@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: Apache-2.0
 # Copyright 2026 CYFR Works Inc.
 
-defmodule EmissaryWeb.HealthControllerTest do
+defmodule CyfrWeb.Ingress.HealthControllerTest do
   use EmissaryWeb.ConnCase, async: false
 
   describe "GET /api/health" do
@@ -45,14 +45,14 @@ defmodule EmissaryWeb.HealthControllerTest do
       # The controller owns the probe spelling (probe_dir/0 — the sweep
       # consumes it); this pins its root to the roster so a renamed row
       # cannot leave the probe writing into a refused root.
-      assert hd(EmissaryWeb.HealthController.probe_dir()) in Arca.Storage.global_prefixes()
+      assert hd(CyfrWeb.Ingress.HealthController.probe_dir()) in Arca.Storage.global_prefixes()
     end
 
     test "an empty but reachable database is still ready", %{conn: conn} do
       # A freshly migrated node has a schema and no rows. The probe asks
       # the database for a value it computes itself, so "nothing stored
       # yet" never reaches it — and a healthy node stays in rotation.
-      Arca.Cache.invalidate({EmissaryWeb.HealthController, :ready_cache})
+      Arca.Cache.invalidate({CyfrWeb.Ingress.HealthController, :ready_cache})
       Arca.Repo.delete_all(Arca.Schemas.BuildRecord)
 
       response = json_response(get(conn, "/api/health/ready"), 200)
@@ -65,10 +65,10 @@ defmodule EmissaryWeb.HealthControllerTest do
       # the node cannot reach looks like from here. What must not happen is
       # a 200 or the word "ready": either one puts a broken node back in
       # front of traffic.
-      Arca.Cache.invalidate({EmissaryWeb.HealthController, :ready_cache})
+      Arca.Cache.invalidate({CyfrWeb.Ingress.HealthController, :ready_cache})
 
       on_exit(fn ->
-        Arca.Cache.invalidate({EmissaryWeb.HealthController, :ready_cache})
+        Arca.Cache.invalidate({CyfrWeb.Ingress.HealthController, :ready_cache})
       end)
 
       Ecto.Adapters.SQL.Sandbox.mode(Arca.Repo, :manual)
@@ -83,12 +83,12 @@ defmodule EmissaryWeb.HealthControllerTest do
       # rotation: the endpoint answers 503 to everything but this probe
       # until the claim is won back, and the probe must not answer "ready"
       # meanwhile. It reads the cached standing, so it costs no query.
-      Arca.Cache.invalidate({EmissaryWeb.HealthController, :ready_cache})
+      Arca.Cache.invalidate({CyfrWeb.Ingress.HealthController, :ready_cache})
       Arca.ControlPlane.record(:lost)
 
       on_exit(fn ->
         Arca.ControlPlane.record(:unclaimed)
-        Arca.Cache.invalidate({EmissaryWeb.HealthController, :ready_cache})
+        Arca.Cache.invalidate({CyfrWeb.Ingress.HealthController, :ready_cache})
       end)
 
       response = json_response(get(conn, "/api/health/ready"), 503)
@@ -96,7 +96,7 @@ defmodule EmissaryWeb.HealthControllerTest do
       assert response["checks"]["control_plane"] == "failed"
 
       Arca.ControlPlane.record(:unclaimed)
-      Arca.Cache.invalidate({EmissaryWeb.HealthController, :ready_cache})
+      Arca.Cache.invalidate({CyfrWeb.Ingress.HealthController, :ready_cache})
 
       response = json_response(get(conn, "/api/health/ready"), 200)
       assert response["status"] == "ready"
@@ -108,14 +108,14 @@ defmodule EmissaryWeb.HealthControllerTest do
       # delete strands at most one object, reclaimed by the next probe's
       # overwrite (the retention sweep is the belt for legacy strays).
       # Bust the result cache so this request runs a real probe.
-      Arca.Cache.invalidate({EmissaryWeb.HealthController, :ready_cache})
+      Arca.Cache.invalidate({CyfrWeb.Ingress.HealthController, :ready_cache})
 
       ctx = Sanctum.internal_context(user_id: "_test", permissions: [:storage_write])
 
       :ok =
         Arca.put(
           Sanctum.Context.actor(ctx),
-          EmissaryWeb.HealthController.probe_dir() ++ [".write_probe"],
+          CyfrWeb.Ingress.HealthController.probe_dir() ++ [".write_probe"],
           "stranded"
         )
 
@@ -125,7 +125,7 @@ defmodule EmissaryWeb.HealthControllerTest do
       assert {:ok, []} =
                Arca.list_typed(
                  Sanctum.Context.actor(ctx),
-                 EmissaryWeb.HealthController.probe_dir()
+                 CyfrWeb.Ingress.HealthController.probe_dir()
                )
     end
   end

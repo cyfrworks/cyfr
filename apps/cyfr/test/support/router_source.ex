@@ -23,14 +23,43 @@ defmodule Cyfr.Test.RouterSource do
   Every `pipeline :name do … end` block in `file`, mapped to its `plug`
   heads in order: a module plug as its full name (the file's `alias`
   lines applied), a function plug as `":name"`. Options are not read.
+
+  A `CyfrWeb.Pipelines.browser(name, opts)` statement is the pipeline
+  `name` whose plugs are `CyfrWeb.Pipelines.browser_plugs(opts)`, rendered
+  the same way: the shared definition is the one the macro expands. Its
+  `opts` must be a literal.
   """
   @spec pipelines(Path.t()) :: %{String.t() => [String.t()]}
   def pipelines(file) do
     {body, aliases} = module_body(file)
 
-    for {:pipeline, _, [name, [do: block]]} <- statements(body), into: %{} do
-      {Atom.to_string(name), plugs(block, aliases)}
+    for statement <- statements(body),
+        {name, plugs} <- pipeline(statement, aliases),
+        into: %{},
+        do: {Atom.to_string(name), plugs}
+  end
+
+  defp pipeline({:pipeline, _, [name, [do: block]]}, aliases),
+    do: [{name, plugs(block, aliases)}]
+
+  defp pipeline({{:., _, [{:__aliases__, _, _} = module, :browser]}, _, [name | opts]}, aliases) do
+    if render(module, aliases) == "CyfrWeb.Pipelines",
+      do: [{name, shared_browser_plugs(opts)}],
+      else: []
+  end
+
+  defp pipeline(_statement, _aliases), do: []
+
+  defp shared_browser_plugs([]), do: shared_browser_plugs([[]])
+
+  defp shared_browser_plugs([opts]) do
+    unless Macro.quoted_literal?(opts) do
+      raise ArgumentError,
+            "CyfrWeb.Pipelines.browser/2 options must be a literal: #{Macro.to_string(opts)}"
     end
+
+    {opts, _binding} = Code.eval_quoted(opts)
+    for {plug, _plug_opts} <- CyfrWeb.Pipelines.browser_plugs(opts), do: inspect(plug)
   end
 
   @doc """

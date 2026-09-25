@@ -117,7 +117,17 @@ defmodule Cyfr.Application do
   def tiers do
     [
       {Cyfr.InfraSupervisor, List.flatten([pre_gate(), gate(), post_gate(), seed_offer()])},
-      {Cyfr.WebSupervisor, [EmissaryWeb.Endpoint]}
+      {Cyfr.WebSupervisor, web()}
+    ]
+  end
+
+  # The ingress's task supervisor (an inbound webhook's delivery) starts
+  # before the endpoint and so stops after it: a shutdown closes the
+  # listener first, and a delivery already in flight is ended after it.
+  defp web do
+    [
+      {Task.Supervisor, name: CyfrWeb.Ingress.TaskSupervisor},
+      EmissaryWeb.Endpoint
     ]
   end
 

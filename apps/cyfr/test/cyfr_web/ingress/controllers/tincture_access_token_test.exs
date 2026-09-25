@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: Apache-2.0
 # Copyright 2026 CYFR Works Inc.
 
-defmodule EmissaryWeb.TinctureAccessTokenTest do
+defmodule CyfrWeb.Ingress.TinctureAccessTokenTest do
   @moduledoc """
   Tests exchanging a header credential for a short-lived tincture `?_t=` token.
   """

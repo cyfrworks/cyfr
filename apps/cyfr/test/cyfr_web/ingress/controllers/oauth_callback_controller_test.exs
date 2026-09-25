@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: Apache-2.0
 # Copyright 2026 CYFR Works Inc.
 
-defmodule EmissaryWeb.OAuthCallbackControllerTest do
+defmodule CyfrWeb.Ingress.OAuthCallbackControllerTest do
   @moduledoc """
   The vault grant callback writes a credential only for the session that
   started the grant, as it stands when the provider answers: one revoked

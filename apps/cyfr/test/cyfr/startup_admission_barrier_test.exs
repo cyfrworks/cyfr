@@ -80,7 +80,7 @@ defmodule Cyfr.StartupAdmissionBarrierTest do
     Cyfr.SeedOffer
   ]
 
-  @web [EmissaryWeb.Endpoint]
+  @web [CyfrWeb.Ingress.TaskSupervisor, EmissaryWeb.Endpoint]
 
   @credential_events [
     [:cyfr, :sanctum, :provider_credentials, :fetch],

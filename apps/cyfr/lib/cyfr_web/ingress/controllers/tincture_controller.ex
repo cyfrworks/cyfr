@@ -1,9 +1,9 @@
 # SPDX-License-Identifier: Apache-2.0
 # Copyright 2026 CYFR Works Inc.
 
-defmodule EmissaryWeb.TinctureController do
+defmodule CyfrWeb.Ingress.TinctureController do
   @moduledoc """
-  Tincture HTTP serving on EmissaryWeb (the platform API surface).
+  Tincture HTTP serving on the host's ingress (the platform API surface).
 
   All clients (Prism shell, CLI, API keys) access tinctures
   through this single controller. Authentication is delegated to
@@ -17,7 +17,7 @@ defmodule EmissaryWeb.TinctureController do
   GET  /t/:athanor/:publisher/:tincture_name/*path     — serve static assets
   """
 
-  use CyfrWeb, :controller
+  use CyfrWeb.Ingress, :controller
 
   # A public URL is the public route regardless of authentication, and
   # names the tincture by its address; the private fallback is the

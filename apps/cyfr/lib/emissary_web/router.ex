@@ -4,65 +4,20 @@
 defmodule EmissaryWeb.Router do
   use CyfrWeb, :router
 
+  require CyfrWeb.Ingress.Router
+  require CyfrWeb.Pipelines
   require Emissary.Router
 
   # Pipelines define authentication and transport rules for the scopes below.
 
-  # The browser pipeline serves the Prism LiveViews and the auth pages.
-  # LiveView mounts are gated in `CyfrWeb.ContextGuard`, because the
+  # The browser pipeline serves the Prism LiveViews and the console's
+  # pages, under the console's root layout. LiveView mounts are gated in `CyfrWeb.ContextGuard`, because the
   # LiveView socket is handled by the endpoint before the router and never
   # passes through here.
-  pipeline :browser do
-    # First: a headless node serves none of this (CYFR_HEADLESS).
-    plug CyfrWeb.Plugs.Headless
-    plug :accepts, ["html"]
-    plug :fetch_session
-    plug :fetch_live_flash
-    plug :put_root_layout, html: {PrismWeb.Layouts, :root}
-    plug :protect_from_forgery
-    plug :put_secure_browser_headers
-    plug CyfrWeb.Plugs.BrowserCSP
-  end
-
-  pipeline :api do
-    plug :accepts, ["json"]
-    plug CyfrWeb.Plugs.ApiSecurityHeaders
-  end
-
-  # Client-driven auth-API endpoints (logout, whoami) self-gate in the
-  # controller (401/400 without a token) but were otherwise unmetered — a
-  # session-token brute-force / Session.get amplification surface. The
-  # IdP-driven callbacks stay unthrottled (shared-NAT corporate IPs).
-  pipeline :auth_api_throttle do
-    plug CyfrWeb.Plugs.AuthRateLimit,
-      bucket: :auth_api,
-      max_requests: 30,
-      window_ms: 60_000
-  end
+  CyfrWeb.Pipelines.browser(:browser, root_layout: {PrismWeb.Layouts, :root})
 
   # The MCP adapter's `:mcp` pipeline and `/mcp` scope.
   Emissary.Router.routes()
-
-  # Authenticated HTTP routes use the shared context resolver with API
-  # error rendering and a separate rate-limit bucket.
-  pipeline :authenticated_api do
-    plug CyfrWeb.Plugs.CallIdentity, tool: "execution"
-    plug :accepts, ["json", "event-stream"]
-    plug CyfrWeb.Plugs.ApiSecurityHeaders
-    plug CyfrWeb.Plugs.CORS, methods: ~w(GET), headers: ~w(last-event-id)
-    plug CyfrWeb.Plugs.MCPOrigin
-    plug CyfrWeb.Plugs.MCPRateLimit, bucket: :api
-    plug CyfrWeb.Plugs.Authenticate
-  end
-
-  # OAuth kickoff gets a conservative per-IP throttle; callbacks get the
-  # generous :oauth_callback_throttle above.
-  pipeline :oauth_start_throttle do
-    plug CyfrWeb.Plugs.AuthRateLimit,
-      bucket: :oauth_start,
-      max_requests: 30,
-      window_ms: 60_000
-  end
 
   # Submit path on the claim page: defends against username enumeration
   # (cyfr.run's 409 distinguishes SLUG_TAKEN / ALREADY_CLAIMED) and
@@ -82,112 +37,6 @@ defmodule EmissaryWeb.Router do
       bucket: :legal_accept,
       max_requests: 12,
       window_ms: 60_000
-  end
-
-  # Callbacks arrive from IdPs on real users' behalf, often through
-  # shared-NAT corporate IPs, so their budget is generous — high enough
-  # that a floor of real users never trips it, low enough that one IP
-  # cannot spin the token-exchange machinery unboundedly.
-  pipeline :oauth_callback_throttle do
-    plug CyfrWeb.Plugs.AuthRateLimit,
-      bucket: :oauth_callback,
-      max_requests: 60,
-      window_ms: 60_000
-  end
-
-  # The OAuth grant callback serves a BROWSER page (CyfrWeb.MinimalPage,
-  # no session) — `:api`'s `accepts ["json"]` 406'd any client that sent a
-  # strict `Accept: text/html`, which is what a browser redirect carries.
-  pipeline :oauth_callback do
-    plug :accepts, ["html", "json"]
-    plug CyfrWeb.Plugs.ApiSecurityHeaders
-  end
-
-  # Meter ticket adoption before authentication. Looking up a ticket
-  # consumes it, so attempts need their own request budget.
-  pipeline :device_complete_throttle do
-    plug CyfrWeb.Plugs.AuthRateLimit,
-      bucket: :device_complete,
-      max_requests: 30,
-      window_ms: 60_000
-  end
-
-  # Tincture serving — auth via signed `?_t=` token or Authorization bearer.
-  # No session cookie auth: a tincture page is embeddable cross-origin (see
-  # the invoke pipeline below), and an ambient cookie credential on a
-  # cross-origin surface is exactly the CSRF/rebinding food the design
-  # refuses — there is one session store, and this surface ignores it.
-  # Tinctures set their own CSP (the controller); the closed set here only
-  # supplies what it does not touch (nosniff, referrer policy, HSTS) — the
-  # controller replaces the CSP and framing headers on what it serves.
-  pipeline :tincture do
-    plug CyfrWeb.Plugs.CallIdentity, tool: "tincture"
-    plug :accepts, ["html", "json"]
-    plug CyfrWeb.Plugs.ApiSecurityHeaders
-    plug CyfrWeb.Plugs.ScrubTinctureCredentials
-
-    plug CyfrWeb.Plugs.TinctureRateLimit,
-      bucket: :page,
-      max_requests: 60,
-      window_ms: CyfrWeb.Plugs.TinctureRateLimit.default_window_ms()
-  end
-
-  pipeline :tincture_invoke do
-    plug CyfrWeb.Plugs.CallIdentity, tool: "tincture"
-    plug :accepts, ["json"]
-    plug CyfrWeb.Plugs.ApiSecurityHeaders
-    # Deliberately NO MCPOrigin here, unlike /mcp and /api: a public
-    # tincture is embeddable from any origin, so this surface is
-    # cross-origin BY DESIGN (the CORS plug below is its contract). The
-    # DNS-rebinding class MCPOrigin defends against needs an ambient
-    # credential to steal; invoke authenticates per request (Bearer or the
-    # short-lived ?_t= mint) and the public route is credential-less.
-    # POST for invoke, GET for the cross-origin `/t/access-token` mint.
-    plug CyfrWeb.Plugs.CORS, methods: ~w(GET POST)
-    # Before the rate limiter so a 429 is scrubbed too — it is logged like any
-    # other response, and it never reaches the action that reads the credential.
-    plug CyfrWeb.Plugs.ScrubTinctureCredentials
-    # After CORS on purpose: OPTIONS preflights are halted with 204 above and
-    # must never be counted or answered 429 without CORS headers.
-    plug CyfrWeb.Plugs.TinctureRateLimit,
-      bucket: :invoke,
-      max_requests: CyfrWeb.Plugs.TinctureRateLimit.default_invoke_max(),
-      window_ms: CyfrWeb.Plugs.TinctureRateLimit.default_window_ms()
-  end
-
-  pipeline :tincture_asset do
-    # No :accepts — assets serve arbitrary content types.
-    plug CyfrWeb.Plugs.ApiSecurityHeaders
-    plug CyfrWeb.Plugs.ScrubTinctureCredentials
-
-    plug CyfrWeb.Plugs.TinctureRateLimit,
-      bucket: :asset,
-      max_requests: 300,
-      window_ms: CyfrWeb.Plugs.TinctureRateLimit.default_window_ms()
-  end
-
-  # Anonymous and internet-reachable behind the tls proxy, and /ready does
-  # real DB/storage work per uncached hit — metered per IP so it cannot be
-  # used to drive storage round-trips (billable PUTs on S3) at will.
-  pipeline :health_throttle do
-    plug CyfrWeb.Plugs.AuthRateLimit,
-      bucket: :health,
-      max_requests: 60,
-      window_ms: 60_000
-  end
-
-  # Inbound webhook receiver. Rate-limited (per-slug + per-IP scan-evasion bucket)
-  # before signature verification so unverified spam is dropped early. Raw body
-  # is captured by `CyfrWeb.Plugs.RawBodyReader` (registered as the
-  # `Plug.Parsers` body_reader on the endpoint) so HMAC verification sees the
-  # exact bytes the sender signed.
-  pipeline :webhook do
-    plug CyfrWeb.Plugs.CallIdentity, tool: "webhook"
-    plug :accepts, ["json"]
-    plug CyfrWeb.Plugs.ApiSecurityHeaders
-    plug CyfrWeb.Plugs.WebhookRateLimit
-    plug CyfrWeb.Plugs.VerifyWebhookSignature
-    plug CyfrWeb.Plugs.WebhookIdempotency
   end
 
   # Focus is in the URL: `/a/<athanor>/…` — a person's athanor as
@@ -216,51 +65,9 @@ defmodule EmissaryWeb.Router do
       window_ms: 60_000
   end
 
-  # Auth API routes (logout, whoami) - must be defined before wildcard /:provider
-  scope "/auth", EmissaryWeb do
-    pipe_through [:api, :auth_api_throttle]
-
-    delete "/logout", AuthController, :logout, metadata: %{auth: :handler_auth}
-    get "/whoami", AuthController, :whoami, metadata: %{auth: :handler_auth}
-  end
-
-  # OAuth callback for catalyst OAuth providers (not user auth)
-  # Must be defined before the /:provider wildcard below
-  scope "/auth/oauth", EmissaryWeb do
-    pipe_through [:oauth_callback, :oauth_callback_throttle]
-
-    get "/callback", OAuthCallbackController, :callback, metadata: %{auth: :public_oauth_state}
-  end
-
-  # Sign-in routes. GitHub/Google sign in by device flow on `/login`;
-  # `/auth/:provider` is the OIDC kickoff. Static paths
-  # sit above `/:provider` so they cannot be captured as a provider name.
-  scope "/auth", EmissaryWeb do
-    pipe_through :browser
-
-    get "/post-legal-accept", AuthController, :post_legal_accept,
-      metadata: %{auth: :browser_oauth_flow}
-
-    scope "/" do
-      pipe_through :device_complete_throttle
-
-      get "/device/complete/:ticket", AuthController, :device_complete,
-        metadata: %{auth: :browser_oauth_flow}
-    end
-
-    scope "/" do
-      pipe_through :oauth_start_throttle
-
-      get "/:provider", AuthController, :request, metadata: %{auth: :browser_oauth_start}
-    end
-
-    scope "/" do
-      pipe_through :oauth_callback_throttle
-
-      get "/:provider/callback", AuthController, :callback,
-        metadata: %{auth: :browser_oauth_callback}
-    end
-  end
+  # The host's ingress: sign-in and sign-out, the OAuth grant callback,
+  # tincture serving, health, the execution-events stream and webhooks.
+  CyfrWeb.Ingress.Router.routes()
 
   # The publisher-namespace claim (web flow): a person who wants to publish
   # to cyfr.run claims their namespace here, whenever they choose. Signing
@@ -288,75 +95,17 @@ defmodule EmissaryWeb.Router do
     post "/submit", LegalAcceptController, :submit, metadata: %{auth: :browser_public_legal}
   end
 
-  scope "/t", EmissaryWeb do
-    pipe_through :tincture_invoke
-    # Cross-origin token mint: session/Bearer header → short-lived ?_t=.
-    get "/access-token", TinctureController, :access_token,
-      metadata: %{auth: :tincture_handler_auth}
-
-    match :options, "/access-token", TinctureController, :access_token,
-      metadata: %{auth: :tincture_handler_auth}
-
-    post "/:athanor/:publisher/:tincture_name/invoke", TinctureController, :invoke,
-      metadata: %{auth: :tincture_handler_auth}
-
-    # OPTIONS preflight — CORS plug intercepts and sends 204 before reaching controller.
-    # Required because sandboxed iframes (opaque origin) + POST with JSON content-type
-    # triggers CORS preflight from the browser.
-    match :options, "/:athanor/:publisher/:tincture_name/invoke", TinctureController, :invoke,
-      metadata: %{auth: :tincture_handler_auth}
-  end
-
-  scope "/t", EmissaryWeb do
-    pipe_through :tincture
-
-    get "/:athanor/:publisher/:tincture_name", TinctureController, :index,
-      metadata: %{auth: :tincture_handler_auth}
-  end
-
-  scope "/t", EmissaryWeb do
-    pipe_through :tincture_asset
-
-    get "/:athanor/:publisher/:tincture_name/*path", TinctureController, :asset,
-      metadata: %{auth: :tincture_handler_auth}
-  end
-
-  # Health check endpoint
-  scope "/api", EmissaryWeb do
-    pipe_through [:api, :health_throttle]
-
-    get "/health", HealthController, :check, metadata: %{auth: :public_health}
-    get "/health/ready", HealthController, :ready, metadata: %{auth: :public_health}
-  end
-
-  # Execution event SSE stream. Ownership is verified in the controller, on the
-  # context `Plugs.Authenticate` resolved, before any event flows.
-  scope "/api", EmissaryWeb do
-    pipe_through :authenticated_api
-
-    get "/executions/:id/events", ExecutionEventsController, :stream,
-      metadata: %{auth: :authenticate_plug}
-  end
-
-  scope "/hooks", EmissaryWeb do
-    pipe_through :webhook
-    post "/:slug", WebhookController, :invoke, metadata: %{auth: :webhook_hmac}
-  end
-
   # ==========================================================================
   # Prism — the LiveView face, on this origin
   # ==========================================================================
 
-  # Sign in and out from the browser. `/login` starts GitHub/Google device
-  # flow (or links to `/auth/oidcc`); `/auth/logout` drops the cookie
-  # session and retires the Sanctum session behind it.
+  # Sign in from the browser. `/login` starts GitHub/Google device flow
+  # (or links to `/auth/oidcc`); signing out is the ingress's
+  # `POST /auth/logout`.
   scope "/", PrismWeb do
     pipe_through :browser
 
     live "/login", LoginLive, :login, metadata: %{auth: :browser_public_login}
-    # POST, never GET: signing someone out must not be one <img src> away
-    # — the browser pipeline's CSRF token guards the state change.
-    post "/auth/logout", SessionController, :logout, metadata: %{auth: :browser_public_auth}
   end
 
   scope "/a/:athanor", PrismWeb do

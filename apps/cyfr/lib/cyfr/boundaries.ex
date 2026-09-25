@@ -372,17 +372,6 @@ defmodule Cyfr.Boundaries do
           "process as a JSON-RPC refusal"
     },
     %{
-      from: ["apps/cyfr/lib/emissary_web/**/*.ex"],
-      into: "Sanctum",
-      allow: ~w(
-        Sanctum Sanctum.Auth Sanctum.BearerToken Sanctum.Caller
-        Sanctum.ClientIp Sanctum.Context Sanctum.Door Sanctum.Session Sanctum.SignIn
-        Sanctum.Tenancy Sanctum.TinctureAccess Sanctum.TinctureAuth Sanctum.Vault
-        Sanctum.Webhook
-      ),
-      reason: "the auth fabric's own ingress — a wide roster is the front door doing its job"
-    },
-    %{
       from: ["apps/cyfr/lib/prism/**/*.ex", "apps/cyfr/lib/prism.ex"],
       into: "Sanctum",
       allow: ~w(Sanctum Sanctum.Context Sanctum.Tenancy),
@@ -393,11 +382,27 @@ defmodule Cyfr.Boundaries do
     },
     %{
       from: [
+        "apps/cyfr/lib/cyfr_web/ingress/**/*.ex",
+        "apps/cyfr/lib/cyfr_web/ingress.ex"
+      ],
+      into: "Sanctum",
+      depth: 3,
+      allow: ~w(
+        Sanctum Sanctum.Auth.EmailVerification Sanctum.BearerToken
+        Sanctum.Caller Sanctum.ClientIp Sanctum.Context Sanctum.Door Sanctum.Session
+        Sanctum.SignIn Sanctum.Tenancy Sanctum.Tenancy.Users Sanctum.TinctureAccess
+        Sanctum.TinctureAuth Sanctum.Vault.OAuthGrant Sanctum.Webhook
+      ),
+      reason: "the auth fabric's own ingress — a wide roster is the front door doing its job"
+    },
+    %{
+      from: [
         "apps/cyfr/lib/prism_web/**/*.ex",
         "apps/cyfr/lib/prism_web.ex",
         "apps/cyfr/lib/cyfr_web/**/*.ex",
         "apps/cyfr/lib/cyfr_web.ex"
       ],
+      except: ["apps/cyfr/lib/cyfr_web/ingress/**/*.ex", "apps/cyfr/lib/cyfr_web/ingress.ex"],
       into: "Sanctum",
       allow: ~w(
         Sanctum.ApiKey Sanctum.Auth Sanctum.BearerToken Sanctum.Caller Sanctum.ClientIp
@@ -586,13 +591,10 @@ defmodule Cyfr.Boundaries do
         "apps/cyfr/lib/emissary_web/**/*.ex"
       ],
       into: "Compendium",
-      allow: ~w(Compendium),
+      allow: [],
       reason:
-        "the MCP surface reaches the component domain through its root facade alone: " <>
-          "the sign-in probe (`EmissaryWeb.AuthController`, " <>
-          "`Compendium.complete_sign_in/4`) and the tincture controller's reads of a " <>
-          "tincture's entry and connect domains, which stay here until W1 moves the " <>
-          "controllers; every other component operation is a gate operation."
+        "the MCP surface names nothing of the component domain: every component " <>
+          "operation it serves is a gate operation, reached through the operation table."
     },
     %{
       from: [
@@ -653,9 +655,12 @@ defmodule Cyfr.Boundaries do
       allow: ~w(Compendium),
       reason:
         "the host reaches the component domain's root facade alone: the seed offer " <>
-          "(`Cyfr.SeedOffer`, `Compendium.sync_seeds/0`) and the tincture asset " <>
+          "(`Cyfr.SeedOffer`, `Compendium.sync_seeds/0`), the tincture asset " <>
           "ingress (`CyfrWeb.Ingress.TinctureAssets`, " <>
-          "`Compendium.tincture_asset_rules/0`). The composition root is excepted."
+          "`Compendium.tincture_asset_rules/0`), the sign-in probe " <>
+          "(`CyfrWeb.Ingress.AuthController`, `Compendium.complete_sign_in/4`) and the " <>
+          "tincture controller's reads of a tincture's entry and connect domains. The " <>
+          "composition root is excepted."
     },
     %{
       from: [
@@ -665,11 +670,12 @@ defmodule Cyfr.Boundaries do
       ],
       except: ["apps/cyfr/lib/cyfr/application.ex"],
       into: "Crucible",
-      allow: [],
+      allow: ~w(Crucible),
       reason:
-        "the host names nothing of execution: the member slot, the bus and the web " <>
-          "tier's glue sit below it. The composition root (`Cyfr.Application`) starts " <>
-          "execution's trees, and is excepted."
+        "the host names nothing of execution's internals: the member slot, the bus " <>
+          "and the web tier's glue sit below it, and the HTTP ingress follows, invokes " <>
+          "and probes executions through the root facade alone. The composition root " <>
+          "(`Cyfr.Application`) starts execution's trees, and is excepted."
     },
     %{
       from: [
@@ -788,6 +794,30 @@ defmodule Cyfr.Boundaries do
       reason:
         "an adapter names no other surface: the MCP adapter and the console meet " <>
           "only below them, in the host's shared web tier and the domains."
+    },
+    %{
+      from: ["apps/cyfr/lib/emissary/**/*.ex", "apps/cyfr/lib/emissary.ex"],
+      into: "CyfrWeb.Ingress",
+      allow: [],
+      reason:
+        "an adapter names no other surface: the MCP adapter and the host's HTTP " <>
+          "ingress meet only below them, in the shared web tier and the domains."
+    },
+    %{
+      from: ["apps/cyfr/lib/cyfr_web/ingress/**/*.ex", "apps/cyfr/lib/cyfr_web/ingress.ex"],
+      into: "PrismWeb",
+      allow: [],
+      reason:
+        "an adapter names no other surface: the host's HTTP ingress renders its own " <>
+          "no-session pages (`CyfrWeb.MinimalPage`) and names nothing of the console."
+    },
+    %{
+      from: ["apps/cyfr/lib/cyfr_web/ingress/**/*.ex", "apps/cyfr/lib/cyfr_web/ingress.ex"],
+      into: "Emissary",
+      allow: [],
+      reason:
+        "an adapter names no other surface: an inbound webhook's delivery runs on the " <>
+          "ingress's own task supervisor, never the MCP adapter's."
     },
     %{
       from: ["apps/cyfr/lib/emissary/**/*.ex", "apps/cyfr/lib/emissary.ex"],
@@ -1357,7 +1387,7 @@ defmodule Cyfr.Boundaries do
 
   # The route providers the composition router invokes, so another cannot
   # appear silently: each hands its routes to the root by macro.
-  @routers [Emissary.Router]
+  @routers [Emissary.Router, CyfrWeb.Ingress.Router]
 
   @doc "The route providers whose routes the composition router's table holds."
   @spec routers() :: [module()]
@@ -1686,19 +1716,19 @@ defmodule Cyfr.Boundaries do
     %{module: CyfrWeb.Plugs.ControlPlaneOwnership, site: :call, plane: :external},
     # The tincture routes: a tincture the address does not resolve, a mint
     # without a credential that may mint, and the routes' rate limit.
-    %{module: EmissaryWeb.TinctureController, site: :index, plane: :external},
-    %{module: EmissaryWeb.TinctureController, site: :invoke, plane: :external},
-    %{module: EmissaryWeb.TinctureController, site: :access_token, plane: :external},
+    %{module: CyfrWeb.Ingress.TinctureController, site: :index, plane: :external},
+    %{module: CyfrWeb.Ingress.TinctureController, site: :invoke, plane: :external},
+    %{module: CyfrWeb.Ingress.TinctureController, site: :access_token, plane: :external},
     %{module: CyfrWeb.Plugs.TinctureRateLimit, site: :call, plane: :external},
     # The webhook route: the caller the row establishes, its signature,
     # its idempotency key and its rate limit.
-    %{module: EmissaryWeb.WebhookController, site: :invoke, plane: :external},
+    %{module: CyfrWeb.Ingress.WebhookController, site: :invoke, plane: :external},
     %{module: CyfrWeb.Plugs.VerifyWebhookSignature, site: :call, plane: :external},
     %{module: CyfrWeb.Plugs.WebhookIdempotency, site: :call, plane: :external},
     %{module: CyfrWeb.Plugs.WebhookRateLimit, site: :call, plane: :external},
     # The execution-events stream: an execution the caller may not read (or
     # that does not exist), an unauthenticated caller, and the stream limit.
-    %{module: EmissaryWeb.ExecutionEventsController, site: :stream, plane: :external},
+    %{module: CyfrWeb.Ingress.ExecutionEventsController, site: :stream, plane: :external},
     # The scheduler's fire: its own admission is the occurrence claimed
     # under a held generation, and a run admission refusal is that fire's
     # failed completion.
@@ -1829,6 +1859,21 @@ defmodule Cyfr.Boundaries do
           "a bucket and the signature plug to verify. Its secrets are opened only by " <>
           "that verification, and the function that opens them leaves the connection " <>
           "once it is done."
+    },
+    %{
+      responsibility: "probe that storage still takes a write, before any caller is known",
+      modules: ~w(CyfrWeb.Ingress.HealthController Arca),
+      check: "Arca.Storage.authorize_path/2",
+      reason:
+        "the readiness probe is anonymous and asks whether the store still takes a " <>
+          "write, so it runs before any caller is known and in no estate: `ready/2` " <>
+          "puts one fixed key under the global `system/` root " <>
+          "(`CyfrWeb.Ingress.HealthController.probe_dir/0`) and deletes it again, under " <>
+          "the platform's internal context, whose system actor is the only kind " <>
+          "`Arca.Storage.authorize_path/2` opens a global root to. `Arca` runs that " <>
+          "check on every put and delete. The probe names no tenant path and reads " <>
+          "nothing back, and its one key means a stranded write is overwritten, never " <>
+          "accumulated."
     },
     %{
       responsibility: "reconcile storage projections before any caller is known",
