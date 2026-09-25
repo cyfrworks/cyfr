@@ -28,13 +28,22 @@ defmodule EmissaryWeb.MCPController do
 
   Both carry `MCP-Protocol-Version` and `X-Request-Id`.
 
+  ## Audit
+
+  The transport records no row of its own. A `tools/call` or
+  `resources/read` is an operation call, recorded by the gate as one
+  admission decision with its request-log row (`Grimoire.Decisions`),
+  correlated to this request by its `X-Request-Id`; discovery is not
+  recorded.
+
   ## Cancellation
 
   Closing the response stream cancels the request — the only cancellation
   signal this transport has. It is noticed on the next write, which is either
   the next notification or the keep-alive comment, and it kills the tool task
   through the gate (`Grimoire.cancel_request/1`) as well as the wrapper
-  waiting on it.
+  waiting on it. A call whose wrapper is killed that way records no
+  completion: its decision stays admitted with an unknown outcome.
 
   ## Telemetry
 
@@ -47,7 +56,6 @@ defmodule EmissaryWeb.MCPController do
 
   alias Emissary.MCP
   alias Emissary.MCP.{Message, Progress, Subscriptions}
-  alias Grimoire.RequestLog
   alias CyfrWeb.ContextGuard
   require CyfrWeb.ContextGuard
   require Logger
@@ -145,18 +153,6 @@ defmodule EmissaryWeb.MCPController do
     tool = extract_tool(params)
     action = extract_action(params)
 
-    # The transport's own row. Its call id is the request id: this call *is*
-    # the request. Calls made beneath it get their own ids and point back here
-    # through `request_id`.
-    log_request_started(context, request_id, %{
-      method: method,
-      tool: tool,
-      action: action,
-      input: params["params"] || %{}
-    })
-
-    routed_to = determine_routed_to(tool, action)
-
     # Headers go on before anything can commit the response: once the stream
     # below is opened they can no longer be set.
     conn =
@@ -166,122 +162,32 @@ defmodule EmissaryWeb.MCPController do
 
     {conn, outcome} = dispatch(conn, context, params, request_id)
 
+    telemetry = %{method: method, tool: tool, action: action, request_id: request_id}
+
     case outcome do
       :cancelled ->
-        emit_telemetry(start_time, context, %{
-          method: method,
-          tool: tool,
-          status: :cancelled,
-          action: action,
-          request_id: request_id
-        })
-
-        log_request_failed(
-          context,
-          request_id,
-          "Client closed the response stream",
-          Message.error_code(:request_cancelled),
-          duration_ms(start_time),
-          routed_to
-        )
-
+        emit_telemetry(start_time, context, Map.put(telemetry, :status, :cancelled))
         conn
 
       {:ok, result, id} ->
-        duration_ms = duration_ms(start_time)
-
-        emit_telemetry(start_time, context, %{
-          method: method,
-          tool: tool,
-          status: :success,
-          action: action,
-          request_id: request_id
-        })
-
-        log_request_completed(context, request_id, result, duration_ms, routed_to)
-
+        emit_telemetry(start_time, context, Map.put(telemetry, :status, :success))
         respond(conn, Message.encode_result(id, result))
 
       :ok ->
         # Notification - no response needed
-        duration_ms = duration_ms(start_time)
-
-        emit_telemetry(start_time, context, %{
-          method: method,
-          tool: tool,
-          status: :success,
-          action: action,
-          request_id: request_id
-        })
-
-        log_request_completed(context, request_id, %{}, duration_ms, "emissary")
-
+        emit_telemetry(start_time, context, Map.put(telemetry, :status, :success))
         send_resp(conn, 202, "")
 
       {:error, code, message, data, id} ->
-        duration_ms = duration_ms(start_time)
-
-        emit_telemetry(start_time, context, %{
-          method: method,
-          tool: tool,
-          status: :error,
-          action: action,
-          request_id: request_id
-        })
-
-        log_request_failed(
-          context,
-          request_id,
-          message,
-          Message.error_code(code),
-          duration_ms,
-          routed_to
-        )
-
+        emit_telemetry(start_time, context, Map.put(telemetry, :status, :error))
         respond_error(conn, code, Message.encode_error(id, code, message, data))
 
       {:error, code, message, id} ->
-        duration_ms = duration_ms(start_time)
-
-        emit_telemetry(start_time, context, %{
-          method: method,
-          tool: tool,
-          status: :error,
-          action: action,
-          request_id: request_id
-        })
-
-        log_request_failed(
-          context,
-          request_id,
-          message,
-          Message.error_code(code),
-          duration_ms,
-          routed_to
-        )
-
+        emit_telemetry(start_time, context, Map.put(telemetry, :status, :error))
         respond_error(conn, code, Message.encode_error(id, code, message))
 
       {:error, code, message} ->
-        duration_ms = duration_ms(start_time)
-
-        emit_telemetry(start_time, context, %{
-          method: method,
-          tool: tool,
-          status: :error,
-          action: action,
-          request_id: request_id
-        })
-
-        log_request_failed(
-          context,
-          request_id,
-          message,
-          Message.error_code(code),
-          duration_ms,
-          routed_to
-        )
-
+        emit_telemetry(start_time, context, Map.put(telemetry, :status, :error))
         respond_error(conn, code, Message.encode_error(nil, code, message))
     end
   end
@@ -673,43 +579,6 @@ defmodule EmissaryWeb.MCPController do
 
   defp extract_action(%{"params" => %{"arguments" => %{"action" => action}}}), do: action
   defp extract_action(_), do: nil
-
-  defp determine_routed_to(nil, _action), do: "grimoire"
-
-  defp determine_routed_to(tool, _action) do
-    case Grimoire.lookup(tool) do
-      {:ok, {module, _meta}} -> Grimoire.Services.service_name(module)
-      :miss -> "grimoire"
-    end
-  end
-
-  defp duration_ms(start_time) do
-    System.monotonic_time()
-    |> Kernel.-(start_time)
-    |> System.convert_time_unit(:native, :millisecond)
-  end
-
-  # Logging is best-effort by contract — the `safe_log_*` wrappers never
-  # raise; these keep only the positional-to-map shaping.
-  defp log_request_started(context, request_id, data),
-    do: RequestLog.safe_log_started(context, request_id, data)
-
-  defp log_request_completed(ctx, request_id, output, duration_ms, routed_to) do
-    RequestLog.safe_log_completed(ctx, request_id, %{
-      output: output,
-      duration_ms: duration_ms,
-      routed_to: routed_to
-    })
-  end
-
-  defp log_request_failed(ctx, request_id, error, code, duration_ms, routed_to) do
-    RequestLog.safe_log_failed(ctx, request_id, %{
-      error: error,
-      code: code,
-      duration_ms: duration_ms,
-      routed_to: routed_to
-    })
-  end
 
   defp emit_telemetry(start_time, %Sanctum.Context{} = context, metadata) do
     duration = System.monotonic_time() - start_time

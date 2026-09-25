@@ -209,7 +209,9 @@ defmodule Aqua.Loop.Binding do
   Run a resolved call under the turn's authority. `dispatch`:
   `:ctx` (guest-planed), `:authority`, `:root_execution_id`,
   `:thread_id`, `:charge` (the step's charge map),
-  `:execution_id` (a hand's pre-minted child id), `:step_id`. A hand runs
+  `:execution_id` (a hand's pre-minted child id), `:step_id`, `:call_id`
+  (the admission the root's row was started under, the parent call of a
+  catalog or external call; nil when none was recorded). A hand runs
   as a child of the root on its catalyst; a catalog or external call goes
   in-chain through the one gate. A launch, a clone and the `ui` event are
   not dispatched here.
@@ -251,7 +253,10 @@ defmodule Aqua.Loop.Binding do
         parent_execution_id: Map.fetch!(dispatch, :root_execution_id),
         root_execution_id: Map.fetch!(dispatch, :root_execution_id),
         attempt: Map.get(dispatch, :attempt),
-        thread_id: Map.get(dispatch, :thread_id)
+        thread_id: Map.get(dispatch, :thread_id),
+        # The admission the turn's root execution was started under, read
+        # off its row: the parent call of every call the turn makes.
+        call_id: Map.get(dispatch, :call_id)
       },
       charge: Map.get(dispatch, :charge),
       cancel_handle: Map.get(dispatch, :cancel_handle),

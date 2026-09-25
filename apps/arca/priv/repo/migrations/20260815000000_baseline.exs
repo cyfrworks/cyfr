@@ -721,6 +721,9 @@ defmodule Arca.Repo.Migrations.Baseline do
       add :current_attempt, :string
       # The durable event counter, allocated in the writer's transaction.
       add :event_seq, :integer, null: false, default: 0
+      # The admission the run was started under (`decision_logs.call_id`),
+      # which the calls its chain makes name as their parent.
+      add :call_id, :string
     end
 
     create unique_index(:executions, [:id, :athanor_id])
@@ -943,6 +946,9 @@ defmodule Arca.Repo.Migrations.Baseline do
   # ==========================================================================
 
   defp logs do
+    # One row per recorded call of a tenant, the projection of its
+    # admission decision (`decision_logs`), written in the same
+    # transaction: `id` is the decision's call id.
     create table(:mcp_logs, primary_key: false) do
       add :id, :string, primary_key: true
       add :user_id, :string
@@ -960,6 +966,8 @@ defmodule Arca.Repo.Migrations.Baseline do
       add :athanor_id, :string, null: false
       # The ingress request a call belongs to; a chain shares one.
       add :request_id, :string
+      # A refused call's class (`Prima.Refusal.classes/0`).
+      add :refusal_class, :string
     end
 
     create index(:mcp_logs, [:user_id])

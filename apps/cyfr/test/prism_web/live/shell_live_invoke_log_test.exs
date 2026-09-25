@@ -105,7 +105,15 @@ defmodule PrismWeb.ShellLiveInvokeLogTest do
     assert [row] = rows
     assert row.method == "tools/call"
     assert row.action == "invoke_protected"
-    assert row.id == row.request_id
+    # The row is the projection of the gate's decision: its id is the
+    # call's, its request id the request's, and one decision carries it.
+    assert "call_" <> _ = row.id
+    assert "req_" <> _ = row.request_id
+
+    assert [decision] =
+             Arca.Repo.all(from(d in Arca.Schemas.DecisionLog, where: d.call_id == ^row.id))
+
+    assert decision.request_id == row.request_id
     # This tincture has no granted profile, so the invoke fails — and the
     # failure is on the row, with its duration, like the HTTP ingress.
     assert row.status in ["error", "failed"]

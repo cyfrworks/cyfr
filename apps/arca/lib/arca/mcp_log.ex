@@ -3,9 +3,13 @@
 
 defmodule Arca.McpLog do
   @moduledoc """
-  The MCP request log: recording a call's lifecycle, the tenant-scoped
-  readers and the retention primitives over `Arca.Schemas.McpLog`. Every
-  row a function here answers is a plain map (`Arca.Data`).
+  The MCP request log: the tenant-scoped readers and the retention
+  primitives over `Arca.Schemas.McpLog`. Every row a function here
+  answers is a plain map (`Arca.Data`).
+
+  A row is written only as the projection of an admission decision, in
+  the decision's own transaction (`Arca.DecisionLog.append/3` and
+  `finish/4`, option `mcp_log:`); nothing here writes one.
   """
 
   import Ecto.Query
@@ -15,69 +19,6 @@ defmodule Arca.McpLog do
   @doc "Every status a log row can carry."
   @spec statuses() :: [String.t()]
   def statuses, do: Row.statuses()
-
-  @doc """
-  Inserts a new MCP log entry.
-  """
-  @spec record(map()) :: {:ok, map()} | {:error, term()}
-  def record(attrs) do
-    Arca.Repo.Errors.with_db_rescue("McpLog.record", fn ->
-      attrs
-      |> Row.create_changeset()
-      |> Arca.Repo.insert()
-    end)
-    |> Arca.Data.project()
-  end
-
-  @doc """
-  Inserts a started row only if none exists: the write-behind may land the
-  call's close first, and a close carries the whole row.
-  """
-  @spec record_started(map()) :: {:ok, map()} | {:error, term()}
-  def record_started(attrs) do
-    Arca.Repo.Errors.with_db_rescue("McpLog.record_started", fn ->
-      attrs
-      |> Row.create_changeset()
-      |> Arca.Repo.insert(on_conflict: :nothing, conflict_target: :id)
-    end)
-    |> Arca.Data.project()
-  end
-
-  @doc """
-  Closes a call whose started row may or may not have landed: the whole
-  row is written, and an existing row takes the close's fields.
-  """
-  @spec record_close(map(), map()) :: {:ok, map()} | {:error, term()}
-  def record_close(started, close) when is_map(started) and is_map(close) do
-    Arca.Repo.Errors.with_db_rescue("McpLog.record_close", fn ->
-      started
-      |> Map.merge(close)
-      |> Row.create_changeset()
-      |> Arca.Repo.insert(
-        on_conflict:
-          {:replace, [:status, :duration_ms, :routed_to, :error_code, :output, :error]},
-        conflict_target: :id
-      )
-    end)
-    |> Arca.Data.project()
-  end
-
-  @doc """
-  Updates an existing MCP log entry (e.g., on completion or failure).
-
-  Uses tenant-scoped lookup when a context is provided.
-  """
-  # arca:unscoped-ok the row was fetched tenant-scoped by row_of/2 one line above.
-  @spec record_update(Prima.Actor.t(), String.t(), map()) :: {:ok, map()} | {:error, term()}
-  def record_update(%Prima.Actor{} = actor, id, attrs) do
-    Arca.Repo.Errors.with_db_rescue("McpLog.record_update", fn ->
-      case row_of(actor, id) do
-        nil -> {:error, :not_found}
-        log -> log |> Row.update_changeset(attrs) |> Arca.Repo.update()
-      end
-    end)
-    |> Arca.Data.project()
-  end
 
   @doc """
   Lists recent MCP logs with optional filters.

@@ -1280,6 +1280,7 @@ defmodule Aqua.Loop do
       ctx: guest(state),
       authority: spec.authority,
       root_execution_id: state.turn.root_execution_id,
+      call_id: spec.call_id,
       attempt: state.turn.attempt,
       thread_id: state.turn.thread_id,
       charge: Binding.charge(step, state.turn),

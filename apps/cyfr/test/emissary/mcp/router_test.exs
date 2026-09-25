@@ -328,6 +328,49 @@ defmodule Emissary.MCP.RouterTest do
     end
   end
 
+  describe "the decision a call is recorded as" do
+    test "a tools/call is recorded under the call id the request's context carries",
+         %{context: ctx} do
+      call_id = Prima.UUID7.generate_id("call")
+      ctx = %{ctx | request_id: Prima.UUID7.request_id(), call_id: call_id}
+
+      msg = %Message{
+        type: :request,
+        id: 1,
+        method: "tools/call",
+        params: %{"name" => "session", "arguments" => %{"action" => "whoami"}}
+      }
+
+      assert {:ok, _} = Router.dispatch(ctx, msg)
+
+      assert {:ok, %{admission: :admitted, tool: "session", request_id: request_id}} =
+               Arca.DecisionLog.get(Sanctum.Context.actor(ctx), call_id)
+
+      assert request_id == ctx.request_id
+
+      assert %{method: "tools/call"} = Arca.Repo.get(Arca.Schemas.McpLog, call_id)
+    end
+
+    test "a resources/read keeps its wire method on the row", %{context: ctx} do
+      call_id = Prima.UUID7.generate_id("call")
+      ctx = %{ctx | request_id: Prima.UUID7.request_id(), call_id: call_id}
+
+      msg = %Message{
+        type: :request,
+        id: 1,
+        method: "resources/read",
+        params: %{"uri" => "arca://files/data/nothing-here.txt"}
+      }
+
+      _ = Router.dispatch(ctx, msg)
+
+      assert {:ok, %{admission: :admitted}} =
+               Arca.DecisionLog.get(Sanctum.Context.actor(ctx), call_id)
+
+      assert %{method: "resources/read"} = Arca.Repo.get(Arca.Schemas.McpLog, call_id)
+    end
+  end
+
   describe "dispatch/2 with unknown method" do
     test "returns method_not_found error", %{context: ctx} do
       msg = %Message{

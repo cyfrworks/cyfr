@@ -124,8 +124,10 @@ defmodule Emissary.External.InChainProbeTest do
        %{token: token} do
     {:ok, ctx} = Sanctum.Caller.establish(token)
 
+    assert {:ok, target} = Proxy.resolve(@tool, ctx, :in_chain)
+
     assert {:error, %Prima.Refusal{reason: :missing_grant, message: message}} =
-             Proxy.try_handle(@tool, ctx, @arguments, :in_chain)
+             Proxy.dispatch(target, ctx, @arguments, :in_chain)
 
     assert message =~ "Call to probe__echo_env on server 'leak' not admitted: "
     refute_received {:called, _, _}
@@ -150,12 +152,14 @@ defmodule Emissary.External.InChainProbeTest do
     lineage = %{"parent_execution_id" => root.id, "root_execution_id" => root.id}
 
     reply =
-      Emissary.External.Proxy.try_handle(
-        args["name"],
-        ctx,
-        Map.merge(args["arguments"], lineage),
-        :in_chain
-      )
+      with {:ok, target} <- Emissary.External.Proxy.resolve(args["name"], ctx, :in_chain) do
+        Emissary.External.Proxy.dispatch(
+          target,
+          ctx,
+          Map.merge(args["arguments"], lineage),
+          :in_chain
+        )
+      end
 
     :ok =
       case reply do

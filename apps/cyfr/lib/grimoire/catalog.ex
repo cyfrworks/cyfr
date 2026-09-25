@@ -345,6 +345,12 @@ defmodule Grimoire.Catalog do
   process of their own; `:supervised` runs it in a task under a timeout,
   registered under `ctx.request_id` so a transport whose caller
   disconnects can stop it (`Grimoire.cancel_request/1`), for the wire.
+
+  Every call is one admission decision (`Grimoire.Decisions`), recorded
+  under `opts[:call_id]` — a `call_` id an entry minted before its own
+  checks — or, without one, an id the gate mints before its first check.
+  `opts[:method]` names the wire method the call's request-log row
+  records (default `"tools/call"`).
   """
   def call_external(name, ctx, args, opts \\ [])
 
@@ -372,11 +378,12 @@ defmodule Grimoire.Catalog do
   own authorization applies through the guest-plane permission branch;
   the arguments must cast; and the chain's authority must grant the tool
   (or the matching tool server) through the transition relation. All of
-  it runs inside the control-plane fence and the request log, so a member
-  that lost its slot takes no budget, and every in-chain call writes one
-  log row, a refusal included. Each refusal it makes carries
-  `stage: :admission`. Guest-supplied lineage keys are discarded before
-  dispatch.
+  it runs inside the control-plane fence, so a member that lost its slot
+  takes no budget, and every in-chain call is recorded as one admission
+  decision, a refusal included, whose parent call is `opts[:lineage]`'s
+  `call_id` — the call that admitted the calling execution. Each refusal
+  it makes carries `stage: :admission`. Guest-supplied lineage and call
+  keys are discarded before dispatch.
 
   The grant is the one the calling execution's attempt stores, found by
   the host-stamped `opts[:lineage]`: its `attempt` must be an open attempt
@@ -423,8 +430,14 @@ defmodule Grimoire.Catalog do
       |> Keyword.put(:authority, authority)
 
     args =
-      args
-      |> Map.drop(["parent_execution_id", "root_execution_id", "thread_id", "attempt"])
+      Map.drop(args, [
+        "parent_execution_id",
+        "root_execution_id",
+        "thread_id",
+        "attempt",
+        "call_id",
+        "parent_call_id"
+      ])
 
     do_call(name, ctx, args, opts)
   end
@@ -961,60 +974,132 @@ defmodule Grimoire.Catalog do
   # The gate. Every call, on either plane, is decided here once: the
   # caller's authorization and the arguments' cast and, for a chain's call,
   # the calling execution's standing, the authority's step and its charge —
-  # inside the request log and the control-plane fence, before any handler
-  # runs. A refusal made here carries `stage: :admission`; what a handler
-  # or the call's own ending answers is the execution's.
+  # inside the control-plane fence, before any handler runs. A refusal
+  # made here carries `stage: :admission`; what a handler or the call's
+  # own ending answers is the execution's.
+  #
+  # Each decision is recorded once (`Grimoire.Decisions`): a refusal where
+  # it is made, an admission after the last check and before the work
+  # runs, and the admitted work's completion on this process once it
+  # returns. The call's identity exists before the first check.
   defp do_call(name, %Context{} = ctx, args, opts) when is_map(args) do
+    call_id = call_id!(Keyword.get(opts, :call_id))
+    inserted_at = DateTime.utc_now()
+
     in_chain? = match?(%Prima.Authority{}, Keyword.get(opts, :authority))
     opts = Keyword.put(opts, :in_chain, in_chain?)
 
     # Every call belongs to an ingress request. One that arrived over a
     # transport already carries it; an internal caller has none, so it becomes
-    # its own root.
-    own_root? = is_nil(ctx.request_id)
-    ctx = if own_root?, do: %{ctx | request_id: Prima.UUID7.request_id()}, else: ctx
-
-    # Transports log incoming requests; in-chain calls log themselves even
-    # when they inherit the root request id, and their start row is written
-    # before the effect; an in-process caller's own root rides the
-    # write-behind, start and close alike. Exclude mcp_log to avoid logging
-    # its own queries.
-    log_mode =
-      cond do
-        name == "mcp_log" -> false
-        in_chain? -> true
-        own_root? -> :behind
-        true -> false
-      end
-
-    should_log? = log_mode != false
-
-    # A root call *is* its request, so it is filed under the request id. An
-    # in-chain call is one of several beneath that request and needs its own
-    # key; `request_id` on the row is what ties them together.
-    call_id =
-      cond do
-        not should_log? -> nil
-        in_chain? -> Prima.UUID7.generate_id("call")
-        true -> ctx.request_id
-      end
+    # its own root. The handler is handed the admission it runs inside.
+    ctx = if is_nil(ctx.request_id), do: %{ctx | request_id: Prima.UUID7.request_id()}, else: ctx
+    ctx = %{ctx | call_id: call_id}
 
     action = args["action"] || args[:action]
     logged_args = if in_chain?, do: put_lineage(args, Keyword.get(opts, :lineage)), else: args
-    started = %{tool: name, action: action, method: "tools/call", input: logged_args}
-    opts = Keyword.put(opts, :action, action)
 
-    Grimoire.RequestLog.around(log_mode, ctx, call_id, started, fn ->
-      # A member that lost its cell slot dispatches nothing, catalogued or
-      # proxied, and takes no budget: the endpoint's plug refuses new
-      # requests, but a connected console, an in-process caller and a
-      # running chain's next call all arrive here without passing it.
-      if Arca.ControlPlane.held?() do
-        route(name, ctx, args, opts, in_chain?)
-      else
-        {{:error, Error.admission(:control_plane_lost)}, %{}}
-      end
-    end)
+    audit = %{
+      ctx: ctx,
+      call_id: call_id,
+      parent_call_id: if(in_chain?, do: parent_call_id(Keyword.get(opts, :lineage))),
+      plane: if(in_chain?, do: :in_chain, else: :external),
+      tool: bounded(name),
+      inserted_at: inserted_at,
+      recorded?: Grimoire.Decisions.recorded?(name, action),
+      projection: %{method: Keyword.get(opts, :method) || "tools/call", input: logged_args}
+    }
+
+    opts = opts |> Keyword.put(:action, action) |> Keyword.put(:audit, audit)
+
+    # A member that lost its cell slot dispatches nothing, catalogued or
+    # proxied, and takes no budget: the endpoint's plug refuses new
+    # requests, but a connected console, an in-process caller and a
+    # running chain's next call all arrive here without passing it.
+    outcome =
+      if Arca.ControlPlane.held?(),
+        do: route(name, ctx, args, opts, in_chain?),
+        else: refused(opts, args, Error.admission(:control_plane_lost))
+
+    settle(audit, outcome)
+  end
+
+  # The call's identity: the entry's, when it minted one before its own
+  # checks, else a new one.
+  defp call_id!(nil), do: Prima.UUID7.generate_id("call")
+  defp call_id!("call_" <> rest = call_id) when rest != "", do: call_id
+
+  defp call_id!(_other),
+    do: raise(ArgumentError, "a gate call's :call_id is a call_ id minted by its entry")
+
+  # The call that admitted the calling execution, as the host stamped it
+  # on the lineage — never anything the guest's arguments carry.
+  defp parent_call_id(%{call_id: "call_" <> _ = call_id}), do: call_id
+  defp parent_call_id(_lineage), do: nil
+
+  # A decision's operation names, as stored: a name that is not a string
+  # names nothing, and the columns hold 255 characters on PostgreSQL, so a
+  # longer name — a guest's own — is cut rather than costing the record.
+  defp bounded(value) when is_binary(value),
+    do: value |> String.codepoints() |> Enum.take(255) |> Enum.join()
+
+  defp bounded(_value), do: nil
+
+  defp action_of(args), do: bounded(args["action"] || args[:action])
+
+  # The call admitted: its decision recorded, then the work run. The
+  # duration is the work's alone.
+  defp admitted(opts, args, run) do
+    decide(Keyword.fetch!(opts, :audit), :admitted, action_of(args), nil)
+    started = System.monotonic_time()
+    {result, meta} = run.()
+    elapsed = System.convert_time_unit(System.monotonic_time() - started, :native, :millisecond)
+    {:admitted, result, meta, elapsed}
+  end
+
+  # The call refused before any work ran: its decision recorded, the
+  # refusal answered.
+  defp refused(opts, args, %Prima.Refusal{} = refusal) do
+    decide(Keyword.fetch!(opts, :audit), :refused, action_of(args), refusal)
+    {:refused, {:error, refusal}}
+  end
+
+  # Discovery and the audit's own reads are neither appended nor emitted.
+  defp decide(%{recorded?: false}, _admission, _action, _refusal), do: :ok
+
+  defp decide(audit, admission, action, refusal) do
+    ctx = audit.ctx
+
+    decision = %Prima.Decision{
+      call_id: audit.call_id,
+      parent_call_id: audit.parent_call_id,
+      request_id: ctx.request_id,
+      user_id: ctx.user_id,
+      athanor_id: ctx.athanor_id,
+      plane: audit.plane,
+      tool: audit.tool,
+      action: action,
+      inserted_at: audit.inserted_at,
+      admission: admission,
+      refusal_class: refusal && refusal.class,
+      reason: refusal && Grimoire.render(refusal)
+    }
+
+    Grimoire.Decisions.open(ctx, decision, audit.projection)
+  end
+
+  # The admitted work's completion, recorded by the process that ran it
+  # once it returned; the answer is the work's either way.
+  defp settle(_audit, {:refused, result}), do: result
+  defp settle(%{recorded?: false}, {:admitted, result, _meta, _elapsed}), do: result
+
+  defp settle(audit, {:admitted, result, meta, elapsed}) do
+    Grimoire.Decisions.close(audit.ctx, audit.call_id, %{
+      result: result,
+      duration_ms: elapsed,
+      routed_to: Map.get(meta, :routed_to)
+    })
+
+    result
   end
 
   # A chain's call: the calling execution's standing, the in-chain plane,
@@ -1028,40 +1113,34 @@ defmodule Grimoire.Catalog do
     with :ok <- lineage_standing(ctx, Keyword.get(opts, :lineage)),
          :ok <- check_in_chain_reachable(name, args),
          :ok <- authorize_declared_action(name, ctx, args, true),
-         {:ok, args} <- validate_chain_arguments(name, args),
-         {:ok, target, server} <- in_chain_target(ctx, name, args),
+         {:ok, cast} <- validate_chain_arguments(name, args),
+         {:ok, target, server} <- in_chain_target(ctx, name, cast),
          {:ok, resource} <- authority_step(authority, guest_fn, target, name) do
       warn_on_description_drift(ctx, authority, resource)
 
       # The server row the transition was judged on is the one dispatch
       # speaks to — one revision per call, never a second read that a
       # change in between could answer.
-      charged(name, ctx, args, authority, guest_fn, Keyword.put(opts, :server, server))
+      charged(name, ctx, cast, authority, guest_fn, Keyword.put(opts, :server, server))
     else
-      {:error, reason} -> {{:error, Error.admission(reason)}, routed(name)}
+      # Recorded with the arguments as the caller sent them.
+      {:error, reason} -> refused(opts, args, Error.admission(reason))
     end
   end
 
   defp route(name, ctx, args, opts, false = _in_chain?) do
     case lookup(name) do
-      {:ok, {module, meta}} ->
+      {:ok, {_module, meta}} ->
         with :ok <- authorize_declared_action(name, ctx, args, false),
-             {:ok, args} <- Operation.cast(meta, args) do
-          dispatch(name, ctx, args, opts)
+             {:ok, cast} <- Operation.cast(meta, args) do
+          dispatch(name, ctx, cast, opts)
         else
-          {:error, reason} ->
-            {{:error, Error.admission(reason)}, %{routed_to: inspect(module)}}
+          # Recorded with the arguments as the caller sent them.
+          {:error, reason} -> refused(opts, args, Error.admission(reason))
         end
 
       :miss ->
         dispatch(name, ctx, args, opts)
-    end
-  end
-
-  defp routed(name) do
-    case lookup(name) do
-      {:ok, {module, _meta}} -> %{routed_to: inspect(module)}
-      :miss -> %{}
     end
   end
 
@@ -1100,8 +1179,14 @@ defmodule Grimoire.Catalog do
           |> Keyword.drop([:guest_fn, :charge, :authority])
 
         try do
-          {result, meta} = dispatch(name, ctx, args, dispatch_opts)
-          {prune_in_chain_discovery(result, name, args, ctx, authority), meta}
+          case dispatch(name, ctx, args, dispatch_opts) do
+            {:admitted, result, meta, elapsed} ->
+              {:admitted, prune_in_chain_discovery(result, name, args, ctx, authority), meta,
+               elapsed}
+
+            {:refused, _result} = refused ->
+              refused
+          end
         after
           if guest_fn == :spawn do
             Sanctum.Authority.release_invoke(authority)
@@ -1112,66 +1197,76 @@ defmodule Grimoire.Catalog do
       {:error, reason} ->
         # The slot the transition charged goes back: the row refused it.
         Sanctum.Authority.BudgetCounter.release(authority.budget)
-        {{:error, Error.admission(chain_denial(reason, name))}, routed(name)}
+        refused(opts, args, Error.admission(chain_denial(reason, name)))
     end
   end
 
   # The admitted call, run: a catalogued tool's handler, or — on a miss —
-  # the proxy port for a `server:tool` name.
+  # the proxy port for a `server:tool` name, once it has resolved the name
+  # and the call is admitted.
   defp dispatch(name, ctx, args, opts) do
     in_chain? = Keyword.fetch!(opts, :in_chain)
     args = if in_chain?, do: put_lineage(args, Keyword.get(opts, :lineage)), else: args
 
     case lookup(name) do
       {:ok, {module, _meta}} ->
-        result =
-          execute_tool_call(name, ctx, opts, fn ->
-            module.handle(name, handler_input(module, ctx), args)
-          end)
+        admitted(opts, args, fn ->
+          result =
+            execute_tool_call(name, ctx, opts, fn ->
+              module.handle(name, handler_input(module, ctx), args)
+            end)
 
-        {result, %{routed_to: inspect(module)}}
+          # The row names the service that answered, as `system.status`
+          # names it.
+          {result, %{routed_to: Grimoire.Services.service_name(module)}}
+        end)
 
       :miss ->
         proxied(name, ctx, args, opts, in_chain?)
     end
   end
 
+  # A namespaced name (e.g. "notion:create_page") is asked of the proxy
+  # port: resolved first — the server, the tool, the plane — as part of
+  # the admission, then run.
   defp proxied(name, ctx, args, opts, in_chain?) do
-    # Try external provider for namespaced tools (e.g., "notion:create_page")
-    external_result =
-      if String.contains?(name, ":") and not ctx.authenticated do
-        # External tools carry no per-tool requires_auth metadata; all
-        # of them require authentication. The HTTP router never routes
-        # unknown names here, so this guards the in-process callers
-        # (FormulaHandler, LiveViews). Bare unknown names fall through
-        # so they still produce "Unknown tool".
-        {:error, Error.admission({:tool_auth_required, name})}
-      else
-        # The caller's plane rides along: proxied tools are in-chain
-        # by declaration, and an external-plane call reaches one only
-        # when the server row opts in — enforced where the row is in
-        # hand, not left to the wiring.
-        plane = if in_chain?, do: :in_chain, else: :external
-        proxy = Grimoire.Proxy.impl!()
+    if String.contains?(name, ":") and not ctx.authenticated do
+      # External tools carry no per-tool requires_auth metadata; all of
+      # them require authentication. The HTTP router never routes unknown
+      # names here, so this guards the in-process callers (FormulaHandler,
+      # LiveViews). Bare unknown names fall through so they still produce
+      # "Unknown tool".
+      refused(opts, args, Error.admission({:tool_auth_required, name}))
+    else
+      # The caller's plane rides along: proxied tools are in-chain by
+      # declaration, and an external-plane call reaches one only when the
+      # server row opts in — enforced where the row is in hand, not left to
+      # the wiring.
+      plane = if in_chain?, do: :in_chain, else: :external
+      proxy = Grimoire.Proxy.impl!()
 
-        execute_tool_call(name, ctx, opts, fn ->
-          proxy.try_handle(name, ctx, args, plane,
-            server: Keyword.get(opts, :server),
-            execution_id: Keyword.get(opts, :execution_id),
-            step: Keyword.get(opts, :step),
-            hold: Keyword.get(opts, :hold),
-            retention_class: Keyword.get(opts, :retention_class)
-          )
-        end)
+      case proxy.resolve(name, ctx, plane, server: Keyword.get(opts, :server)) do
+        {:ok, target} ->
+          admitted(opts, args, fn ->
+            result =
+              execute_tool_call(name, ctx, opts, fn ->
+                proxy.dispatch(target, ctx, args, plane,
+                  execution_id: Keyword.get(opts, :execution_id),
+                  step: Keyword.get(opts, :step),
+                  hold: Keyword.get(opts, :hold),
+                  retention_class: Keyword.get(opts, :retention_class)
+                )
+              end)
+
+            {result, %{routed_to: "external:#{name}"}}
+          end)
+
+        {:error, :not_external} ->
+          refused(opts, args, Error.admission({:unknown_tool, name}))
+
+        {:error, reason} ->
+          refused(opts, args, Error.admission(reason))
       end
-
-    case external_result do
-      {:error, :not_external} ->
-        refusal = Error.admission({:unknown_tool, name})
-        {{:error, refusal}, %{code: -32_601, error_text: refusal.message}}
-
-      result ->
-        {result, %{routed_to: "external:#{name}"}}
     end
   end
 

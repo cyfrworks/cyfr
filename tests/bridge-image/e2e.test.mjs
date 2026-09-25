@@ -249,7 +249,8 @@ async function tool(name, args) {
  * (`Sanctum.ExecutionStanding.capture/1`), which the root's attempt stores
  * (`Crucible.Record.write_started/2`); the call names the root as its parent
  * and root and reaches the dispatch a chain's call reaches past its
- * authority (`Emissary.External.Proxy.try_handle/5`), which keeps it as a
+ * authority (`Emissary.External.Proxy.resolve/4`, then `dispatch/5` with the
+ * target it resolved), which keeps it as a
  * tool_call execution with its payloads under the grant it inherits; the
  * root then closes with the call's outcome. A call that names no parent has
  * no grant to inherit and is refused. Answers `{ok: result}` or
@@ -278,7 +279,9 @@ function callTool(name, args = {}, plane = "console") {
           lineage = %{"parent_execution_id" => root.id, "root_execution_id" => root.id}
 
           reply =
-            Emissary.External.Proxy.try_handle(args["name"], ctx, Map.merge(args["arguments"], lineage), :in_chain)
+            with {:ok, target} <- Emissary.External.Proxy.resolve(args["name"], ctx, :in_chain) do
+              Emissary.External.Proxy.dispatch(target, ctx, Map.merge(args["arguments"], lineage), :in_chain)
+            end
 
           :ok =
             case reply do

@@ -407,21 +407,24 @@ defmodule Opus.ModelContractTest do
     assert {:ok, []} =
              Arca.BudgetReservations.charges(Sanctum.Context.actor(ctx), played.turn.budget_id)
 
-    # Each call passed the gate, which keeps a row of it with what it was
-    # asked; the rows close behind the calls.
+    # Each call passed the gate, which records it with a row of what it
+    # was asked, completed when the call returns; `system.status` is
+    # discovery, which is not recorded.
     gated = fn ->
       {:ok, rows} = Arca.McpLog.list(athanor_id: ctx.athanor_id, limit: 100)
       for %{tool: tool} = row <- rows, tool in ["notes", "system"], do: row
     end
 
     wait_until(
-      fn -> Enum.count(gated.(), &(&1.status == "success")) == 4 end,
+      fn -> Enum.count(gated.(), &(&1.status == "success")) == 3 end,
       @settle_ms,
-      "the gate's rows of the four calls to close"
+      "the gate's rows of the three recorded calls to close"
     )
 
     assert gated.() |> Enum.map(&"#{&1.tool}.#{&1.action}") |> Enum.sort() ==
-             ["notes.list", "notes.search", "notes.search", "system.status"]
+             ["notes.list", "notes.search", "notes.search"]
+
+    assert Enum.all?(gated.(), &String.starts_with?(&1.id, "call_"))
 
     assert gated.()
            |> Enum.filter(&(&1.action == "search"))

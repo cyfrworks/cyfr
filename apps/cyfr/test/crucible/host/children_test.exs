@@ -567,6 +567,41 @@ defmodule Crucible.Host.ChildrenTest do
       assert message =~ "own payload"
     end
 
+    test "names the call that admitted its execution as its parent call", %{ctx: ctx} do
+      # The formula runs inside the admission of a call: its context and
+      # its row carry that call's id, and so does a child it admits.
+      root_call = Prima.UUID7.generate_id("call")
+      ctx = %{ctx | call_id: root_call, request_id: Prima.UUID7.request_id()}
+      authority = authority(edges: %{@target => %{"tools" => ["component.categories"]}})
+      fixture = formula!(ctx, authority)
+
+      assert %{"ok" => answer} = admit(fixture, "#{@target}:1.0.0", %{})
+      child = child!(fixture, answer)
+
+      assert %{call_id: ^root_call} =
+               Arca.Repo.get!(Arca.Schemas.Execution, child.execution_id)
+
+      # The child's attempt read the call off its row; its tool call names
+      # it, whatever the guest's arguments say.
+      assert %{"ok" => _} =
+               tool(child, "component", %{
+                 "action" => "categories",
+                 "call_id" => "call_forged",
+                 "parent_call_id" => "call_forged"
+               })
+
+      assert {:ok, decisions} =
+               Arca.DecisionLog.correlate(Sanctum.Context.actor(ctx), ctx.request_id)
+
+      assert [call] = Enum.filter(decisions, &(&1.tool == "component"))
+      assert call.plane == :in_chain
+      assert call.parent_call_id == root_call
+      refute call.call_id in [root_call, "call_forged"]
+      assert call.completion == :succeeded
+
+      assert %{"ok" => _} = fail!(child, "done")
+    end
+
     test "is refused on the in-chain plane for an action no chain may run", %{ctx: ctx} do
       fixture = formula!(ctx, authority(tools: ["key.create"]))
 

@@ -37,6 +37,14 @@ defmodule Crucible.Schedules.Scheduler do
   generation, so a task that outlived the take-over stops where it stands
   instead of writing after the successor has begun.
 
+  Each fire is one admission decision (`Grimoire.open_decision/3`, tool
+  `schedule`, action `fire`), recorded before the run under a call id the
+  run's context carries, so the root execution's row names it, and
+  completed with the run's answer (`Grimoire.close_decision/3`). A fire
+  whose member lost its generation between the run and its answer records
+  no completion — a stale owner emits no result — and neither does one
+  whose runner task died: its decision reads as unknown.
+
   A completed occurrence is announced on `Cyfr.Bus.schedule_completions/0`
   (`Cyfr.Bus.ScheduleCompleted`) once: only when closing it moved the
   occurrence row, the schedule's run was recorded, and the generation still
@@ -624,15 +632,29 @@ defmodule Crucible.Schedules.Scheduler do
 
   # One root run, the occurrence joined to
   # the execution by its admission; the occurrence closes with the
-  # answer, whichever it is.
+  # answer, whichever it is. The fire is one admission decision, recorded
+  # before the run under a call id the context carries, so the root's row
+  # names it, and completed with the run's answer.
   defp run(schedule, occurrence, ctx, exec_reference, input, generation) do
     request_id = Prima.UUID7.request_id()
-    ctx = %{ctx | request_id: request_id}
+    call_id = Prima.UUID7.generate_id("call")
+    ctx = %{ctx | request_id: request_id, call_id: call_id}
     execution_id = Prima.UUID7.execution_id()
 
-    Grimoire.RequestLog.safe_log_started(ctx, request_id, %{
-      tool: "schedule",
-      action: "fire",
+    decision =
+      Prima.Decision.new(
+        call_id: call_id,
+        request_id: request_id,
+        user_id: ctx.user_id,
+        athanor_id: ctx.athanor_id,
+        plane: :external,
+        tool: "schedule",
+        action: "fire",
+        inserted_at: DateTime.utc_now(),
+        admission: :admitted
+      )
+
+    Grimoire.open_decision(ctx, decision, %{
       method: "cron/fire",
       input: %{schedule_id: schedule.id, reference: exec_reference, input: input}
     })
@@ -681,8 +703,8 @@ defmodule Crucible.Schedules.Scheduler do
 
           recorded = record_run(ctx, schedule.id, execution_id)
 
-          Grimoire.RequestLog.safe_log_completed(ctx, request_id, %{
-            output: output,
+          Grimoire.close_decision(ctx, call_id, %{
+            result: {:ok, output},
             duration_ms: duration_ms,
             routed_to: Crucible.service()
           })
@@ -725,8 +747,8 @@ defmodule Crucible.Schedules.Scheduler do
               "failed"
             )
 
-          Grimoire.RequestLog.safe_log_failed(ctx, request_id, %{
-            error: Grimoire.render(reason),
+          Grimoire.close_decision(ctx, call_id, %{
+            result: {:error, reason},
             duration_ms: duration_ms,
             routed_to: Crucible.service()
           })

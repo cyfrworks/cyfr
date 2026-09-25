@@ -165,10 +165,13 @@ defmodule Crucible.Host.Children do
 
   def call(caller, {:tool_call, tool}) do
     with {:ok, chain} <- Attempt.call(caller.execution_id, caller, :chain) do
+      # The call that admitted the calling execution is the parent of
+      # this one: read off the execution's own row, never the guest's.
       lineage = %{
         parent_execution_id: caller.execution_id,
         root_execution_id: chain.root_execution_id,
-        attempt: caller.attempt
+        attempt: caller.attempt,
+        call_id: chain.call_id
       }
 
       case Grimoire.call_in_chain(tool.name, chain.ctx, tool.args, chain.authority,

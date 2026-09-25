@@ -63,118 +63,94 @@ defmodule Emissary.IntegrationTest do
     end
   end
 
+  # The request's rows: the gate's decisions' projections, correlated to
+  # the response by its request id. The transport records none of its own.
+  defp rows(request_id) do
+    import Ecto.Query
+    Arca.Repo.all(from(l in Arca.Schemas.McpLog, where: l.request_id == ^request_id))
+  end
+
+  defp whoami(conn) do
+    conn
+    |> recycle()
+    |> put_req_header("content-type", "application/json")
+    |> mcp_post(%{
+      "jsonrpc" => "2.0",
+      "id" => 2,
+      "method" => "tools/call",
+      "params" => %{"name" => "session", "arguments" => %{"action" => "whoami"}}
+    })
+  end
+
+  # An admitted read whose handler finds nothing: a call that fails.
+  defp missing_read(conn) do
+    conn
+    |> recycle()
+    |> put_req_header("content-type", "application/json")
+    |> mcp_post(%{
+      "jsonrpc" => "2.0",
+      "id" => 2,
+      "method" => "resources/read",
+      "params" => %{"uri" => "arca://files/data/nothing-here.txt"}
+    })
+  end
+
   describe "request logging verification" do
     test "request log created with correct fields", %{conn: conn} do
-      conn =
-        conn
-        |> put_req_header("content-type", "application/json")
-        |> mcp_post(%{
-          "jsonrpc" => "2.0",
-          "id" => 1,
-          "method" => "server/discover"
-        })
-
+      conn = whoami(conn)
       [request_id] = get_resp_header(conn, "x-request-id")
 
       # Logging is synchronous — no wait needed
-
-      log = Arca.Repo.get(Arca.Schemas.McpLog, request_id)
+      assert [log] = rows(request_id)
 
       # Verify all required fields
-      assert log.id == request_id
-      assert log.method == "server/discover"
+      assert "call_" <> _ = log.id
+      assert log.request_id == request_id
+      assert log.method == "tools/call"
       assert log.status == "success"
       assert log.timestamp
       assert is_integer(log.duration_ms)
       assert log.duration_ms >= 0
+    end
 
-      # Cleanup
-      Arca.Repo.get(Arca.Schemas.McpLog, request_id) |> Arca.Repo.delete()
+    test "discovery leaves no row", %{conn: conn} do
+      conn =
+        conn
+        |> put_req_header("content-type", "application/json")
+        |> mcp_post(%{"jsonrpc" => "2.0", "id" => 1, "method" => "server/discover"})
+
+      [request_id] = get_resp_header(conn, "x-request-id")
+      assert rows(request_id) == []
     end
 
     test "tool call log includes tool and action", %{conn: conn} do
-      # Initialize first
-      init_conn =
-        conn
-        |> put_req_header("content-type", "application/json")
-        |> mcp_post(%{
-          "jsonrpc" => "2.0",
-          "id" => 1,
-          "method" => "server/discover"
-        })
-
-      [init_request_id] = get_resp_header(init_conn, "x-request-id")
-
-      # Make tool call
-      tool_conn =
-        conn
-        |> recycle()
-        |> put_req_header("content-type", "application/json")
-        |> mcp_post(%{
-          "jsonrpc" => "2.0",
-          "id" => 2,
-          "method" => "tools/call",
-          "params" => %{
-            "name" => "system",
-            "arguments" => %{"action" => "status"}
-          }
-        })
-
+      tool_conn = whoami(conn)
       [request_id] = get_resp_header(tool_conn, "x-request-id")
 
-      # Logging is synchronous — no wait needed
-
-      log = Arca.Repo.get(Arca.Schemas.McpLog, request_id)
-
+      assert [log] = rows(request_id)
       assert log.method == "tools/call"
-      assert log.tool == "system"
-      assert log.action == "status"
-      assert log.routed_to == "grimoire"
-
-      # Cleanup
-      Arca.Repo.get(Arca.Schemas.McpLog, request_id) |> Arca.Repo.delete()
-      Arca.Repo.get(Arca.Schemas.McpLog, init_request_id) |> Arca.Repo.delete()
+      assert log.tool == "session"
+      assert log.action == "whoami"
+      assert log.routed_to == "sanctum"
     end
 
     test "failed request log includes error details", %{conn: conn} do
-      # Initialize first
-      init_conn =
-        conn
-        |> put_req_header("content-type", "application/json")
-        |> mcp_post(%{
-          "jsonrpc" => "2.0",
-          "id" => 1,
-          "method" => "server/discover"
-        })
-
-      [init_request_id] = get_resp_header(init_conn, "x-request-id")
-
-      # Make request that will fail (invalid URI)
-      error_conn =
-        conn
-        |> recycle()
-        |> put_req_header("content-type", "application/json")
-        |> mcp_post(%{
-          "jsonrpc" => "2.0",
-          "id" => 2,
-          "method" => "resources/read",
-          "params" => %{"uri" => "invalid-uri-no-scheme"}
-        })
-
+      error_conn = missing_read(conn)
       [request_id] = get_resp_header(error_conn, "x-request-id")
 
-      # Logging is synchronous — no wait needed
-
-      log = Arca.Repo.get(Arca.Schemas.McpLog, request_id)
-
+      assert [log] = rows(request_id)
+      assert log.method == "resources/read"
       assert log.status == "error"
       assert is_binary(log.error)
-      # error_code may be stored as integer or string depending on the error path
-      assert log.error_code != nil
 
-      # Cleanup
-      Arca.Repo.get(Arca.Schemas.McpLog, request_id) |> Arca.Repo.delete()
-      Arca.Repo.get(Arca.Schemas.McpLog, init_request_id) |> Arca.Repo.delete()
+      # The row's meaning is the class, on its decision; the JSON-RPC code
+      # is the transport's rendering, and the row carries none.
+      assert log.error_code == nil
+
+      assert %{completion: "failed", completion_class: class} =
+               Arca.Repo.get(Arca.Schemas.DecisionLog, log.id)
+
+      assert class in Enum.map(Prima.Refusal.classes(), &Atom.to_string/1)
     end
   end
 
@@ -454,25 +430,13 @@ defmodule Emissary.IntegrationTest do
     end
 
     test "request_id appears in request log", %{conn: conn} do
-      conn =
-        conn
-        |> put_req_header("content-type", "application/json")
-        |> mcp_post(%{
-          "jsonrpc" => "2.0",
-          "id" => 1,
-          "method" => "server/discover"
-        })
-
+      conn = whoami(conn)
       [request_id] = get_resp_header(conn, "x-request-id")
 
-      # Logging is synchronous — no wait needed
-
-      # Verify request_id is in the log
-      log = Arca.Repo.get(Arca.Schemas.McpLog, request_id)
-      assert log.id == request_id
-
-      # Cleanup
-      Arca.Repo.get(Arca.Schemas.McpLog, request_id) |> Arca.Repo.delete()
+      # The row is the call's, filed under the request's id.
+      assert [log] = rows(request_id)
+      assert log.request_id == request_id
+      refute log.id == request_id
     end
 
     test "request_id is unique per request", %{conn: conn} do
@@ -502,80 +466,32 @@ defmodule Emissary.IntegrationTest do
     end
 
     test "session_id is included in context for tool calls", %{conn: conn} do
-      # Initialize
-      init_conn =
-        conn
-        |> put_req_header("content-type", "application/json")
-        |> mcp_post(%{
-          "jsonrpc" => "2.0",
-          "id" => 1,
-          "method" => "server/discover"
-        })
-
-      [init_request_id] = get_resp_header(init_conn, "x-request-id")
-
-      # Make tool call
-      tool_conn =
-        conn
-        |> recycle()
-        |> put_req_header("content-type", "application/json")
-        |> mcp_post(%{
-          "jsonrpc" => "2.0",
-          "id" => 2,
-          "method" => "tools/call",
-          "params" => %{
-            "name" => "session",
-            "arguments" => %{"action" => "whoami"}
-          }
-        })
-
+      tool_conn = whoami(conn)
       [tool_request_id] = get_resp_header(tool_conn, "x-request-id")
 
-      # Logging is synchronous — no wait needed
-
-      # Verify both requests have their request_ids in logs
-      init_log = Arca.Repo.get(Arca.Schemas.McpLog, init_request_id)
-      assert init_log.id == init_request_id
-
-      tool_log = Arca.Repo.get(Arca.Schemas.McpLog, tool_request_id)
-      assert tool_log.id == tool_request_id
+      assert [tool_log] = rows(tool_request_id)
+      assert tool_log.request_id == tool_request_id
 
       # The log still attributes the call to a caller, now by credential.
       assert tool_log.user_id != nil
-
-      # Cleanup
-      Arca.Repo.get(Arca.Schemas.McpLog, init_request_id) |> Arca.Repo.delete()
-      Arca.Repo.get(Arca.Schemas.McpLog, tool_request_id) |> Arca.Repo.delete()
     end
 
     test "request_id propagates to downstream tool handlers", %{conn: conn} do
-      # Make a tool call that uses the context
-      tool_conn =
-        conn
-        |> recycle()
-        |> put_req_header("content-type", "application/json")
-        |> mcp_post(%{
-          "jsonrpc" => "2.0",
-          "id" => 2,
-          "method" => "tools/call",
-          "params" => %{
-            "name" => "system",
-            "arguments" => %{"action" => "status"}
-          }
-        })
-
+      tool_conn = whoami(conn)
       [request_id] = get_resp_header(tool_conn, "x-request-id")
 
-      # Logging is synchronous — no wait needed
-
       # Request log should exist and contain the request
-      log = Arca.Repo.get(Arca.Schemas.McpLog, request_id)
-      assert log.id == request_id
+      assert [log] = rows(request_id)
       assert log.method == "tools/call"
-      assert log.tool == "system"
+      assert log.tool == "session"
 
-      # Cleanup
-      Arca.Repo.get(Arca.Schemas.McpLog, request_id) |> Arca.Repo.delete()
+      assert {:ok, [decision]} =
+               Arca.DecisionLog.correlate(
+                 Prima.Actor.in_athanor(log.athanor_id),
+                 request_id
+               )
+
+      assert decision.call_id == log.id
     end
 
     test "request_id format is valid UUID7", %{conn: conn} do
@@ -603,42 +519,12 @@ defmodule Emissary.IntegrationTest do
     end
 
     test "failed requests still have request_id in log", %{conn: conn} do
-      # Initialize
-      init_conn =
-        conn
-        |> put_req_header("content-type", "application/json")
-        |> mcp_post(%{
-          "jsonrpc" => "2.0",
-          "id" => 1,
-          "method" => "server/discover"
-        })
-
-      [init_request_id] = get_resp_header(init_conn, "x-request-id")
-
-      # Make a request that will fail
-      error_conn =
-        conn
-        |> recycle()
-        |> put_req_header("content-type", "application/json")
-        |> mcp_post(%{
-          "jsonrpc" => "2.0",
-          "id" => 2,
-          "method" => "resources/read",
-          "params" => %{"uri" => "invalid-uri"}
-        })
-
+      error_conn = missing_read(conn)
       [error_request_id] = get_resp_header(error_conn, "x-request-id")
 
-      # Logging is synchronous — no wait needed
-
-      # Error request should still be logged with its request_id
-      error_log = Arca.Repo.get(Arca.Schemas.McpLog, error_request_id)
-      assert error_log.id == error_request_id
+      # Error request should still be logged under its request_id
+      assert [error_log] = rows(error_request_id)
       assert error_log.status == "error"
-
-      # Cleanup
-      Arca.Repo.get(Arca.Schemas.McpLog, init_request_id) |> Arca.Repo.delete()
-      Arca.Repo.get(Arca.Schemas.McpLog, error_request_id) |> Arca.Repo.delete()
     end
   end
 end

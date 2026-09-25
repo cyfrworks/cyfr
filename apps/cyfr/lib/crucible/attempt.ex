@@ -208,6 +208,7 @@ defmodule Crucible.Attempt do
               [
                 :need,
                 :root_execution_id,
+                :call_id,
                 :activation_digest,
                 :claimed_by,
                 :worker,
@@ -244,7 +245,9 @@ defmodule Crucible.Attempt do
   @typedoc """
   What a run's guest's children and catalog tools are decided under: the
   context its guest's calls run in, the run's authority, its component's
-  reference, its root, the declared needs and activation digest the
+  reference, its root, the admission decision its row was started under
+  (`call_id`, the parent call of every call its guest makes; nil when
+  none was recorded), the declared needs and activation digest the
   resolver gave its component, the delegation roster its admitted input
   carries and the endpoint of the worker service it runs on.
   """
@@ -253,6 +256,7 @@ defmodule Crucible.Attempt do
           authority: Authority.t(),
           component_ref: String.t(),
           root_execution_id: String.t(),
+          call_id: String.t() | nil,
           declared_needs: [String.t()],
           activation_digest: String.t() | nil,
           roster: [map()],
@@ -272,7 +276,8 @@ defmodule Crucible.Attempt do
   limits), `:stream_id` (the stream its guest's events go on, default the
   execution's), `:budget_id` (the root whose emit budget they draw on,
   default the execution's), `:root_execution_id` (default the execution's),
-  `:declared_needs` (default `[]`) and `:activation_digest` (the
+  `:call_id` (the admission decision the row was started under, as the row
+  records it), `:declared_needs` (default `[]`) and `:activation_digest` (the
   resolver's, for its guest's children), `:roster` (the delegation roster
   of its admitted input, default `[]`), `:step_spans`, `:worker`,
   `:service_id` and `:boot_id` (the `t:Prima.WorkerAPI.endpoint/0`, the id
@@ -617,6 +622,7 @@ defmodule Crucible.Attempt do
       owner: owner_ref,
       waiter: owner,
       root_execution_id: Keyword.get(opts, :root_execution_id, execution_id),
+      call_id: Keyword.get(opts, :call_id),
       declared_needs: Keyword.get(opts, :declared_needs, []),
       activation_digest: Keyword.get(opts, :activation_digest),
       roster: Keyword.get(opts, :roster, []),
@@ -1253,6 +1259,7 @@ defmodule Crucible.Attempt do
       authority: state.authority,
       component_ref: state.component_ref,
       root_execution_id: state.root_execution_id,
+      call_id: state.call_id,
       declared_needs: state.declared_needs,
       activation_digest: state.activation_digest,
       roster: state.roster,

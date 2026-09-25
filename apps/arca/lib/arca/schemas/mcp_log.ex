@@ -9,8 +9,12 @@ defmodule Arca.Schemas.McpLog do
 
   ## Schema
 
-  - `id` (PK) - This call. For the request an ingress received, it is the
-    request id; an in-chain call minted during that request has its own.
+  Every row is the projection of one admission decision
+  (`Arca.DecisionLog`), written in the same transaction as the decision:
+  its start when the call is decided, its completion when the admitted
+  work ends.
+
+  - `id` (PK) - This call: the decision's call id (`call_<uuid7>`).
   - `request_id` - The ingress request every call in one chain shares. Group by
     this to see a formula's whole run: the `execution.run` that started it and
     each tool it reached from inside the sandbox.
@@ -26,6 +30,7 @@ defmodule Arca.Schemas.McpLog do
   - `input` - JSON-encoded request input
   - `output` - JSON-encoded response output
   - `error` - Error message if failed
+  - `refusal_class` - A refused call's class (`Prima.Refusal.classes/0`)
   """
 
   use Ecto.Schema
@@ -57,6 +62,7 @@ defmodule Arca.Schemas.McpLog do
     field :input, :string
     field :output, :string
     field :error, :string
+    field :refusal_class, :string
   end
 
   @required_fields [:id, :user_id, :athanor_id, :timestamp, :status]
@@ -70,7 +76,8 @@ defmodule Arca.Schemas.McpLog do
     :error_code,
     :input,
     :output,
-    :error
+    :error,
+    :refusal_class
   ]
 
   @doc """
@@ -80,15 +87,6 @@ defmodule Arca.Schemas.McpLog do
     %__MODULE__{}
     |> cast(attrs, @required_fields ++ @optional_fields)
     |> validate_required(@required_fields)
-    |> validate_inclusion(:status, @statuses)
-  end
-
-  @doc """
-  Creates a changeset for updating an existing MCP log entry.
-  """
-  def update_changeset(log, attrs) do
-    log
-    |> cast(attrs, [:status, :duration_ms, :routed_to, :error_code, :output, :error])
     |> validate_inclusion(:status, @statuses)
   end
 end

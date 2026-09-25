@@ -14,7 +14,9 @@ defmodule Emissary.MCP.Router do
 
   ## Authorization Model
 
-  The Router decides nothing; the gate authorizes, once. A `tools/call`
+  The Router decides nothing; the gate authorizes, once, and records the
+  call as one admission decision under the call id the request's context
+  carries (`ctx.call_id`), or one it mints. A `tools/call`
   of a tool the table holds goes to `Grimoire.call_external/4` with the
   caller's arguments as sent, and the gate authorizes the declared action
   before it casts the remaining fields, so an unauthorized caller
@@ -170,7 +172,10 @@ defmodule Emissary.MCP.Router do
           arguments = Map.get(params, "arguments", %{})
           has_output_schema = Map.has_key?(tool_def, "outputSchema")
 
-          case Grimoire.call_external(name, ctx, arguments, runner: :supervised) do
+          case Grimoire.call_external(name, ctx, arguments,
+                 runner: :supervised,
+                 call_id: ctx.call_id
+               ) do
             {:ok, result} ->
               {:ok, call_result(name, result, has_output_schema)}
 
@@ -231,7 +236,9 @@ defmodule Emissary.MCP.Router do
     read =
       with {:ok, tool, action} <- Grimoire.Resources.resolve(uri) do
         Grimoire.call_external(tool, ctx, %{"action" => action, "uri" => uri},
-          runner: :supervised
+          runner: :supervised,
+          call_id: ctx.call_id,
+          method: "resources/read"
         )
       end
 

@@ -323,4 +323,217 @@ defmodule EmissaryWeb.WebhookControllerTest do
                      2_000
     end
   end
+
+  describe "POST /hooks/:slug — the delivery is one recorded decision" do
+    defp decisions_for(request_id) do
+      import Ecto.Query, only: [from: 2]
+
+      Arca.Repo.all(from(d in Arca.Schemas.DecisionLog, where: d.request_id == ^request_id))
+    end
+
+    defp log_rows_for(request_id) do
+      import Ecto.Query, only: [from: 2]
+      Arca.Repo.all(from(l in Arca.Schemas.McpLog, where: l.request_id == ^request_id))
+    end
+
+    defp executions_for(call_id) do
+      import Ecto.Query, only: [from: 2]
+      Arca.Repo.all(from(e in Arca.Schemas.Execution, where: e.call_id == ^call_id))
+    end
+
+    @math_wasm_path Path.expand("../../support/test_wasm/math.wasm", __DIR__)
+
+    # A hook whose target runs: a published component, its profile's head
+    # consent activating that release, and a scripted worker service that
+    # answers the run.
+    defp runnable_hook!(ctx) do
+      name = "wh-run-#{System.unique_integer([:positive])}"
+      reference = "reagent:local.#{name}"
+
+      {:ok, component} =
+        Compendium.Registry.publish_bytes(ctx, File.read!(@math_wasm_path), %{
+          name: name,
+          version: "1.0.0",
+          type: "reagent"
+        })
+
+      profile_id = "prof_#{name}"
+
+      :ok =
+        Sanctum.Test.ConsentFixtures.seed_head!(
+          ctx,
+          %{
+            id: profile_id,
+            kind: :owner,
+            source_ref: reference,
+            label: "default",
+            status: :active
+          },
+          %{
+            id: "consent-#{profile_id}",
+            revision: 1,
+            scope: :versionless,
+            pinned_version: "",
+            invoke_mode: :open_inert,
+            shape_digest: "sha256:shape-#{profile_id}",
+            commit_digest: "sha256:commit-#{profile_id}",
+            resolved_policy:
+              Jason.encode!(%{
+                "canonical" => "jcs-1",
+                "nodes" => %{
+                  reference => %{
+                    "limits" => Prima.Test.AuthorityFixtures.limits_map(),
+                    "edges" => %{"@ingress" => %{}}
+                  }
+                }
+              }),
+            activation: %{reference => component.release_digest},
+            vault_refs: []
+          }
+        )
+
+      previous = Application.get_env(:cyfr, :opus_workers)
+      on_exit(fn -> Application.put_env(:cyfr, :opus_workers, previous) end)
+
+      Application.put_env(
+        :cyfr,
+        :opus_workers,
+        Cyfr.Test.ScriptedWorker.workers(reference, previous)
+      )
+
+      start_supervised!({Cyfr.Test.ScriptedWorker, ref: reference, script: [%{"ran" => true}]})
+
+      {:ok, hook} =
+        Webhook.create(ctx, %{
+          name: "audited",
+          target_ref: "#{reference}:1.0.0",
+          profile_id: profile_id,
+          replay_protection: "none"
+        })
+
+      hook
+    end
+
+    # Every loss of a decision or its completion; a second completion that
+    # differed from the first would be one (a conflict).
+    defp watch_losses do
+      id = {__MODULE__, make_ref()}
+
+      :telemetry.attach(
+        id,
+        [:cyfr, :grimoire, :decision, :lost],
+        fn _event, _measurements, metadata, test -> send(test, {:decision_lost, metadata}) end,
+        self()
+      )
+
+      on_exit(fn -> :telemetry.detach(id) end)
+    end
+
+    test "a signed delivery is one admitted decision with its row, its run's execution and one completion",
+         %{conn: conn, ctx: ctx} do
+      watch_losses()
+      %{slug: slug, secret: secret} = runnable_hook!(ctx)
+
+      conn = post_signed(conn, slug, secret, ~s({"event":"x"}))
+      request_id = json_response(conn, 200)["request_id"]
+
+      # The completion is recorded before the task's stop telemetry.
+      assert_receive {:telemetry, [:cyfr, :emissary, :webhook, :invoke, :stop], _,
+                      %{request_id: ^request_id}},
+                     5_000
+
+      assert [decision] = decisions_for(request_id)
+      assert "call_" <> _ = decision.call_id
+      assert decision.tool == "webhook"
+      assert decision.action == "invoke"
+      assert decision.plane == "external"
+      assert decision.admission == "admitted"
+      # Attributed as the delivery was established: the webhook's athanor
+      # and its own identity.
+      assert decision.athanor_id == ctx.athanor_id
+      assert decision.user_id == "webhook:" <> slug
+      assert decision.completion == "succeeded"
+      assert %DateTime{} = decision.completed_at
+
+      assert [row] = log_rows_for(request_id)
+      assert row.id == decision.call_id
+      assert row.method == "POST /hooks/:slug"
+      assert row.status == "success"
+
+      # The run the delivery started names the decision it was admitted under.
+      assert [execution] = executions_for(decision.call_id)
+      assert execution.request_id == request_id
+      assert execution.status == "completed"
+
+      refute_received {:decision_lost, _}
+    end
+
+    test "a delivery refused for want of an engine is closed once, failed", %{
+      conn: conn,
+      ctx: ctx
+    } do
+      watch_losses()
+      %{slug: slug, secret: secret} = create_hook!(ctx, "no-engine")
+
+      previous = Application.get_env(:cyfr, :opus_workers)
+      Application.put_env(:cyfr, :opus_workers, [])
+      on_exit(fn -> Application.put_env(:cyfr, :opus_workers, previous) end)
+
+      conn = post_signed(conn, slug, secret, ~s({"event":"x"}))
+      assert conn.status == 503
+      Application.put_env(:cyfr, :opus_workers, previous)
+
+      assert [decision] = Arca.Repo.all(Arca.Schemas.DecisionLog)
+      assert decision.tool == "webhook"
+      assert decision.admission == "admitted"
+      assert decision.completion == "failed"
+      assert is_binary(decision.completion_class)
+
+      assert [row] = log_rows_for(decision.request_id)
+      assert row.id == decision.call_id
+      assert row.status == "error"
+      assert executions_for(decision.call_id) == []
+
+      refute_received {:decision_lost, _}
+    end
+
+    @tag capture_log: true
+    test "a run that raises is closed once, failed, by the task's rescue", %{
+      conn: conn,
+      ctx: ctx
+    } do
+      watch_losses()
+      %{slug: slug, secret: secret} = create_hook!(ctx, "raises")
+
+      # A worker roster the availability check reads past, whose first
+      # service does not run this component and whose rest is not a list:
+      # the delivery is accepted, and the run's own lookup of a worker for
+      # the component raises inside the task.
+      previous = Application.get_env(:cyfr, :opus_workers)
+      [endpoint | _] = previous
+      on_exit(fn -> Application.put_env(:cyfr, :opus_workers, previous) end)
+
+      Application.put_env(:cyfr, :opus_workers, [
+        Map.put(endpoint, :components, ["no-such-component"]) | :not_a_worker
+      ])
+
+      conn = post_signed(conn, slug, secret, ~s({"event":"x"}))
+      request_id = json_response(conn, 200)["request_id"]
+
+      assert_receive {:telemetry, [:cyfr, :emissary, :webhook, :invoke, :stop], _,
+                      %{request_id: ^request_id, error: "execution_crashed"}},
+                     5_000
+
+      Application.put_env(:cyfr, :opus_workers, previous)
+
+      assert [decision] = decisions_for(request_id)
+      assert decision.completion == "failed"
+      assert decision.completion_class == "internal"
+
+      assert [row] = log_rows_for(request_id)
+      assert row.status == "error"
+
+      refute_received {:decision_lost, _}
+    end
+  end
 end

@@ -11,9 +11,12 @@ defmodule Grimoire do
   authority — and every refusal either makes before a handler runs is a
   `%Prima.Refusal{stage: :admission}`. The rest reads the table this
   member wrote at boot (`Grimoire.Catalog.load!/0`) or cancels a call the
-  gate is running. `Grimoire.Catalog` is the implementation: outside
-  Grimoire only the composition root names it, to load its table and
-  install it as consent's port.
+  gate is running. Every call either entry decides is recorded as one
+  admission decision (`Grimoire.Decisions`), and an entry that decides on
+  its own — a webhook, a schedule's fire — records its decision through
+  `open_decision/3` and `close_decision/3`. `Grimoire.Catalog` is the
+  implementation: outside Grimoire only the composition root names it, to
+  load its table and install it as consent's port.
   """
 
   alias Grimoire.{Catalog, RunningTasks}
@@ -27,6 +30,21 @@ defmodule Grimoire do
   @spec call_in_chain(String.t(), Sanctum.Context.t(), term(), Prima.Authority.t(), keyword()) ::
           {:ok, term()} | {:error, term()}
   defdelegate call_in_chain(name, ctx, args, authority, opts \\ []), to: Catalog
+
+  @doc """
+  Record an admission decision an entry made on its own, with its
+  request-log row (`Grimoire.Decisions.open/3`). Always `:ok`: audit never
+  decides the operation's outcome.
+  """
+  @spec open_decision(Sanctum.Context.t() | nil, Prima.Decision.t(), map()) :: :ok
+  defdelegate open_decision(ctx, decision, projection \\ %{}), to: Grimoire.Decisions, as: :open
+
+  @doc """
+  Record how an admitted call ended, on its decision and its request-log
+  row (`Grimoire.Decisions.close/3`). Always `:ok`.
+  """
+  @spec close_decision(Sanctum.Context.t() | nil, String.t(), map()) :: :ok
+  defdelegate close_decision(ctx, call_id, completion), to: Grimoire.Decisions, as: :close
 
   @doc """
   The public sentence for any refusal, whichever vocabulary it came from

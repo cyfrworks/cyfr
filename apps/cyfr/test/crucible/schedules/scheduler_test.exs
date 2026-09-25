@@ -417,6 +417,63 @@ defmodule Crucible.Schedules.SchedulerTest do
     assert row.last_execution_id == execution_id
   end
 
+  describe "the fire's decision" do
+    defp fire_decisions do
+      Arca.Repo.all(from(d in Arca.Schemas.DecisionLog, where: d.tool == "schedule"))
+    end
+
+    test "a fire is one admitted decision with its row, its run's execution and one completion",
+         %{ctx: ctx} do
+      script!([%{"ran" => true}])
+      schedule = due!(create_schedule(ctx))
+      scheduler!()
+
+      wait_until(fn -> match?([%{completion: "succeeded"}], fire_decisions()) end)
+
+      assert [decision] = fire_decisions()
+      assert "call_" <> _ = decision.call_id
+      assert decision.action == "fire"
+      assert decision.plane == "external"
+      assert decision.admission == "admitted"
+      assert decision.athanor_id == ctx.athanor_id
+      assert decision.user_id == ctx.user_id
+      assert %DateTime{} = decision.completed_at
+
+      assert [row] =
+               Arca.Repo.all(
+                 from(l in Arca.Schemas.McpLog, where: l.request_id == ^decision.request_id)
+               )
+
+      assert row.id == decision.call_id
+      assert row.method == "cron/fire"
+      assert row.status == "success"
+
+      # The run the fire started names the decision it was admitted under.
+      assert [%{state: "completed", execution_id: execution_id}] = occurrences(ctx, schedule)
+
+      assert [%{id: ^execution_id, request_id: request_id}] =
+               Arca.Repo.all(
+                 from(e in Arca.Schemas.Execution, where: e.call_id == ^decision.call_id)
+               )
+
+      assert request_id == decision.request_id
+    end
+
+    test "a fire whose admission fails is closed once, failed", %{ctx: ctx} do
+      script!([%{"ran" => true}])
+      schedule = due!(create_schedule(ctx, %{profile_id: "prof_unconsented"}))
+      scheduler!()
+
+      wait_until(fn ->
+        match?({:ok, %{error_count: 1}}, CronSchedule.get_for_daemon(schedule.id))
+      end)
+
+      wait_until(fn -> match?([%{completion: "failed"}], fire_decisions()) end)
+      assert [%{completion_class: class, admission: "admitted"}] = fire_decisions()
+      assert is_binary(class)
+    end
+  end
+
   test "a boot that does not own the control plane claims no occurrence, and fires once it does",
        %{ctx: ctx} do
     Arca.ControlPlane.record(:lost)

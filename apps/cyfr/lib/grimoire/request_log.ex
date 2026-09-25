@@ -3,349 +3,106 @@
 
 defmodule Grimoire.RequestLog do
   @moduledoc """
-  MCP call logging for CYFR.
+  The MCP request log's rows, as projections of admission decisions.
 
-  One row per call, so a chain is legible: the `execution.run` an ingress
-  received, and each tool the running component reached from inside the
-  sandbox. `id` is the call, `request_id` is the ingress request they share.
+  One row per recorded call, so a chain is legible: the `execution.run`
+  an ingress received, and each tool the running component reached from
+  inside the sandbox. `id` is the call — the decision's call id — and
+  `request_id` is the ingress request they share.
 
-  In-chain calls have their own log rows and share the root request id.
+  A row is never written on its own. `Grimoire.Decisions.open/3` appends
+  the decision with the start row this module builds (`opened/3`), and
+  `Grimoire.Decisions.close/3` records the completion with the columns
+  this module builds (`closed/2`), each in the decision's own transaction
+  (`Arca.DecisionLog`): the row and the decision cannot disagree.
 
-  Routes all persistent storage through `Arca.McpLog`. The start of a call
-  is written synchronously (the row must exist); its completion or failure
-  goes through `Arca.RecordSink`, the write-behind.
+  A row's meaning is its decision's: a refused call carries the
+  refusal's `refusal_class`, a failed one its sentence, and the decision
+  carries the completion's class. A JSON-RPC error code is a transport's
+  rendering of a class, which the gate cannot name, so a row the gate
+  writes leaves `error_code` empty.
 
-  Every row is filed under the athanor the call ran in. A call with no
-  athanor on its context — the anonymous surface (`initialize`,
-  `tools/list`, `system.status` before sign-in) — has no tenant to be filed
-  under and is not recorded here; it is still rate-limited and traced by the
-  request logger. A public tincture's calls carry the tincture's athanor.
+  Every row is filed under the athanor the call ran in. A decision without
+  an athanor — a caller refused before any tenant was resolved, a platform
+  context working in none — has no tenant to file a row under, so it has
+  the decision alone. A public tincture's calls carry the tincture's
+  athanor.
 
   ## Sensitive Data
 
-  Input parameters are automatically sanitized to redact passwords,
-  secrets, tokens, and API keys before logging.
+  Input parameters are sanitized to redact passwords, secrets, tokens and
+  API keys before they are stored, and so is the structure inside a
+  result's text blocks.
   """
 
+  alias Prima.Decision
   alias Sanctum.Context
 
-  require Logger
-
-  @type log_entry :: %{
-          call_id: String.t(),
-          request_id: String.t() | nil,
-          user_id: String.t(),
-          timestamp: String.t(),
-          tool: String.t() | nil,
-          action: String.t() | nil,
-          method: String.t() | nil,
-          input: map(),
-          output: map() | nil,
-          status: String.t(),
-          duration_ms: non_neg_integer() | nil,
-          routed_to: String.t() | nil,
-          error: String.t() | nil,
-          error_code: integer() | nil
-        }
-
   # ============================================================================
-  # Public API
+  # Projections
   # ============================================================================
 
   @doc """
-  Log the start of one call.
+  The start row that projects `decision`, or nil when it has no tenant.
 
-  `call_id` identifies this call; `ctx.request_id` identifies the ingress
-  request it belongs to, which is what groups a chain. For the request an
-  ingress received the two are the same value — it is its own root.
-
-  Called before the work runs, so the row exists with status "pending" even if
-  the process dies. Input is automatically sanitized.
+  `projection` carries what the decision does not: `:method` (default
+  `"tools/call"`) and `:input` (sanitized and encoded here). An admitted
+  decision's row is `"pending"`; a refused one's is closed at once as
+  `"error"`, with the refusal's class and its rendered reason.
   """
-  @spec log_started(Context.t(), String.t(), map()) :: :ok | {:error, term()}
-  def log_started(%Context{athanor_id: athanor_id}, _call_id, _data)
-      when athanor_id in [nil, ""],
-      do: :ok
-
-  def log_started(%Context{} = ctx, call_id, data)
-      when is_binary(call_id) and is_map(data) do
-    case Arca.McpLog.record(started_row(ctx, call_id, data)) do
-      {:ok, _} -> :ok
-      {:error, reason} -> {:error, reason}
-    end
-  end
-
-  defp started_row(%Context{} = ctx, call_id, data) do
-    %{
-      id: call_id,
-      request_id: ctx.request_id,
+  @spec opened(Context.t() | nil, Decision.t(), map()) :: map() | nil
+  def opened(%Context{athanor_id: athanor_id} = ctx, %Decision{} = decision, projection)
+      when is_binary(athanor_id) and athanor_id != "" and is_map(projection) do
+    row = %{
+      id: decision.call_id,
+      request_id: decision.request_id,
       user_id: ctx.user_id || "system",
-      athanor_id: ctx.athanor_id,
-      timestamp: DateTime.utc_now(),
-      tool: data[:tool] || data["tool"],
-      action: data[:action] || data["action"],
-      method: data[:method] || data["method"],
-      status: "pending",
-      input: encode_json(sanitize_input(data[:input] || data["input"] || %{}))
+      timestamp: decision.inserted_at,
+      tool: decision.tool,
+      action: decision.action,
+      method: Map.get(projection, :method) || "tools/call",
+      input: encode_json(sanitize_input(Map.get(projection, :input) || %{}))
     }
+
+    case decision.admission do
+      :admitted ->
+        Map.put(row, :status, "pending")
+
+      :refused ->
+        Map.merge(row, %{
+          status: "error",
+          refusal_class: Atom.to_string(decision.refusal_class),
+          error: decision.reason
+        })
+    end
   end
+
+  def opened(_ctx, %Decision{}, projection) when is_map(projection), do: nil
 
   @doc """
-  Log successful completion of an MCP request.
+  The completion columns of a call's row: `"success"` with its sanitized
+  output, or `"error"` with the refusal's sentence (`text`, rendered by the
+  caller from the reason). `:duration_ms` and `:routed_to` label either;
+  an absent one is left as the row has it.
   """
-  @spec log_completed(Context.t(), String.t(), map()) :: :ok
-  def log_completed(%Context{athanor_id: athanor_id}, _call_id, _data)
-      when athanor_id in [nil, ""],
-      do: :ok
-
-  def log_completed(%Context{} = ctx, call_id, data)
-      when is_binary(call_id) and is_map(data) do
-    # The row was started synchronously; its completion is bookkeeping and
-    # rides the write-behind.
-    Arca.RecordSink.enqueue(
-      {:mcp_log_update, Context.actor(ctx), call_id,
-       %{
-         status: "success",
-         duration_ms: data[:duration_ms] || data["duration_ms"],
-         routed_to: data[:routed_to] || data["routed_to"],
-         output: encode_json(sanitize_output(data[:output] || data["output"]))
-       }}
-    )
+  @spec closed({:ok, term()} | {:error, String.t()}, map()) :: map()
+  def closed({:ok, output}, meta) when is_map(meta) do
+    %{status: "success", output: encode_json(sanitize_output(output))}
+    |> labelled(meta, [:duration_ms, :routed_to])
   end
 
-  @doc """
-  Log failure of an MCP request.
-  """
-  @spec log_failed(Context.t(), String.t(), map()) :: :ok
-  def log_failed(%Context{athanor_id: athanor_id}, _call_id, _data)
-      when athanor_id in [nil, ""],
-      do: :ok
-
-  def log_failed(%Context{} = ctx, call_id, data)
-      when is_binary(call_id) and is_map(data) do
-    Arca.RecordSink.enqueue(
-      {:mcp_log_update, Context.actor(ctx), call_id,
-       %{
-         status: "error",
-         error_code: data[:code] || data["code"],
-         duration_ms: data[:duration_ms] || data["duration_ms"],
-         error: sanitize_input(data[:error] || data["error"]),
-         routed_to: data[:routed_to] || data["routed_to"]
-       }}
-    )
+  def closed({:error, text}, meta) when is_binary(text) and is_map(meta) do
+    %{status: "error", error: text}
+    |> labelled(meta, [:duration_ms, :routed_to])
   end
 
-  # ============================================================================
-  # Best-effort wrappers
-  # ============================================================================
-
-  # Logging must never raise, never block, and never fail the underlying
-  # operation. Every logging ingress — MCPController, TinctureController,
-  # WebhookController, CronScheduler, and the tool dispatch through
-  # `around/5` — wants the same contract; centralize it here.
-
-  @doc """
-  Record one call around the work that is the call.
-
-  Logs the started row, runs `fun`, and logs the completed or failed row
-  with the measured duration — through the `safe_log_*` wrappers, so a
-  logging fault never fails the call. `fun` returns `{result, meta}`:
-  `meta[:routed_to]` labels the row when present, `meta[:code]` overrides
-  the default `-32_603` failure code, and `meta[:error_text]` supplies an
-  already-formatted error string in place of the sanitized `inspect`.
-  Returns `result`. With `log?` false, runs `fun` and only returns.
-  """
-  @spec around(false | true | :behind, Context.t(), String.t() | nil, map(), (-> {result, map()})) ::
-          result
-        when result: {:ok, term()} | {:error, term()}
-  def around(log?, ctx, call_id, started, fun)
-
-  def around(false, _ctx, _call_id, _started, fun) do
-    {result, _meta} = fun.()
-    result
-  end
-
-  # The row's start rides the write-behind as well as its close: an
-  # in-process call is its own root and nothing reads its row before it
-  # ends. The close carries the whole row, so a start that was shed, or
-  # lands late, leaves one complete row either way.
-  def around(:behind, %Context{athanor_id: athanor_id} = ctx, call_id, started, fun)
-      when is_binary(athanor_id) and is_binary(call_id) do
-    row = started_row(ctx, call_id, started)
-    safe_enqueue({:mcp_log_started, row})
-    start_time = System.monotonic_time()
-    {result, meta} = fun.()
-
-    duration_ms =
-      System.convert_time_unit(System.monotonic_time() - start_time, :native, :millisecond)
-
-    close =
-      case result do
-        {:ok, output} ->
-          put_routed(
-            %{
-              status: "success",
-              duration_ms: duration_ms,
-              output: encode_json(sanitize_output(output))
-            },
-            meta
-          )
-
-        {:error, reason} ->
-          error_text = Map.get(meta, :error_text) || error_text(reason)
-
-          put_routed(
-            %{
-              status: "error",
-              error_code: Map.get(meta, :code, -32_603),
-              duration_ms: duration_ms,
-              error: error_text
-            },
-            meta
-          )
+  defp labelled(columns, meta, keys) do
+    Enum.reduce(keys, columns, fn key, acc ->
+      case Map.get(meta, key) do
+        nil -> acc
+        value -> Map.put(acc, key, value)
       end
-
-    safe_enqueue({:mcp_log_close, row, close})
-    result
-  end
-
-  def around(:behind, ctx, call_id, started, fun),
-    do: around(true, ctx, call_id, started, fun)
-
-  def around(true, %Context{} = ctx, call_id, started, fun) do
-    safe_log_started(ctx, call_id, started)
-    start_time = System.monotonic_time()
-    {result, meta} = fun.()
-
-    duration_ms =
-      System.convert_time_unit(System.monotonic_time() - start_time, :native, :millisecond)
-
-    case result do
-      {:ok, output} ->
-        safe_log_completed(
-          ctx,
-          call_id,
-          put_routed(%{output: output, duration_ms: duration_ms}, meta)
-        )
-
-      {:error, reason} ->
-        error_text = Map.get(meta, :error_text) || error_text(reason)
-
-        safe_log_failed(
-          ctx,
-          call_id,
-          put_routed(
-            %{error: error_text, code: Map.get(meta, :code, -32_603), duration_ms: duration_ms},
-            meta
-          )
-        )
-    end
-
-    result
-  end
-
-  # The row holds the refusal's public sentence, the one every surface
-  # reads (`Grimoire.render/1`): a stored row is never a term's spelling.
-  defp error_text(reason), do: Grimoire.render(reason)
-
-  # The write-behind never fails the call either: inline (the test env)
-  # it writes in the caller, and a caller with no connection of its own
-  # loses the row, as it would have under the synchronous start.
-  #
-  # A store that goes away does not raise, it exits — `DBConnection` exits
-  # the caller when its connection dies, and under the test sandbox that
-  # happens whenever the owning process finishes first. `rescue` alone left
-  # that exit to travel into the call this is supposed to never fail.
-  defp safe_enqueue(item) do
-    Arca.RecordSink.enqueue(item)
-  rescue
-    e -> Logger.warning("[Grimoire.RequestLog] log row not queued: #{Exception.message(e)}")
-  catch
-    :exit, reason ->
-      Logger.warning("[Grimoire.RequestLog] log row not queued: store exited #{inspect(reason)}")
-  end
-
-  defp put_routed(data, %{routed_to: routed}) when not is_nil(routed),
-    do: Map.put(data, :routed_to, routed)
-
-  defp put_routed(data, _meta), do: data
-
-  @doc """
-  Best-effort wrapper around `log_started/3`. Always returns `:ok`.
-
-  Logs unexpected errors via `Logger.error` rather than propagating.
-  """
-  @spec safe_log_started(Context.t(), String.t(), map()) :: :ok
-  def safe_log_started(%Context{} = ctx, call_id, data) do
-    case log_started(ctx, call_id, data) do
-      :ok ->
-        :ok
-
-      {:error, reason} ->
-        Logger.error(
-          "[Grimoire.RequestLog] log_started failed for #{call_id}: #{inspect(reason)}"
-        )
-
-        :ok
-    end
-  rescue
-    e ->
-      Logger.error(
-        "[Grimoire.RequestLog] log_started raised for #{call_id}: #{Exception.message(e)}"
-      )
-
-      :ok
-  catch
-    # "Always returns :ok" has to cover an exit too: a store whose
-    # connection dies exits its caller rather than raising.
-    :exit, reason ->
-      Logger.error("[Grimoire.RequestLog] log_started exited for #{call_id}: #{inspect(reason)}")
-      :ok
-  end
-
-  @doc """
-  Best-effort wrapper around `log_completed/3`. Always returns `:ok`.
-  """
-  @spec safe_log_completed(Context.t(), String.t(), map()) :: :ok
-  def safe_log_completed(%Context{} = ctx, call_id, data) do
-    log_completed(ctx, call_id, data)
-  rescue
-    e ->
-      Logger.error(
-        "[Grimoire.RequestLog] log_completed raised for #{call_id}: #{Exception.message(e)}"
-      )
-
-      :ok
-  catch
-    # "Always returns :ok" has to cover an exit too: a store whose
-    # connection dies exits its caller rather than raising.
-    :exit, reason ->
-      Logger.error(
-        "[Grimoire.RequestLog] log_completed exited for #{call_id}: #{inspect(reason)}"
-      )
-
-      :ok
-  end
-
-  @doc """
-  Best-effort wrapper around `log_failed/3`. Always returns `:ok`.
-  """
-  @spec safe_log_failed(Context.t(), String.t(), map()) :: :ok
-  def safe_log_failed(%Context{} = ctx, call_id, data) do
-    log_failed(ctx, call_id, data)
-  rescue
-    e ->
-      Logger.error(
-        "[Grimoire.RequestLog] log_failed raised for #{call_id}: #{Exception.message(e)}"
-      )
-
-      :ok
-  catch
-    # "Always returns :ok" has to cover an exit too: a store whose
-    # connection dies exits its caller rather than raising.
-    :exit, reason ->
-      Logger.error("[Grimoire.RequestLog] log_failed exited for #{call_id}: #{inspect(reason)}")
-      :ok
+    end)
   end
 
   # ============================================================================
