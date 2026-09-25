@@ -18,6 +18,18 @@
   const _listeners = new Map()
   const REQUEST_TIMEOUT = 30000
 
+  // A refusal as the shell and the invoke endpoint send it — `{code,
+  // message}`, its class and its sentence — as an Error carrying both.
+  // A bare string is the shell's own answer to a message it could not route.
+  function _refusal(error, fallback) {
+    if (error && typeof error === "object") {
+      var err = new Error(typeof error.message === "string" ? error.message : fallback)
+      if (typeof error.code === "string") err.code = error.code
+      return err
+    }
+    return new Error(typeof error === "string" && error !== "" ? error : fallback)
+  }
+
   function _nextId() {
     return "req_" + (++_requestId) + "_" + Math.random().toString(36).slice(2, 8)
   }
@@ -56,7 +68,7 @@
         _pending.delete(msg.id)
         clearTimeout(pending.timer)
         if (msg.error) {
-          pending.reject(new Error(msg.error))
+          pending.reject(_refusal(msg.error, "Request failed"))
         } else {
           pending.resolve(msg.result)
         }
@@ -82,10 +94,13 @@
     /**
      * Invoke a backend component.
      * In shell mode: bridges via postMessage to ShellLive.
-     * In public mode: POSTs to the tincture invoke HTTP endpoint.
+     * In public mode: POSTs to the tincture's own invoke route, whose path
+     * carries its public address (athanor segment, publisher and name).
      * @param {string} reference - Component reference (e.g., "c:local.claude")
      * @param {object} input - Input data for the component
      * @returns {Promise<{status: string, output: object, execution_id: string, duration_ms: number}>}
+     *   rejected on a refusal with an Error whose `message` is its sentence
+     *   and whose `code` is its class (e.g. "consent_required")
      */
     invoke: function(reference, input) {
       if (_mode === "public") {
@@ -96,8 +111,11 @@
           headers: {"Content-Type": "application/json"},
           body: JSON.stringify({reference: reference, input: input || {}})
         }).then(function(r) {
-          if (!r.ok) return r.json().then(function(e) { throw new Error(e.error || "Invoke failed") })
-          return r.json()
+          if (r.ok) return r.json()
+          return r.json().then(
+            function(body) { throw _refusal(body, "Invoke failed") },
+            function() { throw new Error("Invoke failed") }
+          )
         })
       } else {
         return _send("invoke", { reference: reference, input: input || {} })

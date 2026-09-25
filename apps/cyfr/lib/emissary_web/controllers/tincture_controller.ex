@@ -19,10 +19,12 @@ defmodule EmissaryWeb.TinctureController do
 
   use EmissaryWeb, :controller
 
-  # A public URL is the public route regardless of authentication; the
-  # private fallback is the protected route.
-  defp route_for(:public), do: :public
-  defp route_for(_), do: :protected
+  # A public URL is the public route regardless of authentication, and
+  # names the tincture by its address; the private fallback is the
+  # protected route, in the caller's own athanor. The action fixes the
+  # route.
+  defp action_args(:public, athanor), do: %{"action" => "invoke_public", "athanor" => athanor}
+  defp action_args(_private, _athanor), do: %{"action" => "invoke_protected"}
 
   alias Sanctum.TinctureAccess
 
@@ -192,34 +194,29 @@ defmodule EmissaryWeb.TinctureController do
           "tincture_name" => tincture_name
         } = params
       ) do
-    reference = params["reference"]
-    input = params["input"] || %{}
-
-    with {:ok, tincture, visibility, auth_ctx} <-
+    with {:ok, _tincture, visibility, ctx} <-
            resolve_tincture(conn, athanor, publisher, tincture_name) do
-      # One implementation for both invoke surfaces (the console shell is
-      # the other) — validation, context, logging, telemetry and the
-      # readiness gate live in Emissary.Tincture.Invoke; this surface only
-      # renders its outcomes.
-      case Emissary.Tincture.Invoke.run(auth_ctx, tincture, reference, input,
-             route: route_for(visibility),
-             method: "POST /t/invoke",
-             client_ip: Sanctum.ClientIp.resolve(conn)
+      # The same declared operation the console shell and `/mcp` call,
+      # through the one gate: it authorizes, casts and logs the call, and
+      # `Crucible.invoke_tincture/3` reads the tincture again. The rate
+      # limit and the origin rules stay this route's own.
+      args =
+        %{
+          "publisher" => publisher,
+          "tincture_name" => tincture_name,
+          "reference" => params["reference"],
+          "input" => params["input"] || %{}
+        }
+        |> Map.merge(action_args(visibility, athanor))
+        |> Map.reject(fn {_key, value} -> is_nil(value) end)
+
+      case Grimoire.call_external(
+             "tincture",
+             %{ctx | client_ip: Sanctum.ClientIp.resolve(conn)},
+             args
            ) do
-        {:ok, result} ->
-          json(conn, result)
-
-        {:error, :invalid_params, msg} ->
-          EmissaryWeb.ApiError.send(conn, 400, :invalid_params, msg)
-
-        {:error, :consent_required, msg} ->
-          EmissaryWeb.ApiError.send(conn, 403, :consent_required, msg)
-
-        {:error, :service_unavailable, msg} ->
-          EmissaryWeb.ApiError.send(conn, 503, :service_unavailable, msg)
-
-        {:error, :execution_failed, msg} ->
-          EmissaryWeb.ApiError.send(conn, 500, :execution_failed, msg)
+        {:ok, result} -> json(conn, result)
+        {:error, refusal} -> EmissaryWeb.ApiError.refuse(conn, refusal)
       end
     else
       {:error, :unavailable} ->
@@ -346,11 +343,15 @@ defmodule EmissaryWeb.TinctureController do
     |> EmissaryWeb.ApiError.send(503, :not_owner, "Try again shortly")
   end
 
+  # A credential presented and refused is `unauthenticated` — a 401 with
+  # its challenge — and one that stands but may not mint is `forbidden`.
   defp mint_refused(conn, reason) do
+    refusal = Grimoire.Error.classify(reason)
+
     EmissaryWeb.ApiError.send(
       conn,
-      403,
-      reason,
+      EmissaryWeb.ApiError.status(refusal.class),
+      refusal,
       "This credential cannot open a tincture link; sign in again"
     )
   end

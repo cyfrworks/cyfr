@@ -87,21 +87,21 @@ defmodule EmissaryWeb.Telemetry do
         event_name: [:cyfr, :emissary, :webhook, :invoke, :start],
         description: "Webhook invocations begun"
       ),
-      counter("cyfr.emissary.tincture.invoke.start.count",
-        event_name: [:cyfr, :emissary, :tincture, :invoke, :start],
+      counter("cyfr.crucible.tincture.invoke.start.count",
+        event_name: [:cyfr, :crucible, :tincture, :invoke, :start],
         description: "Tincture invocations begun"
       ),
       counter("cyfr.emissary.webhook.dedup_unavailable.count",
         event_name: [:cyfr, :emissary, :webhook, :dedup_unavailable],
         description: "Webhook deliveries accepted without dedup protection (store down)"
       ),
-      distribution("cyfr.emissary.tincture.invoke.stop.duration_ms",
-        event_name: [:cyfr, :emissary, :tincture, :invoke, :stop],
+      distribution("cyfr.crucible.tincture.invoke.stop.duration_ms",
+        event_name: [:cyfr, :crucible, :tincture, :invoke, :stop],
         measurement: :duration_ms,
         tags: [:status],
         unit: :millisecond,
         reporter_options: [buckets: [10, 50, 100, 250, 500, 1000, 2500, 5000]],
-        description: "Tincture invoke duration (HTTP and console surfaces)"
+        description: "Tincture invoke duration (HTTP, console and MCP surfaces)"
       ),
       counter("cyfr.sanctum.policy.decision.count",
         event_name: [:cyfr, :sanctum, :policy, :decision],

@@ -41,9 +41,10 @@ config :cyfr,
     # host-side and scoped, because the files catalyst's grant is `data/`
     # and widening it would widen it for every agent.
     Compendium.Providers.Source,
-    # `crucible`: executions and schedules.
+    # `crucible`: executions, schedules and a tincture's invocations.
     Crucible.Provider,
     Crucible.Schedules.Provider,
+    Crucible.Providers.Tincture,
     # `compendium`: builds and components.
     Compendium.Builds.Provider,
     Compendium.Provider,

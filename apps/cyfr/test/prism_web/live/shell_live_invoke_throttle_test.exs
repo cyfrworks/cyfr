@@ -89,7 +89,7 @@ defmodule PrismWeb.ShellLiveInvokeThrottleTest do
     invoke(view)
 
     assert_push_event(view, "iframe_response:#{@window_id}", %{
-      error: "rate limited — retry shortly"
+      error: %{code: "rate_limited", message: "Too many requests — slow down and retry"}
     })
   end
 
@@ -97,7 +97,7 @@ defmodule PrismWeb.ShellLiveInvokeThrottleTest do
     {view, _html} = mount_athanor(conn, "/tinctures")
     invoke(view)
     invoke(view)
-    assert_push_event(view, "iframe_response:#{@window_id}", %{error: "rate limited" <> _})
+    assert_push_event(view, "iframe_response:#{@window_id}", %{error: %{code: "rate_limited"}})
 
     # A different person mounting the same tincture starts with a full budget:
     # the key is {:live, user_id}, not the tincture alone.
@@ -108,7 +108,7 @@ defmodule PrismWeb.ShellLiveInvokeThrottleTest do
     invoke(other_view)
 
     refute_push_event(other_view, "iframe_response:#{@window_id}", %{
-      error: "rate limited — retry shortly"
+      error: %{code: "rate_limited"}
     })
   end
 end

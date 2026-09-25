@@ -417,6 +417,7 @@ one annotation. It is short:
 |------|---------|------------|
 | `session` | `login`, `logout`, `whoami`, `device_init`, `device_poll`, `read_resource` | Needed to authenticate in the first place; `read_resource` tells a caller only its own identity and permissions |
 | `system` | `status` | Health checks |
+| `tincture` | `invoke_public` | A published tincture is public by definition: named by its public address (`athanor`, the URL's `@namespace` or group slug, with `publisher` and `tincture_name`), the call runs one of its declared dependencies under its active public profile, as its public page does; the address confers no authority, and one with no active public profile answers `not_found` |
 
 That is the whole list, and it does **not** widen on a server without an
 auth provider: a request with no credential is an unauthenticated context
@@ -1022,6 +1023,10 @@ Public tinctures use the same `/t/` path — no authentication needed. A tinctur
 GET /t/@alice/local/stock-dashboard              → index.html (no auth needed if public)
 GET /t/@alice/local/stock-dashboard/app.js       → static asset
 ```
+
+### Invoke
+
+`POST /t/:athanor/:publisher/:tincture_name/invoke` with `{"reference": …, "input": {…}}` runs one of the tincture's declared dependencies — under its public profile when it has an active one, otherwise under its owner profile for an authenticated caller. It is the `tincture.invoke_public` operation, with the path's athanor segment as its `athanor` address, or `tincture.invoke_protected` in the caller's own athanor — the same operations `/mcp` serves and the console shell's `cyfr.invoke()` bridge calls (always the protected one) — so a refusal answers `{"code": <class>, "message": <sentence>}` at the class's status. The route keeps its own per-address rate limit.
 
 ### Security Headers
 

@@ -36,6 +36,7 @@ const (
 	Session            = "session"
 	System             = "system"
 	Thread             = "thread"
+	Tincture           = "tincture"
 	TinctureVisibility = "tincture_visibility"
 	Tools              = "tools"
 	Turn               = "turn"
@@ -213,6 +214,8 @@ const (
 	ThreadSend              = "send"
 	ThreadStop              = "stop"
 	ThreadUnfollow          = "unfollow"
+	TinctureInvokeProtected = "invoke_protected"
+	TinctureInvokePublic    = "invoke_public"
 	TinctureVisibilityGet   = "get"
 	ToolsList               = "list"
 	TurnRecover             = "recover"
@@ -259,6 +262,7 @@ var Actions = map[string][]string{
 	"session":             {"device_init", "device_poll", "login", "logout", "read_resource", "use", "whoami"},
 	"system":              {"notify", "status"},
 	"thread":              {"aloud", "approve", "attach", "create", "decline", "delete", "events", "follow", "get", "list", "messages", "restart_for_consent", "revoke_grant", "send", "stop", "unfollow"},
+	"tincture":            {"invoke_protected", "invoke_public"},
 	"tincture_visibility": {"get"},
 	"tools":               {"list"},
 	"turn":                {"recover", "suspend"},
@@ -3510,6 +3514,50 @@ func (args ThreadUnfollowArgs) MarshalJSON() ([]byte, error) {
 		Action string `json:"action"`
 		fields
 	}{Action: ThreadUnfollow, fields: fields(args)})
+}
+
+// TinctureInvokeProtectedArgs carries arguments for tincture.invoke_protected.
+type TinctureInvokeProtectedArgs struct {
+	// The tincture's publisher (e.g. 'local')
+	Publisher string `json:"publisher"`
+	// The tincture's name
+	TinctureName string `json:"tincture_name"`
+	// The dependency to invoke, as the tincture's manifest declares it
+	Reference string `json:"reference"`
+	// The input to pass to the dependency
+	Input map[string]any `json:"input"`
+}
+
+// MarshalJSON supplies the operation's fixed action discriminator.
+func (args TinctureInvokeProtectedArgs) MarshalJSON() ([]byte, error) {
+	type fields TinctureInvokeProtectedArgs
+	return json.Marshal(struct {
+		Action string `json:"action"`
+		fields
+	}{Action: TinctureInvokeProtected, fields: fields(args)})
+}
+
+// TinctureInvokePublicArgs carries arguments for tincture.invoke_public.
+type TinctureInvokePublicArgs struct {
+	// The tincture's public address: its athanor's URL segment ('@<namespace>' for a person's, the slug for a group's)
+	Athanor string `json:"athanor"`
+	// The tincture's publisher (e.g. 'local')
+	Publisher string `json:"publisher"`
+	// The tincture's name
+	TinctureName string `json:"tincture_name"`
+	// The dependency to invoke, as the tincture's manifest declares it
+	Reference string `json:"reference"`
+	// The input to pass to the dependency
+	Input map[string]any `json:"input"`
+}
+
+// MarshalJSON supplies the operation's fixed action discriminator.
+func (args TinctureInvokePublicArgs) MarshalJSON() ([]byte, error) {
+	type fields TinctureInvokePublicArgs
+	return json.Marshal(struct {
+		Action string `json:"action"`
+		fields
+	}{Action: TinctureInvokePublic, fields: fields(args)})
 }
 
 // TinctureVisibilityGetArgs carries arguments for tincture_visibility.get.

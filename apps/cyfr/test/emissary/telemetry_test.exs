@@ -136,7 +136,7 @@ defmodule Emissary.TelemetryTest do
       for event <- [
             [:cyfr, :emissary, :webhook, :invoke, :stop],
             [:cyfr, :emissary, :webhook, :verify_failed],
-            [:cyfr, :emissary, :tincture, :invoke, :stop],
+            [:cyfr, :crucible, :tincture, :invoke, :stop],
             [:cyfr, :sanctum, :policy, :decision]
           ] do
         assert event in event_names,
