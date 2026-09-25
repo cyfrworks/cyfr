@@ -26,7 +26,7 @@ defmodule CyfrWeb.Plugs.Authenticate do
 
   This plug carries no protocol knowledge. The MCP endpoint's own conformance
   rules — the per-request `_meta`, the mirrored headers — live in
-  `EmissaryWeb.Plugs.MCPRequestMetadata`, which runs after it.
+  `Emissary.Web.Plugs.MCPRequestMetadata`, which runs after it.
   """
 
   import Plug.Conn

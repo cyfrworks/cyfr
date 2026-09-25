@@ -8,7 +8,7 @@ defmodule CyfrWeb.Plugs.AuthenticateTest do
   Verifies bearer handling, auth-provider integration and context propagation.
   The MCP endpoint's own conformance rules are a separate plug and are
   exercised end-to-end through the pipeline in
-  `EmissaryWeb.MCPControllerTest`.
+  `Emissary.Web.MCPControllerTest`.
   """
   use EmissaryWeb.ConnCase, async: false
 
@@ -481,7 +481,7 @@ defmodule CyfrWeb.Plugs.AuthenticateTest do
       conn =
         conn
         |> put_req_header("authorization", "Bearer cyfr_pk_invalid123456789012345678")
-        |> Authenticate.call(errors: EmissaryWeb.MCPError)
+        |> Authenticate.call(errors: Emissary.Web.MCPError)
 
       assert conn.halted
       assert conn.status == 401
@@ -648,7 +648,7 @@ defmodule CyfrWeb.Plugs.AuthenticateTest do
     test "auth provider *error* fails closed with 503", %{conn: conn} do
       Application.put_env(:sanctum, :auth_provider, __MODULE__.ErrorAuthProvider)
 
-      conn = Authenticate.call(conn, errors: EmissaryWeb.MCPError)
+      conn = Authenticate.call(conn, errors: Emissary.Web.MCPError)
 
       assert conn.halted
       assert conn.status == 503
@@ -671,7 +671,7 @@ defmodule CyfrWeb.Plugs.AuthenticateTest do
     test "rejects an authenticated user with no resolved athanor with 403", %{conn: conn} do
       Application.put_env(:sanctum, :auth_provider, __MODULE__.TestAuthProvider)
 
-      conn = Authenticate.call(conn, errors: EmissaryWeb.MCPError)
+      conn = Authenticate.call(conn, errors: Emissary.Web.MCPError)
 
       assert conn.halted
       assert conn.status == 403
@@ -738,7 +738,7 @@ defmodule CyfrWeb.Plugs.AuthenticateTest do
 
       log =
         capture_log(fn ->
-          conn = Authenticate.call(conn, errors: EmissaryWeb.MCPError)
+          conn = Authenticate.call(conn, errors: Emissary.Web.MCPError)
 
           assert conn.halted
           assert conn.status == 503

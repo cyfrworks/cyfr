@@ -1,11 +1,11 @@
 # SPDX-License-Identifier: Apache-2.0
 # Copyright 2026 CYFR Works Inc.
 
-defmodule EmissaryWeb.MCPErrorTest do
+defmodule Emissary.Web.MCPErrorTest do
   @moduledoc """
   Checks that JSON-RPC error responses echo valid request ids.
   """
-  use EmissaryWeb.ConnCase, async: true
+  use Emissary.Web.ConnCase, async: true
 
   alias Prima.MCP.Message
 

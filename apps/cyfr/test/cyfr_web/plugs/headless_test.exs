@@ -6,7 +6,7 @@ defmodule CyfrWeb.Plugs.HeadlessTest do
   A headless node keeps the API and MCP and shows no face: every browser
   route answers 404 while `/api`, `/mcp` and `/t` go on serving.
   """
-  use EmissaryWeb.ConnCase, async: false
+  use Emissary.Web.ConnCase, async: false
 
   setup do
     Application.put_env(:cyfr, :headless, true)

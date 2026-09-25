@@ -15,7 +15,7 @@ defmodule Crucible.Providers.TinctureTest do
   athanor too.
   """
 
-  use EmissaryWeb.ConnCase, async: false
+  use Emissary.Web.ConnCase, async: false
 
   import Ecto.Query, only: [from: 2]
   import ExUnit.CaptureLog

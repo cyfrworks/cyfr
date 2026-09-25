@@ -7,7 +7,7 @@ defmodule CyfrWeb.ApiError do
   JSON-RPC.
 
   One of the two `CyfrWeb.ErrorRenderer` implementations; the other is
-  `EmissaryWeb.MCPError`, which answers in JSON-RPC.
+  `Emissary.Web.MCPError`, which answers in JSON-RPC.
 
   A rejection is a refusal (`Prima.Refusal`): the body is
   `{"code": <class>, "message": <sentence>}`, the sentence always the
@@ -59,7 +59,7 @@ defmodule CyfrWeb.ApiError do
   @doc """
   Render `reason` at `status`. The body's `code` is the reason's class
   and its `message` the refusal's own sentence, for every caller: the
-  message argument, which `EmissaryWeb.MCPError` reads, is not read
+  message argument, which `Emissary.Web.MCPError` reads, is not read
   here, so no route words a refusal apart from the table.
   """
   @impl true

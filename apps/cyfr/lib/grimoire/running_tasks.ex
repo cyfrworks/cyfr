@@ -7,7 +7,7 @@ defmodule Grimoire.RunningTasks do
   can stop it when the caller goes away.
 
   Keyed by the server-minted `Sanctum.Context.request_id`, stamped by
-  `EmissaryWeb.MCPController`. Client JSON-RPC ids may repeat across callers
+  `Emissary.Web.MCPController`. Client JSON-RPC ids may repeat across callers
   and must not identify running tasks.
 
   ## Why one request may hold several tasks

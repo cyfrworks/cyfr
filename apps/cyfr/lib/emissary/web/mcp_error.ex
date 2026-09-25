@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: Apache-2.0
 # Copyright 2026 CYFR Works Inc.
 
-defmodule EmissaryWeb.MCPError do
+defmodule Emissary.Web.MCPError do
   @moduledoc """
   Sends a JSON-RPC error response from the MCP ingress plugs and controllers.
 

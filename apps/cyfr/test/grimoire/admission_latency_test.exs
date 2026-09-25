@@ -634,7 +634,7 @@ defmodule Grimoire.AdmissionLatencyTest do
     conn = if token, do: put_req_header(conn, "authorization", "Bearer " <> token), else: conn
 
     conn =
-      EmissaryWeb.ConnCase.mcp_post(conn, %{
+      Emissary.Web.ConnCase.mcp_post(conn, %{
         "jsonrpc" => "2.0",
         "id" => 1,
         "method" => "tools/call",

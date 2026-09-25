@@ -226,7 +226,7 @@ defmodule Cyfr.Bus do
       template: "tenant:<athanor_id>:progress:<build|register|pull|request>:<id>",
       dispatcher: BoundedDispatcher,
       producers: ["Compendium.Builds.Provider", "Compendium.Providers.Component"],
-      consumers: ["PrismWeb.BuildsLive", "PrismWeb.ComponentsLive", "EmissaryWeb.MCPController"],
+      consumers: ["PrismWeb.BuildsLive", "PrismWeb.ComponentsLive", "Emissary.Web.MCPController"],
       reason:
         "one build's, registration's or pull's progress, on its own topic and on the " <>
           "topic of the MCP request it runs for; bounded per subscriber"

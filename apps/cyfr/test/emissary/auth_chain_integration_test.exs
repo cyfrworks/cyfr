@@ -9,7 +9,7 @@ defmodule Emissary.AuthChainIntegrationTest do
   Verifies that permission-gated MCP tools correctly enforce authorization
   through the unified Context.authorize/2 path.
   """
-  use EmissaryWeb.ConnCase, async: false
+  use Emissary.Web.ConnCase, async: false
 
   setup do
     test_dir =

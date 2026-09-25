@@ -16,7 +16,7 @@ defmodule EmissaryWeb.RouterTest do
         end)
 
       assert mcp_post
-      assert mcp_post.plug == EmissaryWeb.MCPController
+      assert mcp_post.plug == Emissary.Web.MCPController
       assert mcp_post.plug_opts == :handle
     end
 
@@ -28,7 +28,7 @@ defmodule EmissaryWeb.RouterTest do
         route = Enum.find(routes, &(&1.path == "/mcp" and &1.verb == verb))
 
         assert route, "GET/DELETE /mcp must stay routed so the server can say 405"
-        assert route.plug == EmissaryWeb.MCPController
+        assert route.plug == Emissary.Web.MCPController
         assert route.plug_opts == :method_not_allowed
       end
     end

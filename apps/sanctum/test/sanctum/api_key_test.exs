@@ -540,7 +540,7 @@ defmodule Sanctum.ApiKeyTest do
   # back from the stored key row, never from the request, and the tenant is
   # enforced on the resulting Context via Sanctum.TenantPolicy.require_athanor/1
   # (see Sanctum.ApiKey.context_from_metadata/1 and
-  # EmissaryWeb.Plugs.MCPRequestMetadata). Key validity is intentionally
+  # Emissary.Web.Plugs.MCPRequestMetadata). Key validity is intentionally
   # DECOUPLED from the creator's *current* athanor membership — revocation is
   # the control. The consequence (an offboarded OIDC user's key keeps athanor
   # access until the key is revoked) is the deliberate model, not an oversight.

@@ -7,6 +7,50 @@
 # cannot move or vanish without this file changing with it.
 %{
   providers: %{
+    "Emissary.Router" => %{
+      file: "apps/cyfr/lib/emissary/router.ex",
+      pipelines: %{
+        "mcp" => [
+          "CyfrWeb.Plugs.CallIdentity",
+          ":accepts",
+          "CyfrWeb.Plugs.ApiSecurityHeaders",
+          "CyfrWeb.Plugs.CORS",
+          "CyfrWeb.Plugs.MCPOrigin",
+          "CyfrWeb.Plugs.MCPRateLimit",
+          "CyfrWeb.Plugs.Authenticate",
+          "Emissary.Web.Plugs.MCPRequestMetadata"
+        ]
+      },
+      routes: [
+        %{
+          verb: "DELETE",
+          path: "/mcp",
+          plug: "Emissary.Web.MCPController",
+          plug_opts: ":method_not_allowed",
+          auth: "authenticate_plug",
+          live_view: nil,
+          pipe_through: ["mcp"]
+        },
+        %{
+          verb: "GET",
+          path: "/mcp",
+          plug: "Emissary.Web.MCPController",
+          plug_opts: ":method_not_allowed",
+          auth: "authenticate_plug",
+          live_view: nil,
+          pipe_through: ["mcp"]
+        },
+        %{
+          verb: "POST",
+          path: "/mcp",
+          plug: "Emissary.Web.MCPController",
+          plug_opts: ":handle",
+          auth: "authenticate_plug",
+          live_view: nil,
+          pipe_through: ["mcp"]
+        }
+      ]
+    },
     "EmissaryWeb.Router" => %{
       file: "apps/cyfr/lib/emissary_web/router.ex",
       pipelines: %{
@@ -43,16 +87,6 @@
         "device_complete_throttle" => ["CyfrWeb.Plugs.AuthRateLimit"],
         "health_throttle" => ["CyfrWeb.Plugs.AuthRateLimit"],
         "legal_accept_throttle" => ["CyfrWeb.Plugs.AuthRateLimit"],
-        "mcp" => [
-          "CyfrWeb.Plugs.CallIdentity",
-          ":accepts",
-          "CyfrWeb.Plugs.ApiSecurityHeaders",
-          "CyfrWeb.Plugs.CORS",
-          "CyfrWeb.Plugs.MCPOrigin",
-          "CyfrWeb.Plugs.MCPRateLimit",
-          "CyfrWeb.Plugs.Authenticate",
-          "EmissaryWeb.Plugs.MCPRequestMetadata"
-        ],
         "oauth_callback" => [":accepts", "CyfrWeb.Plugs.ApiSecurityHeaders"],
         "oauth_callback_throttle" => ["CyfrWeb.Plugs.AuthRateLimit"],
         "oauth_start_throttle" => ["CyfrWeb.Plugs.AuthRateLimit"],
@@ -463,33 +497,6 @@
           auth: "browser_public_login",
           live_view: "PrismWeb.LoginLive",
           pipe_through: ["browser"]
-        },
-        %{
-          verb: "DELETE",
-          path: "/mcp",
-          plug: "EmissaryWeb.MCPController",
-          plug_opts: ":method_not_allowed",
-          auth: "authenticate_plug",
-          live_view: nil,
-          pipe_through: ["mcp"]
-        },
-        %{
-          verb: "GET",
-          path: "/mcp",
-          plug: "EmissaryWeb.MCPController",
-          plug_opts: ":method_not_allowed",
-          auth: "authenticate_plug",
-          live_view: nil,
-          pipe_through: ["mcp"]
-        },
-        %{
-          verb: "POST",
-          path: "/mcp",
-          plug: "EmissaryWeb.MCPController",
-          plug_opts: ":handle",
-          auth: "authenticate_plug",
-          live_view: nil,
-          pipe_through: ["mcp"]
         },
         %{
           verb: "GET",

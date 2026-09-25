@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: Apache-2.0
 # Copyright 2026 CYFR Works Inc.
 
-defmodule EmissaryWeb.Plugs.MCPRequestMetadata do
+defmodule Emissary.Web.Plugs.MCPRequestMetadata do
   @moduledoc """
   The request metadata every MCP request carries, and the rules it must satisfy.
 
@@ -156,5 +156,5 @@ defmodule EmissaryWeb.Plugs.MCPRequestMetadata do
     end
   end
 
-  defp reject(conn, code, message), do: EmissaryWeb.MCPError.halt(conn, 400, code, message)
+  defp reject(conn, code, message), do: Emissary.Web.MCPError.halt(conn, 400, code, message)
 end

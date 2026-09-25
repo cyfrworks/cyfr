@@ -12,7 +12,7 @@ defmodule CyfrWeb.Plugs.CORS do
   ## Why the header list is derived
 
   MCP 2026-07-28 mirrors body fields into `Mcp-Method`, `Mcp-Name` and
-  `MCP-Protocol-Version`, and `EmissaryWeb.Plugs.MCPRequestMetadata` rejects a request
+  `MCP-Protocol-Version`, and `Emissary.Web.Plugs.MCPRequestMetadata` rejects a request
   that omits any of them. A preflight that does not advertise a required header
   is a failure the browser raises *before* the request is sent, so no server-side
   error can explain it — and the failure is invisible to the bundled deployment,
