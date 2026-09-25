@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: Apache-2.0
 # Copyright 2026 CYFR Works Inc.
 
-defmodule EmissaryWeb.WebhookControllerTest do
+defmodule CyfrWeb.Ingress.WebhookControllerTest do
   use EmissaryWeb.ConnCase, async: false
 
   require Arca.Repo.Errors
@@ -341,7 +341,7 @@ defmodule EmissaryWeb.WebhookControllerTest do
       Arca.Repo.all(from(e in Arca.Schemas.Execution, where: e.call_id == ^call_id))
     end
 
-    @math_wasm_path Path.expand("../../support/test_wasm/math.wasm", __DIR__)
+    @math_wasm_path Path.expand("../../../support/test_wasm/math.wasm", __DIR__)
 
     # A hook whose target runs: a published component, its profile's head
     # consent activating that release, and a scripted worker service that

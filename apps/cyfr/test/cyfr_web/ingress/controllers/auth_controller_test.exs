@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: Apache-2.0
 # Copyright 2026 CYFR Works Inc.
 
-defmodule EmissaryWeb.AuthControllerTest do
+defmodule CyfrWeb.Ingress.AuthControllerTest do
   @moduledoc """
   Tests for the sign-in controller.
 
@@ -77,7 +77,7 @@ defmodule EmissaryWeb.AuthControllerTest do
       conn =
         conn
         |> assign(:ueberauth_failure, failure)
-        |> EmissaryWeb.AuthController.callback(%{})
+        |> CyfrWeb.Ingress.AuthController.callback(%{})
 
       assert html_response(conn, 401) =~ "Sign-in failed"
       assert html_response(conn, 401) =~ "Access denied"
@@ -104,7 +104,7 @@ defmodule EmissaryWeb.AuthControllerTest do
         conn
         |> Plug.Test.init_test_session(%{})
         |> assign(:ueberauth_auth, auth)
-        |> EmissaryWeb.AuthController.callback(%{})
+        |> CyfrWeb.Ingress.AuthController.callback(%{})
 
       assert conn.status == 403
       assert conn.resp_body =~ "not allowed on this server"
@@ -132,7 +132,7 @@ defmodule EmissaryWeb.AuthControllerTest do
         conn
         |> Plug.Test.init_test_session(%{})
         |> assign(:ueberauth_auth, auth)
-        |> EmissaryWeb.AuthController.callback(%{})
+        |> CyfrWeb.Ingress.AuthController.callback(%{})
 
       assert conn.status == 403
     end
@@ -160,7 +160,7 @@ defmodule EmissaryWeb.AuthControllerTest do
         conn
         |> Plug.Test.init_test_session(%{})
         |> assign(:ueberauth_auth, oidcc_auth(uid, "test@example.com"))
-        |> EmissaryWeb.AuthController.callback(%{})
+        |> CyfrWeb.Ingress.AuthController.callback(%{})
 
       assert redirected_to(conn) == "/"
       assert is_binary(Plug.Conn.get_session(conn, :sanctum_session_token))
@@ -193,7 +193,7 @@ defmodule EmissaryWeb.AuthControllerTest do
         |> Plug.Test.init_test_session(%{})
         |> Phoenix.ConnTest.fetch_flash()
         |> assign(:ueberauth_auth, oidcc_auth(uid, "back@example.com"))
-        |> EmissaryWeb.AuthController.callback(%{})
+        |> CyfrWeb.Ingress.AuthController.callback(%{})
 
       assert redirected_to(conn) == "/"
       token = Plug.Conn.get_session(conn, :sanctum_session_token)
@@ -279,7 +279,7 @@ defmodule EmissaryWeb.AuthControllerTest do
       |> Plug.Test.init_test_session(%{})
       |> Phoenix.ConnTest.fetch_flash()
       |> assign(:ueberauth_auth, auth)
-      |> EmissaryWeb.AuthController.callback(%{})
+      |> CyfrWeb.Ingress.AuthController.callback(%{})
     end
 
     defp session_of(conn), do: Plug.Conn.get_session(conn, :sanctum_session_token)

@@ -42,7 +42,7 @@ defmodule EmissaryWeb.RouterTest do
         end)
 
       assert health_get
-      assert health_get.plug == EmissaryWeb.HealthController
+      assert health_get.plug == CyfrWeb.Ingress.HealthController
       assert health_get.plug_opts == :check
     end
   end

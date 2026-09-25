@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: Apache-2.0
 # Copyright 2026 CYFR Works Inc.
 
-defmodule EmissaryWeb.WebhookController do
+defmodule CyfrWeb.Ingress.WebhookController do
   @moduledoc """
   Inbound webhook receiver.
 
@@ -30,7 +30,7 @@ defmodule EmissaryWeb.WebhookController do
   produce inconsistent error reasons for the same kill.
   """
 
-  use CyfrWeb, :controller
+  use CyfrWeb.Ingress, :controller
 
   require Logger
 
@@ -203,7 +203,7 @@ defmodule EmissaryWeb.WebhookController do
       if Crucible.available?() do
         claim = conn.assigns[:webhook_delivery_claim]
 
-        Task.Supervisor.start_child(Emissary.TaskSupervisor, fn ->
+        Task.Supervisor.start_child(CyfrWeb.Ingress.TaskSupervisor, fn ->
           Prima.LoggerContext.restore(logger_metadata)
           run_in_task(ctx, webhook, input, telemetry_meta, start_time, claim)
         end)

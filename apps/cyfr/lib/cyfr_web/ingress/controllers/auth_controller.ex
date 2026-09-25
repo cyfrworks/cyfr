@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: Apache-2.0
 # Copyright 2026 CYFR Works Inc.
 
-defmodule EmissaryWeb.AuthController do
+defmodule CyfrWeb.Ingress.AuthController do
   @moduledoc """
   OAuth authentication controller for CYFR.
 
@@ -19,10 +19,11 @@ defmodule EmissaryWeb.AuthController do
     session token lives in the cookie, never in a body)
   - `GET /auth/device/complete/:ticket` - Sets the cookie after device flow
   - `GET /auth/post-legal-accept` - Re-probes after policy acceptance
-  - `DELETE /auth/logout` - Destroys session
+  - `DELETE /auth/logout` - Destroys session (API callers, bearer token)
+  - `POST /auth/logout` - Browser sign-out (cookie session, forgery-guarded)
   """
 
-  use CyfrWeb, :controller
+  use CyfrWeb.Ingress, :controller
 
   require Logger
 
@@ -234,7 +235,7 @@ defmodule EmissaryWeb.AuthController do
       {_missing, conn} ->
         # Cookie expired (10 min TTL) or never set. Force fresh OAuth.
         Logger.info(
-          "[EmissaryWeb.AuthController] post_legal_accept: missing probe cookie; " <>
+          "[CyfrWeb.Ingress.AuthController] post_legal_accept: missing probe cookie; " <>
             "redirecting to login"
         )
 
@@ -283,9 +284,10 @@ defmodule EmissaryWeb.AuthController do
   defp extract_access_token(_), do: nil
 
   @doc """
-  Logout - destroys the session.
+  Logout - destroys the session, for API callers (`DELETE /auth/logout`).
 
   Accepts the credential only from the `Authorization: Bearer` header.
+  The browser signs out through `browser_logout/2`.
   """
   def logout(conn, _params) do
     token = get_bearer_token(conn)
@@ -303,6 +305,25 @@ defmodule EmissaryWeb.AuthController do
     else
       CyfrWeb.ApiError.refuse(conn, :missing_token)
     end
+  end
+
+  @doc """
+  The browser's sign-out (`POST /auth/logout`): retires the Sanctum
+  session the cookie names, drops the cookie session, and lands on the
+  sign-in page.
+
+  POST, never GET, so signing someone out is not one `<img src>` away:
+  the route's browser pipeline checks the forgery token first.
+  """
+  def browser_logout(conn, _params) do
+    case get_session(conn, SignInResponse.session_key()) do
+      token when is_binary(token) and token != "" -> Session.destroy(token)
+      _ -> :ok
+    end
+
+    conn
+    |> configure_session(drop: true)
+    |> redirect(to: "/login?error=signed_out")
   end
 
   @doc """

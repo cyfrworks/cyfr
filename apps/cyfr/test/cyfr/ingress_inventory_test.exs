@@ -26,7 +26,7 @@ defmodule Cyfr.IngressInventoryTest do
     # Ingresses proper.
     "apps/cyfr/lib/crucible/provider.ex" => :mcp,
     "apps/cyfr/lib/crucible/schedules/scheduler.ex" => :cron,
-    "apps/cyfr/lib/emissary_web/controllers/webhook_controller.ex" => :webhook,
+    "apps/cyfr/lib/cyfr_web/ingress/controllers/webhook_controller.ex" => :webhook,
     # A tincture's invocation, behind the declared `tincture` operations
     # every surface reaches through the gate (the HTTP controller, the
     # console shell and `/mcp` render its outcomes; none calls run_root).
@@ -99,7 +99,7 @@ defmodule Cyfr.IngressInventoryTest do
   @ingress_files ~w(
     apps/cyfr/lib/crucible/provider.ex
     apps/cyfr/lib/crucible/schedules/scheduler.ex
-    apps/cyfr/lib/emissary_web/controllers/webhook_controller.ex
+    apps/cyfr/lib/cyfr_web/ingress/controllers/webhook_controller.ex
     apps/cyfr/lib/crucible/tincture.ex
   )
 

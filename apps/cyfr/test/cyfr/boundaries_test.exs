@@ -1313,14 +1313,15 @@ defmodule Cyfr.BoundariesTest do
                ["Aqua", "Aqua.Notes", "Aqua.Runner"]
     end
 
-    test "the MCP surface and the console name only the component domain's root" do
-      rows =
-        for tree <- ["emissary", "emissary_web", "prism", "prism_web"],
-            do:
-              Enum.find(
-                Boundaries.surfaces(),
-                &(&1.into == "Compendium" and "apps/cyfr/lib/#{tree}/**/*.ex" in &1.from)
-              ) || flunk("no surface row fences #{tree} into the component domain's root")
+    test "the console and the host name only the component domain's root; MCP names none" do
+      find = fn tree ->
+        Enum.find(
+          Boundaries.surfaces(),
+          &(&1.into == "Compendium" and "apps/cyfr/lib/#{tree}/**/*.ex" in &1.from)
+        ) || flunk("no surface row fences #{tree} into the component domain's root")
+      end
+
+      rows = Enum.map(["cyfr_web", "prism", "prism_web"], find)
 
       planted = [
         {"apps/cyfr/lib/planted.ex",
@@ -1343,6 +1344,13 @@ defmodule Cyfr.BoundariesTest do
 
         assert Boundaries.surface_violations(row, planted) ==
                  ["Compendium.OCI", "Compendium.Registry", "Compendium.SignInSync"]
+      end
+
+      for row <- Enum.uniq(Enum.map(["emissary", "emissary_web"], find)) do
+        assert row.allow == []
+
+        assert Boundaries.surface_violations(row, planted) ==
+                 ["Compendium", "Compendium.OCI", "Compendium.Registry", "Compendium.SignInSync"]
       end
     end
 
@@ -1375,7 +1383,7 @@ defmodule Cyfr.BoundariesTest do
                ["Aqua.Kinds", "Aqua.Loop", "Aqua.Runner"]
     end
 
-    test "the host names no domain but the component domain's root" do
+    test "the host names no domain but the component and execution domains' roots" do
       rows =
         for into <- ~w(Aqua Compendium Crucible Emissary),
             do:
@@ -1399,6 +1407,7 @@ defmodule Cyfr.BoundariesTest do
            def sync, do: Compendium.Provisioning.sync_seeds()
            def roster(ctx), do: Aqua.roster(ctx)
            def run(ctx, ref), do: Crucible.authority_for(ctx, :default, ref)
+           def admit(ctx, ref), do: Crucible.Admission.authority_for(ctx, :default, ref, [])
            def proxy, do: Emissary.External.Proxy
          end
          ''')}
@@ -1407,7 +1416,7 @@ defmodule Cyfr.BoundariesTest do
       expected = %{
         "Aqua" => ["Aqua"],
         "Compendium" => ["Compendium.Provisioning"],
-        "Crucible" => ["Crucible"],
+        "Crucible" => ["Crucible.Admission"],
         "Emissary" => ["Emissary.External"]
       }
 
@@ -1514,12 +1523,12 @@ defmodule Cyfr.BoundariesTest do
   defmodule PlantedRouter do
     use Phoenix.Router
 
-    get "/planted/unclassified", EmissaryWeb.HealthController, :check
+    get "/planted/unclassified", CyfrWeb.Ingress.HealthController, :check
 
-    get "/planted/unknown-posture", EmissaryWeb.HealthController, :check,
+    get "/planted/unknown-posture", CyfrWeb.Ingress.HealthController, :check,
       metadata: %{auth: :made_up}
 
-    get "/planted/unrostered-public", EmissaryWeb.HealthController, :check,
+    get "/planted/unrostered-public", CyfrWeb.Ingress.HealthController, :check,
       metadata: %{auth: :public_health}
   end
 

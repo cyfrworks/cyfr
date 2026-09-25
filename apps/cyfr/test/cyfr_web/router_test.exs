@@ -212,10 +212,13 @@ defmodule CyfrWeb.RouterTest do
     end
 
     test "every page pipeline refuses a headless node first" do
-      pages = Enum.flat_map(["browser", "attachment"], &declared/1)
-      assert pages != [], "no section declares a browser or attachment pipeline"
+      names = ["browser", "auth_browser", "attachment"]
 
-      for name <- ["browser", "attachment"], {provider, plugs} <- declared(name) do
+      for name <- names do
+        assert declared(name) != [], "no section declares the #{name} pipeline"
+      end
+
+      for name <- names, {provider, plugs} <- declared(name) do
         assert List.first(plugs) == "CyfrWeb.Plugs.Headless",
                "#{provider}'s #{name} pipeline does not begin with the headless refusal: " <>
                  inspect(plugs)

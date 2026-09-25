@@ -238,7 +238,7 @@ defmodule Cyfr.Bus do
       match: {:prefix, "execution:events:"},
       template: "tenant:<athanor_id>:execution:events:<execution_id>",
       producers: ["Crucible.Events"],
-      consumers: ["EmissaryWeb.ExecutionEventsController", "Aqua.Loop.Stream"],
+      consumers: ["CyfrWeb.Ingress.ExecutionEventsController", "Aqua.Loop.Stream"],
       reason:
         "one execution's stream: durable rows after commit, deltas before the " <>
           "write-behind sink keeps them, numbered for replay"
@@ -326,8 +326,8 @@ defmodule Cyfr.Bus do
       struct: Ping,
       match: {:prefix, "health_check:"},
       template: "health_check:<nonce>",
-      producers: ["EmissaryWeb.HealthController"],
-      consumers: ["EmissaryWeb.HealthController"],
+      producers: ["CyfrWeb.Ingress.HealthController"],
+      consumers: ["CyfrWeb.Ingress.HealthController"],
       reason: "a prober's round trip to itself; no tenant data crosses it"
     },
     %{

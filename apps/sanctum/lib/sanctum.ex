@@ -15,7 +15,7 @@ defmodule Sanctum do
   A session is minted at exactly two places, and the door
   (`Sanctum.Door.admit_identity/2`) is asked first at both:
 
-  - the browser flow — `EmissaryWeb.AuthController.callback/2` after the
+  - the browser flow — `CyfrWeb.Ingress.AuthController.callback/2` after the
     configured provider (`Sanctum.Auth.provider/0`: `Sanctum.Auth.OAuth`
     or `Sanctum.Auth.OIDC`) proves the identity;
   - the CLI flow — `Sanctum.Auth.DeviceFlow.poll_for_session/3` behind the

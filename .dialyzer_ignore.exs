@@ -24,7 +24,7 @@
   {"lib/crucible/events/sequence.ex", :missing_range},
   {"lib/prima/json_formatter.ex", :unknown_type},
   {"lib/cyfr/retention_scheduler.ex", :pattern_match},
-  {"lib/emissary_web/controllers/auth_controller.ex", :pattern_match_cov},
+  {"lib/cyfr_web/ingress/controllers/auth_controller.ex", :pattern_match_cov},
   {"lib/cyfr_web/plugs/verify_webhook_signature.ex", :pattern_match},
   {"lib/cyfr_web/plugs/verify_webhook_signature.ex", :pattern_match_cov},
   {"lib/cyfr_web/sse.ex", :missing_range},

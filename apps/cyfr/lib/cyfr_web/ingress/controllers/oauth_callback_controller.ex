@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: Apache-2.0
 # Copyright 2026 CYFR Works Inc.
 
-defmodule EmissaryWeb.OAuthCallbackController do
+defmodule CyfrWeb.Ingress.OAuthCallbackController do
   @moduledoc """
   Handles the OAuth callback for vault-entry grants (`vault.authorize`).
 
@@ -17,7 +17,7 @@ defmodule EmissaryWeb.OAuthCallbackController do
   session revoked in between writes nothing.
   """
 
-  use CyfrWeb, :controller
+  use CyfrWeb.Ingress, :controller
 
   require Logger
 

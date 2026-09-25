@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: Apache-2.0
 # Copyright 2026 CYFR Works Inc.
 
-defmodule EmissaryWeb.TinctureControllerTest do
+defmodule CyfrWeb.Ingress.TinctureControllerTest do
   use EmissaryWeb.ConnCase, async: false
 
   require Ecto.Query
@@ -223,7 +223,7 @@ defmodule EmissaryWeb.TinctureControllerTest do
       conn = put_req_header(conn, "authorization", "Bearer #{token}")
 
       conn =
-        EmissaryWeb.TinctureController.index(conn, %{
+        CyfrWeb.Ingress.TinctureController.index(conn, %{
           "athanor" => "test",
           "publisher" => "local",
           "tincture_name" => "auth-dash"
@@ -246,7 +246,7 @@ defmodule EmissaryWeb.TinctureControllerTest do
       conn = put_req_header(conn, "authorization", "Bearer #{token}")
 
       conn =
-        EmissaryWeb.TinctureController.index(conn, %{
+        CyfrWeb.Ingress.TinctureController.index(conn, %{
           "athanor" => "test",
           "publisher" => "local",
           "tincture_name" => "auth-dash"
@@ -263,7 +263,7 @@ defmodule EmissaryWeb.TinctureControllerTest do
       conn = put_req_header(conn, "authorization", "Bearer #{token}")
 
       conn =
-        EmissaryWeb.TinctureController.index(conn, %{
+        CyfrWeb.Ingress.TinctureController.index(conn, %{
           "athanor" => "test",
           "publisher" => "local",
           "tincture_name" => "no-such-tincture"
