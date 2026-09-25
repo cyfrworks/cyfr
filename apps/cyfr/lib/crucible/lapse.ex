@@ -51,7 +51,6 @@ defmodule Crucible.Lapse do
         %{completed_at: now, duration_ms: duration_ms, error_message: @message},
         attempt: record.attempt,
         lease_until: record.lease_until,
-        event: "execution.lapsed",
         grant: stamp(record),
         verify: &Sanctum.ExecutionStanding.stamp_only/1
       )

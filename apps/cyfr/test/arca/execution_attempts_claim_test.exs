@@ -284,7 +284,7 @@ defmodule Arca.ExecutionAttemptsClaimTest do
         execution.id,
         "cancelled",
         %{completed_at: DateTime.utc_now(), duration_ms: 1},
-        nil,
+        attempt.attempt,
         Arca.Test.Actor.stored()
       )
 
@@ -356,7 +356,7 @@ defmodule Arca.ExecutionAttemptsClaimTest do
         other.id,
         "cancelled",
         %{completed_at: DateTime.utc_now(), duration_ms: 1},
-        nil,
+        other_attempt.attempt,
         Arca.Test.Actor.stored()
       )
 

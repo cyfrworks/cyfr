@@ -24,6 +24,17 @@ defmodule Arca.Execution do
   @terminal_statuses Row.terminal_statuses()
   @fields Row.__schema__(:fields)
 
+  # The outcomes an ended execution's attempt may close with, by the
+  # status it ends in: a completion is `ok` and a cancel `cancelled`; a
+  # failure is an error, an effect that may have landed (`uncertain`), or
+  # a completed run whose result could not be kept (`result_lost`). The
+  # first of each is the status's own.
+  @end_outcomes %{
+    "completed" => ["ok"],
+    "failed" => ["error", "uncertain", "result_lost"],
+    "cancelled" => ["cancelled"]
+  }
+
   @doc "Every status an execution row can carry."
   @spec statuses() :: [String.t()]
   def statuses, do: Row.statuses()
@@ -79,18 +90,26 @@ defmodule Arca.Execution do
 
   defp duplicate_child_key(other), do: other
 
-  @doc """
-  Records the start of an execution in the database.
-  """
+  @doc false
+  # A test writer: a row with no attempt and no admission, in a status of
+  # the execution vocabulary (the start changeset's), for fixtures that
+  # need a row and not the admission contract (`admit/2`). A row it writes
+  # has no stamp to match, so it ends on its status alone
+  # (`record_end/6`, `mark_failed_if_running/3`). No production path
+  # calls it.
   @spec record_start(map()) :: {:ok, map()} | {:error, term()}
-  def record_start(attrs) do
-    Arca.Repo.Errors.with_db_rescue("Execution.record_start", fn ->
-      attrs
-      |> Row.start_changeset()
-      |> Arca.Repo.insert()
-      |> duplicate_child_key()
-    end)
-    |> Arca.Data.project()
+  def record_start(attrs) when is_map(attrs) do
+    if Map.has_key?(attrs, :current_attempt) do
+      {:error, :illegal_transition}
+    else
+      Arca.Repo.Errors.with_db_rescue("Execution.record_start", fn ->
+        attrs
+        |> Row.start_changeset()
+        |> Arca.Repo.insert()
+        |> duplicate_child_key()
+      end)
+      |> Arca.Data.project()
+    end
   end
 
   @doc """
@@ -132,14 +151,18 @@ defmodule Arca.Execution do
     child is admitted under; the parent barrier holds it while it owns its
     running parent, running with no cancel asked of it
     (`Arca.ExecutionAttempts.hold_for_child!/3`), and admission is refused
-    `{:error, :parent_ended}` otherwise.
+    `{:error, :parent_ended}` otherwise. The barrier applies to every row
+    that names a parent: without the option it holds the parent's current
+    attempt, read in the transaction.
   - `:payloads` — staged payloads (`Arca.ExecutionPayloads.Staged`)
     committed for the attempt in the same transaction; one that cannot
     be kept refuses admission `{:error, {:payload_not_retained, why}}`.
   - `:occurrence_id` — the schedule occurrence this root runs; it moves
     from `claimed` to `started` in the same transaction
     (`Arca.ScheduleOccurrences.start!/3`), and admission is refused
-    `{:error, :occurrence_not_claimed}` when it is not claimed.
+    `{:error, :occurrence_not_claimed}` when it is not claimed. A row that
+    names a `schedule_id` runs an occurrence, and is refused the same way
+    without one.
   - `:grant` and `:verify` (required, `Arca.ExecutionStanding`) — the
     `Prima.ExecutionGrant` the attempt is stamped with and the caller's
     check over it, asked first in the transaction, before any row is
@@ -253,26 +276,36 @@ defmodule Arca.Execution do
           :ok
       end
 
-      case Keyword.get(opts, :parent_attempt) do
-        parent_attempt when is_binary(parent_attempt) ->
-          parent_id = Map.fetch!(attrs, :parent_execution_id)
+      # The barriers a row's own columns call for apply whether or not the
+      # caller declared them: a child is held against its parent, and a
+      # scheduled root against its occurrence.
+      case {execution.parent_execution_id, Keyword.get(opts, :parent_attempt)} do
+        {nil, nil} ->
+          :ok
 
-          if Arca.ExecutionAttempts.hold_for_child!(
-               Prima.Actor.in_athanor(athanor_id),
-               parent_id,
-               parent_attempt,
-               grant
-             ) != 1,
+        {parent_id, parent_attempt} when is_binary(parent_id) ->
+          parent_attempt = parent_attempt || current_attempt_of(athanor_id, parent_id)
+
+          if is_nil(parent_attempt) or
+               Arca.ExecutionAttempts.hold_for_child!(
+                 Prima.Actor.in_athanor(athanor_id),
+                 parent_id,
+                 parent_attempt,
+                 grant
+               ) != 1,
              do: Arca.Repo.rollback(:parent_ended)
 
-        nil ->
-          :ok
+        {nil, _declared} ->
+          Arca.Repo.rollback(:parent_ended)
       end
 
       commit_payloads!(Keyword.get(opts, :payloads, []), attempt_id)
 
-      case Keyword.get(opts, :occurrence_id) do
-        occurrence_id when is_binary(occurrence_id) ->
+      case {execution.schedule_id, Keyword.get(opts, :occurrence_id)} do
+        {nil, nil} ->
+          :ok
+
+        {_schedule, occurrence_id} when is_binary(occurrence_id) ->
           if Arca.ScheduleOccurrences.start!(
                Prima.Actor.in_athanor(athanor_id),
                occurrence_id,
@@ -280,8 +313,8 @@ defmodule Arca.Execution do
              ) != 1,
              do: Arca.Repo.rollback(:occurrence_not_claimed)
 
-        nil ->
-          :ok
+        {_schedule, nil} ->
+          Arca.Repo.rollback(:occurrence_not_claimed)
       end
 
       event =
@@ -300,6 +333,18 @@ defmodule Arca.Execution do
     |> duplicate_child_key()
   end
 
+  # The attempt that owns `parent_id` now, read in the admission's
+  # transaction: the one a child that declared none is held against.
+  # arca:db-raise-ok inside the caller's transaction
+  defp current_attempt_of(athanor_id, parent_id) do
+    Arca.Repo.one(
+      from(e in Row,
+        where: e.athanor_id == ^athanor_id and e.id == ^parent_id,
+        select: e.current_attempt
+      )
+    )
+  end
+
   # A child inherits its parent's stored grant unchanged: the stamp the
   # parent's current attempt carries, never one read from the estate now.
   # arca:db-raise-ok inside the caller's transaction
@@ -313,36 +358,35 @@ defmodule Arca.Execution do
     :ok
   end
 
-  @doc """
-  Records the completion of an execution in the database.
-
-  Uses tenant-scoped lookup when a context is provided.
-
-  The write carries an atomic `status == "running"` precondition, like its
-  sibling `mark_failed_if_running/3`: cancel and the finishing runner race
-  on this row, and without the guard whichever wrote second won — a
-  `cancelled` row overwritten `completed` (with a second terminal event on
-  the wire), or a finished run stamped `cancelled` and its output
-  discarded. A row that already left `running` answers
-  `{:error, :not_running}` and the caller keeps its hands off the wire.
-
-  `opts`: `attempt:` narrows the write to the attempt that owns the row
-  (against `current_attempt`), so a finisher whose attempt is no longer
-  the row's is refused the same way; `grant:` and `verify:` (required,
-  `Arca.ExecutionStanding`) are the completion's standing, asked before
-  the row is written: a completion needs a grant that stands. `grant:
-  :stored` names the stamp the row's current attempt carries; a row with
-  no attempt needs an explicit grant of its own athanor. A row whose
-  attempt carries another stamp is refused `{:error, :not_standing}`, the
-  check's refusal is answered as itself, and a missing input is
-  `{:error, :missing_grant}`; none writes. The attempt row itself is
-  closed by `record_end/6`, which every engine completion uses.
-  """
+  @doc false
+  # A test writer, beside `record_start/1`: no production path calls it,
+  # and every engine completion ends through `record_end/6`, which closes
+  # the attempt too. It ends a running row in the terminal status its
+  # attrs name (the complete changeset's vocabulary) and, when they name
+  # an outcome, only one that status allows (`{:error,
+  # :illegal_transition}` otherwise).
+  #
+  # The write carries an atomic `status == "running"` precondition: a row
+  # that already left `running` answers `{:error, :not_running}`. `opts`:
+  # `attempt:` narrows the write to the attempt that owns the row;
+  # `grant:` and `verify:` (required, `Arca.ExecutionStanding`) are the
+  # completion's standing, asked before the row is written. `grant:
+  # :stored` names the stamp the row's current attempt carries; a row with
+  # no attempt needs an explicit grant of its own athanor. A row whose
+  # attempt carries another stamp is refused `{:error, :not_standing}`, the
+  # check's refusal is answered as itself, and a missing input is
+  # `{:error, :missing_grant}`; none writes.
   @spec record_complete(Prima.Actor.t(), String.t(), map(), keyword()) ::
           {:ok, map()} | {:error, term()}
   def record_complete(actor, id, attrs, opts \\ [])
 
   def record_complete(%Prima.Actor{} = actor, id, attrs, opts) when is_list(opts) do
+    if outcome_allowed?(Map.get(attrs, :status), Map.get(attrs, :outcome)),
+      do: complete(actor, id, attrs, opts),
+      else: {:error, :illegal_transition}
+  end
+
+  defp complete(actor, id, attrs, opts) do
     Arca.Repo.Errors.with_db_rescue("Execution.record_complete", fn ->
       case Arca.ExecutionStanding.inputs(opts, fn -> stored_of(actor, id) end) do
         {:ok, %Prima.ExecutionGrant{} = grant, verify} ->
@@ -357,6 +401,11 @@ defmodule Arca.Execution do
     end)
     |> Arca.Data.project()
   end
+
+  # Whether `outcome` (nil for the status's own) is one an execution ending
+  # in `status` may close its attempt with.
+  defp outcome_allowed?(_status, nil), do: true
+  defp outcome_allowed?(status, outcome), do: outcome in Map.get(@end_outcomes, status, [])
 
   # The standing first, then the row: the grant is checked before the row
   # is locked by its write, and must be the stamp of the row's attempt.
@@ -702,7 +751,9 @@ defmodule Arca.Execution do
   input. `fence`: `attempt:` names the attempt being retired (the row's
   current one when absent); `lease_until:` is the lease the sweeper
   observed, and the attempt lapses only if that exact lease still stands,
-  so a renewal that landed after the scan matches nothing; `grant:`
+  so a renewal that landed after the scan matches nothing, and the row's
+  event is `execution.lapsed` — without one the attempt closes failed and
+  the event is `execution.failed`; `grant:`
   (`:stored` for the current attempt's stamp) and `verify:`
   (`Arca.ExecutionStanding`, required) — a failure retires work, so its
   check need not find the grant standing, but the attempt must carry its
@@ -781,13 +832,14 @@ defmodule Arca.Execution do
                 ]
               )
 
-            # The lifecycle row of a run ended from outside: swept
-            # (`execution.lapsed`) or failed by its parent's end.
+            # The lifecycle row of a run ended from outside, named by how
+            # its attempt was retired: on the lease the sweep saw
+            # (`execution.lapsed`), or failed by its parent's end.
             event =
               Arca.ExecutionEvents.append!(
                 Prima.Actor.in_athanor(execution.athanor_id),
                 id,
-                Keyword.get(fence, :event, "execution.failed"),
+                failure_event(Keyword.get(fence, :lease_until)),
                 data: %{"status" => "failed", "error" => attrs[:error_message]}
               )
 
@@ -803,14 +855,23 @@ defmodule Arca.Execution do
     end
   end
 
+  defp failure_event(%DateTime{}), do: "execution.lapsed"
+  defp failure_event(nil), do: "execution.failed"
+
   @doc """
   End an execution from the attempt that owns it: the attempt closes with
   `outcome`, the row leaves `running`/`paused` as `status`, and the
   lifecycle event (`execution.<status>`, or `execution.result_lost` for
   a completed run whose result was not kept) is appended — its number is
-  the answered execution's `event_seq` — in one transaction. `attempt` nil means the row's current attempt (a cancel
-  from a read-back record). `{:error, :not_running}` when the row is not
-  open or the attempt does not own it.
+  the answered execution's `event_seq` — in one transaction. `attempt`
+  names the attempt ending it and is required for a row that has one
+  (`{:error, :attempt_not_owner}` when nil); only a row with no attempt —
+  a test row (`record_start/1`) — ends with nil. `{:error, :not_running}`
+  when the row is not open or the attempt does not own it.
+  `attrs[:outcome]` is the attempt's outcome when it is not the status's
+  own, and must be one that status allows (`completed`: ok; `failed`:
+  error, uncertain, result_lost; `cancelled`: cancelled), else
+  `{:error, :illegal_transition}`.
 
   `opts` are the grant contract's (`Arca.ExecutionStanding`, required):
   `grant:` (`:stored` for the current attempt's stamp) and `verify:`,
@@ -829,21 +890,26 @@ defmodule Arca.Execution do
              | :not_standing
              | :unavailable
              | :missing_grant
+             | :attempt_not_owner
+             | :illegal_transition
              | {:payload_not_retained, term()}
              | {:invalid, Arca.Data.field_errors()}}
   def record_end(%Prima.Actor{} = actor, id, status, attrs, attempt, opts)
       when status in @terminal_statuses and is_list(opts) do
     # `attrs[:payloads]` are staged payloads committed for the owning
-    # attempt in this transaction; `attrs[:outcome]` names the attempt's
-    # outcome when it is not the status's own; `attrs[:event]` is data the
-    # lifecycle event carries besides the status.
-    Arca.Repo.Errors.with_db_rescue("Execution.record_end", fn ->
-      case Arca.ExecutionStanding.inputs(opts, fn -> stored_of(actor, id) end) do
-        {:ok, grant, verify} -> end_owned(actor, id, status, attrs, attempt, grant, verify)
-        {:error, :missing_grant} = refused -> refused
-      end
-    end)
-    |> Arca.Data.project()
+    # attempt in this transaction; `attrs[:event]` is data the lifecycle
+    # event carries besides the status, never its type.
+    if outcome_allowed?(status, Map.get(attrs, :outcome)) do
+      Arca.Repo.Errors.with_db_rescue("Execution.record_end", fn ->
+        case Arca.ExecutionStanding.inputs(opts, fn -> stored_of(actor, id) end) do
+          {:ok, grant, verify} -> end_owned(actor, id, status, attrs, attempt, grant, verify)
+          {:error, :missing_grant} = refused -> refused
+        end
+      end)
+      |> Arca.Data.project()
+    else
+      {:error, :illegal_transition}
+    end
   end
 
   # The stamp of the current attempt of an execution the actor may read.
@@ -872,7 +938,13 @@ defmodule Arca.Execution do
         |> Arca.Repo.one()
 
       if is_nil(execution), do: Arca.Repo.rollback(:not_running)
-      owner = attempt || execution.current_attempt
+
+      # The attempt ending the row names itself: a row with an attempt is
+      # never ended on whichever attempt happens to own it now.
+      if is_nil(attempt) and is_binary(execution.current_attempt),
+        do: Arca.Repo.rollback(:attempt_not_owner)
+
+      owner = attempt
       if owner != execution.current_attempt, do: Arca.Repo.rollback(:not_running)
 
       changeset = Row.complete_changeset(execution, Map.put(attrs, :status, status))
@@ -918,7 +990,7 @@ defmodule Arca.Execution do
               "error" => Map.get(attrs, :error_message)
             }
             |> Map.reject(fn {_k, v} -> is_nil(v) end)
-            |> Map.merge(Map.get(attrs, :event, %{}))
+            |> Map.merge(Map.drop(Map.get(attrs, :event, %{}), ["status", "outcome"]))
         )
 
       %{Ecto.Changeset.apply_changes(changeset) | event_seq: event.seq}

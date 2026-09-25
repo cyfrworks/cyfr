@@ -495,17 +495,34 @@ defmodule Aqua.Loop.FlushTest do
     {:ok, _} = Aqua.Approvals.resolve(ctx, approval.id, %{decision: :declined})
   end
 
+  # A model request is recorded only on a running turn: the steps an
+  # interrupted flush left behind were written while the turn ran, so the
+  # fixture records them on the paused turn as it stood then.
   defp model_step!(ctx, turn, purpose) do
     {:ok, step} =
-      Tape.record_model_intent(ctx, turn, %{
-        idempotency_key: "model:#{turn.id}:#{System.unique_integer([:positive])}",
-        tool: @model,
-        action: "chat",
-        purpose: purpose
-      })
+      as_running(turn, fn ->
+        Tape.record_model_intent(ctx, turn, %{
+          idempotency_key: "model:#{turn.id}:#{System.unique_integer([:positive])}",
+          tool: @model,
+          action: "chat",
+          purpose: purpose
+        })
+      end)
 
     {:ok, step} = Tape.mark_dispatched(ctx, turn, step)
     step
+  end
+
+  defp as_running(%{id: turn_id, status: status}, fun) do
+    import Ecto.Query, only: [from: 2]
+    row = from(t in Arca.Schemas.Turn, where: t.id == ^turn_id)
+    {1, _} = Arca.Repo.update_all(row, set: [status: "running"])
+
+    try do
+      fun.()
+    after
+      {1, _} = Arca.Repo.update_all(row, set: [status: status])
+    end
   end
 
   defp call_attrs(turn, model_step, id, name) do

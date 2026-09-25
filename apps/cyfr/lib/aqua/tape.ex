@@ -25,7 +25,7 @@ defmodule Aqua.Tape do
 
   Which turn may run at all is `threads.active_turn_id`, not a process on
   any member. `start_turn/3` takes it, `finish/4` and `suspend/3` give it
-  up, `bump_recovery/2` and `recover/2` take it from a turn whose holder
+  up, `bump_recovery/2` and `recover/3` take it from a turn whose holder
   is not a live member, and `claim_holder/2` reads it. An approval pause
   keeps it.
   """
@@ -44,10 +44,6 @@ defmodule Aqua.Tape do
   @doc "Whether the turn has a terminal status in the durable lifecycle."
   @spec terminal?(turn()) :: boolean()
   def terminal?(%{status: status}), do: Prima.TurnState.terminal?(status)
-
-  @doc "How many automatic recoveries a turn gets before it ends `uncertain`."
-  @spec recovery_cap() :: pos_integer()
-  def recovery_cap, do: TurnStorage.recovery_cap()
 
   # ---------------------------------------------------------------------------
   # Acceptance
@@ -180,7 +176,9 @@ defmodule Aqua.Tape do
 
   @doc """
   Start an accepted turn with its root, attempt, budget and pins
-  (`TurnStorage.start/3`), taking the thread's claim with it.
+  (`TurnStorage.start/3`), taking the thread's claim with it and storing
+  the recovery limit the caller's policy names (`:recovery_limit`), which
+  the turn is held to from then on.
 
   The claim names the consumed sequence read here, a moment before the
   statement that compares it: that read and that write are the
@@ -233,16 +231,19 @@ defmodule Aqua.Tape do
   @doc """
   Take the thread's claim for an open turn no live member runs and count
   the recovery, in one transaction (`TurnStorage.recover/3`), from the
-  fence `turn` was read with. Refused past the cap, and `{:error,
-  :held_elsewhere}` for a thread a live peer holds.
+  fence `turn` was read with. An accepted turn's recovery is its first
+  claim, which stores `recovery_limit` — the caller's policy — and spends
+  none; any other turn is held to the limit it stores. Refused once that
+  limit is spent, and `{:error, :held_elsewhere}` for a thread a live
+  peer holds.
   """
-  @spec recover(Context.t(), turn()) :: {:ok, turn()} | {:error, term()}
-  def recover(%Context{} = ctx, turn),
+  @spec recover(Context.t(), turn(), pos_integer()) :: {:ok, turn()} | {:error, term()}
+  def recover(%Context{} = ctx, turn, recovery_limit),
     do:
       TurnStorage.recover(
         Sanctum.Context.actor(ctx),
         turn.id,
-        standing(%{fence: turn.fence}, :current)
+        standing(%{fence: turn.fence, recovery_limit: recovery_limit}, :current)
       )
 
   @doc """
@@ -281,7 +282,7 @@ defmodule Aqua.Tape do
   @doc """
   Take over a turn another runner lost: the successor attempt, the new
   fence and the recovery count (`TurnStorage.takeover/3`), from the fence
-  `turn` was read with. Refused past the cap.
+  `turn` was read with. Refused once the turn's stored limit is spent.
   """
   @spec bump_recovery(Context.t(), turn()) :: {:ok, turn()} | {:error, term()}
   def bump_recovery(%Context{} = ctx, turn),

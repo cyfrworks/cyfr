@@ -135,9 +135,10 @@ defmodule Prima.Refusal do
     :turn_superseded
   ]
 
-  # A run's own record refused the write it was handed: an internal fault
-  # of the writer, never something the caller can change.
-  @turn_internal [:fence_required, :seq_conflict]
+  # A run's own record refused the write it was handed — no fence, a lost
+  # sequence race, or a transition its rows do not allow: an internal
+  # fault of the writer, never something the caller can change.
+  @turn_internal [:fence_required, :seq_conflict, :illegal_transition]
 
   @turn_not_found [
     :approval_not_found,

@@ -576,7 +576,8 @@ defmodule Crucible.ArchiveFenceTest do
         root_execution_id: root.id,
         attempt: attempt.attempt,
         profile_id: "prof_fence",
-        consent_id: "consent_fence"
+        consent_id: "consent_fence",
+        recovery_limit: 3
       })
 
     {:ok, paused} = Arca.TurnStorage.pause(actor(ctx), turn.id, %{fence: started.fence})

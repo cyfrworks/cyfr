@@ -530,7 +530,19 @@ defmodule Crucible.Schedules.SchedulerTest do
         claimed_at: now
       })
 
-    # Started, and its execution has since ended without the occurrence.
+    # Started — a scheduled root is admitted only against its claimed
+    # occurrence, which admission moves to `started` — and its execution
+    # has since ended without the occurrence.
+    Arca.Repo.insert!(%Arca.Schemas.ScheduleOccurrence{
+      id: "occ_started",
+      athanor_id: ctx.athanor_id,
+      schedule_id: schedule.id,
+      scheduled_for: DateTime.add(now, -60, :second),
+      state: "claimed",
+      claimed_by: "gone",
+      claimed_at: now
+    })
+
     {:ok, %{attempt: attempt}} =
       Arca.Execution.admit(
         %{
@@ -541,7 +553,7 @@ defmodule Crucible.Schedules.SchedulerTest do
           component_type: "reagent",
           schedule_id: schedule.id
         },
-        Cyfr.Test.AttemptFixtures.standing(ctx.athanor_id)
+        [occurrence_id: "occ_started"] ++ Cyfr.Test.AttemptFixtures.standing(ctx.athanor_id)
       )
 
     {:ok, _} =
@@ -553,18 +565,6 @@ defmodule Crucible.Schedules.SchedulerTest do
         attempt.attempt,
         Cyfr.Test.AttemptFixtures.stored()
       )
-
-    Arca.Repo.insert!(%Arca.Schemas.ScheduleOccurrence{
-      id: "occ_started",
-      athanor_id: ctx.athanor_id,
-      schedule_id: schedule.id,
-      scheduled_for: DateTime.add(now, -60, :second),
-      state: "started",
-      execution_id: "exec_lapsed",
-      attempts: 1,
-      claimed_by: "gone",
-      claimed_at: now
-    })
 
     scheduler!()
 

@@ -90,7 +90,11 @@ defmodule Aqua.ApprovalsTest do
       Tape.start_turn(
         ctx,
         turn,
-        Map.merge(pins, %{root_execution_id: execution.id, attempt: attempt.attempt})
+        Map.merge(pins, %{
+          root_execution_id: execution.id,
+          attempt: attempt.attempt,
+          recovery_limit: Aqua.Runner.RecoveryPolicy.max_attempts()
+        })
       )
 
     turn

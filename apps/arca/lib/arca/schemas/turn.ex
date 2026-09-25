@@ -36,6 +36,7 @@ defmodule Arca.Schemas.Turn do
     field :runner_id, :string
     field :fence, :integer
     field :recovery_attempts, :integer, default: 0
+    field :recovery_limit, :integer
     field :profile_id, :string
     field :consent_id, :string
     field :agent_revision_digest, :string

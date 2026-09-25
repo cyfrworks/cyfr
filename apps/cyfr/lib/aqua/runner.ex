@@ -83,7 +83,7 @@ defmodule Aqua.Runner do
 
   require Logger
 
-  alias Aqua.Runner.{Admission, RecoveryTable}
+  alias Aqua.Runner.{Admission, RecoveryPolicy, RecoveryTable}
   alias Aqua.Tape
   alias Cyfr.Bus.{Notify, ThreadEvent}
   alias Sanctum.Context
@@ -380,15 +380,15 @@ defmodule Aqua.Runner do
   end
 
   # What a freshly started runner made of the turn: the row, read again. A
-  # turn it gave up on because the cap was spent is `uncertain` with the
-  # cap's own count, which is the cap answering; `uncertain` for any other
-  # reason is reported as the status it is.
+  # turn it gave up on because its limit was spent is `uncertain` with the
+  # limit's own count, which is the limit answering; `uncertain` for any
+  # other reason is reported as the status it is.
   defp recovered(ctx, turn_id) do
-    cap = Tape.recovery_cap()
-
     case Tape.turn(ctx, turn_id) do
-      {:ok, %{status: "uncertain", recovery_attempts: spent}} when spent >= cap ->
-        {:error, :recovery_exhausted}
+      {:ok, %{status: "uncertain", recovery_attempts: spent} = turn} ->
+        if spent >= recovery_limit(turn),
+          do: {:error, :recovery_exhausted},
+          else: {:ok, report_row(turn)}
 
       {:ok, turn} ->
         {:ok, report_row(turn)}
@@ -397,6 +397,11 @@ defmodule Aqua.Runner do
         {:error, reason}
     end
   end
+
+  # The limit a turn is held to: the one its row stores, or — for a turn
+  # only accepted, which stores none yet — the policy.
+  defp recovery_limit(%{recovery_limit: limit}) when is_integer(limit), do: limit
+  defp recovery_limit(_turn), do: RecoveryPolicy.max_attempts()
 
   defp report_row(turn) do
     %{
@@ -1212,7 +1217,7 @@ defmodule Aqua.Runner do
     if Tape.terminal?(turn) do
       {:reply, {:error, :not_open}, state}
     else
-      case Tape.recover(state.ctx, turn) do
+      case Tape.recover(state.ctx, turn, RecoveryPolicy.max_attempts()) do
         {:ok, recovered} ->
           state =
             RecoveryTable.claimed(state.ctx, recovered)

@@ -112,6 +112,7 @@ defmodule Crucible.TurnRootTest do
         budget_id: claim.budget_id,
         profile_id: claim.authority.profile_id,
         consent_id: claim.authority.consent_id,
+        recovery_limit: Aqua.Runner.RecoveryPolicy.max_attempts(),
         fence: turn.fence
       })
 

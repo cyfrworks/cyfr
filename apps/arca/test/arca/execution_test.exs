@@ -603,7 +603,7 @@ defmodule Arca.ExecutionTest do
           id,
           "completed",
           %{completed_at: DateTime.utc_now(), duration_ms: 1},
-          nil,
+          attempt,
           Arca.Test.Actor.stored()
         )
 

@@ -119,6 +119,18 @@ defmodule Arca.SchemaFingerprintTest do
     assert :refused = insert_row("retention_settings", %{row | athanor_id: nil})
   end
 
+  test "a turn's recovery limit is the fingerprinted baseline's, with no storage default" do
+    [baseline] =
+      Path.wildcard(Path.expand("../../priv/repo/migrations/*_baseline.exs", __DIR__))
+
+    assert File.read!(baseline) =~ ~r/add :recovery_limit, :integer\n/
+    assert :recovery_limit in Arca.Schemas.Turn.__schema__(:fields)
+
+    # An accepted turn has no limit yet: the column is nullable and
+    # storage supplies none, so a turn row carries only the limit written.
+    assert %Arca.Schemas.Turn{}.recovery_limit == nil
+  end
+
   defp insert_row(table, row) do
     Arca.Repo.transaction(fn -> Arca.Repo.insert_all(table, [row]) end)
     :ok
