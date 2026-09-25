@@ -16,11 +16,12 @@ defmodule Cyfr.Bus.Payload do
 
   def athanor!(%Prima.Actor{athanor_id: athanor_id}) do
     raise ArgumentError,
-          "a tenant payload needs an actor with a non-empty athanor_id, got #{inspect(athanor_id)}"
+          "a tenant payload needs an actor with a non-empty athanor_id, got #{Prima.LoggerContext.shape(athanor_id)}"
   end
 
   def athanor!(other) do
-    raise ArgumentError, "a tenant payload needs a Prima.Actor, got #{inspect(other, limit: 3)}"
+    raise ArgumentError,
+          "a tenant payload needs a Prima.Actor, got #{Prima.LoggerContext.shape(other)}"
   end
 
   @doc false
@@ -30,7 +31,7 @@ defmodule Cyfr.Bus.Payload do
       kind
     else
       raise ArgumentError,
-            "#{inspect(module)} has no kind #{inspect(kind)}; its kinds are #{inspect(kinds)}"
+            "#{inspect(module)} has no kind #{Prima.LoggerContext.shape(kind)}; its kinds are #{inspect(kinds)}"
     end
   end
 
@@ -80,7 +81,8 @@ defmodule Cyfr.Bus.Payload do
         struct!(module, Map.merge(fields, fixed))
 
       unknown ->
-        raise ArgumentError, "#{inspect(module)} declares no field #{inspect(Enum.sort(unknown))}"
+        raise ArgumentError,
+              "#{inspect(module)} declares no field of #{Prima.LoggerContext.shape(Map.take(fields, unknown))}"
     end
   end
 end

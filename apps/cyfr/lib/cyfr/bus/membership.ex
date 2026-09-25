@@ -55,7 +55,7 @@ defmodule Cyfr.Bus.Membership do
       change
     else
       raise ArgumentError,
-            "#{inspect(__MODULE__)} has no change #{inspect(change)}; " <>
+            "#{inspect(__MODULE__)} has no change #{Prima.LoggerContext.shape(change)}; " <>
               "its changes are #{inspect(@changes)}"
     end
   end

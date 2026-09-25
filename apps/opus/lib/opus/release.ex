@@ -50,7 +50,7 @@ defmodule Opus.Release do
       nil -> :service
       "service" -> :service
       "runner" -> :runner
-      other -> raise ArgumentError, "[Opus.Release] OPUS_ROLE=#{other} names no role"
+      _other -> raise ArgumentError, "[Opus.Release] OPUS_ROLE names no role: service or runner"
     end
   end
 
@@ -68,7 +68,11 @@ defmodule Opus.Release do
         :ok
 
       {:error, reason} ->
-        IO.puts(:stderr, "[Opus.Release] the runner could not start: #{inspect(reason)}")
+        IO.puts(
+          :stderr,
+          "[Opus.Release] the runner could not start: #{Prima.LoggerContext.shape(reason)}"
+        )
+
         :erlang.halt(1)
     end
   end

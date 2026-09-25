@@ -44,6 +44,17 @@ defmodule Sanctum.Auth.IdentityTest do
         Identity.key("github", "https://github.com", "")
       end
     end
+
+    test "the refusal names the wrong part, never an identity value" do
+      error =
+        assert_raise ArgumentError, fn ->
+          Identity.key("github", "https://issuer.example", "")
+        end
+
+      assert error.message =~ "sub must be"
+      refute error.message =~ "issuer.example"
+      refute error.message =~ "github"
+    end
   end
 
   describe "builtin_key/2" do

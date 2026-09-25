@@ -791,7 +791,7 @@ defmodule Arca.Overlay do
 
         other ->
           raise ArgumentError,
-                "commit_unit needs a unit path; #{inspect(unit)} locates to #{inspect(other)}"
+                "commit_unit needs a unit path; the unit locates to #{Prima.LoggerContext.shape(other)}"
       end
 
     internal = internal_actor(actor)
@@ -871,7 +871,7 @@ defmodule Arca.Overlay do
       other ->
         raise ArgumentError,
               "replace_subtree needs a directory unit and a subtree other than its sentinel; " <>
-                "#{inspect(unit)} locates to #{inspect(other)}"
+                "the unit locates to #{Prima.LoggerContext.shape(other)}"
     end
   end
 

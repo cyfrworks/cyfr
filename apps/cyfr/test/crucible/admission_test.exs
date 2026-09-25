@@ -462,6 +462,56 @@ defmodule Crucible.AdmissionTest do
     end
   end
 
+  describe "the component's type" do
+    # The registry's type decides; a caller's asserted type is checked
+    # against it and refused as a rostered reason, before any row exists.
+    test "an asserted type that is not the registry's is refused with both types in the reason" do
+      ctx = Sanctum.TestContext.local()
+
+      assert {:error, {:component_type_mismatch, :formula, :reagent} = reason} =
+               Admission.admit(ctx, "#{@target_node}:0.1.0", %{}, type: "formula")
+
+      assert %Prima.Refusal{class: :invalid_argument, message: message} =
+               Grimoire.Error.classify(reason)
+
+      refute message =~ @target_node
+    end
+
+    test "a type outside the executable roster is an invalid argument" do
+      ctx = Sanctum.TestContext.local()
+
+      assert {:error, :invalid_component_type} =
+               Admission.admit(ctx, "#{@target_node}:0.1.0", %{}, type: "sk-not-a-type")
+
+      assert %Prima.Refusal{class: :invalid_argument, message: message} =
+               Grimoire.Error.classify(:invalid_component_type)
+
+      refute message =~ "sk-not-a-type"
+    end
+  end
+
+  describe "the component's bytes" do
+    test "bytes that do not hash to the recorded digest are corrupt, never unavailable" do
+      ctx = Sanctum.TestContext.local()
+      actor = Sanctum.Context.actor(ctx)
+
+      {:ok, row} = Arca.ComponentStorage.get_component(actor, "chain-target", "0.1.0", "local")
+
+      # The row altered outside the publish path: it now records a digest
+      # its stored bytes do not hash to.
+      digest = Prima.Digest.sha256("not the bytes the row's artifact holds")
+
+      {1, _} =
+        Ecto.Query.from(c in Arca.Schemas.Component, where: c.id == ^row.id)
+        |> Arca.Repo.update_all(set: [digest: digest])
+
+      assert {:error, {:corrupt, {:artifact, ^digest}} = reason} =
+               Crucible.Artifacts.fetch(ctx, digest, "#{@target_node}:0.1.0")
+
+      assert %Prima.Refusal{class: :corrupt} = Grimoire.Error.classify(reason)
+    end
+  end
+
   describe "the cell's standing" do
     test "a member that holds no slot admits nothing, and asking costs no query", %{ctx: ctx} do
       Arca.ControlPlane.record(:lost)

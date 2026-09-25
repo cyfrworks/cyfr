@@ -133,7 +133,7 @@ defmodule Opus.FormulaHandler do
           # The runner's boundary rescues this into a failed execution; a
           # bare MatchError here read as a host bug rather than the capacity
           # condition it is.
-          raise "async tracker could not start: #{inspect(reason)}"
+          raise "async tracker could not start: #{Prima.LoggerContext.shape(reason)}"
       end
 
     exec_opts = [limits: limits, intercepted: Keyword.get(opts, :intercepted, [])]

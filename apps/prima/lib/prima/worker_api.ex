@@ -215,7 +215,8 @@ defmodule Prima.WorkerAPI do
   """
   @spec status_to_wire(status()) :: %{String.t() => term()}
   def status_to_wire(status) do
-    unless valid_status?(status), do: raise(ArgumentError, "not a status: #{inspect(status)}")
+    unless valid_status?(status),
+      do: raise(ArgumentError, "not a status: #{Prima.LoggerContext.shape(status)}")
 
     %{
       "service" => status.service,

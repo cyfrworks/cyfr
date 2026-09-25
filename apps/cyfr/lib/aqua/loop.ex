@@ -1316,23 +1316,20 @@ defmodule Aqua.Loop do
         {:error, {:denied, message}} ->
           {"denied", message, true}
 
-        # The authority vocabulary's own sentence
-        # (`Prima.Authority.Transition.deny_message/1`).
-        {:error, {:invoke_denied, reason}} ->
-          {"denied",
-           "Denied by chain authority: " <> Prima.Authority.Transition.deny_message(reason), true}
+        # The chain's authority denied the call, answered by the child's
+        # admission or refused by the gate: the step closes `denied`, in
+        # the table's sentence for it.
+        {:error, {:invoke_denied, _reason} = denied} ->
+          {"denied", Prima.Refusal.message(denied), true}
+
+        {:error, %Prima.Refusal{stage: :admission, reason: {:invoke_denied, _}} = refusal} ->
+          {"denied", refusal.message, true}
 
         {:error, message} when is_binary(message) ->
-          if String.starts_with?(message, "Denied by chain authority"),
-            do: {"denied", message, true},
-            else: {"error", message, true}
+          {"error", message, true}
 
-        # The gate's own refusal, in a sentence it wrote: the chain's
-        # authority denying the call closes the step `denied`.
         {:error, %Prima.Refusal{stage: :admission, reason: message}} when is_binary(message) ->
-          if String.starts_with?(message, "Denied by chain authority"),
-            do: {"denied", message, true},
-            else: {"error", message, true}
+          {"error", message, true}
 
         {:ok, text} when is_binary(text) ->
           {"ok", text, false}

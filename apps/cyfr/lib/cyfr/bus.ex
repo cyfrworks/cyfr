@@ -415,11 +415,12 @@ defmodule Cyfr.Bus do
   def prefix(%Actor{athanor_id: athanor_id}) do
     raise ArgumentError,
           "a tenant topic requires an actor with a non-empty athanor_id, " <>
-            "got #{inspect(athanor_id)}"
+            "got #{Prima.LoggerContext.shape(athanor_id)}"
   end
 
   def prefix(other) do
-    raise ArgumentError, "a tenant topic requires a Prima.Actor, got #{inspect(other, limit: 3)}"
+    raise ArgumentError,
+          "a tenant topic requires a Prima.Actor, got #{Prima.LoggerContext.shape(other)}"
   end
 
   # ---------------------------------------------------------------------------
@@ -722,10 +723,10 @@ defmodule Cyfr.Bus do
 
       {:ok, row} ->
         raise ArgumentError,
-              "#{inspect(topic)} carries #{inspect(row.struct)}, not #{inspect(payload.__struct__)}"
+              "the topic carries #{inspect(row.struct)}, not #{inspect(payload.__struct__)}"
 
       :error ->
-        raise ArgumentError, "#{inspect(topic)} is not a #{scope} topic of Cyfr.Bus"
+        raise ArgumentError, "the topic is not a #{scope} topic of Cyfr.Bus"
     end
   end
 

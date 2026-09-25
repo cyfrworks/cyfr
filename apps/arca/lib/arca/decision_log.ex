@@ -206,7 +206,7 @@ defmodule Arca.DecisionLog do
        when is_binary(athanor_id) and athanor_id != "" do
     case Map.keys(attrs) -- @completion_columns do
       [] -> attrs |> Map.to_list()
-      extra -> raise ArgumentError, "not completion columns of an mcp_log: #{inspect(extra)}"
+      extra -> raise ArgumentError, "not completion columns of an mcp_log: #{Prima.LoggerContext.shape(extra)}"
     end
   end
 

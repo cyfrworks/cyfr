@@ -490,6 +490,6 @@ defmodule Prima.Authority.Transition do
   defp target_tag({:event, %{} = payload}) when not is_struct(payload), do: :event
 
   defp target_tag(other) do
-    raise ArgumentError, "not a transition target: #{inspect(other)}"
+    raise ArgumentError, "not a transition target: #{Prima.LoggerContext.shape(other)}"
   end
 end

@@ -738,7 +738,7 @@ defmodule Arca do
           :ok
 
         other ->
-          raise ArgumentError, "cap: must be :checked or :exempt, got #{inspect(other)}"
+          raise ArgumentError, "cap: must be :checked or :exempt, got #{Prima.LoggerContext.shape(other)}"
       end
     else
       :ok
@@ -758,7 +758,7 @@ defmodule Arca do
         :ok
 
       other ->
-        raise ArgumentError, "cap: must be {:checked, bytes} or :exempt, got #{inspect(other)}"
+        raise ArgumentError, "cap: must be {:checked, bytes} or :exempt, got #{Prima.LoggerContext.shape(other)}"
     end
   end
 

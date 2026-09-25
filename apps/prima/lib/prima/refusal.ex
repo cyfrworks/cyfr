@@ -422,16 +422,40 @@ defmodule Prima.Refusal do
   defp row({:setup_required, :registry_binding}),
     do: {:setup_required, "The component has no registry binding; register it again."}
 
+  # A caller's asserted component type that is not the registry's: the
+  # registry decides, since the type selects the runtime's capabilities.
+  # The two types ride in the reason, not the sentence.
+  defp row({:component_type_mismatch, asserted, registered})
+       when is_atom(asserted) and is_atom(registered),
+       do:
+         {:invalid_argument, "The requested type does not match the component's registered type."}
+
+  # A component type outside the executable roster, from a caller or a row.
+  defp row(:invalid_component_type),
+    do:
+      {:invalid_argument,
+       "Invalid component type; it must be one of: " <>
+         Enum.join(Prima.ComponentRef.executable_types(), ", ") <> "."}
+
+  # A component's stored bytes that do not hash to the digest its registry
+  # row records: never run, and only registering it again repairs it.
+  defp row({:corrupt, {:artifact, digest}}) when is_binary(digest),
+    do: {:corrupt, "The component's bytes do not match their recorded digest; register it again."}
+
   # A component whose signature or attestation does not verify.
   defp row({:attestation_failed, _what}),
     do:
       {:forbidden, "The component's signature could not be verified; signed pulls are required."}
 
   # A chain's authority refused what the chain asked, in the authority
-  # vocabulary's own sentence (`Prima.Authority.Transition.deny_message/1`).
+  # vocabulary's own sentence (`Prima.Authority.Transition.deny_message/1`)
+  # after the words a reader of a closed step or a guest's answer matches
+  # a denial by.
   defp row({:invoke_denied, reason}) do
     if Prima.Authority.Transition.refusal?(reason),
-      do: {:forbidden, Prima.Authority.Transition.deny_message(reason)}
+      do:
+        {:forbidden,
+         "Denied by chain authority: " <> Prima.Authority.Transition.deny_message(reason)}
   end
 
   defp row({tag, _detail} = refusal)

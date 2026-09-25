@@ -186,7 +186,8 @@ defmodule Locus.Keeper do
         bytes
 
       other ->
-        raise ArgumentError, "a build's memory bound is a count of bytes, got: #{inspect(other)}"
+        raise ArgumentError,
+              "a build's memory bound is a count of bytes, got: #{Prima.LoggerContext.shape(other)}"
     end
   end
 

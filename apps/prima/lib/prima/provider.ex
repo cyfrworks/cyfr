@@ -195,7 +195,7 @@ defmodule Prima.Provider do
 
         other ->
           raise ArgumentError,
-                "#{inspect(module)}.context_kind/0 answered #{inspect(other)}; " <>
+                "#{inspect(module)}.context_kind/0 answered #{Prima.LoggerContext.shape(other)}; " <>
                   "a provider's handler input is :context or :actor"
       end
     else

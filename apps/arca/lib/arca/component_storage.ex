@@ -269,7 +269,7 @@ defmodule Arca.ComponentStorage do
 
     unless source in Prima.ComponentSource.values() do
       raise ArgumentError,
-            "unknown component source #{inspect(source)}; " <>
+            "unknown component source #{Prima.LoggerContext.shape(source)}; " <>
               "the roster is #{inspect(Prima.ComponentSource.values())}"
     end
 

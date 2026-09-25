@@ -2249,6 +2249,68 @@ defmodule Compendium.ProviderTest do
       assert "search" in visible_component_actions(key_ctx)
     end
 
+    test "registry's person-only actions refuse an API key at the gate, and discovery hides them" do
+      key_ctx = %Context{
+        user_id: "github|https://github.com|keyholder",
+        athanor_id: "ath_test",
+        permissions: MapSet.new([:*]),
+        scope: :athanor,
+        auth_method: :api_key,
+        api_key_type: :application,
+        authenticated: true
+      }
+
+      person_only =
+        ~w(claim_publisher verify_publisher tokens_issue tokens_revoke members_add
+           members_update members_remove report appeal)
+
+      args = %{
+        "slug" => "someslug",
+        "token_id" => "tok_1",
+        "target_personal_slug" => "bob",
+        "role" => "member",
+        "category" => "spam",
+        "details" => "d",
+        "target_namespace" => "alice",
+        "provider" => "github",
+        "action_type" => "ban",
+        "action_ref" => "github|1",
+        "argument" => "a"
+      }
+
+      for action <- person_only do
+        assert {:error,
+                %Prima.Refusal{
+                  stage: :admission,
+                  class: :forbidden,
+                  reason: {:consent_class_required, {:surface_not_permitted, :api_key}}
+                }} =
+                 Grimoire.call_external("registry", key_ctx, Map.put(args, "action", action)),
+               "registry.#{action} admitted an API key"
+      end
+
+      visible = visible_actions("registry", key_ctx)
+
+      for action <- person_only do
+        refute action in visible, "discovery shows an API key registry.#{action}"
+      end
+
+      # What a key may do on the registry stays visible to it.
+      assert "whoami" in visible
+      assert "tokens_list" in visible
+    end
+
+    test "registry's person-only actions are shown to a signed-in person", %{ctx: ctx} do
+      assert ctx.auth_method == :oidc
+      visible = visible_actions("registry", ctx)
+
+      for action <-
+            ~w(claim_publisher verify_publisher tokens_issue tokens_revoke members_add
+               members_update members_remove report appeal legal_accept) do
+        assert action in visible
+      end
+    end
+
     test "component.push is shown to and dispatched for a signed-in person", %{ctx: ctx} do
       assert ctx.auth_method == :oidc
       assert "push" in visible_component_actions(ctx)
@@ -2426,11 +2488,13 @@ defmodule Compendium.ProviderTest do
   # renderer is the one spelling of every sentence, so assert through it.
   # Plain strings pass through unchanged.
   # The component actions `ctx` is shown by `tools/list`.
-  defp visible_component_actions(ctx) do
+  defp visible_component_actions(ctx), do: visible_actions("component", ctx)
+
+  defp visible_actions(tool, ctx) do
     {:ok, %{tools: tools}} = Grimoire.call_external("tools", ctx, %{"action" => "list"})
 
     tools
-    |> Enum.find(&(&1["name"] == "component"))
+    |> Enum.find(&(&1["name"] == tool))
     |> get_in(["inputSchema", "properties", "action", "enum"])
   end
 

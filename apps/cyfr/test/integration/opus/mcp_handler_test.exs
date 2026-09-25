@@ -139,8 +139,11 @@ defmodule Opus.FormulaHandlerMcpTest do
       decoded = Jason.decode!(result)
 
       assert decoded["error"]["type"] == "dispatch_error"
-      assert decoded["error"]["message"] =~ "Denied by chain authority"
-      assert decoded["error"]["message"] =~ "component"
+
+      # The table's sentence for the rostered denial (`{:invoke_denied,
+      # :tool_not_granted}`), which says why in the authority's own words.
+      assert decoded["error"]["message"] ==
+               "Denied by chain authority: tool not granted on this node's consent"
     end
 
     test "denies every tool when the edge grants none", %{ctx: ctx} do

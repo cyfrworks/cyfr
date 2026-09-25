@@ -1021,7 +1021,7 @@ defmodule Crucible.Record do
 
   defp parse_component_type(other) do
     raise ArgumentError,
-          "Unexpected component type value: #{inspect(other)}. " <>
+          "Unexpected component type value: #{Prima.LoggerContext.shape(other)}. " <>
             "Expected nil, a binary string, or an atom."
   end
 

@@ -650,17 +650,39 @@ defmodule Compendium.Registry do
   component_type to disambiguate.
   """
   def get(%Context{} = ctx, name, version, publisher \\ nil, component_type \\ nil)
-      when is_binary(name) do
+      when is_binary(name),
+      do: get(ctx, name, version, publisher, component_type, :decoded)
+
+  @doc false
+  # `get/5` and `get_latest/4` for the consent facts port
+  # (`Compendium.ConsentFacts`): the same rows, except that a manifest that
+  # does not decode is handed over as the bytes storage holds rather than
+  # as none, so consent refuses it as corrupt instead of reading a
+  # component that declares nothing.
+  @spec get_as_stored(Context.t(), String.t(), String.t(), String.t() | nil, String.t() | nil) ::
+          {:ok, map()} | {:error, term()}
+  def get_as_stored(%Context{} = ctx, name, version, publisher, component_type)
+      when is_binary(name),
+      do: get(ctx, name, version, publisher, component_type, :as_stored)
+
+  @doc false
+  @spec get_latest_as_stored(Context.t(), String.t(), String.t() | nil, String.t() | nil) ::
+          {:ok, map()} | {:error, term()}
+  def get_latest_as_stored(%Context{} = ctx, name, publisher, component_type)
+      when is_binary(name),
+      do: latest(ctx, name, publisher, component_type, :as_stored)
+
+  defp get(ctx, name, version, publisher, component_type, manifest) do
     if version == nil do
       {:error, :version_required}
     else
       with :ok <- ProjectionReconciler.await(ctx, @root) do
-        get_row(ctx, name, version, publisher, component_type)
+        get_row(ctx, name, version, publisher, component_type, manifest)
       end
     end
   end
 
-  defp get_row(ctx, name, version, publisher, component_type) do
+  defp get_row(ctx, name, version, publisher, component_type, manifest) do
     case Arca.ComponentStorage.get_component(
            Sanctum.Context.actor(ctx),
            name,
@@ -668,7 +690,7 @@ defmodule Compendium.Registry do
            publisher,
            component_type
          ) do
-      {:ok, row} -> {:ok, decode_row_json_fields(row)}
+      {:ok, row} -> {:ok, decode_row_json_fields(row, manifest)}
       {:error, :not_found} -> {:error, :not_found}
       # Propagate database faults unchanged.
       {:error, reason} -> {:error, reason}
@@ -683,10 +705,13 @@ defmodule Compendium.Registry do
   Returns `{:ok, component}` or `{:error, :not_found}`.
   """
   def get_latest(%Context{} = ctx, name, publisher \\ nil, component_type \\ nil)
-      when is_binary(name) do
+      when is_binary(name),
+      do: latest(ctx, name, publisher, component_type, :decoded)
+
+  defp latest(ctx, name, publisher, component_type, manifest) do
     case latest_row(ctx, name, publisher, component_type) do
       {:ok, %{component_type: "agent"} = row} -> {:ok, row}
-      {:ok, row} -> {:ok, decode_row_json_fields(row)}
+      {:ok, row} -> {:ok, decode_row_json_fields(row, manifest)}
       {:error, reason} -> {:error, reason}
     end
   end
@@ -1268,26 +1293,27 @@ defmodule Compendium.Registry do
   # Local components arrive as the plain, atom-keyed rows
   # `Arca.ComponentStorage` answers and remote components as maps; either
   # has its JSON-text columns decoded here.
-  defp decode_row_json_fields(row) when is_map(row) do
+  defp decode_row_json_fields(row, manifest \\ :decoded) when is_map(row) do
     row
     |> Map.update(:tags, [], &decode_json/1)
     |> Map.update(:exports, [], &decode_json/1)
-    |> Map.update(:manifest, nil, &decode_manifest_json(&1, row))
+    |> Map.update(:manifest, nil, &decode_manifest_json(&1, row, manifest))
   end
 
-  defp decode_manifest_json(nil, _row), do: nil
-  defp decode_manifest_json(value, _row) when is_map(value), do: value
+  defp decode_manifest_json(nil, _row, _mode), do: nil
+  defp decode_manifest_json(value, _row, _mode) when is_map(value), do: value
 
-  # A manifest that does not decode reads as none. The line names the
-  # component, never the manifest's bytes.
-  defp decode_manifest_json(value, row) when is_binary(value) do
+  # A manifest that does not decode reads as none, or — for the consent
+  # facts port — as the bytes storage holds, which consent refuses as
+  # corrupt. The line names the component, never the manifest's bytes.
+  defp decode_manifest_json(value, row, mode) when is_binary(value) do
     case Prima.Json.decode(value) do
       {:ok, map} when is_map(map) ->
         map
 
       _malformed ->
         Logger.warning("[Compendium.Registry] manifest malformed: #{component_ref(row)}")
-        nil
+        if mode == :as_stored, do: value
     end
   end
 

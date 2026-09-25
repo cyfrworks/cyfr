@@ -196,14 +196,41 @@ defmodule Grimoire.CatalogChargeRowTest do
         1
       )
 
-    assert {:error, %Prima.Refusal{stage: :admission, message: msg}} =
-             call(ctx, auth, charge, lineage)
+    assert {:error,
+            %Prima.Refusal{
+              stage: :admission,
+              class: :forbidden,
+              reason: {:invoke_denied, :invoke_budget_exhausted},
+              message: msg
+            }} = call(ctx, auth, charge, lineage)
 
     assert msg =~ "Denied by chain authority"
     assert Sanctum.Authority.budget(auth).in_flight == 0
 
     assert {:ok, [%{id: "other"}]} =
              Arca.BudgetReservations.charges(Prima.Actor.in_athanor(@athanor), auth.budget.id)
+  end
+
+  test "a target the guest function cannot take is the table's rostered refusal", %{
+    auth: auth,
+    ctx: ctx,
+    lineage: lineage
+  } do
+    assert {:error,
+            %Prima.Refusal{
+              stage: :admission,
+              class: :forbidden,
+              reason: {:invoke_invalid, {:malformed_target, :await, :tool}},
+              message: "The chain named a target that does not exist."
+            }} =
+             Catalog.call_in_chain(
+               "tincture_visibility",
+               ctx,
+               %{"action" => "get", "publisher" => "local", "name" => "no-such-tincture"},
+               auth,
+               guest_fn: :await,
+               lineage: lineage
+             )
   end
 
   test "a call under the chain's attempt with no identity of its own holds a row of its own", %{

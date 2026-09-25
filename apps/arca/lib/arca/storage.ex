@@ -573,7 +573,7 @@ defmodule Arca.Storage do
     # directory outside the athanor's own tree.
     unless athanor_id =~ @athanor_id_format do
       raise ArgumentError,
-            "invalid athanor_id for storage: #{inspect(athanor_id)} " <>
+            "invalid athanor_id for storage: #{Prima.LoggerContext.shape(athanor_id)} " <>
               "(must match #{inspect(@athanor_id_format)})"
     end
 
@@ -583,8 +583,8 @@ defmodule Arca.Storage do
   def tenant_segments(%Prima.Actor{} = actor) do
     raise ArgumentError,
           "Arca.Storage.tenant_segments/1: a resolved athanor_id is required " <>
-            "(user_id=#{inspect(actor.user_id)} scope=#{inspect(actor.scope)} " <>
-            "system=#{inspect(actor.system)})"
+            "(user_id=#{Prima.LoggerContext.shape(actor.user_id)} scope=#{Prima.LoggerContext.shape(actor.scope)} " <>
+            "system=#{Prima.LoggerContext.shape(actor.system)})"
   end
 
   # The one physical directory every athanor tree lives under. Spelled as
@@ -633,7 +633,7 @@ defmodule Arca.Storage do
 
       :invalid ->
         raise ArgumentError,
-              "unknown storage root #{inspect(hd(segments))}; " <>
+              "unknown storage root #{Prima.LoggerContext.shape(hd(segments))}; " <>
                 "tenant scopes are #{inspect(@tenant_roots)} (see Arca.Storage.tenant_roots/0)"
     end
   end

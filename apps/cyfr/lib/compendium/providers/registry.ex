@@ -20,10 +20,13 @@ defmodule Compendium.Providers.Registry do
   # the IdP access token carried in args.
   @identity_mutations ~w(claim_publisher verify_publisher tokens_issue tokens_revoke members_add members_update members_remove)
 
-  # A push or a registry mutation is a person's act under their own
-  # namespace; an API key belongs to an athanor and is nobody's registry
-  # identity, so it never wields one.
-  @person_only @identity_mutations ++ ~w(report legal_accept appeal)
+  # A registry mutation, a report and an appeal are a person's act under
+  # their own identity; an API key belongs to an athanor and is nobody's
+  # registry identity. Those actions declare `consent: :interactive`, so
+  # the gate admits a signed-in session alone and discovery shows a key
+  # nothing it cannot run. `legal_accept` cannot: it serves a session that
+  # has not claimed its namespace yet (`auth: :signed_in`, unauthenticated),
+  # which the interactive class refuses, so its handler refuses a key.
 
   @doc false
   # The tool's wire definition — schema and access annotations beside the
@@ -101,6 +104,7 @@ defmodule Compendium.Providers.Registry do
             )
           ],
           kind: :write,
+          consent: :interactive,
           planes: [:external],
           permission: :component_manage
         ),
@@ -115,6 +119,7 @@ defmodule Compendium.Providers.Registry do
             )
           ],
           kind: :write,
+          consent: :interactive,
           planes: [:external, :in_chain],
           permission: :component_manage
         ),
@@ -145,6 +150,7 @@ defmodule Compendium.Providers.Registry do
             )
           ],
           kind: :write,
+          consent: :interactive,
           planes: [:external],
           permission: :component_manage
         ),
@@ -163,6 +169,7 @@ defmodule Compendium.Providers.Registry do
             )
           ],
           kind: :write,
+          consent: :interactive,
           planes: [:external, :in_chain],
           permission: :component_manage
         ),
@@ -199,6 +206,7 @@ defmodule Compendium.Providers.Registry do
             )
           ],
           kind: :write,
+          consent: :interactive,
           planes: [:external],
           permission: :component_manage
         ),
@@ -222,6 +230,7 @@ defmodule Compendium.Providers.Registry do
             )
           ],
           kind: :write,
+          consent: :interactive,
           planes: [:external],
           permission: :component_manage
         ),
@@ -240,6 +249,7 @@ defmodule Compendium.Providers.Registry do
             )
           ],
           kind: :write,
+          consent: :interactive,
           planes: [:external],
           permission: :component_manage
         ),
@@ -296,6 +306,7 @@ defmodule Compendium.Providers.Registry do
             )
           ],
           kind: :write,
+          consent: :interactive,
           planes: [:external, :in_chain]
         ),
         Operation.new(
@@ -392,6 +403,7 @@ defmodule Compendium.Providers.Registry do
             )
           ],
           kind: :write,
+          consent: :interactive,
           planes: [:external, :in_chain]
         )
       ],
@@ -401,11 +413,10 @@ defmodule Compendium.Providers.Registry do
     )
   end
 
-  def handle(%Context{auth_method: :api_key}, %{"action" => action})
-      when action in @person_only do
+  def handle(%Context{auth_method: :api_key}, %{"action" => "legal_accept"}) do
     {:error,
      {:invalid_argument,
-      "registry.#{action} is a person's act — sign in; an API key cannot do it"}}
+      "registry.legal_accept is a person's act — sign in; an API key cannot do it"}}
   end
 
   def handle(%Context{} = ctx, %{"action" => action} = args)

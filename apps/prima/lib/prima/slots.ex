@@ -383,7 +383,7 @@ defmodule Prima.Slots do
     do:
       raise(
         ArgumentError,
-        "wait_ms must be a non-negative integer or :infinity, got: #{inspect(other)}"
+        "wait_ms must be a non-negative integer or :infinity, got: #{Prima.LoggerContext.shape(other)}"
       )
 
   defp call_timeout(:infinity), do: :infinity
@@ -400,7 +400,7 @@ defmodule Prima.Slots do
 
     unless is_integer(child_reserve) and child_reserve >= 0 and child_reserve < max do
       raise ArgumentError,
-            "child_reserve must be an integer from 0 below max (#{max}), got: #{inspect(child_reserve)}"
+            "child_reserve must be an integer from 0 below max (#{max}), got: #{Prima.LoggerContext.shape(child_reserve)}"
     end
 
     %{
@@ -421,8 +421,12 @@ defmodule Prima.Slots do
 
   defp positive!(opts, option, default) do
     case Keyword.get(opts, option, default) do
-      n when is_integer(n) and n > 0 -> n
-      other -> raise ArgumentError, "#{option} must be a positive integer, got: #{inspect(other)}"
+      n when is_integer(n) and n > 0 ->
+        n
+
+      other ->
+        raise ArgumentError,
+              "#{option} must be a positive integer, got: #{Prima.LoggerContext.shape(other)}"
     end
   end
 
@@ -432,7 +436,8 @@ defmodule Prima.Slots do
         n
 
       other ->
-        raise ArgumentError, "#{option} must be a non-negative integer, got: #{inspect(other)}"
+        raise ArgumentError,
+              "#{option} must be a non-negative integer, got: #{Prima.LoggerContext.shape(other)}"
     end
   end
 
@@ -443,7 +448,7 @@ defmodule Prima.Slots do
              class in @classes and policy in @policies
            end) do
       raise ArgumentError,
-            "policy must be :wait, :reject, or a map of class to either, got: #{inspect(per_class)}"
+            "policy must be :wait, :reject, or a map of class to either, got: #{Prima.LoggerContext.shape(per_class)}"
     end
 
     Map.merge(policy!(:wait), per_class)
@@ -453,7 +458,7 @@ defmodule Prima.Slots do
     do:
       raise(
         ArgumentError,
-        "policy must be :wait, :reject, or a map of class to either, got: #{inspect(other)}"
+        "policy must be :wait, :reject, or a map of class to either, got: #{Prima.LoggerContext.shape(other)}"
       )
 
   # ============================================================================

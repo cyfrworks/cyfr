@@ -873,7 +873,7 @@ defmodule Arca.Adapters.Local do
     # Belt over the denylist: whatever the validator and the layout produced,
     # the joined path must still live under its root.
     unless contained_in?(path, root) do
-      raise ArgumentError, "storage path escapes its root: #{inspect(segments)}"
+      raise ArgumentError, "storage path escapes its root"
     end
 
     path
@@ -894,7 +894,7 @@ defmodule Arca.Adapters.Local do
       |> Path.expand()
       |> Path.join(seed_root)
     else
-      raise ArgumentError, "unknown seed root: #{inspect(seed_root)}"
+      raise ArgumentError, "unknown seed root: #{Prima.LoggerContext.shape(seed_root)}"
     end
   end
 

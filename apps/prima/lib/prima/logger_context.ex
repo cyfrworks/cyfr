@@ -21,6 +21,9 @@ defmodule Prima.LoggerContext do
   `unexpected/3` is the one log line for a process's unexpected-message
   catch-all. Each server keeps its own final `handle_info/2` clause and
   calls it there.
+
+  `shape/1` is the projection that line prints, for a `raise` or a console
+  line that must say what kind of term it was handed without printing it.
   """
 
   require Logger
@@ -135,9 +138,23 @@ defmodule Prima.LoggerContext do
     Logger.log(level, cap(line, @max_line))
   end
 
-  defp shape(atom) when is_atom(atom), do: inspect(atom)
+  @doc """
+  The shape of `term`, never its values: what `unexpected/3` prints.
 
-  defp shape(tuple) when is_tuple(tuple) do
+  A tuple is its leading atom and its arity; a struct, its module and
+  sorted field keys; a map, its size and its first #{@max_keys} sorted
+  keys, an atom key as itself and any other key by its type; an atom is
+  itself; a binary is its byte size; a list is its length; anything else
+  is its type.
+
+  A `raise` or an `IO` line that names an offending term names it this
+  way: the term may be a credential, an identity or a tenant's data, and a
+  crash report or a console carries whatever the message says.
+  """
+  @spec shape(term()) :: String.t()
+  def shape(atom) when is_atom(atom), do: inspect(atom)
+
+  def shape(tuple) when is_tuple(tuple) do
     case tuple_size(tuple) do
       0 -> "tuple/0"
       arity when is_atom(elem(tuple, 0)) -> "tuple #{inspect(elem(tuple, 0))}/#{arity}"
@@ -145,20 +162,20 @@ defmodule Prima.LoggerContext do
     end
   end
 
-  defp shape(%module{} = struct) do
+  def shape(%module{} = struct) do
     keys = struct |> Map.keys() |> List.delete(:__struct__) |> Enum.sort()
     "%#{inspect(module)}{#{Enum.map_join(keys, ", ", &key/1)}}"
   end
 
-  defp shape(map) when is_map(map) do
+  def shape(map) when is_map(map) do
     keys = map |> Map.keys() |> Enum.sort() |> Enum.take(@max_keys)
     "map/#{map_size(map)} [#{Enum.map_join(keys, ", ", &key/1)}]"
   end
 
-  defp shape(binary) when is_binary(binary), do: "binary/#{byte_size(binary)} bytes"
-  defp shape(bits) when is_bitstring(bits), do: "bitstring/#{bit_size(bits)} bits"
-  defp shape(list) when is_list(list), do: "list/#{count(list, 0)}"
-  defp shape(other), do: type(other)
+  def shape(binary) when is_binary(binary), do: "binary/#{byte_size(binary)} bytes"
+  def shape(bits) when is_bitstring(bits), do: "bitstring/#{bit_size(bits)} bits"
+  def shape(list) when is_list(list), do: "list/#{count(list, 0)}"
+  def shape(other), do: type(other)
 
   # An atom key names a field. Any other key is data, a credential
   # possibly, and is only its type.

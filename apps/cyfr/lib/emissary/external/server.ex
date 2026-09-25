@@ -120,7 +120,7 @@ defmodule Emissary.External.Server do
 
       other ->
         raise ArgumentError,
-              "Emissary.External.Server: config requires :athanor_id, got #{inspect(other)}"
+              "Emissary.External.Server: config requires :athanor_id, got #{Prima.LoggerContext.shape(other)}"
     end
   end
 

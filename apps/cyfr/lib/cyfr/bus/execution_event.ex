@@ -61,7 +61,7 @@ defmodule Cyfr.Bus.ExecutionEvent do
 
       _ ->
         raise ArgumentError,
-              "#{inspect(__MODULE__)} #{kind} event with delta #{inspect(Map.get(fields, :delta))}"
+              "#{inspect(__MODULE__)} #{kind} event with delta #{Prima.LoggerContext.shape(Map.get(fields, :delta))}"
     end
 
     Payload.build(__MODULE__, @fields, fields, %{athanor_id: Payload.athanor!(actor)})
