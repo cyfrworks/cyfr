@@ -210,13 +210,25 @@ defmodule EmissaryWeb.TinctureController do
         |> Map.merge(action_args(visibility, athanor))
         |> Map.reject(fn {_key, value} -> is_nil(value) end)
 
+      # The context carries the request's identity (the pipeline's,
+      # `EmissaryWeb.Plugs.CallIdentity`), so the gate's decision is this
+      # request's; a refusal it answers is its row, and the renderer
+      # appends no second one.
+      ctx = EmissaryWeb.Plugs.CallIdentity.stamp(conn, ctx)
+
       case Grimoire.call_external(
              "tincture",
              %{ctx | client_ip: Sanctum.ClientIp.resolve(conn)},
-             args
+             args,
+             call_id: ctx.call_id
            ) do
-        {:ok, result} -> json(conn, result)
-        {:error, refusal} -> EmissaryWeb.ApiError.refuse(conn, refusal)
+        {:ok, result} ->
+          json(conn, result)
+
+        {:error, refusal} ->
+          conn
+          |> EmissaryWeb.Plugs.CallIdentity.decided()
+          |> EmissaryWeb.ApiError.refuse(refusal)
       end
     else
       {:error, :unavailable} ->

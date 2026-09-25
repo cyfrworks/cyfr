@@ -50,7 +50,7 @@ defmodule EmissaryWeb.Plugs.Authenticate do
         Prima.LoggerContext.set_from_context(context)
 
         conn
-        |> assign(:context, stamp_client_ip(conn, context))
+        |> assign(:context, established(conn, context))
         |> assign(:auth_method, kind)
 
       # No credential this plug recognises. Either none was presented — the
@@ -80,7 +80,7 @@ defmodule EmissaryWeb.Plugs.Authenticate do
             error_response(conn, :invalid_bearer, errors)
 
           context ->
-            context = stamp_client_ip(conn, context)
+            context = established(conn, context)
             Prima.LoggerContext.set_from_context(context)
             assign(conn, :context, context)
         end
@@ -167,6 +167,14 @@ defmodule EmissaryWeb.Plugs.Authenticate do
   # is the same trust boundary every limiter uses.
   defp stamp_client_ip(conn, %Context{} = context) do
     %{context | client_ip: Sanctum.ClientIp.resolve(conn)}
+  end
+
+  # The context as the surface hands it on: the caller's address, and the
+  # request's identity the pipeline minted (`EmissaryWeb.Plugs.CallIdentity`)
+  # — its request id and the admission's call id, which the gate takes as
+  # its own.
+  defp established(conn, %Context{} = context) do
+    EmissaryWeb.Plugs.CallIdentity.stamp(conn, stamp_client_ip(conn, context))
   end
 
   defp unauthenticated_context do

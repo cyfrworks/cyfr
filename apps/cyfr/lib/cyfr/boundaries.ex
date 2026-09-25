@@ -1234,6 +1234,61 @@ defmodule Cyfr.Boundaries do
   @spec ports() :: [map()]
   def ports, do: @ports
 
+  # The admission entries: every site that decides a request before, or
+  # instead of, the gate, and so records the decision itself. Each row is
+  # the deciding module, the function (a plug's `call/2`, a controller
+  # action, a gate head, a server's message handler) and the plane its
+  # refusals are recorded on. `EmissaryWeb.Plugs.CallIdentity` is not a
+  # row: it mints the identity and decides nothing.
+  @admission_entries [
+    # The gate's heads: refusals made before its own checks and identity.
+    %{module: Grimoire, site: :call_external, plane: :external},
+    %{module: Grimoire, site: :call_in_chain, plane: :in_chain},
+    # The JSON-RPC router's pre-gate refusals: a request naming no tool or
+    # an unknown one, a read naming no resource, an unknown method.
+    %{module: Emissary.MCP.Router, site: :dispatch, plane: :external},
+    # The MCP transport: a batch, a method the endpoint does not serve, an
+    # authorization refusal raised in the request process.
+    %{module: EmissaryWeb.MCPController, site: :handle, plane: :external},
+    %{module: EmissaryWeb.MCPController, site: :method_not_allowed, plane: :external},
+    # The MCP pipeline's plugs, after routing.
+    %{module: EmissaryWeb.Plugs.Authenticate, site: :call, plane: :external},
+    %{module: EmissaryWeb.Plugs.MCPOrigin, site: :call, plane: :external},
+    %{module: EmissaryWeb.Plugs.MCPRateLimit, site: :call, plane: :external},
+    %{module: EmissaryWeb.Plugs.MCPRequestMetadata, site: :call, plane: :external},
+    # The endpoint's ownership plug: a stale owner refusing is an admission
+    # refusal, class not_owner.
+    %{module: EmissaryWeb.Plugs.ControlPlaneOwnership, site: :call, plane: :external},
+    # The tincture routes: a tincture the address does not resolve, a mint
+    # without a credential that may mint, and the routes' rate limit.
+    %{module: EmissaryWeb.TinctureController, site: :index, plane: :external},
+    %{module: EmissaryWeb.TinctureController, site: :invoke, plane: :external},
+    %{module: EmissaryWeb.TinctureController, site: :access_token, plane: :external},
+    %{module: EmissaryWeb.Plugs.TinctureRateLimit, site: :call, plane: :external},
+    # The webhook route: the caller the row establishes, its signature,
+    # its idempotency key and its rate limit.
+    %{module: EmissaryWeb.WebhookController, site: :invoke, plane: :external},
+    %{module: EmissaryWeb.Plugs.VerifyWebhookSignature, site: :call, plane: :external},
+    %{module: EmissaryWeb.Plugs.WebhookIdempotency, site: :call, plane: :external},
+    %{module: EmissaryWeb.Plugs.WebhookRateLimit, site: :call, plane: :external},
+    # The scheduler's fire: its own admission is the occurrence claimed
+    # under a held generation, and a run admission refusal is that fire's
+    # failed completion.
+    %{module: Crucible.Schedules.Scheduler, site: :handle_info, plane: :external},
+    # The HostAPI's in-chain entry: a tool call whose attempt refuses it
+    # before any chain exists.
+    %{module: Crucible.Host.Children, site: :call, plane: :in_chain}
+  ]
+
+  @doc """
+  The admission entries: every site that decides a request before, or
+  instead of, the gate, and records the decision itself — one
+  `%{module, site, plane}` row per entry. Host owns the roster; the seam
+  test drives each row to its refusal and finds exactly one decision.
+  """
+  @spec admission_entries() :: [%{module: module(), site: atom(), plane: :external | :in_chain}]
+  def admission_entries, do: @admission_entries
+
   @doc """
   The behaviours Sanctum declares that are not ports: named internal
   strategies, declared and implemented inside the application.

@@ -107,6 +107,74 @@ defmodule Grimoire.DecisionsTest do
     end
   end
 
+  describe "refused/3 and what a tag carries" do
+    test "a refusal before the gate is a refused decision with the reason's class and sentence" do
+      ctx = Sanctum.TestContext.local()
+
+      decision =
+        Grimoire.Decisions.refused(ctx, :invalid_bearer,
+          plane: :external,
+          tool: "system",
+          action: "status"
+        )
+
+      assert "call_" <> _ = decision.call_id
+      assert decision.request_id == ctx.request_id
+      assert decision.athanor_id == ctx.athanor_id
+      assert decision.user_id == ctx.user_id
+      assert decision.admission == :refused
+      assert decision.refusal_class == :unauthenticated
+      assert decision.reason == Grimoire.render(:invalid_bearer)
+      assert :ok = Prima.Decision.validate(decision)
+
+      # Under no context: no actor, a null tenant, and an entry's own id kept.
+      bare = Grimoire.Decisions.refused(nil, :lost, plane: :in_chain, call_id: "call_kept")
+      assert bare.call_id == "call_kept"
+      assert is_nil(bare.athanor_id) and is_nil(bare.user_id)
+
+      assert_raise ArgumentError, fn ->
+        Grimoire.Decisions.refused(nil, :lost, plane: :in_chain, call_id: "req_wrong")
+      end
+    end
+
+    test "a refused call's tags hold only names the table knows" do
+      refused = attach([:cyfr, :grimoire, :decision, :refused])
+      ctx = Sanctum.TestContext.local()
+
+      # A tool nobody declared, and an action its tool did not: a guest's
+      # own names never become a metric series.
+      Grimoire.Decisions.emit(
+        Grimoire.Decisions.refused(ctx, :not_found, plane: :external, tool: "x-#{ctx.user_id}")
+      )
+
+      assert_received {^refused, %{count: 1}, %{tool: "unknown", action: "", refusal_class: _}}
+
+      Grimoire.Decisions.emit(
+        Grimoire.Decisions.refused(ctx, :invalid_params,
+          plane: :external,
+          tool: "system",
+          action: "explode"
+        )
+      )
+
+      assert_received {^refused, %{count: 1}, %{tool: "system", action: "unknown"}}
+
+      Grimoire.Decisions.emit(
+        Grimoire.Decisions.refused(ctx, :invalid_bearer,
+          plane: :external,
+          tool: "system",
+          action: "status"
+        )
+      )
+
+      assert_received {^refused, %{count: 1}, %{tool: "system", action: "status"}}
+
+      # The row keeps the name as sent: the tag is the only thing bounded.
+      assert Grimoire.Decisions.refused(ctx, :not_found, plane: :external, tool: "nope").tool ==
+               "nope"
+    end
+  end
+
   describe "the loss path" do
     @tag capture_log: true
     test "an append whose store cannot answer is :ok, emitted and counted as lost" do

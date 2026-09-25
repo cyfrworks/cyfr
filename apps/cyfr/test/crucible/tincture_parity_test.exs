@@ -313,9 +313,17 @@ defmodule Crucible.TinctureParityTest do
       )
     end
 
-    # The gate refuses a guest-planed context at its entry, before its
-    # request log opens: neither call files a row, refused or otherwise.
-    assert rows(ctx) == []
+    # The gate refuses a guest-planed context at its head, before its own
+    # identity: each call is still one refused decision with its row, of
+    # the refusal's class, under a request id the head minted.
+    assert [first, second] = rows(ctx)
+
+    for row <- [first, second] do
+      assert "call_" <> _ = row.id
+      assert "req_" <> _ = row.request_id
+      assert row.status == "error"
+      assert row.refusal_class == "forbidden"
+    end
   end
 
   # The registry is one server-wide process, left holding the real

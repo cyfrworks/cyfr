@@ -10,6 +10,12 @@ defmodule EmissaryWeb.Plugs.ControlPlaneOwnership do
   a term read and an integer comparison, which is what lets it sit on
   every request. Health stays reachable so a probe can see the state
   instead of a bare 503.
+
+  It sits in the endpoint before any pipeline, so a refusal here is an
+  admission refusal with no identity minted yet: it mints the request
+  and call ids itself (`EmissaryWeb.Plugs.CallIdentity.mint/1`) and the
+  renderer records the decision — class `not_owner`, no actor, a null
+  tenant. A request it passes it leaves unminted.
   """
 
   @behaviour Plug
@@ -27,6 +33,7 @@ defmodule EmissaryWeb.Plugs.ControlPlaneOwnership do
       conn
     else
       conn
+      |> EmissaryWeb.Plugs.CallIdentity.mint()
       |> put_resp_header("retry-after", "5")
       |> EmissaryWeb.ApiError.halt(
         503,

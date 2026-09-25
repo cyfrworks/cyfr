@@ -59,7 +59,6 @@ defmodule EmissaryWeb.MCPController do
   alias CyfrWeb.ContextGuard
   require CyfrWeb.ContextGuard
   require Logger
-  alias Prima.UUID7
 
   @protocol_version Emissary.MCP.Protocol.version()
   @protocol_version_header Emissary.MCP.Protocol.protocol_version_header()
@@ -86,14 +85,16 @@ defmodule EmissaryWeb.MCPController do
   end
 
   def handle(conn, params) do
-    request_id = UUID7.request_id()
-    Prima.LoggerContext.set_request_id(request_id)
+    # The request's identity was minted at the pipeline's head
+    # (`EmissaryWeb.Plugs.CallIdentity`) and stamped on the context by
+    # `Authenticate`: nested component calls retain the root request's
+    # correlation id, and the gate takes the call id as its own.
+    request_id = conn.assigns.request_id
     start_time = System.monotonic_time()
 
     # Decode every method through Message.decode/1. Authenticate has resolved
-    # the caller; the router authorizes each action. Stamp the request id here
-    # so nested component calls retain the root request's correlation id.
-    ctx = %{conn.assigns.context | request_id: request_id}
+    # the caller; the router authorizes each action.
+    ctx = conn.assigns.context
 
     # `subscriptions/listen` is answered here rather than through the dispatcher
     # for a reason the discovery branch above did not have: its response *is* an
@@ -118,16 +119,20 @@ defmodule EmissaryWeb.MCPController do
 
       # Re-rendered from the reason rather than `Exception.message/1`: the
       # struct bakes its prose at raise time without the auth method, and
-      # only the vocabulary can add the API-key remediation hint.
-      respond_error(
-        conn,
-        code,
-        Message.encode_error(
-          params["id"],
-          code,
-          Sanctum.Unauthorized.message(e.reason, conn.assigns.context.auth_method)
-        )
-      )
+      # only the vocabulary can add the API-key remediation hint. Rendered
+      # through the renderer, which records it as the request's refusal;
+      # on a stream already open the refusal is its last frame.
+      message = Sanctum.Unauthorized.message(e.reason, conn.assigns.context.auth_method)
+
+      case conn.state do
+        :chunked ->
+          conn
+          |> EmissaryWeb.Plugs.CallIdentity.refused(e.reason)
+          |> respond_error(code, Message.encode_error(params["id"], code, message))
+
+        _unsent ->
+          EmissaryWeb.MCPError.send(conn, http_status_for(code), e.reason, message)
+      end
   end
 
   @doc """
@@ -154,11 +159,9 @@ defmodule EmissaryWeb.MCPController do
     action = extract_action(params)
 
     # Headers go on before anything can commit the response: once the stream
-    # below is opened they can no longer be set.
-    conn =
-      conn
-      |> put_resp_header(@protocol_version_header, @protocol_version)
-      |> put_resp_header("x-request-id", request_id)
+    # below is opened they can no longer be set. `x-request-id` is the
+    # pipeline's (`EmissaryWeb.Plugs.CallIdentity`).
+    conn = put_resp_header(conn, @protocol_version_header, @protocol_version)
 
     {conn, outcome} = dispatch(conn, context, params, request_id)
 

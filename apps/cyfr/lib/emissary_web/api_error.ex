@@ -13,6 +13,10 @@ defmodule EmissaryWeb.ApiError do
   `{"code": <class>, "message": <sentence>}`, the sentence always the
   refusal's own, plus `data` for a consent signal, and a 401 carries the
   `www-authenticate` challenge. `status/1` is the class→HTTP table.
+
+  A rejection rendered here is the request's refused decision, recorded
+  once (`EmissaryWeb.Plugs.CallIdentity.refused/2`) when the pipeline
+  minted a call id and nothing recorded it before.
   """
 
   @behaviour EmissaryWeb.ErrorRenderer
@@ -63,6 +67,7 @@ defmodule EmissaryWeb.ApiError do
     refusal = Grimoire.Error.classify(reason)
 
     conn
+    |> EmissaryWeb.Plugs.CallIdentity.refused(refusal)
     |> challenge(status)
     |> put_status(status)
     |> Phoenix.Controller.json(body(refusal))

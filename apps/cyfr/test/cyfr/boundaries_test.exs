@@ -1271,6 +1271,32 @@ defmodule Cyfr.BoundariesTest do
     end
   end
 
+  describe "admission entries" do
+    test "every row names a loaded module exporting its site, or a plug" do
+      for %{module: module, site: site, plane: plane} <- Boundaries.admission_entries() do
+        assert Code.ensure_loaded?(module), "#{inspect(module)} does not load"
+        assert plane in [:external, :in_chain]
+
+        assert function_exported?(module, site, 2) or
+                 (site == :call and function_exported?(module, :init, 1)) or
+                 function_exported?(module, site, 4) or function_exported?(module, site, 5),
+               "#{inspect(module)} exports no #{site}"
+      end
+    end
+
+    test "the identity plug decides nothing and is not an entry" do
+      refute Enum.any?(
+               Boundaries.admission_entries(),
+               &(&1.module == EmissaryWeb.Plugs.CallIdentity)
+             )
+    end
+
+    test "each entry is rostered once" do
+      keys = Enum.map(Boundaries.admission_entries(), &{&1.module, &1.site})
+      assert keys == Enum.uniq(keys)
+    end
+  end
+
   defp defmodule_name(path, lines) do
     Enum.find_value(lines, fn {line, _n} ->
       case Regex.run(~r/^defmodule ([A-Z][\w.]*) do$/, line, capture: :all_but_first) do

@@ -164,23 +164,37 @@ defmodule Crucible.Host.Children do
   end
 
   def call(caller, {:tool_call, tool}) do
-    with {:ok, chain} <- Attempt.call(caller.execution_id, caller, :chain) do
-      # The call that admitted the calling execution is the parent of
-      # this one: read off the execution's own row, never the guest's.
-      lineage = %{
-        parent_execution_id: caller.execution_id,
-        root_execution_id: chain.root_execution_id,
-        attempt: caller.attempt,
-        call_id: chain.call_id
-      }
+    case Attempt.call(caller.execution_id, caller, :chain) do
+      {:ok, chain} ->
+        # The call that admitted the calling execution is the parent of
+        # this one: read off the execution's own row, never the guest's.
+        lineage = %{
+          parent_execution_id: caller.execution_id,
+          root_execution_id: chain.root_execution_id,
+          attempt: caller.attempt,
+          call_id: chain.call_id
+        }
 
-      case Grimoire.call_in_chain(tool.name, chain.ctx, tool.args, chain.authority,
-             guest_fn: tool.guest_fn,
-             lineage: lineage
-           ) do
-        {:ok, result} -> tool_result(result)
-        {:error, reason} -> {:error, tool_refusal(reason, chain)}
-      end
+        case Grimoire.call_in_chain(tool.name, chain.ctx, tool.args, chain.authority,
+               guest_fn: tool.guest_fn,
+               lineage: lineage
+             ) do
+          {:ok, result} -> tool_result(result)
+          {:error, reason} -> {:error, tool_refusal(reason, chain)}
+        end
+
+      # The attempt refused the call before any chain existed — its row is
+      # not held here, or the store could not answer — so the gate never
+      # saw it. This is the HostAPI's admission entry, and the refusal is
+      # recorded here as the gate would have: on the in-chain plane, under
+      # no actor (there is no context to name one), with no parent call.
+      {:error, reason} = refused ->
+        Grimoire.open_decision(
+          nil,
+          Grimoire.refused_decision(nil, reason, plane: :in_chain, tool: tool.name)
+        )
+
+        refused
     end
   end
 
