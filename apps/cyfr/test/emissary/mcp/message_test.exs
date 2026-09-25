@@ -188,8 +188,7 @@ defmodule Emissary.MCP.MessageTest do
 
   describe "refusal_code/2" do
     defp code(reason, where \\ :tools_call),
-      do:
-        reason |> Grimoire.Error.classify() |> Message.refusal_code(where) |> Message.error_code()
+      do: reason |> Grimoire.classify() |> Message.refusal_code(where) |> Message.error_code()
 
     test "each class answers with its code" do
       assert code({:invalid_argument, "x"}) == -32602

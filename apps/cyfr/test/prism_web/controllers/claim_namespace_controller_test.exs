@@ -358,6 +358,26 @@ defmodule PrismWeb.ClaimNamespaceControllerTest do
                Compendium.Registry.CredentialStore.get(as(user_id), "registry.test", slug)
     end
 
+    # One submit: the claim route is rate limited per address, and the
+    # other refusals' reasons are the facade's to show
+    # (`Compendium.FacadeTest`).
+    test "a policy the person has not accepted routes to the acceptance page, recording nothing",
+         %{bypass: bypass} do
+      {user_id, token, slug} = unclaimed_person()
+
+      Bypass.expect_once(bypass, "POST", "/v1/namespaces/personal/claim", fn c ->
+        c
+        |> Plug.Conn.put_resp_header("content-type", "application/json")
+        |> Plug.Conn.resp(
+          412,
+          Jason.encode!(%{"errors" => [%{"code" => "POLICY_ACCEPTANCE_REQUIRED"}]})
+        )
+      end)
+
+      assert redirected_to(submit(slug, token)) == "/legal/accept"
+      assert {:ok, %{namespace: nil}} = Sanctum.Tenancy.Users.get(user_id)
+    end
+
     test "a claim answered without a token still records the identity", %{bypass: bypass} do
       {user_id, token, slug} = unclaimed_person()
 

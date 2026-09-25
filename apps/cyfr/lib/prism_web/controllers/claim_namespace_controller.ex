@@ -10,10 +10,10 @@ defmodule PrismWeb.ClaimNamespaceController do
   - `GET /claim-namespace` — renders a form prompting the user for a slug
     (default = a suggestion from their screen name or email).
   - `POST /claim-namespace/submit` — reads the pending-probe cookie
-    (`PrismWeb.PendingProbe`), invokes
-    `Compendium.Registry.Client.claim_personal_namespace/4`,
-    stores the issued push token, and redirects to the configured post-login
-    landing target via `PrismWeb.SafeRedirect`.
+    (`PrismWeb.PendingProbe`), claims the namespace
+    (`Compendium.claim_personal_namespace/3`), records it, stores the issued
+    push token (`Compendium.store_push_token/3`), and redirects to the
+    configured post-login landing target via `PrismWeb.SafeRedirect`.
 
   Accepted cross-layer coupling — this controller is part of the auth
   sliver in spirit but calls Compendium for the post-claim token storage.
@@ -23,8 +23,6 @@ defmodule PrismWeb.ClaimNamespaceController do
 
   require Logger
 
-  alias Compendium.Registry.Client
-  alias Compendium.Registry.CredentialStore
   alias PrismWeb.PendingProbe
 
   def show(conn, _params) do
@@ -43,29 +41,20 @@ defmodule PrismWeb.ClaimNamespaceController do
     with {:ok, popped, access_token} <- PendingProbe.pop(conn),
          {:ok, ctx} <- standing_caller(popped),
          {:ok, provider} <- current_provider(popped, params),
-         {:ok, body} <-
-           Client.claim_personal_namespace(username, provider, access_token),
+         {:ok, %{slug: slug, token: push_token}} <-
+           Compendium.claim_personal_namespace(username, provider, access_token),
          # The registry answered after a round trip: the session is read
          # again before anything is written under it.
          {:ok, %{user_id: user_id} = fresh} <- still_standing(popped, ctx) do
       conn = popped
-      slug = body["slug"] || username
 
       # The claim is the person's identity from here on: it lands on the
       # users row first, and that is what lets them through. The push token
       # is cached best-effort — a later probe re-mints it.
       case Sanctum.SignIn.record_namespace(user_id, slug) do
         {:ok, _user} ->
-          registry = Compendium.RegistryHost.canonical_host()
-
           conn =
-            case CredentialStore.put_push_token(
-                   fresh,
-                   registry,
-                   slug,
-                   body["token"],
-                   "personal"
-                 ) do
+            case Compendium.store_push_token(fresh, slug, push_token) do
               :ok ->
                 conn
 
@@ -112,7 +101,7 @@ defmodule PrismWeb.ClaimNamespaceController do
           "We could not confirm your session just now. Try again shortly."
         )
 
-      {:error, :invalid_access_token} ->
+      {:error, %Prima.Refusal{reason: :invalid_access_token}} ->
         # IdP access_token expired between the callback-side cookie stash and
         # the claim submission. Can't recover; bounce back through login.
         # Clear the dead cookie so the fresh auth round starts clean.
@@ -120,7 +109,7 @@ defmodule PrismWeb.ClaimNamespaceController do
         |> PendingProbe.clear()
         |> redirect(to: "/login")
 
-      {:error, %Compendium.OCI.Errors{reason: :policy_acceptance_required}} ->
+      {:error, %Prima.Refusal{reason: {:registry, :policy_acceptance_required}}} ->
         # cyfr.run wants the user to clickwrap-accept the current bundled
         # policy before claiming. Don't clear _cyfr_pending_probe — the
         # accept flow consumes it, and the user can return here to retry
@@ -130,9 +119,9 @@ defmodule PrismWeb.ClaimNamespaceController do
 
       {:error, err} ->
         # 422: the claim was refused and the form re-renders for a retry —
-        # a 200 said "fine" about a failure. Internal terms are logged,
-        # never put on the page.
-        page(conn, 422, username, claim_error_message(err))
+        # a 200 said "fine" about a failure. The refusal's sentence is
+        # what the page shows; an internal term reads as the fixed one.
+        page(conn, 422, username, Grimoire.render(err))
     end
   end
 
@@ -170,12 +159,6 @@ defmodule PrismWeb.ClaimNamespaceController do
       pattern: Prima.ComponentRef.personal_slug_html_pattern()
     )
   end
-
-  # One renderer: a registry's own error becomes its refusal first
-  # (`Compendium.Providers.Shared.refusal/1`), and an internal term reads
-  # as the fixed sentence, never reflected.
-  defp claim_error_message(other),
-    do: other |> Compendium.Providers.Shared.refusal() |> Grimoire.Error.render()
 
   defp suggestion(conn) do
     with {:ok, %{user_id: id, provider: provider}} when is_binary(id) <-

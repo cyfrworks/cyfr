@@ -1192,6 +1192,109 @@ defmodule Cyfr.BoundariesTest do
                ["Aqua", "Aqua.Notes", "Aqua.Runner"]
     end
 
+    test "the MCP surface and the console name only the component domain's root" do
+      rows =
+        for tree <- ["emissary", "emissary_web", "prism", "prism_web"],
+            do:
+              Enum.find(
+                Boundaries.surfaces(),
+                &(&1.into == "Compendium" and "apps/cyfr/lib/#{tree}/**/*.ex" in &1.from)
+              ) || flunk("no surface row fences #{tree} into the component domain's root")
+
+      planted = [
+        {"apps/cyfr/lib/planted.ex",
+         CodeLines.aliases(~S'''
+         defmodule Planted do
+           alias Compendium.Registry.Client
+
+           def sign_in(ctx, user), do: Compendium.complete_sign_in(ctx, user, :github, "t")
+           def probe(ctx, user), do: Compendium.SignInSync.complete(ctx, user, :github, "t")
+           def accept(v), do: Client.accept_policies(:github, "t", nil, v)
+
+           def required({:error, %Compendium.OCI.Errors{} = err}),
+             do: Compendium.OCI.Errors.required_version(err)
+         end
+         ''')}
+      ]
+
+      for row <- rows do
+        assert row.allow == ["Compendium"]
+
+        assert Boundaries.surface_violations(row, planted) ==
+                 ["Compendium.OCI", "Compendium.Registry", "Compendium.SignInSync"]
+      end
+    end
+
+    test "the console names the assistant's root and its task supervisor, nothing more" do
+      row =
+        Enum.find(
+          Boundaries.surfaces(),
+          &(&1.into == "Aqua" and "apps/cyfr/lib/prism_web/**/*.ex" in &1.from)
+        ) || flunk("no surface row fences the console into the assistant's root")
+
+      assert row.allow == ["Aqua", "Aqua.TaskSupervisor"]
+      assert "apps/cyfr/lib/prism/**/*.ex" in row.from
+
+      planted = [
+        {"apps/cyfr/lib/prism_web/planted_live.ex",
+         CodeLines.aliases(~S'''
+         defmodule PrismWeb.PlantedLive do
+           alias Aqua.Runner
+
+           def roster(ctx), do: Aqua.roster(ctx)
+           def work(fun), do: Task.Supervisor.start_child(Aqua.TaskSupervisor, fun)
+           def follow(id, athanor_id), do: Runner.subscribe(id, athanor_id)
+           def partials, do: Aqua.Loop.Stream.new()
+           def kind(tool, action), do: Aqua.Kinds.kind_for(tool, action)
+         end
+         ''')}
+      ]
+
+      assert Boundaries.surface_violations(row, planted) ==
+               ["Aqua.Kinds", "Aqua.Loop", "Aqua.Runner"]
+    end
+
+    test "the host names no domain but the component domain's root" do
+      rows =
+        for into <- ~w(Aqua Compendium Crucible Emissary),
+            do:
+              {into,
+               Enum.find(
+                 Boundaries.surfaces(),
+                 &(&1.into == into and "apps/cyfr/lib/cyfr/**/*.ex" in &1.from)
+               ) || flunk("no surface row fences the host out of #{into}")}
+
+      for {_into, row} <- rows do
+        assert "apps/cyfr/lib/cyfr_web/**/*.ex" in row.from
+        assert row.except == ["apps/cyfr/lib/cyfr/application.ex"]
+        refute "apps/cyfr/lib/cyfr/application.ex" in for({path, _} <- names(row), do: path)
+      end
+
+      planted = [
+        {"apps/cyfr/lib/cyfr/planted.ex",
+         CodeLines.aliases(~S'''
+         defmodule Cyfr.Planted do
+           def seeds, do: Compendium.sync_seeds()
+           def sync, do: Compendium.Provisioning.sync_seeds()
+           def roster(ctx), do: Aqua.roster(ctx)
+           def run(ctx, ref), do: Crucible.authority_for(ctx, :default, ref)
+           def proxy, do: Emissary.External.Proxy
+         end
+         ''')}
+      ]
+
+      expected = %{
+        "Aqua" => ["Aqua"],
+        "Compendium" => ["Compendium.Provisioning"],
+        "Crucible" => ["Crucible"],
+        "Emissary" => ["Emissary.External"]
+      }
+
+      for {into, row} <- rows do
+        assert Boundaries.surface_violations(row, planted) == expected[into]
+      end
+    end
+
     test "the assistant, the MCP surface and the console name only execution's root" do
       rows =
         for tree <- ["aqua", "emissary", "prism_web"],

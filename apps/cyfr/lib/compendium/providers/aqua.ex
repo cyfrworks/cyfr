@@ -987,7 +987,7 @@ defmodule Compendium.Providers.Aqua do
           cloneable: false,
           note:
             "The soul was not given leave to clone into it: " <>
-              Grimoire.Error.render(reason)
+              Grimoire.render(reason)
         }
     end
   end

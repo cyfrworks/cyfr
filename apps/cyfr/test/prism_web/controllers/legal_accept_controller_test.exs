@@ -97,4 +97,66 @@ defmodule PrismWeb.LegalAcceptControllerTest do
       assert response(refused, 400) =~ "All policy checkboxes must be ticked"
     end
   end
+
+  describe "POST against a registry that refuses the acceptance (Bypass)" do
+    setup do
+      bypass = Bypass.open()
+      original_scheme = Application.get_env(:cyfr, :registry_scheme)
+      Application.put_env(:cyfr, :registry_url, "127.0.0.1:#{bypass.port}")
+      Application.put_env(:cyfr, :registry_scheme, "http")
+
+      on_exit(fn ->
+        if original_scheme,
+          do: Application.put_env(:cyfr, :registry_scheme, original_scheme),
+          else: Application.delete_env(:cyfr, :registry_scheme)
+      end)
+
+      {:ok, bypass: bypass}
+    end
+
+    defp submit_ticked(conn) do
+      %{value: cookie} =
+        build_conn()
+        |> Map.put(:secret_key_base, EmissaryWeb.Endpoint.config(:secret_key_base))
+        |> put_resp_cookie("_cyfr_pending_probe", "gho_probe", encrypt: true, max_age: 600)
+        |> Map.fetch!(:resp_cookies)
+        |> Map.fetch!("_cyfr_pending_probe")
+
+      conn
+      |> log_in_user(test_user())
+      |> Plug.Test.put_req_cookie("_cyfr_pending_probe", cookie)
+      |> post("/legal/accept/submit", %{
+        "policy_version" => "v3",
+        "policies" => "terms",
+        "ack_terms" => "on"
+      })
+    end
+
+    defp registry_answers(bypass, status, body) do
+      Bypass.expect_once(bypass, "POST", "/v1/legal/accept", fn c ->
+        c
+        |> Plug.Conn.put_resp_header("content-type", "application/json")
+        |> Plug.Conn.resp(status, Jason.encode!(body))
+      end)
+    end
+
+    test "a moved policy version sends the person back to read the version it requires",
+         %{conn: conn, bypass: bypass} do
+      registry_answers(bypass, 412, %{
+        "errors" => [%{"code" => "POLICY_VERSION_MISMATCH"}],
+        "required_version" => "v4"
+      })
+
+      assert redirected_to(submit_ticked(conn)) == "/legal/accept?required=v4"
+    end
+
+    test "a refused identity reads as restricted, and another refusal as its sentence",
+         %{conn: conn, bypass: bypass} do
+      registry_answers(bypass, 403, %{"errors" => [%{"code" => "IDENTITY_BANNED"}]})
+      assert response(submit_ticked(conn), 403) =~ "restricted from publishing"
+
+      registry_answers(bypass, 409, %{"errors" => [%{"message" => "already recorded"}]})
+      assert response(submit_ticked(conn), 502) =~ "already recorded"
+    end
+  end
 end

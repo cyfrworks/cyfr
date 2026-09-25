@@ -90,4 +90,28 @@ defmodule Cyfr.SeedOfferTest do
     assert Agent.get(pid, & &1) == :after_the_offer
     Supervisor.stop(supervisor)
   end
+
+  # The work the offer runs by default is the component domain's facade
+  # entry: the host names no internal of the domain it offers seeds for.
+  # A capture is no call, so it is read off the compiled definition.
+  test "the default sync is Compendium.sync_seeds/0" do
+    {:ok, {_, [debug_info: {:debug_info_v1, backend, data}]}} =
+      :beam_lib.chunks(:code.which(SeedOffer), [:debug_info])
+
+    {:ok, %{definitions: definitions}} = backend.debug_info(:elixir_v1, SeedOffer, data, [])
+    {_run, _kind, _meta, clauses} = Enum.find(definitions, &match?({{:run, 1}, _, _, _}, &1))
+
+    captured =
+      for {_meta, _args, _guards, body} <- clauses,
+          {_ast, found} = Macro.prewalk(body, [], &capture/2),
+          mfa <- found,
+          do: mfa
+
+    assert captured == [{Compendium, :sync_seeds, 0}]
+  end
+
+  defp capture({:&, _, [{:/, _, [{{:., _, [module, fun]}, _, []}, arity]}]} = node, acc),
+    do: {node, [{module, fun, arity} | acc]}
+
+  defp capture(node, acc), do: {node, acc}
 end

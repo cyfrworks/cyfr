@@ -115,7 +115,7 @@ defmodule Emissary.MCP.Message do
 
   @doc """
   The code name a refusal answers with: its row's override when it has
-  one (`Grimoire.Error.code_override/1`), a consent signal's own tag, and
+  one (`Grimoire.code_override/1`), a consent signal's own tag, and
   otherwise its class's code. `where` is the method it answers —
   `:resources_read` answers an absent resource with the MCP resource code,
   `:tools_call` and `:transport` with invalid params.
@@ -123,7 +123,7 @@ defmodule Emissary.MCP.Message do
   @spec refusal_code(Prima.Refusal.t(), :tools_call | :resources_read | :transport) :: atom()
   def refusal_code(%Prima.Refusal{} = refusal, where) do
     cond do
-      override = Grimoire.Error.code_override(refusal) -> override
+      override = Grimoire.code_override(refusal) -> override
       Prima.ConsentSignal.signal?(refusal.reason) -> elem(refusal.reason, 0)
       true -> class_code(refusal.class, where)
     end

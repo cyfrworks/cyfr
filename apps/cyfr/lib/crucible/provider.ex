@@ -744,7 +744,7 @@ defmodule Crucible.Provider do
   defp format_root_result({:error, reason}) when not is_binary(reason) do
     # Render refusals through the gate's renderer; an internal term reads
     # as the fixed sentence and is logged by its shape.
-    {:error, "authority_error: #{Grimoire.Error.render(reason)}"}
+    {:error, "authority_error: #{Grimoire.render(reason)}"}
   end
 
   defp format_root_result(other), do: other

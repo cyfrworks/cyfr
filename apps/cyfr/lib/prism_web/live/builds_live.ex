@@ -188,16 +188,16 @@ defmodule PrismWeb.BuildsLive do
   end
 
   defp discover_local_components(ctx) do
-    # The build plane's one walk (`Compendium.AutoIndexer.discover/1`) —
+    # The build plane's one walk (`Compendium.discover_components/1`) —
     # the same manifest-bearing roster registration sees, so the picker
     # can never diverge from the scanner. Manifest-less version dirs
     # rightly vanish: a scaffold always writes the manifest, so a dir
     # without one was never buildable.
-    with {:ok, segment_lists} <- Compendium.AutoIndexer.discover(ctx) do
+    with {:ok, segment_lists} <- Compendium.discover_components(ctx) do
       refs =
         segment_lists
         |> Enum.flat_map(fn segments ->
-          case Compendium.ComponentPath.parse(segments) do
+          case Compendium.parse_component_path(segments) do
             {:ok, %{type: type, publisher: publisher, name: name, version: version}} ->
               [
                 Prima.ComponentRef.to_string(%Prima.ComponentRef{

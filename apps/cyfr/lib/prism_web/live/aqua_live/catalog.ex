@@ -26,7 +26,7 @@ defmodule PrismWeb.AquaLive.Catalog do
   (`:read | :write | :execute | :destructive`) sourced from
   `annotations.actions[verb].kind` (or `_default.kind` for opaque tools).
   An action without a kind annotation is not policy-manageable — the
-  policy plane (`Aqua.Kinds.kind_for/2`) refuses it, so it is
+  policy plane (`Aqua.tool_kind/2`) refuses it, so it is
   logged and left off this catalogue rather than mislabeled `:write`.
   """
   def enumerate_tool_actions do
@@ -37,7 +37,7 @@ defmodule PrismWeb.AquaLive.Catalog do
         schema = t["inputSchema"] || %{}
         props = schema["properties"] || %{}
         action_enum = get_in(props, ["action", "enum"]) || []
-        actions_meta = Grimoire.Annotations.actions_of(t)
+        actions_meta = Grimoire.declared_actions(t)
         default_meta = actions_meta["_default"]
 
         actions =
@@ -71,7 +71,7 @@ defmodule PrismWeb.AquaLive.Catalog do
       end)
       |> Enum.reject(fn {_name, actions} -> actions == [] end)
 
-    virtual = Aqua.Hands.list_for_panel()
+    virtual = Aqua.virtual_tool_catalog()
 
     # `native_search` is a bare-tool exclusivity gate — has no actions but
     # appears in the policy as a single boolean key.

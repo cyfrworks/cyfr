@@ -37,7 +37,6 @@ defmodule PrismWeb.ChatLive do
   alias Phoenix.LiveView.JS
 
   alias Arca.ThreadStorage, as: Threads
-  alias Aqua.Runner
   alias Sanctum.Tenancy.Athanors
 
   @impl true
@@ -274,7 +273,7 @@ defmodule PrismWeb.ChatLive do
   # to the person's own AQUA beside the page, by name and id only.
   defp select(socket, target) do
     socket = unsubscribe_current(socket)
-    if target, do: Runner.subscribe(target.id, target.athanor_id)
+    if target, do: follow_thread(target.id, target.athanor_id)
 
     socket
     |> assign(:thread, target)
@@ -303,11 +302,22 @@ defmodule PrismWeb.ChatLive do
   end
 
   defp unsubscribe_current(%{assigns: %{thread: %{id: id, athanor_id: athanor_id}}} = socket) do
-    Runner.unsubscribe(id, athanor_id)
+    unfollow_thread(id, athanor_id)
     socket
   end
 
   defp unsubscribe_current(socket), do: socket
+
+  # A thread's broadcasts: the bus topic its estate's actor names.
+  defp follow_thread(thread_id, athanor_id) do
+    actor = Prima.Actor.in_athanor(athanor_id)
+    Cyfr.Bus.subscribe(actor, Cyfr.Bus.thread(actor, thread_id))
+  end
+
+  defp unfollow_thread(thread_id, athanor_id) do
+    actor = Prima.Actor.in_athanor(athanor_id)
+    Cyfr.Bus.unsubscribe(actor, Cyfr.Bus.thread(actor, thread_id))
+  end
 
   # ============================================================================
   # The rail

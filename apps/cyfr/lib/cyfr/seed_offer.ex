@@ -6,7 +6,7 @@ defmodule Cyfr.SeedOffer do
   The boot's seed offer: a new release may ship new seed media (bundle
   versions, a new AQUA template), and boot is when the estates that
   already exist are offered it — additively, never over anything they own
-  (`Compendium.Provisioning.sync_seeds/0`).
+  (`Compendium.sync_seeds/0`).
 
   Optional work, and never a gate. It starts after `Cyfr.Bootstrap`'s
   checked success and after every child that admits work, runs once in
@@ -46,14 +46,14 @@ defmodule Cyfr.SeedOffer do
 
   `opts`: `:key` (`"cell"` by default), `:owner` (this boot by default),
   `:lease_ms`, and `:sync`, the work itself
-  (`Compendium.Provisioning.sync_seeds/0` by default).
+  (`Compendium.sync_seeds/0` by default).
   """
   @spec run(keyword()) :: :ok | :skipped | {:error, :database_error | :exception}
   def run(opts \\ []) when is_list(opts) do
     key = Keyword.get(opts, :key, JobClaims.cell_key())
     owner = Keyword.get(opts, :owner, Prima.Boot.id())
     lease_ms = Keyword.get(opts, :lease_ms, @lease_ms)
-    sync = Keyword.get(opts, :sync, &Compendium.Provisioning.sync_seeds/0)
+    sync = Keyword.get(opts, :sync, &Compendium.sync_seeds/0)
 
     case JobClaims.claim("seed_release", key, owner, lease_ms) do
       {:ok, claim} ->

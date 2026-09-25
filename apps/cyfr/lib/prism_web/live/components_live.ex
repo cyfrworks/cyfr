@@ -12,7 +12,7 @@ defmodule PrismWeb.ComponentsLive do
   # The one spelling of the local namespace. Exact equality on purpose: a
   # nil publisher is a display question, not `local_publisher?/1`'s
   # nil-collapses-to-local policy question.
-  @local_publisher Compendium.ComponentPath.default_publisher()
+  @local_publisher Prima.ComponentPath.default_publisher()
 
   @impl true
   def mount(_params, _session, socket) do
@@ -721,7 +721,7 @@ defmodule PrismWeb.ComponentsLive do
   end
 
   defp group_search_results(components),
-    do: Compendium.Catalogue.group_search_results(components)
+    do: Compendium.group_search_results(components)
 
   # Small inline badge next to the publisher cell for deprecated / yanked /
   # taken_down versions. Returns `nil` for active (no badge rendered). Colors
@@ -864,7 +864,7 @@ defmodule PrismWeb.ComponentsLive do
   end
 
   defp group_by_component(components),
-    do: Compendium.Catalogue.group_by_component(components)
+    do: Compendium.group_by_component(components)
 
   # --- Data helpers ---
 
@@ -910,7 +910,7 @@ defmodule PrismWeb.ComponentsLive do
     if is_binary(type) and is_binary(name) do
       Prima.ComponentRef.build(
         type,
-        Compendium.ComponentPath.normalize_publisher(publisher),
+        Prima.ComponentPath.normalize_publisher(publisher),
         name,
         version
       )
@@ -951,7 +951,7 @@ defmodule PrismWeb.ComponentsLive do
 
   # Extract publisher from a component or ref
   defp extract_publisher(comp) when is_map(comp) do
-    Compendium.ComponentPath.normalize_publisher(
+    Prima.ComponentPath.normalize_publisher(
       comp_field(comp, :publisher) || comp_field(comp, :namespace_slug)
     )
   end
@@ -990,7 +990,7 @@ defmodule PrismWeb.ComponentsLive do
   defp newer_shipped_ref(ver, versions) do
     with true <- comp_field(ver, :provenance) == "bundled",
          [newest | _] <- comp_field(ver, :shipped_versions) || [],
-         true <- Compendium.Semver.strictly_newer?(newest, comp_field(ver, :version)),
+         true <- Prima.Semver.strictly_newer?(newest, comp_field(ver, :version)),
          false <- Enum.any?(versions, &(comp_field(&1, :version) == newest)),
          {:ok, cref} <- Prima.ComponentRef.parse(comp_ref(ver)) do
       Prima.ComponentRef.to_string(%Prima.ComponentRef{cref | version: newest})

@@ -29,7 +29,7 @@ defmodule Prism.TinctureRegistry do
 
   The marker holds the epoch the component registry had acknowledged for
   the athanor's `components/` root when the scan began
-  (`Compendium.ProjectionReconciler.acknowledged_epoch/3`). A read past
+  (`Compendium.acknowledged_projection_epoch/3`). A read past
   the registry's barrier that finds the epoch moved rescans the athanor,
   so a tincture change reaches the table whether or not the domain's
   `%Cyfr.Bus.Tinctures{kind: :changed}` on the athanor's tinctures topic
@@ -90,7 +90,7 @@ defmodule Prism.TinctureRegistry do
   # Past the registry's barrier: a change the reader's own write made is
   # acknowledged before the epoch is read.
   defp current_epoch(ctx) do
-    case Compendium.ProjectionReconciler.acknowledged_epoch(ctx, "components") do
+    case Compendium.acknowledged_projection_epoch(ctx, "components") do
       {:ok, epoch} -> epoch
       {:error, _} -> :unknown
     end
@@ -100,7 +100,7 @@ defmodule Prism.TinctureRegistry do
   # derives nothing, and a change made while it scans moves the epoch past
   # what the marker records.
   defp scan_epoch(athanor_id) do
-    case Compendium.ProjectionReconciler.acknowledged_epoch(
+    case Compendium.acknowledged_projection_epoch(
            scan_context(athanor_id),
            "components",
            await: false
@@ -262,7 +262,7 @@ defmodule Prism.TinctureRegistry do
   # -- Scanning --
 
   # Pinned at compile time from the SSOT.
-  @tincture_type_plural Compendium.ComponentPath.type_plural("tincture")
+  @tincture_type_plural Prima.ComponentPath.type_plural("tincture")
 
   # Scanning runs through Arca (`list_recursive` + `get`) so the registry
   # populates identically on the Local FS adapter and any configured
@@ -301,13 +301,13 @@ defmodule Prism.TinctureRegistry do
 
     case Arca.list_recursive(
            Sanctum.Context.actor(ctx),
-           Compendium.ComponentPath.base_prefix() ++ [@tincture_type_plural]
+           Prima.ComponentPath.base_prefix() ++ [@tincture_type_plural]
          ) do
       {:ok, leaves} ->
         segment = Sanctum.Tenancy.Athanors.route_slug(athanor)
 
         leaves
-        |> Compendium.ComponentPath.manifest_leaves()
+        |> Compendium.manifest_leaves()
         |> Enum.flat_map(fn manifest_segs -> read_and_parse(ctx, manifest_segs, athanor.id) end)
         |> Enum.map(&put_segment(&1, segment))
 
@@ -359,13 +359,13 @@ defmodule Prism.TinctureRegistry do
   end
 
   # A tincture manifest exactly at its version directory — the one parser
-  # (`Compendium.ComponentPath.parse/1`) decides, so a manifest nested
+  # (`Compendium.parse_component_path/1`) decides, so a manifest nested
   # BELOW a version dir is refused instead of indexed with the wrong
   # version segments. Tenant-relative; the athanor is the scanning
   # context's.
   defp tincture_path?(segs),
     do:
-      match?({:ok, %{type: "tincture", rest: [_manifest]}}, Compendium.ComponentPath.parse(segs))
+      match?({:ok, %{type: "tincture", rest: [_manifest]}}, Compendium.parse_component_path(segs))
 
   defp parse_manifest(ctx, manifest_segs, raw, athanor_id) do
     with {:ok, manifest} <- Jason.decode(raw),
@@ -373,7 +373,7 @@ defmodule Prism.TinctureRegistry do
          true <- is_binary(manifest["name"]) do
       version_segs = Enum.drop(manifest_segs, -1)
       tincture_block = manifest["tincture"] || %{}
-      publisher = Compendium.ComponentPath.normalize_publisher(manifest["publisher"])
+      publisher = Prima.ComponentPath.normalize_publisher(manifest["publisher"])
       name = manifest["name"]
       version = manifest["version"] || "0.1.0"
 
@@ -483,13 +483,13 @@ defmodule Prism.TinctureRegistry do
 
   defp blocked_image?(_), do: false
 
-  # Select the latest tincture version using Compendium.Semver.
+  # Select the latest tincture version using Prima.Semver.
   defp pick_latest_versions(tinctures) do
     tinctures
     |> Enum.group_by(fn t -> {t.athanor_id, t.publisher, t.name} end)
     |> Enum.map(fn {_key, versions} ->
       versions
-      |> Compendium.Semver.sort_desc_by(&(&1.version || "0.0.0"))
+      |> Prima.Semver.sort_desc_by(&(&1.version || "0.0.0"))
       |> hd()
     end)
   end

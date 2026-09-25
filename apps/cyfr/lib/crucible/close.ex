@@ -148,7 +148,7 @@ defmodule Crucible.Close do
   is recorded as it is. A typed refusal records its readable message,
   announces a `setup_required` event on the run's root or parent stream,
   and answers `{:error, typed}` whole. Any other term is recorded as the
-  sentence `Grimoire.Error.render/1` gives it — an internal one as the
+  sentence `Grimoire.render/1` gives it — an internal one as the
   fixed sentence, logged by its shape. Answers `{:error, masked_message}`
   otherwise.
   """
@@ -457,7 +457,7 @@ defmodule Crucible.Close do
 
   defp failure_message(reason), do: "Execution failed: #{client_reason(reason)}"
 
-  # A refusal gets its one sentence (`Grimoire.Error.render/1`); an
+  # A refusal gets its one sentence (`Grimoire.render/1`); an
   # internal term is never spelled into a message that outlives this call.
-  defp client_reason(reason), do: Grimoire.Error.render(reason)
+  defp client_reason(reason), do: Grimoire.render(reason)
 end

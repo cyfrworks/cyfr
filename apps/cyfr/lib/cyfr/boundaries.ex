@@ -576,6 +576,97 @@ defmodule Cyfr.Boundaries do
           "names none of its internals."
     },
     %{
+      from: [
+        "apps/cyfr/lib/emissary/**/*.ex",
+        "apps/cyfr/lib/emissary.ex",
+        "apps/cyfr/lib/emissary_web/**/*.ex",
+        "apps/cyfr/lib/emissary_web.ex"
+      ],
+      into: "Compendium",
+      allow: ~w(Compendium),
+      reason:
+        "the MCP surface reaches the component domain through its root facade alone: " <>
+          "the sign-in probe (`EmissaryWeb.AuthController`, " <>
+          "`Compendium.complete_sign_in/4`) and the tincture controller's reads of a " <>
+          "tincture's entry and connect domains, which stay here until W1 moves the " <>
+          "controllers; every other component operation is a gate operation."
+    },
+    %{
+      from: [
+        "apps/cyfr/lib/prism/**/*.ex",
+        "apps/cyfr/lib/prism.ex",
+        "apps/cyfr/lib/prism_web/**/*.ex",
+        "apps/cyfr/lib/prism_web.ex"
+      ],
+      into: "Aqua",
+      allow: ~w(Aqua Aqua.TaskSupervisor),
+      reason:
+        "the console reads threads, approvals, attachments, notes, the virtual-tool " <>
+          "catalogue and the reply stream through the assistant's root facade, and " <>
+          "follows a thread on `Cyfr.Bus`. `Aqua.TaskSupervisor` is the supervisor " <>
+          "eight console sites start their page tasks under " <>
+          "(`PrismWeb.ModelCatalog`, `ShellLive`, `BuildsLive`, " <>
+          "`AquaLive.AgentsComponent` and four in `ComponentsLive`); the allowance " <>
+          "retires when S5 starts `Prism.TaskSupervisor`."
+    },
+    %{
+      from: [
+        "apps/cyfr/lib/prism/**/*.ex",
+        "apps/cyfr/lib/prism.ex",
+        "apps/cyfr/lib/prism_web/**/*.ex",
+        "apps/cyfr/lib/prism_web.ex"
+      ],
+      into: "Compendium",
+      allow: ~w(Compendium),
+      reason:
+        "the console reads components, agents, path grammars, the projection epoch " <>
+          "and the registry's claim and legal pages through the component domain's " <>
+          "root facade, and a registry refusal reaches it as a `%Prima.Refusal{}`; " <>
+          "the publisher and version vocabularies it reads are Prima's."
+    },
+    %{
+      from: ["apps/cyfr/lib/cyfr/**/*.ex", "apps/cyfr/lib/cyfr_web/**/*.ex"],
+      except: ["apps/cyfr/lib/cyfr/application.ex"],
+      into: "Aqua",
+      allow: [],
+      reason:
+        "the host names no domain: the bus, telemetry, runtime configuration and the " <>
+          "web tier's glue sit below the domains, which reach them downward. The " <>
+          "composition root (`Cyfr.Application`) names what it starts, and is " <>
+          "excepted."
+    },
+    %{
+      from: ["apps/cyfr/lib/cyfr/**/*.ex", "apps/cyfr/lib/cyfr_web/**/*.ex"],
+      except: ["apps/cyfr/lib/cyfr/application.ex"],
+      into: "Compendium",
+      allow: ~w(Compendium),
+      reason:
+        "the host reaches the component domain's root facade alone: the seed offer " <>
+          "(`Cyfr.SeedOffer`, `Compendium.sync_seeds/0`) and the tincture asset " <>
+          "ingress (`CyfrWeb.Ingress.TinctureAssets`, " <>
+          "`Compendium.tincture_asset_rules/0`). The composition root is excepted."
+    },
+    %{
+      from: ["apps/cyfr/lib/cyfr/**/*.ex", "apps/cyfr/lib/cyfr_web/**/*.ex"],
+      except: ["apps/cyfr/lib/cyfr/application.ex"],
+      into: "Crucible",
+      allow: [],
+      reason:
+        "the host names nothing of execution: the member slot, the bus and the web " <>
+          "tier's glue sit below it. The composition root (`Cyfr.Application`) starts " <>
+          "execution's trees, and is excepted."
+    },
+    %{
+      from: ["apps/cyfr/lib/cyfr/**/*.ex", "apps/cyfr/lib/cyfr_web/**/*.ex"],
+      except: ["apps/cyfr/lib/cyfr/application.ex"],
+      into: "Emissary",
+      allow: [],
+      reason:
+        "the host names nothing of the MCP surface: a surface sits above it and is " <>
+          "wired only by the composition root (`Cyfr.Application`), which installs " <>
+          "the proxied-tool port and starts the surface's trees, and is excepted."
+    },
+    %{
       from: ["apps/sanctum/lib/**/*.ex"],
       into: "Compendium",
       allow: [],

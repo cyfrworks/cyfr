@@ -610,7 +610,7 @@ defmodule PrismWeb.ShellLive do
   """
   @spec iframe_refusal(term(), term()) :: map()
   def iframe_refusal(id, reason) do
-    refusal = Grimoire.Error.classify(reason)
+    refusal = Grimoire.classify(reason)
 
     %{
       type: "cyfr:response",

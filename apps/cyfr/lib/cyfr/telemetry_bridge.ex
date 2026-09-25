@@ -16,7 +16,7 @@ defmodule Cyfr.TelemetryBridge do
   Each event maps to one payload constructor, which takes only the
   metadata fields it names: telemetry metadata is whatever its emitter
   attached, and the console is a trust boundary. A reason or an error is
-  classified here (`Grimoire.Error.classify/1`, which knows the identity
+  classified here (`Grimoire.classify/1`, which knows the identity
   domain's vocabulary the bus may not name) and carried as its class and
   public sentence, never an arbitrary term. A tenant
   event that names no athanor has nowhere to go: it is dropped and counted
@@ -312,7 +312,7 @@ defmodule Cyfr.TelemetryBridge do
   end
 
   defp classify(nil), do: nil
-  defp classify(reason), do: Grimoire.Error.classify(reason)
+  defp classify(reason), do: Grimoire.classify(reason)
 
   # The tray counts only root executions: a chain's children are the same
   # piece of work.

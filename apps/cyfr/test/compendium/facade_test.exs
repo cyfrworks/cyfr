@@ -185,16 +185,28 @@ defmodule Compendium.FacadeTest do
       assert Compendium.group_search_results([]) == Compendium.Catalogue.group_search_results([])
     end
 
-    test "a registry refusal's required policy version reads as Compendium.OCI.Errors" do
+    test "a registry refusal's required policy version is read off its reason" do
       err = %Compendium.OCI.Errors{
         reason: :policy_version_mismatch,
+        status: 412,
         detail: %{original_detail: %{"required_version" => "2026-09"}}
       }
 
-      assert Compendium.registry_required_version(err) == "2026-09"
+      refusal = Compendium.Providers.Shared.refusal(err)
 
-      assert Compendium.registry_required_version(%Compendium.OCI.Errors{detail: nil}) ==
-               Compendium.OCI.Errors.required_version(%Compendium.OCI.Errors{detail: nil})
+      assert %Prima.Refusal{
+               class: :conflict,
+               reason: {:registry, :policy_version_mismatch, "2026-09"}
+             } = refusal
+
+      assert Grimoire.render(refusal) =~ "policy version 2026-09"
+      assert Compendium.registry_required_version(refusal) == "2026-09"
+
+      assert Compendium.registry_required_version(
+               Compendium.Providers.Shared.refusal(%{err | detail: nil})
+             ) == nil
+
+      assert Compendium.registry_required_version(Grimoire.classify(:busy)) == nil
     end
   end
 
@@ -266,6 +278,38 @@ defmodule Compendium.FacadeTest do
 
       assert {:error, %Prima.Refusal{class: :unavailable, reason: {:registry, _}}} =
                Compendium.claim_personal_namespace("alice", :github, "gho_access")
+    end
+
+    test "a policy acceptance the registry refuses is its refusal, with the version it requires",
+         %{bypass: bypass} do
+      Bypass.expect_once(bypass, "POST", "/v1/legal/accept", fn conn ->
+        json_resp(conn, 412, %{
+          "errors" => [%{"code" => "POLICY_VERSION_MISMATCH"}],
+          "required_version" => "2026-10"
+        })
+      end)
+
+      assert {:error,
+              %Prima.Refusal{
+                class: :conflict,
+                reason: {:registry, :policy_version_mismatch, "2026-10"}
+              } = refusal} =
+               Compendium.accept_registry_policies(:github, "gho_access", nil, "2026-09")
+
+      assert Compendium.registry_required_version(refusal) == "2026-10"
+      assert Grimoire.render(refusal) =~ "policy version 2026-10"
+
+      Bypass.expect_once(bypass, "POST", "/v1/legal/accept", fn conn ->
+        json_resp(conn, 403, %{"errors" => [%{"code" => "IDENTITY_BANNED"}]})
+      end)
+
+      assert {:error, %Prima.Refusal{reason: {:registry, :unauthorized}}} =
+               Compendium.accept_registry_policies(:github, "gho_access", nil, "2026-09")
+
+      Bypass.down(bypass)
+
+      assert {:error, %Prima.Refusal{class: :unavailable}} = Compendium.registry_legal_version()
+      assert {:error, %Prima.Refusal{class: :unavailable}} = Compendium.registry_legal_page("tos")
     end
   end
 
