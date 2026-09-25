@@ -509,7 +509,9 @@ defmodule Locus.Builder do
   end
 
   defp validation_failure(reason) when is_atom(reason), do: Atom.to_string(reason)
-  defp validation_failure(reason) when is_tuple(reason), do: inspect(elem(reason, 0))
+
+  defp validation_failure(reason) when is_tuple(reason) and is_atom(elem(reason, 0)),
+    do: Atom.to_string(elem(reason, 0))
 
   defp within_bounds(outputs, on_progress) do
     total = outputs |> Map.values() |> Enum.reduce(0, &(byte_size(&1) + &2))

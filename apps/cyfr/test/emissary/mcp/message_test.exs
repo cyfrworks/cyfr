@@ -204,7 +204,7 @@ defmodule Emissary.MCP.MessageTest do
       assert code({:conflict, "moved"}) == -33101
       assert code(:control_plane_lost) == -33102
       assert code(:database_error) == -33103
-      assert code({:corrupt, "The artifact"}) == -33104
+      assert code({:corrupt, {:digest, "The artifact"}}) == -33104
       assert code({:timeout, "slow"}) == -33105
       assert code(:outcome_unknown) == -33106
       assert code({:exit, "Tool x exited unexpectedly"}) == -33100
@@ -219,8 +219,16 @@ defmodule Emissary.MCP.MessageTest do
           do: assert(code(reason) == -33002)
 
       assert code({:authorization_required, "grant expired"}) == -33001
-      assert code(:malformed_record) == -33004
-      assert code({:consent_class_required, :not_authenticated}) == -33004
+    end
+
+    test "the authorization rows without an override answer with their class's code" do
+      # internal
+      assert code(:malformed_record) == -33100
+      assert code(:untagged_tenant_resource) == -33100
+      assert code({:malformed_resource, :execution}) == -33100
+      # unauthenticated
+      assert code({:consent_class_required, :not_authenticated}) == -33001
+      assert code(:missing_token) == -33001
     end
 
     test "a consent signal answers with its own tag's code" do

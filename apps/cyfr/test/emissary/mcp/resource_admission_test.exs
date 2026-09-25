@@ -121,8 +121,8 @@ defmodule Emissary.MCP.ResourceAdmissionTest do
       assert message =~ "missing required permission 'component_read'"
 
       # Admitted, and the domain answers what is there — by the class of its
-      # refusal; a bare sentence is internal until its producer types it.
-      assert {:error, :internal, "Component not found: r:local.none:1.0.0"} =
+      # refusal: a component the registry does not hold is not found.
+      assert {:error, :resource_not_found, "Component not found: r:local.none:1.0.0"} =
                read(component_key, "compendium://components/r:local.none:1.0.0")
 
       assert {:ok, %{"contents" => [%{"blob" => blob}]}} =

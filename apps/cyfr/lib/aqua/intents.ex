@@ -51,11 +51,11 @@ defmodule Aqua.Intents do
         if state in @allowed_overlay_states do
           {:ok, %{kind: "overlay_open", state: state}}
         else
-          {:error, "ui.overlay.open: state must be \"half\" or \"full\", got #{inspect(state)}"}
+          {:error, "ui.overlay.open: state must be \"half\" or \"full\""}
         end
 
-      other ->
-        {:error, "ui.overlay.open: state must be a string, got #{inspect(other)}"}
+      _other ->
+        {:error, "ui.overlay.open: state must be a string"}
     end
   end
 

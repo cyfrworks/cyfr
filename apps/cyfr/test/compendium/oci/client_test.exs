@@ -402,9 +402,10 @@ defmodule Compendium.OCI.ClientTest do
           credential_ciphertext: ciphertext
         })
 
-      assert {:error, msg} = Client.pull(ctx, "#{registry}/alice/reagents/pinned:1.0.0")
-      assert msg =~ "The stored registry credential is damaged"
-      refute msg =~ "stale"
+      assert {:error, {:corrupt, :registry_credential} = reason} =
+               Client.pull(ctx, "#{registry}/alice/reagents/pinned:1.0.0")
+
+      assert Prima.Refusal.message(reason) =~ "The stored registry credential is damaged"
       refute_received {:registry_contacted, _}
     end
   end

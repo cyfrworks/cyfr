@@ -836,7 +836,7 @@ defmodule Crucible.Record do
 
   defp parse_reference(nil), do: nil
   defp parse_reference(ref) when is_binary(ref), do: ref
-  defp parse_reference(other), do: inspect(other)
+  defp parse_reference(_other), do: nil
 
   defp parse_status(nil), do: :running
   defp parse_status("running"), do: :running

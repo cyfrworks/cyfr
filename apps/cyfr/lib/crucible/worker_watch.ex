@@ -696,7 +696,7 @@ defmodule Crucible.WorkerWatch do
   end
 
   defp name(name) when is_atom(name) and not is_nil(name), do: {:ok, name}
-  defp name(other), do: {:error, "worker watch: the name must be an atom, got #{inspect(other)}"}
+  defp name(_other), do: {:error, "worker watch: the name must be an atom"}
 
   defp configured_bounds do
     case Application.get_env(:cyfr, :opus_watch, []) do
@@ -705,9 +705,8 @@ defmodule Crucible.WorkerWatch do
           do: {:ok, bounds},
           else: {:error, "worker watch: config :cyfr, :opus_watch must be a keyword list"}
 
-      other ->
-        {:error,
-         "worker watch: config :cyfr, :opus_watch must be a keyword list, got #{inspect(other)}"}
+      _other ->
+        {:error, "worker watch: config :cyfr, :opus_watch must be a keyword list"}
     end
   end
 
@@ -716,8 +715,8 @@ defmodule Crucible.WorkerWatch do
       value when is_integer(value) and value > 0 ->
         {:ok, value}
 
-      other ->
-        {:error, "worker watch: #{key} must be a positive integer, got #{inspect(other)}"}
+      _other ->
+        {:error, "worker watch: #{key} must be a positive integer"}
     end
   end
 
@@ -729,8 +728,8 @@ defmodule Crucible.WorkerWatch do
       value when is_integer(value) and value > 0 ->
         {:ok, value}
 
-      other ->
-        {:error, "worker watch: lease_ms must be a positive integer, got #{inspect(other)}"}
+      _other ->
+        {:error, "worker watch: lease_ms must be a positive integer"}
     end
   end
 
@@ -742,11 +741,11 @@ defmodule Crucible.WorkerWatch do
           do: {:halt, {:error, "worker watch: two worker entries name the service #{id}"}},
           else: {:cont, {:ok, Map.put(acc, id, Map.put_new(entry, :components, nil))}}
 
-      other, _acc ->
-        {:halt, {:error, "worker watch: a worker entry is not an endpoint: #{inspect(other)}"}}
+      _other, _acc ->
+        {:halt, {:error, "worker watch: a worker entry is not an endpoint"}}
     end)
   end
 
-  defp workers(other),
-    do: {:error, "worker watch: the worker list must be a list, got #{inspect(other)}"}
+  defp workers(_other),
+    do: {:error, "worker watch: the worker list must be a list"}
 end

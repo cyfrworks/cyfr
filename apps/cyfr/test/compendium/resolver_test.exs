@@ -89,8 +89,10 @@ defmodule Compendium.ResolverTest do
     end
 
     test "errors when component not found", %{ctx: ctx} do
-      assert {:error, msg} = Resolver.resolve(ctx, "c:local.nonexistent")
-      assert msg =~ "Component not found"
+      assert {:error, {:not_found, {:component, "c:local.nonexistent"}} = reason} =
+               Resolver.resolve(ctx, "c:local.nonexistent")
+
+      assert Prima.Refusal.message(reason) =~ "Component not found"
     end
 
     test "errors on empty ref", %{ctx: ctx} do

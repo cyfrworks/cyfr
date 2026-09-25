@@ -220,12 +220,12 @@ defmodule Opus.Runtime do
 
             {:error, reason} ->
               {:error,
-               "Component compilation failed: #{inspect(reason)}. " <>
+               "Component compilation failed: #{engine_words(reason)}. " <>
                  "Ensure the component is compiled as a WASI P2 Component Model binary."}
           end
 
         {:error, reason} ->
-          {:error, "Failed to create WASM store: #{inspect(reason)}"}
+          {:error, "Failed to create WASM store: #{engine_words(reason)}"}
       end
     after
       if cleanup_refs.stream_exec_ref,
@@ -263,11 +263,22 @@ defmodule Opus.Runtime do
         "resource_limit: the engine refused the component's memory or tables (#{what})"
 
       nil ->
-        "Component instantiation failed: #{inspect(reason)}"
+        "Component instantiation failed: #{reason}"
     end
   end
 
-  defp instantiation_failure(reason), do: "Component instantiation failed: #{inspect(reason)}"
+  defp instantiation_failure(reason),
+    do: "Component instantiation failed: #{engine_words(reason)}"
+
+  # The engine answers its refusals as its own sentences; anything else is
+  # logged and named generically, never spelled onto the failure the
+  # control plane records.
+  defp engine_words(reason) when is_binary(reason), do: reason
+
+  defp engine_words(reason) do
+    Logger.warning("[Opus.Runtime] the engine refused with a non-sentence: #{inspect(reason)}")
+    "the engine refused the component"
+  end
 
   # Build all host function imports and collect cleanup refs. The node's
   # limits and the attempt's host client are the presence signal for
@@ -481,8 +492,9 @@ defmodule Opus.Runtime do
   defp execute_json_convention(pid, call_name, input) do
     # Serialize input to JSON string
     case Jason.encode(input) do
-      {:error, err} ->
-        {:error, "Failed to encode input as JSON: #{inspect(err)}"}
+      # The encoder's own message can quote the value it refused.
+      {:error, _err} ->
+        {:error, "Failed to encode input as JSON"}
 
       {:ok, json_input} ->
         case call_function(pid, call_name, json_input) do
@@ -520,7 +532,7 @@ defmodule Opus.Runtime do
             )
 
             {:error,
-             "Component call failed for #{inspect(call_name)}: #{inspect(reason)}. " <>
+             "Component call failed for #{inspect(call_name)}: #{engine_words(reason)}. " <>
                "Ensure the component exports the correct WIT interface (cyfr:reagent/compute@0.1.0, cyfr:catalyst/run@0.1.0, or cyfr:formula/run@0.1.0)."}
         end
     end

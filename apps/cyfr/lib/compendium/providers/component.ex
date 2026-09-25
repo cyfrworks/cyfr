@@ -883,6 +883,9 @@ defmodule Compendium.Providers.Component do
             )
 
             {:error, Shared.refusal(err)}
+
+          {:error, {:corrupt, :registry_credential}} = corrupt ->
+            corrupt
         end
     end
   end
@@ -1017,13 +1020,8 @@ defmodule Compendium.Providers.Component do
             {:ok, %{components: remote[:components] || [], total: remote[:total] || 0}}
           end
 
-        {:error, %Errors{} = err} ->
-          Logger.error(
-            "[Compendium.Providers.Component] CYFR.RUN SEARCH FAILED — #{Errors.to_log_string(err)}. " <>
-              "Results are incomplete. Only local components are shown."
-          )
-
-          error_msg = Shared.refusal(err).message
+        {:error, reason} ->
+          error_msg = remote_search_refusal(reason).message
 
           case local_result do
             {:ok, local} ->
@@ -1052,6 +1050,20 @@ defmodule Compendium.Providers.Component do
       local_result || {:ok, %{components: [], total: 0}}
     end
   end
+
+  # Why the cyfr.run half of a search is missing: the registry's refusal,
+  # or a stored push token that does not open (no request was sent).
+  defp remote_search_refusal(%Errors{} = err) do
+    Logger.error(
+      "[Compendium.Providers.Component] CYFR.RUN SEARCH FAILED — #{Errors.to_log_string(err)}. " <>
+        "Results are incomplete. Only local components are shown."
+    )
+
+    Shared.refusal(err)
+  end
+
+  defp remote_search_refusal({:corrupt, :registry_credential} = corrupt),
+    do: Prima.Refusal.classify(corrupt)
 
   defp finish_register(ctx, register_id, result) do
     # Broadcast per-component status

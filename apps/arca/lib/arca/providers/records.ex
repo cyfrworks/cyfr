@@ -354,7 +354,7 @@ defmodule Arca.Providers.Records do
           {:error, {:not_found, "Payload", "#{id}/#{kind}"}}
 
         {:error, :payload_corrupt} ->
-          {:error, {:corrupt, "Payload #{id}/#{kind}"}}
+          {:error, {:corrupt, {:digest, "Payload #{id}/#{kind}"}}}
 
         {:error, :database_error} ->
           {:error, {:unavailable, "Storage"}}
@@ -675,7 +675,7 @@ defmodule Arca.Providers.Records do
           {:error, {:invalid_argument, "Unknown cleanup_type: #{cleanup_type}"}}
 
         {:error, :corrupt} ->
-          {:error, {:corrupt, "Retention settings"}}
+          {:error, {:corrupt, {:settings, :retention}}}
 
         {:error, reason} ->
           Logger.error("[Arca.Providers.Records] Retention cleanup failed: #{inspect(reason)}")
@@ -691,7 +691,7 @@ defmodule Arca.Providers.Records do
   def handle(tool, %Prima.Actor{}, _args), do: {:error, {:not_found, "tool", tool}}
 
   # A settings refusal as the wire renders it.
-  defp settings_refusal(:corrupt), do: {:corrupt, "Retention settings"}
+  defp settings_refusal(:corrupt), do: {:corrupt, {:settings, :retention}}
   defp settings_refusal(:no_athanor), do: :missing_tenant
 
   defp settings_refusal(reason) do

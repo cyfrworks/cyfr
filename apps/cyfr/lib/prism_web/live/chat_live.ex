@@ -126,7 +126,7 @@ defmodule PrismWeb.ChatLive do
       {:error, reason} ->
         {:noreply,
          socket
-         |> put_flash(:error, "That estate cannot be opened (#{reason}).")
+         |> put_flash(:error, "That estate cannot be opened: #{error_message(reason)}")
          |> push_navigate(to: chat_path(nil))}
     end
   end

@@ -244,11 +244,9 @@ defmodule Grimoire.RequestLog do
     result
   end
 
-  # The row names the reason the gate refused with, not the refusal it
-  # wrapped that reason in: an admission refusal is logged by the same
-  # term a handler's refusal is.
-  defp error_text(%Prima.Refusal{stage: :admission, reason: reason}), do: error_text(reason)
-  defp error_text(reason), do: inspect(sanitize_input(reason))
+  # The row holds the refusal's public sentence, the one every surface
+  # reads (`Grimoire.render/1`): a stored row is never a term's spelling.
+  defp error_text(reason), do: Grimoire.render(reason)
 
   # The write-behind never fails the call either: inline (the test env)
   # it writes in the caller, and a caller with no connection of its own

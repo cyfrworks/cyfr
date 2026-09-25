@@ -28,6 +28,14 @@ defmodule Grimoire do
           {:ok, term()} | {:error, term()}
   defdelegate call_in_chain(name, ctx, args, authority, opts \\ []), to: Catalog
 
+  @doc """
+  The public sentence for any refusal, whichever vocabulary it came from
+  (`Grimoire.Error.render/1`): never `nil`, never an `inspect/1` of the
+  term.
+  """
+  @spec render(term()) :: String.t()
+  defdelegate render(reason), to: Grimoire.Error
+
   @doc "A tool's provider and its declarations: `{:ok, {module, tool}}` or `:miss`."
   @spec lookup(String.t()) :: {:ok, {module(), map()}} | :miss
   defdelegate lookup(name), to: Catalog

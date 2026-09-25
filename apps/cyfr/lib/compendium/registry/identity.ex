@@ -21,7 +21,8 @@ defmodule Compendium.Registry.Identity do
         authenticated: boolean(),
         user_id: String.t() | nil,
         personal_namespace: %{slug: String.t(), last_used_at: String.t()} | nil,
-        memberships: [%{slug: String.t(), role: String.t(), last_used_at: String.t()}]
+        memberships: [%{slug: String.t(), role: String.t(), last_used_at: String.t()}],
+        damaged_credentials: [%{id: String.t(), status: :corrupt}]
       }
 
   `authenticated: true` iff the user holds at least one push token for this
@@ -29,6 +30,10 @@ defmodule Compendium.Registry.Identity do
   namespace has `memberships: []`. A user who has claimed no personal
   namespace but holds publisher-namespace memberships has
   `personal_namespace: nil` and a non-empty `memberships` list.
+
+  A stored row that cannot be opened is listed in `damaged_credentials`
+  as `%{id: id, status: :corrupt}`: shown, not confirmed and not counted
+  toward `authenticated`.
 
   A credential store that cannot be read is
   `{:error, {:unavailable, "Registry credentials"}}` — never
@@ -65,10 +70,16 @@ defmodule Compendium.Registry.Identity do
       {:error, _unreadable} ->
         {:error, {:unavailable, "Registry credentials"}}
 
-      [] ->
-        %{authenticated: false, user_id: ctx.user_id, personal_namespace: nil, memberships: []}
+      {[], damaged} ->
+        %{
+          authenticated: false,
+          user_id: ctx.user_id,
+          personal_namespace: nil,
+          memberships: [],
+          damaged_credentials: damaged
+        }
 
-      creds ->
+      {creds, damaged} ->
         # Confirm tokens concurrently, with at most eight requests in flight.
         # Results are unordered; timed-out tasks are killed after the request
         # timeout plus 500 ms. Failed confirmations are omitted.
@@ -92,7 +103,8 @@ defmodule Compendium.Registry.Identity do
           authenticated: personal != nil or memberships != [],
           user_id: ctx.user_id,
           personal_namespace: personal,
-          memberships: memberships
+          memberships: memberships,
+          damaged_credentials: damaged
         }
     end
   rescue
@@ -106,17 +118,20 @@ defmodule Compendium.Registry.Identity do
   # ============================================================================
 
   # The user's personal credentials (registry push tokens) are the only
-  # credential source; the same path serves every deployment. A row that
-  # cannot be opened has no token to confirm a namespace with.
+  # credential source; the same path serves every deployment. The listing
+  # is read whole (`Sanctum.RegistryCredentials.list/2`): a row that cannot
+  # be opened has no token to confirm a namespace with, and is shown as it
+  # is, `%{id: id, status: :corrupt}`, rather than refusing the summary or
+  # being dropped from it.
   defp list_user_credentials(%Sanctum.Context{user_id: user_id} = ctx, oci_host)
        when is_binary(user_id) and user_id != "" do
     case CredentialStore.list_for_user(ctx, oci_host) do
-      {:ok, entries} -> CredentialStore.push_tokens(entries)
+      {:ok, entries} -> Enum.split_with(entries, &(not match?(%{status: :corrupt}, &1)))
       {:error, _unreadable} = unreadable -> unreadable
     end
   end
 
-  defp list_user_credentials(_ctx, _oci_host), do: []
+  defp list_user_credentials(_ctx, _oci_host), do: {[], []}
 
   # Best-effort per-token probe. Transient errors keep the entry with nil
   # `last_used_at`; 401/403 drops it (token revoked or namespace ownership

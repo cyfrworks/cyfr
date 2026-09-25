@@ -182,13 +182,13 @@ defmodule EmissaryWeb.Plugs.VerifyWebhookSignature do
   end
 
   defp deny_404(conn) do
-    EmissaryWeb.ApiError.halt(conn, 404, :not_found, "Not found")
+    EmissaryWeb.ApiError.halt(conn, 404, :not_found, nil)
   end
 
   defp deny_503(conn) do
     conn
     |> put_resp_header("retry-after", "5")
-    |> EmissaryWeb.ApiError.halt(503, :unavailable, "Webhook store unavailable")
+    |> EmissaryWeb.ApiError.halt(503, :unavailable, nil)
   end
 
   defp deny_401(conn) do
@@ -211,6 +211,6 @@ defmodule EmissaryWeb.Plugs.VerifyWebhookSignature do
 
   defp deny_500(conn) do
     Logger.error("[VerifyWebhookSignature] internal error path=#{conn.request_path}")
-    EmissaryWeb.ApiError.halt(conn, 500, :internal_error, "Internal error")
+    EmissaryWeb.ApiError.halt(conn, 500, :internal_error, nil)
   end
 end

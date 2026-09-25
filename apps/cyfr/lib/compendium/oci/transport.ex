@@ -32,7 +32,8 @@ defmodule Compendium.OCI.Transport do
   @default_max_response_bytes 10 * 1024 * 1024
 
   @type response :: {:ok, integer(), [{String.t(), String.t()}], binary()}
-  @type error :: {:error, Errors.t() | String.t()}
+  # A damaged stored push token answers as itself, before any request.
+  @type error :: {:error, Errors.t() | String.t() | {:corrupt, :registry_credential}}
 
   @doc """
   Perform an HTTP request to an OCI registry endpoint.
@@ -228,7 +229,7 @@ defmodule Compendium.OCI.Transport do
             opts,
             attempt,
             Retry.classify({:error, reason}),
-            inspect(reason),
+            Errors.to_log_string(Errors.connection_error(registry, reason)),
             Retry.backoff(attempt),
             fn -> {:error, Errors.connection_error(registry, reason)} end
           )

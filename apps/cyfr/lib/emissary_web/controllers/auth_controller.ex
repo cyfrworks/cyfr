@@ -298,10 +298,10 @@ defmodule EmissaryWeb.AuthController do
           |> json(%{ok: true, message: "Logged out successfully"})
 
         {:error, reason} ->
-          EmissaryWeb.ApiError.send(conn, 500, :internal_error, friendly_error_message(reason))
+          EmissaryWeb.ApiError.refuse(conn, reason)
       end
     else
-      EmissaryWeb.ApiError.send(conn, 400, :missing_token, nil)
+      EmissaryWeb.ApiError.refuse(conn, :missing_token)
     end
   end
 
@@ -313,7 +313,7 @@ defmodule EmissaryWeb.AuthController do
   def whoami(conn, _params) do
     case get_bearer_token(conn) do
       nil ->
-        EmissaryWeb.ApiError.send(conn, 401, :unauthenticated, "No session token provided")
+        EmissaryWeb.ApiError.refuse(conn, :missing_token)
 
       token ->
         case Session.get(token) do
@@ -414,12 +414,12 @@ defmodule EmissaryWeb.AuthController do
 
   defp failure_message(_failure), do: "Authentication failed"
 
-  # Maps internal error atoms/tuples to user-friendly messages
-  # without exposing implementation details
+  # The sign-in page's own words for the refusals a sign-in answers; any
+  # other reason reads as the table's sentence (`Grimoire.render/1`),
+  # which logs an unknown term by its shape.
   defp friendly_error_message(:session_not_found), do: "Session not found"
   defp friendly_error_message(:session_expired), do: "Session has expired"
   defp friendly_error_message(:invalid_token), do: "Invalid session token"
-  defp friendly_error_message(:database_error), do: "Unable to process request"
 
   defp friendly_error_message(:auth_provider_not_configured),
     do: "Authentication provider not configured"
@@ -448,8 +448,5 @@ defmodule EmissaryWeb.AuthController do
   defp friendly_error_message({:validation_error, _}), do: "Invalid authentication data"
   defp friendly_error_message({:provider_error, _}), do: "Authentication provider error"
 
-  defp friendly_error_message(reason) do
-    Logger.warning("[AuthController] Unhandled auth error: #{inspect(reason)}")
-    "An error occurred during authentication"
-  end
+  defp friendly_error_message(reason), do: Grimoire.render(reason)
 end

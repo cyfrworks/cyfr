@@ -375,6 +375,49 @@ defmodule Compendium.Registry.ClientTest do
       |> List.first()
     end
 
+    test "a damaged stored push token refuses before any request leaves", %{
+      ctx: ctx,
+      bypass: bypass
+    } do
+      registry = Compendium.RegistryHost.canonical_host()
+
+      # One usable token, and one row that does not open: the damaged row
+      # fails the choice, rather than handing over the other token or
+      # sending the request anonymously.
+      :ok =
+        Compendium.Registry.CredentialStore.put_push_token(
+          ctx,
+          registry,
+          "zeta.example",
+          "cyfr_pt_usable",
+          "personal"
+        )
+
+      aad = Sanctum.CipherAAD.registry_token(ctx.user_id, registry, "alice")
+      {:ok, ciphertext} = Sanctum.Cipher.encrypt("not json", aad)
+
+      :ok =
+        Arca.RegistryTokenStorage.put(%{
+          user_id: ctx.user_id,
+          registry: registry,
+          namespace_slug: "alice",
+          credential_ciphertext: ciphertext
+        })
+
+      # No expectation is set: Bypass fails the test on any request that
+      # reaches it.
+      _ = bypass
+
+      assert {:error, {:corrupt, :registry_credential}} = Client.search(ctx, %{query: "x"})
+      assert {:error, {:corrupt, :registry_credential}} = Client.discover(ctx, %{})
+
+      assert {:error, {:corrupt, :registry_credential}} =
+               Client.get_component(ctx, "reagent", "alice", "thing", "1.0.0")
+
+      assert %Prima.Refusal{class: :corrupt} =
+               Prima.Refusal.classify({:corrupt, :registry_credential})
+    end
+
     test "probe_identity/3 — POST /v1/identity/probe with access_token in body", %{bypass: bypass} do
       Bypass.expect_once(bypass, "POST", "/v1/identity/probe", fn conn ->
         {:ok, raw, conn} = Plug.Conn.read_body(conn)

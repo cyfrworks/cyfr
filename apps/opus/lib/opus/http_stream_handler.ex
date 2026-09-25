@@ -386,7 +386,8 @@ defmodule Opus.HttpStreamHandler do
             end
 
           {:error, reason} ->
-            park_error(buffer, :stream_error, "The stream broke: #{inspect(reason)}")
+            Logger.warning("[Opus.HttpStreamHandler] the stream broke: #{inspect(reason)}")
+            park_error(buffer, :stream_error, "The stream broke.")
             :error
 
           :unknown ->

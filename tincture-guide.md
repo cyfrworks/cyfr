@@ -473,7 +473,7 @@ Why formulas are safer:
 |-------|---------|-----|
 | `component not in dependencies` | Invoke ref not in manifest deps | Add the component to `dependencies.static` in `cyfr-manifest.json` |
 | `consent_required` | The tincture has no active profile for the route: its public profile on a public page, its owner profile in the Prism shell | Grant the tincture its owner profile, or publish its public one with `profile.publish` |
-| `Rate limit exceeded` | Public tincture hit rate limit | Wait for `Retry-After` header value. Limit is consent-configured (default 100/min) |
+| `Too many requests; retry in N s.` | Public tincture hit its consented rate limit | Wait the seconds it names. Limit is consent-configured (default 100/min) |
 | `rate_limited` | Private tincture hit rate limit | Reduce invoke frequency or batch requests in a formula. Limit is consent-configured |
 | `Request timed out` | SDK got no response in 30s | Check if shell is responsive, check component execution time |
 | Blank page / nothing renders | Inline `<script>` blocked by CSP | Move all JS to external `.js` files |

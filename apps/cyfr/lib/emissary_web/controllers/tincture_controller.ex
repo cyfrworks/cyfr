@@ -101,17 +101,17 @@ defmodule EmissaryWeb.TinctureController do
           conn,
           401,
           :unauthenticated,
-          Sanctum.Unauthorized.message(:unauthenticated)
+          nil
         )
 
       {:error, :unavailable} ->
-        EmissaryWeb.ApiError.send(conn, 503, :unavailable, "Try again shortly")
+        EmissaryWeb.ApiError.send(conn, 503, :unavailable, nil)
 
       {:error, reason} ->
-        # A presented-but-dead credential says so — the named refusal is
-        # what tells a client "re-authenticate" apart from "you never sent
-        # anything".
-        EmissaryWeb.ApiError.send(conn, 401, reason, "Credential refused")
+        # A presented-but-dead credential says so, at its class's status —
+        # the named refusal is what tells a client "re-authenticate" apart
+        # from "you never sent anything".
+        EmissaryWeb.ApiError.refuse(conn, reason)
     end
   end
 
@@ -143,7 +143,7 @@ defmodule EmissaryWeb.TinctureController do
             )
 
           {:error, _no_entry} ->
-            EmissaryWeb.ApiError.send(conn, 404, :not_found, "Not found")
+            EmissaryWeb.ApiError.send(conn, 404, :not_found, nil)
         end
 
       {:ok, tincture, :private, ctx} ->
@@ -171,14 +171,14 @@ defmodule EmissaryWeb.TinctureController do
             end
 
           {:error, _no_entry} ->
-            EmissaryWeb.ApiError.send(conn, 404, :not_found, "Not found")
+            EmissaryWeb.ApiError.send(conn, 404, :not_found, nil)
         end
 
       {:error, :unavailable} ->
         unavailable(conn)
 
       {:error, :not_found} ->
-        EmissaryWeb.ApiError.send(conn, 404, :not_found, "Not found")
+        EmissaryWeb.ApiError.send(conn, 404, :not_found, nil)
     end
   end
 
@@ -223,7 +223,7 @@ defmodule EmissaryWeb.TinctureController do
         unavailable(conn)
 
       {:error, :not_found} ->
-        EmissaryWeb.ApiError.send(conn, 404, :not_found, "Not found")
+        EmissaryWeb.ApiError.send(conn, 404, :not_found, nil)
     end
   end
 
@@ -273,7 +273,7 @@ defmodule EmissaryWeb.TinctureController do
             unavailable(conn)
 
           {:error, :not_found} ->
-            EmissaryWeb.ApiError.send(conn, 404, :not_found, "Not found")
+            EmissaryWeb.ApiError.send(conn, 404, :not_found, nil)
         end
     end
   end
@@ -304,23 +304,23 @@ defmodule EmissaryWeb.TinctureController do
           conn,
           401,
           :expired_credential,
-          "Signed asset token expired — reload the tincture"
+          nil
         )
 
       {:error, :invalid_credential} ->
-        EmissaryWeb.ApiError.send(conn, 401, :invalid_credential, "Signed asset token invalid")
+        EmissaryWeb.ApiError.send(conn, 401, :invalid_credential, nil)
 
       {:error, :not_member} ->
-        EmissaryWeb.ApiError.send(conn, 403, :not_member, "No longer a member of this athanor")
+        EmissaryWeb.ApiError.send(conn, 403, :not_member, nil)
 
       {:error, reason} when reason in [:not_standing, :ip_not_allowed] ->
-        EmissaryWeb.ApiError.send(conn, 403, reason, "The credential behind this link is retired")
+        EmissaryWeb.ApiError.send(conn, 403, reason, nil)
 
       {:error, :unavailable} ->
         unavailable(conn)
 
       _ ->
-        EmissaryWeb.ApiError.send(conn, 404, :not_found, "Not found")
+        EmissaryWeb.ApiError.send(conn, 404, :not_found, nil)
     end
   end
 
@@ -329,7 +329,7 @@ defmodule EmissaryWeb.TinctureController do
   defp unavailable(conn) do
     conn
     |> put_resp_header("retry-after", "5")
-    |> EmissaryWeb.ApiError.send(503, :unavailable, "Try again shortly")
+    |> EmissaryWeb.ApiError.send(503, :unavailable, nil)
   end
 
   # A mint that did not happen is a named state, never a URL: an outage or
@@ -340,21 +340,12 @@ defmodule EmissaryWeb.TinctureController do
   defp mint_refused(conn, :not_owner) do
     conn
     |> put_resp_header("retry-after", "5")
-    |> EmissaryWeb.ApiError.send(503, :not_owner, "Try again shortly")
+    |> EmissaryWeb.ApiError.send(503, :not_owner, nil)
   end
 
   # A credential presented and refused is `unauthenticated` — a 401 with
   # its challenge — and one that stands but may not mint is `forbidden`.
-  defp mint_refused(conn, reason) do
-    refusal = Grimoire.Error.classify(reason)
-
-    EmissaryWeb.ApiError.send(
-      conn,
-      EmissaryWeb.ApiError.status(refusal.class),
-      refusal,
-      "This credential cannot open a tincture link; sign in again"
-    )
-  end
+  defp mint_refused(conn, reason), do: EmissaryWeb.ApiError.refuse(conn, reason)
 
   # -------------------------------------------------------------------
   # Private helpers

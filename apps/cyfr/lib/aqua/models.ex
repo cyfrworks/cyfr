@@ -216,7 +216,7 @@ defmodule Aqua.Models do
     end
   end
 
-  defp refusal_text(reason), do: Grimoire.Error.render(reason)
+  defp refusal_text(reason), do: Grimoire.render(reason)
 
   @doc """
   For each soul's catalyst: the installed release it resolves to and

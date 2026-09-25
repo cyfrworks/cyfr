@@ -115,7 +115,9 @@ defmodule Prima.Model do
       do: {:error, error}
 
   def decode_envelope(%{"error" => other}) do
-    message = if is_binary(other), do: other, else: inspect(other)
+    message =
+      if is_binary(other), do: other, else: "the catalyst answered an error with no message"
+
     {:error, %{"type" => "provider_error", "message" => message}}
   end
 

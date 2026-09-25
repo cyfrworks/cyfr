@@ -606,7 +606,7 @@ defmodule Sanctum.Webhook do
                "Register or pull it first."}
 
           {:error, reason} ->
-            {:error, "Cannot use target_ref '#{target_ref}': #{inspect(reason)}"}
+            {:error, "Cannot use target_ref '#{target_ref}': #{Prima.Refusal.message(reason)}"}
         end
 
       {:error, reason} ->
@@ -658,7 +658,9 @@ defmodule Sanctum.Webhook do
   defp authorize_profile_binding(ctx, target_ref, profile_id) when is_binary(profile_id) do
     case Sanctum.Consent.RegistrationBinding.authorize(ctx, target_ref, profile_id) do
       :ok -> :ok
-      {:error, reason} -> {:error, "profile binding refused: #{inspect(reason)}"}
+      {:error, reason} ->
+        {:error,
+         "profile binding refused: #{Sanctum.Consent.RegistrationBinding.message(reason)}"}
     end
   end
 

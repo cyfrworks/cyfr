@@ -27,8 +27,8 @@ defmodule Sanctum.Consent.Normalize do
     end
   end
 
-  def only_keys(other, _allowed, tag),
-    do: {:error, {tag, :input, "expected a map, got: #{inspect(other)}"}}
+  def only_keys(_other, _allowed, tag),
+    do: {:error, {tag, :input, "expected a map"}}
 
   def enum(map, key, allowed, tag) do
     case Map.get(map, key) do
@@ -51,8 +51,8 @@ defmodule Sanctum.Consent.Normalize do
         {:ok, value}
       end
     else
-      {:ok, other} ->
-        {:error, {tag, key, "must be a component ref string, got: #{inspect(other)}"}}
+      {:ok, _other} ->
+        {:error, {tag, key, "must be a component ref string"}}
 
       {:error, reason} ->
         {:error, {tag, key, "is not a valid component ref: #{reason}"}}
@@ -63,7 +63,7 @@ defmodule Sanctum.Consent.Normalize do
     case Map.get(map, key) do
       nil -> {:ok, nil}
       value when is_binary(value) and value != "" -> {:ok, value}
-      other -> {:error, {tag, key, "must be a non-empty string, got: #{inspect(other)}"}}
+      _other -> {:error, {tag, key, "must be a non-empty string"}}
     end
   end
 
@@ -86,8 +86,8 @@ defmodule Sanctum.Consent.Normalize do
           {:error, {tag, key, "must be a list of non-empty strings"}}
         end
 
-      other ->
-        {:error, {tag, key, "must be a list, got: #{inspect(other)}"}}
+      _other ->
+        {:error, {tag, key, "must be a list"}}
     end
   end
 
@@ -135,8 +135,8 @@ defmodule Sanctum.Consent.Normalize do
           error -> error
         end
 
-      other ->
-        {:error, {tag, key, "must be a list, got: #{inspect(other)}"}}
+      _other ->
+        {:error, {tag, key, "must be a list"}}
     end
   end
 
@@ -150,8 +150,8 @@ defmodule Sanctum.Consent.Normalize do
     end
   end
 
-  defp normalize_need(other, key, tag) do
-    {:error, {tag, key, "each need must be a map, got: #{inspect(other)}"}}
+  defp normalize_need(_other, key, tag) do
+    {:error, {tag, key, "each need must be a map"}}
   end
 
   @doc false
@@ -168,8 +168,8 @@ defmodule Sanctum.Consent.Normalize do
           end
         end)
 
-      other ->
-        {:error, {tag, key, "must be a map, got: #{inspect(other)}"}}
+      _other ->
+        {:error, {tag, key, "must be a map"}}
     end
   end
 
@@ -229,8 +229,8 @@ defmodule Sanctum.Consent.Normalize do
           end
         end
 
-      other ->
-        {:error, {tag, key, "must be a map, got: #{inspect(other)}"}}
+      _other ->
+        {:error, {tag, key, "must be a map"}}
     end
   end
 

@@ -98,14 +98,24 @@ defmodule Compendium.Registry.CredentialStore do
   def list_for_user(%Context{} = ctx, registry), do: RegistryCredentials.list(ctx, registry)
 
   @doc """
-  The usable push tokens of a listing, in its order: a row the decoder
-  refused (`%{status: :corrupt}`) is skipped when choosing a bearer — it
-  is still in the listing, for a caller that reports it. Every credential
+  The usable push tokens of a listing, in its order, or
+  `{:error, {:corrupt, :registry_credential}}` when any row of it is one
+  the decoder refused (`%{status: :corrupt}`). A damaged row fails the
+  whole choice closed: skipping it would hand a caller whose personal
+  token is damaged a publisher token instead, or send the request with no
+  token at all, and either reads as some other refusal. Every credential
   the decoder hands back carries a non-empty token.
   """
-  @spec push_tokens([map()]) :: [RegistryCredentials.credential()]
+  @spec push_tokens([map()]) ::
+          {:ok, [RegistryCredentials.credential()]}
+          | {:error, {:corrupt, :registry_credential}}
   def push_tokens(entries) when is_list(entries) do
-    Enum.filter(entries, &match?(%{type: :push_token, token: token} when is_binary(token), &1))
+    if Enum.any?(entries, &match?(%{status: :corrupt}, &1)) do
+      {:error, {:corrupt, :registry_credential}}
+    else
+      {:ok,
+       Enum.filter(entries, &match?(%{type: :push_token, token: token} when is_binary(token), &1))}
+    end
   end
 
   @doc """

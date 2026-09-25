@@ -364,7 +364,7 @@ defmodule Opus.FormulaHandlerTest do
       parsed = Jason.decode!(execute(json, host!(ctx, auth), auth))
 
       assert parsed["error"]["type"] == "dispatch_error"
-      assert parsed["error"]["message"] =~ "resolve"
+      assert parsed["error"]["message"] == "Component not found: reagent:local.missing:0.1.0"
     end
 
     test "an intercepted action is the host's only when the assignment names it", %{ctx: ctx} do
@@ -396,7 +396,9 @@ defmodule Opus.FormulaHandlerTest do
         Jason.decode!(execute(execution_run_request(ref, %{"a" => 1}), host!(ctx, auth), auth))
 
       assert parsed["error"]["type"] == "tool_denied"
-      assert parsed["error"]["message"] =~ "edge_only"
+
+      assert parsed["error"]["message"] ==
+               "Invocation denied: " <> Prima.Authority.Transition.deny_message(:edge_only)
     end
 
     test "an open_inert authority runs an off-edge invoke inert, not denied", %{

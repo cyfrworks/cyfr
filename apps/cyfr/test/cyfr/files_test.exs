@@ -342,11 +342,12 @@ defmodule Arca.FilesTest do
 
     assert message =~ "cyfr-manifest.json: Manifest declares unknown top-level key(s): setup"
 
-    # A caps term, rendered whole after the file's name — today's text.
+    # A refusal with no sentence of its own names the file, never the
+    # validator's term.
     assert {:error, {:invalid_argument, message}} =
              Files.write(actor, manifest, ~s({"type":"reagent","caps":"nope"}))
 
-    assert message == ~s(cyfr-manifest.json: {:invalid_caps, {:not_a_map, "nope"}})
+    assert message == "cyfr-manifest.json: its caps are not valid"
 
     # The storage-path predicate is the storage layer's own.
     assert {:error, {:invalid_argument, message}} =
@@ -356,7 +357,8 @@ defmodule Arca.FilesTest do
                ~s({"caps":{"storage":{"paths":["aqua/"],"actions":["read"]}}})
              )
 
-    assert message =~ "invalid_storage_path"
+    assert message ==
+             "cyfr-manifest.json: caps.storage.paths names aqua/, which is no guest scope"
 
     assert {:error, {:invalid_argument, "cyfr-manifest.json is not a JSON object"}} =
              Files.write(actor, manifest, "[1, 2]")

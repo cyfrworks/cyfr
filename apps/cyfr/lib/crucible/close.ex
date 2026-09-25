@@ -294,9 +294,9 @@ defmodule Crucible.Close do
 
   # The result was answered and not retained: the record's write closed
   # the row failed and said so in its own log line.
-  defp audit_error(record, {:error, {:result_lost, reason}} = lost) do
-    emit_audit_error(record, :completed, elem(lost, 1))
-    inspect(reason)
+  defp audit_error(record, {:error, {:result_lost, _reason} = lost}) do
+    emit_audit_error(record, :completed, lost)
+    Grimoire.render(lost)
   end
 
   defp audit_error(record, {:error, reason}) do
@@ -306,7 +306,7 @@ defmodule Crucible.Close do
     )
 
     emit_audit_error(record, :completed, reason)
-    inspect(reason)
+    Grimoire.render(reason)
   end
 
   # The reason travels as data: `Arca.AuditHandler` redacts this metadata

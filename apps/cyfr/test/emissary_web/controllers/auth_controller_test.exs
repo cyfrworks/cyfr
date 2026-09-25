@@ -552,8 +552,9 @@ defmodule EmissaryWeb.AuthControllerTest do
         |> put_req_header("authorization", "Bearer ")
         |> delete(~p"/auth/logout")
 
-      # Empty bearer token should fall through to missing_token
-      assert json_response(conn, 400)["code"] == "invalid_argument"
+      # Empty bearer token should fall through to missing_token, which is
+      # a credential not presented: 401 with its challenge.
+      assert json_response(conn, 401)["code"] == "unauthenticated"
     end
 
     test "a token in the request body is ignored", %{conn: conn} do
@@ -575,7 +576,7 @@ defmodule EmissaryWeb.AuthControllerTest do
         |> put_req_header("content-type", "application/json")
         |> delete(~p"/auth/logout", Jason.encode!(%{"token" => "nonexistent_token"}))
 
-      assert json_response(conn, 400)["code"] == "invalid_argument"
+      assert json_response(conn, 401)["code"] == "unauthenticated"
     end
 
     test "accepts token via Bearer header", %{conn: conn} do

@@ -137,15 +137,13 @@ defmodule Compendium.OCI.AuthTest do
     end
 
     @tag :capture_log
-    test "a corrupt token refuses as unavailable with the damaged-credential sentence" do
+    test "a corrupt token refuses as the damaged credential it is, never as an outage" do
       plant!("alice", ~s({"type":"push_token","token":42}))
 
-      assert {:error,
-              %Errors{
-                reason: :registry_unavailable,
-                detail: %{credential_store: :corrupt},
-                message: message
-              }} = Auth.auth_headers(@registry, "alice/catalysts/foo", "alice", ctx())
+      assert {:error, {:corrupt, :registry_credential} = reason} =
+               Auth.auth_headers(@registry, "alice/catalysts/foo", "alice", ctx())
+
+      assert %Prima.Refusal{class: :corrupt, message: message} = Prima.Refusal.classify(reason)
 
       assert message ==
                "The stored registry credential is damaged; sign in to the registry again."

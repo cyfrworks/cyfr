@@ -110,7 +110,9 @@ defmodule Opus.BudgetConcurrencyCharacterizationTest do
 
     assert refused ==
              List.duplicate(
-               {:guest_error, "resource_limit", "Invocation denied: invoke_budget_exhausted"},
+               {:guest_error, "resource_limit",
+                "Invocation denied: " <>
+                  Prima.Authority.Transition.deny_message(:invoke_budget_exhausted)},
                @spawns - @cap
              )
 

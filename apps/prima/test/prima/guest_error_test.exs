@@ -22,7 +22,10 @@ defmodule Prima.GuestErrorTest do
              "Bind a key"
 
     assert GuestError.render({:failed, "The child failed"}) == "The child failed"
-    assert GuestError.render({:setup_required, %{"vault" => "x"}}) =~ "needs setup"
+    # A setup signal reads as the table's sentence for it, the one a
+    # console reads too.
+    assert GuestError.render({:setup_required, %{"vault" => "x"}}) ==
+             Prima.Refusal.message({:setup_required, %{"vault" => "x"}})
   end
 
   test "a runner's own reasons render as the text they carry" do
@@ -34,7 +37,7 @@ defmodule Prima.GuestErrorTest do
     assert GuestError.render({:uncertain, "The effect may have happened"}) =~ "may have"
     assert GuestError.render({:not_found, "component", "c:1"}) == "component not found: c:1"
     assert GuestError.render({:unavailable, "The registry"}) =~ "unavailable"
-    assert GuestError.render({:corrupt, "The artifact"}) =~ "digest"
+    assert GuestError.render({:corrupt, {:digest, "The artifact"}}) =~ "digest"
   end
 
   test "a unit commit's refusals render as the sentence the console renders" do

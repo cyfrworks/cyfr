@@ -1018,7 +1018,11 @@ defmodule Compendium.Registry do
               end
 
             {:error, reason} ->
-              {:error, "Failed to extract tincture archive: #{inspect(reason)}"}
+              Logger.warning(
+                "[Compendium.Registry] tincture archive not extracted: #{inspect(reason)}"
+              )
+
+              {:error, "Failed to extract tincture archive"}
           end
 
         {:error, :too_large} ->

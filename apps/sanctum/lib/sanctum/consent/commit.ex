@@ -1207,7 +1207,8 @@ defmodule Sanctum.Consent.Commit do
       # construction bug — say so rather than rendering a shorter, quieter
       # sheet that reads like a narrower grant.
       {:error, reason} ->
-        ["Grants could not be rendered (#{inspect(reason)}) — do not approve"]
+        Logger.error("[Sanctum.Consent.Commit] the grants did not parse: #{inspect(reason)}")
+        ["Grants could not be rendered — do not approve"]
     end
   end
 

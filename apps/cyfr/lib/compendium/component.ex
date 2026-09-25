@@ -134,14 +134,18 @@ defmodule Compendium.Component do
   carrying the actually-resolved version — one registry lookup, whether
   the ref is pinned (`Registry.get/5`) or versionless
   (`Registry.get_latest/4`, whose row already carries the manifest).
-  Every error — malformed reference, not found, storage fault — is a
-  human-readable `{:error, binary}`, never a raise.
+  A component the registry does not hold is
+  `{:error, {:not_found, {:component, reference}}}`; a malformed reference
+  or a storage fault is a human-readable `{:error, binary}`. Nothing
+  raises.
 
   The one resolver: the MCP tool modules delegate here
   (`Compendium.Providers.Shared`) and `Compendium.Resolver` is its
-  string-in/string-out adapter, so no caller and no surface can drift.
+  string-in adapter, so no caller and no surface can drift.
   """
-  @spec resolve_component(Context.t(), term()) :: {:ok, map(), map()} | {:error, String.t()}
+  @spec resolve_component(Context.t(), term()) ::
+          {:ok, map(), map()}
+          | {:error, {:not_found, {:component, String.t()}} | String.t()}
   def resolve_component(%Context{} = ctx, reference) do
     case parse_reference(reference) do
       {:ok, namespace, name, version, type} ->
@@ -163,10 +167,10 @@ defmodule Compendium.Component do
              %{namespace: namespace, name: name, version: resolved_version, type: resolved_type}}
 
           {:error, :not_found} ->
-            {:error, "Component not found: #{reference}"}
+            {:error, {:not_found, {:component, reference}}}
 
           {:error, reason} ->
-            {:error, "Failed to resolve component #{reference}: #{inspect(reason)}"}
+            {:error, "Failed to resolve component #{reference}: #{Grimoire.render(reason)}"}
         end
 
       {:error, reason} ->

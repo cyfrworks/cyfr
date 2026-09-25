@@ -31,7 +31,7 @@ defmodule EmissaryWeb.Plugs.ControlPlaneOwnership do
       |> EmissaryWeb.ApiError.halt(
         503,
         :control_plane_lost,
-        "control plane ownership lost; this member refuses work until it wins its cell slot back"
+        nil
       )
     end
   end

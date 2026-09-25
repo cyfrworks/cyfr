@@ -691,7 +691,7 @@ defmodule Compendium.Providers.Registry do
         {:error,
          {:invalid_argument, "no push token available — run `cyfr login` to authenticate"}}
 
-      {:error, _unavailable} = refusal ->
+      {:error, _refused} = refusal ->
         refusal
     end
   end
@@ -820,7 +820,7 @@ defmodule Compendium.Providers.Registry do
         {:error,
          {:invalid_argument, "no push token available — run `cyfr login` to authenticate"}}
 
-      {:error, _unavailable} = refusal ->
+      {:error, _refused} = refusal ->
         refusal
     end
   end
@@ -829,12 +829,13 @@ defmodule Compendium.Providers.Registry do
 
   # The caller's usable push tokens, personal first — the head is the
   # bearer the head-of-list heuristics above pick. A row that cannot be
-  # opened is skipped here; a store that cannot be read refuses.
+  # opened refuses as the damaged credential it is, and a store that
+  # cannot be read as unavailable: neither picks another bearer.
   defp push_tokens(ctx) do
     registry = Compendium.RegistryHost.canonical_host()
 
     case Compendium.Registry.CredentialStore.list_for_user(ctx, registry) do
-      {:ok, entries} -> {:ok, Compendium.Registry.CredentialStore.push_tokens(entries)}
+      {:ok, entries} -> Compendium.Registry.CredentialStore.push_tokens(entries)
       {:error, _unreadable} -> {:error, {:unavailable, "Registry credentials"}}
     end
   end

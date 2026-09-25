@@ -100,7 +100,7 @@ defmodule Sanctum.ProviderCredentials do
           {:error, not_configured_message(provider)}
 
         {:error, reason} ->
-          {:error, "failed to read OAuth provider credentials: #{inspect(reason)}"}
+          {:error, "failed to read OAuth provider credentials: #{Prima.Refusal.message(reason)}"}
       end
     end
   end

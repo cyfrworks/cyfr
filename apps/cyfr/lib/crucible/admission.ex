@@ -195,10 +195,12 @@ defmodule Crucible.Admission do
   The registry row for `reference` in the context's athanor, with string
   keys: `{:ok, component_ref, type, component}`. A row read from the
   registry is cached for five minutes under the athanor and the
-  reference; an unresolvable reference answers `{:error, sentence}`.
+  reference; an unresolvable reference answers Compendium's own refusal
+  (`{:not_found, {:component, reference}}` for one the registry does not
+  hold).
   """
   @spec inspect_component(Context.t(), String.t()) ::
-          {:ok, String.t(), term(), map()} | {:error, String.t()}
+          {:ok, String.t(), term(), map()} | {:error, term()}
   def inspect_component(%Context{} = ctx, reference) do
     cache_key = Arca.Cache.Keys.component_meta(Sanctum.Context.actor(ctx), reference)
 
@@ -213,7 +215,7 @@ defmodule Crucible.Admission do
             {:ok, component["component_ref"], component["type"], component}
 
           {:error, reason} ->
-            {:error, "Failed to resolve component '#{reference}': #{reason}"}
+            {:error, reason}
         end
     end
   end
@@ -278,8 +280,7 @@ defmodule Crucible.Admission do
       ctx = if ctx.request_id, do: ctx, else: %{ctx | request_id: Prima.UUID7.request_id()}
       admit_owned(ctx, reference, input, opts)
     else
-      {:error,
-       "control plane ownership lost; execution refused until this node reclaims the database"}
+      {:error, :control_plane_lost}
     end
   end
 
@@ -374,8 +375,8 @@ defmodule Crucible.Admission do
   # The registry's type is authoritative — type selects WASI capabilities, so
   # a caller-supplied :type may assert but never decide. A missing registry
   # type or a mismatched assertion refuses.
-  defp authoritative_type(nil, _asserted, reference) do
-    {:error, "Component '#{reference}' has no registry type — re-register it"}
+  defp authoritative_type(nil, _asserted, _reference) do
+    {:error, {:setup_required, :registry_binding}}
   end
 
   defp authoritative_type(extracted, asserted, reference) do
@@ -503,7 +504,7 @@ defmodule Crucible.Admission do
 
     # An unparseable consented timeout refuses the run: a default would run
     # the node under a ceiling nobody consented to.
-    with {:ok, timeout_ms} <- node_timeout_ms(limits, run.component_ref),
+    with {:ok, timeout_ms} <- node_timeout_ms(limits, run.component_ref, authority),
          {:ok, timeout_ms, deadline} <- within_parent_deadline(run, timeout_ms),
          :ok <- check_input_size(run, input, limits),
          :ok <- check_rate(run.ctx, run.component_ref, limits),
@@ -530,10 +531,20 @@ defmodule Crucible.Admission do
     end
   end
 
-  defp node_timeout_ms(limits, component_ref) do
+  # A consented timeout that does not parse is a damaged profile row:
+  # nothing the caller can change, and no default stands in for it.
+  defp node_timeout_ms(limits, component_ref, authority) do
     case Prima.Limits.timeout_ms(limits) do
-      {:ok, ms} -> {:ok, ms}
-      {:error, reason} -> {:error, "invalid consented timeout for #{component_ref}: #{reason}"}
+      {:ok, ms} ->
+        {:ok, ms}
+
+      {:error, reason} ->
+        Logger.error(
+          "[Crucible.Admission] the consented timeout for #{component_ref} does not parse: " <>
+            reason
+        )
+
+        {:error, {:corrupt, {:profile, authority.profile_id}}}
     end
   end
 
@@ -553,7 +564,7 @@ defmodule Crucible.Admission do
 
         if remaining > 0,
           do: {:ok, min(timeout_ms, remaining), min(now + timeout_ms, parent_deadline)},
-          else: {:error, "the parent execution's deadline has passed"}
+          else: {:error, {:timeout, :parent_deadline}}
     end
   end
 
@@ -610,13 +621,15 @@ defmodule Crucible.Admission do
           decision_reason: "input size #{size} bytes exceeds maximum #{max_size} bytes"
         })
 
-        {:error, "Input size (#{size} bytes) exceeds maximum (#{max_size} bytes)"}
+        {:error,
+         {:invalid_argument, "Input size (#{size} bytes) exceeds maximum (#{max_size} bytes)"}}
 
       {:ok, _input_json} ->
         :ok
 
-      {:error, reason} ->
-        {:error, "Input encoding failed: #{inspect(reason)}. Input must be JSON-serializable."}
+      # The encoder's own message can quote the value it refused.
+      {:error, _reason} ->
+        {:error, {:invalid_argument, "Input must be JSON-serializable"}}
     end
   end
 
@@ -647,7 +660,7 @@ defmodule Crucible.Admission do
 
       {:error, :rate_limited, retry_after} ->
         record_rate_denial(ctx, bucket, "rate limit exceeded (retry in #{retry_after}ms)")
-        {:error, "Rate limit exceeded. Retry in #{div(retry_after, 1000)}s"}
+        {:error, {:rate_limited, div(retry_after, 1000)}}
 
       {:error, :unavailable} ->
         Logger.error(
@@ -656,10 +669,15 @@ defmodule Crucible.Admission do
         )
 
         record_rate_denial(ctx, bucket, "rate authority unavailable (fail closed)")
-        {:error, "Rate limit check failed for #{bucket}: :unavailable."}
+        {:error, :unavailable}
 
       {:error, reason} ->
-        {:error, "Rate limit check failed for #{bucket}: #{inspect(reason)}."}
+        Logger.error(
+          "[Crucible.Admission] the rate check for #{bucket} failed: #{inspect(reason)} — " <>
+            "failing CLOSED (denying)."
+        )
+
+        {:error, :unavailable}
     end
   end
 
@@ -697,13 +715,18 @@ defmodule Crucible.Admission do
         :ok
 
       {:error, :blob_not_found} ->
-        {:error, "Failed to fetch component bytes: blob not found for #{digest}"}
+        {:error, {:not_found, {:blob, digest}}}
 
       {:error, {:integrity, sentence}} ->
         {:error, sentence}
 
       {:error, reason} ->
-        {:error, "Failed to fetch component bytes: #{inspect(reason)}"}
+        Logger.error(
+          "[Crucible.Admission] the bytes of #{run.reference} could not be fetched: " <>
+            inspect(reason)
+        )
+
+        {:error, :unavailable}
     end
   end
 
@@ -715,15 +738,20 @@ defmodule Crucible.Admission do
 
     case Attestation.attestation(run.component) do
       :unsigned when not is_nil(identity) or not is_nil(issuer) ->
-        {:error,
-         "Signature verification failed: a signer was pinned for #{run.reference}, but the " <>
-           "component was pulled without signature verification"}
+        attestation_failed(
+          run,
+          :pinned_signer_unverified,
+          "a signer was pinned, but the component was pulled without signature verification"
+        )
 
       :unsigned ->
         if Cyfr.RuntimeConfig.require_signed_pulls?() do
-          {:error,
-           "Signature verification failed: #{run.reference} was pulled without signature " <>
-             "verification and this server requires signed pulls (CYFR_REQUIRE_SIGNED_PULLS)"}
+          attestation_failed(
+            run,
+            :signed_pulls_required,
+            "it was pulled without signature verification and this server requires " <>
+              "signed pulls (CYFR_REQUIRE_SIGNED_PULLS)"
+          )
         else
           note_unsigned_execution(run)
         end
@@ -739,8 +767,18 @@ defmodule Crucible.Admission do
   defp verify_signer(run, identity, issuer) do
     case Attestation.verify(run.component, identity, issuer) do
       :ok -> :ok
-      {:error, reason} -> {:error, "Signature verification failed: #{reason}"}
+      {:error, reason} -> attestation_failed(run, :signer_mismatch, reason)
     end
+  end
+
+  # The caller reads the table's one sentence; the operator reads which
+  # check refused and why, here.
+  defp attestation_failed(run, what, detail) do
+    Logger.warning(
+      "[Crucible.Admission] signature verification of #{run.reference} failed: #{detail}"
+    )
+
+    {:error, {:attestation_failed, what}}
   end
 
   defp pinned_signer(verify) when is_map(verify),
@@ -826,7 +864,7 @@ defmodule Crucible.Admission do
           "[Crucible.Admission] attempt of #{record.id} did not open: #{inspect(reason)}"
         )
 
-        {:error, "the execution attempt could not open"}
+        {:error, if(reason == :outcome_unknown, do: :outcome_unknown, else: :unavailable)}
     end
   end
 
@@ -915,7 +953,7 @@ defmodule Crucible.Admission do
 
         case bearing do
           nil -> {:ok, entries -- damaged}
-          %{id: id} -> {:error, {:unavailable, "Consent profile #{id}"}}
+          %{id: id} -> {:error, {:corrupt, {:profile, id}}}
         end
     end
   end

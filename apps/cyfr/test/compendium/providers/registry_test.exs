@@ -64,7 +64,8 @@ defmodule Compendium.Providers.RegistryTest do
 
   describe "a push token that cannot be read" do
     @tag :capture_log
-    test "a damaged stored token refuses as unavailable, not as 'no push token'", %{ctx: ctx} do
+    test "a damaged stored token refuses as the damaged credential, not as 'no push token'",
+         %{ctx: ctx} do
       registry = Compendium.RegistryHost.canonical_host()
       aad = Sanctum.CipherAAD.registry_token(ctx.user_id, registry, "damagedslug")
       {:ok, ciphertext} = Sanctum.Cipher.encrypt("not json", aad)
@@ -77,8 +78,40 @@ defmodule Compendium.Providers.RegistryTest do
           credential_ciphertext: ciphertext
         })
 
-      assert {:error, {:unavailable, "The push token stored for namespace 'damagedslug'"}} =
+      assert {:error, {:corrupt, :registry_credential}} =
                RegistryProvider.handle(ctx, %{"action" => "tokens_list", "slug" => "damagedslug"})
+    end
+
+    @tag :capture_log
+    test "a damaged row among the caller's tokens refuses the bearer choice, never another token",
+         %{ctx: ctx} do
+      registry = Compendium.RegistryHost.canonical_host()
+
+      :ok =
+        Compendium.Registry.CredentialStore.put_push_token(
+          ctx,
+          registry,
+          "zeta.example",
+          "cyfr_pt_usable",
+          "personal"
+        )
+
+      aad = Sanctum.CipherAAD.registry_token(ctx.user_id, registry, "alice")
+      {:ok, ciphertext} = Sanctum.Cipher.encrypt("not json", aad)
+
+      :ok =
+        Arca.RegistryTokenStorage.put(%{
+          user_id: ctx.user_id,
+          registry: registry,
+          namespace_slug: "alice",
+          credential_ciphertext: ciphertext
+        })
+
+      assert {:error, {:corrupt, :registry_credential} = reason} =
+               RegistryProvider.handle(ctx, %{"action" => "list_my_reports"})
+
+      assert %Prima.Refusal{class: :corrupt} = Error.classify(reason)
+      assert Error.render(reason) =~ "sign in to the registry again"
     end
 
     @tag :capture_log

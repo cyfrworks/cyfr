@@ -476,8 +476,8 @@ defmodule Arca.Files do
     end
   end
 
-  defp decode(_content, other),
-    do: {:error, {:invalid_argument, "encoding must be utf8 or base64, got #{inspect(other)}"}}
+  defp decode(_content, _other),
+    do: {:error, {:invalid_argument, "encoding must be utf8 or base64"}}
 
   defp check_write_size(bytes) when byte_size(bytes) > @max_write,
     do: {:error, {:invalid_argument, "A write is at most #{@max_write} bytes"}}
@@ -513,10 +513,18 @@ defmodule Arca.Files do
       {:error, {:invalid_manifest, [{_block, detail} | _]}} when is_binary(detail) ->
         {:error, {:invalid_argument, "#{name}: #{detail}"}}
 
-      {:error, {:invalid_manifest, [{block, detail} | _]}} ->
-        {:error, {:invalid_argument, "#{name}: #{inspect({block, detail})}"}}
+      {:error, {:invalid_manifest, [failure | _]}} ->
+        {:error, {:invalid_argument, "#{name}#{failure_words(failure)}"}}
     end
   end
+
+  # A validator's typed failure in words, never its term: the storage
+  # predicate's refusal names the path it refused.
+  defp failure_words({:invalid_caps, {:invalid_storage_path, path}}) when is_binary(path),
+    do: ": caps.storage.paths names #{path}, which is no guest scope"
+
+  defp failure_words({:invalid_caps, _detail}), do: ": its caps are not valid"
+  defp failure_words(_failure), do: " is not a valid manifest"
 
   defp text?(bytes), do: String.valid?(bytes) and not String.contains?(bytes, <<0>>)
 end

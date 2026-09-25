@@ -151,7 +151,7 @@ defmodule Compendium.Registry.Transport do
           attempt,
           limits,
           Retry.classify({:error, reason}),
-          inspect(reason),
+          Errors.to_log_string(Errors.api_connection_error(reason)),
           Retry.backoff(attempt),
           fn -> {:error, Errors.api_connection_error(reason)} end
         )

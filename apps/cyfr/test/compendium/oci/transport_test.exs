@@ -189,11 +189,9 @@ defmodule Compendium.OCI.TransportTest do
       stub(fn conn -> Plug.Conn.send_resp(conn, 200, "never reached") end)
       plant!(ctx, ~s({"type":"push_token","token":""}))
 
-      assert {:error, %Errors{reason: :registry_unavailable} = err} =
+      assert {:error, {:corrupt, :registry_credential}} =
                Transport.request_url(ctx, :get, @url, @registry, @repository)
 
-      assert err.detail == %{credential_store: :corrupt}
-      assert Errors.to_string(err) =~ "The stored registry credential is damaged"
       assert attempts() == 0
     end
 

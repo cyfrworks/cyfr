@@ -131,7 +131,7 @@ defmodule Compendium.OCI.Manifest do
 
       case Jason.encode(manifest) do
         {:ok, manifest_json} -> {:ok, manifest_json, config_digest, wasm_digest}
-        {:error, reason} -> {:error, "Failed to encode manifest: #{inspect(reason)}"}
+        {:error, reason} -> {:error, "Failed to encode manifest: #{Exception.message(reason)}"}
       end
     end
   end
@@ -175,7 +175,7 @@ defmodule Compendium.OCI.Manifest do
         {:error, "Manifest missing schemaVersion"}
 
       {:error, reason} ->
-        {:error, "Invalid manifest JSON: #{inspect(reason)}"}
+        {:error, "Invalid manifest JSON: #{Exception.message(reason)}"}
     end
   end
 
@@ -302,7 +302,7 @@ defmodule Compendium.OCI.Manifest do
   defp encode_config_json(m) when is_map(m) do
     case Jason.encode(m) do
       {:ok, json} -> {:ok, json}
-      {:error, reason} -> {:error, "Failed to encode config: #{inspect(reason)}"}
+      {:error, reason} -> {:error, "Failed to encode config: #{Exception.message(reason)}"}
     end
   end
 end

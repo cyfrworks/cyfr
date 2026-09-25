@@ -182,10 +182,7 @@ defmodule Prima.Limits do
     end
   end
 
-  def new(other) do
-    {:error,
-     {:invalid_limit, :input, "expected a map, got: #{inspect(Prima.Sanitizer.sanitize(other))}"}}
-  end
+  def new(_other), do: {:error, {:invalid_limit, :input, "expected a map"}}
 
   @doc """
   The limits as the string-keyed map `new/1` reads: `new(to_map(limits)) ==
@@ -260,9 +257,8 @@ defmodule Prima.Limits do
     end
   end
 
-  def parse_duration(other) do
-    {:error,
-     "Invalid duration #{inspect(other)}. Expected a string like '30s', '5m', '1h', or '500ms'"}
+  def parse_duration(_other) do
+    {:error, "Invalid duration. Expected a string like '30s', '5m', '1h', or '500ms'"}
   end
 
   defp parse_int_unit(str, suffix, multiplier) do
@@ -356,9 +352,7 @@ defmodule Prima.Limits do
 
     cond do
       map_size(value) != 2 ->
-        {:error,
-         "must have exactly requests and window, got: " <>
-           inspect(Prima.Sanitizer.sanitize(value))}
+        {:error, "must have exactly requests and window"}
 
       not (is_integer(requests) and requests >= 0) ->
         {:error, "requests must be a non-negative integer, got: #{inspect(requests)}"}

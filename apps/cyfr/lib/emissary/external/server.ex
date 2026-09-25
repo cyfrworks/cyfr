@@ -440,7 +440,7 @@ defmodule Emissary.External.Server do
              }}
 
           {:error, reason} ->
-            {:reply, {:error, "External call failed to start: #{inspect(reason)}"}, state}
+            {:reply, {:error, "External call failed to start: #{Grimoire.render(reason)}"}, state}
         end
     end
   end
@@ -657,7 +657,7 @@ defmodule Emissary.External.Server do
         {:ok, mask_credentials(result, state)}
 
       {:ok, %{"error" => error}} ->
-        {:error, mask_credentials(error["message"] || inspect(error), state)}
+        {:error, mask_credentials(upstream_message(error), state)}
 
       {:legacy, _state} ->
         {:error, "#{state.name} changed protocol era mid-connection"}
@@ -851,17 +851,29 @@ defmodule Emissary.External.Server do
   defp bridge_reason(reason), do: reason
 
   # `state.error` surfaces to callers and the status view — the same egress
-  # rule as results: mask the credentials this plane injected before a
-  # transport exception that echoed them can carry one out. The log gets the
-  # masked sentence too; the credential is never the diagnostic part.
+  # rule as results: a sentence, never a term's spelling, with the
+  # credentials this plane injected masked out of it before a transport
+  # exception that echoed them can carry one out. The log gets the masked
+  # term; the credential is never the diagnostic part.
   defp fail_initialize(state, reason) do
-    masked = mask_credentials(inspect(reason), state)
-    state = %{state | status: :error, error: masked}
+    state = %{state | status: :error, error: mask_credentials(failure_sentence(reason), state)}
 
-    Logger.error("[Emissary.External.Server] Failed to initialize #{state.name}: #{masked}")
+    Logger.error(
+      "[Emissary.External.Server] Failed to initialize #{state.name}: " <>
+        mask_credentials(inspect(reason), state)
+    )
 
     {:error, reason, state}
   end
+
+  defp failure_sentence(reason) when is_binary(reason), do: reason
+  defp failure_sentence(%{__exception__: true} = exception), do: Exception.message(exception)
+  defp failure_sentence(reason), do: Grimoire.render(reason)
+
+  # An upstream JSON-RPC error's own message; one without a message is
+  # named as such rather than spelled.
+  defp upstream_message(%{"message" => message}) when is_binary(message), do: message
+  defp upstream_message(_error), do: "the server answered an error with no message"
 
   # Try the current protocol first; fall back to the handshake only when the
   # answer says the peer cannot speak it.
@@ -915,7 +927,7 @@ defmodule Emissary.External.Server do
 
     case http_post(state, body) do
       {:ok, %{"result" => result}} -> {:ok, result, state}
-      {:ok, %{"error" => error}} -> {:error, error["message"] || inspect(error)}
+      {:ok, %{"error" => error}} -> {:error, upstream_message(error)}
       {:error, reason} -> {:error, reason}
     end
   end
@@ -946,7 +958,7 @@ defmodule Emissary.External.Server do
         {:ok, Map.get(result, "tools", []), state}
 
       {:ok, %{"error" => error}} ->
-        {:error, error["message"] || inspect(error)}
+        {:error, upstream_message(error)}
 
       {:legacy, state} ->
         {:legacy, state}
@@ -1198,7 +1210,7 @@ defmodule Emissary.External.Server do
     case Map.get(parsed, "id") do
       ^request_id -> {:ok, parsed}
       nil -> {:ok, parsed}
-      other -> {:error, "Response id #{inspect(other)} answers a different request"}
+      _other -> {:error, "The response answers a different request"}
     end
   end
 

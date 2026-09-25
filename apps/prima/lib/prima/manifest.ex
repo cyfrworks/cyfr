@@ -180,8 +180,8 @@ defmodule Prima.Manifest do
     end
   end
 
-  defp validate_contracts_block(%{"contracts" => other}) do
-    {:error, {:invalid_contracts, "Manifest `contracts` must be a list, got: #{inspect(other)}"}}
+  defp validate_contracts_block(%{"contracts" => _other}) do
+    {:error, {:invalid_contracts, "Manifest `contracts` must be a list"}}
   end
 
   defp validate_contracts_block(_), do: :ok
@@ -219,8 +219,8 @@ defmodule Prima.Manifest do
     end
   end
 
-  defp validate_agent_value(other) do
-    {:error, {:invalid_agent, "agent must be an object, got: #{inspect(other)}"}}
+  defp validate_agent_value(_other) do
+    {:error, {:invalid_agent, "agent must be an object"}}
   end
 
   defp valid_agent_catalyst?(nil), do: true
@@ -265,8 +265,8 @@ defmodule Prima.Manifest do
     end
   end
 
-  defp validate_agent_policy(other) do
-    {:error, {:invalid_agent, "agent.policy must be an object, got: #{inspect(other)}"}}
+  defp validate_agent_policy(_other) do
+    {:error, {:invalid_agent, "agent.policy must be an object"}}
   end
 
   defp string_list?(list) when is_list(list),
@@ -318,8 +318,8 @@ defmodule Prima.Manifest do
     end
   end
 
-  defp validate_tincture_block(%{"tincture" => other}) do
-    {:error, {:invalid_tincture, "tincture must be an object, got: #{inspect(other)}"}}
+  defp validate_tincture_block(%{"tincture" => _other}) do
+    {:error, {:invalid_tincture, "tincture must be an object"}}
   end
 
   defp validate_tincture_block(_), do: :ok
@@ -338,16 +338,14 @@ defmodule Prima.Manifest do
         dynamic when is_map(dynamic) or is_list(dynamic) ->
           :ok
 
-        other ->
-          {:error,
-           {:invalid_dependencies,
-            "dependencies.dynamic must be an object or list, got: #{inspect(other)}"}}
+        _other ->
+          {:error, {:invalid_dependencies, "dependencies.dynamic must be an object or list"}}
       end
     end
   end
 
-  defp validate_dependencies_block(%{"dependencies" => other}) do
-    {:error, {:invalid_dependencies, "dependencies must be an object, got: #{inspect(other)}"}}
+  defp validate_dependencies_block(%{"dependencies" => _other}) do
+    {:error, {:invalid_dependencies, "dependencies must be an object"}}
   end
 
   defp validate_dependencies_block(_), do: :ok
@@ -367,9 +365,8 @@ defmodule Prima.Manifest do
     end
   end
 
-  defp validate_static_deps(other) do
-    {:error,
-     {:invalid_dependencies, "dependencies.static must be a list, got: #{inspect(other)}"}}
+  defp validate_static_deps(_other) do
+    {:error, {:invalid_dependencies, "dependencies.static must be a list"}}
   end
 
   defp valid_dependency_entry?(entry) when is_binary(entry), do: true

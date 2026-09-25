@@ -217,7 +217,13 @@ defmodule Compendium.AutoIndexer do
     error_entry =
       case extract_segment_metadata(segs) do
         {:ok, name, version, type, _publisher} ->
-          %{name: name, version: version, type: type, status: "error", error: inspect(reason)}
+          %{
+            name: name,
+            version: version,
+            type: type,
+            status: "error",
+            error: Grimoire.render(reason)
+          }
 
         _ ->
           %{
@@ -225,7 +231,7 @@ defmodule Compendium.AutoIndexer do
             version: "unknown",
             type: "unknown",
             status: "error",
-            error: inspect(reason)
+            error: Grimoire.render(reason)
           }
       end
 

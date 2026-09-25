@@ -327,15 +327,15 @@ defmodule Grimoire.Provider do
             # A failed delivery is a failed tool call — {:ok, delivered:
             # false} rendered as isError: false, so the caller's happy
             # path swallowed it. The reason is a crafted string from the
-            # pinned request path (SSRF refusals, transport prose), never
-            # a raw term.
+            # pinned request path (SSRF refusals) or a refusal of the
+            # table, rendered as its sentence — never a raw term.
             {:error, "notification delivery to #{target} failed: #{reason_text(reason)}"}
         end
     end
   end
 
   defp reason_text(reason) when is_binary(reason), do: reason
-  defp reason_text(reason), do: inspect(Prima.Sanitizer.sanitize(reason))
+  defp reason_text(reason), do: Grimoire.Error.render(reason)
 
   # ============================================================================
   # Tools List Filtering
@@ -487,7 +487,7 @@ defmodule Grimoire.Provider do
 
           {:error, reason} ->
             Logger.warning("[Grimoire.Provider] Webhook failed to #{target}: #{inspect(reason)}")
-            {:error, inspect(reason)}
+            {:error, {:unavailable, "The webhook target"}}
         end
     end
   end

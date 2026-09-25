@@ -460,11 +460,12 @@ defmodule Compendium.BuildsTest do
 
   describe "validating bytes" do
     # A refusal whose reason is a tuple carries the binary's own bytes or
-    # sizes after its tag; the answer is the tag, as the builder names it.
+    # sizes after its tag; the answer is the tag, spelled as the builder
+    # names it, never as a term.
     test "a tuple refusal answers its tag", %{ctx: ctx} do
       unsupported = <<0x00, 0x61, 0x73, 0x6D, 0x02, 0x00, 0x00, 0x00>>
 
-      assert {:ok, %{valid: false, reason: ":unsupported_version"}} =
+      assert {:ok, %{valid: false, reason: "unsupported_version"}} =
                Provider.handle("build", ctx, %{
                  "action" => "validate",
                  "wasm_base64" => Base.encode64(unsupported)

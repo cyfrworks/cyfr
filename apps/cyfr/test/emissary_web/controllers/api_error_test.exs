@@ -63,7 +63,9 @@ defmodule EmissaryWeb.ApiErrorTest do
              |> Plug.Conn.get_resp_header("www-authenticate")
   end
 
-  test "an adapter's own wording and status keep the class as the code" do
+  test "an adapter's status keeps the class as the code and the row's sentence as the message" do
+    # An adapter chooses the status for its route; the words are the
+    # table's for every caller, whatever the adapter passed.
     conn =
       ApiError.send(
         conn(:get, "/"),
@@ -76,7 +78,7 @@ defmodule EmissaryWeb.ApiErrorTest do
 
     assert body(conn) == %{
              "code" => "unavailable",
-             "message" => "Authentication service unavailable"
+             "message" => Prima.Refusal.message(:auth_provider_error)
            }
   end
 

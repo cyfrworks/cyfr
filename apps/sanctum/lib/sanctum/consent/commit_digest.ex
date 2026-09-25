@@ -100,8 +100,8 @@ defmodule Sanctum.Consent.CommitDigest do
     end
   end
 
-  def compute(other),
-    do: {:error, {:invalid_commit, :input, "expected a map, got: #{inspect(other)}"}}
+  def compute(_other),
+    do: {:error, {:invalid_commit, :input, "expected a map"}}
 
   @doc """
   The canonical map the commit digest is taken over.
@@ -168,8 +168,8 @@ defmodule Sanctum.Consent.CommitDigest do
           error -> error
         end
 
-      other ->
-        {:error, {tag, :bindings, "must be a list, got: #{inspect(other)}"}}
+      _other ->
+        {:error, {tag, :bindings, "must be a list"}}
     end
   end
 
@@ -193,8 +193,8 @@ defmodule Sanctum.Consent.CommitDigest do
     end
   end
 
-  defp normalize_binding(other) do
-    {:error, {:invalid_commit, :bindings, "each binding must be a map, got: #{inspect(other)}"}}
+  defp normalize_binding(_other) do
+    {:error, {:invalid_commit, :bindings, "each binding must be a map"}}
   end
 
   # One edge, one selected profile: the digest covers which labelled
@@ -217,8 +217,8 @@ defmodule Sanctum.Consent.CommitDigest do
           error -> error
         end
 
-      other ->
-        {:error, {tag, :selections, "must be a list, got: #{inspect(other)}"}}
+      _other ->
+        {:error, {tag, :selections, "must be a list"}}
     end
   end
 
@@ -242,9 +242,9 @@ defmodule Sanctum.Consent.CommitDigest do
     end
   end
 
-  defp normalize_selection(other) do
+  defp normalize_selection(_other) do
     {:error,
-     {:invalid_commit, :selections, "each selection must be a map, got: #{inspect(other)}"}}
+     {:invalid_commit, :selections, "each selection must be a map"}}
   end
 
   defp ensure_one_selection_per_edge(selections) do
@@ -291,8 +291,8 @@ defmodule Sanctum.Consent.CommitDigest do
           error -> error
         end
 
-      other ->
-        {:error, {tag, :tool_servers, "must be a list, got: #{inspect(other)}"}}
+      _other ->
+        {:error, {tag, :tool_servers, "must be a list"}}
     end
   end
 
@@ -307,8 +307,8 @@ defmodule Sanctum.Consent.CommitDigest do
     end
   end
 
-  defp normalize_tool_server(other) do
-    {:error, {:invalid_commit, :tool_servers, "each grant must be a map, got: #{inspect(other)}"}}
+  defp normalize_tool_server(_other) do
+    {:error, {:invalid_commit, :tool_servers, "each grant must be a map"}}
   end
 
   defp ensure_one_grant_per_server(grants) do
@@ -325,7 +325,7 @@ defmodule Sanctum.Consent.CommitDigest do
   defp override(commit) do
     case Map.get(commit, :override, false) do
       value when is_boolean(value) -> {:ok, value}
-      other -> {:error, {:invalid_commit, :override, "must be a boolean, got: #{inspect(other)}"}}
+      _other -> {:error, {:invalid_commit, :override, "must be a boolean"}}
     end
   end
 end

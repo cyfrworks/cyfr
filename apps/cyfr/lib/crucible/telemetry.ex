@@ -220,5 +220,5 @@ defmodule Crucible.Telemetry do
   defp format_reference(_), do: "unknown"
 
   defp format_error(reason) when is_binary(reason), do: reason
-  defp format_error(reason), do: inspect(reason)
+  defp format_error(reason), do: Grimoire.render(reason)
 end

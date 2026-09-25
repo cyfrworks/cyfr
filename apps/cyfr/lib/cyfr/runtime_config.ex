@@ -68,7 +68,7 @@ defmodule Cyfr.RuntimeConfig do
         end
 
       other ->
-        {:error, ~s(Unknown CYFR_AUTH_PROVIDER=#{inspect(other)}; expected "oauth" or "oidc".)}
+        {:error, ~s(Unknown CYFR_AUTH_PROVIDER="#{other}"; expected "oauth" or "oidc".)}
     end
   end
 
@@ -340,7 +340,7 @@ defmodule Cyfr.RuntimeConfig do
       "" -> {:ok, :local}
       "local" -> {:ok, :local}
       "s3" -> s3_config(getenv)
-      other -> {:error, ~s(Unknown CYFR_STORAGE=#{inspect(other)}; expected "local" or "s3".)}
+      other -> {:error, ~s(Unknown CYFR_STORAGE="#{other}"; expected "local" or "s3".)}
     end
   end
 

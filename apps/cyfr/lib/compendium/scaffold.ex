@@ -91,7 +91,7 @@ defmodule Compendium.Scaffold do
         {:error, reason} = refusal ->
           if Prima.Refusal.reason?(reason),
             do: refusal,
-            else: {:error, "Failed to write scaffold files: #{inspect(reason)}"}
+            else: {:error, "Failed to write scaffold files: #{Grimoire.render(reason)}"}
       end
     end
   end
@@ -162,7 +162,7 @@ defmodule Compendium.Scaffold do
         end
 
       {:error, reason} ->
-        {:error, "Cannot scaffold right now — seed media unreadable: #{inspect(reason)}"}
+        {:error, "Cannot scaffold right now — seed media unreadable: #{Grimoire.render(reason)}"}
     end
   end
 

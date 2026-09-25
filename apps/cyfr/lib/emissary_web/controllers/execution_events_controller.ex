@@ -40,7 +40,7 @@ defmodule EmissaryWeb.ExecutionEventsController do
           conn,
           503,
           :execution_unavailable,
-          "Execution event streaming unavailable — the engine is starting"
+          nil
         )
 
       true ->
@@ -63,7 +63,7 @@ defmodule EmissaryWeb.ExecutionEventsController do
           # Non-existent and not-yours both return 404 to avoid leaking which
           # execution IDs exist in the system via 403/404 distinction.
           {:exec, nil} ->
-            EmissaryWeb.ApiError.send(conn, 404, :not_found, "Execution not found")
+            EmissaryWeb.ApiError.send(conn, 404, :not_found, nil)
 
           # The lookup is `with_db_rescue`-wrapped, so a store that cannot
           # answer arrives here rather than raising. It is neither "no such
@@ -71,17 +71,17 @@ defmodule EmissaryWeb.ExecutionEventsController do
           # execution is gone during a blip — so it answers the same 503 the
           # engine-unavailable branch above does.
           {:exec, {:error, :database_error}} ->
-            EmissaryWeb.ApiError.send(conn, 503, :unavailable, "Try again shortly")
+            EmissaryWeb.ApiError.send(conn, 503, :unavailable, nil)
 
           {:error, :forbidden} ->
-            EmissaryWeb.ApiError.send(conn, 404, :not_found, "Execution not found")
+            EmissaryWeb.ApiError.send(conn, 404, :not_found, nil)
 
           {:error, :stream_limit} ->
             EmissaryWeb.ApiError.send(
               conn,
               429,
               :stream_limit,
-              "Concurrent event-stream limit reached"
+              nil
             )
         end
     end

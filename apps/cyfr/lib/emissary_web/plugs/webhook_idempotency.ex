@@ -88,12 +88,12 @@ defmodule EmissaryWeb.Plugs.WebhookIdempotency do
     end
   end
 
-  defp missing_key(conn, header) do
+  defp missing_key(conn, _header) do
     conn
     |> EmissaryWeb.ApiError.send(
       400,
       :missing_idempotency_key,
-      "this webhook requires the '#{header}' header on every delivery"
+      nil
     )
     |> halt()
   end

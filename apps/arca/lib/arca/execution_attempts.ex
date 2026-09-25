@@ -1205,12 +1205,21 @@ defmodule Arca.ExecutionAttempts do
       :ok -> :applied
       {:error, :unknown} -> {:unknown, :unknown_outcome}
       {:error, _reason} = refused -> {:refused, refused}
-      other -> crashed(intent, "answered #{inspect(other, limit: 5, printable_limit: 64)}")
+      other -> crashed(intent, {:answered, other})
     end
   rescue
     exception -> crashed(intent, Exception.format(:error, exception, __STACKTRACE__))
   catch
     kind, _payload -> crashed(intent, "ended with a #{kind}")
+  end
+
+  defp crashed(intent, {:answered, other}) do
+    Logger.error(
+      "[Arca.ExecutionAttempts] the store call of write intent #{intent} answered " <>
+        inspect(other, limit: 5, printable_limit: 64)
+    )
+
+    {:unknown, :io_crashed}
   end
 
   defp crashed(intent, how) do

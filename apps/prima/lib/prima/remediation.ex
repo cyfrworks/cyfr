@@ -26,11 +26,10 @@ defmodule Prima.Remediation do
   def analyze({:setup_required, %{} = payload}) do
     component_ref = payload[:node_ref] || payload["node_ref"] || ""
     need = payload[:need] || payload["need"] || ""
-    reason = payload[:reason] || payload["reason"]
 
     base = %{
       "component_ref" => component_ref,
-      "message" => setup_message(need, reason),
+      "message" => setup_message(need),
       "setup_command" => grant_command(component_ref),
       "profile_id" => payload[:profile_id] || payload["profile_id"]
     }
@@ -41,7 +40,7 @@ defmodule Prima.Remediation do
           %{
             "type" => "unbound_need",
             "need" => need,
-            "message" => "The need #{inspect(need)} has no live credential bound",
+            "message" => "The need \"#{need}\" has no live credential bound",
             "fix" => %{
               "tool" => "profile",
               "action" => "plan",
@@ -66,7 +65,7 @@ defmodule Prima.Remediation do
        "profile_id" => profile_id,
        "message" =>
          "This app's permissions changed since you approved them " <>
-           "(consent revision #{inspect(revision)}). Review and approve to continue.",
+           "(consent revision #{revision}). Review and approve to continue.",
        "setup_command" => "cyfr profile grant",
        "issues" => [
          %{
@@ -84,11 +83,10 @@ defmodule Prima.Remediation do
 
   def analyze(_reason), do: :not_setup_error
 
-  defp setup_message("", reason),
-    do: "This app needs setup before it can run (#{inspect(reason)})"
-
-  defp setup_message(need, reason),
-    do: "This app needs a vault entry for #{inspect(need)} (#{inspect(reason)})"
+  # The payload's reason is the vault's own term for what is missing; the
+  # issues carry the fix, so the sentence names only the need.
+  defp setup_message(""), do: "This app needs setup before it can run"
+  defp setup_message(need), do: "This app needs a vault entry for \"#{need}\""
 
   defp grant_command(""), do: "cyfr profile grant"
   defp grant_command(ref), do: "cyfr profile grant #{ref}"

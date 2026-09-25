@@ -90,8 +90,8 @@ defmodule Sanctum.Consent.ShapeDigest do
     end
   end
 
-  def compute(other),
-    do: {:error, {:invalid_shape, :input, "expected a map, got: #{inspect(other)}"}}
+  def compute(_other),
+    do: {:error, {:invalid_shape, :input, "expected a map"}}
 
   @doc """
   The canonical map a shape digest is taken over. Exposed so a preview can

@@ -142,7 +142,7 @@ defmodule Compendium.Registry.CredentialStoreTest do
       assert Enum.map(list, & &1.namespace) == ["alice"]
     end
 
-    test "a bearer is chosen from the usable tokens, past a damaged row" do
+    test "a damaged row fails the bearer choice closed, never skipped for another token" do
       aad = Sanctum.CipherAAD.registry_token(@user, @reg, "alice")
       {:ok, ciphertext} = Sanctum.Cipher.encrypt("not json", aad)
 
@@ -159,7 +159,13 @@ defmodule Compendium.Registry.CredentialStoreTest do
       assert {:ok, [%{status: :corrupt}, %{namespace: "bob"}] = entries} =
                CredentialStore.list_for_user(as(@user), @reg)
 
-      assert [%{token: ^token}] = CredentialStore.push_tokens(entries)
+      assert {:error, {:corrupt, :registry_credential}} = CredentialStore.push_tokens(entries)
+
+      # Without the damaged row, the usable tokens are the choice.
+      assert {:ok, [%{token: ^token}]} =
+               entries
+               |> Enum.reject(&match?(%{status: :corrupt}, &1))
+               |> CredentialStore.push_tokens()
     end
   end
 
