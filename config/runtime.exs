@@ -653,7 +653,7 @@ if config_env() != :test do
         http: [
           ip: emissary_bind,
           port: port,
-          thousand_island_options: [shutdown_timeout: 30_000, read_timeout: 60_000]
+          thousand_island_options: [read_timeout: 60_000]
         ],
         check_origin: host_origins ++ localhost_origins,
         secret_key_base: secret_key_base,

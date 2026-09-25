@@ -29,7 +29,11 @@ defmodule Cyfr.StartupAdmissionBarrierTest do
   The same holds after boot. A stand-in killed before the gate restarts
   everything after it, the gate first; one killed after the gate restarts
   only what follows it; a refused rerun fails the tier and then the root;
-  and an endpoint in a crash loop exhausts the web tier alone.
+  an endpoint in a crash loop exhausts the web tier alone; and a dead MCP
+  bridge controller restarts the servers that release through it.
+
+  A stop is the start backwards: the endpoint first, the cell last, and
+  every child that holds a claim stopped before its tier returns.
   """
 
   use ExUnit.Case, async: false
@@ -133,6 +137,64 @@ defmodule Cyfr.StartupAdmissionBarrierTest do
 
   @web [CyfrWeb.Ingress.TaskSupervisor, CyfrWeb.Endpoint]
 
+  # The order a stop of the whole tree stops every lasting child in: the
+  # web tier, the console, the schedule pair, then the domains in reverse
+  # (the host API listener before the attempt tree it reaches), and the
+  # foundations down to the cell.
+  @stop_order [
+    CyfrWeb.Endpoint,
+    CyfrWeb.Ingress.TaskSupervisor,
+    Prism.TaskSupervisor,
+    Prism.TinctureRegistry,
+    Crucible.Schedules.Scheduler,
+    Crucible.Schedules.TaskSupervisor,
+    Emissary.TaskSupervisor,
+    Emissary.External.Reconciler,
+    Emissary.External.ServerSupervisor,
+    Emissary.External.Backends,
+    Emissary.External.ServerRegistry,
+    Aqua.RunnerSupervisor,
+    Aqua.RunnerRegistry,
+    Aqua.TaskSupervisor,
+    Aqua.Loop.Worker,
+    Aqua.ScheduleNotes,
+    Crucible.HostListener,
+    Crucible.WorkerWatch,
+    Crucible.Sweeper,
+    Crucible.ArchiveWatch,
+    Crucible.TaskSupervisor,
+    Crucible.Attempt.Supervisor,
+    Crucible.Attempt.Registry,
+    Crucible.Events.Supervisor,
+    Crucible.Events.Sequence,
+    Crucible.Events.Registry,
+    Crucible.Registry,
+    Crucible.Slots,
+    Compendium.ProjectionReconciler,
+    Compendium.Provisioning,
+    Compendium.ProvisioningSupervisor,
+    Compendium.Builds.TaskSupervisor,
+    Grimoire.TaskSupervisor,
+    Grimoire.RunningTasks,
+    CyfrWeb.SSE.Registry,
+    Cyfr.RetentionScheduler,
+    Cyfr.TelemetryBridge,
+    Cyfr.StandingWatch,
+    Phoenix.PubSub.Supervisor,
+    CyfrWeb.Telemetry,
+    Arca.AuditHandler,
+    Cyfr.Cell,
+    Cluster.Supervisor
+  ]
+
+  # The children that hold a claim or a slot row while they run.
+  @claim_holders [
+    Cyfr.Cell,
+    Cyfr.RetentionScheduler,
+    Crucible.WorkerWatch,
+    Emissary.External.Backends
+  ]
+
   # The leaves the product starts no lasting process for: the one-shot
   # checks and offers answer `:ignore`, and the recovery task exits once it
   # has run. Their stand-ins record the start and leave no process either.
@@ -209,6 +271,10 @@ defmodule Cyfr.StartupAdmissionBarrierTest do
       # is temporary: it runs once, at boot.
       assert %{restart: :transient} = infra |> Enum.find(&(shape(&1) == Cyfr.Bootstrap)) |> spec()
       assert %{restart: :temporary} = infra |> Enum.find(&(shape(&1) == Cyfr.SeedOffer)) |> spec()
+
+      # The cell, which the suite's own boot omits, releases its slot row
+      # within its stated bound.
+      assert %{shutdown: 5_000} = infra |> Enum.find(&(shape(&1) == Cyfr.Cell)) |> spec()
     end
 
     test "only a test build with boot work switched off omits the gate" do
@@ -508,6 +574,69 @@ defmodule Cyfr.StartupAdmissionBarrierTest do
       quiet!()
       stop_tree(starter, [retry])
     end
+
+    # The servers release their owners through the controller, so a
+    # controller that dies takes them down and starts them again after
+    # it, with the reconciler that fills them; the registry before it,
+    # and everything outside the group, keep running.
+    @tag :capture_log
+    test "a dead MCP bridge controller restarts the servers it releases, and nothing else", %{
+      key: key
+    } do
+      {starter, root} = booted!(key)
+      group = [:barrier_infra, Emissary.Supervisor, Emissary.External.ServerTree]
+      registry = pid_at(root, group ++ [Emissary.External.ServerRegistry])
+
+      kill!(root, group ++ [Emissary.External.Backends])
+      next_stopped!([Emissary.External.Reconciler, Emissary.External.ServerSupervisor])
+
+      next_started!([
+        Emissary.External.Backends,
+        Emissary.External.ServerSupervisor,
+        Emissary.External.Reconciler
+      ])
+
+      quiet!()
+      refute_received {:stopped, _}
+      assert pid_at(root, group ++ [Emissary.External.ServerRegistry]) == registry
+      stop_tree(starter)
+    end
+  end
+
+  describe "a stop" do
+    setup do
+      {:ok, slot: hold_slot!()}
+    end
+
+    test "runs the start backwards, and every claim holder is down before its tier returns", %{
+      key: key
+    } do
+      {starter, root} = booted!(key)
+      infra = pid_at(root, [:barrier_infra])
+
+      # The gate answered and left no process: its claim was released
+      # before the tier went on, and nothing of it is left to stop.
+      assert {Cyfr.Bootstrap, :undefined, :worker, _} =
+               infra |> Supervisor.which_children() |> List.keyfind(Cyfr.Bootstrap, 0)
+
+      infra_ref = Process.monitor(infra)
+      :ok = Supervisor.stop(root)
+      stops = stops(infra_ref)
+
+      assert stops -- [:infra_down] == @stop_order
+      assert @stop_order == Enum.reverse(@pre_gate ++ leaves(@post_gate) ++ @web) -- @no_process
+
+      # The tier's own exit is the last thing a stop of the tree sees.
+      assert List.last(stops) == :infra_down
+      down = Enum.find_index(stops, &(&1 == :infra_down))
+
+      for holder <- @claim_holders do
+        assert Enum.find_index(stops, &(&1 == holder)) < down,
+               "#{inspect(holder)} did not stop before its tier returned"
+      end
+
+      stop_tree(starter)
+    end
   end
 
   # ---------------------------------------------------------------------------
@@ -654,7 +783,26 @@ defmodule Cyfr.StartupAdmissionBarrierTest do
     end
   end
 
+  # The next stand-ins to stop are `ids`, in this order.
+  defp next_stopped!(ids) do
+    for id <- ids do
+      assert_receive {:stopped, stopped}, 5_000
+      assert stopped == id
+    end
+  end
+
   defp quiet!, do: refute_receive({:started, _}, 200)
+
+  # Every stand-in stopped so far, in the order they stopped, with
+  # `:infra_down` where the monitored tier's exit arrived among them.
+  defp stops(infra_ref, acc \\ []) do
+    receive do
+      {:stopped, id} -> stops(infra_ref, [id | acc])
+      {:DOWN, ^infra_ref, :process, _pid, _reason} -> stops(infra_ref, [:infra_down | acc])
+    after
+      100 -> Enum.reverse(acc)
+    end
+  end
 
   # The leaves of `shapes` a restart starts again: all but the offer,
   # which is temporary and runs once, at boot.

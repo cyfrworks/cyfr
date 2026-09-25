@@ -102,7 +102,10 @@ defmodule Cyfr.Application do
     # PubSub and registries instead of holding dead references. The repo is
     # the `arca` application's and restarts under its own supervisor;
     # everything here reaches it by name. Shutdown is reverse start order:
-    # endpoints drain before infra goes down.
+    # endpoints drain before infra goes down, and every child that holds a
+    # claim has stopped before this tree returns, so the `arca`
+    # application, which this one depends on and which stops after it,
+    # still has its pool open for every claim they release.
     children = Enum.map(layout(), &tier/1)
 
     opts = [strategy: :rest_for_one, name: Cyfr.Supervisor, max_restarts: 10, max_seconds: 60]
@@ -155,9 +158,14 @@ defmodule Cyfr.Application do
   # The ingress's task supervisor (an inbound webhook's delivery) starts
   # before the endpoint and so stops after it: a shutdown closes the
   # listener first, and a delivery already in flight is ended after it.
+  # The endpoint drains its open connections for the
+  # `thousand_island_options` `shutdown_timeout` in `config/config.exs`.
   defp web do
     [
-      {Task.Supervisor, name: CyfrWeb.Ingress.TaskSupervisor},
+      # 30 s: the longest webhook delivery it lets finish.
+      Supervisor.child_spec({Task.Supervisor, name: CyfrWeb.Ingress.TaskSupervisor},
+        shutdown: 30_000
+      ),
       CyfrWeb.Endpoint
     ]
   end
@@ -187,18 +195,24 @@ defmodule Cyfr.Application do
       # event is audited exactly when `Cyfr.Telemetry.Catalog` names
       # `:audit` among its consumers. The storage layer holds the handler
       # and the sinks; naming the catalog is the host's part.
-      {Arca.AuditHandler, events: Cyfr.Telemetry.Catalog.consumed_by(:audit)},
+      # 5 s: its stop, which holds no work in flight.
+      Supervisor.child_spec(
+        {Arca.AuditHandler, events: Cyfr.Telemetry.Catalog.consumed_by(:audit)},
+        shutdown: 5_000
+      ),
       # Emissary web layer
       CyfrWeb.Telemetry,
       # The bus's server (`Cyfr.Bus`): nothing else names it.
       {Phoenix.PubSub, name: Cyfr.PubSub},
       # Drops this member's cached authorization decisions when any member
       # says one is no longer good. Right after PubSub, and before
-      # anything that establishes a caller.
-      Cyfr.StandingWatch,
+      # anything that establishes a caller. 5 s: its stop, which holds no
+      # work in flight.
+      Supervisor.child_spec(Cyfr.StandingWatch, shutdown: 5_000),
       # The host's telemetry-to-bus bridge, attached before the reconcile
       # announces a revocation, so the announcement reaches mounted views.
-      Cyfr.TelemetryBridge
+      # 5 s: its stop, which holds no work in flight.
+      Supervisor.child_spec(Cyfr.TelemetryBridge, shutdown: 5_000)
     ]
   end
 
@@ -219,7 +233,8 @@ defmodule Cyfr.Application do
   # credential or publishes a result.
   defp post_gate do
     [
-      Cyfr.RetentionScheduler,
+      # 5 s: its stop, which leaves a cycle's claim to lapse on its lease.
+      Supervisor.child_spec(Cyfr.RetentionScheduler, shutdown: 5_000),
       # The SSE stream slots (`CyfrWeb.SSE.claim_slot/3`): one entry per open
       # stream, which dies with its conn process, so a vanished client frees
       # its slot without bookkeeping.
@@ -230,26 +245,33 @@ defmodule Cyfr.Application do
       Compendium.Supervisor,
       # The slots' caps and the host API's bind and port
       # (`CYFR_HOST_API_BIND`, `CYFR_HOST_API_PORT`) are read here and
-      # handed down: a domain's subtree reads no configuration.
+      # handed down: a domain's subtree reads no configuration. The
+      # listener's drain is the time an open host call has to finish once
+      # it stops accepting.
       {Crucible.Supervisor,
        slot_caps: execution_slot_caps(),
        bind: Cyfr.RuntimeConfig.host_api_bind(),
-       port: Cyfr.RuntimeConfig.host_api_port()},
+       port: Cyfr.RuntimeConfig.host_api_port(),
+       drain_ms: 5_000},
       # Off in the test env: suites drive runners directly.
       {Aqua.Supervisor, thread_recovery: Application.get_env(:cyfr, :thread_recovery, true)},
       Emissary.Supervisor,
       # Recurring component executions: the runs the scheduler fires are
       # tasks of their own, monitored by it. Last among the domains, so a
       # fire never reaches a tree that is not up, and the first to stop at
-      # shutdown.
+      # shutdown. 30 s: the longest run it lets finish.
       Supervisor.child_spec({Task.Supervisor, name: Crucible.Schedules.TaskSupervisor},
         shutdown: 30_000
       ),
-      Crucible.Schedules.Scheduler,
+      # 10 s: its terminate cancelling the timers of every schedule it
+      # holds, before a fire can reach a stopping tree.
+      Supervisor.child_spec(Crucible.Schedules.Scheduler, shutdown: 10_000),
       # The console's: the tincture registry, and the task supervisor its
-      # pages start their asynchronous work on.
-      Prism.TinctureRegistry,
-      {Task.Supervisor, name: Prism.TaskSupervisor}
+      # pages start their asynchronous work on. 5 s: the registry's stop,
+      # which holds no work in flight; 30 s: the longest page task it lets
+      # finish.
+      Supervisor.child_spec(Prism.TinctureRegistry, shutdown: 5_000),
+      Supervisor.child_spec({Task.Supervisor, name: Prism.TaskSupervisor}, shutdown: 30_000)
     ]
   end
 
@@ -383,8 +405,9 @@ defmodule Cyfr.Application do
   # suite's sandbox cannot lend it a connection, so the suite turns it off
   # and exercises `Arca.ControlPlane`'s writes and `Cyfr.Cell` directly.
   defp cell_claim do
+    # 5 s: its terminate releasing this member's slot row.
     if Application.get_env(:arca, :control_plane_claim_enabled, true),
-      do: [Cyfr.Cell],
+      do: [Supervisor.child_spec(Cyfr.Cell, shutdown: 5_000)],
       else: []
   end
 
