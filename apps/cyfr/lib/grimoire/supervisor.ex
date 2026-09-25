@@ -18,10 +18,12 @@ defmodule Grimoire.Supervisor do
   def init(_opts) do
     Supervisor.init(
       [
-        Grimoire.RunningTasks,
+        # 5 s: its stop; the tables it owns go with it.
+        Supervisor.child_spec(Grimoire.RunningTasks, shutdown: 5_000),
         # The gate's supervised handlers, after the table they register
-        # in, so a shutdown stops them first.
-        Grimoire.TaskSupervisor
+        # in, so a shutdown stops them first. 30 s: the longest handler it
+        # lets finish.
+        Supervisor.child_spec(Grimoire.TaskSupervisor, shutdown: 30_000)
       ],
       strategy: :rest_for_one,
       max_restarts: 10,

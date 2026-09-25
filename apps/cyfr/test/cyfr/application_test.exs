@@ -17,6 +17,40 @@ defmodule Cyfr.ApplicationTest do
     )
   )
 
+  # Every long-running child's stated stop bound: a GenServer's stop, a
+  # task supervisor's longest task, the scheduler's timers. A supervisor
+  # waits for its own children and keeps `:infinity`.
+  @shutdowns %{
+    Cyfr.Cell => 5_000,
+    Arca.AuditHandler => 5_000,
+    Cyfr.StandingWatch => 5_000,
+    Cyfr.TelemetryBridge => 5_000,
+    Cyfr.RetentionScheduler => 5_000,
+    Grimoire.RunningTasks => 5_000,
+    Grimoire.TaskSupervisor => 30_000,
+    Compendium.Builds.TaskSupervisor => 30_000,
+    Compendium.ProvisioningSupervisor => 30_000,
+    Compendium.Provisioning => 5_000,
+    Compendium.ProjectionReconciler => 5_000,
+    Crucible.Slots => 5_000,
+    Crucible.Events.Sequence => 5_000,
+    Crucible.TaskSupervisor => 30_000,
+    Crucible.ArchiveWatch => 5_000,
+    Crucible.Sweeper => 5_000,
+    Crucible.WorkerWatch => 5_000,
+    Aqua.ScheduleNotes => 5_000,
+    Aqua.Loop.Worker => 5_000,
+    Aqua.TaskSupervisor => 30_000,
+    Emissary.External.Backends => 5_000,
+    Emissary.External.Reconciler => 5_000,
+    Emissary.TaskSupervisor => 30_000,
+    Crucible.Schedules.TaskSupervisor => 30_000,
+    Crucible.Schedules.Scheduler => 10_000,
+    Prism.TinctureRegistry => 5_000,
+    Prism.TaskSupervisor => 30_000,
+    CyfrWeb.Ingress.TaskSupervisor => 30_000
+  }
+
   # A wildcard CORS origin once authentication is configured must fail closed
   # at boot in a real release, not merely warn. cors_enforcement/3 is the pure
   # decision seam the boot guard uses (first arg: auth configured?).
@@ -296,6 +330,75 @@ defmodule Cyfr.ApplicationTest do
       end
     end
 
+    # Each child is stopped within its stated bound, read from the child
+    # spec its running supervisor holds. The suite's boot omits the cell
+    # (`:control_plane_claim_enabled`); the admission barrier test reads
+    # its bound from the census.
+    test "every long-running child in the census stops within its stated bound" do
+      children =
+        for {id, _, _, _} = tier <- Cyfr.Application.tiers(),
+            {^id, pid, :supervisor, _} =
+              List.keyfind(Supervisor.which_children(Cyfr.Supervisor), id, 0),
+            child <- running_specs(tier, pid),
+            do: child
+
+      for %{id: id, shutdown: shutdown, type: type, written?: written?} <- children do
+        case Map.fetch(@shutdowns, id) do
+          {:ok, bound} ->
+            assert {shutdown, written?} == {bound, true},
+                   "#{inspect(id)} does not state its bound where it is declared"
+
+          :error ->
+            assert {type, shutdown} == {:supervisor, :infinity},
+                   "#{inspect(id)} is long-running and states no bound"
+        end
+      end
+
+      assert Map.keys(@shutdowns) -- Enum.map(children, & &1.id) == [Cyfr.Cell]
+    end
+
+    # A tier returns from its stop only once each child is down, a worker
+    # within its bound. The claim holders are workers under the infra
+    # tier, so none outlives it; and `:cyfr` stops before `:arca`, which
+    # it depends on, so the pool they release through is still open. The
+    # cell and the gate, which the suite's boot omits, are the admission
+    # barrier test's.
+    test "the claim holders stop inside the infra tier, before the pool closes" do
+      assert :arca in Application.spec(:cyfr, :applications)
+
+      for {path, id} <- [
+            {[], Cyfr.RetentionScheduler},
+            {[Crucible.Supervisor], Crucible.WorkerWatch},
+            {[Emissary.Supervisor, Emissary.External.ServerTree], Emissary.External.Backends}
+          ] do
+        supervisor = child_pid(Cyfr.InfraSupervisor, path)
+
+        assert {:ok, %{type: :worker, shutdown: bound}} =
+                 :supervisor.get_childspec(supervisor, id)
+
+        assert is_integer(bound)
+      end
+    end
+
+    # The endpoint's drain is one setting in `config/config.exs`, merged
+    # under every environment's `http:`, and the release's runtime
+    # configuration does not set it again.
+    test "the endpoint drains its connections for 30 s in every environment" do
+      drain = [:thousand_island_options, :shutdown_timeout]
+      assert get_in(CyfrWeb.Endpoint.config(:http), drain) == 30_000
+
+      root = Path.expand("../../../..", __DIR__)
+
+      for env <- [:dev, :test, :prod] do
+        config = Config.Reader.read!(Path.join(root, "config/config.exs"), env: env)
+
+        assert get_in(config, [:cyfr, CyfrWeb.Endpoint, :http | drain]) == 30_000,
+               "the #{env} endpoint drains for another time"
+      end
+
+      refute File.read!(Path.join(root, "config/runtime.exs")) =~ "shutdown_timeout"
+    end
+
     test "the endpoint lives under the web tier" do
       ids =
         Cyfr.WebSupervisor
@@ -324,6 +427,30 @@ defmodule Cyfr.ApplicationTest do
       {^child_id, child, :supervisor, _} = List.keyfind(running, child_id, 0)
       assert_runs(nested, child)
     end
+  end
+
+  # The child spec each running supervisor holds for every leaf of the
+  # census below it, and whether the census states its shutdown rather
+  # than leaving the module's default.
+  defp running_specs({_id, _, _, children}, pid) do
+    running = Supervisor.which_children(pid)
+
+    Enum.flat_map(children, fn
+      {child_id, _, _, _} = nested ->
+        {^child_id, child, :supervisor, _} = List.keyfind(running, child_id, 0)
+        running_specs(nested, child)
+
+      child ->
+        {:ok, spec} = :supervisor.get_childspec(pid, census_id(child))
+        [Map.put(spec, :written?, Map.has_key?(Supervisor.child_spec(child, []), :shutdown))]
+    end)
+  end
+
+  defp child_pid(supervisor, []), do: supervisor
+
+  defp child_pid(supervisor, [id | path]) do
+    {^id, pid, :supervisor, _} = supervisor |> Supervisor.which_children() |> List.keyfind(id, 0)
+    child_pid(pid, path)
   end
 
   defp census_id({id, _strategy, _intensity, _children}), do: id

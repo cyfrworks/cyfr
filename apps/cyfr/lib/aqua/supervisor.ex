@@ -25,11 +25,14 @@ defmodule Aqua.Supervisor do
       [
         # Keeps a completed schedule's outcome as a note when the schedule
         # asked for it: subscribed to the committed completions before the
-        # scheduler can fire, and acting only on its own member's.
-        Aqua.ScheduleNotes,
+        # scheduler can fire, and acting only on its own member's. 5 s: its
+        # stop, which holds no work in flight.
+        Supervisor.child_spec(Aqua.ScheduleNotes, shutdown: 5_000),
+        # The loop worker's 5 s is its stop, which holds no work in flight;
+        # the task supervisor's 30 s the longest loop step it lets finish.
         group(Aqua.WorkerTree, [
-          Aqua.Loop.Worker,
-          {Task.Supervisor, name: Aqua.TaskSupervisor}
+          Supervisor.child_spec(Aqua.Loop.Worker, shutdown: 5_000),
+          Supervisor.child_spec({Task.Supervisor, name: Aqua.TaskSupervisor}, shutdown: 30_000)
         ]),
         # Thread runners: one process per thread with open turns, started on
         # demand; the recovery task starts one for every thread holding an

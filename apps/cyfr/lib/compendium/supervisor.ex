@@ -22,21 +22,28 @@ defmodule Compendium.Supervisor do
         # it, each request to the Locus builds service and the registration
         # after it. After the catalog, the bus and the bookkeeping they write
         # through, so a shutdown ends the builds before them; a build it ends
-        # publishes nothing.
-        {Task.Supervisor, name: Compendium.Builds.TaskSupervisor},
+        # publishes nothing. 30 s: the longest build step it lets finish.
+        Supervisor.child_spec({Task.Supervisor, name: Compendium.Builds.TaskSupervisor},
+          shutdown: 30_000
+        ),
         # Filling an athanor's component estate: the background fills the
         # first-need hook and a sign-in ask for, and the registry pulls each
-        # attempt runs under its own deadline.
-        {Task.Supervisor, name: Compendium.ProvisioningSupervisor},
+        # attempt runs under its own deadline. 30 s: the longest fill step
+        # it lets finish.
+        Supervisor.child_spec({Task.Supervisor, name: Compendium.ProvisioningSupervisor},
+          shutdown: 30_000
+        ),
         # The estate filler itself — it reacts to the identity domain's
-        # announcement that an athanor needs filling.
-        Compendium.Provisioning,
+        # announcement that an athanor needs filling. 5 s: its stop, which
+        # holds no work in flight.
+        Supervisor.child_spec(Compendium.Provisioning, shutdown: 5_000),
         # The registry and the agent index follow the seeded roots' changes:
         # it reconciles the estate a change names, and recovers every estate
         # a root is behind in once started and on every tick this member
         # holds its slot. Every read passes its own barrier, so nothing
-        # waits on this child to be right.
-        Compendium.ProjectionReconciler
+        # waits on this child to be right. 5 s: its terminate detaching
+        # its handler.
+        Supervisor.child_spec(Compendium.ProjectionReconciler, shutdown: 5_000)
       ],
       strategy: :one_for_one,
       max_restarts: 10,

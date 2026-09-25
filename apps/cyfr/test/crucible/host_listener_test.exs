@@ -30,7 +30,7 @@ defmodule Crucible.HostListenerTest do
     :ok = Ecto.Adapters.SQL.Sandbox.checkout(Arca.Repo)
     Ecto.Adapters.SQL.Sandbox.mode(Arca.Repo, {:shared, self()})
     listener = start_supervised!({HostListener, port: 0})
-    {:ok, url: "http://127.0.0.1:#{HostListener.port(listener)}"}
+    {:ok, listener: listener, url: "http://127.0.0.1:#{HostListener.port(listener)}"}
   end
 
   # One request to `path` on the listener at `url`, with the auth headers
@@ -523,5 +523,26 @@ defmodule Crucible.HostListenerTest do
 
       assert claimed_by(fixture) == nil
     end
+  end
+
+  describe "the drain" do
+    # The Bandit server is started with the drain as its
+    # `shutdown_timeout`: on shutdown it stops accepting and lets the
+    # calls already open finish for that long.
+    test "reaches the server's options, 5 s unless the supervisor names another", %{
+      listener: listener
+    } do
+      drained = start_supervised!({HostListener, port: 0, drain_ms: 1_234}, id: :drained)
+
+      assert drain(listener) == 5_000
+      assert drain(drained) == 1_234
+    end
+  end
+
+  defp drain(listener) do
+    {:ok, %{start: {Bandit, :start_link, [options]}}} =
+      :supervisor.get_childspec(listener, :server)
+
+    options |> Keyword.fetch!(:thousand_island_options) |> Keyword.fetch!(:shutdown_timeout)
   end
 end

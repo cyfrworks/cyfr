@@ -22,7 +22,9 @@ defmodule Emissary.Supervisor do
         # and reconciler restart from the registry down: a failure restarts
         # its dependents. The controller starts before the servers and
         # stops after them, because a stopping stdio server releases its
-        # owner through it.
+        # owner through it. The controller's 5 s is its stop, after which
+        # the backend claims it held lapse on their lease; the
+        # reconciler's is its stop, which holds no work in flight.
         %{
           id: Emissary.External.ServerTree,
           start:
@@ -30,10 +32,10 @@ defmodule Emissary.Supervisor do
              [
                [
                  {Registry, keys: :unique, name: Emissary.External.ServerRegistry},
-                 Emissary.External.Backends,
+                 Supervisor.child_spec(Emissary.External.Backends, shutdown: 5_000),
                  {DynamicSupervisor,
                   name: Emissary.External.ServerSupervisor, strategy: :one_for_one},
-                 Emissary.External.Reconciler
+                 Supervisor.child_spec(Emissary.External.Reconciler, shutdown: 5_000)
                ],
                [
                  strategy: :rest_for_one,
@@ -44,7 +46,8 @@ defmodule Emissary.Supervisor do
              ]},
           type: :supervisor
         },
-        {Task.Supervisor, name: Emissary.TaskSupervisor}
+        # 30 s: the longest MCP call it lets finish.
+        Supervisor.child_spec({Task.Supervisor, name: Emissary.TaskSupervisor}, shutdown: 30_000)
       ],
       strategy: :one_for_one,
       max_restarts: 10,

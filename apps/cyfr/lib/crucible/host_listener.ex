@@ -57,8 +57,9 @@ defmodule Crucible.HostListener do
   unauthenticated caller from making CYFR read what it sent.
 
   Nothing here is configured from the application environment: the
-  supervisor that starts it names the bind and port (`child_spec/1`), so a
-  test binds port 0 and reads what it was given (`port/1`).
+  supervisor that starts it names the bind, the port and the drain
+  (`child_spec/1`), so a test binds port 0 and reads what it was given
+  (`port/1`).
   """
 
   use Plug.Router, copy_opts_to_assign: :host_listener
@@ -71,12 +72,20 @@ defmodule Crucible.HostListener do
   plug(:match)
   plug(:dispatch)
 
-  @typedoc "How the listener is started: the address to bind and the port (0 for any free one)."
-  @type option :: {:bind, :inet.ip_address()} | {:port, :inet.port_number()}
+  @typedoc """
+  How the listener is started: the address to bind, the port (0 for any
+  free one) and the drain, in milliseconds.
+  """
+  @type option ::
+          {:bind, :inet.ip_address()}
+          | {:port, :inet.port_number()}
+          | {:drain_ms, non_neg_integer()}
 
   @doc """
   The listener's child spec: a supervisor of the nonce memory and the
   Bandit server, bound to `:bind` (default loopback) on `:port` (required).
+  On shutdown the server stops accepting and lets the connections already
+  open finish for `:drain_ms` (default 5 000) before it closes them.
   """
   @spec child_spec([option()]) :: Supervisor.child_spec()
   def child_spec(opts) when is_list(opts) do
@@ -335,6 +344,7 @@ defmodule Crucible.HostListener do
     def init(opts) do
       bind = Keyword.get(opts, :bind, {127, 0, 0, 1})
       port = Keyword.fetch!(opts, :port)
+      drain_ms = Keyword.get(opts, :drain_ms, 5_000)
       nonces = Crucible.HostListener.Nonces.new()
 
       children = [
@@ -345,7 +355,8 @@ defmodule Crucible.HostListener do
            scheme: :http,
            ip: bind,
            port: port,
-           startup_log: false},
+           startup_log: false,
+           thousand_island_options: [shutdown_timeout: drain_ms]},
           id: @server
         )
       ]
