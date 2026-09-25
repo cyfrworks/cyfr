@@ -32,7 +32,6 @@ defmodule PrismWeb.ThreadPaneLive do
   require Logger
 
   alias Arca.ThreadStorage, as: Threads
-  alias Aqua.Runner
   alias Cyfr.Bus.ThreadEvent
   alias Phoenix.LiveView.JS
   alias Sanctum.Tenancy.Users
@@ -96,7 +95,7 @@ defmodule PrismWeb.ThreadPaneLive do
     # roster is real before anything is filled. What is not ready is the
     # consent a turn pins, which is why sending is held rather than reading.
     preparing? = preparing?(athanor)
-    roster = if connected?(socket), do: Aqua.Roster.roster(ctx), else: []
+    roster = if connected?(socket), do: Aqua.roster(ctx), else: []
 
     socket =
       socket
@@ -119,10 +118,10 @@ defmodule PrismWeb.ThreadPaneLive do
       |> stream(:messages, [])
       |> allow_upload(:attachments,
         accept: :any,
-        max_entries: Aqua.Attachments.limits().max_files,
+        max_entries: Aqua.attachment_limits().max_files,
         # 20 MB — sized with EmissaryWeb.Endpoint's Plug.Parsers :length so a
         # base64-encoded attachment of this size fits through POST /mcp.
-        max_file_size: Aqua.Attachments.limits().max_file_bytes,
+        max_file_size: Aqua.attachment_limits().max_file_bytes,
         auto_upload: true
       )
 
@@ -174,8 +173,8 @@ defmodule PrismWeb.ThreadPaneLive do
 
     case {connected?(socket), thread} do
       {true, %{} = thread} ->
-        Runner.subscribe(thread.id, thread.athanor_id)
-        live = Runner.state(thread.id, thread.athanor_id)
+        follow_thread(thread.id, thread.athanor_id)
+        live = Aqua.thread_state(thread.id, thread.athanor_id)
 
         # Newest window only: unbounded, this read loaded every row of a
         # long-lived thread into every viewer's socket. The runner's
@@ -202,11 +201,22 @@ defmodule PrismWeb.ThreadPaneLive do
   end
 
   defp unsubscribe_thread(%{assigns: %{thread: %{id: id, athanor_id: athanor_id}}} = socket) do
-    Runner.unsubscribe(id, athanor_id)
+    unfollow_thread(id, athanor_id)
     socket
   end
 
   defp unsubscribe_thread(socket), do: socket
+
+  # A thread's broadcasts: the bus topic its estate's actor names.
+  defp follow_thread(thread_id, athanor_id) do
+    actor = Prima.Actor.in_athanor(athanor_id)
+    Cyfr.Bus.subscribe(actor, Cyfr.Bus.thread(actor, thread_id))
+  end
+
+  defp unfollow_thread(thread_id, athanor_id) do
+    actor = Prima.Actor.in_athanor(athanor_id)
+    Cyfr.Bus.unsubscribe(actor, Cyfr.Bus.thread(actor, thread_id))
+  end
 
   defp reset_live(socket) do
     socket
@@ -216,7 +226,7 @@ defmodule PrismWeb.ThreadPaneLive do
     |> assign(:queued, 0)
     |> assign(:turn_user, nil)
     |> assign(:live_turn_id, nil)
-    |> assign(:partials, Aqua.Loop.Stream.new())
+    |> assign(:partials, Aqua.stream_new())
     |> assign(:tool_activity, [])
     |> assign(:token_usage, %{input: 0, output: 0})
     |> assign(:grants, MapSet.new())
@@ -315,7 +325,7 @@ defmodule PrismWeb.ThreadPaneLive do
 
   def handle_event("discard_send", _params, %{assigns: %{held_send: %{} = held}} = socket) do
     ctx = socket.assigns.context
-    Aqua.Attachments.discard(ctx, held.thread_id, held.message_id, held.attachments)
+    Aqua.discard_attachments(ctx, held.thread_id, held.message_id, held.attachments)
     {:noreply, socket |> assign(:held_send, nil) |> mirror(nil)}
   end
 
@@ -534,7 +544,7 @@ defmodule PrismWeb.ThreadPaneLive do
         socket = assign(socket, :athanor, athanor)
 
         if socket.assigns.preparing? and not preparing?(athanor) do
-          roster = Aqua.Roster.roster(ctx)
+          roster = Aqua.roster(ctx)
 
           socket =
             socket
@@ -582,7 +592,7 @@ defmodule PrismWeb.ThreadPaneLive do
         case PrismWeb.Ops.call_tool(socket, "thread/approve", %{
                "thread" => thread_id,
                "message_id" => id,
-               "scope" => Aqua.ApprovalScope.to_string(scope)
+               "scope" => Aqua.approval_scope_string(scope)
              }) do
           {:ok, _} ->
             socket
@@ -607,7 +617,7 @@ defmodule PrismWeb.ThreadPaneLive do
                "thread" => thread_id,
                "message_id" => id,
                "reason" => reason,
-               "scope" => Aqua.ApprovalScope.to_string(scope)
+               "scope" => Aqua.approval_scope_string(scope)
              }) do
           {:ok, _} ->
             socket
@@ -633,7 +643,7 @@ defmodule PrismWeb.ThreadPaneLive do
   defp handle_thread_event(socket, :message, row) do
     socket
     |> upsert_message(row)
-    |> assign(:partials, Aqua.Loop.Stream.landed(socket.assigns.partials, row))
+    |> assign(:partials, Aqua.stream_landed(socket.assigns.partials, row))
   end
 
   # A turn may start for a message queued earlier — the sender's draft of
@@ -646,7 +656,7 @@ defmodule PrismWeb.ThreadPaneLive do
     |> assign(:paused, false)
     |> assign(:paused_reason, nil)
     |> assign(:turn_user, user_id)
-    |> assign(:partials, Aqua.Loop.Stream.new())
+    |> assign(:partials, Aqua.stream_new())
     |> assign(:tool_activity, [])
     |> assign(:token_usage, %{input: 0, output: 0})
   end
@@ -674,7 +684,7 @@ defmodule PrismWeb.ThreadPaneLive do
     |> assign(:paused, true)
     |> assign(:paused_reason, reason)
     |> assign(:live_turn_id, nil)
-    |> assign(:partials, Aqua.Loop.Stream.new())
+    |> assign(:partials, Aqua.stream_new())
     |> assign(:tool_activity, [])
   end
 
@@ -687,7 +697,7 @@ defmodule PrismWeb.ThreadPaneLive do
     |> assign(:paused_reason, nil)
     |> assign(:turn_user, nil)
     |> assign(:live_turn_id, nil)
-    |> assign(:partials, Aqua.Loop.Stream.new())
+    |> assign(:partials, Aqua.stream_new())
     |> assign(:tool_activity, [])
     |> assign(:cancel_requested, false)
   end
@@ -699,21 +709,21 @@ defmodule PrismWeb.ThreadPaneLive do
          :turn_fence,
          %{turn_id: turn_id, fence: fence}
        ),
-       do: assign(socket, :partials, Aqua.Loop.Stream.advance(socket.assigns.partials, fence))
+       do: assign(socket, :partials, Aqua.stream_advance(socket.assigns.partials, fence))
 
   defp handle_thread_event(
          %{assigns: %{running: true, live_turn_id: turn_id}} = socket,
          :delta_abandoned,
          %{turn_id: turn_id} = marker
        ),
-       do: assign(socket, :partials, Aqua.Loop.Stream.abandoned(socket.assigns.partials, marker))
+       do: assign(socket, :partials, Aqua.stream_abandoned(socket.assigns.partials, marker))
 
   defp handle_thread_event(
          %{assigns: %{running: true, live_turn_id: turn_id}} = socket,
          :delta,
          %{turn_id: turn_id} = delta
        ),
-       do: assign(socket, :partials, Aqua.Loop.Stream.add(socket.assigns.partials, delta))
+       do: assign(socket, :partials, Aqua.stream_add(socket.assigns.partials, delta))
 
   defp handle_thread_event(socket, :tool_activity, list),
     do: assign(socket, :tool_activity, list)
@@ -776,7 +786,7 @@ defmodule PrismWeb.ThreadPaneLive do
 
     with {:ok, thread, created?} <- current_or_new(socket),
          {room, socket} = room_context(socket, thread),
-         {:ok, refs} <- Aqua.Attachments.store(ctx, thread.id, message_id, files) do
+         {:ok, refs} <- Aqua.store_attachments(ctx, thread.id, message_id, files) do
       envelope = %{
         thread_id: thread.id,
         client_id: Prima.UUID7.generate_id("snd"),
@@ -822,7 +832,7 @@ defmodule PrismWeb.ThreadPaneLive do
          |> opened(created)}
 
       {:error, reason} ->
-        Aqua.Attachments.discard(
+        Aqua.discard_attachments(
           ctx,
           envelope.thread_id,
           envelope.message_id,
@@ -1309,7 +1319,7 @@ defmodule PrismWeb.ThreadPaneLive do
         class="flex-1 overflow-y-auto px-4 py-3 space-y-3"
       >
         <div
-          :if={not @any_messages and Aqua.Loop.Stream.texts(@partials) == []}
+          :if={not @any_messages and Aqua.stream_texts(@partials) == []}
           class="flex flex-col items-center justify-center h-full gap-2 text-sm text-gray-500"
         >
           <%= if @preparing? do %>
@@ -1460,7 +1470,7 @@ defmodule PrismWeb.ThreadPaneLive do
         </ul>
 
         <.message_bubble
-          :for={partial <- Aqua.Loop.Stream.texts(@partials)}
+          :for={partial <- Aqua.stream_texts(@partials)}
           id={@dom <> "-streaming-" <> partial.step_id}
           role="assistant"
           content={partial.text}
@@ -1468,7 +1478,7 @@ defmodule PrismWeb.ThreadPaneLive do
         />
 
         <div
-          :if={@running and Aqua.Loop.Stream.texts(@partials) == [] and @tool_activity == []}
+          :if={@running and Aqua.stream_texts(@partials) == [] and @tool_activity == []}
           class="flex items-center gap-2 text-xs text-gray-500"
         >
           <span class="inline-block h-2 w-2 animate-pulse rounded-full bg-blue-400" />
@@ -1758,7 +1768,7 @@ defmodule PrismWeb.ThreadPaneLive do
 
   defp label_for(_members, _user_id, _ctx), do: nil
 
-  defp scope_atom(scope), do: Aqua.ApprovalScope.parse(scope)
+  defp scope_atom(scope), do: Aqua.parse_approval_scope(scope)
 
   defp role_align("user"), do: "items-end"
   defp role_align(_), do: "items-start"

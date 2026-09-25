@@ -173,7 +173,7 @@ defmodule Crucible.Tincture do
   # other reason is the closed table's.
   defp refusal(reason) when reason in @unconsented, do: unconsented(reason)
   defp refusal({:profile_unavailable, _status} = reason), do: unconsented(reason)
-  defp refusal(reason), do: Grimoire.Error.classify(reason)
+  defp refusal(reason), do: Grimoire.classify(reason)
 
   defp unconsented(reason), do: %{Prima.Refusal.classify(:consent_required) | reason: reason}
 

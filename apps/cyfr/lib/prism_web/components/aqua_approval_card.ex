@@ -295,7 +295,7 @@ defmodule PrismWeb.AquaApprovalCard do
   defp always_confirm(name),
     do: "Stop asking for this action in #{name}? It applies to every member, not just you."
 
-  defp parse_scope(scope), do: Aqua.ApprovalScope.parse(scope)
+  defp parse_scope(scope), do: Aqua.parse_approval_scope(scope)
 
   defp status(:pending), do: :pending
   defp status(:running), do: :running
@@ -326,7 +326,7 @@ defmodule PrismWeb.AquaApprovalCard do
     do: false
 
   defp standing_offered?(kind, standing, scope),
-    do: standing_offered(kind, Grimoire.Annotations.standing(standing), scope)
+    do: standing_offered(kind, Grimoire.standing_scope(standing), scope)
 
   defp standing_offered(_kind, false, _scope), do: false
   defp standing_offered(_kind, :thread, :always), do: false

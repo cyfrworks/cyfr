@@ -14,8 +14,6 @@ defmodule PrismWeb.AquaLive.ScrollsComponent do
 
   import PrismWeb.AquaLive.Section
 
-  alias Compendium.AquaPath
-
   @impl true
   def mount(socket) do
     {:ok,
@@ -202,7 +200,7 @@ defmodule PrismWeb.AquaLive.ScrollsComponent do
   end
 
   defp skill_provenance(provenance, name) when is_binary(name),
-    do: Map.get(provenance, Enum.join(AquaPath.skill_dir(name), "/"))
+    do: Map.get(provenance, Enum.join(Compendium.skill_dir(name), "/"))
 
   # Label, confirm prefix and event of the one removal verb an open
   # scroll may offer.

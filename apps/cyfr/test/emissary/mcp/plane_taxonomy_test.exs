@@ -157,7 +157,7 @@ defmodule Emissary.MCP.PlaneTaxonomyTest do
       ctx = Sanctum.TestContext.local()
 
       listed =
-        for tool_def <- Grimoire.Visibility.filter_for_context(Grimoire.list_tools(), ctx),
+        for tool_def <- Grimoire.visible_tools(Grimoire.list_tools(), ctx),
             verb <- get_in(tool_def, ["inputSchema", "properties", "action", "enum"]) || [],
             do: "#{tool_def["name"]}.#{verb}"
 

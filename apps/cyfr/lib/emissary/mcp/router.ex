@@ -44,7 +44,7 @@ defmodule Emissary.MCP.Router do
 
   `resources/list` and `resources/templates/list` are unauthenticated
   metadata. `resources/read` is an ordinary operation call:
-  `Grimoire.Resources.resolve/1` names the operation that
+  `Grimoire.resolve_resource/1` names the operation that
   declares the URI's scheme, and the Router calls it once through
   `Grimoire.call_external/4` with the URI as its one argument —
   the same gate, plane, authentication, permission and runner a
@@ -153,7 +153,7 @@ defmodule Emissary.MCP.Router do
 
   defp dispatch_method(ctx, "tools/list", params, _id) do
     Grimoire.list_tools()
-    |> Grimoire.Visibility.filter_for_context(ctx)
+    |> Grimoire.visible_tools(ctx)
     |> paginate("tools", params)
   end
 
@@ -199,7 +199,7 @@ defmodule Emissary.MCP.Router do
               else
                 {:ok,
                  %{
-                   "content" => [%{"type" => "text", "text" => Grimoire.Error.render(reason)}],
+                   "content" => [%{"type" => "text", "text" => Grimoire.render(reason)}],
                    "isError" => true
                  }}
               end
@@ -215,12 +215,12 @@ defmodule Emissary.MCP.Router do
   # ============================================================================
 
   defp dispatch_method(_ctx, "resources/list", params, _id) do
-    resources = Grimoire.Resources.list_resources()
+    resources = Grimoire.list_resources()
     paginate(resources, "resources", params)
   end
 
   defp dispatch_method(_ctx, "resources/templates/list", params, _id) do
-    templates = Grimoire.Resources.list_resource_templates()
+    templates = Grimoire.list_resource_templates()
     paginate(templates, "resourceTemplates", params)
   end
 
@@ -302,7 +302,7 @@ defmodule Emissary.MCP.Router do
 
   defp read_resource(ctx, uri, _id) do
     read =
-      with {:ok, tool, action} <- Grimoire.Resources.resolve(uri) do
+      with {:ok, tool, action} <- Grimoire.resolve_resource(uri) do
         Grimoire.call_external(tool, ctx, %{"action" => action, "uri" => uri},
           runner: :supervised,
           call_id: ctx.call_id,
@@ -382,7 +382,7 @@ defmodule Emissary.MCP.Router do
   # sentence — an authorization refusal's worded for the caller's
   # credential, a consent signal's with its `error.data`.
   defp protocol_error(ctx, reason, where) do
-    refusal = Grimoire.Error.classify(reason)
+    refusal = Grimoire.classify(reason)
     code = Message.refusal_code(refusal, where)
     inner = refusal.reason
 

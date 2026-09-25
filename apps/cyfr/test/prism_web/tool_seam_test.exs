@@ -67,7 +67,7 @@ defmodule PrismWeb.ToolSeamTest do
     # minting the person's identity, before any athanor exists to run a tool
     # in; `Compendium.Providers.Shared.namespace_bearer/2` reads it afterwards.
     {"apps/cyfr/lib/prism_web/controllers/claim_namespace_controller.ex",
-     "Compendium.Registry.CredentialStore.put_push_token"},
+     "Compendium.store_push_token"},
     # Chat IS on the wire now (`thread.*`, external-plane and
     # OIDC-only, so no agent and no API key reaches it) — and the console
     # is a deliberate in-process client of the same domain functions
@@ -78,8 +78,8 @@ defmodule PrismWeb.ToolSeamTest do
     # Attachments a person drags into their own chat, and the same call
     # undone when the message they belonged to is not sent. Storage-capped by
     # `Sanctum.Tenancy.Caps.check_storage/2` like every other tenant write.
-    {"apps/cyfr/lib/prism_web/live/thread_pane_live.ex", "Aqua.Attachments.store"},
-    {"apps/cyfr/lib/prism_web/live/thread_pane_live.ex", "Aqua.Attachments.discard"}
+    {"apps/cyfr/lib/prism_web/live/thread_pane_live.ex", "Aqua.store_attachments"},
+    {"apps/cyfr/lib/prism_web/live/thread_pane_live.ex", "Aqua.discard_attachments"}
   ]
 
   # The namespaces whose state the console must not change behind the tool

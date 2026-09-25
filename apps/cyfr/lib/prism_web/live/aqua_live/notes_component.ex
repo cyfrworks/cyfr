@@ -20,7 +20,7 @@ defmodule PrismWeb.AquaLive.NotesComponent do
      socket
      |> assign(:loaded, false)
      |> assign(:pinned_name, nil)
-     |> assign(:pin_max_bytes, Aqua.Notes.pin_max_bytes())
+     |> assign(:pin_max_bytes, Aqua.pin_max_bytes())
      |> assign(:about, "")
      |> assign(:about_draft, "")
      |> assign(:about_editing?, false)
@@ -65,7 +65,7 @@ defmodule PrismWeb.AquaLive.NotesComponent do
            socket
            |> assign(:about_editing?, false)
            |> load()
-           |> put_flash(:info, Aqua.Notes.describe(result) || "Pinned.")}
+           |> put_flash(:info, Aqua.describe_note_result(result) || "Pinned.")}
 
         {:error, reason} ->
           {:noreply, put_flash(socket, :error, "Could not pin that: #{error_message(reason)}")}
@@ -96,7 +96,7 @@ defmodule PrismWeb.AquaLive.NotesComponent do
           socket = if open && open.name == name, do: assign(socket, :note_open, nil), else: socket
 
           {:noreply,
-           socket |> load() |> put_flash(:info, Aqua.Notes.describe(result) || "Forgotten.")}
+           socket |> load() |> put_flash(:info, Aqua.describe_note_result(result) || "Forgotten.")}
 
         {:error, reason} ->
           {:noreply,
@@ -112,12 +112,12 @@ defmodule PrismWeb.AquaLive.NotesComponent do
   defp load(socket), do: socket |> load_about() |> load_notes() |> assign(:loaded, true)
 
   # The pinned page: what the soul reads first, every turn here. Which
-  # page is the estate's kind (`Aqua.Notes.pinned_page/1`); its body is
+  # page is the estate's kind (`Aqua.pinned_note_page/1`); its body is
   # read the way any note is.
   defp load_about(socket) do
     ctx = socket.assigns.context
 
-    case Aqua.Notes.pinned_page(ctx) do
+    case Aqua.pinned_note_page(ctx) do
       {:ok, name} ->
         about =
           case call_tool(ctx, "notes/read", %{"name" => name}) do
@@ -136,7 +136,7 @@ defmodule PrismWeb.AquaLive.NotesComponent do
   defp load_notes(socket) do
     notes =
       case call_tool(socket.assigns.context, "notes/list", %{}) do
-        {:ok, %{notes: notes}} -> Enum.reject(notes, &Aqua.Notes.pinned?(&1.name))
+        {:ok, %{notes: notes}} -> Enum.reject(notes, &Aqua.note_pinned?(&1.name))
         _ -> []
       end
 

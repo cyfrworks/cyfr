@@ -24,11 +24,21 @@ defmodule Compendium.Providers.Shared do
   `rate_limited`, anything else `unavailable` — with reason
   `{:registry, oci_reason}`, so the struct never reaches the gate. Its
   sentence is `Compendium.OCI.Errors.to_string/1` with the actionable
-  hint; the verbose `detail` stays in the client's log. The access-token
-  endpoints' bare `:invalid_access_token` is the provider's spent IdP
-  token. Any other reason is returned as it is, for the gate to classify.
+  hint; the verbose `detail` stays in the client's log. A policy-version
+  mismatch is the rostered reason
+  `{:registry, :policy_version_mismatch, required_version}`, which carries
+  the version the registry requires and reads as `Prima.Refusal`'s row.
+  The access-token endpoints' bare `:invalid_access_token` is the
+  provider's spent IdP token. Any other reason is returned as it is, for
+  the gate to classify.
   """
-  @spec refusal(term()) :: term()
+  @spec refusal(term()) :: Prima.Refusal.t() | term()
+  def refusal(%Compendium.OCI.Errors{reason: :policy_version_mismatch} = err) do
+    Prima.Refusal.classify(
+      {:registry, :policy_version_mismatch, Compendium.OCI.Errors.required_version(err)}
+    )
+  end
+
   def refusal(%Compendium.OCI.Errors{} = err) do
     msg = Compendium.OCI.Errors.to_string(err)
     hint = Compendium.OCI.Errors.actionable_hint(err)

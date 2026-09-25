@@ -397,27 +397,50 @@ defmodule Compendium do
     )
   end
 
-  @doc "The registry's current policy version and policies (`Compendium.Registry.Client.get_legal_version/0`)."
-  @spec registry_legal_version() :: {:ok, map()} | {:error, Compendium.OCI.Errors.t()}
-  defdelegate registry_legal_version(), to: Client, as: :get_legal_version
+  @doc """
+  The registry's current policy version and policies
+  (`Compendium.Registry.Client.get_legal_version/0`); a failure is the
+  registry's refusal, as `Compendium.Providers.Shared.refusal/1` renders it.
+  """
+  @spec registry_legal_version() :: {:ok, map()} | {:error, Prima.Refusal.t()}
+  def registry_legal_version, do: registry_answer(Client.get_legal_version())
 
-  @doc "One registry policy page (`Compendium.Registry.Client.get_legal_page/1`)."
-  @spec registry_legal_page(String.t()) :: {:ok, map()} | {:error, Compendium.OCI.Errors.t()}
-  defdelegate registry_legal_page(name), to: Client, as: :get_legal_page
+  @doc """
+  One registry policy page (`Compendium.Registry.Client.get_legal_page/1`);
+  a failure is the registry's refusal.
+  """
+  @spec registry_legal_page(String.t()) :: {:ok, map()} | {:error, Prima.Refusal.t()}
+  def registry_legal_page(name), do: registry_answer(Client.get_legal_page(name))
 
-  @doc "Record the person's acceptance of a policy version (`Compendium.Registry.Client.accept_policies/4`)."
+  @doc """
+  Record the person's acceptance of a policy version
+  (`Compendium.Registry.Client.accept_policies/4`). A refusal is the
+  registry's: a stale version is the reason
+  `{:registry, :policy_version_mismatch, required_version}`, a refused
+  identity `{:registry, :unauthorized}`, a spent IdP token
+  `:invalid_access_token`.
+  """
   @spec accept_registry_policies(
           atom() | String.t(),
           String.t() | nil,
           String.t() | nil,
           String.t()
-        ) ::
-          {:ok, map()} | {:error, Compendium.OCI.Errors.t() | :invalid_access_token}
-  defdelegate accept_registry_policies(provider, access_token, id_token, policy_version),
-    to: Client,
-    as: :accept_policies
+        ) :: {:ok, map()} | {:error, Prima.Refusal.t()}
+  def accept_registry_policies(provider, access_token, id_token, policy_version) do
+    registry_answer(Client.accept_policies(provider, access_token, id_token, policy_version))
+  end
 
-  @doc "The policy version a registry refusal requires, or nil (`Compendium.OCI.Errors.required_version/1`)."
-  @spec registry_required_version(Compendium.OCI.Errors.t()) :: String.t() | nil
-  defdelegate registry_required_version(error), to: Compendium.OCI.Errors, as: :required_version
+  @doc "The policy version a registry refusal requires, or nil."
+  @spec registry_required_version(Prima.Refusal.t()) :: String.t() | nil
+  def registry_required_version(%Prima.Refusal{
+        reason: {:registry, :policy_version_mismatch, version}
+      }),
+      do: version
+
+  def registry_required_version(%Prima.Refusal{}), do: nil
+
+  defp registry_answer({:ok, _body} = ok), do: ok
+
+  defp registry_answer({:error, reason}),
+    do: {:error, Compendium.Providers.Shared.refusal(reason)}
 end

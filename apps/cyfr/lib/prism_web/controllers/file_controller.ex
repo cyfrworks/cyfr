@@ -75,7 +75,7 @@ defmodule PrismWeb.FileController do
   end
 
   defp disposition(name) do
-    safe = name |> Aqua.Attachments.strip_controls() |> String.replace(~r/["\\]/, "")
+    safe = name |> Aqua.strip_attachment_name() |> String.replace(~r/["\\]/, "")
 
     if safe == name do
       ~s(attachment; filename="#{safe}")

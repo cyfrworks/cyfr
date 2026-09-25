@@ -263,6 +263,19 @@ defmodule Prima.Refusal do
   defp row({:corrupt, :registry_credential}),
     do: {:corrupt, "The stored registry credential is damaged; sign in to the registry again."}
 
+  # The registry's own refusals of a policy acceptance, as the component
+  # domain rosters them: the version it now requires the person to accept,
+  # and an identity it refuses. A refusal carrying the HTTP answer keeps
+  # that answer's class; this row is the reason's own.
+  defp row({:registry, :policy_version_mismatch, version}) when is_binary(version),
+    do: {:conflict, "The registry requires acceptance of policy version #{version}"}
+
+  defp row({:registry, :policy_version_mismatch, nil}),
+    do: {:conflict, "The registry requires acceptance of a newer policy version"}
+
+  defp row({:registry, :unauthorized}),
+    do: {:unauthenticated, "The registry refused this identity; sign in to the registry again"}
+
   # Stored bytes that no longer match the digest their row recorded: an
   # integrity refusal, not an outage — a retry will not help, and the
   # bytes are not served under the digest a caller would trust.

@@ -29,7 +29,7 @@ defmodule PrismWeb.Ops do
       VERBATIM — atom keys at the top level, but a field decoded from a
       stored JSON column keeps its string keys. Proxied `server:tool`
       calls carry decoded JSON throughout.
-    * `Aqua.AgentConfig.call_aqua/2` deep-stringifies on the way out, so
+    * `PrismWeb.AquaLive.Section.call_aqua/2` deep-stringifies on the way out, so
       its consumers read string keys only.
 
   Some nested JSON values remain string-keyed inside atom-keyed rows.

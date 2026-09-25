@@ -55,7 +55,7 @@ defmodule EmissaryWeb.MCPError do
     if Message.code?(code) do
       {code, message}
     else
-      refusal = Grimoire.Error.classify(code)
+      refusal = Grimoire.classify(code)
       {Message.refusal_code(refusal, :transport), message || refusal.message}
     end
   end

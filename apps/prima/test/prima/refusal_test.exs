@@ -31,6 +31,9 @@ defmodule Prima.RefusalTest do
     {{:corrupt, {:manifest, "c:local.x:1.0.0"}}, :corrupt},
     {{:corrupt, {:settings, :retention}}, :corrupt},
     {{:corrupt, :registry_credential}, :corrupt},
+    {{:registry, :policy_version_mismatch, "2026-09"}, :conflict},
+    {{:registry, :policy_version_mismatch, nil}, :conflict},
+    {{:registry, :unauthorized}, :unauthenticated},
     {{:timeout, :parent_deadline}, :timeout},
     {{:rate_limited, 5}, :rate_limited},
     {{:attestation_failed, :signed_pulls_required}, :forbidden},
@@ -270,6 +273,14 @@ defmodule Prima.RefusalTest do
     test "the corrupt registry credential says what to do" do
       assert Refusal.classify({:corrupt, :registry_credential}).message ==
                "The stored registry credential is damaged; sign in to the registry again."
+    end
+
+    test "a policy-version refusal names the version the registry requires" do
+      assert Refusal.message({:registry, :policy_version_mismatch, "2026-09"}) ==
+               "The registry requires acceptance of policy version 2026-09"
+
+      assert Refusal.message({:registry, :policy_version_mismatch, nil}) ==
+               "The registry requires acceptance of a newer policy version"
     end
 
     test "each damaged store reads as what it is, not as a digest mismatch" do

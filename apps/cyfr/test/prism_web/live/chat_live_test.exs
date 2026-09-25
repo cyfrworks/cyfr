@@ -526,7 +526,7 @@ defmodule PrismWeb.ChatLiveTest do
     assert Base.decode64!(data) == "hi there"
 
     [msg | _] = Threads.messages(Sanctum.Context.actor(ctx), thread.id)
-    refs = msg |> Aqua.Attachments.refs_of() |> Enum.sort_by(& &1["filename"])
+    refs = msg |> Aqua.attachment_refs() |> Enum.sort_by(& &1["filename"])
     assert Enum.map(refs, & &1["filename"]) == ["note.txt", "plan.md"]
     assert Enum.map(refs, & &1["size"]) == [8, 6]
     # the bytes are the record: one blob per ref, under the message — the
@@ -535,7 +535,7 @@ defmodule PrismWeb.ChatLiveTest do
       refute Map.has_key?(ref, "path")
 
       assert {:ok, ["threads", thread_id, msg_id, _name] = blob} =
-               Aqua.Attachments.blob_path(thread.id, msg.id, ref)
+               Aqua.attachment_blob_path(thread.id, msg.id, ref)
 
       assert thread_id == thread.id and msg_id == msg.id
       assert Arca.exists?(Sanctum.Context.actor(ctx), blob)

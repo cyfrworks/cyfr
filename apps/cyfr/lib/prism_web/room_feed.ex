@@ -16,7 +16,7 @@ defmodule PrismWeb.RoomFeed do
   One direction only: the room is read into the person's own thread. The
   feed carries a name and two ids, never a line of the tape — the excerpt
   is read at send time, under the person's own membership
-  (`Aqua.RoomExcerpt`).
+  (`Aqua.room_excerpt/2`).
   """
 
   @typedoc "`athanor_id`, `thread_id`, and for display `title` and `estate`."
@@ -59,8 +59,13 @@ defmodule PrismWeb.RoomFeed do
 
   def label(_), do: ""
 
-  @doc "The room as `Aqua.RoomExcerpt.read/2` takes it."
-  @spec excerpt_room(map()) :: Aqua.RoomExcerpt.room()
+  @doc "The room as `Aqua.room_excerpt/2` takes it."
+  @spec excerpt_room(map()) :: %{
+          required(:athanor_id) => String.t(),
+          required(:thread_id) => String.t(),
+          optional(:title) => String.t() | nil,
+          optional(:estate) => String.t() | nil
+        }
   def excerpt_room(%{"athanor_id" => athanor_id, "thread_id" => thread_id} = room) do
     %{
       athanor_id: athanor_id,

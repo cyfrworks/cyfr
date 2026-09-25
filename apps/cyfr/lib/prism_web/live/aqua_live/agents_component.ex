@@ -15,8 +15,6 @@ defmodule PrismWeb.AquaLive.AgentsComponent do
 
   import PrismWeb.AquaLive.Section
 
-  alias Compendium.AquaAgent
-  alias Compendium.AquaPath
   alias Phoenix.LiveView.JS
   alias PrismWeb.AquaLive.Catalog
 
@@ -238,7 +236,7 @@ defmodule PrismWeb.AquaLive.AgentsComponent do
   # an "ask" on it is a hand it silently loses. A destructive or external
   # action is never added to a role at all: it always asks, and only the
   # soul can ask. The kind is DERIVED here from the action's own
-  # annotation (`Aqua.Kinds.kind_for/2`), never taken off the wire. A
+  # annotation (`Aqua.tool_kind/2`), never taken off the wire. A
   # key that resolves to no known action is refused.
   def handle_event("editor_toggle_capability", %{"name" => name, "key" => key}, socket) do
     CyfrWeb.ContextGuard.guard(socket, fn socket ->
@@ -322,7 +320,7 @@ defmodule PrismWeb.AquaLive.AgentsComponent do
          update_tool_policy(
            socket,
            soul_name,
-           &{:ok, toggle_key(&1, AquaAgent.clone_glob(role_name))}
+           &{:ok, toggle_key(&1, Compendium.agent_clone_glob(role_name))}
          )}
       else
         _ -> {:noreply, put_flash(socket, :error, "Unknown role: #{role_name}")}
@@ -425,7 +423,7 @@ defmodule PrismWeb.AquaLive.AgentsComponent do
   defp load_agents(socket) do
     ctx = socket.assigns.context
     provenance = socket.assigns.provenance
-    types = [AquaAgent.soul_type(), AquaAgent.role_type()]
+    types = [Compendium.agent_soul_type(), Compendium.agent_role_type()]
 
     # One call: list with detail carries every field the cards show, and
     # the roles set aside — `list` leaves them out of the closet; a role
@@ -451,11 +449,12 @@ defmodule PrismWeb.AquaLive.AgentsComponent do
           "tool_policy" => g["tool_policy"] || %{},
           "content" => g["content"] || "",
           "disabled" => g["disabled"] == true,
-          "provenance" => Map.get(provenance, Enum.join(AquaPath.agent_file(g["name"]), "/"))
+          "provenance" =>
+            Map.get(provenance, Enum.join(Compendium.agent_file_path(g["name"]), "/"))
         }
       end
 
-    soul_type = AquaAgent.soul_type()
+    soul_type = Compendium.agent_soul_type()
     soul = Enum.find(agents, &(&1["type"] == soul_type))
     roles = agents |> Enum.reject(&(&1["type"] == soul_type)) |> Enum.sort_by(& &1["name"])
 
@@ -495,16 +494,16 @@ defmodule PrismWeb.AquaLive.AgentsComponent do
   # has never heard of (fail closed).
   defp resolved_kind(key) when is_binary(key) do
     case String.split(key, ".", parts: 2) do
-      [tool, action] -> Aqua.Kinds.kind_for(tool, action)
+      [tool, action] -> Aqua.tool_kind(tool, action)
       _ -> nil
     end
   end
 
   # "auto" (run with no card) is only for kinds a card can be skipped for —
-  # the one rule `Aqua.Kinds.auto_permitted?/2` holds for every door.
+  # the one rule `Aqua.auto_permitted?/2` holds for every door.
   defp auto_permitted?(key) do
     case String.split(key, ".", parts: 2) do
-      [tool, action] -> Aqua.Kinds.auto_permitted?(tool, action)
+      [tool, action] -> Aqua.auto_permitted?(tool, action)
       _ -> false
     end
   end
@@ -512,7 +511,7 @@ defmodule PrismWeb.AquaLive.AgentsComponent do
   defp soul_name?(socket, name) do
     case socket.assigns.soul do
       %{"name" => soul_name} -> soul_name == name
-      _ -> Compendium.AquaPath.soul?(name)
+      _ -> Compendium.soul_agent_file?(name)
     end
   end
 
@@ -554,7 +553,7 @@ defmodule PrismWeb.AquaLive.AgentsComponent do
 
   defp fresh_role(ctx, name) do
     case call_aqua(ctx, %{"action" => "get", "name" => name}) do
-      {:ok, %{"type" => type} = agent} -> if type == AquaAgent.role_type(), do: agent
+      {:ok, %{"type" => type} = agent} -> if type == Compendium.agent_role_type(), do: agent
       _ -> nil
     end
   end
@@ -607,7 +606,7 @@ defmodule PrismWeb.AquaLive.AgentsComponent do
   # nothing either.
   defp removal(agent) do
     cond do
-      agent["type"] == AquaAgent.soul_type() ->
+      agent["type"] == Compendium.agent_soul_type() ->
         nil
 
       agent["provenance"] == "user" ->
@@ -1013,7 +1012,7 @@ defmodule PrismWeb.AquaLive.AgentsComponent do
           >
             <input
               type="checkbox"
-              checked={Map.has_key?(@tool_policy, AquaAgent.clone_glob(role["name"]))}
+              checked={Map.has_key?(@tool_policy, Compendium.agent_clone_glob(role["name"]))}
               phx-click="editor_toggle_clone"
               phx-target={@myself}
               phx-value-role={role["name"]}

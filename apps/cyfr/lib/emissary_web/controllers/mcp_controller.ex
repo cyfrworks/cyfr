@@ -115,7 +115,7 @@ defmodule EmissaryWeb.MCPController do
       # `:auth_required`, which is what a client retries on. Answering
       # every refusal `:insufficient_permissions` told an unauthenticated
       # caller their permissions were the problem.
-      code = e.reason |> Grimoire.Error.classify() |> Message.refusal_code(:transport)
+      code = e.reason |> Grimoire.classify() |> Message.refusal_code(:transport)
 
       # Re-rendered from the reason rather than `Exception.message/1`: the
       # struct bakes its prose at raise time without the auth method, and
@@ -258,7 +258,7 @@ defmodule EmissaryWeb.MCPController do
   # decision and echoes the request's JSON-RPC id. `reason` is the
   # refusal's term; its class picks the code and the HTTP status.
   defp listen_error(conn, request_id, reason, message) do
-    code = reason |> Grimoire.Error.classify() |> Message.refusal_code(:transport)
+    code = reason |> Grimoire.classify() |> Message.refusal_code(:transport)
 
     conn
     |> put_resp_header("x-request-id", request_id)
@@ -336,7 +336,7 @@ defmodule EmissaryWeb.MCPController do
   # The listen request answered with the refusal its credential now earns:
   # retryable when the store could not answer, a sign-in otherwise.
   defp refuse_stream(conn, id, :unavailable) do
-    refusal = Grimoire.Error.classify(:auth_provider_error)
+    refusal = Grimoire.classify(:auth_provider_error)
 
     sse_event(
       conn,
