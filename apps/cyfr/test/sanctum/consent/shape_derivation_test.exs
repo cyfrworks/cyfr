@@ -4,6 +4,8 @@
 defmodule Sanctum.Consent.ShapeDerivationTest do
   use ExUnit.Case, async: false
 
+  require Ecto.Query
+
   alias Sanctum.Consent.Bootstrap
   alias Sanctum.Consent.Loader
   alias Sanctum.Consent.ShapeDerivation
@@ -359,6 +361,56 @@ defmodule Sanctum.Consent.ShapeDerivationTest do
       # And no vault pointer was minted — a needs manifest has no legacy
       # grants, so the entry appears only when the operator binds one.
       assert authority.resources.vault == nil
+    end
+  end
+
+  describe "a stored manifest that does not decode" do
+    # A row altered outside the publish path: its manifest column holds
+    # bytes that are not JSON. The real facts port hands consent those
+    # bytes as storage holds them.
+    defp corrupt_manifest!(name) do
+      {1, _} =
+        Ecto.Query.from(c in Arca.Schemas.Component, where: c.name == ^name)
+        |> Arca.Repo.update_all(set: [manifest: ~s({"needs": {"api_key": )])
+
+      :ok
+    end
+
+    test "has no shape: every entry refuses it as corrupt, never the empty ask", %{ctx: ctx} do
+      publish!(ctx, "shape-corrupt", "1.0.0", %{manifest: Jason.encode!(@needs_caps_manifest)})
+      corrupt_manifest!("shape-corrupt")
+
+      ref = "reagent:local.shape-corrupt"
+      refusal = {:error, {:corrupt, {:manifest, ref}}}
+
+      assert ShapeDerivation.shape_input(ctx, ref) == refusal
+      assert ShapeDerivation.manifest_blocks(ctx, ref) == refusal
+      assert ShapeDerivation.live_digest(ctx, ref) == refusal
+
+      {:ok, row} = Sanctum.Consent.Components.get_latest(ctx, "shape-corrupt", "local", "reagent")
+      assert ShapeDerivation.dependency_releases(ctx, row, ref) == refusal
+
+      assert %Prima.Refusal{class: :corrupt, message: "The stored manifest is damaged."} =
+               Prima.Refusal.classify({:corrupt, {:manifest, ref}})
+    end
+
+    test "reads as corrupt consent, not as a component that asks for nothing", %{ctx: ctx} do
+      publish!(ctx, "shape-corrupt-status", "1.0.0")
+      corrupt_manifest!("shape-corrupt-status")
+
+      assert Aqua.ConsentStatus.state(ctx, "reagent:local.shape-corrupt-status") ==
+               {:error, :corrupt}
+    end
+
+    test "the registry's own reads still read it as none", %{ctx: ctx} do
+      publish!(ctx, "shape-corrupt-registry", "1.0.0")
+      corrupt_manifest!("shape-corrupt-registry")
+
+      assert {:ok, %{manifest: nil}} =
+               Compendium.Registry.get_latest(ctx, "shape-corrupt-registry", "local", "reagent")
+
+      assert {:ok, %{manifest: nil}} =
+               Compendium.Registry.get(ctx, "shape-corrupt-registry", "1.0.0", "local", "reagent")
     end
   end
 end

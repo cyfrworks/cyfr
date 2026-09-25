@@ -19,9 +19,14 @@ defmodule Opus.ReleaseTest do
     assert Release.role(%{"OPUS_ROLE" => "service"}) == :service
     assert Release.role(%{"OPUS_ROLE" => "runner"}) == :runner
 
-    assert_raise ArgumentError, ~r/OPUS_ROLE=worker names no role/, fn ->
-      Release.role(%{"OPUS_ROLE" => "worker"})
-    end
+    # The refusal names the setting and the roles it takes, never the
+    # value the environment carried.
+    error =
+      assert_raise ArgumentError, ~r/OPUS_ROLE names no role/, fn ->
+        Release.role(%{"OPUS_ROLE" => "worker"})
+      end
+
+    refute error.message =~ "worker"
 
     assert Release.role() == :service
   end

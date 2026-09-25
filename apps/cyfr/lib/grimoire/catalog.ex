@@ -1181,7 +1181,7 @@ defmodule Grimoire.Catalog do
          :ok <- authorize_declared_action(name, ctx, args, true),
          {:ok, cast} <- validate_chain_arguments(name, args),
          {:ok, target, server} <- in_chain_target(ctx, name, cast),
-         {:ok, resource} <- authority_step(authority, guest_fn, target, name) do
+         {:ok, resource} <- authority_step(authority, guest_fn, target) do
       warn_on_description_drift(ctx, authority, resource)
 
       # The server row the transition was judged on is the one dispatch
@@ -1210,24 +1210,19 @@ defmodule Grimoire.Catalog do
     end
   end
 
-  defp authority_step(authority, guest_fn, target, name) do
+  defp authority_step(authority, guest_fn, target) do
     case Sanctum.Authority.step(authority, guest_fn, target) do
       {:allow_tool, resource} ->
         {:ok, resource}
 
-      # Rendered through the vocabulary's own renderer — never `inspect`,
-      # which put internal terms on the guest's wire.
+      # Rostered reasons (`Prima.Refusal`), which the table renders in the
+      # authority vocabulary's own sentence and classes `forbidden`.
       {:deny, reason} ->
-        {:error, chain_denial(reason, name)}
+        {:error, {:invoke_denied, reason}}
 
-      {:invalid, {:malformed_target, fun, tag}} ->
-        {:error, "Invalid in-chain call: #{fun}/#{tag}"}
+      {:invalid, {:malformed_target, _fun, _tag} = malformed} ->
+        {:error, {:invoke_invalid, malformed}}
     end
-  end
-
-  defp chain_denial(reason, name) do
-    "Denied by chain authority: " <>
-      "#{Prima.Authority.Transition.deny_message(reason)} for '#{name}'"
   end
 
   # A spawn-shaped transition charged the invoke budget; this process
@@ -1263,7 +1258,7 @@ defmodule Grimoire.Catalog do
       {:error, reason} ->
         # The slot the transition charged goes back: the row refused it.
         Sanctum.Authority.BudgetCounter.release(authority.budget)
-        refused(opts, args, Error.admission(chain_denial(reason, name)))
+        refused(opts, args, Error.admission({:invoke_denied, reason}))
     end
   end
 

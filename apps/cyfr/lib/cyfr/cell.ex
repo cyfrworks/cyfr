@@ -359,7 +359,7 @@ defmodule Cyfr.Cell do
 
       {:error, reason} ->
         raise "[Cyfr] FATAL: this member's cell slot could not be read or written " <>
-                "(#{inspect(reason)})."
+                "(#{Prima.LoggerContext.shape(reason)})."
     end
   end
 
@@ -521,7 +521,8 @@ defmodule Cyfr.Cell do
 
       {:error, reason} ->
         _ = Arca.ControlPlane.release()
-        raise "[Cyfr] FATAL: the cell roster could not be read (#{inspect(reason)})."
+
+        raise "[Cyfr] FATAL: the cell roster could not be read (#{Prima.LoggerContext.shape(reason)})."
     end
   end
 
@@ -545,7 +546,8 @@ defmodule Cyfr.Cell do
         :ok
 
       others ->
-        raise "[Cyfr] FATAL: this node is connected to #{inspect(others)} but CYFR_CLUSTER is " <>
+        raise "[Cyfr] FATAL: this node is connected to #{length(others)} other node(s) " <>
+                "but CYFR_CLUSTER is " <>
                 "not set. A cell of control planes needs the multi-node work; a single one " <>
                 "must not be distributed."
     end

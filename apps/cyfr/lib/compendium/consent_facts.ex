@@ -36,12 +36,15 @@ defmodule Compendium.ConsentFacts do
   def resolve_verified(%Context{} = ctx, component),
     do: Activation.resolve_verified(ctx, component)
 
+  # The row with its manifest as storage holds it when it does not decode:
+  # consent refuses that as corrupt (`{:corrupt, {:manifest, ref}}`), where
+  # a manifest read as none would derive the empty ask.
   @impl Sanctum.Consent.Components
   def get_component(%Context{} = ctx, name, nil, publisher, type),
-    do: Registry.get_latest(ctx, name, publisher, type)
+    do: Registry.get_latest_as_stored(ctx, name, publisher, type)
 
   def get_component(%Context{} = ctx, name, version, publisher, type),
-    do: Registry.get(ctx, name, version, publisher, type)
+    do: Registry.get_as_stored(ctx, name, version, publisher, type)
 
   @impl Sanctum.Consent.Components
   def agent_rows(%Context{} = ctx), do: AgentSource.rows(ctx)

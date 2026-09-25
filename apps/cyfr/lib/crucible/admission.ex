@@ -288,7 +288,7 @@ defmodule Crucible.Admission do
     with {:ok, grant} <- grant(ctx, opts),
          {:ok, pinned, resolution} <- resolve(ctx, reference),
          {:ok, component_ref, extracted_type, component} <- inspect_component(ctx, pinned),
-         {:ok, component_type} <- authoritative_type(extracted_type, opts[:type], pinned) do
+         {:ok, component_type} <- authoritative_type(extracted_type, opts[:type]) do
       record =
         ctx
         |> new_record(pinned, input, opts, component_type, component, resolution)
@@ -375,11 +375,11 @@ defmodule Crucible.Admission do
   # The registry's type is authoritative — type selects WASI capabilities, so
   # a caller-supplied :type may assert but never decide. A missing registry
   # type or a mismatched assertion refuses.
-  defp authoritative_type(nil, _asserted, _reference) do
+  defp authoritative_type(nil, _asserted) do
     {:error, {:setup_required, :registry_binding}}
   end
 
-  defp authoritative_type(extracted, asserted, reference) do
+  defp authoritative_type(extracted, asserted) do
     with {:ok, component_type} <- parse_component_type(extracted) do
       case asserted && parse_component_type(asserted) do
         nil ->
@@ -389,9 +389,7 @@ defmodule Crucible.Admission do
           {:ok, component_type}
 
         {:ok, other} ->
-          {:error,
-           "Requested type #{other} does not match the registry type " <>
-             "#{component_type} for '#{reference}'"}
+          {:error, {:component_type_mismatch, other, component_type}}
 
         {:error, reason} ->
           {:error, reason}
@@ -407,9 +405,7 @@ defmodule Crucible.Admission do
         {:ok, component_type}
 
       _ ->
-        {:error,
-         "Invalid component type: #{inspect(type)}. " <>
-           "Must be one of: #{Enum.join(Prima.ComponentRef.executable_types(), ", ")}"}
+        {:error, :invalid_component_type}
     end
   end
 
@@ -494,7 +490,8 @@ defmodule Crucible.Admission do
         enforce_authority(run, authority, input)
 
       other ->
-        raise ArgumentError, "execution without an authority is not a thing: #{inspect(other)}"
+        raise ArgumentError,
+              "execution without an authority is not a thing: #{Prima.LoggerContext.shape(other)}"
     end
   end
 
@@ -717,8 +714,8 @@ defmodule Crucible.Admission do
       {:error, :blob_not_found} ->
         {:error, {:not_found, {:blob, digest}}}
 
-      {:error, {:integrity, sentence}} ->
-        {:error, sentence}
+      {:error, {:corrupt, {:artifact, _digest}}} = corrupt ->
+        corrupt
 
       {:error, reason} ->
         Logger.error(

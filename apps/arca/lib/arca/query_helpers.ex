@@ -79,7 +79,7 @@ defmodule Arca.QueryHelpers do
   def where_athanor(_query, athanor_id) do
     raise ArgumentError,
           "Arca.QueryHelpers.where_athanor/2: a resolved athanor_id is required, " <>
-            "got #{inspect(athanor_id)}"
+            "got #{Prima.LoggerContext.shape(athanor_id)}"
   end
 
   @doc """
@@ -96,8 +96,8 @@ defmodule Arca.QueryHelpers do
     if athanor_id in [nil, ""] do
       raise ArgumentError,
             "Arca.QueryHelpers.where_tenant/2: a resolved athanor_id is required " <>
-              "(user_id=#{inspect(actor.user_id)} scope=#{inspect(actor.scope)} " <>
-              "system=#{inspect(actor.system)})"
+              "(user_id=#{Prima.LoggerContext.shape(actor.user_id)} scope=#{Prima.LoggerContext.shape(actor.scope)} " <>
+              "system=#{Prima.LoggerContext.shape(actor.system)})"
     end
 
     from(q in query, where: q.athanor_id == ^athanor_id)
@@ -113,8 +113,8 @@ defmodule Arca.QueryHelpers do
     if athanor_id in [nil, ""] do
       raise ArgumentError,
             "Arca.QueryHelpers.stamp_tenant!/2: a resolved athanor_id is required " <>
-              "(user_id=#{inspect(actor.user_id)} scope=#{inspect(actor.scope)} " <>
-              "system=#{inspect(actor.system)})"
+              "(user_id=#{Prima.LoggerContext.shape(actor.user_id)} scope=#{Prima.LoggerContext.shape(actor.scope)} " <>
+              "system=#{Prima.LoggerContext.shape(actor.system)})"
     end
 
     Map.put(attrs, :athanor_id, athanor_id)

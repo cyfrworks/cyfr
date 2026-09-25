@@ -56,7 +56,7 @@ defmodule Arca.ProvisioningClaims do
              is_binary(entry_kind) and
              is_integer(lease_ms) and lease_ms > 0 do
     if entry_kind not in ProvisioningClaim.entry_kinds(),
-      do: raise(ArgumentError, "unknown provisioning entry kind #{inspect(entry_kind)}")
+      do: raise(ArgumentError, "unknown provisioning entry kind #{Prima.LoggerContext.shape(entry_kind)}")
 
     Arca.Repo.Errors.with_db_rescue("Arca.ProvisioningClaims.claim", fn ->
       take(athanor_id, owner, entry_kind, lease_ms, @rounds)
@@ -95,7 +95,7 @@ defmodule Arca.ProvisioningClaims do
       when is_binary(athanor_id) and athanor_id != "" and is_binary(owner) and is_integer(fence) and
              is_binary(outcome) and (is_binary(detail) or is_nil(detail)) do
     if outcome not in ProvisioningClaim.outcomes(),
-      do: raise(ArgumentError, "unknown provisioning outcome #{inspect(outcome)}")
+      do: raise(ArgumentError, "unknown provisioning outcome #{Prima.LoggerContext.shape(outcome)}")
 
     Arca.Repo.Errors.with_db_rescue("Arca.ProvisioningClaims.settle", fn ->
       athanor_id

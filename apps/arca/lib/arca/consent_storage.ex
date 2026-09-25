@@ -107,7 +107,7 @@ defmodule Arca.ConsentStorage do
 
       other ->
         raise ArgumentError,
-              "consent revisions require a blob_digest, got: #{inspect(other)}"
+              "consent revisions require a blob_digest, got: #{Prima.LoggerContext.shape(other)}"
     end
 
     attrs

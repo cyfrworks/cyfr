@@ -400,7 +400,7 @@ defmodule Arca.JobClaims do
        do: %{kind: kind, key: key, owner: owner, fence: fence}
 
   defp identity!(held),
-    do: raise(ArgumentError, "not a held job claim: #{inspect(Map.keys(held))}")
+    do: raise(ArgumentError, "not a held job claim: #{Prima.LoggerContext.shape(held)}")
 
   # The row while it is still this holder's, at the fence it read.
   defp mine(%{kind: kind, key: key, owner: owner, fence: fence}) do
@@ -433,6 +433,6 @@ defmodule Arca.JobClaims do
 
   defp known!(kind) do
     if kind not in JobClaim.kinds(),
-      do: raise(ArgumentError, "unknown job claim kind #{inspect(kind)}")
+      do: raise(ArgumentError, "unknown job claim kind #{Prima.LoggerContext.shape(kind)}")
   end
 end

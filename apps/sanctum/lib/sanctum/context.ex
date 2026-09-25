@@ -239,14 +239,14 @@ defmodule Sanctum.Context do
 
     unless scope in @valid_scopes do
       raise ArgumentError,
-            "invalid scope #{inspect(scope)}, must be one of #{inspect(@valid_scopes)}"
+            "invalid scope #{Prima.LoggerContext.shape(scope)}, must be one of #{inspect(@valid_scopes)}"
     end
 
     auth_method = Map.get(attrs, :auth_method)
 
     unless auth_method in @valid_auth_methods do
       raise ArgumentError,
-            "invalid auth_method #{inspect(auth_method)}, must be one of " <>
+            "invalid auth_method #{Prima.LoggerContext.shape(auth_method)}, must be one of " <>
               "#{inspect(@valid_auth_methods)}"
     end
 
@@ -254,7 +254,7 @@ defmodule Sanctum.Context do
 
     unless plane in @valid_planes do
       raise ArgumentError,
-            "invalid plane #{inspect(plane)}, must be one of #{inspect(@valid_planes)}"
+            "invalid plane #{Prima.LoggerContext.shape(plane)}, must be one of #{inspect(@valid_planes)}"
     end
 
     for field <- [
@@ -271,7 +271,7 @@ defmodule Sanctum.Context do
       val = Map.get(attrs, field)
 
       unless is_nil(val) or is_binary(val) do
-        raise ArgumentError, "#{field} must be a string or nil, got: #{inspect(val)}"
+        raise ArgumentError, "#{field} must be a string or nil, got: #{Prima.LoggerContext.shape(val)}"
       end
     end
 
@@ -286,7 +286,7 @@ defmodule Sanctum.Context do
     if authenticated and is_nil(Map.get(attrs, :user_id)) do
       raise ArgumentError,
             "Sanctum.Context.build/1: authenticated contexts require :user_id " <>
-              "(scope=#{inspect(scope)} auth_method=#{inspect(auth_method)})."
+              "(scope=#{Prima.LoggerContext.shape(scope)} auth_method=#{Prima.LoggerContext.shape(auth_method)})."
     end
 
     permissions =
@@ -369,7 +369,7 @@ defmodule Sanctum.Context do
        do: binding
 
   defp binding!(other),
-    do: raise(ArgumentError, "credential_binding is malformed: #{inspect(other)}")
+    do: raise(ArgumentError, "credential_binding is malformed: #{Prima.LoggerContext.shape(other)}")
 
   defp deadline!(nil), do: nil
   defp deadline!(%DateTime{} = deadline), do: deadline
@@ -378,14 +378,14 @@ defmodule Sanctum.Context do
     do:
       raise(
         ArgumentError,
-        "credential_deadline must be a DateTime or nil, got: #{inspect(other)}"
+        "credential_deadline must be a DateTime or nil, got: #{Prima.LoggerContext.shape(other)}"
       )
 
   defp validated_at!(nil), do: nil
   defp validated_at!(%DateTime{} = at), do: at
 
   defp validated_at!(other),
-    do: raise(ArgumentError, "validated_at must be a DateTime or nil, got: #{inspect(other)}")
+    do: raise(ArgumentError, "validated_at must be a DateTime or nil, got: #{Prima.LoggerContext.shape(other)}")
 
   @doc """
   The single builder for server-constructed, no-external-credential contexts.

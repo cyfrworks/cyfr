@@ -280,12 +280,50 @@ defmodule Crucible.Close do
     end
   end
 
-  # An application-level error a component reports in its output.
-  defp application_error(%{"error" => %{"message" => msg}}) when is_binary(msg), do: msg
-  defp application_error(%{"error" => %{"message" => msg}}), do: inspect(msg)
-  defp application_error(%{"error" => msg}) when is_binary(msg), do: msg
-  defp application_error(%{"error" => err}) when is_map(err), do: inspect(err)
-  defp application_error(_output), do: nil
+  # A component's own error lands in `executions.error_message`, a row that
+  # outlives the call and that the console and the wire read back. The
+  # guest's words are kept, but bounded: 1 024 bytes is room for any
+  # sentence a component means a person to read and small enough that a
+  # component cannot make its row the size of its output.
+  @application_error_bytes 1_024
+
+  @doc """
+  The message an application-level error a component reports in its
+  output is recorded as, or nil when the output reports none.
+
+  A string is the component's own words; anything else is its JSON with
+  the values under sensitive keys redacted (`Prima.Sanitizer`), never an
+  Elixir rendering. Either is cut to #{@application_error_bytes} bytes on
+  a character boundary.
+  """
+  @spec application_error(term()) :: String.t() | nil
+  def application_error(%{"error" => %{"message" => msg}}), do: bounded(msg)
+  def application_error(%{"error" => err}) when is_binary(err) or is_map(err), do: bounded(err)
+  def application_error(_output), do: nil
+
+  defp bounded(message) when is_binary(message), do: cap(message)
+
+  defp bounded(term) do
+    case Jason.encode(Prima.Sanitizer.sanitize(term)) do
+      {:ok, json} -> cap(json)
+      {:error, _} -> "The component reported an error that is not JSON."
+    end
+  end
+
+  defp cap(text) when byte_size(text) <= @application_error_bytes, do: text
+
+  defp cap(text) do
+    whole = binary_part(text, 0, @application_error_bytes - byte_size("…"))
+    valid_prefix(whole) <> "…"
+  end
+
+  # The longest prefix that is valid UTF-8: the cut may land inside a
+  # character, and the row is text.
+  defp valid_prefix(bytes) do
+    if String.valid?(bytes),
+      do: bytes,
+      else: valid_prefix(binary_part(bytes, 0, byte_size(bytes) - 1))
+  end
 
   defp audit_error(_record, :ok), do: nil
 

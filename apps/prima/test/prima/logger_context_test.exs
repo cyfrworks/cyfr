@@ -58,6 +58,23 @@ defmodule Prima.LoggerContextTest do
     end
   end
 
+  describe "shape/1" do
+    test "is the projection the unexpected-message line prints" do
+      for term <- [:stray, {:DOWN, make_ref(), :process, self(), :normal}, %{"k" => 1}, [1, 2]] do
+        log = capture_log(fn -> LoggerContext.unexpected(__MODULE__, term) end)
+        assert log =~ "unexpected message: " <> LoggerContext.shape(term)
+      end
+    end
+
+    test "names no value, for a raise or a console line" do
+      secret = "sk-live-0123456789abcdef"
+
+      for term <- [secret, {:error, secret}, %{token: secret}, [secret], %URI{userinfo: secret}] do
+        refute LoggerContext.shape(term) =~ "0123456789abcdef"
+      end
+    end
+  end
+
   describe "unexpected/3" do
     defp line(message, level \\ :warning) do
       log = capture_log(fn -> LoggerContext.unexpected(__MODULE__, message, level) end)

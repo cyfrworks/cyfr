@@ -47,10 +47,18 @@ defmodule Sanctum.Auth.Identity do
   # Reject empty components. An empty iss/sub produced a degenerate key like
   # "github||" that can collide across people and normalize unexpectedly — an
   # identity must have all three parts.
+  #
+  # The message names which part is wrong and never its value: a subject or
+  # an issuer is a person's identity.
   def key(provider, iss, sub) do
+    wrong =
+      for {part, value} <- [provider: provider, iss: iss, sub: sub],
+          not (is_binary(value) and value != ""),
+          do: part
+
     raise ArgumentError,
-          "invalid identity components: " <>
-            "provider=#{inspect(provider)} iss=#{inspect(iss)} sub=#{inspect(sub)}"
+          "invalid identity components: #{Enum.join(wrong, ", ")} " <>
+            "must be non-empty strings"
   end
 
   @doc """
@@ -112,12 +120,13 @@ defmodule Sanctum.Auth.Identity do
     # provider is ever added without a canonical issuer registered here.
     case Map.fetch(@builtin, provider) do
       {:ok, iss} -> iss
-      :error -> raise ArgumentError, "no canonical issuer registered for provider #{provider}"
+      :error -> raise ArgumentError, "no canonical issuer registered for the provider"
     end
   end
 
   def issuer(other) do
-    raise ArgumentError, "no canonical issuer registered for provider #{inspect(other)}"
+    raise ArgumentError,
+          "no canonical issuer registered for a provider of #{Prima.LoggerContext.shape(other)}"
   end
 
   @doc """

@@ -237,7 +237,7 @@ defmodule Sanctum.Session do
 
     unless surface in [:console, :tincture] do
       raise ArgumentError,
-            "Session.load surface must be :console or :tincture, got: #{inspect(surface)}"
+            "Session.load surface must be :console or :tincture, got: #{Prima.LoggerContext.shape(surface)}"
     end
 
     case Arca.SessionStorage.get_session(token_hash) do

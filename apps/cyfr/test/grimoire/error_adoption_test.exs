@@ -32,6 +32,18 @@ defmodule Grimoire.ErrorAdoptionTest do
   counted 2 where `Locus.MCP` counted 11, because the build orchestration's
   sentences live in `Compendium.Builds`, which defines no tool and which
   the scan never opened.
+
+  ## Crashes and console lines
+
+  A `raise` message and an `IO` line reach a crash report, a supervisor's
+  log and a terminal, so they carry the shape of what went wrong — a fixed
+  sentence and the offending term's kind (`Prima.LoggerContext.shape/1`) —
+  never the term, which may be a credential, an identity or a tenant's
+  data. `@raise_inspects` is the same ratchet over every `inspect` inside a
+  `raise` or an `IO` call whose argument names a variable: what remains
+  names a module or a name the code itself declares, and says so. An
+  `inspect` of a constant — a module attribute, `__MODULE__`, a zero-argument
+  roster call — names no runtime value and is not counted.
   """
 
   use ExUnit.Case, async: true
@@ -78,7 +90,7 @@ defmodule Grimoire.ErrorAdoptionTest do
     "apps/cyfr/lib/compendium/component.ex" => 3,
     "apps/cyfr/lib/compendium/providers/shared.ex" => 4,
     "apps/cyfr/lib/compendium/registry.ex" => 4,
-    "apps/cyfr/lib/grimoire/catalog.ex" => 4,
+    "apps/cyfr/lib/grimoire/catalog.ex" => 3,
     # The build orchestration behind `Compendium.Builds.Provider`: the
     # three this ratchet could not see until the scan followed a tool
     # module into what it calls.
@@ -104,6 +116,51 @@ defmodule Grimoire.ErrorAdoptionTest do
     "apps/sanctum/lib/sanctum/providers/athanor.ex" => 1,
     "apps/sanctum/lib/sanctum/providers/tincture_visibility.ex" => 1,
     "apps/sanctum/lib/sanctum/vault.ex" => 1
+  }
+
+  # module path => `inspect` calls inside a `raise` or an `IO` call whose
+  # argument names a variable. Each is a name, never a value.
+  @raise_inspects %{
+    # The config key that is missing, an atom this module spells.
+    "apps/arca/lib/arca/adapters/s3.ex" => 1,
+    # A changeset's field names and their validation sentences, which
+    # `Arca.Data.invalid/1` renders interpolating only limits.
+    "apps/arca/lib/arca/decision_log.ex" => 2,
+    # The overlaid roots and the locator map the composition root installs:
+    # root strings and module names, both literals of `Cyfr.Application`.
+    "apps/arca/lib/arca/storage/unit_locator.ex" => 4,
+    # Table names read from the live schema.
+    "apps/arca/lib/arca/tenant_tables.ex" => 2,
+    # The keyring's labels, which name keys and are not key material, and
+    # the application's boot refusals; the composition root is S5's to
+    # recut (the label prefix a too-long label prints is the one to review
+    # there).
+    "apps/cyfr/lib/cyfr/application.ex" => 5,
+    # An application name from the boundary table.
+    "apps/cyfr/lib/cyfr/boundaries.ex" => 1,
+    # The payload module a topic row declares and the one it was handed.
+    "apps/cyfr/lib/cyfr/bus.ex" => 2,
+    # A payload module and the kinds it declares.
+    "apps/cyfr/lib/cyfr/bus/payload.ex" => 3,
+    # Configured provider modules that fail to load.
+    "apps/cyfr/lib/grimoire/catalog.ex" => 2,
+    # The installed port module.
+    "apps/cyfr/lib/grimoire/proxy.ex" => 1,
+    # The config keys that are missing or malformed, atoms this module
+    # spells.
+    "apps/opus/lib/opus/credentials.ex" => 2,
+    # The keeper module that cannot run.
+    "apps/opus/lib/opus/keeper.ex" => 1,
+    # The malformed setting's config key.
+    "apps/opus/lib/opus/settings.ex" => 1,
+    # The installed port module.
+    "apps/prima/lib/prima/caps.ex" => 1,
+    # The provider module whose declaration is malformed.
+    "apps/prima/lib/prima/provider.ex" => 1,
+    # The installed port module.
+    "apps/sanctum/lib/sanctum/consent/components.ex" => 1,
+    # The installed port module.
+    "apps/sanctum/lib/sanctum/grimoire.ex" => 1
   }
 
   defp root, do: Path.expand("../../../..", __DIR__)
@@ -219,6 +276,138 @@ defmodule Grimoire.ErrorAdoptionTest do
            #{Enum.join(Enum.sort(shrunk), "\n")}
            """
   end
+
+  describe "raise and IO lines" do
+    test "no file inspects more runtime terms into a raise or an IO line than recorded" do
+      counts =
+        for path <- lib_files(),
+            rel = Path.relative_to(path, root()),
+            count = length(raise_inspects(rel, Prima.Test.SourceTree.read(path))),
+            count > 0,
+            into: %{},
+            do: {rel, count}
+
+      differ =
+        for rel <- Enum.uniq(Map.keys(counts) ++ Map.keys(@raise_inspects)),
+            now = Map.get(counts, rel, 0),
+            recorded = Map.get(@raise_inspects, rel, 0),
+            now != recorded,
+            do: "  #{rel}: #{now} now, #{recorded} recorded"
+
+      assert differ == [],
+             """
+             These files `inspect` a runtime term into a `raise` or an `IO`
+             line a different number of times than recorded:
+
+             #{Enum.join(Enum.sort(differ), "\n")}
+
+             A crash report and a console carry the message whole. Name the
+             term's kind with `Prima.LoggerContext.shape/1` and say what is
+             wrong in fixed words; a count that fell is lowered here (and
+             the line deleted at zero). A new site that names a module or a
+             declared name joins the roster with that reason.
+             """
+    end
+
+    test "the scan counts a runtime term and skips a constant, a log line and a return" do
+      source = ~S"""
+      defmodule Planted do
+        require Logger
+
+        @roster [:a, :b]
+
+        def raised(other), do: raise(ArgumentError, "got #{inspect(other)}")
+        def piped(reason), do: raise("failed: " <> (reason |> inspect()))
+        def printed(reason), do: IO.puts(:stderr, "failed: #{inspect(reason)}")
+        def dumped(term), do: IO.inspect(term)
+        def field(row), do: raise(ArgumentError, "#{inspect(row.struct)} is wrong")
+        def constant(_), do: raise(ArgumentError, "one of #{inspect(@roster)} in #{inspect(__MODULE__)}")
+        def roster(_), do: raise(ArgumentError, "one of #{inspect(Planted.values())}")
+        def shaped(other), do: raise(ArgumentError, "got #{Prima.LoggerContext.shape(other)}")
+        def logged(reason), do: Logger.warning("failed: #{inspect(reason)}")
+        def returned(reason), do: {:error, inspect(reason)}
+      end
+      """
+
+      assert raise_inspects("planted.ex", source) |> Enum.map(&elem(&1, 0)) ==
+               [:raised, :piped, :printed, :dumped, :field]
+    end
+
+    test "the roster names only files that still inspect into a raise" do
+      gone =
+        for rel <- Map.keys(@raise_inspects),
+            path = Path.join(root(), rel),
+            not File.exists?(path) or raise_inspects(rel, Prima.Test.SourceTree.read(path)) == [],
+            do: rel
+
+      assert gone == [], "delete these roster lines: #{inspect(Enum.sort(gone))}"
+    end
+  end
+
+  # Each `inspect` of an expression naming a variable inside a `raise`,
+  # `reraise` or `IO` call, and each `IO.inspect`, as `{function, line}`.
+  defp raise_inspects(path, source) do
+    ast = Code.string_to_quoted!(source, file: path, columns: true)
+    {_ast, {_stack, sites}} = Macro.traverse(ast, {[], []}, &enter/2, &leave/2)
+    Enum.reverse(sites)
+  end
+
+  defp enter({kind, _meta, [head | _]} = node, {stack, sites})
+       when kind in [:def, :defp, :defmacro, :defmacrop],
+       do: {node, {[{:function, function_name(head)} | stack], sites}}
+
+  defp enter({{:., _, [{:__aliases__, _, [:IO]}, :inspect]}, meta, [subject | _]} = node, acc),
+    do: inspected(node, meta, subject, :io, acc)
+
+  defp enter({{:., _, [{:__aliases__, _, [:IO]}, _]}, _, _} = node, {stack, sites}),
+    do: {node, {[:crash | stack], sites}}
+
+  defp enter({call, _meta, args} = node, {stack, sites})
+       when call in [:raise, :reraise] and is_list(args),
+       do: {node, {[:crash | stack], sites}}
+
+  defp enter({:|>, meta, [subject, {:inspect, _, _}]} = node, {stack, sites}),
+    do: inspected(node, meta, subject, :crash in stack, {stack, sites})
+
+  defp enter({:inspect, meta, [subject | _]} = node, {stack, sites}),
+    do: inspected(node, meta, subject, :crash in stack, {stack, sites})
+
+  defp enter(node, {stack, sites}), do: {node, {[:node | stack], sites}}
+
+  defp leave(node, {[_ | stack], sites}), do: {node, {stack, sites}}
+
+  defp inspected(node, meta, subject, counted, {stack, sites}) do
+    sites =
+      if counted in [true, :io] and names_variable?(subject),
+        do: [{enclosing(stack), meta[:line]} | sites],
+        else: sites
+
+    {node, {[:inspect | stack], sites}}
+  end
+
+  # A variable other than a special form (`__MODULE__`), outside a module
+  # attribute: a term the code received rather than one it spelled.
+  defp names_variable?(subject) do
+    {_subject, found?} =
+      Macro.prewalk(subject, false, fn
+        {:@, _meta, _attribute}, found ->
+          {:attribute, found}
+
+        {name, _meta, context} = node, found when is_atom(name) and is_atom(context) ->
+          {node, found or not String.starts_with?(Atom.to_string(name), "__")}
+
+        node, found ->
+          {node, found}
+      end)
+
+    found?
+  end
+
+  defp enclosing(stack),
+    do: Enum.find_value(stack, :module_body, &(match?({:function, _}, &1) && elem(&1, 1)))
+
+  defp function_name({:when, _, [head | _]}), do: function_name(head)
+  defp function_name({name, _, _}) when is_atom(name), do: name
 
   test "the roster names only modules the scan still reaches" do
     live = MapSet.new(scanned_modules(), &Path.relative_to(&1, root()))

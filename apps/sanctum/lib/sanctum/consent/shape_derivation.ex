@@ -23,6 +23,10 @@ defmodule Sanctum.Consent.ShapeDerivation do
   vocabulary — one spelling, no nesting grammar. Empty lists and absent
   limits are omitted: declaring nothing and asking for nothing are the
   same shape.
+
+  A stored manifest that does not decode has no shape: every entry here
+  answers `{:error, {:corrupt, {:manifest, source_ref}}}` for it, never the
+  empty ask, which would read as a component that asks for nothing.
   """
 
   alias Prima.Manifest.Caps
@@ -30,8 +34,6 @@ defmodule Sanctum.Consent.ShapeDerivation do
   alias Sanctum.Consent.Components
   alias Sanctum.Consent.ShapeDigest
   alias Prima.ToolPattern
-
-  require Logger
 
   @doc """
   The live shape digest for a source ref, or `{:error, reason}` when the
@@ -76,9 +78,10 @@ defmodule Sanctum.Consent.ShapeDerivation do
   """
   @spec shape_input(Sanctum.Context.t(), String.t()) :: {:ok, map()} | {:error, term()}
   def shape_input(ctx, source_ref) do
-    with {:ok, row, needs, caps} <- manifest_row(ctx, source_ref) do
-      needs = needs || []
-      caps = caps || Caps.empty()
+    with {:ok, row, manifest} <- manifest_row(ctx, source_ref),
+         {:ok, releases} <- dependency_releases(ctx, row, source_ref) do
+      needs = Needs.from_manifest(manifest) || []
+      caps = Caps.from_manifest(manifest, &Arca.Storage.valid_guest_path?/1) || Caps.empty()
 
       {:ok,
        %{
@@ -88,15 +91,14 @@ defmodule Sanctum.Consent.ShapeDerivation do
          caps: digest_caps(caps),
          tool_actions: expand_tools(caps.tools),
          slots: Enum.sort(Enum.map(needs, & &1.name)),
-         dependency_releases: dependency_releases(ctx, row, source_ref)
+         dependency_releases: releases
        }
-       |> Prima.MapUtil.put_present(:model_target, model_target(row, source_ref))
-       |> Prima.MapUtil.put_present(:tool_policy, tool_policy(row, source_ref))}
+       |> Prima.MapUtil.put_present(:model_target, model_target(manifest))
+       |> Prima.MapUtil.put_present(:tool_policy, tool_policy(manifest))}
     end
   end
 
-  defp model_target(row, source_ref) do
-    manifest = manifest(row, source_ref)
+  defp model_target(manifest) do
     agent = manifest["agent"] || %{}
 
     case {manifest["type"], agent["catalyst"], agent["model"]} do
@@ -109,9 +111,7 @@ defmodule Sanctum.Consent.ShapeDerivation do
     end
   end
 
-  defp tool_policy(row, source_ref) do
-    manifest = manifest(row, source_ref)
-
+  defp tool_policy(manifest) do
     case get_in(manifest, ["agent", "policy"]) do
       %{"auto" => auto, "ask" => ask} when is_list(auto) and is_list(ask) ->
         %{auto: auto, ask: ask}
@@ -147,33 +147,41 @@ defmodule Sanctum.Consent.ShapeDerivation do
   A closure that cannot be resolved contributes nothing rather than
   failing the shape: the loader has its own `{:incomplete, …}` path for an
   unresolvable world (`setup_required`), and a shape that errored here
-  would report the wrong thing.
+  would report the wrong thing. A source whose own manifest does not
+  decode is not an unresolvable world but a damaged row: its closure would
+  resolve to the source alone, so it is refused as corrupt instead.
   """
-  @spec dependency_releases(Sanctum.Context.t(), map(), String.t()) :: [String.t()]
+  @spec dependency_releases(Sanctum.Context.t(), map(), String.t()) ::
+          {:ok, [String.t()]} | {:error, {:corrupt, {:manifest, String.t()}}}
   def dependency_releases(ctx, row, source_ref) do
-    case Components.resolve(ctx, row) do
-      {:ok, %{graph: graph}} when is_map(graph) ->
-        graph
-        |> Enum.reject(fn {node_key, _digest} -> node_key == source_ref end)
-        |> Enum.map(fn {node_key, digest} -> "#{node_key}@#{digest}" end)
-        |> Enum.sort()
+    with {:ok, _manifest} <- manifest(row, source_ref) do
+      case Components.resolve(ctx, row) do
+        {:ok, %{graph: graph}} when is_map(graph) ->
+          {:ok,
+           graph
+           |> Enum.reject(fn {node_key, _digest} -> node_key == source_ref end)
+           |> Enum.map(fn {node_key, digest} -> "#{node_key}@#{digest}" end)
+           |> Enum.sort()}
 
-      _unresolvable ->
-        []
+        _unresolvable ->
+          {:ok, []}
+      end
     end
   end
 
   @doc """
   The declared manifest blocks for a source ref's latest release:
   `{:ok, needs, caps}` with `nil` for an absent block, or an error when
-  the row cannot be read. The blocks are validated at registration, so
-  `nil` from a present-but-invalid block cannot occur on a stored row.
+  the row cannot be read or its manifest does not decode. The blocks are
+  validated at registration, so `nil` from a present-but-invalid block
+  cannot occur on a stored row.
   """
   @spec manifest_blocks(Sanctum.Context.t(), String.t()) ::
           {:ok, [map()] | nil, map() | nil} | {:error, term()}
   def manifest_blocks(ctx, source_ref) do
-    with {:ok, _row, needs, caps} <- manifest_row(ctx, source_ref) do
-      {:ok, needs, caps}
+    with {:ok, _row, manifest} <- manifest_row(ctx, source_ref) do
+      {:ok, Needs.from_manifest(manifest),
+       Caps.from_manifest(manifest, &Arca.Storage.valid_guest_path?/1)}
     end
   end
 
@@ -182,11 +190,9 @@ defmodule Sanctum.Consent.ShapeDerivation do
   # its other callers read.
   defp manifest_row(ctx, source_ref) do
     with {:ok, ref} <- Prima.ComponentRef.parse(source_ref),
-         {:ok, row} <- Components.get_latest(ctx, ref.name, ref.namespace, ref.type) do
-      manifest = manifest(row, source_ref)
-
-      {:ok, row, Needs.from_manifest(manifest),
-       Caps.from_manifest(manifest, &Arca.Storage.valid_guest_path?/1)}
+         {:ok, row} <- Components.get_latest(ctx, ref.name, ref.namespace, ref.type),
+         {:ok, manifest} <- manifest(row, source_ref) do
+      {:ok, row, manifest}
     end
   end
 
@@ -248,16 +254,12 @@ defmodule Sanctum.Consent.ShapeDerivation do
     end)
   end
 
-  # A manifest that does not decode declares nothing. The line names the
-  # component, never the manifest's bytes.
+  # A manifest that does not decode is a damaged row, refused by the ref it
+  # was read under and never by its bytes.
   defp manifest(row, ref) do
     case Prima.Manifest.decode_strict(Map.get(row, :manifest) || Map.get(row, "manifest")) do
-      {:ok, manifest} ->
-        manifest
-
-      {:error, :malformed_manifest} ->
-        Logger.warning("[Sanctum.Consent.ShapeDerivation] manifest malformed: #{ref}")
-        %{}
+      {:ok, manifest} -> {:ok, manifest}
+      {:error, :malformed_manifest} -> {:error, {:corrupt, {:manifest, ref}}}
     end
   end
 end

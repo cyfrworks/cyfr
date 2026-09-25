@@ -143,7 +143,8 @@ defmodule Prima.Decision do
 
     cond do
       unknown != [] ->
-        raise ArgumentError, "invalid decision: unknown fields #{inspect(unknown)}"
+        raise ArgumentError,
+              "invalid decision: unknown fields of #{Prima.LoggerContext.shape(Map.take(fields, unknown))}"
 
       true ->
         case validate(decision) do

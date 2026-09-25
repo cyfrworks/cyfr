@@ -392,8 +392,13 @@ defmodule Aqua.Providers.NotesTest do
 
     # A chain whose authority predates the notes actions is denied before
     # the tool is reached — legibly, so re-consent is the obvious answer.
-    assert {:error, %Prima.Refusal{stage: :admission, reason: "Denied by chain authority: " <> _}} =
-             in_chain(ctx, args, granting([{"notes", "read"}]))
+    assert {:error,
+            %Prima.Refusal{
+              stage: :admission,
+              class: :forbidden,
+              reason: {:invoke_denied, :tool_not_granted},
+              message: "Denied by chain authority: " <> _
+            }} = in_chain(ctx, args, granting([{"notes", "read"}]))
   end
 
   test "list and search answer pages, one budget across every estate", %{ctx: ctx, home: home} do

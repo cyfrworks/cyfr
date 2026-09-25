@@ -29,6 +29,9 @@ defmodule Prima.RefusalTest do
     {{:corrupt, {:digest, "The artifact"}}, :corrupt},
     {{:corrupt, {:profile, "prof_1"}}, :corrupt},
     {{:corrupt, {:manifest, "c:local.x:1.0.0"}}, :corrupt},
+    {{:corrupt, {:artifact, "sha256:ab12"}}, :corrupt},
+    {{:component_type_mismatch, :formula, :reagent}, :invalid_argument},
+    {:invalid_component_type, :invalid_argument},
     {{:corrupt, {:settings, :retention}}, :corrupt},
     {{:corrupt, :registry_credential}, :corrupt},
     {{:registry, :policy_version_mismatch, "2026-09"}, :conflict},
@@ -307,6 +310,16 @@ defmodule Prima.RefusalTest do
       assert Refusal.message({:setup_required, :registry_binding}) ==
                "The component has no registry binding; register it again."
 
+      # The specifics ride in the reason; the sentence names neither the
+      # types nor the digest.
+      assert Refusal.message({:component_type_mismatch, :formula, :reagent}) ==
+               "The requested type does not match the component's registered type."
+
+      assert Refusal.message(:invalid_component_type) =~ "Invalid component type"
+
+      assert Refusal.message({:corrupt, {:artifact, "sha256:ab12"}}) ==
+               "The component's bytes do not match their recorded digest; register it again."
+
       assert Refusal.message({:not_found, {:component, "c:local.x:1.0.0"}}) ==
                "Component not found: c:local.x:1.0.0"
 
@@ -322,7 +335,9 @@ defmodule Prima.RefusalTest do
             {:invoke_denied, {:need, :required}}
           ] do
         {:invoke_denied, deny} = reason
-        assert Refusal.message(reason) == Prima.Authority.Transition.deny_message(deny)
+
+        assert Refusal.message(reason) ==
+                 "Denied by chain authority: " <> Prima.Authority.Transition.deny_message(deny)
       end
 
       assert Refusal.message({:invoke_invalid, {:malformed_target, :call, :task}}) ==

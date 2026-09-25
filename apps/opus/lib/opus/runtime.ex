@@ -133,7 +133,7 @@ defmodule Opus.Runtime do
     if Keyword.get(opts, :authority_required, true) and is_nil(authority) do
       raise ArgumentError,
             "execution requires an authority but none reached the runtime " <>
-              "(reference: #{inspect(reference)}) — an opts filter dropped it"
+              "— an opts filter dropped it"
     end
 
     if authority do

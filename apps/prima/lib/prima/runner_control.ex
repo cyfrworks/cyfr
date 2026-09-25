@@ -254,7 +254,8 @@ defmodule Prima.RunnerControl do
     [Jason.encode_to_iodata!(object), ?\n]
   end
 
-  def encode(message), do: raise(ArgumentError, "not a message: #{inspect(message)}")
+  def encode(message),
+    do: raise(ArgumentError, "not a message: #{Prima.LoggerContext.shape(message)}")
 
   @doc """
   The message one line carries, with or without the newline that ends it,

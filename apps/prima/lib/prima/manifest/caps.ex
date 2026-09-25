@@ -280,6 +280,6 @@ defmodule Prima.Manifest.Caps do
 
   defp limit_key(key) when is_binary(key) do
     Enum.find(Prima.Limits.fields(), &(Atom.to_string(&1) == key)) ||
-      raise ArgumentError, "unknown limit #{inspect(key)}"
+      raise ArgumentError, "unknown limit #{Prima.LoggerContext.shape(key)}"
   end
 end

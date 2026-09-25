@@ -248,10 +248,10 @@ defmodule Crucible.Events do
     under.(durable, n) ++ Enum.flat_map(rows, fn row -> [row | under.(row.durable, 0)] end)
   end
 
-  def since(execution_id, _cursor, athanor_id) do
+  def since(_execution_id, _cursor, athanor_id) do
     raise ArgumentError,
-          "Crucible.Events.since/3: a resolved athanor_id is required " <>
-            "for #{execution_id}, got #{inspect(athanor_id)}"
+          "Crucible.Events.since/3: a resolved athanor_id is required, " <>
+            "got #{Prima.LoggerContext.shape(athanor_id)}"
   end
 
   # A durable row as the stream carries it.
@@ -299,15 +299,15 @@ defmodule Crucible.Events do
   # `Arca.Execution` record — the natural source at terminal-event sites).
   # A caller without a resolved athanor raises: there is no default tenant
   # to route to.
-  defp actor!(execution_id, ctx) do
+  defp actor!(_execution_id, ctx) do
     case extract_athanor_id(ctx) do
       {:ok, athanor_id} ->
         Prima.Actor.in_athanor(athanor_id)
 
       :error ->
         raise ArgumentError,
-              "Crucible.Events: a resolved athanor_id is required " <>
-                "for #{execution_id}, got #{inspect(ctx, limit: 5)}"
+              "Crucible.Events: a resolved athanor_id is required, " <>
+                "got #{Prima.LoggerContext.shape(ctx)}"
     end
   end
 
