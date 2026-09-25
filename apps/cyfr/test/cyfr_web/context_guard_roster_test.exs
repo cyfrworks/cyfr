@@ -89,7 +89,7 @@ defmodule CyfrWeb.ContextGuardRosterTest do
   test "every routed LiveView is mounted through the guard, and every live route is rostered" do
     live_routes =
       for %{metadata: %{phoenix_live_view: {view, _action, _opts, session}}} <-
-            EmissaryWeb.Router.__routes__(),
+            Cyfr.Boundaries.routes(),
           do: {view, session}
 
     routed_views = MapSet.new(live_routes, fn {view, _} -> view end)

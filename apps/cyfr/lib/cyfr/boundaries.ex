@@ -1305,6 +1305,19 @@ defmodule Cyfr.Boundaries do
   @spec public_routes() :: [{atom(), String.t()}]
   def public_routes, do: @public_routes
 
+  # Every posture, public-roster and `route_info` consumer reads the route
+  # table through this one name, so splitting the route providers and
+  # changing the root router are each made here, in one place.
+  @router EmissaryWeb.Router
+
+  @doc "The composition router: the one module whose table is every HTTP route."
+  @spec router() :: module()
+  def router, do: @router
+
+  @doc "The total route table, `router/0`'s `__routes__/0`."
+  @spec routes() :: [map()]
+  def routes, do: @router.__routes__()
+
   @doc """
   What is wrong with `routes`, a router's `__routes__/0`: a route with no
   declared posture, a posture outside the vocabulary, or a public route

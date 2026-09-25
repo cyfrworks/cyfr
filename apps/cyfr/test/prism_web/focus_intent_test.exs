@@ -80,7 +80,7 @@ defmodule PrismWeb.FocusIntentTest do
     # module here would let a re-route silently move the page out from
     # under the intent.
     assert %{plug: Phoenix.LiveView.Plug, log_module: module} =
-             Phoenix.Router.route_info(EmissaryWeb.Router, "GET", path, "example.com"),
+             Phoenix.Router.route_info(Cyfr.Boundaries.router(), "GET", path, "example.com"),
            "#{path} is served by no live route"
 
     module
