@@ -1119,6 +1119,34 @@ defmodule Cyfr.BoundariesTest do
                ["Compendium.Activation", "Compendium.Component"]
     end
 
+    test "the assistant naming a component-domain internal is reported" do
+      row =
+        Enum.find(
+          Boundaries.surfaces(),
+          &(&1.into == "Compendium" and "apps/cyfr/lib/aqua/**/*.ex" in &1.from)
+        ) || flunk("no surface row fences the assistant into the component domain's root")
+
+      assert "Compendium" in row.allow
+      assert "apps/cyfr/lib/aqua.ex" in row.from
+
+      planted = [
+        {"apps/cyfr/lib/aqua/planted.ex",
+         CodeLines.aliases(~S'''
+         defmodule Aqua.Planted do
+           alias Compendium.AgentSource
+
+           def agent(ctx, name), do: Compendium.agent(ctx, name)
+           def snapshot(ctx, name), do: Compendium.AgentIndex.snapshot(ctx, name)
+           def roster(ctx), do: AgentSource.enabled_roster(ctx)
+           def skills(ctx), do: Compendium.AquaSkills.index(ctx, 10)
+         end
+         ''')}
+      ]
+
+      assert Boundaries.surface_violations(row, planted) ==
+               ["Compendium.AgentIndex", "Compendium.AgentSource", "Compendium.AquaSkills"]
+    end
+
     test "execution or the MCP surface naming the assistant is reported" do
       from_execution =
         Enum.find(

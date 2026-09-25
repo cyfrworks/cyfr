@@ -156,13 +156,13 @@ defmodule Aqua.Prompt do
   # The estate's scrolls — procedures kept as Agent Skills — as an index
   # of name and line, read on demand with `aqua.skill_get`. The same
   # in-process read the `aqua` tool's `skill_list` makes
-  # (`Compendium.AquaSkills.index/1`), so the two cannot list different
+  # (`Compendium.skills_index/2`), so the two cannot list different
   # sets. Sorted by name and free of anything that changes between turns;
   # an estate with no scrolls gets no section rather than an empty one,
   # and one whose scrolls cannot be listed gets none — said in the log,
   # never silently.
   defp scrolls(ctx) do
-    case Compendium.AquaSkills.index(ctx, Compendium.AquaSkills.index_limit()) do
+    case Compendium.skills_index(ctx, Compendium.skills_index_limit()) do
       {:ok, %{entries: [_ | _] = skills, more: more}} ->
         [
           "\n\n---\n\n## Scrolls\n\nProcedures this estate has learned. Read one with " <>

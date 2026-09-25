@@ -34,7 +34,7 @@ defmodule Aqua.Notes do
 
   A note carries who kept it, when, and — when known — the thread and
   execution it came from, as frontmatter above the body. The reader is the
-  one the agent files share, `Compendium.AquaAgent.parse_frontmatter/1`.
+  one the agent files share, `Compendium.parse_agent_frontmatter/1`.
 
   This module is the domain. Four callers read or write here:
   `Aqua.Providers.Notes`, the door people and agents come through;
@@ -715,7 +715,7 @@ defmodule Aqua.Notes do
 
   defp decode(ctx, name, binary) do
     {meta, body} =
-      case Compendium.AquaAgent.parse_frontmatter(binary) do
+      case Compendium.parse_agent_frontmatter(binary) do
         {:ok, meta, body} -> {meta, body}
         {:error, _} -> {%{}, binary}
       end

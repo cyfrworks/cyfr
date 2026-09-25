@@ -22,7 +22,6 @@ defmodule Aqua.Loop.Clone do
   alias Aqua.Loop.Binding.Call
   alias Aqua.Loop.Turn
   alias Aqua.Tape
-  alias Compendium.AgentSource
   alias Prima.Authority
   alias Prima.Authority.Transition
 
@@ -40,7 +39,7 @@ defmodule Aqua.Loop.Clone do
 
     with {:ok, definition} <- Turn.role(parent.spec, role),
          :ok <- intact(ctx, parent.spec.authority),
-         {:ok, snapshot} <- Compendium.AgentIndex.snapshot(ctx, role),
+         {:ok, snapshot} <- Compendium.agent_snapshot(ctx, role),
          {:ok, child} <- authority(parent.spec.authority, role, snapshot, roster(parent.spec)),
          {:ok, %{turn: clone}} <-
            Tape.open_clone_turn(guest, parent.turn, %{
@@ -108,7 +107,7 @@ defmodule Aqua.Loop.Clone do
           {:ok, Authority.t()} | {:error, refusal()}
   def authority(%Authority{} = parent, role, %{agent: agent} = _snapshot, %MapSet{} = roster)
       when is_binary(role) do
-    ref = AgentSource.ref(role)
+    ref = Prima.AgentRef.ref(role)
 
     with {:ok, consented} <- consented_release(parent, ref, role),
          :ok <- check_release(consented, agent, roster, role) do
@@ -124,7 +123,7 @@ defmodule Aqua.Loop.Clone do
   end
 
   defp check_release(consented, agent, roster, role) do
-    if AgentSource.row(agent, roster).release_digest == consented,
+    if Compendium.agent_row(agent, roster).release_digest == consented,
       do: :ok,
       else: {:error, {:role_shape_moved, role}}
   end

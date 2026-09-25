@@ -71,7 +71,7 @@ defmodule Aqua.Launch do
           not is_binary(reference) ->
             {:error, {:invalid_argument, "execution.#{action} needs a reference"}}
 
-          Compendium.AgentSource.agent_ref?(reference) ->
+          Prima.AgentRef.agent_ref?(reference) ->
             {:error, {:invalid_argument, "an agent is not a tool to run"}}
 
           Aqua.Hands.hand_catalyst?(reference) ->

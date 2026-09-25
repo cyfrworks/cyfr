@@ -135,8 +135,8 @@ defmodule Aqua.Runner.RecoveryTable do
   defp capability_holds(_ctx, %{agent_capability_digest: nil}), do: :ok
 
   defp capability_holds(ctx, %{agent: name, agent_capability_digest: pinned}) do
-    with {:ok, agent} <- Compendium.AquaAgent.get(ctx, name),
-         {:ok, ^pinned} <- Compendium.AquaAgent.capability_digest(agent) do
+    with {:ok, agent} <- Compendium.agent(ctx, name),
+         {:ok, ^pinned} <- Compendium.agent_capability_digest(agent) do
       :ok
     else
       {:ok, _other} -> {:error, "#{name} changed since the turn started"}
@@ -145,9 +145,9 @@ defmodule Aqua.Runner.RecoveryTable do
   end
 
   defp source_ref(%{agent: name}) do
-    if Compendium.AgentSource.soul?(name),
-      do: Compendium.AgentSource.soul_ref(),
-      else: Compendium.AgentSource.ref(name)
+    if Prima.AgentRef.soul?(name),
+      do: Prima.AgentRef.soul_ref(),
+      else: Prima.AgentRef.ref(name)
   end
 
   defp action(ctx, turn) do

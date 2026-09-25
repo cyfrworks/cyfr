@@ -357,7 +357,7 @@ defmodule Aqua.Approvals do
     case Crucible.authority_for(
            ctx,
            {:id, turn.profile_id},
-           Compendium.AgentSource.soul_ref()
+           Prima.AgentRef.soul_ref()
          ) do
       {:ok, %{consent_id: consent_id}} when consent_id == turn.consent_id ->
         :ok
@@ -373,8 +373,8 @@ defmodule Aqua.Approvals do
   defp capability_holds(_ctx, %{agent_capability_digest: nil}), do: :ok
 
   defp capability_holds(ctx, %{agent: name, agent_capability_digest: pinned}) do
-    with {:ok, agent} <- Compendium.AquaAgent.get(ctx, name),
-         {:ok, ^pinned} <- Compendium.AquaAgent.capability_digest(agent) do
+    with {:ok, agent} <- Compendium.agent(ctx, name),
+         {:ok, ^pinned} <- Compendium.agent_capability_digest(agent) do
       :ok
     else
       {:ok, _other} -> {:error, "#{name} changed since the turn started"}

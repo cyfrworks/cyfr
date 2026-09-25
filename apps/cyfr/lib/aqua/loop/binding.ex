@@ -112,7 +112,7 @@ defmodule Aqua.Loop.Binding do
     input = Map.get(args, "input") || %{}
 
     cond do
-      Compendium.AgentSource.agent_ref?(reference) ->
+      Prima.AgentRef.agent_ref?(reference) ->
         {:error, "an agent is cloned as a role, never run: name the role instead"}
 
       true ->

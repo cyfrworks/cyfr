@@ -236,7 +236,7 @@ defmodule Aqua.Models do
         _ -> []
       end
 
-    soul_type = Compendium.AquaAgent.soul_type()
+    soul_type = Compendium.agent_soul_type()
 
     agents
     |> Enum.filter(&(&1["type"] == soul_type))
