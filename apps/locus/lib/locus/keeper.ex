@@ -17,9 +17,9 @@ defmodule Locus.Keeper do
   `KEEPER_CHANNEL` naming the socket (`socket:[inode]`);
   `channel_inherited?/0` holds fd 3 to that name, so a descriptor the
   runtime opened for itself is never taken for the channel. This server
-  owns the channel, whose messages are JSON objects one per line (the
-  protocol of `apps/keeper/internal/protocol`), and the attach socket every
-  spawn's relay connects to.
+  owns the channel, whose messages are JSON objects one per line, and the
+  attach socket every spawn's relay connects to; `Prima.KeeperProtocol`
+  writes and reads every byte of both.
 
   ## A run
 
@@ -66,20 +66,17 @@ defmodule Locus.Keeper do
   @behaviour Locus.Executor
 
   alias Locus.Executor.Log
+  alias Prima.KeeperProtocol
 
   @channel_fd 3
   @channel_env "KEEPER_CHANNEL"
-  @protocol_version 1
   @pool "build"
   @attach_dir "/run/cyfr-builder"
 
-  @stream_stdin 0
-  @stream_stdout 1
-  @stream_stderr 2
-  @stream_attach 3
-  @max_frame_bytes 65_536
-  @token_hex_bytes 64
-  @max_line_bytes 1_048_576
+  # The bytes of a relay's attach frame: its header, an empty frame's
+  # length, and the spawn's token.
+  @attach_frame_bytes IO.iodata_length(KeeperProtocol.end_frame(:attach)) +
+                        KeeperProtocol.token_hex_bytes()
 
   # cyfr-keeper bounds a stage and a relay's dial at 10 s each.
   @start_timeout_ms 15_000
@@ -232,13 +229,8 @@ defmodule Locus.Keeper do
     reactivate(%{s | conn: conn, conn_open: true})
   end
 
-  defp on_spawner(s, {:exited, code, signal, memory_exceeded}) do
-    %{
-      s
-      | exit: if(signal, do: {:signal, signal}, else: {:status, code}),
-        memory_exceeded: memory_exceeded
-    }
-  end
+  defp on_spawner(s, {:exited, exit, memory_exceeded}),
+    do: %{s | exit: exit, memory_exceeded: memory_exceeded}
 
   defp on_spawner(s, :released), do: %{s | released: true, released_by: now() + @drain_timeout_ms}
 
@@ -252,36 +244,37 @@ defmodule Locus.Keeper do
   # Stdin is written from a process of its own, so a command slow to read
   # it never stops this one reading its output.
   defp feed_stdin(conn, stdin) do
-    frames = [chunk_frames(IO.iodata_to_binary(stdin)), frame(@stream_stdin, "")]
+    frames = [
+      KeeperProtocol.frames(:stdin, IO.iodata_to_binary(stdin)),
+      KeeperProtocol.end_frame(:stdin)
+    ]
+
     spawn(fn -> :gen_tcp.send(conn, frames) end)
   end
 
-  defp chunk_frames(<<chunk::binary-size(@max_frame_bytes), rest::binary>>),
-    do: [frame(@stream_stdin, chunk) | chunk_frames(rest)]
-
-  defp chunk_frames(<<>>), do: []
-  defp chunk_frames(chunk), do: [frame(@stream_stdin, chunk)]
-
-  defp frame(stream, payload), do: [<<stream, byte_size(payload)::32>>, payload]
-
-  defp on_frames(s, data), do: parse_frames(%{s | frames: s.frames <> data})
-
-  defp parse_frames(%{frames: <<stream, length::32, rest::binary>>} = s)
-       when byte_size(rest) >= length and length <= @max_frame_bytes do
-    <<payload::binary-size(^length), rest::binary>> = rest
-    %{s | frames: rest} |> on_frame(stream, payload) |> parse_frames()
+  # A relay carries the command's stdout and stderr; a frame on any other
+  # stream, or one the codec refuses, is its fault.
+  defp on_frames(s, data) do
+    case KeeperProtocol.parse_frames(s.frames <> data) do
+      {:ok, frames, rest} -> each_frame(%{s | frames: rest}, frames)
+      {:error, _reason} -> relay_fault(s)
+    end
   end
 
-  defp parse_frames(%{frames: <<_stream, length::32, _::binary>>} = s)
-       when length > @max_frame_bytes,
-       do: relay_fault(s)
+  # A relay fault ends the frames after it.
+  defp each_frame(s, []), do: s
 
-  defp parse_frames(s), do: s
+  defp each_frame(s, [{stream, payload} | frames]) do
+    case on_frame(s, stream, payload) do
+      {:fault, s} -> s
+      s -> each_frame(s, frames)
+    end
+  end
 
-  defp on_frame(s, @stream_stdout, ""), do: s
-  defp on_frame(s, @stream_stderr, ""), do: s
+  defp on_frame(s, :stdout, ""), do: s
+  defp on_frame(s, :stderr, ""), do: s
 
-  defp on_frame(%{failure: nil} = s, @stream_stdout, payload) do
+  defp on_frame(%{failure: nil} = s, :stdout, payload) do
     bytes = s.stdout_bytes + byte_size(payload)
 
     if bytes > s.max_stdout,
@@ -289,12 +282,12 @@ defmodule Locus.Keeper do
       else: %{s | stdout: [s.stdout, payload], stdout_bytes: bytes}
   end
 
-  defp on_frame(s, @stream_stdout, _payload), do: s
+  defp on_frame(s, :stdout, _payload), do: s
 
-  defp on_frame(s, @stream_stderr, payload),
+  defp on_frame(s, :stderr, payload),
     do: %{s | log: Log.add(s.log, payload, s.on_output)}
 
-  defp on_frame(s, _stream, _payload), do: relay_fault(s)
+  defp on_frame(s, _stream, _payload), do: {:fault, relay_fault(s)}
 
   defp relay_fault(s) do
     if s.conn, do: :gen_tcp.close(s.conn)
@@ -478,9 +471,8 @@ defmodule Locus.Keeper do
   # A relay's first frame is its spawn's token; the connection goes to the
   # process that asked for that spawn.
   defp handshake(conn, server) do
-    with {:ok, <<@stream_attach, @token_hex_bytes::32>>} <-
-           :gen_tcp.recv(conn, 5, @attach_timeout_ms),
-         {:ok, token} <- :gen_tcp.recv(conn, @token_hex_bytes, @attach_timeout_ms),
+    with {:ok, frame} <- :gen_tcp.recv(conn, @attach_frame_bytes, @attach_timeout_ms),
+         {:ok, token} <- KeeperProtocol.decode_attach(frame),
          {:ok, owner, ref} <- GenServer.call(server, {:attach, token}),
          :ok <- :gen_tcp.controlling_process(conn, owner) do
       send(owner, {__MODULE__, ref, {:attached, conn}})
@@ -496,9 +488,8 @@ defmodule Locus.Keeper do
     id = Integer.to_string(state.next_id + 1)
     token = 32 |> :crypto.strong_rand_bytes() |> Base.encode16(case: :lower)
 
-    message = %{
-      v: @protocol_version,
-      type: "spawn",
+    request = %{
+      type: :spawn,
       id: id,
       pool: @pool,
       argv: argv,
@@ -507,7 +498,7 @@ defmodule Locus.Keeper do
       attach: %{path: state.attach_path, token: token}
     }
 
-    with {:ok, line} <- Jason.encode(message),
+    with {:ok, line} <- encode(request),
          :ok <- send_line(state, line) do
       ref = make_ref()
 
@@ -530,7 +521,7 @@ defmodule Locus.Keeper do
            tokens: Map.put(state.tokens, token, ref)
        }}
     else
-      {:error, %Jason.EncodeError{}} ->
+      {:error, :unencodable} ->
         {:reply, {:error, {:spawn_failed, :unencodable_command}}, state}
 
       {:error, reason} ->
@@ -563,17 +554,17 @@ defmodule Locus.Keeper do
 
   @impl GenServer
   def handle_info({:channel, data}, state) do
-    [rest | lines] = (state.buffer <> data) |> String.split("\n") |> Enum.reverse()
+    case KeeperProtocol.split_lines(state.buffer, data) do
+      {:error, :line_too_long} ->
+        Logger.error(
+          "[Locus.Keeper] FATAL: the spawner sent a line longer than " <>
+            "#{KeeperProtocol.max_line_bytes()} bytes"
+        )
 
-    if byte_size(rest) > @max_line_bytes do
-      Logger.error(
-        "[Locus.Keeper] FATAL: the spawner sent a line longer than #{@max_line_bytes} bytes"
-      )
+        {:stop, {:shutdown, :channel_fault}, state}
 
-      {:stop, {:shutdown, :channel_fault}, state}
-    else
-      state = lines |> Enum.reverse() |> Enum.reduce(%{state | buffer: rest}, &on_line/2)
-      {:noreply, state}
+      {lines, rest} ->
+        {:noreply, Enum.reduce(lines, %{state | buffer: rest}, &on_line/2)}
     end
   end
 
@@ -611,15 +602,22 @@ defmodule Locus.Keeper do
   defp on_line("", state), do: state
 
   defp on_line(line, state) do
-    case Jason.decode(line) do
-      {:ok, %{"v" => @protocol_version} = message} -> on_message(message, state)
-      _ -> state
+    case KeeperProtocol.decode_reply(line) do
+      {:ok, reply} ->
+        on_reply(reply, state)
+
+      {:error, reason} ->
+        Logger.warning(
+          "[Locus.Keeper] the spawner sent a line that is not a reply (#{inspect(reason)}); ignored"
+        )
+
+        state
     end
   end
 
-  defp on_message(%{"type" => "spawned", "id" => id, "spawn_id" => spawn_id} = m, state) do
+  defp on_reply({:spawned, id, spawn_id, uid, pid}, state) do
     with_request(state, state.ids[id], fn ref, entry ->
-      notify(entry, ref, {:spawned, m["uid"], m["pid"]})
+      notify(entry, ref, {:spawned, uid, pid})
       state = %{state | spawns: Map.put(state.spawns, spawn_id, ref)}
       state = put_entry(state, ref, %{entry | spawn_id: spawn_id})
 
@@ -630,7 +628,7 @@ defmodule Locus.Keeper do
     end)
   end
 
-  defp on_message(%{"type" => "error", "id" => id, "code" => code}, state) when is_binary(id) do
+  defp on_reply({:error, id, _spawn_id, code}, state) when is_binary(id) do
     with_request(state, state.ids[id], fn ref, entry ->
       notify(entry, ref, {:error, code})
       drop(state, ref)
@@ -638,20 +636,21 @@ defmodule Locus.Keeper do
   end
 
   # A release for a spawn cyfr-keeper no longer holds: its retirement is done.
-  defp on_message(%{"type" => "error", "spawn_id" => spawn_id, "code" => "unknown_spawn"}, state),
+  defp on_reply({:error, nil, spawn_id, "unknown_spawn"}, state) when is_binary(spawn_id),
     do: released(state, spawn_id)
 
-  defp on_message(%{"type" => "exited", "spawn_id" => spawn_id} = m, state) do
+  defp on_reply({:exited, spawn_id, exit, memory_exceeded}, state) do
     with_request(state, state.spawns[spawn_id], fn ref, entry ->
-      notify(entry, ref, {:exited, m["code"], m["signal"], m["memory_exceeded"] == true})
+      notify(entry, ref, {:exited, exit, memory_exceeded})
       state
     end)
   end
 
-  defp on_message(%{"type" => "released", "spawn_id" => spawn_id}, state),
-    do: released(state, spawn_id)
+  defp on_reply({:released, spawn_id}, state), do: released(state, spawn_id)
 
-  defp on_message(_message, state), do: state
+  # A `pool` reply, which this client never asks for, and an `error` for a
+  # spawn it does not follow are ignored.
+  defp on_reply(_reply, state), do: state
 
   # The entry stays until its caller is done, so a relay connection that
   # arrives after the report still reaches the caller.
@@ -719,19 +718,20 @@ defmodule Locus.Keeper do
         })
 
       %{spawn_id: spawn_id} ->
-        line =
-          Jason.encode!(%{
-            v: @protocol_version,
-            type: "release",
-            spawn_id: spawn_id,
-            grace_ms: grace_ms
-          })
-
+        line = KeeperProtocol.encode(%{type: :release, spawn_id: spawn_id, grace_ms: grace_ms})
         _ = send_line(state, line)
         state
     end
   end
 
-  defp send_line(state, line),
-    do: :socket.send(state.channel, [line, ?\n], @channel_send_timeout_ms)
+  # A request built from a build's command that the keeper would refuse as
+  # malformed is refused here, before it is sent; the refusal never quotes
+  # the command, whose environment may hold a credential.
+  defp encode(request) do
+    {:ok, KeeperProtocol.encode(request)}
+  rescue
+    ArgumentError -> {:error, :unencodable}
+  end
+
+  defp send_line(state, line), do: :socket.send(state.channel, line, @channel_send_timeout_ms)
 end

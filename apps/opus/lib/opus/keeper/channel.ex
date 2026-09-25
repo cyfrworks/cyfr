@@ -11,9 +11,9 @@ defmodule Opus.Keeper.Channel do
 
   `cyfr-keeper serve` starts the service with a socketpair on file
   descriptor 3 and `KEEPER_CHANNEL` naming it. This process owns
-  that channel, whose messages are JSON objects one per line (the
-  protocol of `apps/keeper/internal/protocol`), and the attach socket in
-  `:attach_dir` every runner's relay connects to.
+  that channel, whose messages are JSON objects one per line, and the
+  attach socket in `:attach_dir` every runner's relay connects to;
+  `Prima.KeeperProtocol` writes and reads every byte of both.
 
   ## A runner
 
@@ -79,18 +79,16 @@ defmodule Opus.Keeper.Channel do
 
   require Logger
 
+  alias Prima.KeeperProtocol
+
   @channel_fd 3
-  @protocol_version 1
   @pool "runner"
   @attach_socket "attach.sock"
 
-  @stream_stdout 1
-  @stream_stderr 2
-  @stream_attach 3
-  @stream_control 4
-  @max_frame_bytes 65_536
-  @token_hex_bytes 64
-  @max_line_bytes 1_048_576
+  # The bytes of a relay's attach frame: its header, an empty frame's
+  # length, and the spawn's token.
+  @attach_frame_bytes IO.iodata_length(KeeperProtocol.end_frame(:attach)) +
+                        KeeperProtocol.token_hex_bytes()
 
   # cyfr-keeper bounds a stage and a relay's dial at 10 s each.
   @start_timeout_ms 15_000
@@ -324,9 +322,8 @@ defmodule Opus.Keeper.Channel do
   # A relay's first frame is its spawn's token; the connection then
   # belongs to this client, which reads its frames for the spawn's owner.
   defp handshake(conn, server) do
-    with {:ok, <<@stream_attach, @token_hex_bytes::32>>} <-
-           :gen_tcp.recv(conn, 5, @attach_timeout_ms),
-         {:ok, token} <- :gen_tcp.recv(conn, @token_hex_bytes, @attach_timeout_ms),
+    with {:ok, frame} <- :gen_tcp.recv(conn, @attach_frame_bytes, @attach_timeout_ms),
+         {:ok, token} <- KeeperProtocol.decode_attach(frame),
          :ok <- :gen_tcp.controlling_process(conn, server),
          :ok <- GenServer.call(server, {:attach, token, conn}) do
       :ok
@@ -342,9 +339,8 @@ defmodule Opus.Keeper.Channel do
     id = Integer.to_string(state.next_id + 1)
     token = 32 |> :crypto.strong_rand_bytes() |> Base.encode16(case: :lower)
 
-    message = %{
-      v: @protocol_version,
-      type: "spawn",
+    request = %{
+      type: :spawn,
       id: id,
       pool: @pool,
       argv: argv,
@@ -354,7 +350,7 @@ defmodule Opus.Keeper.Channel do
       attach: %{path: state.attach_path, token: token}
     }
 
-    with {:ok, line} <- Jason.encode(message),
+    with {:ok, line} <- encode(request),
          :ok <- send_line(state, line) do
       ref = make_ref()
 
@@ -382,7 +378,7 @@ defmodule Opus.Keeper.Channel do
            tokens: Map.put(state.tokens, token, ref)
        }}
     else
-      {:error, %Jason.EncodeError{}} ->
+      {:error, :unencodable} ->
         {:reply, {:error, {:spawn_failed, :unencodable_command}}, state}
 
       {:error, reason} ->
@@ -400,7 +396,7 @@ defmodule Opus.Keeper.Channel do
         {:reply, :ok, put_entry(state, ref, %{entry | pending: [entry.pending, data]})}
 
       %{conn: conn} ->
-        {:reply, :gen_tcp.send(conn, control_frames(data)), state}
+        {:reply, :gen_tcp.send(conn, KeeperProtocol.frames(:control, data)), state}
     end
   end
 
@@ -410,7 +406,9 @@ defmodule Opus.Keeper.Channel do
 
     case ref && state.requests[ref] do
       %{conn: nil} = entry ->
-        _ = :gen_tcp.send(conn, control_frames(IO.iodata_to_binary(entry.pending)))
+        _ =
+          :gen_tcp.send(conn, KeeperProtocol.frames(:control, IO.iodata_to_binary(entry.pending)))
+
         :ok = :inet.setopts(conn, active: true)
         notify(entry, ref, :attached)
 
@@ -427,7 +425,7 @@ defmodule Opus.Keeper.Channel do
 
   def handle_call(:stats, from, state) do
     id = "pool-" <> Integer.to_string(state.next_id + 1)
-    line = Jason.encode!(%{v: @protocol_version, type: "pool", id: id, pool: @pool})
+    line = KeeperProtocol.encode(%{type: :pool, id: id, pool: @pool})
 
     case send_line(state, line) do
       :ok ->
@@ -443,17 +441,17 @@ defmodule Opus.Keeper.Channel do
 
   @impl GenServer
   def handle_info({:channel, data}, state) do
-    [rest | lines] = (state.buffer <> data) |> String.split("\n") |> Enum.reverse()
+    case KeeperProtocol.split_lines(state.buffer, data) do
+      {:error, :line_too_long} ->
+        Logger.error(
+          "[Opus.Keeper.Channel] FATAL: the keeper sent a line longer than " <>
+            "#{KeeperProtocol.max_line_bytes()} bytes"
+        )
 
-    if byte_size(rest) > @max_line_bytes do
-      Logger.error(
-        "[Opus.Keeper.Channel] FATAL: the keeper sent a line longer than #{@max_line_bytes} bytes"
-      )
+        {:stop, {:shutdown, :channel_fault}, state}
 
-      {:stop, {:shutdown, :channel_fault}, state}
-    else
-      state = lines |> Enum.reverse() |> Enum.reduce(%{state | buffer: rest}, &on_line/2)
-      {:noreply, state}
+      {lines, rest} ->
+        {:noreply, Enum.reduce(lines, %{state | buffer: rest}, &on_line/2)}
     end
   end
 
@@ -548,15 +546,23 @@ defmodule Opus.Keeper.Channel do
   defp on_line("", state), do: state
 
   defp on_line(line, state) do
-    case Jason.decode(line) do
-      {:ok, %{"v" => @protocol_version} = message} -> on_message(message, state)
-      _ -> state
+    case KeeperProtocol.decode_reply(line) do
+      {:ok, reply} ->
+        on_reply(reply, state)
+
+      {:error, reason} ->
+        Logger.warning(
+          "[Opus.Keeper.Channel] the keeper sent a line that is not a reply " <>
+            "(#{inspect(reason)}); ignored"
+        )
+
+        state
     end
   end
 
-  defp on_message(%{"type" => "spawned", "id" => id, "spawn_id" => spawn_id} = m, state) do
+  defp on_reply({:spawned, id, spawn_id, _uid, pid}, state) do
     with_request(state, state.ids[id], fn ref, entry ->
-      notify(entry, ref, {:spawned, m["pid"]})
+      notify(entry, ref, {:spawned, pid})
       state = %{state | spawns: Map.put(state.spawns, spawn_id, ref), bound_refused: false}
       state = put_entry(state, ref, %{entry | spawn_id: spawn_id})
 
@@ -567,7 +573,7 @@ defmodule Opus.Keeper.Channel do
     end)
   end
 
-  defp on_message(%{"type" => "error", "id" => id, "code" => code}, state) when is_binary(id) do
+  defp on_reply({:error, id, _spawn_id, code}, state) when is_binary(id) do
     case Map.pop(state.stats, id) do
       {nil, _stats} ->
         with_request(state, state.ids[id], fn ref, entry ->
@@ -583,16 +589,14 @@ defmodule Opus.Keeper.Channel do
   end
 
   # A release for a spawn the keeper no longer holds: its retirement is done.
-  defp on_message(%{"type" => "error", "spawn_id" => spawn_id, "code" => "unknown_spawn"}, state),
+  defp on_reply({:error, nil, spawn_id, "unknown_spawn"}, state) when is_binary(spawn_id),
     do: released(state, spawn_id)
 
-  defp on_message(%{"type" => "exited", "spawn_id" => spawn_id} = m, state) do
+  defp on_reply({:exited, spawn_id, exit, memory_exceeded}, state) do
     with_request(state, state.spawns[spawn_id], fn ref, entry ->
-      exit = if m["signal"], do: {:signal, m["signal"]}, else: {:status, m["code"]}
-
       # cyfr-keeper read it from the group's own counters: the kernel killed
       # the runner at its bound, not for the container's limit.
-      if m["memory_exceeded"] == true do
+      if memory_exceeded do
         Logger.warning(
           "[Opus.Keeper.Channel] runner #{entry.runner} was ended at its memory bound of " <>
             "#{state.memory_bytes} bytes (spawn #{spawn_id}, #{format_exit(exit)})"
@@ -604,25 +608,20 @@ defmodule Opus.Keeper.Channel do
     end)
   end
 
-  defp on_message(%{"type" => "released", "spawn_id" => spawn_id}, state),
-    do: released(state, spawn_id)
+  defp on_reply({:released, spawn_id}, state), do: released(state, spawn_id)
 
-  defp on_message(%{"type" => "pool", "id" => id} = m, state) do
+  defp on_reply({:pool, id, _pool, size, free, quarantined}, state) do
     case Map.pop(state.stats, id) do
       {nil, _stats} ->
         state
 
       {from, stats} ->
-        GenServer.reply(
-          from,
-          {:ok, %{size: m["size"], free: m["free"], quarantined: m["quarantined"]}}
-        )
-
+        GenServer.reply(from, {:ok, %{size: size, free: free, quarantined: quarantined}})
         %{state | stats: stats}
     end
   end
 
-  defp on_message(_message, state), do: state
+  defp on_reply(_reply, state), do: state
 
   defp released(state, spawn_id) do
     with_request(state, state.spawns[spawn_id], fn ref, entry ->
@@ -660,35 +659,35 @@ defmodule Opus.Keeper.Channel do
     end
   end
 
-  defp parse_frames(state, ref, conn, %{frames: <<stream, length::32, rest::binary>>} = entry)
-       when byte_size(rest) >= length and length <= @max_frame_bytes do
-    <<payload::binary-size(^length), rest::binary>> = rest
-    entry = %{entry | frames: rest}
+  # A relay carries the runner's stdout, stderr and control channel; a
+  # frame on any other stream, or one the codec refuses, is its fault.
+  defp parse_frames(state, ref, conn, entry) do
+    case KeeperProtocol.parse_frames(entry.frames) do
+      {:ok, frames, rest} -> on_frames(state, ref, conn, %{entry | frames: rest}, frames)
+      {:error, _reason} -> relay_fault(state, ref, conn)
+    end
+  end
 
+  defp on_frames(state, ref, _conn, entry, []), do: put_entry(state, ref, entry)
+
+  defp on_frames(state, ref, conn, entry, [{stream, payload} | frames]) do
     case on_frame(entry, ref, stream, payload) do
-      {:ok, entry} -> parse_frames(state, ref, conn, entry)
+      {:ok, entry} -> on_frames(state, ref, conn, entry, frames)
       :fault -> relay_fault(put_entry(state, ref, entry), ref, conn)
     end
   end
 
-  defp parse_frames(state, ref, conn, %{frames: <<_stream, length::32, _::binary>>})
-       when length > @max_frame_bytes,
-       do: relay_fault(state, ref, conn)
-
-  defp parse_frames(state, ref, _conn, entry), do: put_entry(state, ref, entry)
-
-  defp on_frame(%{control_open: true} = entry, ref, @stream_control, ""),
+  defp on_frame(%{control_open: true} = entry, ref, :control, ""),
     do: {:ok, notify_entry(%{entry | control_open: false}, ref, :control_closed)}
 
-  defp on_frame(entry, _ref, @stream_control, ""), do: {:ok, entry}
+  defp on_frame(entry, _ref, :control, ""), do: {:ok, entry}
 
-  defp on_frame(entry, ref, @stream_control, payload),
+  defp on_frame(entry, ref, :control, payload),
     do: {:ok, notify_entry(entry, ref, {:control, payload})}
 
-  defp on_frame(entry, _ref, stream, "") when stream in [@stream_stdout, @stream_stderr],
-    do: {:ok, entry}
+  defp on_frame(entry, _ref, stream, "") when stream in [:stdout, :stderr], do: {:ok, entry}
 
-  defp on_frame(entry, ref, stream, payload) when stream in [@stream_stdout, @stream_stderr],
+  defp on_frame(entry, ref, stream, payload) when stream in [:stdout, :stderr],
     do: {:ok, notify_entry(entry, ref, {:log, payload})}
 
   defp on_frame(_entry, _ref, _stream, _payload), do: :fault
@@ -722,20 +721,6 @@ defmodule Opus.Keeper.Channel do
       put_entry(state, ref, %{entry | conn: nil})
     end)
   end
-
-  @doc false
-  # Control bytes split into frames of at most the relay's payload bound.
-  def control_frames(<<chunk::binary-size(@max_frame_bytes), rest::binary>>),
-    do: [frame(@stream_control, chunk) | control_frames(rest)]
-
-  def control_frames(<<>>), do: []
-  def control_frames(chunk) when is_binary(chunk), do: [frame(@stream_control, chunk)]
-
-  @doc false
-  # The zero-length control frame: the sender's end of the channel is closed.
-  def end_frame, do: frame(@stream_control, "")
-
-  defp frame(stream, payload), do: [<<stream, byte_size(payload)::32>>, payload]
 
   # ————— the requests —————
 
@@ -792,19 +777,31 @@ defmodule Opus.Keeper.Channel do
         })
 
       %{spawn_id: spawn_id} = entry ->
-        line =
-          Jason.encode!(%{
-            v: @protocol_version,
-            type: "release",
-            spawn_id: spawn_id,
-            grace_ms: grace_ms
-          })
+        case encode(%{type: :release, spawn_id: spawn_id, grace_ms: grace_ms}) do
+          {:ok, line} ->
+            _ = send_line(state, line)
+            put_entry(state, ref, %{entry | released: true})
 
-        _ = send_line(state, line)
-        put_entry(state, ref, %{entry | released: true})
+          # A grace past the keeper's bound, which it would refuse.
+          {:error, :unencodable} ->
+            Logger.error(
+              "[Opus.Keeper.Channel] runner #{entry.runner} was not released: a grace of " <>
+                "#{grace_ms} ms is past what cyfr-keeper accepts"
+            )
+
+            state
+        end
     end
   end
 
-  defp send_line(state, line),
-    do: :socket.send(state.channel, [line, ?\n], @channel_send_timeout_ms)
+  # A request built from the caller's command that the keeper would refuse
+  # as malformed is refused here, before it is sent; the refusal never
+  # quotes the command, whose environment may hold a credential.
+  defp encode(request) do
+    {:ok, KeeperProtocol.encode(request)}
+  rescue
+    ArgumentError -> {:error, :unencodable}
+  end
+
+  defp send_line(state, line), do: :socket.send(state.channel, line, @channel_send_timeout_ms)
 end

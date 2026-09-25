@@ -15,7 +15,7 @@ defmodule Opus.KeeperChannelTest do
 
   use ExUnit.Case, async: true
 
-  alias Prima.RunnerControl
+  alias Prima.{KeeperProtocol, RunnerControl}
   alias Opus.Keeper.Channel
   alias Opus.RunnerProcess
 
@@ -180,7 +180,16 @@ defmodule Opus.KeeperChannelTest do
     # The runner's end closes, its process ends, its uid is retired.
     :ok = :gen_tcp.send(relay, frame(@stream_control, ""))
     assert_receive {RunnerProcess, ^handle, :closed}, 5_000
-    reply(spawner, %{v: 1, type: "exited", spawn_id: spawn_id, code: 0, signal: nil})
+
+    reply(spawner, %{
+      v: 1,
+      type: "exited",
+      spawn_id: spawn_id,
+      code: 0,
+      signal: nil,
+      memory_exceeded: false
+    })
+
     assert_receive {RunnerProcess, ^handle, {:exited, {:status, 0}}}, 5_000
     reply(spawner, %{v: 1, type: "released", spawn_id: spawn_id})
     assert_receive {RunnerProcess, ^handle, :released}, 5_000
@@ -202,7 +211,16 @@ defmodule Opus.KeeperChannelTest do
     # The handle holds the assign until its channel attaches.
     handle = start_handle!(name)
     %{"id" => id} = request(spawner)
-    reply(spawner, %{v: 1, type: "spawned", id: id, spawn_id: String.duplicate("aa", 16), pid: 1})
+
+    reply(spawner, %{
+      v: 1,
+      type: "spawned",
+      id: id,
+      spawn_id: String.duplicate("aa", 16),
+      uid: 1,
+      pid: 1
+    })
+
     assert :ok = RunnerProcess.send_message(handle, assign)
     refute_received {RunnerProcess, ^handle, :ready}
 
@@ -236,7 +254,15 @@ defmodule Opus.KeeperChannelTest do
     assert %{"v" => 1, "type" => "release", "spawn_id" => ^spawn_id, "grace_ms" => 750} =
              request(spawner)
 
-    reply(spawner, %{v: 1, type: "exited", spawn_id: spawn_id, code: nil, signal: "SIGKILL"})
+    reply(spawner, %{
+      v: 1,
+      type: "exited",
+      spawn_id: spawn_id,
+      code: nil,
+      signal: "SIGKILL",
+      memory_exceeded: false
+    })
+
     assert_receive {RunnerProcess, ^handle, {:exited, {:signal, "SIGKILL"}}}, 5_000
     :gen_tcp.close(relay)
     assert_receive {RunnerProcess, ^handle, :closed}, 5_000
@@ -295,10 +321,10 @@ defmodule Opus.KeeperChannelTest do
     payload = Base.decode16!(line_frame["payload_hex"], case: :lower)
     assert {:ok, %{type: :cancel_child}} = RunnerControl.decode(payload)
 
-    assert IO.iodata_to_binary(Channel.control_frames(payload)) ==
+    assert IO.iodata_to_binary(KeeperProtocol.frames(:control, payload)) ==
              Base.decode16!(line_frame["encoded_hex"], case: :lower)
 
-    assert IO.iodata_to_binary(Channel.end_frame()) ==
+    assert IO.iodata_to_binary(KeeperProtocol.end_frame(:control)) ==
              Base.decode16!(end_frame["encoded_hex"], case: :lower)
   end
 
