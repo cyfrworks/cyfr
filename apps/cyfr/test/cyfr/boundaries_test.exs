@@ -1094,6 +1094,31 @@ defmodule Cyfr.BoundariesTest do
       assert Boundaries.surface_violations(into_execution, planted) == ["Crucible"]
     end
 
+    test "execution naming a component-domain internal is reported" do
+      row =
+        Enum.find(
+          Boundaries.surfaces(),
+          &(&1.into == "Compendium" and "apps/cyfr/lib/crucible/**/*.ex" in &1.from)
+        ) || flunk("no surface row fences execution into the component domain's root")
+
+      assert row.allow == ["Compendium"]
+      assert "apps/cyfr/lib/crucible.ex" in row.from
+
+      planted = [
+        {"apps/cyfr/lib/crucible/planted.ex",
+         CodeLines.aliases(~S'''
+         defmodule Crucible.Planted do
+           def resolve(ctx, ref), do: Compendium.resolve(ctx, ref)
+           def inspect(ctx, ref), do: Compendium.Component.inspect_component(ctx, ref)
+           def graph(ctx, component), do: Compendium.Activation.resolve(ctx, component)
+         end
+         ''')}
+      ]
+
+      assert Boundaries.surface_violations(row, planted) ==
+               ["Compendium.Activation", "Compendium.Component"]
+    end
+
     test "execution or the MCP surface naming the assistant is reported" do
       from_execution =
         Enum.find(

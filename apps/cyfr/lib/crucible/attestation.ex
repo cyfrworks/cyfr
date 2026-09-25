@@ -5,7 +5,7 @@ defmodule Crucible.Attestation do
   @moduledoc """
   Reads the signature attestation recorded at pull time.
 
-  No cryptography happens here: `Compendium.Cosign` verified (or failed to
+  No cryptography happens here: Compendium verified (or failed to
   verify) the OCI signature when the component was pulled and the result was
   recorded on the row (`signature_verified`, `signer_identity`,
   `signer_issuer`). This module checks that recorded attestation at
@@ -89,13 +89,13 @@ defmodule Crucible.Attestation do
       # `nil` is NOT in this list: a missing source is an unclassified value,
       # and the closed-vocabulary arm below refuses it (the column is NOT NULL
       # with a default, so a nil here is a malformed caller, not a real row).
-      source in [Compendium.Source.filesystem(), Compendium.Source.published()] ->
+      source in [Prima.ComponentSource.filesystem(), Prima.ComponentSource.published()] ->
         :trusted
 
-      source == Compendium.Source.oci() and verified == true ->
+      source == Prima.ComponentSource.oci() and verified == true ->
         :signed
 
-      source == Compendium.Source.oci() ->
+      source == Prima.ComponentSource.oci() ->
         :unsigned
 
       true ->

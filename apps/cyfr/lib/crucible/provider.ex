@@ -461,7 +461,7 @@ defmodule Crucible.Provider do
       when action in ["run", "run_stream"] do
     reference = args["reference"] || ""
 
-    if Compendium.AgentSource.agent_ref?(reference) do
+    if Prima.AgentRef.agent_ref?(reference) do
       {:error,
        {:invalid_argument,
         "#{reference} is an agent: it is addressed in a thread (thread.send), never run"}}

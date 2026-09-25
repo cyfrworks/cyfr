@@ -514,6 +514,16 @@ defmodule Cyfr.Boundaries do
           "reverse."
     },
     %{
+      from: ["apps/cyfr/lib/crucible/**/*.ex", "apps/cyfr/lib/crucible.ex"],
+      into: "Compendium",
+      allow: ~w(Compendium),
+      reason:
+        "execution resolves, inspects and activates what it runs through the component " <>
+          "domain's root facade alone: the reference, the manifest, the activation graph " <>
+          "and an artifact's bytes are component facts Compendium answers, and the " <>
+          "source and agent-reference vocabularies it reads are Prima's."
+    },
+    %{
       from: [
         "apps/cyfr/lib/emissary/**/*.ex",
         "apps/cyfr/lib/emissary.ex",
