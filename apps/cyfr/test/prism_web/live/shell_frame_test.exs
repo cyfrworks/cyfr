@@ -9,9 +9,12 @@ defmodule PrismWeb.ShellFrameTest do
   for a capability it does not declare is not created. Each open mints a
   frame credential bound to the frame id, handed to the frame's bridge
   once; a hidden frame without a background grant is suspended and
-  resumed when shown, a discarded one is revoked, and the view's end
-  revokes every credential it minted. The frame's messages are shell verbs
-  for that frame only; anything else is dropped and counted.
+  resumed when shown, a discarded one is revoked, and every path that ends
+  the view revokes every credential it minted. A suspension that fails
+  discards the frame; a resume that fails revokes the credential and shows
+  the refusal. The frame's messages are shell verbs for a live frame this
+  view holds; anything else — another frame's, a frozen frame's, one that
+  would place or raise the frame — is dropped and counted.
   """
 
   use PrismWeb.ConnCase, async: false
@@ -154,9 +157,31 @@ defmodule PrismWeb.ShellFrameTest do
     end
   end
 
-  defp frame_id(view_or_html, name) do
+  defp frame_id(view_or_html, name), do: frame(view_or_html, name).id
+
+  defp frame(view_or_html, name) do
     %{frames: frames} = assigns(view_or_html)
-    frames["iframe_#{name}"].id
+    Prism.Frames.get(frames, {:full, "iframe_#{name}"})
+  end
+
+  defp opened(view), do: view |> assigns() |> Map.fetch!(:frames) |> Prism.Frames.list()
+  defp dropped(view), do: view |> assigns() |> Map.fetch!(:frames) |> Prism.Frames.dropped()
+
+  defp active(view),
+    do: view |> assigns() |> Map.fetch!(:frames) |> Prism.Frames.active_tincture()
+
+  # The bearer the bridge is handed for `frame_id`.
+  defp bearer!(view, frame_id) do
+    render_hook(view, "frame_handshake", %{"frame" => frame_id})
+    assert_reply(view, %{credential: bearer})
+    bearer
+  end
+
+  defp verify(bearer), do: Sanctum.TinctureAuth.verify_frame_credential(bearer)
+
+  defp ended!(view) do
+    ref = Process.monitor(view.pid)
+    assert_receive {:DOWN, ^ref, :process, _pid, _reason}, 5_000
   end
 
   defp assigns(%Phoenix.LiveViewTest.View{pid: pid}), do: :sys.get_state(pid).socket.assigns
@@ -213,10 +238,10 @@ defmodule PrismWeb.ShellFrameTest do
         })
 
       assert {:error, {:undeclared_capability, ["fullscreen"]}} =
-               PrismWeb.ShellLive.frame_attributes(declaration, ["pointer_lock", "fullscreen"])
+               Prism.Frames.frame_attributes(declaration, ["pointer_lock", "fullscreen"])
 
       assert {:ok, %{sandbox: "allow-scripts allow-pointer-lock", allow: ""}} =
-               PrismWeb.ShellLive.frame_attributes(declaration, ["pointer_lock"])
+               Prism.Frames.frame_attributes(declaration, ["pointer_lock"])
     end
 
     test "a frame asking for a capability no frame has is not created and mints nothing",
@@ -274,6 +299,51 @@ defmodule PrismWeb.ShellFrameTest do
       assert {:error, :revoked} = Sanctum.TinctureAuth.verify_frame_credential(bearer)
     end
 
+    test "the archived-athanor notice ends the view and revokes every credential it minted",
+         %{conn: conn, ctx: ctx, athanor: athanor} do
+      tincture!(ctx, "arch-dash")
+      tincture!(ctx, "arch-other")
+      view = shell!(conn)
+      open!(view, "arch-dash")
+      open!(view, "arch-other")
+      ids = [frame_id(view, "arch-dash"), frame_id(view, "arch-other")]
+      bearer = bearer!(view, frame_id(view, "arch-other"))
+
+      # The status alone moves, so what revokes is the view, not the
+      # transition that archives an athanor.
+      {1, _} =
+        Arca.Repo.update_all(
+          from(a in Arca.Schemas.Athanor, where: a.id == ^athanor.id),
+          set: [status: "archived"]
+        )
+
+      send(view.pid, %Cyfr.Bus.Notify{athanor_id: athanor.id, kind: :athanor_changed})
+      ended!(view)
+
+      for id <- ids, do: assert(row(id).state == "revoked")
+      assert {:error, _refused} = verify(bearer)
+    end
+
+    test "navigating away ends the view and revokes every credential it minted",
+         %{conn: conn, ctx: ctx} do
+      tincture!(ctx, "nav-dash")
+      view = shell!(conn)
+      open!(view, "nav-dash")
+      id = frame_id(view, "nav-dash")
+      bearer = bearer!(view, id)
+      assert {:ok, _} = verify(bearer)
+
+      old = view.pid
+      ref = Process.monitor(old)
+      # The client leaves the shell's channel for the next page's; what
+      # that page answers is its own.
+      _navigated = live_redirect(view, to: athanor_path("/files"))
+      assert_receive {:DOWN, ^ref, :process, ^old, _reason}, 5_000
+
+      assert row(id).state == "revoked"
+      assert {:error, :revoked} = verify(bearer)
+    end
+
     test "a tincture without an owner consent binds grant revision 0", %{conn: conn, ctx: ctx} do
       tincture!(ctx, "plain-dash")
       view = shell!(conn)
@@ -300,6 +370,10 @@ defmodule PrismWeb.ShellFrameTest do
   end
 
   describe "hidden and shown" do
+    setup do
+      on_exit(fn -> Arca.ControlPlane.record(:unclaimed) end)
+    end
+
     test "a hidden frame without a background grant is suspended, and resumed when shown",
          %{conn: conn, ctx: ctx} do
       tincture!(ctx, "front-dash")
@@ -308,14 +382,25 @@ defmodule PrismWeb.ShellFrameTest do
 
       open!(view, "front-dash")
       front = frame_id(view, "front-dash")
+      bearer = bearer!(view, front)
+      assert {:ok, _} = verify(bearer)
 
-      open!(view, "other-dash")
+      html = open!(view, "other-dash")
       assert row(front).state == "suspended"
+      assert {:error, :suspended} = verify(bearer)
       assert row(frame_id(view, "other-dash")).state == "active"
+      assert frame(view, "front-dash").state == :frozen
+      assert attribute(iframe(html, "front-dash"), "data-frame-state") == "frozen"
+      assert iframe(html, "front-dash") =~ ~r/\sinert[\s>=\/]/
+      refute iframe(html, "other-dash") =~ ~r/\sinert[\s>=\/]/
+      assert_push_event(view, "frame_state", %{frame: ^front, state: "frozen"})
 
       open!(view, "front-dash")
       assert frame_id(view, "front-dash") == front
       assert row(front).state == "active"
+      assert {:ok, _} = verify(bearer)
+      assert frame(view, "front-dash").state == :live
+      assert_push_event(view, "frame_state", %{frame: ^front, state: "live"})
       assert row(frame_id(view, "other-dash")).state == "suspended"
     end
 
@@ -325,12 +410,35 @@ defmodule PrismWeb.ShellFrameTest do
       view = shell!(conn)
 
       open!(view, "radio-dash")
+      radio = frame_id(view, "radio-dash")
+      bearer = bearer!(view, radio)
       open!(view, "other-dash")
 
-      assert row(frame_id(view, "radio-dash")).state == "active"
+      assert row(radio).state == "active"
+      assert {:ok, _} = verify(bearer)
+      assert %{state: :live, visible: false} = frame(view, "radio-dash")
     end
 
-    test "a frame whose credential cannot resume is opened again, with a new credential",
+    test "a frame whose suspension cannot be recorded is discarded, not left running",
+         %{conn: conn, ctx: ctx} do
+      tincture!(ctx, "stuck-dash")
+      tincture!(ctx, "other-dash")
+      view = shell!(conn)
+
+      open!(view, "stuck-dash")
+      stuck = frame_id(view, "stuck-dash")
+
+      # A standing transition revoked it while it was shown: the suspension
+      # that hiding it asks for is refused.
+      {:ok, _} = Arca.FrameCredentials.revoke(Sanctum.Context.actor(ctx), row(stuck).id)
+
+      html = open!(view, "other-dash")
+      assert frame(view, "stuck-dash") == nil
+      refute html =~ ~s(id="#{stuck}")
+      assert Enum.map(opened(view), & &1.tincture_id) == ["iframe_other-dash"]
+    end
+
+    test "a frame whose credential was revoked while hidden shows its refusal when shown",
          %{conn: conn, ctx: ctx} do
       tincture!(ctx, "lost-dash")
       tincture!(ctx, "other-dash")
@@ -340,13 +448,35 @@ defmodule PrismWeb.ShellFrameTest do
       lost = frame_id(view, "lost-dash")
       open!(view, "other-dash")
 
-      # A standing transition revoked it while it was hidden.
       {:ok, _} = Arca.FrameCredentials.revoke(Sanctum.Context.actor(ctx), row(lost).id)
 
-      open!(view, "lost-dash")
-      fresh = frame_id(view, "lost-dash")
-      refute fresh == lost
-      assert row(fresh).state == "active"
+      html = open!(view, "lost-dash")
+      assert %{id: ^lost, state: :refused, refusal: :refused} = frame(view, "lost-dash")
+      assert html =~ ~s(data-tincture-state="refused")
+      refute html =~ ~s(<iframe id="#{lost}")
+      assert row(lost).state == "revoked"
+      assert Enum.count(rows()) == 2
+    end
+
+    test "a resume the member cannot make revokes the credential and shows unavailable",
+         %{conn: conn, ctx: ctx} do
+      tincture!(ctx, "slotless-dash")
+      tincture!(ctx, "other-dash")
+      view = shell!(conn)
+
+      open!(view, "slotless-dash")
+      id = frame_id(view, "slotless-dash")
+      bearer = bearer!(view, id)
+      open!(view, "other-dash")
+      assert row(id).state == "suspended"
+
+      Arca.ControlPlane.record(:lost)
+      html = open!(view, "slotless-dash")
+
+      assert %{state: :refused, refusal: :unavailable} = frame(view, "slotless-dash")
+      assert html =~ ~s(data-tincture-state="unavailable")
+      assert row(id).state == "revoked"
+      assert {:error, :revoked} = verify(bearer)
     end
   end
 
@@ -366,11 +496,12 @@ defmodule PrismWeb.ShellFrameTest do
       assert Enum.find(assigns(view).tinctures, &(&1.id == "iframe_verb-dash")).title == "Lisbon"
 
       verb!(view, frame, Prima.TinctureWire.shell_message(:ready, frame))
+      verb!(view, frame, Prima.TinctureWire.shell_message(:focus, frame))
       verb!(view, frame, Prima.TinctureWire.shell_message(:close, frame))
 
-      assert assigns(view).opened_tinctures == []
+      assert opened(view) == []
       assert row(frame).state == "revoked"
-      assert assigns(view).dropped_messages == 0
+      assert dropped(view) == 0
     end
 
     test "a verb carrying data, another frame's message and an old data request are dropped",
@@ -403,18 +534,62 @@ defmodule PrismWeb.ShellFrameTest do
 
       render_hook(view, "frame_verb", %{"message" => %{}})
 
-      assert assigns(view).dropped_messages == 5
-      assert assigns(view).opened_tinctures == ["iframe_verb-dash"]
+      assert dropped(view) == 5
+      assert Enum.map(opened(view), & &1.tincture_id) == ["iframe_verb-dash"]
       assert row(frame).state == "active"
+    end
+
+    test "a message that tries to place, size or raise the frame is dropped",
+         %{view: view, frame: frame} do
+      for message <- [
+            %{"v" => 1, "verb" => "place", "frame" => frame, "args" => %{"x" => 0, "y" => 0}},
+            %{"v" => 1, "verb" => "resize", "frame" => frame, "args" => %{"width" => 9}},
+            %{"v" => 1, "verb" => "focus", "frame" => frame, "args" => %{"x" => 10, "y" => 10}},
+            %{"v" => 1, "verb" => "float", "frame" => frame, "args" => %{}}
+          ] do
+        verb!(view, frame, message)
+      end
+
+      assert dropped(view) == 4
+      assert %{placement: :full} = frame(view, "verb-dash")
+    end
+
+    test "a hidden frame's focus does not raise it", %{conn: conn, ctx: ctx} do
+      tincture!(ctx, "radio-dash", %{"background" => true})
+      tincture!(ctx, "front-dash")
+      view = shell!(conn)
+      open!(view, "radio-dash")
+      radio = frame_id(view, "radio-dash")
+      open!(view, "front-dash")
+
+      verb!(view, radio, Prima.TinctureWire.shell_message(:focus, radio))
+
+      assert active(view) == "iframe_front-dash"
+      assert dropped(view) == 1
+    end
+
+    test "a frozen frame's verbs act on nothing", %{view: view, frame: frame, ctx: ctx} do
+      tincture!(ctx, "cover-dash")
+      send(view.pid, :tinctures_refreshed)
+      open!(view, "cover-dash")
+      assert frame(view, "verb-dash").state == :frozen
+
+      verb!(view, frame, Prima.TinctureWire.shell_message(:close, frame))
+
+      assert frame(view, "verb-dash").state == :frozen
+      assert row(frame).state == "suspended"
+      assert dropped(view) == 1
     end
   end
 
   test "the shell builds no ?_t= URL" do
-    source = File.read!(Path.join(:code.priv_dir(:cyfr), "../lib/prism_web/live/shell_live.ex"))
+    for file <- ~w(prism_web/live/shell_live.ex prism_web/live/canvas_live.ex prism/frames.ex) do
+      source = File.read!(Path.join(:code.priv_dir(:cyfr), "../lib/" <> file))
 
-    refute source =~ "_t="
-    refute source =~ "issue_access_token"
-    refute source =~ ~s(sandbox="allow-scripts")
-    refute source =~ "cyfr:request"
+      refute source =~ "_t="
+      refute source =~ "issue_access_token"
+      refute source =~ ~s(sandbox="allow-scripts")
+      refute source =~ "cyfr:request"
+    end
   end
 end

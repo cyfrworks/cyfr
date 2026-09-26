@@ -70,10 +70,6 @@ defmodule PrismWeb.ToolSeamTest do
     # Dropping the in-flight marker after a manual tincture refresh. Cache
     # invalidation, not persistence.
     {"apps/cyfr/lib/prism_web/live/shell_live.ex", "Arca.Cache.delete_match"},
-    # Revoking the credential of a frame this shell created, as it discards
-    # the frame or ends. The frame exists only in this view; no agent holds
-    # one, so there is no tool.
-    {"apps/cyfr/lib/prism_web/live/shell_live.ex", "Sanctum.TinctureAuth.revoke_frame"},
     # The one transcription of a sign-in outcome to a browser response —
     # it mints the person's OWN session, before any console exists for
     # them. Door placement is pinned by Sanctum.DoorPlacementTest.
