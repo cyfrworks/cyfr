@@ -5,7 +5,10 @@ package scaffold
 
 import (
 	"io/fs"
+	"os"
 	"path/filepath"
+	"regexp"
+	"slices"
 	"strings"
 	"testing"
 )
@@ -18,6 +21,7 @@ import (
 // `cyfr update` would clobber them.
 func TestIsManaged(t *testing.T) {
 	managed := []string{
+		"configuration-guide.md",
 		"component-guide.md",
 		"tincture-guide.md",
 		"integration-guide.md",
@@ -53,6 +57,42 @@ func TestIsManaged(t *testing.T) {
 	for _, p := range notManaged {
 		if isManaged(p) {
 			t.Errorf("expected %q NOT to be managed (must be preserved on update)", p)
+		}
+	}
+}
+
+// TestShippedGuidesAreManaged binds the guides the scaffold tarball packs
+// (scripts/scaffold-tarball.sh's items) to the managed set: a guide shipped
+// but not managed would never be refreshed by `cyfr update`, and one
+// managed but not shipped would name nothing.
+func TestShippedGuidesAreManaged(t *testing.T) {
+	raw, err := os.ReadFile(filepath.Join("..", "..", "..", "..", "scripts", "scaffold-tarball.sh"))
+	if err != nil {
+		t.Fatalf("read scaffold-tarball.sh: %v", err)
+	}
+	items := regexp.MustCompile(`(?s)\nITEMS=\((.*?)\n\)`).FindStringSubmatch(string(raw))
+	if items == nil {
+		t.Fatal("scaffold-tarball.sh has no ITEMS list")
+	}
+	var shipped []string
+	for _, line := range strings.Split(items[1], "\n") {
+		if strings.HasPrefix(strings.TrimSpace(line), "#") {
+			continue
+		}
+		for _, item := range strings.Fields(line) {
+			if strings.HasSuffix(item, "-guide.md") {
+				shipped = append(shipped, item)
+			}
+		}
+	}
+	want := []string{"component-guide.md", "configuration-guide.md", "integration-guide.md", "tincture-guide.md"}
+	slices.Sort(shipped)
+	if !slices.Equal(shipped, want) {
+		t.Errorf("the tarball ships the guides %v, want %v", shipped, want)
+	}
+	for _, guide := range shipped {
+		if !isManaged(guide) {
+			t.Errorf("the tarball ships %s, which `cyfr update` does not refresh", guide)
 		}
 	}
 }

@@ -11,9 +11,12 @@ defmodule Cyfr.DocsDriftTest do
   use ExUnit.Case, async: true
 
   alias Cyfr.Platform.Settings.Roster
+  alias Cyfr.Platform.Settings.Roster.Entry
+  alias Mix.Tasks.Cyfr.Gen.ConfigurationGuide
 
   @repo_root Path.expand("../../../..", __DIR__)
   @readme Path.join(@repo_root, "README.md")
+  @configuration_guide Path.join(@repo_root, "configuration-guide.md")
 
   test "README's storage tree names every tenant root and global prefix" do
     doc = File.read!(@readme)
@@ -498,9 +501,8 @@ defmodule Cyfr.DocsDriftTest do
   end
 
   # cyfr's side of the worker wire, as `config/runtime.exs` and the
-  # resolvers it calls read it, is documented in `.env.example`, the file
-  # cyfr reads.
-  test "every worker variable of cyfr's that the runtime configuration reads is documented in .env.example" do
+  # resolvers it calls read it, is documented in the configuration guide.
+  test "every worker variable of cyfr's that the runtime configuration reads is in the configuration guide" do
     read =
       for file <-
             ~w(config/runtime.exs apps/cyfr/lib/cyfr/runtime_config.ex
@@ -516,12 +518,12 @@ defmodule Cyfr.DocsDriftTest do
 
     assert length(read) >= 6, "the scan found only #{inspect(read)}"
 
-    project = documented(File.read!(Path.join(@repo_root, ".env.example")))
-    undocumented = Enum.reject(read, &MapSet.member?(project, &1))
+    guide = documented_in_guide(File.read!(@configuration_guide))
+    undocumented = Enum.reject(read, &MapSet.member?(guide, &1))
 
     assert undocumented == [],
-           "config/runtime.exs reads these worker variables, and .env.example does not " <>
-             "document them: #{inspect(undocumented)}"
+           "config/runtime.exs reads these worker variables, and configuration-guide.md " <>
+             "does not document them: #{inspect(undocumented)}"
   end
 
   # ==========================================================================
@@ -540,6 +542,11 @@ defmodule Cyfr.DocsDriftTest do
   #   * integration-guide.md's "Running a worker outside Compose", for what
   #     compose fixes and a release run without it is given itself.
   #
+  # Every name the `cyfr` boot reads has its home in `configuration-guide.md`,
+  # rendered from `Cyfr.Platform.Settings.Roster`; `.env.example` is the
+  # starting `.env`, a selection of the guide's names, so a name the guide
+  # documents counts there alone.
+  #
   # The rules are functions of the files' text, so the planted violations
   # below prove each one fails.
   # ==========================================================================
@@ -551,6 +558,15 @@ defmodule Cyfr.DocsDriftTest do
   defp documented(text) do
     ~r/^#?[ \t]*([A-Z][A-Z0-9_]*)=/m
     |> Regex.scan(text, capture: :all_but_first)
+    |> List.flatten()
+    |> MapSet.new()
+  end
+
+  # The names configuration-guide.md documents: the first cell of each row
+  # of its tables, where it is one backquoted name.
+  defp documented_in_guide(guide) do
+    ~r/^\| `([A-Z][A-Z0-9_]*)` \|/m
+    |> Regex.scan(guide, capture: :all_but_first)
     |> List.flatten()
     |> MapSet.new()
   end
@@ -632,7 +648,8 @@ defmodule Cyfr.DocsDriftTest do
   # The documentation texts the rules read, by the name a failure shows.
   defp homes do
     Map.new(
-      ~w(.env.example .env.opus.example .env.locus.example integration-guide.md),
+      ~w(.env.example .env.opus.example .env.locus.example integration-guide.md
+         configuration-guide.md),
       &{&1, File.read!(Path.join(@repo_root, &1))}
     )
   end
@@ -640,11 +657,14 @@ defmodule Cyfr.DocsDriftTest do
   # Rule 1: every variable a release reads is documented in exactly one
   # home. Answers the violations, `{variable, homes}`.
   defp misplaced(variables, homes) do
+    guide = documented_in_guide(homes["configuration-guide.md"])
+
     documented_in = %{
-      ".env.example" => documented(homes[".env.example"]),
+      ".env.example" => MapSet.difference(documented(homes[".env.example"]), guide),
       ".env.opus.example" => documented(homes[".env.opus.example"]),
       ".env.locus.example" => documented(homes[".env.locus.example"]),
-      "integration-guide.md" => documented_outside_compose(homes["integration-guide.md"])
+      "integration-guide.md" => documented_outside_compose(homes["integration-guide.md"]),
+      "configuration-guide.md" => guide
     }
 
     for variable <- variables,
@@ -780,6 +800,15 @@ defmodule Cyfr.DocsDriftTest do
 
     assert "LOCUS_BACKENDS_PORT" in stranded(compose, planted)
 
+    # A platform setting of the control plane's documented in a service's
+    # example as well as in the guide.
+    planted = plant.(".env.locus.example", "# CYFR_SESSION_TTL_HOURS=720")
+
+    assert {"CYFR_SESSION_TTL_HOURS", [".env.locus.example", "configuration-guide.md"]} in misplaced(
+             ["CYFR_SESSION_TTL_HOURS"],
+             planted
+           )
+
     # A setting documented nowhere.
     unplanted =
       Map.update!(homes, ".env.opus.example", &String.replace(&1, "# OPUS_POOL_SIZE=", "#"))
@@ -798,10 +827,11 @@ defmodule Cyfr.DocsDriftTest do
   end
 
   # Compose reads the variables it interpolates from the project .env, so
-  # each is documented in an env example an operator copies: the service
-  # settings where they are read, and the containers' own limits, which no
-  # release reads, in `.env.example` beside the settings they hold.
-  test "every variable docker-compose.yml interpolates is documented in an env example" do
+  # each is documented where an operator looks for it: the service settings
+  # in the env example or the guide that owns them, and the containers' own
+  # limits, which no release reads, in `.env.example` beside the settings
+  # they hold.
+  test "every variable docker-compose.yml interpolates is documented in an env example or the guide" do
     compose = File.read!(Path.join(@repo_root, "docker-compose.yml"))
 
     interpolated =
@@ -815,14 +845,14 @@ defmodule Cyfr.DocsDriftTest do
     documented =
       for example <- Path.wildcard(Path.join(@repo_root, ".env*.example"), match_dot: true),
           [_, name] <- Regex.scan(~r/^#?\s*([A-Z][A-Z0-9_]*)=/m, File.read!(example)),
-          into: MapSet.new(),
+          into: documented_in_guide(File.read!(@configuration_guide)),
           do: name
 
     undocumented = Enum.reject(interpolated, &MapSet.member?(documented, &1))
 
     assert undocumented == [],
-           "docker-compose.yml reads these from the project .env, and no env example " <>
-             "documents them: #{inspect(undocumented)}"
+           "docker-compose.yml reads these from the project .env, and neither an env " <>
+             "example nor configuration-guide.md documents them: #{inspect(undocumented)}"
 
     # The containers' limits are compose's alone: documented where compose
     # reads them, and read by no release.
@@ -838,9 +868,10 @@ defmodule Cyfr.DocsDriftTest do
   end
 
   # The builds service is two variables, read by one resolver
-  # (`Cyfr.RuntimeConfig.resolve_locus_builds/1`), documented where an
-  # operator sets them.
-  test "the builds service's variables are documented in .env.example and the integration guide" do
+  # (`Cyfr.RuntimeConfig.resolve_locus_builds/1`), which `.env.example`
+  # assigns for `cyfr init` to complete: the compose service's URL, and the
+  # key init mints.
+  test "the builds service's variables are assigned in .env.example and documented in the guides" do
     read =
       @repo_root
       |> Path.join("apps/cyfr/lib/cyfr/runtime_config.ex")
@@ -854,19 +885,23 @@ defmodule Cyfr.DocsDriftTest do
 
     project = File.read!(Path.join(@repo_root, ".env.example"))
     guide = File.read!(Path.join(@repo_root, "integration-guide.md"))
+    configuration = documented_in_guide(File.read!(@configuration_guide))
 
     for name <- read do
-      assert project =~ ~r/^# #{name}=/m, "#{name} is not documented in .env.example"
+      assert project =~ ~r/^#{name}=/m, "#{name} is not assigned in .env.example"
       assert guide =~ "`#{name}`", "#{name} is not in integration-guide.md's reference"
+      assert name in configuration, "#{name} is not in configuration-guide.md"
     end
 
-    assert project =~ "# CYFR_LOCUS_BUILDS_URL=http://locus-builds:4100"
+    assert project =~ ~r/^CYFR_LOCUS_BUILDS_URL=http:\/\/locus-builds:4100$/m
+    assert project =~ ~r/^CYFR_LOCUS_BUILDS_KEY=$/m
   end
 
   # The backends service is four variables of the control plane's, read by
   # `config/runtime.exs` (its two periods through the platform settings
-  # roster), documented where an operator sets them.
-  test "the backends service's variables are documented in .env.example and the integration guide" do
+  # roster), documented in the guides; `.env.example` assigns the key for
+  # `cyfr init` to mint, and compose sets the URL.
+  test "the backends service's variables are documented in the guides, its key in .env.example" do
     read =
       ~w(config/runtime.exs apps/cyfr/lib/cyfr/platform/settings/roster.ex)
       |> Enum.map_join("\n", &File.read!(Path.join(@repo_root, &1)))
@@ -884,13 +919,17 @@ defmodule Cyfr.DocsDriftTest do
 
     project = File.read!(Path.join(@repo_root, ".env.example"))
     guide = File.read!(Path.join(@repo_root, "integration-guide.md"))
+    configuration = documented_in_guide(File.read!(@configuration_guide))
 
     for name <- read do
-      assert project =~ ~r/^# #{name}=/m, "#{name} is not documented in .env.example"
       assert guide =~ "`#{name}`", "#{name} is not in integration-guide.md's reference"
+      assert name in configuration, "#{name} is not in configuration-guide.md"
     end
 
-    assert project =~ "# CYFR_LOCUS_BACKENDS_URL=http://locus-backends:4101"
+    assert project =~ ~r/^CYFR_LOCUS_BACKENDS_KEY=$/m
+
+    assert File.read!(Path.join(@repo_root, "docker-compose.yml")) =~
+             "CYFR_LOCUS_BACKENDS_URL=${CYFR_LOCUS_BACKENDS_URL:-http://locus-backends:4101}"
   end
 
   # Every build and every runner is bounded by a cgroup of its own, which
@@ -1005,8 +1044,9 @@ defmodule Cyfr.DocsDriftTest do
   }
 
   # A name two releases read, each from its own env file, is documented in
-  # each: cyfr reads it from .env, the opus service from .env.opus.
-  @read_by_two %{"CYFR_LOG_LEVEL" => [".env.example", ".env.opus.example"]}
+  # each: cyfr's in the configuration guide, the opus service's in
+  # .env.opus.example.
+  @read_by_two %{"CYFR_LOG_LEVEL" => [".env.opus.example", "configuration-guide.md"]}
 
   # Every quoted upper-case name the releases' readers spell: what a
   # documented name must be read as, whatever its prefix.
@@ -1074,6 +1114,99 @@ defmodule Cyfr.DocsDriftTest do
     assert unread == [],
            "these examples document names no release reads and compose does not " <>
              "interpolate: #{inspect(unread)}"
+  end
+
+  # ==========================================================================
+  # The deployment file and the configuration guide
+  #
+  # `.env.example` is the starting `.env`: the lines `cyfr init` rewrites
+  # or completes, assigned, and the deployment's choices commented out.
+  # `configuration-guide.md` is the roster's render, every name and setting
+  # with its sentence.
+  # ==========================================================================
+
+  # The names `.env.example` assigns: the keys and addresses `cyfr init`
+  # mints, writes or completes, and the reach every deployment decides.
+  @deployment_file_assignments ~w(
+    CYFR_SECRET_KEY_BASE CYFR_PORT CYFR_HOST CYFR_BEHIND_PROXY CADDY_ACME_EMAIL
+    CYFR_CORS_ALLOWED_ORIGINS CYFR_PRIVATE_EGRESS_TARGETS CYFR_GITHUB_CLIENT_ID
+    CYFR_GOOGLE_CLIENT_ID CYFR_OPUS_KEY OPUS_SERVICE_KEY CYFR_LOCUS_BACKENDS_KEY
+    CYFR_LOCUS_BUILDS_URL CYFR_LOCUS_BUILDS_KEY
+  )
+
+  test "the deployment file assigns init's lines, keeps its anchor and holds no platform setting" do
+    text = File.read!(Path.join(@repo_root, ".env.example"))
+
+    assigned =
+      for [name] <- Regex.scan(~r/^([A-Z][A-Z0-9_]*)=/m, text, capture: :all_but_first),
+          do: name
+
+    assert Enum.sort(assigned) == Enum.sort(@deployment_file_assignments),
+           ".env.example assigns #{inspect(assigned)}"
+
+    # `cyfr init` writes the operators' line over its commented anchor,
+    # matched by prefix, so the template carries the anchor once.
+    assert length(Regex.scan(~r/^# CYFR_PLATFORM_ADMIN_EMAILS=$/m, text)) == 1
+    refute text =~ ~r/^#?\s*CYFR_PLATFORM_ADMIN_EMAILS=.+$/m
+
+    settings = MapSet.new(Roster.variables())
+
+    assert Enum.filter(documented(text), &MapSet.member?(settings, &1)) == [],
+           ".env.example documents platform settings, which the guide and the Settings page hold"
+
+    declared = MapSet.new(Roster.deployment() ++ Roster.compose_only())
+
+    stray =
+      for name <- documented(text),
+          String.starts_with?(name, "CYFR_"),
+          not MapSet.member?(declared, name),
+          do: name
+
+    assert stray == [], ".env.example documents #{inspect(stray)}, no deployment variable"
+
+    assert length(String.split(text, "configuration-guide.md")) == 2,
+           ".env.example points at configuration-guide.md once"
+  end
+
+  test "configuration-guide.md is the roster's render" do
+    assert File.read!(@configuration_guide) == ConfigurationGuide.render(),
+           "configuration-guide.md is stale: run `mix cyfr.gen.configuration_guide`"
+  end
+
+  test "the guide lists every name the roster declares, each once, with its sentence" do
+    text = File.read!(@configuration_guide)
+
+    listed =
+      ~r/^\| `([A-Z][A-Z0-9_]*)` \|/m
+      |> Regex.scan(text, capture: :all_but_first)
+      |> List.flatten()
+
+    exact_foreign =
+      for {name, _owner} <- Roster.foreign(), not String.ends_with?(name, "*"), do: name
+
+    assert Enum.sort(listed) ==
+             Enum.sort(
+               Roster.deployment() ++ Roster.variables() ++ Roster.compose_only() ++ exact_foreign
+             )
+
+    for {name, doc} <- Roster.deployment_docs() ++ Roster.compose_only_docs() do
+      assert is_binary(doc) and String.trim(doc) != "", "#{name} has no sentence"
+    end
+
+    lines = String.split(text, "\n")
+
+    for %Entry{} = entry <- Roster.entries() do
+      assert is_binary(entry.doc) and String.trim(entry.doc) != "", "#{entry.key} has no doc"
+
+      row =
+        Enum.find(lines, &String.starts_with?(&1, "| `#{entry.variable}` | `#{entry.key}` |")) ||
+          flunk("configuration-guide.md has no row for #{entry.key}")
+
+      assert row =~ "| `#{entry.group}` | #{entry.scope} | #{entry.stale} | #{entry.doc} |"
+    end
+
+    [_, recovery] = String.split(text, "## Headless recovery\n", parts: 2)
+    assert recovery =~ "bin/cyfr rpc" and recovery =~ "bin/cyfr eval"
   end
 
   # ==========================================================================

@@ -30,6 +30,9 @@ defmodule Cyfr.Platform.Settings.Roster do
   none of the four declares, refuses the boot naming it. That is how a
   retired name is refused without a list of retired names.
 
+  Every declaration carries the sentence `configuration-guide.md` gives
+  it, which `mix cyfr.gen.configuration_guide` renders from this module.
+
   `config/runtime.exs` reads this module only on the `cyfr` boot: an island
   release carries no host module, and `Opus.Settings` and `Locus.Config`
   declare their own prefixes.
@@ -66,6 +69,8 @@ defmodule Cyfr.Platform.Settings.Roster do
         log level, `nil` for every other live entry.
       * `inherit` — `true` for the API rate-limit pair alone: absent, the
         pair takes the MCP pair's value.
+      * `doc` — one sentence saying what the setting bounds or chooses, for
+        `configuration-guide.md` (`mix cyfr.gen.configuration_guide`).
     """
 
     @enforce_keys [:key, :app, :variable, :type, :default, :validator, :group, :scope, :stale]
@@ -81,7 +86,8 @@ defmodule Cyfr.Platform.Settings.Roster do
       :scope,
       :stale,
       apply: nil,
-      inherit: false
+      inherit: false,
+      doc: nil
     ]
 
     @type t :: %__MODULE__{
@@ -96,7 +102,8 @@ defmodule Cyfr.Platform.Settings.Roster do
             scope: :live | :restart,
             stale: :refuse | :serve,
             apply: {module(), atom(), 1} | nil,
-            inherit: boolean()
+            inherit: boolean(),
+            doc: String.t() | nil
           }
   end
 
@@ -110,33 +117,146 @@ defmodule Cyfr.Platform.Settings.Roster do
   @apply_log_level {Cyfr.Platform.Settings, :apply_log_level, 1}
   @apply_execution_slots {Cyfr.Platform.Settings, :apply_execution_slots, 1}
 
-  @deployment ~w(
-    CYFR_AUTH_PROVIDER CYFR_AUTO_MIGRATE CYFR_BEHIND_PROXY CYFR_BIND_ADDRESS
-    CYFR_CELL_COOKIE CYFR_CLUSTER CYFR_CLUSTER_DNS_QUERY CYFR_CLUSTER_NODE_BASENAME
-    CYFR_CLUSTER_NODES CYFR_CORS_ALLOWED_ORIGINS CYFR_COSIGN_IDENTITY CYFR_COSIGN_ISSUER
-    CYFR_COSIGN_KEY CYFR_COSIGN_PASSWORD CYFR_CRYPTO_KEYRING
-    CYFR_CRYPTO_KEYRING_FINGERPRINT_ACCEPT CYFR_DATABASE CYFR_DATABASE_PATH
-    CYFR_DATABASE_URL CYFR_DATA_PATH CYFR_DB_POOL_SIZE CYFR_DB_SSL CYFR_GITHUB_CLIENT_ID
-    CYFR_GOOGLE_CLIENT_ID CYFR_GOOGLE_CLIENT_SECRET CYFR_HEADLESS CYFR_HOST
-    CYFR_HOST_API_BIND CYFR_HOST_API_PORT CYFR_HOST_API_URL CYFR_LIVE_SALT
-    CYFR_LOCUS_BACKENDS_KEY CYFR_LOCUS_BACKENDS_URL CYFR_LOCUS_BUILDS_KEY
-    CYFR_LOCUS_BUILDS_URL CYFR_LOG_FORMAT CYFR_MCP_ALLOWED_ORIGINS CYFR_METRICS_TOKEN
-    CYFR_OCI_REGISTRY_URL CYFR_OIDC_CLIENT_ID CYFR_OIDC_CLIENT_SECRET CYFR_OIDC_ISSUER
-    CYFR_OPUS_KEY CYFR_OPUS_WORKERS CYFR_OTEL_ENABLED CYFR_PLATFORM_ADMIN_EMAILS
-    CYFR_PORT CYFR_PRIVATE_EGRESS_TARGETS CYFR_PROMETHEUS_METRICS CYFR_PUBLIC_URL
-    CYFR_REGISTRY_URL CYFR_REQUIRE_SIGNED_PULLS CYFR_S3_ACCESS_KEY_ID CYFR_S3_BUCKET
-    CYFR_S3_ENDPOINT CYFR_S3_PATH_STYLE CYFR_S3_PREFIX CYFR_S3_RECEIVE_TIMEOUT_MS
-    CYFR_S3_REGION CYFR_S3_SECRET_ACCESS_KEY CYFR_SECRET_KEY_BASE CYFR_SEED_PATH
-    CYFR_SESSION_SALT CYFR_STORAGE CYFR_TRUSTED_PROXY_CIDRS CYFR_TRUSTED_PROXY_HOPS
-    OTEL_EXPORTER_OTLP_ENDPOINT
-  )
+  # Each deployment variable with the sentence `configuration-guide.md`
+  # gives it, in name order.
+  @deployment [
+    {"CYFR_AUTH_PROVIDER",
+     "The sign-in provider: unset for the built-in GitHub and Google device flows, `oidc` for the external issuer the three `CYFR_OIDC_*` variables name; `oidc` with any of them missing refuses the boot."},
+    {"CYFR_AUTO_MIGRATE",
+     "Whether the server migrates the schema on boot (default `true`); `false` when several members share one PostgreSQL database or an operator runs `bin/cyfr eval \"Cyfr.Release.migrate()\"` by hand."},
+    {"CYFR_BEHIND_PROXY",
+     "`true` when a reverse proxy fronts the server: forwarded headers are trusted, the plain-HTTP warning is silent, and `cyfr up` starts the stack's Caddy (`--profile tls`). `cyfr init`'s TLS answer writes it."},
+    {"CYFR_BIND_ADDRESS",
+     "The address the one endpoint binds (default `0.0.0.0`); `127.0.0.1` binds localhost only."},
+    {"CYFR_CELL_COOKIE",
+     "A cell's cookie: at least 32 characters (`openssl rand -hex 32`), the same on every member and the cookie each member's BEAM runs under (`RELEASE_COOKIE` or `-setcookie`)."},
+    {"CYFR_CLUSTER",
+     "Several members on one database as one cell (default off). A member boots only with PostgreSQL, S3 storage, TLS distribution, `CYFR_CELL_COOKIE`, a discovery topology, a shared `CYFR_OPUS_KEY` and its own `CYFR_HOST_API_URL`; each missing one is a named refusal."},
+    {"CYFR_CLUSTER_DNS_QUERY",
+     "A cell's discovery by DNS: the headless service whose addresses are the members, each named `<CYFR_CLUSTER_NODE_BASENAME>@<address>`."},
+    {"CYFR_CLUSTER_NODE_BASENAME",
+     "The node basename of the members `CYFR_CLUSTER_DNS_QUERY` finds."},
+    {"CYFR_CLUSTER_NODES",
+     "A cell's members by name, comma-separated (`cyfr@10.0.0.1,cyfr@10.0.0.2`)."},
+    {"CYFR_CORS_ALLOWED_ORIGINS",
+     "The browser CORS allowlist, comma-separated origins. A release with sign-in configured refuses to boot on the unassigned wildcard default; assigned empty, as `cyfr init` writes it, it admits no cross-origin caller, which the shipped stack never needs."},
+    {"CYFR_COSIGN_IDENTITY",
+     "Keyless OCI signature verification: the regular expression the signing certificate's identity must match, with `CYFR_COSIGN_ISSUER`; a missing keyless constraint refuses verification."},
+    {"CYFR_COSIGN_ISSUER",
+     "Keyless OCI signature verification: the regular expression the signing certificate's issuer must match, with `CYFR_COSIGN_IDENTITY`."},
+    {"CYFR_COSIGN_KEY", "Key-based OCI signature verification: the cosign public key."},
+    {"CYFR_COSIGN_PASSWORD", "The password of `CYFR_COSIGN_KEY`, when it has one."},
+    {"CYFR_CRYPTO_KEYRING",
+     "The keyring sealing secrets at rest (vault entries, webhook secrets, registry tokens), as JSON `{\"primary\":\"label\",\"keys\":{\"label\":\"<base64, at least 32 bytes>\"}}`; unset, one key derived from `CYFR_SECRET_KEY_BASE`. To rotate, keep the old labels listed and re-seal with `Cyfr.Release.rotate_cipher_keys/1`."},
+    {"CYFR_CRYPTO_KEYRING_FINGERPRINT_ACCEPT",
+     "The primary-key fingerprint the boot's refusal reports, set for one boot to accept a deliberate key change; re-seal, then unset it. It recovers nothing sealed with a key that is gone."},
+    {"CYFR_DATABASE",
+     "The database adapter, `sqlite` (default) or `postgres`, fixed when the release is built; the published image is SQLite, and a runtime value that disagrees with the build refuses the boot."},
+    {"CYFR_DATABASE_PATH", "The SQLite file (default `cyfr.db` under `CYFR_DATA_PATH`)."},
+    {"CYFR_DATABASE_URL",
+     "The PostgreSQL URL, which a PostgreSQL build requires (there is no localhost fallback)."},
+    {"CYFR_DATA_PATH",
+     "The one runtime storage root: every athanor's tree, the caches and the SQLite database (default `data`; the image sets its own)."},
+    {"CYFR_DB_POOL_SIZE", "The database connection pool's size (default 20)."},
+    {"CYFR_DB_SSL", "TLS to the PostgreSQL server (default off)."},
+    {"CYFR_GITHUB_CLIENT_ID",
+     "The GitHub OAuth app's client ID for the device flow; `.env.example` ships a public one, which your own app's replaces."},
+    {"CYFR_GOOGLE_CLIENT_ID",
+     "The Google OAuth client ID for the device flow, used with `CYFR_GOOGLE_CLIENT_SECRET`; `.env.example` ships a public one."},
+    {"CYFR_GOOGLE_CLIENT_SECRET",
+     "The Google OAuth client secret, set in `.env` alone and never in a tracked file."},
+    {"CYFR_HEADLESS",
+     "A Codex-only node (default off): `/mcp`, `/api` and public tinctures are served and every browser page answers 404. It does not combine with `CYFR_AUTH_PROVIDER=oidc`."},
+    {"CYFR_HOST",
+     "The hostname clients reach the server at (default `localhost`); in TLS mode Caddy's certificate names it."},
+    {"CYFR_HOST_API_BIND",
+     "The address the host API binds for the workers' host calls and exit reports (default `127.0.0.1`; compose binds every interface of the worker network)."},
+    {"CYFR_HOST_API_PORT", "The host API's port (default 4300)."},
+    {"CYFR_HOST_API_URL",
+     "The address a worker service reaches this member's host API at, carried by every assignment the member issues; unset, a worker uses its own `OPUS_HOST_URL`, and a cell refuses to boot without it."},
+    {"CYFR_LIVE_SALT",
+     "The LiveView socket's signing salt; unset, derived from `CYFR_SECRET_KEY_BASE`. Set it only to keep sessions across a key-base rotation."},
+    {"CYFR_LOCUS_BACKENDS_KEY",
+     "The backends service's key, 32 random bytes as 64 hexadecimal digits (`openssl rand -hex 32`), which `cyfr init` mints and compose hands the service as `LOCUS_BACKENDS_KEY`; without it, or without `CYFR_LOCUS_BACKENDS_URL`, stdio MCP servers are refused."},
+    {"CYFR_LOCUS_BACKENDS_URL",
+     "The backends service's base URL; compose sets `http://locus-backends:4101`. Set it for a service elsewhere, and name its host in `CYFR_PRIVATE_EGRESS_TARGETS`."},
+    {"CYFR_LOCUS_BUILDS_KEY",
+     "The key every build request is signed with, 64 hexadecimal digits, which `cyfr init` mints and compose hands the builder as `LOCUS_BUILDS_KEY`; set with `CYFR_LOCUS_BUILDS_URL` or not at all."},
+    {"CYFR_LOCUS_BUILDS_URL",
+     "The builds service's base URL. `http://locus-builds:4100`, which `cyfr init` writes, names the compose service, which `cyfr up` then starts; a URL naming another host starts no local builder. With it and `CYFR_LOCUS_BUILDS_KEY` both empty builds are off and every build is refused; one without the other refuses the boot."},
+    {"CYFR_LOG_FORMAT", "`json` for structured logs; unset, plain text."},
+    {"CYFR_MCP_ALLOWED_ORIGINS",
+     "Extra origins, comma-separated, the MCP endpoint's Origin check accepts beside `https://CYFR_HOST` and the localhost defaults."},
+    {"CYFR_METRICS_TOKEN",
+     "The bearer token a `/metrics` scrape must present; unset, an enabled endpoint is unauthenticated, so bind it privately or allowlist it at the proxy."},
+    {"CYFR_OCI_REGISTRY_URL",
+     "The OCI registry host components are pulled from and pushed to (default `registry.<CYFR_REGISTRY_URL>`, and `none` when that is `none`)."},
+    {"CYFR_OIDC_CLIENT_ID", "The client ID at the OIDC issuer, with `CYFR_AUTH_PROVIDER=oidc`."},
+    {"CYFR_OIDC_CLIENT_SECRET",
+     "The client secret at the OIDC issuer, with `CYFR_AUTH_PROVIDER=oidc`."},
+    {"CYFR_OIDC_ISSUER",
+     "The OIDC issuer's URL (Okta, Auth0, Keycloak, Azure AD and the like), with `CYFR_AUTH_PROVIDER=oidc`."},
+    {"CYFR_OPUS_KEY",
+     "The worker root, 32 random bytes as 64 hexadecimal digits, read by cyfr alone; every worker service's key derives from it. `cyfr init` mints it, every member of a cell holds the same one, and without it no component runs."},
+    {"CYFR_OPUS_WORKERS",
+     "The worker services runs are dispatched to, comma-separated `<service_id>=<url>` entries tried in order; compose sets `wrk_opus=http://opus:4200`, and outside compose the default is a worker on this machine."},
+    {"CYFR_OTEL_ENABLED",
+     "OpenTelemetry traces over OTLP to `OTEL_EXPORTER_OTLP_ENDPOINT` (default off)."},
+    {"CYFR_PLATFORM_ADMIN_EMAILS",
+     "The server's operators, comma-separated emails: each is always let in and holds the platform-admin capability, reconciled at every boot. Unset, no one can sign in."},
+    {"CYFR_PORT", "The one endpoint's port (default 4000)."},
+    {"CYFR_PRIVATE_EGRESS_TARGETS",
+     "The private hosts, addresses or CIDRs the server's own outbound calls may reach (MCP servers, OAuth token endpoints, registry pulls), comma-separated; the stack names `locus-backends`. Link-local addresses are always refused, and a run's egress never uses this list."},
+    {"CYFR_PROMETHEUS_METRICS",
+     "Prometheus metrics at `/metrics` on the API port (default off)."},
+    {"CYFR_PUBLIC_URL",
+     "The address the server is reachable at from outside, which behind a proxy or tunnel only the operator knows; webhook URLs are absolute when it is set and bare paths when it is not."},
+    {"CYFR_REGISTRY_URL",
+     "The component registry host (default `cyfr.run`); `none` is an appliance without a registry, whose pulls and publishes refuse."},
+    {"CYFR_REQUIRE_SIGNED_PULLS",
+     "Refuse a component pull whose OCI signature cannot be verified (default off: the component is stored as unverified)."},
+    {"CYFR_S3_ACCESS_KEY_ID", "The object store's access key ID, with `CYFR_STORAGE=s3`."},
+    {"CYFR_S3_BUCKET", "The object store's bucket, with `CYFR_STORAGE=s3`."},
+    {"CYFR_S3_ENDPOINT",
+     "The endpoint of a non-AWS object store (MinIO and the like), usually with `CYFR_S3_PATH_STYLE=true`."},
+    {"CYFR_S3_PATH_STYLE", "Path-style bucket addressing (default off)."},
+    {"CYFR_S3_PREFIX", "A key prefix every object is stored under (default none)."},
+    {"CYFR_S3_RECEIVE_TIMEOUT_MS",
+     "The per-request timeout against the object store, in milliseconds (default 60000); a slower store reads as a storage outage."},
+    {"CYFR_S3_REGION", "The object store's region, with `CYFR_STORAGE=s3`."},
+    {"CYFR_S3_SECRET_ACCESS_KEY",
+     "The object store's secret access key, with `CYFR_STORAGE=s3`."},
+    {"CYFR_SECRET_KEY_BASE",
+     "The key base that signs sessions and derives the at-rest key (`openssl rand -base64 48`), which `cyfr init` mints; a restored data directory needs the same value."},
+    {"CYFR_SEED_PATH",
+     "The seed tree read in place: the component bundle under `components/` and the AQUA template under `aqua/` (default `seed`; the image sets its own)."},
+    {"CYFR_SESSION_SALT",
+     "The session cookie's signing salt; unset, derived from `CYFR_SECRET_KEY_BASE`. Set it only to keep sessions across a key-base rotation."},
+    {"CYFR_STORAGE",
+     "`s3` for S3-compatible object storage, which needs the bucket, region and both keys; unset, the local filesystem under `CYFR_DATA_PATH`."},
+    {"CYFR_TRUSTED_PROXY_CIDRS",
+     "The reverse proxies in front of the server, comma-separated addresses or CIDRs, which take precedence over `CYFR_TRUSTED_PROXY_HOPS`; an entry that is neither refuses the boot."},
+    {"CYFR_TRUSTED_PROXY_HOPS",
+     "The reverse-proxy hops in front of the server when `CYFR_BEHIND_PROXY` is true (default 1, the stack's Caddy; 0 to 16). Too few resolves client addresses to a proxy, so API-key address allowlists fail closed."},
+    {"OTEL_EXPORTER_OTLP_ENDPOINT",
+     "The OTLP endpoint traces go to (default `http://localhost:4318`). Not under the prefix; listed so every name the boot reads has one home."}
+  ]
 
   # The `${…}` names docker-compose.yml interpolates that no release reads:
-  # each container's CPU and memory limit, and Caddy's ACME address.
-  @compose_only ~w(
-    CADDY_ACME_EMAIL CYFR_CPU_LIMIT LOCUS_BUILDS_CPU_LIMIT LOCUS_BUILDS_MEMORY_LIMIT
-    OPUS_CPU_LIMIT OPUS_MEMORY_LIMIT
-  )
+  # each container's CPU and memory limit, and Caddy's ACME address, each
+  # with the sentence `configuration-guide.md` gives it.
+  @compose_only [
+    {"CADDY_ACME_EMAIL",
+     "The address Let's Encrypt registers Caddy's certificate under, in TLS mode with a real `CYFR_HOST`; `cyfr init` asks for it."},
+    {"CYFR_CPU_LIMIT",
+     "The cyfr container's CPU limit (default 4), which bounds the aggregate CPU of components that never yield."},
+    {"LOCUS_BUILDS_CPU_LIMIT", "The locus-builds container's CPU limit (default 2)."},
+    {"LOCUS_BUILDS_MEMORY_LIMIT",
+     "The locus-builds container's memory limit (default 4G), at least `LOCUS_BUILDS_MAX_CONCURRENT` x (`LOCUS_BUILDS_MEMORY_BYTES` + 1 GiB), so each build reaches its own bound before the container reaches its limit."},
+    {"OPUS_CPU_LIMIT", "The opus container's CPU limit (default 4)."},
+    {"OPUS_MEMORY_LIMIT",
+     "The opus container's memory limit (default 4G), at least 8 runner uids x `OPUS_RUNNER_MEMORY_BYTES` + 1 GiB, so each runner reaches its own bound before the container reaches its limit."}
+  ]
 
   # Names under the prefix that other programs own. A trailing `*` is a
   # prefix. Only the process environment may carry them: a `.env` file is
@@ -153,6 +273,71 @@ defmodule Cyfr.Platform.Settings.Roster do
     {"CYFR_CLUSTER_DATABASE_URL", "the test harness: the cluster suite's shared database"},
     {"CYFR_GOLDEN_RECORD", "the test harness: rewrites the consent bootstrap's golden file"}
   ]
+
+  # Each setting's sentence, by key: every entry's `doc`.
+  @setting_docs %{
+    "max_athanors" =>
+      "Active athanors on this server; an archived one frees its place. Unset, no cap.",
+    "max_groups_per_person" =>
+      "Groups one person may create (they may belong to more); 0 turns the cap off.",
+    "max_pairs_per_person" =>
+      "DMs one person may hold open; a DM is minted for two, so either person at the cap refuses it, and an ended DM frees its place. 0 turns the cap off.",
+    "max_members_per_group" => "Seats in one group, invitations included. Unset, no cap.",
+    "max_threads_per_athanor" =>
+      "Threads one athanor may hold, each a row any member's client can mint; 0 turns the cap off.",
+    "mint_per_hour" =>
+      "Personal athanors minted per hour: how fast strangers can arrive through an open door. Unset, no cap.",
+    "athanor_storage_bytes" =>
+      "Bytes one athanor may hold, its whole tree including its copies of the shipped bundle. Unset, no cap.",
+    "crucible_max_concurrent" =>
+      "Concurrent WASM executions on each member, at least 32 so the chain children's reserve holds a chain of the full depth.",
+    "crucible_max_concurrent_per_tenant" =>
+      "Concurrent WASM executions one athanor may hold on each member.",
+    "mcp_rate_limit_max" =>
+      "Requests and stream opens per client address per window on the MCP endpoint; streams already open are unaffected.",
+    "mcp_rate_limit_window_ms" => "The MCP rate limit's window, in milliseconds.",
+    "api_rate_limit_max" =>
+      "Requests per client address per window on the API bucket (execution-event stream reconnects); unset, the MCP pair's value, counted separately.",
+    "api_rate_limit_window_ms" =>
+      "The API bucket's window, in milliseconds; unset, the MCP pair's.",
+    "webhook_per_ip_rate_limit_max" =>
+      "Inbound webhook deliveries per client address per minute across every slug, checked before and so capping each webhook's own limit.",
+    "mcp_subscription_max_concurrent" =>
+      "Concurrent MCP subscription streams per caller (athanor and credential).",
+    "mcp_subscription_max_ms" =>
+      "How long one MCP subscription stream lives before the client reconnects, in milliseconds.",
+    "crucible_events_max_concurrent" =>
+      "Concurrent execution-event streams per caller (athanor and credential).",
+    "crucible_events_max_ms" =>
+      "How long one execution-event stream lives before the client reconnects, in milliseconds.",
+    "session_ttl_hours" => "Hours a session may sit idle before it ends; 0 never ends one.",
+    "webhook_max_skew_seconds" =>
+      "How far a delivery's timestamp may sit from now before it is refused as a replay: how long a captured delivery stays replayable.",
+    "webhook_idempotency_ttl_seconds" =>
+      "How long delivered idempotency keys are kept: the window in which a retried delivery is recognised as a duplicate.",
+    "device_label" =>
+      "The label recorded against the registry push tokens this server mints. Unset, the hostname.",
+    "health_ready_cache_ms" =>
+      "How long `/health/ready` reuses its last probe, in milliseconds; on S3 every uncached probe is a billable write.",
+    "decision_retention_days" =>
+      "Days the server keeps the admission decisions it made before any athanor was resolved; each athanor keeps its own under its retention settings.",
+    "opus_watch_poll_ms" =>
+      "How often cyfr asks each worker service for its status, in milliseconds.",
+    "opus_watch_misses" =>
+      "Status polls a worker service may miss in a row before cyfr ends the runs of the boot it last heard from.",
+    "locus_backends_lease_ms" =>
+      "How long the backends service runs a stdio server's backends without a renewal from cyfr, in milliseconds; cyfr renews every third of it.",
+    "locus_backends_idle_ms" =>
+      "How long a stdio backend runs without a tool call before it is stopped and its slot freed, in milliseconds; its next call starts it again.",
+    "log_level" =>
+      "The Logger level, `emergency` to `debug`; debug output may include unredacted dependency messages.",
+    "asset_credential_window_s" =>
+      "How long a private tincture's asset credential stays one credential, in seconds.",
+    "frame_credential_deadline_s" =>
+      "How long an unobserved frame's credential lives before it is refused, in seconds.",
+    "frame_invocation_max" => "The invocations one tincture frame may make per window.",
+    "frame_invocation_window_ms" => "The frame invocation limit's window, in milliseconds."
+  }
 
   @doc "Every platform setting, in the order the boot reads them."
   @spec entries() :: [Entry.t()]
@@ -406,6 +591,7 @@ defmodule Cyfr.Platform.Settings.Roster do
         window()
       )
     ]
+    |> Enum.map(&%{&1 | doc: Map.fetch!(@setting_docs, &1.key)})
   end
 
   defp cap(key, variable, default, unit) do
@@ -529,14 +715,22 @@ defmodule Cyfr.Platform.Settings.Roster do
   listed so every name the boot reads has one home.
   """
   @spec deployment() :: [String.t()]
-  def deployment, do: @deployment
+  def deployment, do: Enum.map(@deployment, &elem(&1, 0))
+
+  @doc "Each deployment variable with its one sentence, in name order."
+  @spec deployment_docs() :: [{String.t(), String.t()}]
+  def deployment_docs, do: @deployment
 
   @doc """
   The names `docker-compose.yml` interpolates that no release reads: the
   containers' CPU and memory limits and Caddy's ACME address.
   """
   @spec compose_only() :: [String.t()]
-  def compose_only, do: @compose_only
+  def compose_only, do: Enum.map(@compose_only, &elem(&1, 0))
+
+  @doc "Each compose-only name with its one sentence."
+  @spec compose_only_docs() :: [{String.t(), String.t()}]
+  def compose_only_docs, do: @compose_only
 
   @doc """
   The `CYFR_*` names other programs own, each with its owner; a name

@@ -7,7 +7,7 @@ cd "$REPO_ROOT"
 OUTPUT="${1:-cyfr-scaffold.tar.gz}"
 
 ITEMS=(
-  component-guide.md tincture-guide.md integration-guide.md
+  configuration-guide.md component-guide.md tincture-guide.md integration-guide.md
   LICENSE LICENSES/ FAIR_SOURCE.md
   wit/
   # Package deployment files for cyfr init: the app, the execution worker,

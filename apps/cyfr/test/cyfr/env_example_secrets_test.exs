@@ -46,12 +46,15 @@ defmodule Cyfr.EnvExampleSecretsTest do
   end
 
   # The keys are generated per deployment: shipped with a value, every
-  # deployment that copied the example would share it.
-  test "every key the stack needs is shipped empty" do
+  # deployment that copied the example would share it. Each is assigned
+  # empty, the line `cyfr init` writes its minted key on.
+  test "every key the stack needs is shipped assigned and empty" do
+    text = File.read!(Path.join(@root, ".env.example"))
+
     for key <-
-          ~w(CYFR_OPUS_KEY CYFR_LOCUS_BACKENDS_KEY OPUS_SERVICE_KEY CYFR_LOCUS_BUILDS_KEY) do
-      text = File.read!(Path.join(@root, ".env.example"))
-      assert text =~ ~r/^(# )?#{key}=$/m, ".env.example must ship #{key} empty"
+          ~w(CYFR_SECRET_KEY_BASE CYFR_OPUS_KEY CYFR_LOCUS_BACKENDS_KEY OPUS_SERVICE_KEY
+             CYFR_LOCUS_BUILDS_KEY) do
+      assert text =~ ~r/^#{key}=$/m, ".env.example must assign #{key} empty"
     end
   end
 end
