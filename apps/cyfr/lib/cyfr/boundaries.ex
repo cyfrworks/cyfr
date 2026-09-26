@@ -1877,6 +1877,9 @@ defmodule Cyfr.Boundaries do
     # The gate's heads: refusals made before its own checks and identity.
     %{module: Grimoire, site: :call_external, plane: :external},
     %{module: Grimoire, site: :call_in_chain, plane: :in_chain},
+    # The gate's stream entry: an open is decided and recorded there, and
+    # MCP `subscriptions/listen` admits through it.
+    %{module: Grimoire, site: :open_stream, plane: :external},
     # The JSON-RPC router's pre-gate refusals: a request naming no tool or
     # an unknown one, a read naming no resource, an unknown method.
     %{module: Emissary.MCP.Router, site: :dispatch, plane: :external},

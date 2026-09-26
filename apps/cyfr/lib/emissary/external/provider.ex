@@ -63,6 +63,22 @@ defmodule Emissary.External.Provider do
   @impl true
   def tools, do: [definition()]
 
+  # The one stream MCP `subscriptions/listen` serves: the athanor's
+  # servers or their tool lists changed. It carries the change's kind and
+  # nothing else, takes no subject, and a grant on it lives no longer than
+  # the longest subscription window an operator may set (24 hours).
+  @impl true
+  def streams do
+    [
+      %Prima.Provider.Stream{
+        name: "mcp_servers.changes",
+        topic: :mcp_servers,
+        projection: ["kind"],
+        deadline_bound: 86_400
+      }
+    ]
+  end
+
   @impl true
   def handle("mcp_servers", %Context{} = ctx, args) when is_map(args), do: handle(ctx, args)
   def handle(tool, _ctx, _args), do: {:error, "Unknown tool: #{tool}"}

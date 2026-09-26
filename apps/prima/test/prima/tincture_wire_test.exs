@@ -85,7 +85,7 @@ defmodule Prima.TinctureWireTest do
     {:ok, deadline, 0} = DateTime.from_iso8601(stream["deadline"])
 
     grant = %StreamGrant{
-      topic: "tenant:ath_1:bus:execution_events:#{stream["subject"]}",
+      topic: :execution_events,
       projection: stream["projection"],
       subject: stream["subject"],
       deadline: deadline,
@@ -93,7 +93,8 @@ defmodule Prima.TinctureWireTest do
     }
 
     assert TinctureWire.stream(grant, stream["stream"]) == body
-    refute inspect(TinctureWire.stream(grant, stream["stream"])) =~ "tenant:"
+    # The bus key the grant rides stays on the server.
+    refute inspect(TinctureWire.stream(grant, stream["stream"])) =~ "execution_events"
 
     assert TinctureWire.result(%{"temperature" => 21}) ==
              Enum.find(vectors()["answers"], &(&1["kind"] == "invoke"))["body"]

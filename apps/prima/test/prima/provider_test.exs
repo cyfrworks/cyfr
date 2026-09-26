@@ -122,7 +122,7 @@ defmodule Prima.ProviderTest do
     now = ~U[2026-09-26 12:00:00Z]
 
     grant = %Prima.StreamGrant{
-      topic: "tenant:ath_1:bus:execution_events:exec_1",
+      topic: :execution_events,
       projection: ["seq", "delta"],
       subject: "exec_1",
       deadline: DateTime.add(now, 60, :second),

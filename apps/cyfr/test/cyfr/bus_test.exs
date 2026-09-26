@@ -289,6 +289,120 @@ defmodule Cyfr.BusTest do
   end
 
   # ---------------------------------------------------------------------------
+  # Streams: the roster keys a grant names, and the boot check
+  # ---------------------------------------------------------------------------
+
+  defp grant(topic, subject) do
+    %Prima.StreamGrant{
+      topic: topic,
+      projection: ["kind"],
+      subject: subject,
+      deadline: DateTime.utc_now(),
+      grant_id: "sgr_1"
+    }
+  end
+
+  defp stream(name, topic, subject \\ nil) do
+    %Prima.Provider.Stream{
+      name: name,
+      topic: topic,
+      projection: ["kind"],
+      subject: subject,
+      deadline_bound: 60
+    }
+  end
+
+  describe "topic?/1" do
+    test "knows every roster key, as an atom or its string, and nothing else" do
+      for %{key: key} <- Bus.topics() do
+        assert Bus.topic?(key)
+        assert Bus.topic?(Atom.to_string(key))
+      end
+
+      refute Bus.topic?(:no_such_topic)
+      refute Bus.topic?("no_such_topic")
+      refute Bus.topic?("tenant:ath_1:bus:mcp_servers")
+      refute Bus.topic?(nil)
+      refute Bus.topic?(42)
+    end
+  end
+
+  describe "a stream grant's topic" do
+    test "is the key under the holder's tenant prefix" do
+      assert Bus.granted_topic(actor("ath_1"), grant(:mcp_servers, nil)) ==
+               Bus.mcp_servers(actor("ath_1"))
+
+      assert Bus.granted_topic(actor("ath_1"), grant(:execution_events, "exec_1")) ==
+               Bus.execution_events(actor("ath_1"), "exec_1")
+    end
+
+    test "is the holder's own, so the bus's tenant check admits it and no other's" do
+      topic = Bus.granted_topic(actor("ath_1"), grant(:mcp_servers, nil))
+      assert :ok = Bus.subscribe(actor("ath_1"), topic)
+      assert {:error, :cross_tenant} = Bus.subscribe(actor("ath_2"), topic)
+    end
+
+    test "refuses a key that is not a tenant row, or a subject its row does not take" do
+      for {key, subject} <- [
+            {:sessions, nil},
+            {:page_viewing, "x"},
+            {:no_such_topic, nil},
+            {:mcp_servers, "x"},
+            {:execution_events, nil},
+            {:execution_events, ""}
+          ] do
+        assert_raise ArgumentError, fn ->
+          Bus.granted_topic(actor("ath_1"), grant(key, subject))
+        end
+      end
+    end
+
+    test "grantable?/2 answers the same shapes" do
+      assert Bus.grantable?(:mcp_servers, false)
+      refute Bus.grantable?(:mcp_servers, true)
+      assert Bus.grantable?(:execution_events, true)
+      refute Bus.grantable?(:execution_events, false)
+      refute Bus.grantable?(:sessions, false)
+      refute Bus.grantable?(:no_such_topic, false)
+    end
+  end
+
+  describe "the boot check on declared streams" do
+    test "passes the table this boot loaded" do
+      assert Cyfr.Application.check_stream_topics!() == :ok
+      assert Cyfr.Application.stream_topic_findings(Grimoire.Catalog.stream_entries()) == []
+    end
+
+    test "refuses a stream naming no rostered topic, naming the provider, stream and topic" do
+      entries = [
+        {Emissary.External.Provider, stream("mcp_servers.changes", :mcp_servers)},
+        {Some.Provider, stream("some.stream", :no_such_topic)}
+      ]
+
+      error =
+        assert_raise RuntimeError, fn -> Cyfr.Application.check_stream_topics!(entries) end
+
+      assert error.message =~ "refusing to boot"
+      assert error.message =~ "Some.Provider declares some.stream on :no_such_topic"
+      refute error.message =~ "mcp_servers.changes"
+    end
+
+    test "refuses a stream on a topic no grant can scope" do
+      assert [finding] =
+               Cyfr.Application.stream_topic_findings([
+                 {Some.Provider, stream("some.sessions", :sessions)}
+               ])
+
+      assert finding =~ "Some.Provider declares some.sessions on :sessions"
+
+      assert [_subject_shape] =
+               Cyfr.Application.stream_topic_findings([
+                 {Some.Provider, stream("some.servers", :mcp_servers, ~S"\A[a-z]+\z")}
+               ])
+    end
+  end
+
+  # ---------------------------------------------------------------------------
   # The tree
   # ---------------------------------------------------------------------------
 

@@ -241,18 +241,41 @@ defmodule Emissary.Web.MCPController do
   # Distinct name from `open_stream/1` below (the bare SSE open): this one
   # opens the SUBSCRIPTION stream and adds the two MCP-specific headers;
   # the four SSE mechanics belong to `CyfrWeb.SSE.open/1`.
+  #
+  # Each acknowledged type is admitted by the gate first
+  # (`Subscriptions.listen/2`), which records its own decision; a refusal
+  # there is answered without a second one. The stream ends at the earlier
+  # of the operator's window and the grants' own deadline.
   defp open_subscription_stream(conn, context, params, request_id, id) do
     filter = get_in(params, ["params", "notifications"]) || %{}
-    {:ok, acknowledged} = Subscriptions.listen(context, filter)
-    watch = ContextGuard.watch(context)
-    deadline = CyfrWeb.SSE.deadline(:mcp_subscription_max_ms)
 
-    conn
-    |> put_resp_header(@protocol_version_header, @protocol_version)
-    |> put_resp_header("x-request-id", request_id)
-    |> CyfrWeb.SSE.open()
-    |> acknowledge(id, acknowledged)
-    |> listen_loop(id, deadline, watch)
+    case Subscriptions.listen(context, filter) do
+      {:ok, acknowledged, grants} ->
+        watch = ContextGuard.watch(context)
+        deadline = stream_deadline(grants)
+
+        conn
+        |> put_resp_header(@protocol_version_header, @protocol_version)
+        |> put_resp_header("x-request-id", request_id)
+        |> CyfrWeb.SSE.open()
+        |> acknowledge(id, acknowledged)
+        |> listen_loop(id, deadline, watch)
+        |> tap(fn _conn -> Subscriptions.close(context, grants) end)
+
+      {:error, %Prima.Refusal{} = refusal} ->
+        conn
+        |> CyfrWeb.Plugs.CallIdentity.decided()
+        |> listen_error(request_id, refusal, refusal.message)
+    end
+  end
+
+  defp stream_deadline(grants) do
+    window = CyfrWeb.SSE.deadline(:mcp_subscription_max_ms)
+
+    case Subscriptions.remaining_ms(grants) do
+      :infinity -> window
+      remaining -> min(window, System.monotonic_time(:millisecond) + remaining)
+    end
   end
 
   # A refusal of the listen itself, before any stream opens: rendered
@@ -311,14 +334,20 @@ defmodule Emissary.Web.MCPController do
           end
 
         message ->
-          case Subscriptions.notification_for(message) do
-            {:ok, method, params} ->
-              params = Map.put(params, "_meta", %{Subscriptions.subscription_id_key() => id})
+          # A listener that fell too far behind ends its stream with the
+          # typed refusal rather than delivering some of what it owes.
+          with :ok <- Subscriptions.backlog(),
+               {:ok, method, params} <- Subscriptions.notification_for(message) do
+            params = Map.put(params, "_meta", %{Subscriptions.subscription_id_key() => id})
 
-              write(conn, Message.encode_notification(method, params), id, deadline, watch)
-
+            write(conn, Message.encode_notification(method, params), id, deadline, watch)
+          else
             :ignore ->
               listen_loop(conn, id, deadline, watch)
+
+            {:error, %Prima.Refusal{} = refusal} ->
+              ContextGuard.unwatch(watch)
+              refuse_stream(conn, id, refusal)
           end
       after
         min(@keep_alive_ms, remaining) ->
@@ -341,6 +370,17 @@ defmodule Emissary.Web.MCPController do
   defp refuse_stream(conn, id, :unavailable) do
     refusal = Grimoire.classify(:auth_provider_error)
 
+    sse_event(
+      conn,
+      Message.encode_error(
+        id,
+        Message.refusal_code(refusal, :transport, Grimoire.code_override(refusal)),
+        refusal.message
+      )
+    )
+  end
+
+  defp refuse_stream(conn, id, %Prima.Refusal{} = refusal) do
     sse_event(
       conn,
       Message.encode_error(

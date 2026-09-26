@@ -9,9 +9,10 @@ defmodule Grimoire.Catalog do
   configured under `:cyfr, :tool_providers`, audits its declarations and
   writes the table into Grimoire's own `:persistent_term`: the table
   itself (`{Grimoire, :operations}`, tool name → `{provider, tool}`), the
-  sorted wire list `tools/list` serves (`{Grimoire, :tool_list}`) and,
-  through `Grimoire.Resources`, the resource URI index
-  (`{Grimoire, :resources}`). The term is this member's, written once;
+  sorted wire list `tools/list` serves (`{Grimoire, :tool_list}`), the
+  stream table (`{Grimoire, :streams}`, stream name → `{provider, stream}`,
+  from each provider's `Prima.Provider.streams/1`) and, through
+  `Grimoire.Resources`, the resource URI index (`{Grimoire, :resources}`). The term is this member's, written once;
   nothing refreshes, rebuilds or invalidates it, and a process that dies
   takes none of it along. Every lookup and every action enumeration reads
   it. The proxied `server:tool` tools are no provider's declarations and
@@ -68,9 +69,15 @@ defmodule Grimoire.Catalog do
   # Default tool execution timeout (5 minutes)
   @tool_timeout_ms :timer.minutes(5)
 
-  # The operation table's two terms. `Grimoire.Resources` holds the third.
+  # The operation table's three terms. `Grimoire.Resources` holds the fourth.
   @operations {Grimoire, :operations}
   @tool_list {Grimoire, :tool_list}
+  @streams {Grimoire, :streams}
+
+  # What a stream open is judged by: the default an action declares
+  # nothing beyond — a read, on the external plane, for a signed-in,
+  # claimed caller, with no permission, consent class or scope.
+  @stream_annotation %{kind: :read, planes: [:external]}
 
   # ============================================================================
   # The table
@@ -119,7 +126,7 @@ defmodule Grimoire.Catalog do
 
       saved =
         {:persistent_term.get(@operations), :persistent_term.get(@tool_list),
-         Grimoire.Resources.table()}
+         :persistent_term.get(@streams), Grimoire.Resources.table()}
 
       try do
         configured_providers()
@@ -130,9 +137,10 @@ defmodule Grimoire.Catalog do
 
         fun.()
       after
-        {operations, tool_list, resources} = saved
+        {operations, tool_list, streams, resources} = saved
         :persistent_term.put(@operations, operations)
         :persistent_term.put(@tool_list, tool_list)
+        :persistent_term.put(@streams, streams)
         Grimoire.Resources.put(resources)
       end
     end
@@ -196,6 +204,8 @@ defmodule Grimoire.Catalog do
       &inspect/1
     )
 
+    streams = stream_table!(providers)
+
     operations =
       for module <- providers, tool <- module.tools(), into: %{} do
         {tool.name, {module, canonical(tool)}}
@@ -203,6 +213,7 @@ defmodule Grimoire.Catalog do
 
     :persistent_term.put(@operations, operations)
     :persistent_term.put(@tool_list, wire_list(operations))
+    :persistent_term.put(@streams, streams)
     Grimoire.Resources.put(Grimoire.Resources.build(providers))
 
     Logger.info(
@@ -210,6 +221,39 @@ defmodule Grimoire.Catalog do
     )
 
     :ok
+  end
+
+  # Every provider's declared streams, by name. A declaration
+  # `Prima.Provider.streams/1` refuses, or one name two providers declare,
+  # refuses the boot: an open names a stream, and a name that could mean
+  # either would let one provider's grammar and bound admit the other's.
+  defp stream_table!(providers) do
+    declared =
+      for module <- providers,
+          stream <- declared_streams!(module),
+          do: {stream.name, {module, stream}}
+
+    audit!(
+      case for {name, entries} <- Enum.group_by(declared, &elem(&1, 0), &elem(elem(&1, 1), 0)),
+               length(entries) > 1,
+               do: %{stream: name, providers: entries} do
+        [] -> :ok
+        findings -> {:error, findings}
+      end,
+      "stream declarations failed the catalog audit",
+      &"#{&1.stream}: declared by #{inspect(&1.providers)}"
+    )
+
+    Map.new(declared)
+  end
+
+  defp declared_streams!(module) do
+    Prima.Provider.streams(module)
+  rescue
+    exception in ArgumentError ->
+      reraise "stream declarations failed the catalog audit; refusing to boot:\n  - " <>
+                Exception.message(exception),
+              __STACKTRACE__
   end
 
   defp audit!(:ok, _what, _line), do: :ok
@@ -261,6 +305,54 @@ defmodule Grimoire.Catalog do
   """
   @spec list_tools() :: [map()]
   def list_tools, do: :persistent_term.get(@tool_list)
+
+  @doc """
+  Every stream the providers declare, as plain data sorted by name: what
+  a tincture's declaration is checked against
+  (`Compendium.Tincture.Rules.check_streams/2`) and what an open names.
+  """
+  @spec streams() :: [Prima.Provider.Stream.t()]
+  def streams do
+    :persistent_term.get(@streams)
+    |> Enum.map(fn {_name, {_module, stream}} -> stream end)
+    |> Enum.sort_by(& &1.name)
+  end
+
+  @doc """
+  Every declared stream with the provider that declares it, sorted by
+  name: what the host's boot check reads to name a stream's provider.
+  """
+  @spec stream_entries() :: [{module(), Prima.Provider.Stream.t()}]
+  def stream_entries do
+    :persistent_term.get(@streams)
+    |> Enum.sort_by(&elem(&1, 0))
+    |> Enum.map(fn {_name, entry} -> entry end)
+  end
+
+  @doc "A stream's provider and its declaration, from the table."
+  @spec lookup_stream(String.t()) :: {:ok, {module(), Prima.Provider.Stream.t()}} | :miss
+  def lookup_stream(name) when is_binary(name) do
+    case :persistent_term.get(@streams) do
+      %{^name => entry} -> {:ok, entry}
+      _ -> :miss
+    end
+  end
+
+  @doc """
+  The gate's authorization of a stream open, as an action with no
+  declaration beyond the default is authorized (`@stream_annotation`):
+  the same auth, scope, permission and consent checks, on the external
+  plane. `name` is the operation name the refusal carries.
+  """
+  @spec authorize_stream(String.t(), Context.t()) ::
+          :ok | {:error, Sanctum.Unauthorized.reason()}
+  def authorize_stream(name, %Context{} = ctx) when is_binary(name) do
+    with :ok <- check_auth(name, ctx, @stream_annotation),
+         :ok <- check_scope(ctx, @stream_annotation),
+         :ok <- check_permission(ctx, @stream_annotation) do
+      check_consent(ctx, @stream_annotation, false)
+    end
+  end
 
   @doc """
   Prune a tools/list payload to the in-chain *plane*: actions whose plane

@@ -37,6 +37,8 @@ defmodule Grimoire.FacadeTest do
     lookup: 1,
     open_decision: 2,
     open_decision: 3,
+    open_stream: 2,
+    open_stream: 3,
     operations: 0,
     refused_decision: 3,
     release_call: 1,
@@ -46,6 +48,7 @@ defmodule Grimoire.FacadeTest do
     restrict_tool: 2,
     standing_scope: 1,
     standing_to_wire: 1,
+    streams: 0,
     tool_actions: 1,
     tool_kind: 2,
     visible_tools: 2

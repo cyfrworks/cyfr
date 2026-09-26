@@ -136,7 +136,12 @@ defmodule Cyfr.BusPayloadTest do
               :subscribe_page,
               :unsubscribe_page,
               :subscribe_standing,
-              :unsubscribe_standing
+              :unsubscribe_standing,
+              # Lookups over the roster a stream grant is checked and
+              # resolved through, not topics.
+              :topic?,
+              :grantable?,
+              :granted_topic
             ],
             uniq: true,
             do: name
