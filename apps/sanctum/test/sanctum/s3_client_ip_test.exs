@@ -48,13 +48,15 @@ defmodule Sanctum.S3ClientIpTest do
 
     test "trusted XFF resolves the RIGHTMOST untrusted hop, not the client-claimed left" do
       Application.put_env(:sanctum, :trust_x_forwarded_for, true)
-      # Chain is [claimed..., appended-by-proxy, socket]; with the default of
-      # 1 trusted hop (the socket peer), the proxy-appended entry wins.
+      Application.put_env(:sanctum, :trusted_proxy_hops, 1)
+      # Chain is [claimed..., appended-by-proxy, socket]; with 1 trusted hop
+      # (the socket peer), the proxy-appended entry wins.
       assert ClientIp.resolve(conn({10, 0, 0, 5}, "1.2.3.4, 9.9.9.9")) == "9.9.9.9"
     end
 
     test "a client-prepended XFF entry cannot spoof the resolved IP" do
       Application.put_env(:sanctum, :trust_x_forwarded_for, true)
+      Application.put_env(:sanctum, :trusted_proxy_hops, 1)
       # Attacker at 8.8.8.8 sends "X-Forwarded-For: 203.0.113.9"; Caddy appends
       # the peer it saw. The spoofed leftmost entry must never be selected.
       assert ClientIp.resolve(conn({172, 18, 0, 2}, "203.0.113.9, 8.8.8.8")) == "8.8.8.8"
@@ -94,6 +96,7 @@ defmodule Sanctum.S3ClientIpTest do
 
     test "XFF chains split across multiple header instances are joined" do
       Application.put_env(:sanctum, :trust_x_forwarded_for, true)
+      Application.put_env(:sanctum, :trusted_proxy_hops, 1)
       assert ClientIp.resolve(conn({10, 0, 0, 5}, ["1.2.3.4", "203.0.113.9"])) == "203.0.113.9"
     end
 
@@ -142,6 +145,7 @@ defmodule Sanctum.S3ClientIpTest do
 
     test "a spoofed leftmost XFF entry cannot satisfy the allowlist behind a proxy" do
       Application.put_env(:sanctum, :trust_x_forwarded_for, true)
+      Application.put_env(:sanctum, :trusted_proxy_hops, 1)
       ctx = Sanctum.TestContext.issuer!(Sanctum.TestContext.local())
 
       {:ok, %{api_key: key}} =

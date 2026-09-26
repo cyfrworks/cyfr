@@ -14,7 +14,7 @@ defmodule Locus.ApplicationTest do
 
   alias Locus.Application, as: App
 
-  @release_executors [Locus.Keeper]
+  @release_launcher nil
   @none %{builds: false, backends: false}
   @builds %{builds: true, backends: false}
   @backends %{builds: false, backends: true}
@@ -36,18 +36,18 @@ defmodule Locus.ApplicationTest do
   test "a node that holds neither key serves nothing, whoever started it" do
     assert ids(App.children(@none, false)) == [Prima.Slots]
     assert ids(App.children(@none, true)) == [Prima.Slots, Locus.Keeper]
-    assert ids(App.children(@none, false, @release_executors)) == [Prima.Slots]
+    assert ids(App.children(@none, false, @release_launcher)) == [Prima.Slots]
   end
 
   test "a node that serves under cyfr-keeper starts the keeper's client before the services that depend on it" do
-    for executors <- [Locus.Executor.executors(), @release_executors] do
-      assert ids(App.children(@builds, true, executors)) == [Prima.Slots, Locus.Keeper, Bandit]
+    for launcher <- [Locus.Executor.direct_launcher(), @release_launcher] do
+      assert ids(App.children(@builds, true, launcher)) == [Prima.Slots, Locus.Keeper, Bandit]
 
-      assert ids(App.children(@backends, true, executors)) ==
+      assert ids(App.children(@backends, true, launcher)) ==
                [Prima.Slots, Locus.Keeper | @backends_children]
 
       # Both services on one node: the backends' children after the builds'.
-      assert ids(App.children(@both, true, executors)) ==
+      assert ids(App.children(@both, true, launcher)) ==
                [Prima.Slots, Locus.Keeper, Bandit | @backends_children]
     end
   end
@@ -73,18 +73,18 @@ defmodule Locus.ApplicationTest do
   test "serving without cyfr-keeper refuses the boot wherever the direct launcher is unknown" do
     assert_raise RuntimeError,
                  ~r/every build and every backend only through cyfr-keeper.*fd 3 is not that channel.*--pool build:… --/s,
-                 fn -> App.children(@builds, false, @release_executors) end
+                 fn -> App.children(@builds, false, @release_launcher) end
 
     assert_raise RuntimeError,
                  ~r/fd 3 is not that channel.*`cyfr-keeper serve --pool backends:… --/s,
-                 fn -> App.children(@backends, false, @release_executors) end
+                 fn -> App.children(@backends, false, @release_launcher) end
 
     assert_raise RuntimeError,
                  ~r/--pool build:… --pool backends:… --/s,
-                 fn -> App.children(@both, false, @release_executors) end
+                 fn -> App.children(@both, false, @release_launcher) end
 
     # The test build knows the launcher, and serves through it.
-    assert Locus.DirectLauncher in Locus.Executor.executors()
+    assert Locus.Executor.direct_launcher() == Locus.DirectLauncher
     assert ids(App.children(@builds, false)) == [Prima.Slots, Bandit]
     assert ids(App.children(@backends, false)) == [Prima.Slots | @backends_children]
     assert ids(App.children(@both, false)) == [Prima.Slots, Bandit | @backends_children]

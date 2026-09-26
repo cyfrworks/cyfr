@@ -13,6 +13,7 @@ defmodule CyfrWeb.Plugs.TinctureRateLimitTest do
     # real per-pipeline limits here by removing the override.
     original_max = Application.get_env(:cyfr, :tincture_rate_limit_max)
     original_trust = Application.get_env(:sanctum, :trust_x_forwarded_for)
+    original_hops = Application.get_env(:sanctum, :trusted_proxy_hops)
     Application.delete_env(:cyfr, :tincture_rate_limit_max)
 
     on_exit(fn ->
@@ -24,8 +25,10 @@ defmodule CyfrWeb.Plugs.TinctureRateLimitTest do
       end
 
       Application.delete_env(:sanctum, :trust_x_forwarded_for)
+      Application.delete_env(:sanctum, :trusted_proxy_hops)
       restore.(:cyfr, :tincture_rate_limit_max, original_max)
       restore.(:sanctum, :trust_x_forwarded_for, original_trust)
+      restore.(:sanctum, :trusted_proxy_hops, original_hops)
     end)
 
     :ok
@@ -143,7 +146,9 @@ defmodule CyfrWeb.Plugs.TinctureRateLimitTest do
     end
 
     test "trust on: forwarded clients get independent buckets behind the proxy" do
+      # One proxy in front, as `config/runtime.exs` configures the trust.
       Application.put_env(:sanctum, :trust_x_forwarded_for, true)
+      Application.put_env(:sanctum, :trusted_proxy_hops, 1)
       proxy_ip = {127, 0, 0, 7}
 
       for _ <- 1..3 do

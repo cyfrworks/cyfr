@@ -25,9 +25,17 @@ defmodule Locus.MixProject do
   def application do
     [
       extra_applications: [:logger, :crypto],
+      env: env(Mix.env()),
       mod: {Locus.Application, []}
     ]
   end
+
+  # The test build runs its builds and backends without cyfr-keeper
+  # through `Locus.DirectLauncher`, which isolates and bounds nothing and
+  # is compiled from `test/support` alone (`Locus.Executor.direct_launcher/0`).
+  # Every other build names no launcher and compiles none.
+  defp env(:test), do: [direct_launcher: Locus.DirectLauncher]
+  defp env(_env), do: []
 
   # The builder: the shared contracts, its own listener, and nothing of the
   # control plane (`Cyfr.Boundaries` keeps it so). It reads no `.env`

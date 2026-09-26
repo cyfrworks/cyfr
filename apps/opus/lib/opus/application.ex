@@ -24,11 +24,15 @@ defmodule Opus.Application do
   def start(_type, _args) do
     case Opus.Release.role() do
       :service ->
+        settings = Opus.Settings.pool!()
+        # A service whose keeper cannot run here would start no runner: the
+        # boot is refused before anything starts, naming cyfr-keeper when
+        # no channel was inherited.
+        :ok = keeper!(settings)
         # The nonces the worker listener has seen, owned by the application
         # so a listener or service restart forgets none within the header
         # window.
         :ok = Opus.WorkerListener.init_nonces()
-        settings = Opus.Settings.pool!()
         opts = [strategy: :one_for_one, name: Opus.Supervisor, max_restarts: 10, max_seconds: 60]
         Supervisor.start_link(children(:service, settings), opts)
 
@@ -105,7 +109,7 @@ defmodule Opus.Application do
         ]
   def service_tree(%{keeper: keeper} = settings) do
     module = Opus.Keeper.module(keeper)
-    keeper_opts = [attach_dir: settings.attach_dir]
+    keeper_opts = keeper_opts(settings)
     :ok = Opus.Keeper.check!(module, keeper_opts)
 
     [
@@ -119,6 +123,18 @@ defmodule Opus.Application do
       Opus.WorkerService
     ]
   end
+
+  @doc """
+  Whether the keeper `settings` name can run under `env` (the process
+  environment by default), raising when it cannot: the service's boot
+  check. The channel keeper's refusal names `cyfr-keeper`.
+  """
+  @spec keeper!(Opus.Settings.pool(), %{optional(String.t()) => String.t()}) :: :ok
+  def keeper!(%{keeper: keeper} = settings, env \\ System.get_env()) do
+    Opus.Keeper.check!(Opus.Keeper.module(keeper), keeper_opts(settings), env)
+  end
+
+  defp keeper_opts(settings), do: [attach_dir: settings.attach_dir]
 
   # The credentials are loaded by the worker service, which refuses the
   # boot when they are missing or malformed; the listener reads the same.

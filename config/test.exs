@@ -175,10 +175,11 @@ config :cyfr, execution_archive_watch_enabled: false
 # finds. Its own suite starts it with the endpoints it serves.
 config :cyfr, worker_watch_enabled: false
 
-# The control-plane claim is the same shape again (a permanent GenServer
-# renewing a DB lease); `Cyfr.ControlPlane.Claim` is exercised directly.
-# The key is Arca's, beside the lease row and the cached standing
-# `Arca.ControlPlane` answers from when no claimant runs.
+# The control-plane claim is the same shape again (a permanent process
+# renewing a DB lease) and is exercised directly. The key is
+# `Arca.ControlPlane`'s, which holds the lease row: off, it answers as a
+# member that claims no slot, from the cached standing, and every boot
+# holds.
 config :arca, control_plane_claim_enabled: false
 
 # The boot's database checks (schema fingerprint, tenant roster, keyring
@@ -219,10 +220,10 @@ config :cyfr, :opus_key, test_worker_root
 # The Opus service of a test boot listens on a port of the system's choosing,
 # and so does CYFR's host API listener; `Cyfr.Test.OpusService` points each
 # at the other's once both are up. Its runners are OS processes of their
-# own, started by the `Direct` keeper and pooled across tests; a runner
-# holds no sys.config, so what it takes from this configuration (the log
-# level, the scheduler counts) the service passes it explicitly
-# (`Opus.Release.runner_command/0`).
+# own, started by the test build's `:direct` keeper (`apps/opus/mix.exs`)
+# and pooled across tests; a runner holds no sys.config, so what it takes
+# from this configuration (the log level, the scheduler counts) the service
+# passes it explicitly (`Opus.Release.runner_command/0`).
 config :opus,
   service_key:
     :hmac

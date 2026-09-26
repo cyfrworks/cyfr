@@ -21,14 +21,11 @@ defmodule Arca.BudgetReservations do
 
   ## Tenancy
 
-  Every function but `fetch/1` takes the `Prima.Actor` first and matches
-  it in its head, so the athanor comes from the caller and never from an
-  argument. An actor whose athanor is nil or the empty string is refused
-  before any query — `{:error, :no_athanor}` from an entry point, a
-  raise from a `!` function inside a caller's transaction. `fetch/1` is
-  the exception and says why where it stands: the id is the wire's
-  identity of one root's reservation, and the row answers with its own
-  athanor.
+  Every function takes the `Prima.Actor` first and matches it in its
+  head, so the athanor comes from the caller and never from an argument.
+  An actor whose athanor is nil or the empty string is refused before any
+  query — `{:error, :no_athanor}` from an entry point, a raise from a `!`
+  function inside a caller's transaction.
   """
 
   import Ecto.Query, only: [from: 2]
@@ -233,23 +230,6 @@ defmodule Arca.BudgetReservations do
 
   def close!(%Prima.Actor{}, _root_execution_id),
     do: Arca.QueryHelpers.no_athanor!("Arca.BudgetReservations.close!/2")
-
-  @doc """
-  A reservation by its id alone — the identity an Authority carries over
-  the wire, whose row names the athanor it belongs to.
-  """
-  @spec fetch(String.t()) :: {:ok, map()} | {:error, :not_found | term()}
-  # arca:unscoped-ok the id is the wire's identity of one root's
-  # reservation; the row answers with its own athanor.
-  def fetch(id) when is_binary(id) do
-    Arca.Repo.Errors.with_db_rescue("Arca.BudgetReservations.fetch", fn ->
-      case Arca.Repo.get(BudgetReservation, id) do
-        nil -> {:error, :not_found}
-        row -> {:ok, row}
-      end
-    end)
-    |> Arca.Data.project()
-  end
 
   @doc "A reservation by its id, within the athanor."
   @spec lookup(Prima.Actor.t(), String.t()) :: map() | nil | {:error, term()}

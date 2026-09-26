@@ -10,15 +10,17 @@ defmodule CyfrWeb.Plugs.AuthRateLimitTest do
     # Counters live in Prima.RateLimiter's own table; start each test clean.
     Prima.RateLimiter.reset()
 
-    original_trust = Application.get_env(:sanctum, :trust_x_forwarded_for)
+    originals =
+      for key <- [:trust_x_forwarded_for, :trusted_proxy_hops],
+          do: {key, Application.get_env(:sanctum, key)}
 
     on_exit(fn ->
       Prima.RateLimiter.reset()
 
-      case original_trust do
-        nil -> Application.delete_env(:sanctum, :trust_x_forwarded_for)
-        value -> Application.put_env(:sanctum, :trust_x_forwarded_for, value)
-      end
+      Enum.each(originals, fn
+        {key, nil} -> Application.delete_env(:sanctum, key)
+        {key, value} -> Application.put_env(:sanctum, key, value)
+      end)
     end)
 
     :ok
@@ -129,7 +131,9 @@ defmodule CyfrWeb.Plugs.AuthRateLimitTest do
     end
 
     test "trust on: forwarded clients get independent buckets behind the proxy" do
+      # One proxy in front, as `config/runtime.exs` configures the trust.
       Application.put_env(:sanctum, :trust_x_forwarded_for, true)
+      Application.put_env(:sanctum, :trusted_proxy_hops, 1)
       opts = opts()
       proxy_ip = {127, 0, 0, 22}
 

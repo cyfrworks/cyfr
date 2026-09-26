@@ -17,44 +17,6 @@ if config_env() != :test do
       System.get_env()
     ])
 
-  # A setting under a name that was replaced refuses the boot of either
-  # release while it is set anywhere this file reads (the process
-  # environment or an .env file), blank or not, naming the name that
-  # replaced it and never its value. The old names are spelled in two parts
-  # so the vocabulary gate, which refuses them everywhere else, stays whole.
-  retired_names = %{
-    ("CYFR_WORKER" <> "_KEY") => "CYFR_OPUS_KEY",
-    ("CYFR_WORKER" <> "S") => "CYFR_OPUS_WORKERS",
-    ("CYFR_WORKER" <> "_WATCH_POLL_MS") => "CYFR_OPUS_WATCH_POLL_MS",
-    ("CYFR_WORKER" <> "_WATCH_MISSES") => "CYFR_OPUS_WATCH_MISSES",
-    ("CYFR_SPAWN" <> "_CHANNEL") => "KEEPER_CHANNEL"
-  }
-
-  retired_prefixes = %{
-    ("CYFR_EXECUTION" <> "_EVENTS_") => "CYFR_CRUCIBLE_EVENTS_",
-    ("CYFR_MAX_CONCURRENT" <> "_EXECUTIONS") => "CYFR_CRUCIBLE_MAX_CONCURRENT"
-  }
-
-  retired =
-    sourced
-    |> Map.keys()
-    |> Enum.sort()
-    |> Enum.flat_map(fn name ->
-      renamed =
-        Map.get_lazy(retired_names, name, fn ->
-          Enum.find_value(retired_prefixes, fn {old, new} ->
-            if String.starts_with?(name, old), do: String.replace_prefix(name, old, new)
-          end)
-        end)
-
-      if renamed, do: ["#{name} (now #{renamed})"], else: []
-    end)
-
-  if retired != [] do
-    raise "[Cyfr] FATAL: settings under replaced names are set: #{Enum.join(retired, ", ")}. " <>
-            "Set each under its new name and remove the old one."
-  end
-
   # Runtime configuration for CYFR
   # This file is executed at runtime, not compile time
 
@@ -85,6 +47,16 @@ if config_env() != :test do
   # Reader handed to `Cyfr.RuntimeConfig` so the pure resolvers (auth provider,
   # storage, repo) read the same Dotenvy-merged environment this file does.
   getenv = fn key -> env_str.(key, nil) end
+
+  # A bound is read strictly (`Prima.EnvValue`): a set value that is not a
+  # whole number of `unit` in `range` refuses the boot naming it; unset or
+  # blank is nil, so the code's default stands.
+  env_bound = fn key, range, unit ->
+    case Prima.EnvValue.whole_number(getenv, key, range, unit) do
+      {:ok, value} -> value
+      {:error, message} -> raise "[Cyfr] FATAL: #{message}"
+    end
+  end
 
   # A switch is `on`/`off` (or true/false, yes/no, 1/0); an unrecognised
   # spelling refuses the boot rather than reading as the default.
@@ -241,38 +213,14 @@ if config_env() != :test do
     # (OPUS_RELEASE_GRACE_MS, 2000), the memory bound cyfr-keeper holds each
     # runner to (OPUS_RUNNER_MEMORY_BYTES, a whole number of bytes from
     # 16777216 to 1099511627776, 16 MiB to 1 TiB, the keeper's own range;
-    # default 402653184, 384 MiB), which keeper starts its runners
-    # (OPUS_KEEPER: `channel`, the cyfr-keeper channel the image inherits, or
-    # `direct`, plain child processes of the service's VM for a machine
-    # without a keeper; unset follows the environment) and where the keeper's
-    # relays attach (OPUS_ATTACH_DIR, /run/opus). Only the set ones are
-    # configured, so the code's defaults stand for the rest; a value that is
-    # not a positive integer, a byte count in its range, a clean absolute path
-    # or one of the two keepers refuses the boot naming it.
-    opus_keeper =
-      case env_str.("OPUS_KEEPER", nil) do
-        nil ->
-          nil
-
-        "channel" ->
-          :channel
-
-        "direct" ->
-          :direct
-
-        other ->
-          raise "[Cyfr] FATAL: OPUS_KEEPER=#{inspect(other)} names no keeper; use channel or direct"
-      end
-
-    # A bound is read strictly (`Prima.EnvValue`): a set value that is not a
-    # whole number in its range refuses the boot naming it.
-    opus_bound = fn key, range, unit ->
-      case Prima.EnvValue.whole_number(getenv, key, range, unit) do
-        {:ok, value} -> value
-        {:error, message} -> raise "[Cyfr] FATAL: #{message}"
-      end
-    end
-
+    # default 402653184, 384 MiB) and where the keeper's relays attach
+    # (OPUS_ATTACH_DIR, /run/opus). Only the set ones are configured, so the
+    # code's defaults stand for the rest; a value that is not a positive
+    # integer, a byte count in its range or a clean absolute path refuses the
+    # boot naming it. The runners start through the cyfr-keeper channel the
+    # image inherits and nothing else: the retired OPUS_KEEPER, set here or
+    # in an .env file, refuses the boot (`Opus.Settings.pool/2`).
+    #
     # A memory bound is a byte count (`Prima.EnvValue.bytes/3`), whose range
     # reaches past what the bound reader above takes: 1 TiB is thirteen
     # digits.
@@ -286,24 +234,28 @@ if config_env() != :test do
     opus_pool =
       Enum.reject(
         [
-          pool_size: opus_bound.("OPUS_POOL_SIZE", 1..1_024, "runners"),
-          idle_ttl_ms: opus_bound.("OPUS_IDLE_TTL_MS", 1..86_400_000, "milliseconds"),
-          watchdog_grace_ms: opus_bound.("OPUS_WATCHDOG_GRACE_MS", 1..600_000, "milliseconds"),
-          release_grace_ms: opus_bound.("OPUS_RELEASE_GRACE_MS", 1..600_000, "milliseconds"),
+          pool_size: env_bound.("OPUS_POOL_SIZE", 1..1_024, "runners"),
+          idle_ttl_ms: env_bound.("OPUS_IDLE_TTL_MS", 1..86_400_000, "milliseconds"),
+          watchdog_grace_ms: env_bound.("OPUS_WATCHDOG_GRACE_MS", 1..600_000, "milliseconds"),
+          release_grace_ms: env_bound.("OPUS_RELEASE_GRACE_MS", 1..600_000, "milliseconds"),
           runner_memory_bytes: opus_bytes.("OPUS_RUNNER_MEMORY_BYTES"),
-          keeper: opus_keeper,
           attach_dir: env_str.("OPUS_ATTACH_DIR", nil)
         ],
         fn {_key, value} -> is_nil(value) end
       )
 
-    case Opus.Settings.pool(opus_pool, System.get_env()) do
+    # Checked against everything this file reads (the process environment
+    # and the .env files), so a retired variable is refused wherever it is set.
+    case Opus.Settings.pool(opus_pool, sourced) do
       {:ok, _settings} ->
         config :opus, opus_pool
 
       {:error, {:malformed, key}} ->
         raise "[Cyfr] FATAL: OPUS_#{String.upcase(Atom.to_string(key))} must be " <>
                 Opus.Settings.expected(key)
+
+      {:error, {:retired, name}} ->
+        raise "[Cyfr] FATAL: " <> Opus.Settings.retired(name)
     end
   end
 
@@ -454,34 +406,35 @@ if config_env() != :test do
     headless? = env_bool.("CYFR_HEADLESS", false)
     config :cyfr, :headless, headless?
 
+    # The admission floors: every rate-limit maximum and window, concurrency
+    # ceiling, subscription and event limit below is a whole number from 1
+    # up, since zero or less would admit nothing or read as no limit at all.
+    # A set value outside its range, or not a whole number, refuses the boot
+    # naming it; unset, the code's default stands.
+    #
     # Maximum concurrent WASM executions (default: 128)
     # Prevents dirty scheduler exhaustion from too many simultaneous WASM executions.
     # A quarter of the slots is reserved for chain children (a formula's hops);
     # that reserve must hold a chain of the full authority depth (8), so the
     # floor is 32 — below it a deep chain could wait on itself.
-    if max_exec = env_int.("CYFR_CRUCIBLE_MAX_CONCURRENT", nil) do
-      if max_exec < 32 do
-        raise ArgumentError,
-              "CYFR_CRUCIBLE_MAX_CONCURRENT must be at least 32 (a quarter of the slots " <>
-                "is the child reserve, which must fit a chain of depth 8), got #{max_exec}"
-      end
-
+    if max_exec = env_bound.("CYFR_CRUCIBLE_MAX_CONCURRENT", 32..1_000_000, "executions") do
       config :cyfr, :crucible_max_concurrent, max_exec
     end
 
     # Maximum concurrent WASM executions per tenant (default: 16)
     # Bounds the blast radius of one athanor queueing many long-running executions
-    if max_tenant_exec = env_int.("CYFR_CRUCIBLE_MAX_CONCURRENT_PER_TENANT", nil) do
+    if max_tenant_exec =
+         env_bound.("CYFR_CRUCIBLE_MAX_CONCURRENT_PER_TENANT", 1..1_000_000, "executions") do
       config :cyfr, :crucible_max_concurrent_per_tenant, max_tenant_exec
     end
 
     # MCP transport rate limit, per client IP (default: 120 requests / 60s window).
     # Counts requests and SSE connection opens, not stream duration.
-    if mcp_rl_max = env_int.("CYFR_MCP_RATE_LIMIT_MAX", nil) do
+    if mcp_rl_max = env_bound.("CYFR_MCP_RATE_LIMIT_MAX", 1..1_000_000_000, "requests") do
       config :cyfr, :mcp_rate_limit_max, mcp_rl_max
     end
 
-    if mcp_rl_window = env_int.("CYFR_MCP_RATE_LIMIT_WINDOW_MS", nil) do
+    if mcp_rl_window = env_bound.("CYFR_MCP_RATE_LIMIT_WINDOW_MS", 1..86_400_000, "milliseconds") do
       config :cyfr, :mcp_rate_limit_window_ms, mcp_rl_window
     end
 
@@ -489,35 +442,36 @@ if config_env() != :test do
     # Checked BEFORE the per-slug bucket, so it clamps any `rate_limit` set
     # on a webhooks row above it — raise it when one real sender, egressing
     # from one address, legitimately needs more than this in a minute.
-    if hook_ip_max = env_int.("CYFR_WEBHOOK_PER_IP_RATE_LIMIT_MAX", nil) do
+    if hook_ip_max =
+         env_bound.("CYFR_WEBHOOK_PER_IP_RATE_LIMIT_MAX", 1..1_000_000_000, "requests") do
       config :cyfr, :webhook_per_ip_rate_limit_max, hook_ip_max
     end
 
     # The :api bucket's own budget (GET /api/executions/:id/events — SSE
     # reconnects). Unset, it shares the MCP values above; the counters were
     # always separate, the budgets silently were not.
-    if v = env_int.("CYFR_API_RATE_LIMIT_MAX", nil) do
+    if v = env_bound.("CYFR_API_RATE_LIMIT_MAX", 1..1_000_000_000, "requests") do
       config :cyfr, :api_rate_limit_max, v
     end
 
-    if v = env_int.("CYFR_API_RATE_LIMIT_WINDOW_MS", nil) do
+    if v = env_bound.("CYFR_API_RATE_LIMIT_WINDOW_MS", 1..86_400_000, "milliseconds") do
       config :cyfr, :api_rate_limit_window_ms, v
     end
 
     # Per-caller SSE limits: concurrent streams and lifetime. Defaults are 8 streams and 30 minutes.
-    if v = env_int.("CYFR_MCP_SUBSCRIPTION_MAX_CONCURRENT", nil) do
+    if v = env_bound.("CYFR_MCP_SUBSCRIPTION_MAX_CONCURRENT", 1..1_000_000, "streams") do
       config :cyfr, :mcp_subscription_max_concurrent, v
     end
 
-    if v = env_int.("CYFR_MCP_SUBSCRIPTION_MAX_MS", nil) do
+    if v = env_bound.("CYFR_MCP_SUBSCRIPTION_MAX_MS", 1..86_400_000, "milliseconds") do
       config :cyfr, :mcp_subscription_max_ms, v
     end
 
-    if v = env_int.("CYFR_CRUCIBLE_EVENTS_MAX_CONCURRENT", nil) do
+    if v = env_bound.("CYFR_CRUCIBLE_EVENTS_MAX_CONCURRENT", 1..1_000_000, "streams") do
       config :cyfr, :crucible_events_max_concurrent, v
     end
 
-    if v = env_int.("CYFR_CRUCIBLE_EVENTS_MAX_MS", nil) do
+    if v = env_bound.("CYFR_CRUCIBLE_EVENTS_MAX_MS", 1..86_400_000, "milliseconds") do
       config :cyfr, :crucible_events_max_ms, v
     end
 
@@ -580,19 +534,30 @@ if config_env() != :test do
 
     behind_proxy? = env_bool.("CYFR_BEHIND_PROXY", false)
 
+    # The client IP is taken right-to-left from the XFF chain, stripping the
+    # trusted proxies (Sanctum.ClientIp). With one proxy layer (the shipped
+    # Caddy) the default of 1 hop is correct; stacking more layers requires
+    # raising CYFR_TRUSTED_PROXY_HOPS to match (0 to 16), or listing the
+    # proxies in CYFR_TRUSTED_PROXY_CIDRS (comma-separated IPs/CIDRs, takes
+    # precedence). Both are checked whether or not the trust is on, so a
+    # value that would misplace the client refuses the boot where it is
+    # written: a count outside 0..16, or an entry that is neither an address
+    # nor a CIDR, named.
+    trusted_proxy_hops = env_bound.("CYFR_TRUSTED_PROXY_HOPS", 0..16, "proxy hops") || 1
+    trusted_proxy_cidrs = env_list.("CYFR_TRUSTED_PROXY_CIDRS")
+
+    for entry <- trusted_proxy_cidrs,
+        Prima.Cidr.parse_cidr(entry) == :error and Prima.Cidr.parse_ip(entry) == :error do
+      raise "[Cyfr] FATAL: CYFR_TRUSTED_PROXY_CIDRS entry #{inspect(entry)} is neither " <>
+              "an IP address nor a CIDR"
+    end
+
     if behind_proxy? do
-      # The client IP is taken right-to-left from the XFF chain, stripping the
-      # trusted proxies (Sanctum.ClientIp). With one proxy layer (the shipped
-      # Caddy) the default of 1 hop is correct; stacking more layers requires
-      # raising CYFR_TRUSTED_PROXY_HOPS to match, or listing the proxies in
-      # CYFR_TRUSTED_PROXY_CIDRS (comma-separated IPs/CIDRs, takes precedence).
       config :sanctum, :trust_x_forwarded_for, true
+      config :sanctum, :trusted_proxy_hops, trusted_proxy_hops
 
-      config :sanctum, :trusted_proxy_hops, env_int.("CYFR_TRUSTED_PROXY_HOPS", 1)
-
-      case env_list.("CYFR_TRUSTED_PROXY_CIDRS") do
-        [] -> :ok
-        cidrs -> config :sanctum, :trusted_proxy_cidrs, cidrs
+      if trusted_proxy_cidrs != [] do
+        config :sanctum, :trusted_proxy_cidrs, trusted_proxy_cidrs
       end
     end
 
@@ -657,21 +622,24 @@ if config_env() != :test do
       # by Cyfr.RuntimeConfig in every env (hoisted above the prod block).
       config :cyfr, :mcp_allowed_origins, host_origins ++ localhost_origins
 
-      # Derive signing salts from secret_key_base (or use explicit env overrides)
-      emissary_salt =
-        env_str.("CYFR_EMISSARY_SESSION_SALT", nil) ||
+      # The session cookie's and the LiveView socket's signing salts,
+      # CYFR_SESSION_SALT and CYFR_LIVE_SALT, each derived from
+      # secret_key_base when unset. The derivation labels are unchanged, so
+      # a derived salt, and every session signed under it, carries over.
+      session_salt =
+        env_str.("CYFR_SESSION_SALT", nil) ||
           :crypto.hash(:sha256, "emissary_session" <> secret_key_base)
           |> Base.url_encode64(padding: false)
           |> binary_part(0, 16)
 
-      lv_salt =
-        env_str.("CYFR_LV_SALT", nil) ||
+      live_salt =
+        env_str.("CYFR_LIVE_SALT", nil) ||
           :crypto.hash(:sha256, "live_view" <> secret_key_base)
           |> Base.url_encode64(padding: false)
           |> binary_part(0, 16)
 
-      config :cyfr, :emissary_session_salt, emissary_salt
-      config :cyfr, CyfrWeb.Endpoint, live_view: [signing_salt: lv_salt]
+      config :cyfr, :session_salt, session_salt
+      config :cyfr, CyfrWeb.Endpoint, live_view: [signing_salt: live_salt]
 
       # Session cookies must be secure in production (HTTPS-only).
       # Dev/test leave this false so http://localhost works.

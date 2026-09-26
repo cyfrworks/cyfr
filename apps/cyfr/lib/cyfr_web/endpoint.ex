@@ -45,7 +45,7 @@ defmodule CyfrWeb.Endpoint do
   browser session is the one credential a person's devices hold.
   """
   def session_options do
-    salt = Application.get_env(:cyfr, :emissary_session_salt, @default_session_salt)
+    salt = Application.get_env(:cyfr, :session_salt, @default_session_salt)
 
     # The salt is a domain separator, not a key (signing strength comes
     # from secret_key_base) — but a release running on the repo's default
@@ -153,7 +153,7 @@ defmodule CyfrWeb.Endpoint do
       require Logger
 
       Logger.warning(
-        "[CyfrWeb.Endpoint] No CYFR_EMISSARY_SESSION_SALT set — session cookies " <>
+        "[CyfrWeb.Endpoint] No CYFR_SESSION_SALT set — session cookies " <>
           "are signed under the repo's default salt. Signing strength still " <>
           "comes from CYFR_SECRET_KEY_BASE; set an explicit salt to decouple " <>
           "this deployment's cookie domain from every other CYFR install."

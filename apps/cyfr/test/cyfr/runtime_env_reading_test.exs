@@ -178,7 +178,7 @@ defmodule Cyfr.RuntimeEnvReadingTest do
     src = source()
 
     for name <- ~w(OPUS_POOL_SIZE OPUS_IDLE_TTL_MS OPUS_WATCHDOG_GRACE_MS OPUS_RELEASE_GRACE_MS) do
-      assert src =~ ~s|opus_bound.("#{name}", |, "#{name} must go through the strict bound reader"
+      assert src =~ ~s|env_bound.("#{name}", |, "#{name} must go through the strict bound reader"
       refute src =~ ~s|env_int.("#{name}"|, "#{name} must not be read with env_int"
     end
 
@@ -187,15 +187,47 @@ defmodule Cyfr.RuntimeEnvReadingTest do
     assert src =~ ~S|runner_memory_bytes: opus_bytes.("OPUS_RUNNER_MEMORY_BYTES")|
     assert src =~ ~S|Prima.EnvValue.bytes(getenv, key, Opus.Settings.runner_memory_range())|
     refute src =~ ~S|env_int.("OPUS_RUNNER_MEMORY_BYTES"|
-    refute src =~ ~S|opus_bound.("OPUS_RUNNER_MEMORY_BYTES"|
+    refute src =~ ~S|env_bound.("OPUS_RUNNER_MEMORY_BYTES"|
 
-    assert src =~ ~S|Opus.Settings.pool(opus_pool, System.get_env())|
+    # The pool is checked against everything this file reads, so the retired
+    # keeper variable is refused from an .env file as from the process.
+    assert src =~ ~S|Opus.Settings.pool(opus_pool, sourced)|
+    assert src =~ ~S|{:error, {:retired, name}} ->|
     assert src =~ ~S|Cyfr.RuntimeConfig.resolve_opus_watch(getenv)|
 
-    assert src =~ ~S|names no keeper; use channel or direct|,
-           "OPUS_KEEPER must name channel or direct, or refuse the boot"
+    # The keeper is the channel: nothing here reads a choice of another.
+    refute src =~ ~S|"OPUS_KEEPER"|
+    refute src =~ ~S|keeper:|
+  end
 
-    refute src =~ ~S|"local" ->|, "OPUS_KEEPER names two keepers, and local is neither"
+  # Every rate-limit maximum and window, concurrency ceiling, subscription
+  # and event limit, and the trusted proxy count, is read by the strict
+  # bound reader from its floor: a set value below it, or not a whole
+  # number, refuses the boot by name.
+  test "the admission floors and the trusted proxy count are read strictly from their floors" do
+    src = source()
+
+    for {name, first} <- [
+          {"CYFR_CRUCIBLE_MAX_CONCURRENT", "32"},
+          {"CYFR_CRUCIBLE_MAX_CONCURRENT_PER_TENANT", "1"},
+          {"CYFR_MCP_RATE_LIMIT_MAX", "1"},
+          {"CYFR_MCP_RATE_LIMIT_WINDOW_MS", "1"},
+          {"CYFR_WEBHOOK_PER_IP_RATE_LIMIT_MAX", "1"},
+          {"CYFR_API_RATE_LIMIT_MAX", "1"},
+          {"CYFR_API_RATE_LIMIT_WINDOW_MS", "1"},
+          {"CYFR_MCP_SUBSCRIPTION_MAX_CONCURRENT", "1"},
+          {"CYFR_MCP_SUBSCRIPTION_MAX_MS", "1"},
+          {"CYFR_CRUCIBLE_EVENTS_MAX_CONCURRENT", "1"},
+          {"CYFR_CRUCIBLE_EVENTS_MAX_MS", "1"},
+          {"CYFR_TRUSTED_PROXY_HOPS", "0"}
+        ] do
+      assert src =~ ~s|env_bound.("#{name}", #{first}..|,
+             "#{name} must go through the strict bound reader from #{first}"
+
+      refute src =~ ~s|env_int.("#{name}"|, "#{name} must not be read with env_int"
+    end
+
+    assert src =~ ~S|env_bound.("CYFR_TRUSTED_PROXY_HOPS", 0..16, "proxy hops")|
   end
 
   # Dotenvy is a dependency; these are the behaviours the helpers above

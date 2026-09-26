@@ -33,9 +33,11 @@ defmodule Sanctum.ClientIp do
   and the first remaining hop is the client. Trusted proxies are identified
   either by `config :sanctum, :trusted_proxy_cidrs` (list of IPs/CIDRs — strips
   any number of matching trailing hops) or, when that is unset, by
-  `config :sanctum, :trusted_proxy_hops` (fixed count, default 1 — the shipped
-  single-Caddy topology). A wrong hop count resolves a proxy IP and fails an
-  allowlist *closed*, never open.
+  `config :sanctum, :trusted_proxy_hops` (a fixed count from 0 to 16, which
+  `config/runtime.exs` sets whenever it turns the trust on and refuses the
+  boot for outside that range). A missing or malformed count is zero hops:
+  the socket peer, never a hop the chain's writer chose. A wrong hop count
+  resolves a proxy IP and fails an allowlist *closed*, never open.
 
   `resolve/1` ALWAYS returns a binary — never `nil`. A context with no
   resolvable IP yields `"0.0.0.0"`, which fails a real API-key allowlist
@@ -46,10 +48,9 @@ defmodule Sanctum.ClientIp do
 
   import Plug.Conn, only: [get_req_header: 2]
 
-  # The shipped single-Caddy topology. Spelled once: the config default and
-  # the fallback a malformed `:trusted_proxy_hops` lands on are the same
-  # decision, and a deployment that changes one must change both.
-  @default_trusted_proxy_hops 1
+  # The most proxy hops a deployment may trust, as `config/runtime.exs`
+  # reads `CYFR_TRUSTED_PROXY_HOPS`.
+  @max_trusted_proxy_hops 16
 
   @spec resolve(Plug.Conn.t()) :: String.t()
   def resolve(%Plug.Conn{} = conn) do
@@ -141,11 +142,7 @@ defmodule Sanctum.ClientIp do
   # element is the client. Exhausting the chain yields nil → :error → the
   # caller falls back to the socket IP. count=0 (trust on, no proxy) yields
   # the socket hop itself, correctly ignoring all client-supplied entries.
-  defp strip_hops(chain, count) when is_integer(count) and count >= 0 do
-    chain |> Enum.drop(-count) |> List.last()
-  end
-
-  defp strip_hops(chain, _bad_config), do: strip_hops(chain, @default_trusted_proxy_hops)
+  defp strip_hops(chain, count), do: chain |> Enum.drop(-count) |> List.last()
 
   # Drop trailing hops that match a trusted IP/CIDR entry; the first
   # non-matching hop from the right is the client. If every hop is a trusted
@@ -161,8 +158,13 @@ defmodule Sanctum.ClientIp do
     |> List.first(List.last(chain))
   end
 
+  # Missing or malformed is zero hops, the socket peer: a count this module
+  # cannot trust never widens what the chain's writer controls.
   defp trusted_proxy_hops do
-    Application.get_env(:sanctum, :trusted_proxy_hops, @default_trusted_proxy_hops)
+    case Application.get_env(:sanctum, :trusted_proxy_hops) do
+      count when is_integer(count) and count in 0..@max_trusted_proxy_hops//1 -> count
+      _ -> 0
+    end
   end
 
   defp trusted_proxy_cidrs do

@@ -16,9 +16,9 @@ defmodule Locus.Application do
   serves none. A node that serves runs every build and every backend
   through cyfr-keeper, each under a uid and a memory bound of its own, so
   serving without the keeper's channel refuses the boot. The one node that
-  serves without it is the test environment's, through
-  `Locus.DirectLauncher`, and that choice is compiled into no other
-  (`Locus.Executor.executors/0`): no setting of a release reaches it.
+  serves without it is the test build's, through the direct launcher its
+  test support compiles (`Locus.Executor.direct_launcher/0`), which no
+  other build compiles: no setting of a release reaches it.
 
   The tree restarts `:rest_for_one`. Both services depend on the keeper's
   client: when cyfr-keeper's channel is lost the client stops, everything
@@ -52,18 +52,23 @@ defmodule Locus.Application do
 
   @doc """
   The children of `Locus.Supervisor` for a node that serves `services`,
-  started by cyfr-keeper or not, under the executors this build knows.
-  Serving either service without the keeper where the direct launcher is
-  unknown raises: the boot is refused.
+  started by cyfr-keeper or not, under the direct launcher this build has
+  (`Locus.Executor.direct_launcher/0`, `nil` in every build but the test
+  one's). Serving either service without the keeper and without a direct
+  launcher raises: the boot is refused.
   """
-  @spec children(services(), boolean(), [module()]) :: [
+  @spec children(services(), boolean(), module() | nil) :: [
           Supervisor.child_spec() | {module(), keyword()} | module()
         ]
-  def children(services, keeper?, executors \\ Locus.Executor.executors())
+  def children(services, keeper?, direct_launcher \\ Locus.Executor.direct_launcher())
 
-  def children(%{builds: builds?, backends: backends?} = services, false = _keeper?, executors)
+  def children(
+        %{builds: builds?, backends: backends?} = services,
+        false = _keeper?,
+        direct_launcher
+      )
       when builds? or backends? do
-    if Locus.DirectLauncher in executors do
+    if direct_launcher do
       served(services, [build_slots()])
     else
       raise "[Locus] FATAL: a Locus node runs every build and every backend only through " <>
@@ -73,7 +78,7 @@ defmodule Locus.Application do
     end
   end
 
-  def children(services, keeper?, _executors) do
+  def children(services, keeper?, _direct_launcher) do
     served(services, [build_slots()] ++ if(keeper?, do: [Locus.Keeper], else: []))
   end
 
