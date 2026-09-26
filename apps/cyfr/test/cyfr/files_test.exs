@@ -155,6 +155,33 @@ defmodule Arca.FilesTest do
     assert {:error, {:not_found, "Folder", ^retired}} = Files.list(actor, retired)
   end
 
+  test "notes/ is served from the fenced documents: listed with sizes, read, and never written",
+       %{actor: actor} do
+    note!(actor, "notes/plan.md", "the plan")
+    note!(actor, "notes/about-you.md", "me")
+    # Neither a document outside the folder nor a stray object under the
+    # storage root of the same name is a note.
+    note!(actor, "notes-old/elsewhere.md", "not here")
+    :ok = Arca.put(actor, ["notes", "stray.md"], "a file, not a note")
+
+    assert {:ok, %{tier: :read, entries: entries, truncated: false}} = Files.list(actor, "notes")
+
+    assert entries == [
+             %{name: "about-you.md", kind: :file, size: 2},
+             %{name: "plan.md", kind: :file, size: 8}
+           ]
+
+    assert {:ok, %{content: "the plan", encoding: "utf8", size: 8}} =
+             Files.read(actor, "notes/plan.md")
+
+    assert {:error, {:not_found, "File", "notes/stray.md"}} = Files.read(actor, "notes/stray.md")
+    assert {:error, {:invalid_argument, msg}} = Files.list(actor, "notes/plan.md")
+    assert msg =~ "is a file"
+    assert {:error, {:invalid_argument, _}} = Files.write(actor, "notes/plan.md", "x")
+    assert {:error, {:invalid_argument, _}} = Files.delete(actor, "notes/plan.md")
+    assert {:ok, %{content: "the plan"}} = Files.read(actor, "notes/plan.md")
+  end
+
   test "components/ is shaped: edits land only inside a local unit, and a shipped unit is never deleted",
        %{actor: actor} do
     assert {:ok, %{tier: :shaped}} = Files.list(actor, "components")
@@ -296,7 +323,12 @@ defmodule Arca.FilesTest do
     actor: actor
   } do
     assert {:ok, ["data", "a", "b.txt"], :open} = Files.locate(actor, "data/a/b.txt")
-    assert {:ok, ["notes", "plan.md"], :read} = Files.locate(actor, "notes/plan.md")
+
+    # A note is a document: its bytes are the staged ones it names, and a
+    # note nothing holds has no bytes to stream.
+    assert {:error, {:not_found, "File", "notes/plan.md"}} = Files.locate(actor, "notes/plan.md")
+    staged = note!(actor, "notes/plan.md", "the plan")
+    assert {:ok, ["staging", ^staged], :read} = Files.locate(actor, "notes/plan.md")
 
     assert {:error, {:not_found, "Folder", "payloads"}} =
              Files.locate(actor, "payloads/sha256/abc")
@@ -377,5 +409,19 @@ defmodule Arca.FilesTest do
     assert message ==
              "'components/reagents/acme/theirs/1.0.0/notes.txt': " <>
                Prima.ComponentNamespace.message(:not_local_namespace, "acme")
+  end
+
+  # A document published straight through the store, as a note is kept:
+  # staged bytes and their reference, with no claimant in this suite.
+  defp note!(actor, key, bytes) do
+    {:ok, staged} = Arca.Storage.stage(actor, "notes", bytes)
+
+    change = %Arca.FencedPublication.Change{
+      resource: {:document, actor.athanor_id, key},
+      staged: staged
+    }
+
+    {:ok, 1} = Arca.FencedPublication.publish(change, 0, :none)
+    staged
   end
 end

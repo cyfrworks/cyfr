@@ -27,6 +27,12 @@ defmodule Arca.Files do
     * `:read` (`notes/`, `threads/`) — listed, read and downloaded;
       written only by their own surfaces.
 
+  `notes/` is served from fenced documents (`Arca.FencedPublication`),
+  not from a storage root: a note is the document whose key is its path
+  here (`notes/<name>.md`), and its bytes are the staged ones the
+  document names (`document_roots/0`). Listed, read and downloaded the
+  same as any `:read` folder.
+
   A write into a component's manifest must decode and pass the one
   manifest validator (`Prima.Manifest.validate/2`, with this layer's
   guest-path predicate), and a write under another publisher's component
@@ -44,6 +50,9 @@ defmodule Arca.Files do
   @max_entries 1_000
 
   @type tier :: :open | :shaped | :read
+
+  # Folders whose files are fenced documents keyed by their path here.
+  @document_roots ["notes"]
   @type entry :: %{name: String.t(), kind: :dir | :file, size: non_neg_integer() | nil}
   @type folder :: %{name: String.t(), tier: tier()}
 
@@ -54,6 +63,14 @@ defmodule Arca.Files do
   @doc "The bytes one `write/4` accepts."
   @spec max_write() :: pos_integer()
   def max_write, do: @max_write
+
+  @doc """
+  The folders whose files are fenced documents keyed by their console
+  path (`Arca.FencedPublication`), rather than objects under a storage
+  root.
+  """
+  @spec document_roots() :: [String.t()]
+  def document_roots, do: @document_roots
 
   @doc "The folders of the tree, in tier order."
   @spec folders() :: [folder()]
@@ -84,14 +101,12 @@ defmodule Arca.Files do
 
   defp list_folder(actor, path, segments) do
     with {:ok, physical, tier} <- resolve(segments),
-         {:ok, listed} <- list_typed(actor, physical, path) do
+         {:ok, listed} <- listing(actor, physical, path) do
       {shown, truncated} = Enum.split(listed, @max_entries)
 
       entries =
         shown
-        |> Enum.map(fn {name, kind} ->
-          %{name: name, kind: kind, size: size(actor, physical, name, kind)}
-        end)
+        |> Enum.map(fn {name, kind, size} -> %{name: name, kind: kind, size: size.()} end)
         |> Enum.sort_by(&{&1.kind != :dir, &1.name})
 
       {:ok, %{path: join(segments), tier: tier, entries: entries, truncated: truncated != []}}
@@ -142,7 +157,8 @@ defmodule Arca.Files do
   def locate(%Prima.Actor{} = actor, path) when is_binary(path) do
     with :ok <- tenant(actor),
          {:ok, _segments, physical, tier} <- resolve_file(path),
-         do: {:ok, physical, tier}
+         {:ok, stored} <- stored_at(actor, physical, path),
+         do: {:ok, stored, tier}
   end
 
   @doc """
@@ -324,6 +340,66 @@ defmodule Arca.Files do
 
   # ---- storage ---------------------------------------------------------------
 
+  # A folder's entries as `{name, kind, size}`, the size read only for an
+  # entry the listing shows.
+  defp listing(actor, [root | _] = physical, path) when root in @document_roots do
+    key = Enum.join(physical, "/")
+
+    case Arca.FencedPublication.list(actor, key) do
+      {:ok, docs} ->
+        if Enum.any?(docs, &(&1.key == key)),
+          do: {:error, {:invalid_argument, "'#{path}' is a file — read it"}},
+          else: {:ok, document_entries(actor, docs, key <> "/")}
+
+      {:error, reason} ->
+        storage_error("list", path, reason)
+    end
+  end
+
+  defp listing(actor, physical, path) do
+    with {:ok, entries} <- list_typed(actor, physical, path) do
+      {:ok,
+       for({name, kind} <- entries, do: {name, kind, fn -> size(actor, physical, name, kind) end})}
+    end
+  end
+
+  # One entry per document directly under the folder, and one directory
+  # per first segment of those deeper down.
+  defp document_entries(actor, docs, prefix) do
+    docs
+    |> Enum.flat_map(fn
+      %{key: ^prefix <> below} = doc ->
+        case String.split(below, "/", parts: 2) do
+          [name] -> [{name, :file, fn -> stored_size(actor, doc) end}]
+          [dir, _deeper] -> [{dir, :dir, fn -> nil end}]
+        end
+
+      # A key that only begins with the folder's name (`notes-old/…`).
+      _elsewhere ->
+        []
+    end)
+    |> Enum.uniq_by(fn {name, kind, _size} -> {name, kind} end)
+  end
+
+  defp stored_size(actor, %{blob_key: blob_key}) do
+    case Arca.usage(actor, String.split(blob_key, "/")) do
+      {:ok, %{bytes: bytes}} -> bytes
+      {:error, _} -> nil
+    end
+  end
+
+  # Where a file's bytes are kept: its own path, or for a document the
+  # staged key its reference names.
+  defp stored_at(actor, [root | _] = physical, path) when root in @document_roots do
+    case Arca.FencedPublication.document(actor, Enum.join(physical, "/")) do
+      %{blob_key: blob_key} -> {:ok, String.split(blob_key, "/")}
+      :not_found -> {:error, {:not_found, "File", path}}
+      {:error, reason} -> storage_error("read", path, reason)
+    end
+  end
+
+  defp stored_at(_actor, physical, _path), do: {:ok, physical}
+
   defp list_typed(actor, physical, path) do
     case Arca.list_typed(actor, physical) do
       {:ok, entries} -> {:ok, entries}
@@ -343,10 +419,12 @@ defmodule Arca.Files do
   end
 
   defp get(actor, physical, path) do
-    case Arca.get(actor, physical) do
-      {:ok, bytes} -> {:ok, bytes}
-      {:error, :not_found} -> {:error, {:not_found, "File", path}}
-      {:error, reason} -> storage_error("read", path, reason)
+    with {:ok, stored} <- stored_at(actor, physical, path) do
+      case Arca.get(actor, stored) do
+        {:ok, bytes} -> {:ok, bytes}
+        {:error, :not_found} -> {:error, {:not_found, "File", path}}
+        {:error, reason} -> storage_error("read", path, reason)
+      end
     end
   end
 

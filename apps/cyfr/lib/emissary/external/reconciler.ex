@@ -23,6 +23,15 @@ defmodule Emissary.External.Reconciler do
        again; the tenant caches are dropped. The next call re-resolves
        fresh, or fails closed if the credential is gone.
 
+  Raising an epoch is a host-owned write: `Arca.McpServerStorage.bump_epoch/2`
+  reads the row and publishes the raise under this member's live
+  ownership of its slot and the revision it read
+  (`Arca.FencedPublication`). A raise racing another write to the row —
+  a second rotation's reconcile, an edit — is refused `:stale` and the
+  reconcile is retried whole, reading the rows again; a member that lost
+  its slot writes nothing and leaves the reconcile pending for whichever
+  member holds one.
+
   A rename belongs in that set even though it touches no material: header
   templates reference an entry by NAME and resolve at request time, so moving
   a name between entries changes what a live server sends.
@@ -166,7 +175,7 @@ defmodule Emissary.External.Reconciler do
 
   defp while_held(fun), do: if(Arca.ControlPlane.held?(), do: fun.(), else: :not_owner)
 
-  @spec reconcile(String.t(), String.t(), map()) :: :ok | {:error, term()}
+  @spec reconcile(String.t(), String.t(), map()) :: :ok | :not_owner | {:error, term()}
   defp reconcile(athanor_id, entry_id, meta) do
     ctx = Sanctum.Context.internal(athanor_id: athanor_id, scope: :athanor)
     names = changed_names(meta)
@@ -210,20 +219,32 @@ defmodule Emissary.External.Reconciler do
         Emissary.External.ServerSupervisor.stop(server.name, athanor_id)
         bumped = Arca.McpServerStorage.bump_epoch(Sanctum.Context.actor(ctx), server.id)
 
-        :telemetry.execute(
-          [:cyfr, :emissary, :external_server, :reconciled],
-          %{count: 1},
-          %{server: server.name, athanor_id: athanor_id, entry_id: entry_id}
-        )
+        # Reconciled once the raise landed, or once the row is gone; a
+        # refused raise is retried, not reported done.
+        if match?({:ok, _}, bumped) or bumped == {:error, :not_found} do
+          :telemetry.execute(
+            [:cyfr, :emissary, :external_server, :reconciled],
+            %{count: 1},
+            %{server: server.name, athanor_id: athanor_id, entry_id: entry_id}
+          )
+        end
 
         bumped
       end)
 
     if affected != [], do: Emissary.External.Proxy.invalidate_external_tools_cache(ctx)
 
-    case Enum.find(results, &match?({:error, reason} when reason != :not_found, &1)) do
-      nil -> :ok
-      {:error, reason} -> {:error, reason}
+    # A slot lost mid-reconcile is not a failure to report: the reconcile
+    # stays pending, and a member that holds its slot does it.
+    cond do
+      {:error, :not_owner} in results ->
+        :not_owner
+
+      refused = Enum.find(results, &match?({:error, reason} when reason != :not_found, &1)) ->
+        refused
+
+      true ->
+        :ok
     end
   end
 

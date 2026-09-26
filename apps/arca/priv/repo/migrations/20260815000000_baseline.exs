@@ -1315,6 +1315,9 @@ defmodule Arca.Repo.Migrations.Baseline do
       add :config_json, :text, null: false
       add :enabled, :boolean, default: true
       add :epoch, :bigint, null: false
+      # The per-row counter a fenced publication compares and raises
+      # (`Arca.FencedPublication`); every write to the row raises it.
+      add :revision, :bigint, null: false, default: 0
       # The person who created the row; their stdio servers share one quota
       # of the backends service across every athanor.
       add :created_by, :string, null: false

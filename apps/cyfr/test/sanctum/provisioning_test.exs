@@ -17,7 +17,7 @@ defmodule Sanctum.ProvisioningTest do
   # Another attempt — another boot's — holding the athanor's claim.
   defp held_elsewhere!(athanor_id, entry_kind \\ "first_need") do
     actor = %Prima.Actor{athanor_id: athanor_id}
-    {:ok, claim} = Claims.claim(actor, "boot_elsewhere/own_held", entry_kind, 60_000)
+    {:ok, claim} = Claims.claim(actor, "boot_elsewhere/own_held", entry_kind, 60_000, :none)
     claim
   end
 
@@ -482,9 +482,12 @@ defmodule Sanctum.ProvisioningTest do
     # claim's lease runs out, the second takes the athanor at the next fence.
     defp overtaken!(athanor_id) do
       actor = %Prima.Actor{athanor_id: athanor_id}
-      {:ok, stale} = Claims.claim(actor, "boot_elsewhere/own_stale", "first_need", 1)
+      {:ok, stale} = Claims.claim(actor, "boot_elsewhere/own_stale", "first_need", 1, :none)
       Prima.Test.Wait.wait_until(fn -> not Claims.live?(stale) end, 2_000, "the lease to run out")
-      {:ok, successor} = Claims.claim(actor, "boot_elsewhere/own_successor", "provision", 60_000)
+
+      {:ok, successor} =
+        Claims.claim(actor, "boot_elsewhere/own_successor", "provision", 60_000, :none)
+
       assert successor.fence == stale.fence + 1
       {actor, stale, successor}
     end
@@ -649,7 +652,7 @@ defmodule Sanctum.ProvisioningTest do
 
     # A claim that reads `ready` on an athanor the row does not mark filled
     # makes nothing ready.
-    {:ok, claim} = Claims.claim(actor, "boot_elsewhere/own_said_so", "provision", 60_000)
+    {:ok, claim} = Claims.claim(actor, "boot_elsewhere/own_said_so", "provision", 60_000, :none)
     :ok = Claims.settle(actor, claim.owner, claim.fence, "ready", nil)
     refute Provisioning.provisioned?(in_group)
     assert Provisioning.status(in_group) == :unfilled
@@ -664,7 +667,7 @@ defmodule Sanctum.ProvisioningTest do
     # claim settled failed — moves neither the mark nor the athanor's standing.
     assert {:ok, _} = Filler.install_shipped(in_group, "catalyst:local.foo")
     assert :ok = Filler.sync_seeds()
-    {:ok, later} = Claims.claim(actor, "boot_elsewhere/own_later", "provision", 60_000)
+    {:ok, later} = Claims.claim(actor, "boot_elsewhere/own_later", "provision", 60_000, :none)
     :ok = Claims.settle(actor, later.owner, later.fence, "failed", "seed: :whatever")
 
     assert {:ok, %{provisioned_at: ^at}} = Athanors.get(group.id)
@@ -712,6 +715,87 @@ defmodule Sanctum.ProvisioningTest do
     # the announcement alone.
     assert Sanctum.Provisioning.fill_event() ==
              [:cyfr, :sanctum, :provisioning, :fill_requested]
+  end
+
+  describe "the member's slot" do
+    setup do
+      keys = [
+        {Arca.ControlPlane, :standing},
+        {Arca.ControlPlane, :generation},
+        {Arca.ControlPlane, :slot}
+      ]
+
+      saved = Map.new(keys, &{&1, :persistent_term.get(&1, :absent)})
+
+      on_exit(fn ->
+        for {key, value} <- saved do
+          if value == :absent,
+            do: :persistent_term.erase(key),
+            else: :persistent_term.put(key, value)
+        end
+      end)
+
+      node = "node-provisioning-#{System.unique_integer([:positive])}"
+      {:ok, slot} = Arca.ControlPlane.take(node, node <> "#boot_a", 60_000)
+      athanor_id = "ath_prov_slot_#{System.unique_integer([:positive])}"
+      {:ok, slot: slot, athanor_id: athanor_id, actor: %Prima.Actor{athanor_id: athanor_id}}
+    end
+
+    test "a claim is taken under the member's own slot", %{athanor_id: athanor_id, actor: actor} do
+      assert {:ok, claim} = Provisioning.take_claim(athanor_id, "provision")
+      assert {:ok, %{owner: owner}} = Claims.current(actor)
+      assert owner == claim.owner
+    end
+
+    test "a slot taken over after the member last renewed takes no athanor", %{
+      slot: slot,
+      athanor_id: athanor_id,
+      actor: actor
+    } do
+      # The row names a successor; this member still believes it holds.
+      replace_lease!(slot, owner: slot.node <> "#boot_b", generation: slot.generation + 1)
+
+      assert {:error, :not_owner} = Provisioning.take_claim(athanor_id, "provision")
+
+      assert {:error, :not_owner} =
+               Provisioning.under_claim(athanor_id, "install_shipped", &{:ran, &1})
+
+      assert {:error, :not_owner} =
+               Provisioning.await_claim(athanor_id, "seed_sync", 1_000, 10, &{:ran, &1})
+
+      assert {:error, :not_found} = Claims.current(actor)
+    end
+
+    test "a slot that ran out with no successor takes no athanor", %{
+      slot: slot,
+      athanor_id: athanor_id,
+      actor: actor
+    } do
+      replace_lease!(slot,
+        lease_until: DateTime.add(Arca.ServerMetaStorage.now!(), -1_000, :millisecond)
+      )
+
+      assert {:error, :not_owner} = Provisioning.take_claim(athanor_id, "provision")
+      assert {:error, :not_found} = Claims.current(actor)
+    end
+
+    test "a member that holds no slot where a claimant runs asks nothing of the store", %{
+      athanor_id: athanor_id,
+      actor: actor
+    } do
+      Arca.ControlPlane.record(:lost)
+      assert {:error, :not_owner} = Provisioning.take_claim(athanor_id, "provision")
+      assert {:error, :not_found} = Claims.current(actor)
+    end
+
+    defp replace_lease!(%{node: node}, set) do
+      import Ecto.Query, only: [from: 2]
+
+      {1, _} =
+        Arca.Repo.update_all(from(l in Arca.Schemas.CellLease, where: l.node == ^node), set: set)
+
+      :ok
+    end
   end
 
   test "Compendium.Pull.oci_reference_for refuses local refs and resolves published ones" do

@@ -56,6 +56,13 @@ defmodule Sanctum.Provisioning do
       and `sync_seeds/0` (`seed_sync`) take the claim through
       `under_claim/3` and `await_claim/5` here.
 
+  The claim is taken under this member's own slot in the cell
+  (`Arca.ControlPlane.member_slot/0`), verified live in the claim's
+  transaction: a member that lost its slot takes no athanor, and the take
+  answers `{:error, :not_owner}` as a claim that failed. The athanor's
+  fence is the claim row's own; the slot is the member's, not a second
+  per-athanor fence.
+
   An attempt settles its claim `ready` or `failed`; an install, a sync and
   an attempt that found the athanor filled release it. Every write that
   speaks for the attempt is fenced by the claim: readiness is marked only
@@ -383,12 +390,14 @@ defmodule Sanctum.Provisioning do
   back.
   """
   @spec take_claim(String.t(), String.t()) ::
-          {:ok, claim()} | {:error, :provisioning_busy} | {:error, term()}
+          {:ok, claim()} | {:error, :provisioning_busy | :not_owner} | {:error, term()}
   def take_claim(athanor_id, entry_kind) do
-    case Claims.claim(actor(athanor_id), owner(), entry_kind, @lease_ms) do
-      {:ok, claim} -> {:ok, claim}
-      {:busy, _claim} -> {:error, :provisioning_busy}
-      {:error, _} = error -> error
+    with {:ok, slot} <- Arca.ControlPlane.member_slot() do
+      case Claims.claim(actor(athanor_id), owner(), entry_kind, @lease_ms, slot) do
+        {:ok, claim} -> {:ok, claim}
+        {:busy, _claim} -> {:error, :provisioning_busy}
+        {:error, _} = error -> error
+      end
     end
   end
 
@@ -424,21 +433,25 @@ defmodule Sanctum.Provisioning do
     end
   end
 
+  # The slot is asked again on every round: a member that loses it while
+  # waiting stops waiting.
   defp wait_for_claim(actor, owner, entry_kind, deadline, poll_ms) do
-    case Claims.claim(actor, owner, entry_kind, @lease_ms) do
-      {:ok, claim} ->
-        {:ok, claim}
+    with {:ok, slot} <- Arca.ControlPlane.member_slot() do
+      case Claims.claim(actor, owner, entry_kind, @lease_ms, slot) do
+        {:ok, claim} ->
+          {:ok, claim}
 
-      {:busy, _claim} ->
-        if now_ms() < deadline do
-          Process.sleep(poll_ms)
-          wait_for_claim(actor, owner, entry_kind, deadline, poll_ms)
-        else
-          {:error, :provisioning_busy}
-        end
+        {:busy, _claim} ->
+          if now_ms() < deadline do
+            Process.sleep(poll_ms)
+            wait_for_claim(actor, owner, entry_kind, deadline, poll_ms)
+          else
+            {:error, :provisioning_busy}
+          end
 
-      {:error, _} = error ->
-        error
+        {:error, _} = error ->
+          error
+      end
     end
   end
 

@@ -20,12 +20,17 @@ defmodule Arca.McpServerStorage do
   - config_json: JSON text with headers, timeout_ms, backends, etc.
   - enabled: Whether the server is active
   - epoch: 1 on insert, one higher after every write to the row
+  - revision: 0 on insert, one higher after every write to the row — the
+    counter a fenced publication compares (`Arca.FencedPublication`)
   - created_by: the id of the person whose context created the row
   - athanor_id: the owning athanor
   - inserted_at/updated_at: Timestamps
 
-  Every write that changes a row raises its epoch in the same statement,
-  and the written row is answered as the database returned it.
+  Every write that changes a row raises its epoch and its revision in the
+  same statement. `bump_epoch/3` is a host-owned write, published under
+  this member's live ownership of its slot and the revision it read
+  (`Arca.FencedPublication`); the others answer the written row as the
+  database returned it.
   """
 
   import Ecto.Query
@@ -140,6 +145,7 @@ defmodule Arca.McpServerStorage do
         |> Map.put_new(:enabled, true)
         |> Map.put_new(:config_json, "{}")
         |> Map.put(:epoch, 1)
+        |> Map.put(:revision, 0)
         |> Map.put(:created_by, user_id)
         |> then(&Arca.QueryHelpers.stamp_tenant!(actor, &1))
         |> Map.put_new(:inserted_at, now)
@@ -213,25 +219,80 @@ defmodule Arca.McpServerStorage do
   def update(%Prima.Actor{}, _name, _updates, _expected_epoch), do: {:error, :no_athanor}
 
   @doc """
-  Raise a row's epoch, found by id, with nothing else changed. With
-  `expected_epoch`, only while the row is still at that epoch.
+  Raise a row's epoch, found by id in the actor's athanor, with nothing
+  else changed, and answer the row as the publication wrote it.
+
+  A host-owned write: the row is read, and its raised epoch published
+  under this member's slot (`Arca.ControlPlane.member_slot/0`) over the
+  revision read (`Arca.FencedPublication.publish/3`). With
+  `expected_epoch`, the row must also still be at that epoch; the
+  revision compare-and-set carries that read to the publication.
+
+    * `{:error, :stale_epoch}` — the row is not at `expected_epoch`.
+    * `{:error, :stale}` — the row moved between the read and the
+      publication (with no `expected_epoch`: nothing was raised by this
+      call, and a caller that still needs the raise reads again).
+    * `{:error, :not_owner}` — this member does not hold its slot, live;
+      nothing is written.
+    * `{:error, :budget}` — the publication outran its transaction budget.
   """
   @spec bump_epoch(Prima.Actor.t(), String.t(), pos_integer() | nil) ::
           {:ok, map()}
-          | {:error, :no_athanor | :not_found | :stale_epoch | :database_error}
+          | {:error,
+             :no_athanor
+             | :not_found
+             | :stale_epoch
+             | :stale
+             | :not_owner
+             | :budget
+             | :database_error}
   def bump_epoch(actor, id, expected_epoch \\ nil)
 
   def bump_epoch(%Prima.Actor{athanor_id: athanor_id} = actor, id, expected_epoch)
       when is_binary(athanor_id) and athanor_id != "" and is_binary(id) do
-    Arca.Repo.Errors.with_db_rescue("Arca.McpServerStorage.bump_epoch", fn ->
-      from(s in McpServer, where: s.id == ^id, select: s)
-      |> where_tenant(actor)
-      |> write_epoch([updated_at: now()], expected_epoch, fn -> get_by_id(actor, id) end)
-    end)
-    |> Arca.Data.project()
+    with {:ok, slot} <- Arca.ControlPlane.member_slot(),
+         {:ok, server} <- get_by_id(actor, id),
+         :ok <- at_epoch(server, expected_epoch) do
+      publish_epoch(actor, server, expected_epoch, slot)
+    end
   end
 
   def bump_epoch(%Prima.Actor{}, _id, _expected_epoch), do: {:error, :no_athanor}
+
+  defp at_epoch(_server, nil), do: :ok
+  defp at_epoch(%{epoch: epoch}, epoch), do: :ok
+  defp at_epoch(_server, _expected_epoch), do: {:error, :stale_epoch}
+
+  # What the publication set, not a later read: a read after the commit
+  # could answer a successor's row.
+  defp publish_epoch(actor, server, expected_epoch, slot) do
+    attrs = %{epoch: server.epoch + 1, updated_at: now()}
+
+    change = %Arca.FencedPublication.Change{
+      resource: {:row, McpServer, server.id},
+      attrs: attrs
+    }
+
+    case Arca.FencedPublication.publish(change, server.revision, slot) do
+      {:ok, revision} ->
+        {:ok, server |> Map.merge(attrs) |> Map.put(:revision, revision)}
+
+      {:error, :stale} when is_integer(expected_epoch) ->
+        moved(actor, server.id)
+
+      {:error, _} = refused ->
+        refused
+    end
+  end
+
+  # With an epoch expected, a row that moved is read again so the answer
+  # says which: gone, or at another epoch.
+  defp moved(actor, id) do
+    case get_by_id(actor, id) do
+      {:ok, _moved_on} -> {:error, :stale_epoch}
+      {:error, _} = error -> error
+    end
+  end
 
   @doc """
   The named rows, read in one statement with the status of each row's
@@ -274,7 +335,7 @@ defmodule Arca.McpServerStorage do
   defp write_epoch(query, set, expected_epoch, reread) do
     query = if expected_epoch, do: where(query, [s], s.epoch == ^expected_epoch), else: query
 
-    case Arca.Repo.update_all(query, set: set, inc: [epoch: 1]) do
+    case Arca.Repo.update_all(query, set: set, inc: [epoch: 1, revision: 1]) do
       {1, [server]} ->
         {:ok, server}
 

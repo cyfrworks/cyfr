@@ -24,6 +24,7 @@ defmodule Arca.AgentStorageTest do
 
   alias Arca.AgentStorage
   alias Arca.ProvisioningClaims, as: Claims
+  alias Arca.Schemas.CellLease
   alias Arca.{StorageProjectionChanges, StorageProjectionRoots}
 
   @lease_ms 60_000
@@ -32,7 +33,28 @@ defmodule Arca.AgentStorageTest do
   setup tags do
     Arca.Test.Sandbox.setup!(tags)
     athanor_id = "ath_agents_#{System.unique_integer([:positive])}"
-    {:ok, actor: %Prima.Actor{athanor_id: athanor_id}, athanor_id: athanor_id}
+    {:ok, actor: %Prima.Actor{athanor_id: athanor_id}, athanor_id: athanor_id, slot: slot!()}
+  end
+
+  # The member slot a claim is taken under (`Arca.ProvisioningClaims.claim/5`),
+  # written straight to a row of the case's own.
+  defp slot! do
+    node = "node-agents-#{System.unique_integer([:positive])}"
+    now = Arca.ServerMetaStorage.now!()
+
+    row = %{
+      node: node,
+      owner: node <> "#boot_a",
+      generation: 1,
+      fence: 1,
+      lease_until: DateTime.add(now, 60_000, :millisecond),
+      taken_at: now,
+      inserted_at: now,
+      updated_at: now
+    }
+
+    {1, _} = Arca.Repo.insert_all(CellLease, [row])
+    %{node: node, owner: row.owner, generation: 1, fence: 1}
   end
 
   defp row(athanor_id, name) do
@@ -96,9 +118,10 @@ defmodule Arca.AgentStorageTest do
 
   test "an attempt holding its claim publishes the index", %{
     actor: actor,
-    athanor_id: athanor_id
+    athanor_id: athanor_id,
+    slot: slot
   } do
-    assert {:ok, claim} = Claims.claim(actor, "boot_a", "first_need", @lease_ms)
+    assert {:ok, claim} = Claims.claim(actor, "boot_a", "first_need", @lease_ms, slot)
 
     assert {:ok, _} =
              AgentStorage.replace_projection(actor, token(actor), [row(athanor_id, "alpha")],
@@ -110,9 +133,10 @@ defmodule Arca.AgentStorageTest do
 
   test "an attempt whose claim a successor took publishes nothing", %{
     actor: actor,
-    athanor_id: athanor_id
+    athanor_id: athanor_id,
+    slot: slot
   } do
-    assert {:ok, first} = Claims.claim(actor, "boot_a", "first_need", @lease_ms)
+    assert {:ok, first} = Claims.claim(actor, "boot_a", "first_need", @lease_ms, slot)
 
     assert {:ok, _} =
              AgentStorage.replace_projection(actor, token(actor), [row(athanor_id, "alpha")],
@@ -122,7 +146,7 @@ defmodule Arca.AgentStorageTest do
     # The successor takes the claim — settling the predecessor's is what
     # makes the row takeable, and the take raises the fence.
     assert :ok = Claims.settle(actor, first.owner, first.fence, "failed", nil)
-    assert {:ok, second} = Claims.claim(actor, "boot_b", "seed_sync", @lease_ms)
+    assert {:ok, second} = Claims.claim(actor, "boot_b", "seed_sync", @lease_ms, slot)
     assert second.fence > first.fence
 
     # The predecessor's rewrite writes nothing at all: the rows it would
@@ -146,9 +170,10 @@ defmodule Arca.AgentStorageTest do
 
   test "a settled claim publishes nothing, lease or no lease", %{
     actor: actor,
-    athanor_id: athanor_id
+    athanor_id: athanor_id,
+    slot: slot
   } do
-    assert {:ok, claim} = Claims.claim(actor, "boot_a", "first_need", @lease_ms)
+    assert {:ok, claim} = Claims.claim(actor, "boot_a", "first_need", @lease_ms, slot)
     assert :ok = Claims.settle(actor, claim.owner, claim.fence, "ready", nil)
 
     assert {:error, :claim_lost} =
@@ -160,8 +185,12 @@ defmodule Arca.AgentStorageTest do
   end
 
   describe "the rows and their acknowledgment" do
-    test "roll back together when the claim is lost", %{actor: actor, athanor_id: athanor_id} do
-      assert {:ok, claim} = Claims.claim(actor, "boot_a", "first_need", @lease_ms)
+    test "roll back together when the claim is lost", %{
+      actor: actor,
+      athanor_id: athanor_id,
+      slot: slot
+    } do
+      assert {:ok, claim} = Claims.claim(actor, "boot_a", "first_need", @lease_ms, slot)
       assert :ok = Claims.settle(actor, claim.owner, claim.fence, "failed", nil)
       generation = edited!(actor, "alpha")
 

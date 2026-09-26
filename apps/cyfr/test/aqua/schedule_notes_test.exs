@@ -1,6 +1,27 @@
 # SPDX-License-Identifier: Apache-2.0
 # Copyright 2026 CYFR Works Inc.
 
+defmodule Aqua.ScheduleNotesTest.Between do
+  @moduledoc false
+  # A storage cap that runs, once, what the test planted in the asking
+  # process: `Arca.Storage.stage/3` asks it after the outcome's note was
+  # read and before it is published.
+  @behaviour Prima.Caps
+
+  @impl Prima.Caps
+  def check_counted(%Prima.Actor{}, _key, _count), do: :ok
+
+  @impl Prima.Caps
+  def check_storage(%Prima.Actor{}, _incoming) do
+    case Process.delete(__MODULE__) do
+      nil -> :ok
+      between -> between.()
+    end
+
+    :ok
+  end
+end
+
 defmodule Aqua.ScheduleNotesTest do
   # A schedule that asked to keep its outcome: the committed completion
   # files a note in the schedule's athanor with the run as provenance,
@@ -8,6 +29,8 @@ defmodule Aqua.ScheduleNotesTest do
   # run nobody asked to keep, a closed furnace or a lost slot writes
   # nothing.
   use ExUnit.Case, async: false
+
+  import Ecto.Query, only: [from: 2]
 
   alias Arca.ControlPlane
   alias Aqua.ScheduleNotes
@@ -158,6 +181,86 @@ defmodule Aqua.ScheduleNotesTest do
       ControlPlane.record(:lost)
       assert :skipped = ScheduleNotes.keep(completion)
       assert {:ok, %{notes: []}} = Aqua.Notes.list(ctx)
+    end
+  end
+
+  describe "the publication" do
+    setup do
+      keys = [{ControlPlane, :standing}, {ControlPlane, :generation}, {ControlPlane, :slot}]
+      saved = Map.new(keys, &{&1, :persistent_term.get(&1, :absent)})
+      installed = Prima.Caps.impl!()
+      Prima.Caps.install!(Aqua.ScheduleNotesTest.Between)
+
+      on_exit(fn ->
+        Prima.Caps.install!(installed)
+
+        for {key, value} <- saved do
+          if value == :absent,
+            do: :persistent_term.erase(key),
+            else: :persistent_term.put(key, value)
+        end
+      end)
+
+      node = "node-sched-#{System.unique_integer([:positive])}"
+      {:ok, slot} = ControlPlane.take(node, node <> "#boot_a", 60_000)
+      {:ok, slot: slot}
+    end
+
+    test "is kept under the member's own slot", %{athanor: athanor, user: user, ctx: ctx} do
+      completion = completed(athanor, user)
+      assert :kept = ScheduleNotes.keep(completion)
+      assert {:ok, %{execution: execution}} = Aqua.Notes.read(ctx, completion.schedule_id)
+      assert execution == completion.execution_id
+    end
+
+    test "a note someone kept after it was read stands, and the outcome is not written over it",
+         %{athanor: athanor, user: user, ctx: ctx} do
+      completion = completed(athanor, user, %{note_name: "nightly"})
+      plant(fn -> {:ok, _} = Aqua.Notes.keep(ctx, "nightly", "kept by hand") end)
+
+      assert :not_kept = ScheduleNotes.keep(completion)
+      assert {:ok, %{content: "kept by hand", execution: nil}} = Aqua.Notes.read(ctx, "nightly")
+    end
+
+    test "a slot taken over between the read and the publication publishes nothing",
+         %{athanor: athanor, user: user, ctx: ctx, slot: slot} do
+      completion = completed(athanor, user)
+      plant(fn -> take_over!(slot) end)
+
+      assert :not_kept = ScheduleNotes.keep(completion)
+      assert {:error, {:not_found, "note", _}} = Aqua.Notes.read(ctx, completion.schedule_id)
+      assert {:ok, %{notes: []}} = Aqua.Notes.list(ctx)
+    end
+
+    test "a slot that ran out with no successor publishes nothing",
+         %{athanor: athanor, user: user, ctx: ctx, slot: slot} do
+      completion = completed(athanor, user)
+      plant(fn -> expire!(slot) end)
+
+      assert :not_kept = ScheduleNotes.keep(completion)
+      assert {:ok, %{notes: []}} = Aqua.Notes.list(ctx)
+    end
+
+    defp plant(between), do: Process.put(Aqua.ScheduleNotesTest.Between, between)
+
+    defp take_over!(%{node: node, generation: generation, fence: fence}) do
+      {1, _} =
+        Arca.Repo.update_all(from(l in Arca.Schemas.CellLease, where: l.node == ^node),
+          set: [owner: node <> "#boot_b", generation: generation + 1, fence: fence + 1]
+        )
+
+      :ok
+    end
+
+    defp expire!(%{node: node}) do
+      past = DateTime.add(Arca.ServerMetaStorage.now!(), -1_000, :millisecond)
+
+      {1, _} =
+        Arca.Repo.update_all(from(l in Arca.Schemas.CellLease, where: l.node == ^node),
+          set: [lease_until: past]
+        )
+
+      :ok
     end
   end
 

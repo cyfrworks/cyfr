@@ -4,6 +4,7 @@
 defmodule Emissary.External.ReconcilerTest do
   use ExUnit.Case, async: false
 
+  import Ecto.Query, only: [from: 2]
   import ExUnit.CaptureLog
 
   alias Emissary.External.Reconciler
@@ -146,6 +147,109 @@ defmodule Emissary.External.ReconcilerTest do
     sync_reconciler()
     assert_receive {:reconciled, %{server: "envsrv"}}, 2_000
     assert {:ok, %{epoch: 2}} = Arca.McpServerStorage.get(Sanctum.Context.actor(ctx), "envsrv")
+  end
+
+  describe "the member's slot" do
+    setup %{ctx: ctx} do
+      keys = [
+        {Arca.ControlPlane, :standing},
+        {Arca.ControlPlane, :generation},
+        {Arca.ControlPlane, :slot}
+      ]
+
+      saved = Map.new(keys, &{&1, :persistent_term.get(&1, :absent)})
+
+      on_exit(fn ->
+        for {key, value} <- saved do
+          if value == :absent,
+            do: :persistent_term.erase(key),
+            else: :persistent_term.put(key, value)
+        end
+      end)
+
+      test_pid = self()
+      handler_id = "reconciler-failed-#{System.unique_integer([:positive])}"
+
+      :telemetry.attach(
+        handler_id,
+        [:cyfr, :emissary, :external_server, :reconcile_failed],
+        fn _event, _measure, metadata, _cfg -> send(test_pid, {:reconcile_failed, metadata}) end,
+        nil
+      )
+
+      on_exit(fn -> :telemetry.detach(handler_id) end)
+
+      node = "node-reconciler-#{System.unique_integer([:positive])}"
+      {:ok, slot} = Arca.ControlPlane.take(node, node <> "#boot_a", 60_000)
+
+      {:ok, entry} =
+        Vault.create(ctx, %{name: "slot-token", kind: "api_key", fields: %{"token" => "t1"}})
+
+      {:ok, server} =
+        Arca.McpServerStorage.insert(Sanctum.Context.actor(ctx), %{
+          name: "slotsrv",
+          url: "https://127.0.0.1:9/mcp",
+          config_json:
+            Jason.encode!(%{
+              "headers" => %{"authorization" => "vault:slot-token"},
+              "timeout_ms" => 1_000
+            })
+        })
+
+      {:ok, slot: slot, entry: entry, server: server}
+    end
+
+    test "the epoch is raised under the member's own slot", %{ctx: ctx, entry: entry} do
+      {:ok, _} = Vault.revoke(ctx, entry.id)
+
+      sync_reconciler()
+      assert_receive {:reconciled, %{server: "slotsrv"}}, 2_000
+
+      assert {:ok, %{epoch: 2, revision: 1}} =
+               Arca.McpServerStorage.get(Sanctum.Context.actor(ctx), "slotsrv")
+    end
+
+    test "a slot taken over after the member last renewed raises nothing, and the reconcile stays pending",
+         %{ctx: ctx, entry: entry, slot: slot} do
+      # The row names a successor; this member still believes it holds.
+      {1, _} =
+        Arca.Repo.update_all(
+          from(l in Arca.Schemas.CellLease, where: l.node == ^slot.node),
+          set: [owner: slot.node <> "#boot_b", generation: slot.generation + 1, fence: 9]
+        )
+
+      {:ok, _} = Vault.revoke(ctx, entry.id)
+
+      assert %{pending: pending} = sync_reconciler()
+      assert Map.has_key?(pending, {ctx.athanor_id, entry.id})
+      refute_received {:reconciled, %{server: "slotsrv"}}
+      refute_received {:reconcile_failed, _}
+
+      assert {:ok, %{epoch: 1, revision: 0}} =
+               Arca.McpServerStorage.get(Sanctum.Context.actor(ctx), "slotsrv")
+    end
+
+    test "a slot that ran out with no successor raises nothing", %{
+      ctx: ctx,
+      entry: entry,
+      slot: slot
+    } do
+      past = DateTime.add(Arca.ServerMetaStorage.now!(), -1_000, :millisecond)
+
+      {1, _} =
+        Arca.Repo.update_all(
+          from(l in Arca.Schemas.CellLease, where: l.node == ^slot.node),
+          set: [lease_until: past]
+        )
+
+      {:ok, _} = Vault.revoke(ctx, entry.id)
+
+      assert %{pending: pending} = sync_reconciler()
+      assert Map.has_key?(pending, {ctx.athanor_id, entry.id})
+
+      assert {:ok, %{epoch: 1}} =
+               Arca.McpServerStorage.get(Sanctum.Context.actor(ctx), "slotsrv")
+    end
   end
 
   test "a signal that names no entry stops every server whose templates reference one",
