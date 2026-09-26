@@ -89,6 +89,16 @@ defmodule Prima.MacEnvelope do
     with {:ok, lines} <- lines(label, fields, message), do: {:ok, derive(root, lines)}
   end
 
+  @doc """
+  Whether `value` is a value a field of `type` takes: for `:string`, 1 to
+  256 bytes of printable ASCII without spaces; for `:integer`, an integer
+  from 0 to 2^53 − 1. A body that names a signed field's value holds it to
+  the same rule.
+  """
+  @spec valid_value?(field_type(), term()) :: boolean()
+  def valid_value?(type, value) when type in [:string, :integer],
+    do: write_value(type, value) != :error
+
   @doc "The canonical string a signature of `message` and `body` covers."
   @spec canonical(t(), message(), binary()) :: {:ok, String.t()} | {:error, invalid_field()}
   def canonical(%__MODULE__{} = envelope, message, body)
