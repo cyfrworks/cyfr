@@ -125,6 +125,46 @@ defmodule Grimoire.ProviderContractTest do
     end
   end
 
+  @repo_root Path.expand("../../../..", __DIR__)
+
+  # The modules the applications this suite loads compile from their `lib/`:
+  # a probe provider test support compiles into an application is no
+  # product provider.
+  defp product_modules do
+    for app <- [:prima, :arca, :sanctum, :cyfr],
+        {:ok, modules} = :application.get_key(app, :modules),
+        module <- modules,
+        Code.ensure_loaded?(module),
+        source = to_string(module.module_info(:compile)[:source]),
+        Path.relative_to(source, @repo_root) =~ ~r{\Aapps/[a-z_]+/lib/},
+        do: module
+  end
+
+  defp implements_provider?(module) do
+    Prima.Provider in (module.module_info(:attributes)[:behaviour] || [])
+  end
+
+  test "the configured roster is exactly the umbrella's Prima.Provider implementers" do
+    implementers = product_modules() |> Enum.filter(&implements_provider?/1) |> Enum.sort()
+    roster = Enum.sort(Catalog.configured_providers())
+
+    # Guards against the scan quietly matching nothing.
+    assert Grimoire.Provider in implementers and Arca.Providers.Files in implementers
+
+    assert implementers -- roster == [],
+           "these modules implement Prima.Provider and the configured tool_providers " <>
+             "roster does not name them, so the gate never serves them: " <>
+             inspect(implementers -- roster)
+
+    assert roster -- implementers == [],
+           "the configured tool_providers roster names these, and they do not declare " <>
+             "Prima.Provider: " <> inspect(roster -- implementers)
+
+    # The virtual tools are Grimoire's table beside the roster, never a
+    # provider of their own.
+    refute implements_provider?(Grimoire.VirtualTools)
+  end
+
   test "optional tool metadata accompanies derived annotations" do
     [definition] = MockToolProvider.tools()
 

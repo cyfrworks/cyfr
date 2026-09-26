@@ -11,6 +11,8 @@ defmodule Sanctum.Providers.Profile do
   caller input.
   """
 
+  require Prima.Refusal
+
   alias Sanctum.Consent.Commit
   alias Sanctum.Consent.Plan
   alias Sanctum.Context
@@ -488,10 +490,8 @@ defmodule Sanctum.Providers.Profile do
   # Error rendering
 
   # Preserve typed consent signals for wire and console rendering.
-  defp fmt({tag, payload} = signal)
-       when tag in [:setup_required, :consent_required, :consent_conflict, :restart_required] and
-              is_map(payload),
-       do: signal
+  defp fmt({tag, payload} = signal) when Prima.Refusal.is_consent_signal(tag, payload),
+    do: signal
 
   defp fmt({:plan_token, _reason}),
     do: "plan_token_invalid — re-run plan to stage fresh facts"

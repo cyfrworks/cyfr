@@ -60,7 +60,7 @@ defmodule Prima.WorkerWire do
   """
 
   @version 1
-  @auth_header "x-cyfr-auth"
+  @auth_header Prima.MacEnvelope.auth_header()
   @host_prefix "/host/v1/"
   @worker_prefix "/worker/v1/"
 

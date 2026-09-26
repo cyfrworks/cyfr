@@ -19,6 +19,11 @@ defmodule Crucible.Host do
   header and body here and the answer back; `call/2` verifies the whole
   call itself either way.
 
+  This module implements `Prima.HostAPI`: each callback is the operation
+  of its name for a caller that has already passed checks 0 and 1 below,
+  and `call/2` is how a call reaches one. `runner_exited/3` is the report's
+  operation, which `runner_exited/2` reaches the same way.
+
   ## Checks, in order
 
     0. This boot holds the control plane (`Arca.ControlPlane.held?/0`). A
@@ -136,6 +141,8 @@ defmodule Crucible.Host do
   list the attempts.
   """
 
+  @behaviour Prima.HostAPI
+
   require Logger
 
   alias Prima.{Assignment, Delta, HostAPI, PinnedTarget, WorkerAuth, WorkerWire}
@@ -168,7 +175,7 @@ defmodule Crucible.Host do
       with :ok <- owner(:lost),
            {:ok, caller} <- verify(header, body, now),
            {:ok, op} <- decode(body) do
-        dispatch(caller, op, now)
+        dispatch(caller, op)
       end
 
     encode(answer)
@@ -191,10 +198,8 @@ defmodule Crucible.Host do
       with :ok <- owner(:unavailable),
            {:ok, report} <- verify_report(header, body, now),
            {:ok, reporter, attempts} <- reported_attempts(body),
-           :ok <- reported_here(reporter),
-           :ok <- Lapse.dispatched(report.service, report.boot, reporter.runner, attempts) do
-        holder = %{service_id: report.service, boot_id: report.boot, runner: reporter.runner}
-        Enum.each(attempts, &Attempt.stop_unclosed(&1, holder))
+           :ok <- reported_here(reporter) do
+        runner_exited(report, reporter.runner, attempts)
       end
 
     encode(answer)
@@ -271,8 +276,45 @@ defmodule Crucible.Host do
   # Operations
   # ---------------------------------------------------------------------------
 
-  defp dispatch(caller, {:attach, token}, now) do
-    with {:ok, assignment} <- Assignment.verify(token, Keys.assign_key(), now),
+  # A decoded operation reaches the callback of its name. The callbacks
+  # below trust their caller: `call/2` reaches them only once this boot
+  # holds the control plane and the header has verified, and `caller` is
+  # that verified header.
+  defp dispatch(caller, {:attach, token}), do: attach(caller, token)
+  defp dispatch(caller, {:renew, attempts}), do: renew(caller, attempts)
+  defp dispatch(caller, {:complete, outcome}), do: complete(caller, outcome)
+  defp dispatch(caller, {:fail, outcome}), do: fail(caller, outcome)
+  defp dispatch(caller, {:push_deltas, deltas}), do: push_deltas(caller, deltas)
+  defp dispatch(caller, {:oauth_token, provider}), do: oauth_token(caller, provider)
+  defp dispatch(caller, {:take_rate, bucket}), do: take_rate(caller, bucket)
+  defp dispatch(caller, {:storage, op, args}), do: storage(caller, op, args)
+  defp dispatch(caller, {:fetch_artifact, digest}), do: fetch_artifact(caller, digest)
+  defp dispatch(caller, {:record_denial, denial}), do: record_denial(caller, denial)
+
+  defp dispatch(caller, {Children, {:admit_child, child}}) do
+    admit_child(
+      caller,
+      child.reference,
+      child.need,
+      child.input,
+      child.guest_fn,
+      child.child_key
+    )
+  end
+
+  defp dispatch(caller, {Children, {:tool_call, call}}),
+    do: tool_call(caller, call.name, call.args, call.guest_fn)
+
+  defp dispatch(caller, {Children, {:release_child, child_id}}),
+    do: release_child(caller, child_id)
+
+  defp dispatch(caller, {:egress_pin, request}),
+    do: egress_pin(caller, request.url, purpose: request.purpose, from: request.from)
+
+  @impl HostAPI
+  def attach(caller, token) do
+    with {:ok, assignment} <-
+           Assignment.verify(token, Keys.assign_key(), System.system_time(:millisecond)),
          :ok <- names_caller(assignment, caller),
          :ok <- open_here(caller),
          :ok <- claim(caller) do
@@ -280,20 +322,84 @@ defmodule Crucible.Host do
     end
   end
 
-  defp dispatch(caller, {:renew, attempts}, _now) do
+  @impl HostAPI
+  def renew(caller, attempts) do
     Enum.reduce_while(attempts, {:ok, %{}}, fn attempt, {:ok, renewals} ->
-      case renew(caller, attempt) do
+      case renew_held(caller, attempt) do
         {:ok, renewal} -> {:cont, {:ok, Map.put(renewals, attempt, renewal_wire(renewal))}}
         :unavailable -> {:halt, {:error, :unavailable}}
       end
     end)
   end
 
-  defp dispatch(caller, {Children, op}, _now), do: Children.call(caller, op)
+  @impl HostAPI
+  def complete(caller, outcome),
+    do: Attempt.call(caller.execution_id, caller, {:complete, outcome})
 
-  defp dispatch(caller, {:egress_pin, request}, now), do: Egress.pin(caller, request, now: now)
+  @impl HostAPI
+  def fail(caller, outcome), do: Attempt.call(caller.execution_id, caller, {:fail, outcome})
 
-  defp dispatch(caller, op, _now), do: Attempt.call(caller.execution_id, caller, op)
+  @impl HostAPI
+  def push_deltas(caller, deltas),
+    do: Attempt.call(caller.execution_id, caller, {:push_deltas, deltas})
+
+  @impl HostAPI
+  def oauth_token(caller, provider),
+    do: Attempt.call(caller.execution_id, caller, {:oauth_token, provider})
+
+  @impl HostAPI
+  def take_rate(caller, bucket),
+    do: Attempt.call(caller.execution_id, caller, {:take_rate, bucket})
+
+  @impl HostAPI
+  def storage(caller, op, args),
+    do: Attempt.call(caller.execution_id, caller, {:storage, op, args})
+
+  @impl HostAPI
+  def fetch_artifact(caller, digest),
+    do: Attempt.call(caller.execution_id, caller, {:fetch_artifact, digest})
+
+  @impl HostAPI
+  def record_denial(caller, denial),
+    do: Attempt.call(caller.execution_id, caller, {:record_denial, denial})
+
+  @impl HostAPI
+  def admit_child(caller, reference, need, input, guest_fn, child_key) do
+    Children.call(
+      caller,
+      {:admit_child,
+       %{
+         reference: reference,
+         need: need,
+         input: input,
+         guest_fn: guest_fn,
+         child_key: child_key
+       }}
+    )
+  end
+
+  @impl HostAPI
+  def tool_call(caller, name, args, guest_fn),
+    do: Children.call(caller, {:tool_call, %{name: name, args: args, guest_fn: guest_fn}})
+
+  @impl HostAPI
+  def release_child(caller, child_id), do: Children.call(caller, {:release_child, child_id})
+
+  @impl HostAPI
+  def egress_pin(caller, url, opts) do
+    request = %{url: url, purpose: Keyword.fetch!(opts, :purpose), from: Keyword.get(opts, :from)}
+    Egress.pin(caller, request)
+  end
+
+  # Reached from `runner_exited/2` once the report has verified and names
+  # this member: `report` is the verified report header.
+  @impl HostAPI
+  def runner_exited(report, runner, attempts) do
+    with :ok <- Lapse.dispatched(report.service, report.boot, runner, attempts) do
+      holder = %{service_id: report.service, boot_id: report.boot, runner: runner}
+      Enum.each(attempts, &Attempt.stop_unclosed(&1, holder))
+    end
+  end
 
   defp names_caller(%Assignment{} = assignment, caller) do
     cond do
@@ -340,7 +446,7 @@ defmodule Crucible.Host do
   # on that hold and on the grant that attempt stores, so a stale runner,
   # boot or service renews nothing, and neither does one whose athanor was
   # archived.
-  defp renew(caller, attempt) do
+  defp renew_held(caller, attempt) do
     holder = %{service_id: caller.service, boot_id: caller.boot, runner: caller.runner}
 
     case Arca.ExecutionAttempts.renew_held(

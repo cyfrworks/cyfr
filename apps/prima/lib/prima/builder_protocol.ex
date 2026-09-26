@@ -116,10 +116,10 @@ defmodule Prima.BuilderProtocol do
   alias Prima.MacEnvelope
 
   @version 1
-  @domain "cyfr-locus/v1"
-  @service "builds"
-  @label "cyfr-locus/v1/builds"
-  @auth_header "x-cyfr-auth"
+  @domain MacEnvelope.domain(:locus)
+  @service MacEnvelope.service(:builds)
+  @label MacEnvelope.label(:builds)
+  @auth_header MacEnvelope.auth_header()
   @window_ms 30_000
   @routes %{build: "/locus/v1/builds/build", health: "/locus/v1/builds/health"}
 
