@@ -97,23 +97,50 @@ defmodule Prima.WorkerAuth do
   `verify_host_call/5` answers the authenticated fields or the first
   refusal, in this order:
 
-    1. `:malformed` — the header is not exactly one well-formed host-call
+    1. `:unknown_version` — the header's first token is a version token
+       other than `v1`, such as `v2` (`Prima.MacEnvelope.parse/2`): a peer
+       at another version of the wire, told so before anything else is
+       read;
+    2. `:malformed` — the header is not exactly one well-formed host-call
        header;
-    2. `:outside_window` — `ts` is more than 30 seconds from `now`, on
+    3. `:outside_window` — `ts` is more than 30 seconds from `now`, on
        either side;
-    3. `:bad_mac` — the MAC is not the call key's of the attempt the header
+    4. `:bad_mac` — the MAC is not the call key's of the attempt the header
        names, over the header's fields and the body;
-    4. `:generation_mismatch` — the header's generation is not the verifying
+    5. `:generation_mismatch` — the header's generation is not the verifying
        member's current one;
-    5. `:member_mismatch` — the header names another member. The call
+    6. `:member_mismatch` — the header names another member. The call
        belongs to the member that issued its attempt's assignment, and no
        other answers it: an operation that needs the attempt's process
        would be lost on a peer, and one a peer could answer from the rows
        — a lease renewal — would be answered for work it does not hold.
 
-  `verify_report/4` checks the first three with the dispatch key of the
+  `verify_report/4` checks the first four with the dispatch key of the
   worker service the report names, derived from the root, and
   `verify_request/4` with the dispatch key a worker service holds.
+
+  ## Refusing before the body
+
+  A listener refuses what the header alone decides before it reads the
+  body, and in this order, which `tests/fixtures/host_api.json`'s
+  `pre_body_refusals` pin:
+
+    1. the route: a path that is no route of the listener's, or a method
+       that is not `POST`;
+    2. plane ownership: a control-plane member that does not hold the
+       control plane answers for no attempt;
+    3. the header count: exactly one `x-cyfr-auth` header
+       (`Prima.WorkerWire.auth_header/0`);
+    4. `unknown_version`, then `malformed`, `outside_window`, `bad_mac`,
+       `generation_mismatch` and `member_mismatch`, as the header-first
+       verifiers answer them (a WorkerAPI request and a report stop after
+       `bad_mac`);
+    5. the nonce: one presented before within the window, on a call that
+       is not idempotent (`Prima.HostAPI.retry/1`), is `replayed`.
+
+  Only then is the body read, bounded, checked against the hash the header
+  named (`verify_body/2`), opened when sealed, and read as the route's
+  callback at this version (`Prima.WorkerWire.read_request_body/2`).
 
   `verify_host_call_header/4`, `verify_request_header/3` and
   `verify_report_header/3` answer the same, over the header alone, with
@@ -233,7 +260,7 @@ defmodule Prima.WorkerAuth do
   @typedoc "Which half of a host call a sealed value is: the runner's body or CYFR's answer."
   @type direction :: :body | :answer
 
-  @type dispatch_refusal :: :malformed | :outside_window | :bad_mac
+  @type dispatch_refusal :: :unknown_version | :malformed | :outside_window | :bad_mac
   @type call_refusal :: dispatch_refusal() | :generation_mismatch | :member_mismatch
 
   @typedoc """

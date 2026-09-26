@@ -534,9 +534,11 @@ def check_vectors(path):
     assert sign_assignment(wire, assign_key(root)) == a["token"], "assignment token"
     assert read_assignment(a["token"]) == wire, "assignment reads"
 
-    for vec in v["status"]["valid"]:
+    with open(os.path.join(os.path.dirname(path), "worker_api.json"), encoding="utf-8") as f:
+        status = json.load(f)["status"]
+    for vec in status["valid"]:
         assert read_status(vec["wire"]) == vec["wire"], f"status reads: {vec['why']}"
-    for vec in v["status"]["invalid"]:
+    for vec in status["invalid"]:
         assert read_status(vec["wire"]) is None, f"status refused: {vec['why']}"
     return True
 

@@ -229,7 +229,7 @@ defmodule Cyfr.Test.AttemptFixtures do
 
   @doc "The JSON body of a host call of `op` with `args`."
   @spec body(String.t(), map()) :: String.t()
-  def body(op, args), do: Jason.encode!(%{"op" => op, "args" => args})
+  def body(op, args), do: Jason.encode!(%{"v" => 1, "op" => op, "args" => args})
 
   @doc "A signed header for `body` on `fixture`'s attempt; options as `call/4`'s."
   @spec header(map(), String.t(), keyword()) :: String.t()

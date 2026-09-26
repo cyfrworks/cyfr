@@ -13,7 +13,7 @@ keys sealed for the worker service, the artifact the runner fetches by the
 assignment's digest and the vault fields its attach answers — and `start`,
 `kill` and `status` post `Prima.WorkerAPI` requests to the service signed
 with its dispatch key. `script` sets what an operation answers for one
-execution or for all: a value the runner reads as `{"ok": value}`, a
+execution or for all: a value the runner reads as `{"v": 1, "ok": value}`, a
 refusal, `DROP` (a 500 with no body: an answer that never arrives, which
 the runner's client counts as lost) or a function of the request that
 answers any of those. `stop` closes the listener and the connections its
@@ -292,11 +292,12 @@ class ControlPlane:
 
     @staticmethod
     def encode(answer):
-        return answer if isinstance(answer, dict) else {"ok": answer}
+        answer = answer if isinstance(answer, dict) else {"ok": answer}
+        return {"v": 1, **answer}
 
     @staticmethod
     def answer_plain(handler, status, answer):
-        encoded = json.dumps(answer, separators=(",", ":")).encode()
+        encoded = json.dumps({"v": 1, **answer}, separators=(",", ":")).encode()
         try:
             handler.send_response(status)
             handler.send_header("content-type", "application/json")
@@ -388,7 +389,7 @@ class ControlPlane:
     # ------------------------------------------------------------------
 
     def request(self, base_url, op, args, timeout=35):
-        body = json.dumps({"op": op, "args": args}, separators=(",", ":")).encode()
+        body = json.dumps({"v": 1, "op": op, "args": args}, separators=(",", ":")).encode()
         fields = {"service": self.service, "boot": self.boot, "ts": auth.now_ms(), "nonce": auth.nonce()}
         header = auth.request_header(self.dispatch_key, fields, body)
         request = urllib.request.Request(

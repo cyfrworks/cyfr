@@ -37,6 +37,12 @@ defmodule Prima.Network do
   or `{:fun, predicate}`. `:receive_timeout`, `:protocols` and `:transport_opts`
   are copied into the connection options. Redirects, retries, decompression
   and body decoding stay disabled so the caller controls every next request.
+
+  An engine connecting to an address CYFR pinned for it
+  (`Prima.PinnedTarget.address/1`) passes `private_policy: :allow_all`: the
+  control plane already applied the attempt's private-address policy to
+  that address, so the engine keeps only the metadata refusal, which no
+  policy overrides, and resolves nothing itself.
   """
   @spec pin(URI.t(), :inet.ip_address(), keyword()) ::
           {:ok, pinned()} | {:error, :private_ip_blocked, String.t()}

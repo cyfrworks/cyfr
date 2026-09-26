@@ -80,8 +80,9 @@ defmodule Prima.LocusBackends do
   `cyfr_boot`, `boot`, `ts`) and `invoke` (`athanor`, `server`,
   `generation`, `epoch`, `boot`, `ts`, `nonce`), in that order, with
   `generation` written `gen` in the header. A listener refuses, in order,
-  `:malformed`, `:outside_window` (`ts` further than `window_ms/0` from its
-  clock) and `:bad_mac`. Neither the builds key nor a header of the builds
+  `:unknown_version` (a version token other than `v1`, such as `v2`), `:malformed`,
+  `:outside_window` (`ts` further than `window_ms/0` from its clock) and
+  `:bad_mac`. Neither the builds key nor a header of the builds
   service verifies here. The fences — lifetime, sequence, owner version and
   nonce — are the service's, against state this module does not hold.
 
@@ -393,7 +394,7 @@ defmodule Prima.LocusBackends do
           | {:vault_reference, String.t()}
           | {:reserved_env_name, String.t()}
 
-  @type auth_refusal :: :malformed | :outside_window | :bad_mac
+  @type auth_refusal :: :unknown_version | :malformed | :outside_window | :bad_mac
 
   @typedoc "The hex SHA-256 a verified header names as its body's."
   @type body_hash :: String.t()
@@ -608,16 +609,18 @@ defmodule Prima.LocusBackends do
 
   @doc """
   A header's fields, with the body hash it names as `:body_hash`, and its
-  MAC, or `{:error, :malformed}` for anything but exactly one well-formed
+  MAC; `{:error, :unknown_version}` for a version token other than `v1`,
+  and `{:error, :malformed}` for anything else but exactly one well-formed
   header of `kind`.
   """
-  @spec parse_header(kind(), term()) :: {:ok, map(), String.t()} | {:error, :malformed}
+  @spec parse_header(kind(), term()) ::
+          {:ok, map(), String.t()} | {:error, :unknown_version | :malformed}
   def parse_header(kind, header) when is_map_key(@envelopes, kind),
     do: MacEnvelope.parse(Map.fetch!(@envelopes, kind), header)
 
   @doc """
   A request's authenticated fields under the service `key`, or the first
-  refusal: `:malformed`, `:outside_window`, `:bad_mac`. A control message
+  refusal: `:unknown_version`, `:malformed`, `:outside_window`, `:bad_mac`. A control message
   verifies under the control key, an invoke under the key of the owner its
   header names. `now` is in Unix milliseconds.
   """

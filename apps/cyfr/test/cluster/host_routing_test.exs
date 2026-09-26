@@ -334,7 +334,7 @@ defmodule Cyfr.Cluster.HostRoutingTest do
       |> Map.merge(%{ts: System.system_time(:millisecond), nonce: nonce()})
 
     {:ok, keys} = WorkerAuth.attempt_keys(root(), fields)
-    json = Jason.encode!(%{"op" => op, "args" => args})
+    json = Jason.encode!(%{"v" => 1, "op" => op, "args" => args})
     {:ok, sealed} = WorkerAuth.seal_call(keys.seal, :body, fields, json)
     {:ok, header} = WorkerAuth.host_call_header(keys.call, fields, sealed)
 
@@ -366,6 +366,7 @@ defmodule Cyfr.Cluster.HostRoutingTest do
   defp exit_report(held) do
     body =
       Jason.encode!(%{
+        "v" => 1,
         "op" => "runner_exited",
         "args" => %{
           "member" => held.member,

@@ -319,6 +319,7 @@ defmodule Opus.SecretAuditTest do
          %{mine: mine, other: other} do
       body =
         Jason.encode!(%{
+          "v" => 1,
           "op" => "record_denial",
           "args" => %{
             "type" => "secret_denied",

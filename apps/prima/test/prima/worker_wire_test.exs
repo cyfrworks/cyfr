@@ -5,9 +5,13 @@ defmodule Prima.WorkerWireTest do
   @moduledoc """
   The wire's shape as data: every callback of both behaviours has one
   route and no two callbacks share one; a route reads back to its
-  callback; a request body names its callback and reads back only as a
-  callback of the behaviour it is read for; answers spell success and
-  refusal one way.
+  callback; a request body and an answer carry the version first, a body
+  at no version or another is refused before its op is read and an
+  answer at none is lost; a request body names its callback and reads
+  back only as a callback of the behaviour it is read for; answers spell
+  success and refusal one way. Every body and answer of
+  `tests/fixtures/host_api.json` and `tests/fixtures/worker_api.json`
+  reads and writes back to its bytes.
   """
 
   use ExUnit.Case, async: true
@@ -53,11 +57,13 @@ defmodule Prima.WorkerWireTest do
     assert_raise FunctionClauseError, fn -> WorkerWire.worker_route(:attach) end
   end
 
-  test "a request body names its callback and reads back for its behaviour only" do
+  test "a request body carries the version first, names its callback and reads back for its behaviour only" do
     body = WorkerWire.request_body(:admit_child, %{"reference" => "r"})
-    assert body == %{"op" => "admit_child", "args" => %{"reference" => "r"}}
+    assert Jason.encode!(body) == ~s({"v":1,"op":"admit_child","args":{"reference":"r"}})
+    assert WorkerWire.version() == 1
 
     decoded = body |> Jason.encode!() |> Jason.decode!()
+    assert decoded == %{"v" => 1, "op" => "admit_child", "args" => %{"reference" => "r"}}
 
     assert {:ok, :admit_child, %{"reference" => "r"}} =
              WorkerWire.read_request_body(HostAPI, decoded)
@@ -65,36 +71,182 @@ defmodule Prima.WorkerWireTest do
     assert {:error, :malformed} = WorkerWire.read_request_body(WorkerAPI, decoded)
 
     assert {:ok, :kill, %{}} =
-             WorkerWire.read_request_body(WorkerAPI, %{"op" => "kill", "args" => %{}})
+             WorkerWire.read_request_body(WorkerAPI, %{"v" => 1, "op" => "kill", "args" => %{}})
 
     for malformed <- [
-          %{"op" => "nope", "args" => %{}},
-          %{"op" => "attach", "args" => []},
-          %{"op" => "attach"},
-          %{"args" => %{}},
-          %{"op" => :attach, "args" => %{}},
+          %{"v" => 1, "op" => "nope", "args" => %{}},
+          %{"v" => 1, "op" => "attach", "args" => []},
+          %{"v" => 1, "op" => "attach"},
+          %{"v" => 1, "args" => %{}},
+          %{"v" => 1, "op" => :attach, "args" => %{}},
+          %{"v" => 1, "op" => "attach", "args" => %{}, "extra" => true},
           "attach",
+          ["attach"],
           nil
         ] do
       assert {:error, :malformed} = WorkerWire.read_request_body(HostAPI, malformed),
-             inspect(malformed)
+             Prima.LoggerContext.shape(malformed)
     end
   end
 
-  test "answers spell success as ok and a refusal by name with its fields" do
-    assert WorkerWire.ok(true) == %{"ok" => true}
-    assert WorkerWire.ok(%{"a" => 1}) == %{"ok" => %{"a" => 1}}
-    assert WorkerWire.error(:lost) == %{"error" => "lost"}
+  test "a body at no version or another is refused before its op is read" do
+    for body <- [
+          %{"op" => "attach", "args" => %{}},
+          %{"v" => 2, "op" => "attach", "args" => %{}},
+          %{"v" => 0, "op" => "nope"},
+          %{"v" => "1", "op" => "attach", "args" => %{}},
+          %{"v" => 1.0, "op" => "attach", "args" => %{}},
+          %{"v" => nil},
+          %{}
+        ] do
+      assert {:error, :unknown_version} = WorkerWire.read_request_body(HostAPI, body)
+      assert {:error, :unknown_version} = WorkerWire.read_request_body(WorkerAPI, body)
+    end
+  end
 
-    assert WorkerWire.error(:guest_error, %{"type" => "denied", "message" => "no"}) ==
-             %{"error" => "guest_error", "type" => "denied", "message" => "no"}
+  test "answers carry the version first and spell success as ok and a refusal by name with its fields" do
+    assert Jason.encode!(WorkerWire.ok(true)) == ~s({"v":1,"ok":true})
+    assert Jason.encode!(WorkerWire.ok(%{"a" => 1})) == ~s({"v":1,"ok":{"a":1}})
+    assert Jason.encode!(WorkerWire.error(:lost)) == ~s({"v":1,"error":"lost"})
 
-    assert WorkerWire.error("failed", %{"message" => "m"}) == %{
-             "error" => "failed",
-             "message" => "m"
-           }
+    assert Jason.encode!(WorkerWire.error(:guest_error, %{"type" => "denied", "message" => "no"})) ==
+             ~s({"v":1,"error":"guest_error","message":"no","type":"denied"})
 
-    assert WorkerWire.error("failed", %{"error" => "other"}) == %{"error" => "failed"}
+    assert Jason.encode!(WorkerWire.error("failed", %{"message" => "m"})) ==
+             ~s({"v":1,"error":"failed","message":"m"})
+
+    assert Jason.encode!(WorkerWire.error("failed", %{"error" => "other", "v" => 2})) ==
+             ~s({"v":1,"error":"failed"})
+  end
+
+  test "an answer reads back to what it says, and anything else is a lost answer" do
+    round_trip = &(&1 |> Jason.encode!() |> Jason.decode!() |> WorkerWire.read_answer())
+
+    assert {:ok, true} = round_trip.(WorkerWire.ok(true))
+    assert {:ok, nil} = round_trip.(WorkerWire.ok(nil))
+    assert {:ok, %{"a" => 1}} = round_trip.(WorkerWire.ok(%{"a" => 1}))
+    assert {:error, "lost", %{}} = round_trip.(WorkerWire.error(:lost))
+
+    assert {:error, "guest_error", %{"type" => "denied", "message" => "no"}} =
+             round_trip.(WorkerWire.error(:guest_error, %{"type" => "denied", "message" => "no"}))
+
+    for lost <- [
+          %{"ok" => true},
+          %{"error" => "lost"},
+          %{"v" => 2, "ok" => true},
+          %{"v" => "1", "ok" => true},
+          %{"v" => 1},
+          %{"v" => 1, "ok" => true, "extra" => 1},
+          %{"v" => 1, "ok" => true, "error" => "lost"},
+          %{"v" => 1, "error" => :lost},
+          %{"v" => 1, "error" => nil},
+          [1, true],
+          "ok",
+          nil
+        ] do
+      assert :lost = WorkerWire.read_answer(lost), Prima.LoggerContext.shape(lost)
+    end
+  end
+
+  describe "the message vectors" do
+    @host Path.expand("../../../../tests/fixtures/host_api.json", __DIR__)
+          |> File.read!()
+          |> Jason.decode!()
+    @worker Path.expand("../../../../tests/fixtures/worker_api.json", __DIR__)
+            |> File.read!()
+            |> Jason.decode!()
+
+    defp writes_back(behaviour, body) do
+      assert {:ok, callback, args} = WorkerWire.read_request_body(behaviour, Jason.decode!(body))
+      assert Jason.encode!(WorkerWire.request_body(callback, args)) == body
+      callback
+    end
+
+    defp answers_back(answer) do
+      case WorkerWire.read_answer(Jason.decode!(answer)) do
+        {:ok, value} ->
+          assert Jason.encode!(WorkerWire.ok(value)) == answer
+          {:ok, value}
+
+        {:error, name, fields} ->
+          assert Jason.encode!(WorkerWire.error(name, fields)) == answer
+          {:error, name}
+      end
+    end
+
+    test "the vectors are at this version, named on the header this wire uses" do
+      assert @host["version"] == WorkerWire.version()
+      assert @worker["version"] == WorkerWire.version()
+      assert @host["auth_header"] == WorkerWire.auth_header()
+
+      assert @host["routes"] ==
+               Map.new(WorkerWire.host_routes(), fn {cb, route} -> {Atom.to_string(cb), route} end)
+
+      assert @worker["routes"] ==
+               Map.new(WorkerWire.worker_routes(), fn {cb, route} ->
+                 {Atom.to_string(cb), route}
+               end)
+    end
+
+    test "every call's and pin case's body and answer read and write back to their bytes" do
+      calls = @host["calls"] ++ @host["egress_pin_cases"]
+      assert calls != []
+
+      for %{"callback" => callback, "body" => body, "answer" => answer, "refusals" => refusals} <-
+            calls do
+        assert Atom.to_string(writes_back(HostAPI, body)) == callback
+        assert {_ok_or_error, _value} = answers_back(answer)
+
+        for %{"answer" => refused} <- refusals do
+          assert {:error, _name} = answers_back(refused), callback
+        end
+      end
+
+      assert writes_back(HostAPI, @host["report"]["body"]) == :runner_exited
+      assert writes_back(HostAPI, @host["report"]["cross_member"]["body"]) == :runner_exited
+      assert {:ok, true} = answers_back(@host["report"]["answer"])
+    end
+
+    test "every request's body and answer read and write back to their bytes" do
+      assert @worker["requests"] != []
+
+      for %{"callback" => callback, "body" => body, "answer" => answer, "refusals" => refusals} <-
+            @worker["requests"] do
+        assert Atom.to_string(writes_back(WorkerAPI, body)) == callback
+        assert {:ok, _value} = answers_back(answer)
+        assert {:error, _} = WorkerWire.read_request_body(HostAPI, Jason.decode!(body))
+
+        for %{"answer" => refused} <- refusals do
+          assert {:error, _name} = answers_back(refused), callback
+        end
+      end
+    end
+
+    test "every opened body a listener refuses is refused with its error, at the renew route" do
+      refusals = @host["body_refusals"]
+
+      assert Enum.sort(Enum.map(refusals, & &1["error"]) |> Enum.uniq()) ==
+               ["malformed", "unknown_version"]
+
+      for %{"name" => name, "body" => body, "error" => error} <- refusals do
+        refused =
+          case WorkerWire.read_request_body(HostAPI, Jason.decode!(body)) do
+            {:ok, :renew, _args} -> flunk("#{name} reads as the renew route's own call")
+            {:ok, _other_callback, _args} -> "malformed"
+            {:error, reason} -> Atom.to_string(reason)
+          end
+
+        assert refused == error, name
+      end
+    end
+
+    test "an answer without its version is a lost answer, whatever it says" do
+      for %{"answer" => answer} <- @host["calls"] ++ @worker["requests"] do
+        unversioned = answer |> Jason.decode!() |> Map.delete("v")
+        assert :lost = WorkerWire.read_answer(unversioned)
+        assert :lost = WorkerWire.read_answer(Map.put(unversioned, "v", 2))
+      end
+    end
   end
 
   test "a base URL is http or https with a host and nothing after it" do

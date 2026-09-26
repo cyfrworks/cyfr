@@ -413,7 +413,9 @@ defmodule Opus.HostClientTest do
 
   # The answer envelope the client reads is the one `Prima.WorkerWire` builds.
   test "the answers read are the worker protocol's envelopes" do
-    assert WorkerWire.ok(1) == %{"ok" => 1}
-    assert WorkerWire.error(:lost) == %{"error" => "lost"}
+    assert WorkerWire.ok(1) |> Jason.encode!() |> Jason.decode!() == %{"v" => 1, "ok" => 1}
+
+    assert WorkerWire.error(:lost) |> Jason.encode!() |> Jason.decode!() ==
+             %{"v" => 1, "error" => "lost"}
   end
 end

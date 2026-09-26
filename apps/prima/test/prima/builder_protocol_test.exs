@@ -198,6 +198,14 @@ defmodule Prima.BuilderProtocolTest do
 
       assert :ok = BuilderProtocol.verify_body(hash, v["body"])
       assert {:error, :bad_mac} = BuilderProtocol.verify_body(hash, v["body"] <> " ")
+
+      other = String.replace_prefix(v["header"], "v1 ", "v2 ")
+
+      assert {:error, :unknown_version} =
+               BuilderProtocol.verify_request(request_key(), other, v["body"], v["ts"])
+
+      assert {:error, :unknown_version} =
+               BuilderProtocol.verify_request_header(request_key(), other, v["ts"])
     end
 
     test "every rejected header is refused with its reason, one-step and header-first" do
@@ -504,6 +512,7 @@ defmodule Prima.BuilderProtocolTest do
     test "every class round-trips with its typed reason" do
       refusals = [
         {:malformed, "sources is required"},
+        {:unauthorized, :unknown_version},
         {:unauthorized, :malformed},
         {:unauthorized, :outside_window},
         {:unauthorized, :bad_mac},

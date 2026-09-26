@@ -6,7 +6,9 @@ defmodule Prima.WorkerProtocolTest do
   The data the worker protocol publishes beside its callbacks: what a
   client may do when an answer is lost, how long it waits for one, and
   how much may cross. Every callback of both behaviours has an answer, and
-  no answer names a callback that does not exist.
+  no answer names a callback that does not exist; the message vectors
+  (`tests/fixtures/host_api.json`, `tests/fixtures/worker_api.json`) hold
+  the same, and a status answer's vectors are `worker_api.json`'s.
   """
 
   use ExUnit.Case, async: true
@@ -15,6 +17,48 @@ defmodule Prima.WorkerProtocolTest do
 
   defp behaviour_callbacks(module) do
     module.behaviour_info(:callbacks) |> Enum.map(&elem(&1, 0)) |> Enum.sort()
+  end
+
+  test "the message vectors hold the retry classes, timeouts and bounds published here" do
+    host =
+      "../../../../tests/fixtures/host_api.json"
+      |> Path.expand(__DIR__)
+      |> File.read!()
+      |> Jason.decode!()
+
+    worker =
+      "../../../../tests/fixtures/worker_api.json"
+      |> Path.expand(__DIR__)
+      |> File.read!()
+      |> Jason.decode!()
+
+    assert host["retries"] ==
+             Map.new(
+               HostAPI.callbacks(),
+               &{Atom.to_string(&1), Atom.to_string(HostAPI.retry(&1))}
+             )
+
+    assert host["timeouts_ms"] ==
+             Map.new(HostAPI.callbacks(), &{Atom.to_string(&1), HostAPI.request_timeout_ms(&1)})
+
+    assert worker["retries"] ==
+             Map.new(
+               WorkerAPI.callbacks(),
+               &{Atom.to_string(&1), Atom.to_string(WorkerAPI.retry(&1))}
+             )
+
+    assert worker["timeouts_ms"] ==
+             Map.new(
+               WorkerAPI.callbacks(),
+               &{Atom.to_string(&1), WorkerAPI.request_timeout_ms(&1)}
+             )
+
+    assert host["max_body_bytes"] == HostAPI.max_body_bytes()
+    assert host["max_answer_bytes"] == HostAPI.max_answer_bytes()
+    assert host["window_ms"] == WorkerAuth.window_ms()
+
+    assert host["standing"]["generation"] ==
+             host["calls"] |> hd() |> get_in(["fields", "generation"])
   end
 
   test "every host callback has a retry class and a timeout, and nothing else does" do
@@ -34,6 +78,7 @@ defmodule Prima.WorkerProtocolTest do
     assert HostAPI.retry(:fetch_artifact) == :idempotent
     assert HostAPI.retry(:release_child) == :idempotent
     assert HostAPI.retry(:runner_exited) == :idempotent
+    assert HostAPI.retry(:egress_pin) == :idempotent
     assert HostAPI.retry(:complete) == :outcome
     assert HostAPI.retry(:fail) == :outcome
     assert HostAPI.retry(:push_deltas) == :batch
@@ -168,7 +213,7 @@ defmodule Prima.WorkerProtocolTest do
   end
 
   describe "the status vectors" do
-    @status_vectors Path.expand("../../../../tests/fixtures/worker_auth.json", __DIR__)
+    @status_vectors Path.expand("../../../../tests/fixtures/worker_api.json", __DIR__)
                     |> File.read!()
                     |> Jason.decode!()
                     |> Map.fetch!("status")

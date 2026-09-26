@@ -17,7 +17,8 @@
 #             suite alone on its own database
 #   vocab     the CI vocabulary job's own script, read from test.yml
 #   islands   prima, arca and sanctum compiled and tested from a copy that
-#             holds only what CI gives them; opus and locus with --close
+#             holds only what CI gives them, once the SQLite suite's
+#             partitions have exited; opus and locus with --close
 # With --close the static leg also forces a rebuild on both adapters and
 # compiles the SQLite dev target. Image suites, the S3 suite, the Go
 # checks, the security scanners and the benchmark are not part of
@@ -129,10 +130,12 @@ island() {
 
 leg_islands() {
   local status=0
-  # The islands run their own SQLite suites: under --close they start
-  # once the static leg's four partitions have exited, so no two SQLite
-  # suites share the machine's I/O with the closing runs.
-  if $CLOSE; then await_marker "$LOGDIR/static.done"; fi
+  # The islands run their own SQLite suites: they start once the static
+  # leg's four partitions have exited, so no two SQLite suites share the
+  # machine's I/O. Run concurrently, the control-plane and athanor tests
+  # of the suite and of the arca island answered `:database_error` on the
+  # SQLite writer's wait on one gate in three.
+  await_marker "$LOGDIR/static.done"
   island prima apps/prima tests/fixtures seed/components & local p1=$!
   island arca apps/prima apps/arca config/database_choice.exs & local p2=$!
   island sanctum apps/prima apps/arca apps/sanctum config/database_choice.exs & local p3=$!

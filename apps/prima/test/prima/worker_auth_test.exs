@@ -665,6 +665,38 @@ defmodule Prima.WorkerAuthTest do
     end
   end
 
+  test "the vector file holds the primitives, and the wire's messages are the message vectors'" do
+    refute Map.has_key?(@vectors, "status")
+
+    for file <- ~w(host_api.json worker_api.json) do
+      keys =
+        Path.expand("../../../../tests/fixtures/" <> file, __DIR__)
+        |> File.read!()
+        |> Jason.decode!()
+        |> Map.get("keys")
+
+      if keys, do: assert(Map.delete(keys, "root_hex") == @vectors["keys"])
+      if keys, do: assert(keys["root_hex"] == @vectors["root_hex"])
+    end
+  end
+
+  test "a header at another version is refused as such before anything else" do
+    header = call_header!(call())
+
+    for token <- ["v2", "v0", "v10"] do
+      other = String.replace_prefix(header, "v1 ", token <> " ")
+      assert {:error, :unknown_version} = verify(other)
+      assert {:error, :unknown_version} = verify(other, now: @now + 60_000)
+
+      assert {:error, :unknown_version} =
+               WorkerAuth.verify_host_call_header(@root, other, @now, standing())
+    end
+
+    for no_version <- ["", " " <> header, String.replace_prefix(header, "v1 ", "V1 "), "Bearer x"] do
+      assert {:error, :malformed} = verify(no_version)
+    end
+  end
+
   test "the root text is the one MacEnvelope decodes" do
     assert {:ok, @root} = MacEnvelope.decode_root(hex(@root))
   end

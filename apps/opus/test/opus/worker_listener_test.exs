@@ -147,7 +147,7 @@ defmodule Opus.WorkerListenerTest do
              post(context, :status, request(:kill, %{"execution_id" => "exec_x"}))
 
     assert {400, %{"error" => "malformed"}} =
-             post(context, :status, ~s({"op": "attach", "args": {}}))
+             post(context, :status, ~s({"v": 1, "op": "attach", "args": {}}))
 
     assert {400, %{"error" => "malformed"}} = post(context, :status, "not json")
   end

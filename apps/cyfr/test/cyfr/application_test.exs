@@ -312,7 +312,7 @@ defmodule Cyfr.ApplicationTest do
           decode_body: false
         )
 
-      assert Jason.decode!(body) == %{"error" => "lost"}
+      assert Jason.decode!(body) == %{"v" => 1, "error" => "lost"}
     end
 
     # The census the admission barrier test pins is the tree that runs:
