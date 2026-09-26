@@ -350,6 +350,28 @@ defmodule Cyfr.Test.AttemptFixtures do
   @spec vault_authority!(Sanctum.Context.t(), map(), Authority.t()) ::
           {Authority.t(), Arca.Schemas.VaultEntry.t()}
   def vault_authority!(ctx, attrs, authority \\ Authority.zero()) do
+    # The edge names what a consent would: the entry's fields, and for an
+    # OAuth entry its scopes (a fixture scope when the attrs name none).
+    # `:projection` in `attrs` replaces it whole.
+    {explicit, attrs} = Map.pop(attrs, :projection, :derived)
+
+    attrs =
+      if Map.get(attrs, :kind) == "oauth",
+        do: Map.put_new(attrs, :oauth_scopes, ["fixture.scope"]),
+        else: attrs
+
+    projection =
+      case explicit do
+        :derived ->
+          %{
+            fields: attrs |> Map.get(:fields, %{}) |> Map.keys() |> Enum.sort(),
+            scopes: attrs |> Map.get(:oauth_scopes, []) |> Enum.sort()
+          }
+
+        given ->
+          given
+      end
+
     {:ok, view} =
       Sanctum.Vault.create(
         ctx,
@@ -370,7 +392,7 @@ defmodule Cyfr.Test.AttemptFixtures do
         head_consent_id: consent_id
       })
 
-    vault = %{entry_id: entry.id, binding_digest: digest, projection: nil}
+    vault = %{entry_id: entry.id, binding_digest: digest, projection: projection}
 
     {%{
        authority

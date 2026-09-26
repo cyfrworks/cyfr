@@ -9,6 +9,8 @@ defmodule Sanctum.VaultOAuthRefreshTest do
   alias Sanctum.Vault.Payload
   alias Sanctum.VaultReader
 
+  @scopes ["gmail.readonly"]
+
   setup do
     :ok = Ecto.Adapters.SQL.Sandbox.checkout(Arca.Repo)
     Ecto.Adapters.SQL.Sandbox.mode(Arca.Repo, {:shared, self()})
@@ -39,11 +41,16 @@ defmodule Sanctum.VaultOAuthRefreshTest do
         provider_hint: "google",
         kind: "oauth",
         oauth_endpoints: Map.get(over, :endpoints, ~s({"token_url":"https://127.0.0.1:1/tok"})),
+        oauth_scopes: Jason.encode!(@scopes),
         sealed_payload: sealed
       })
 
     {:ok, digest} = VaultReader.binding_digest(entry)
-    {entry, %{entry_id: entry.id, binding_digest: digest}}
+
+    # The edge a consent writes for an OAuth need: its projection is the
+    # scopes the entry was authorized for.
+    projection = %{fields: [], scopes: @scopes}
+    {entry, %{entry_id: entry.id, binding_digest: digest, projection: projection}}
   end
 
   defp reseal_valid(ctx, entry, token) do

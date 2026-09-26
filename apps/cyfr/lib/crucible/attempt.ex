@@ -1102,14 +1102,26 @@ defmodule Crucible.Attempt do
       %Authority{resources: %Edge{vault: %{via: via}}} ->
         {:setup_required, {:selection_unbound, via.label}}
 
+      # A key or bundle edge's fields are read here; an OAuth edge that
+      # names only scopes reads none, its token flowing through the
+      # dispense call under those scopes. An anonymous caller is refused at
+      # attach on either, as the vault reader refuses it on a field read.
       %Authority{resources: %Edge{vault: %{} = vault}} ->
-        if Sanctum.Consent.Loader.pinned_intact?(close.ctx, authority) do
-          case Sanctum.VaultReader.fetch(close.ctx, vault) do
-            {:ok, secrets} -> {:ok, secrets}
-            {:error, reason} -> {:setup_required, reason}
-          end
-        else
-          {:setup_required, :consent_moved}
+        cond do
+          not Sanctum.Consent.Loader.pinned_intact?(close.ctx, authority) ->
+            {:setup_required, :consent_moved}
+
+          reads_fields?(vault) ->
+            case Sanctum.VaultReader.fetch(close.ctx, vault) do
+              {:ok, secrets} -> {:ok, secrets}
+              {:error, reason} -> {:setup_required, reason}
+            end
+
+          close.ctx.anonymous ->
+            {:setup_required, :anonymous_denied}
+
+          true ->
+            {:ok, %{}}
         end
 
       _ ->
@@ -1118,6 +1130,15 @@ defmodule Crucible.Attempt do
   rescue
     exception -> {:raised, Close.exception_message(exception, __STACKTRACE__)}
   end
+
+  # An OAuth edge whose projection names its scopes and no fields is served
+  # only through the token dispense. Every other edge — a key or bundle
+  # edge, an OAuth edge that also names fields, and an edge that names
+  # nothing, which the vault reader refuses as corrupt — reads its fields.
+  defp reads_fields?(%{projection: %{scopes: [_ | _]} = projection}),
+    do: match?([_ | _], Map.get(projection, :fields))
+
+  defp reads_fields?(_vault), do: true
 
   # One audit entry per field handed to the claiming runner, by its name and
   # never its value, attributed from what this attempt was admitted with:

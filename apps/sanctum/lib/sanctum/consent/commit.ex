@@ -192,12 +192,12 @@ defmodule Sanctum.Consent.Commit do
           {edge_key, %{"vault" => %{"via" => %{"label" => label}} = vault}} <-
             node["edges"] || %{},
           {:ok, dep} <- [Prima.Authority.Blob.edge_target(edge_key)] do
-        %{
-          from: from,
-          dep: dep,
-          label: label,
-          fields: get_in(vault, ["projection", "fields"]) || []
-        }
+        # A selection that named no fields lends the lender's again.
+        Prima.MapUtil.put_present(
+          %{from: from, dep: dep, label: label},
+          :fields,
+          get_in(vault, ["projection", "fields"])
+        )
       end
     else
       _ -> []
@@ -484,7 +484,8 @@ defmodule Sanctum.Consent.Commit do
            {:ok, entry} <- fetch_active_entry(ctx, bound.entry_id),
            {:ok, live_digest} <- VaultReader.binding_digest(entry),
            :ok <- check_lender_digest(live_digest, bound, dep, profile.label),
-           {:ok, fields} <- selected_fields(Map.get(raw, :fields, []), bound, dep) do
+           {:ok, lent} <- lent_fields(bound, dep, profile.label),
+           {:ok, fields} <- selected_fields(raw, lent, dep) do
         selection = %{
           from: from,
           dep: dep,
@@ -493,7 +494,8 @@ defmodule Sanctum.Consent.Commit do
           binding_digest: live_digest,
           entry_id: entry.id,
           entry_name: entry.name,
-          fields: fields
+          fields: fields,
+          lent_fields: lent
         }
 
         {:cont, {:ok, [selection | acc]}}
@@ -564,17 +566,30 @@ defmodule Sanctum.Consent.Commit do
       else: {:error, {:selection_unbound, dep, label}}
   end
 
-  # The selection may narrow the lender's fields, never widen them.
-  defp selected_fields([], _bound, _dep), do: {:ok, []}
+  # A lender lends the fields its own edge names; an edge that names none
+  # lends nothing.
+  defp lent_fields(%{projection: %{fields: [_ | _] = lent}}, _dep, _label), do: {:ok, lent}
+  defp lent_fields(_unprojected, dep, label), do: {:error, {:selection_unbound, dep, label}}
 
-  defp selected_fields(fields, %{projection: %{fields: [_ | _] = granted}}, dep) do
-    case Enum.reject(fields, &(&1 in granted)) do
-      [] -> {:ok, Enum.sort(fields)}
-      missing -> {:error, {:selection_fields_unavailable, dep, missing}}
+  # The selection may narrow the lender's fields, never widen them. Naming
+  # none lends every field the lender names (the selection writes no
+  # projection of its own and the loader takes the lender's); an explicit
+  # empty list names nothing and is refused.
+  defp selected_fields(raw, lent, dep) do
+    case Map.fetch(raw, :fields) do
+      :error ->
+        {:ok, []}
+
+      {:ok, [_ | _] = fields} ->
+        case Enum.reject(fields, &(&1 in lent)) do
+          [] -> {:ok, Enum.sort(fields)}
+          missing -> {:error, {:selection_fields_unavailable, dep, missing}}
+        end
+
+      {:ok, _empty} ->
+        {:error, empty_projection(dep, :fields)}
     end
   end
-
-  defp selected_fields(fields, _unprojected, _dep), do: {:ok, Enum.sort(fields)}
 
   defp declared_needs(component, source_ref) do
     component
@@ -736,14 +751,18 @@ defmodule Sanctum.Consent.Commit do
       need = Map.get(raw, :need, Prima.Authority.Blob.ingress_key())
 
       with {:ok, declared_need} <- check_known_need(need, declared),
+           {:ok, fields} <- binding_list(raw, :fields, declared_need, need),
+           {:ok, scopes} <- binding_list(raw, :scopes, declared_need, need),
+           :ok <- check_token_grant(declared_need, scopes, need),
            {:ok, entry} <- fetch_active_entry(ctx, Map.get(raw, :entry_id)),
-           {:ok, digest} <- VaultReader.binding_digest(entry) do
+           {:ok, digest} <- VaultReader.binding_digest(entry),
+           {:ok, fields, scopes} <- named_projection(declared_need, fields, scopes, entry, need) do
         binding = %{
           need: need,
           entry_id: entry.id,
           binding_digest: digest,
-          fields: Map.get(raw, :fields, default_fields(declared_need)),
-          scopes: Map.get(raw, :scopes, default_scopes(declared_need))
+          fields: fields,
+          scopes: scopes
         }
 
         {:cont, {:ok, [binding | acc], Map.put(entries, entry.id, entry)}}
@@ -783,11 +802,65 @@ defmodule Sanctum.Consent.Commit do
     end
   end
 
-  defp default_fields(nil), do: []
-  defp default_fields(%{fields: fields}), do: fields
+  # A binding's projection is its need's: the declared fields of a key or
+  # bundle need, the declared scopes of an OAuth need, which the shape has
+  # already refused to leave empty. The caller may name its own list in
+  # their place; an explicit empty list names nothing and is refused rather
+  # than read as everything the entry holds.
+  defp binding_list(raw, key, declared_need, need) do
+    case Map.fetch(raw, key) do
+      :error -> {:ok, declared_list(declared_need, key)}
+      {:ok, [_ | _] = list} -> {:ok, list}
+      {:ok, _empty} -> {:error, empty_projection(need, key)}
+    end
+  end
 
-  defp default_scopes(nil), do: []
-  defp default_scopes(%{scopes: scopes}), do: scopes
+  defp declared_list(nil, _key), do: []
+  defp declared_list(declared_need, key), do: Map.fetch!(declared_need, key)
+
+  # A token is dispensed only under scopes an OAuth need grants: a key or
+  # bundle need's edge names no scopes, so it never dispenses one.
+  defp check_token_grant(%{kind: kind}, [_ | _], need) when kind in ~w(api_key bundle) do
+    {:error,
+     {:invalid_argument,
+      "The binding for #{need} names scopes, but #{need} is a #{kind} need; " <>
+        "only an OAuth need grants scopes"}}
+  end
+
+  defp check_token_grant(_declared_need, _scopes, _need), do: :ok
+
+  # An `@ingress` binding on a manifest that declares no need has no list to
+  # inherit. When its caller names none, it names what the entry holds at
+  # consent time — its field names and, for an OAuth entry, its authorized
+  # scopes — so the edge still references its entry under a projection the
+  # preview shows. Those are the entry's binding fields: a change to them
+  # moves the binding digest and asks again. An entry that holds neither
+  # has nothing to project and is refused.
+  defp named_projection(nil, [], [], entry, need) do
+    fields = stored_list(entry.field_names)
+    scopes = if entry.kind == "oauth", do: stored_list(entry.oauth_scopes), else: []
+
+    if fields == [] and scopes == [],
+      do: {:error, empty_projection(need, :fields)},
+      else: {:ok, fields, scopes}
+  end
+
+  defp named_projection(_declared_need, fields, scopes, _entry, _need),
+    do: {:ok, fields, scopes}
+
+  defp stored_list(json) when is_binary(json) and json != "" do
+    case Prima.Json.decode(json) do
+      {:ok, list} when is_list(list) -> list |> Enum.filter(&is_binary/1) |> Enum.sort()
+      _ -> []
+    end
+  end
+
+  defp stored_list(_absent), do: []
+
+  defp empty_projection(name, key) do
+    {:invalid_argument,
+     "The binding for #{name} names no #{key}; a projection names the #{key} it reads"}
+  end
 
   defp fetch_active_entry(_ctx, nil), do: {:error, {:invalid_binding, :entry_id_required}}
 
@@ -1176,24 +1249,29 @@ defmodule Sanctum.Consent.Commit do
       Enum.map(prep.bindings, fn binding ->
         entry = Map.fetch!(prep.entries, binding.entry_id)
 
-        projected =
-          if binding.fields == [], do: "all fields", else: Enum.join(binding.fields, ", ")
-
-        "Uses #{entry.name} (#{projected})"
+        "Uses #{entry.name} (#{render_projection(binding)})"
       end)
 
     selections =
       Enum.map(prep.selections, fn selection ->
-        projected =
-          if selection.fields == [],
-            do: "all fields",
-            else: Enum.join(selection.fields, ", ")
+        fields = if selection.fields == [], do: selection.lent_fields, else: selection.fields
 
         "#{selection.dep} runs with #{selection.entry_name}, the key bound on its " <>
-          "'#{selection.label}' profile (#{projected})"
+          "'#{selection.label}' profile (#{Enum.join(fields, ", ")})"
       end)
 
     [header | bindings ++ selections] ++ render_grants(prep)
+  end
+
+  # The fields and scopes the edge's projection names, as written. A
+  # binding on a manifest with no need names only what its caller named.
+  defp render_projection(binding) do
+    case {binding.fields, binding.scopes} do
+      {[], []} -> "no projection"
+      {fields, []} -> Enum.join(fields, ", ")
+      {[], scopes} -> "scopes " <> Enum.join(scopes, ", ")
+      {fields, scopes} -> Enum.join(fields, ", ") <> "; scopes " <> Enum.join(scopes, ", ")
+    end
   end
 
   defp render_grants(prep) do

@@ -369,7 +369,7 @@ defmodule Sanctum.Vault.OAuthGrantTest do
 
       decisions = %{
         ref: "reagent:local.grant-bound",
-        bindings: [%{need: "@ingress", entry_id: view.id, fields: []}]
+        bindings: [%{need: "@ingress", entry_id: view.id, scopes: @scopes}]
       }
 
       {:ok, preview} = Sanctum.Consent.Commit.preview(ctx, decisions)

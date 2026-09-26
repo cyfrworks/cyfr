@@ -274,10 +274,11 @@ defmodule Opus.ExecutorMaskedOutputTest do
       "contracts" => [Prima.Model.chat_contract()],
       "needs" => %{
         "api_key" => %{
-          "type" => "api_key:#{name}",
-          "reason" => "to read a key as a model catalyst does",
+          "type" => "oauth:#{name}",
+          "reason" => "to read a key and a token as a model catalyst does",
           "required" => true,
-          "fields" => [@key_field]
+          "fields" => [@key_field],
+          "scopes" => TwoServices.stub_scopes()
         }
       },
       "caps" => %{

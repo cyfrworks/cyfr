@@ -27,6 +27,14 @@ defmodule Sanctum.Consent.ShapeDerivation do
   A stored manifest that does not decode has no shape: every entry here
   answers `{:error, {:corrupt, {:manifest, source_ref}}}` for it, never the
   empty ask, which would read as a component that asks for nothing.
+
+  A vault need names what its projection reads: every derived `api_key`
+  or `bundle` need row carries a non-empty `fields` list and every
+  `oauth` need row a non-empty `scopes` list, which the consent writes as
+  the edge's projection. A need that declares none, or an empty list, has
+  no projection to consent to, and the shape refuses it as a manifest
+  error naming the need and the component (`{:invalid_argument,
+  sentence}`), never as a need that reads everything its entry holds.
   """
 
   alias Prima.Manifest.Caps
@@ -47,6 +55,10 @@ defmodule Sanctum.Consent.ShapeDerivation do
   # commit (which derives fresh) and the loader (which reads this cache)
   # would answer different shapes for up to a minute.
   @live_cache_ttl_ms :timer.seconds(60)
+
+  # The list each vault need kind's projection names; the kinds not here
+  # are component-typed and project nothing.
+  @projection_lists %{"api_key" => :fields, "bundle" => :fields, "oauth" => :scopes}
 
   @spec live_digest(Sanctum.Context.t(), String.t()) :: {:ok, String.t()} | {:error, term()}
   def live_digest(ctx, source_ref) do
@@ -79,8 +91,9 @@ defmodule Sanctum.Consent.ShapeDerivation do
   @spec shape_input(Sanctum.Context.t(), String.t()) :: {:ok, map()} | {:error, term()}
   def shape_input(ctx, source_ref) do
     with {:ok, row, manifest} <- manifest_row(ctx, source_ref),
-         {:ok, releases} <- dependency_releases(ctx, row, source_ref) do
-      needs = Needs.from_manifest(manifest) || []
+         {:ok, releases} <- dependency_releases(ctx, row, source_ref),
+         needs = Needs.from_manifest(manifest) || [],
+         :ok <- check_vault_projections(needs, source_ref) do
       caps = Caps.from_manifest(manifest, &Arca.Storage.valid_guest_path?/1) || Caps.empty()
 
       {:ok,
@@ -214,6 +227,23 @@ defmodule Sanctum.Consent.ShapeDerivation do
   # ---------------------------------------------------------------------------
   # Internal
   # ---------------------------------------------------------------------------
+
+  # A vault need whose projection names nothing would consent to an edge
+  # the vault reader refuses as corrupt at dispense; it is refused here
+  # instead, where the manifest's author can be told.
+  defp check_vault_projections(needs, source_ref) do
+    Enum.find_value(needs, :ok, fn need ->
+      with {:ok, list} <- Map.fetch(@projection_lists, need.kind),
+           [] <- Map.fetch!(need, list) do
+        {:error,
+         {:invalid_argument,
+          "#{source_ref} declares the vault need \"#{need.name}\" without #{list}; " <>
+            "a vault need names the #{list} it reads"}}
+      else
+        _named_or_component_typed -> nil
+      end
+    end)
+  end
 
   # The digest's need rows: name/type/fields/scopes — the reason is prose
   # and required-ness surfaces on the sheet, neither is shape.

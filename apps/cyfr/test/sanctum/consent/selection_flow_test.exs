@@ -165,7 +165,7 @@ defmodule Sanctum.Consent.SelectionFlowTest do
 
     assert Enum.any?(
              preview.summary,
-             &(&1 =~ "runs with home key, the key bound on its 'default' profile")
+             &(&1 =~ "runs with home key, the key bound on its 'default' profile (KEY, ORG)")
            )
 
     {{:ok, _}, _} =
@@ -245,6 +245,13 @@ defmodule Sanctum.Consent.SelectionFlowTest do
              Commit.preview(ctx, %{
                ref: ref,
                selections: [%{dep: @dep, label: "work", fields: ["ORG"]}]
+             })
+
+    # An explicit empty list names nothing: refused, never "every field".
+    assert {:error, {:invalid_argument, _message}} =
+             Commit.preview(ctx, %{
+               ref: ref,
+               selections: [%{dep: @dep, label: "work", fields: []}]
              })
 
     # A revoked lender is not offered and not accepted.

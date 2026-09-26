@@ -420,9 +420,9 @@ defmodule Sanctum.Providers.Profile do
 
   defp decode_tool_servers(_), do: {:error, "tool_servers must be a list"}
 
-  # Preserve absent projection keys so Consent.Commit applies manifest
-  # defaults. An explicit empty list means no narrowing (all fields);
-  # it does not grant an empty set of fields.
+  # Preserve absent projection keys so Consent.Commit applies the need's
+  # declared fields and scopes. An explicit list is passed as given, and
+  # Consent.Commit refuses an empty one: a projection names what it reads.
   defp decode_bindings(list) when is_list(list) do
     decoded =
       Enum.map(list, fn binding ->
