@@ -958,6 +958,10 @@ jobs:
         env:
           RELEASE_BOOT_SKIP_BUILD: '1'
         run: tests/tincture-proof/run.sh cyfr-locus:tincture-proof
+      - name: The frame sandbox containment proof
+        env:
+          RELEASE_BOOT_SKIP_BUILD: '1'
+        run: tests/hostile-frame-proof/run.sh
 
   seed-guards:
     name: Seed media (clean, immutable versions)
