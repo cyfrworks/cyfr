@@ -631,7 +631,8 @@ defmodule PrismWeb.ChatLiveTest do
         %Prima.Actor{athanor_id: group.id},
         "boot_elsewhere/own_held",
         "first_need",
-        60_000
+        60_000,
+        :none
       )
 
     {view, _html} = mount_chat(conn, group)
@@ -728,7 +729,8 @@ defmodule PrismWeb.ChatLiveTest do
         %Prima.Actor{athanor_id: group.id},
         "boot_elsewhere/own_held",
         "first_need",
-        60_000
+        60_000,
+        :none
       )
 
     started = System.monotonic_time(:millisecond)

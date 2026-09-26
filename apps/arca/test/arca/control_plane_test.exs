@@ -229,7 +229,9 @@ defmodule Arca.ControlPlaneTest do
       assert ControlPlane.held?()
     end
 
-    test "a slot released is takeable at once, keeping its owner and its generation", %{node: node} do
+    test "a slot released is takeable at once, keeping its owner and its generation", %{
+      node: node
+    } do
       claimed_here(true)
       assert {:ok, first} = ControlPlane.take(node, "boot_a", 60_000)
       assert ControlPlane.release() == :ok
@@ -413,11 +415,68 @@ defmodule Arca.ControlPlaneTest do
     end
   end
 
+  describe "the slot a host-owned write names" do
+    test "member_slot/0 answers the slot this member won and still believes it holds", %{
+      node: node
+    } do
+      claimed_here(true)
+      assert {:ok, slot} = ControlPlane.take(node, "boot_a", 60_000)
+      assert {:ok, ^slot} = assert_queries(0, fn -> ControlPlane.member_slot() end)
+
+      # Its own countdown ran out: no slot to name, whatever the row says.
+      :ok = ControlPlane.record(:lost)
+      assert {:error, :not_owner} = ControlPlane.member_slot()
+    end
+
+    test "no slot is :none only where no claimant runs" do
+      :ok = ControlPlane.forget()
+      :ok = ControlPlane.forget_generation()
+      :ok = ControlPlane.record(:unclaimed)
+
+      claimed_here(false)
+      refute ControlPlane.claimed?()
+      assert {:ok, :none} = ControlPlane.member_slot()
+
+      # A generation known with no slot beside it is not a deployment
+      # without a claimant.
+      :ok = ControlPlane.record_generation(3)
+      assert {:error, :not_owner} = ControlPlane.member_slot()
+      :ok = ControlPlane.forget_generation()
+
+      claimed_here(true)
+      assert ControlPlane.claimed?()
+      assert {:error, :not_owner} = ControlPlane.member_slot()
+
+      # Only an explicit false turns the claimant off.
+      claimed_here(nil)
+      assert ControlPlane.claimed?()
+    end
+
+    test "verify_held/1 passes :none only where no claimant runs, inside a transaction" do
+      claimed_here(true)
+
+      assert {:ok, :lost} =
+               Arca.Repo.locking_transaction(fn -> ControlPlane.verify_held(:none) end)
+
+      assert :lost = ControlPlane.check_held(:none)
+
+      claimed_here(false)
+      assert {:ok, :ok} = Arca.Repo.locking_transaction(fn -> ControlPlane.verify_held(:none) end)
+
+      assert_raise ArgumentError, ~r/inside a locking transaction/, fn ->
+        ControlPlane.verify_held(:none)
+      end
+    end
+  end
+
   # The row put past its lease on the cell's clock — the one condition a
   # takeover turns on, made rather than waited for.
   defp expire(node) do
     past = DateTime.add(Arca.ServerMetaStorage.now!(), -1_000, :millisecond)
-    {1, _} = Arca.Repo.update_all(from(l in CellLease, where: l.node == ^node), set: [lease_until: past])
+
+    {1, _} =
+      Arca.Repo.update_all(from(l in CellLease, where: l.node == ^node), set: [lease_until: past])
+
     :ok
   end
 
@@ -462,7 +521,9 @@ defmodule Arca.ControlPlaneLockTest do
       unboxed(fn -> Arca.Repo.delete_all(from(l in CellLease, where: l.node == ^node)) end)
 
       for {key, value} <- saved do
-        if value == :absent, do: :persistent_term.erase(key), else: :persistent_term.put(key, value)
+        if value == :absent,
+          do: :persistent_term.erase(key),
+          else: :persistent_term.put(key, value)
       end
     end)
 

@@ -29,7 +29,13 @@ defmodule Arca.FencedPublication do
       that renewed during a long write still publishes.
 
   `Arca.ControlPlane.held?/0` and a clock read before the write are fast
-  refusals a caller may make first; they are never the guarantee.
+  refusals a caller may make first; they are never the guarantee. A
+  writer takes its slot from `Arca.ControlPlane.member_slot/0`. Where no
+  claimant runs (`Arca.ControlPlane.claimed?/0` false, the test
+  configuration alone) there is no slot and the writer names `:none`:
+  the live ownership check is skipped and the revision compare-and-set is
+  not. A `:none` slot where a claimant runs is `:not_owner`, so a release
+  never publishes unfenced.
 
   ## Resources
 
@@ -47,7 +53,8 @@ defmodule Arca.FencedPublication do
       renamed on any adapter. The staging row of the bytes a publication
       replaces goes `deleting` in that transaction too, and the sweep
       (`Arca.Retention.FencedStaging`) removes them. `document/2` reads
-      it.
+      it, `list/2` reads a prefix of keys, and `remove/3` deletes it under
+      the same fence, handing its bytes to the sweep.
 
   ## Idempotency
 
@@ -115,6 +122,12 @@ defmodule Arca.FencedPublication do
           optional(atom()) => term()
         }
 
+  @typedoc """
+  The slot a publication names: the writer's own, or `:none` where no
+  claimant runs (see the module doc).
+  """
+  @type writer :: slot() | :none
+
   @type refusal :: :not_owner | :stale | :expired | :budget | :database_error
 
   @refusals [:not_owner, :stale, :expired, :budget]
@@ -145,19 +158,62 @@ defmodule Arca.FencedPublication do
   no staged id or with `attrs`, a row with a staged id, or `attrs` that
   name the revision.
   """
-  @spec publish(Change.t(), non_neg_integer(), slot()) ::
+  @spec publish(Change.t(), non_neg_integer(), writer()) ::
           {:ok, non_neg_integer()} | {:error, refusal()}
-  def publish(%Change{} = change, revision_read, %{node: _, owner: _, generation: _} = slot)
+  def publish(%Change{} = change, revision_read, slot)
       when is_integer(revision_read) and revision_read >= 0 do
     target = target!(change)
-    # The fence, when the slot carries one, is left behind here.
-    slot = Map.take(slot, [:node, :owner, :generation])
+    slot = writer!(slot)
 
-    Arca.Repo.Errors.with_db_rescue("Arca.FencedPublication.publish", fn ->
+    fenced("Arca.FencedPublication.publish", fn ->
+      started = System.monotonic_time(:millisecond)
+      publication(target, revision_read, slot, started)
+    end)
+  end
+
+  @doc """
+  Remove the document `change` names (`{:document, athanor_id, key}`,
+  nothing staged) while it still holds `revision_read`, under the
+  writer's `slot`, in one transaction: the reference row is deleted, and
+  the staging row of the bytes it named goes `deleting` with it, for the
+  sweep to remove.
+
+  Answers `:ok`, or the refusals of `publish/3`: `:not_owner`, `:stale`
+  (the document moved on, or holds no revision to remove — a removal of
+  what is absent included), `:budget` and `:database_error`.
+
+  A removed document reads as absent, revision 0, as one never published
+  does: its next publication creates it again at revision 1.
+
+  Raises `ArgumentError` for a change naming anything else, or one that
+  carries staged bytes or `attrs`.
+  """
+  @spec remove(Change.t(), non_neg_integer(), writer()) :: :ok | {:error, refusal()}
+  def remove(%Change{} = change, revision_read, slot)
+      when is_integer(revision_read) and revision_read >= 0 do
+    {athanor_id, key} = removal!(change)
+    slot = writer!(slot)
+
+    fenced("Arca.FencedPublication.remove", fn ->
+      started = System.monotonic_time(:millisecond)
+
+      with :ok <- owned(slot),
+           :ok <- within_budget(started) do
+        removal(athanor_id, key, revision_read)
+      end
+    end)
+    |> case do
+      {:ok, _revision} -> :ok
+      {:error, _} = refused -> refused
+    end
+  end
+
+  # One transaction for a publication or a removal: a refusal rolls it
+  # back whole, and only the declared refusals leave it.
+  defp fenced(label, step) do
+    Arca.Repo.Errors.with_db_rescue(label, fn ->
       Arca.Repo.locking_transaction(fn ->
-        started = System.monotonic_time(:millisecond)
-
-        case publication(target, revision_read, slot, started) do
+        case step.() do
           {:ok, revision} -> revision
           {:error, reason} -> Arca.Repo.rollback(reason)
         end
@@ -168,6 +224,15 @@ defmodule Arca.FencedPublication do
       end
     end)
   end
+
+  # The fence, when the slot carries one, is left behind here.
+  defp writer!(:none), do: :none
+
+  defp writer!(%{node: _, owner: _, generation: _} = slot),
+    do: Map.take(slot, [:node, :owner, :generation])
+
+  defp writer!(_other),
+    do: raise(ArgumentError, "a fenced publication names the writer's slot, or :none")
 
   @doc """
   The document at `key` in the actor's athanor, as a plain map —
@@ -194,6 +259,36 @@ defmodule Arca.FencedPublication do
 
   def document(%Prima.Actor{}, key) when is_binary(key), do: {:error, :no_athanor}
 
+  @doc """
+  Every document in the actor's athanor whose key begins with `prefix`,
+  as the plain maps `document/2` answers, ordered by key (bytewise, the
+  same on either adapter). An empty prefix lists them all.
+  """
+  @spec list(Prima.Actor.t(), String.t()) ::
+          {:ok, [map()]} | {:error, :no_athanor | :database_error}
+  def list(%Prima.Actor{athanor_id: athanor_id} = actor, prefix)
+      when is_binary(athanor_id) and athanor_id != "" and is_binary(prefix) do
+    Arca.Repo.Errors.with_db_rescue("Arca.FencedPublication.list", fn ->
+      # `substr` rather than `LIKE`: SQLite's `LIKE` folds ASCII case and
+      # both treat `%` and `_` as patterns, where a key prefix is bytes.
+      length = String.length(prefix)
+
+      rows =
+        FencedDocument
+        |> Arca.QueryHelpers.where_tenant(actor)
+        |> where([d], fragment("substr(?, 1, ?)", d.key, ^length) == ^prefix)
+        |> Arca.Repo.all()
+
+      {:ok,
+       rows
+       |> Enum.filter(&String.starts_with?(&1.key, prefix))
+       |> Enum.sort_by(& &1.key)
+       |> Enum.map(&Arca.Data.project/1)}
+    end)
+  end
+
+  def list(%Prima.Actor{}, prefix) when is_binary(prefix), do: {:error, :no_athanor}
+
   # ---- the transaction ---------------------------------------------------------
 
   # Ownership first, under the lease row's shared lock; then the staged
@@ -207,6 +302,8 @@ defmodule Arca.FencedPublication do
     end
   end
 
+  # `:none` stands for no slot only where no claimant runs; anywhere else
+  # `verify_held/1` answers it `:lost`, a writer that holds none.
   defp owned(slot) do
     case Arca.ControlPlane.verify_held(slot) do
       :ok -> :ok
@@ -348,6 +445,29 @@ defmodule Arca.FencedPublication do
     end
   end
 
+  # The removal's one statement: the reference row at the revision read,
+  # its blob key read under the row's lock first, and the bytes it named
+  # handed to the sweep in the same transaction. A document at revision 0
+  # is absent, so there is nothing at it to remove.
+  defp removal(athanor_id, key, revision_read) do
+    current =
+      from(d in FencedDocument,
+        where: d.athanor_id == ^athanor_id and d.key == ^key and d.revision == ^revision_read
+      )
+
+    with blob_key when is_binary(blob_key) <-
+           current
+           |> select_blob_key()
+           |> Arca.QueryHelpers.for_update()
+           |> Arca.Repo.one(),
+         {1, _} <- Arca.Repo.delete_all(current) do
+      retire(athanor_id, blob_key, Arca.ServerMetaStorage.now!())
+      {:ok, revision_read}
+    else
+      _moved -> {:error, :stale}
+    end
+  end
+
   defp select_blob_key(query), do: from(d in query, select: d.blob_key)
 
   # Only a `published` row: the replaced bytes were this document's, and
@@ -405,5 +525,20 @@ defmodule Arca.FencedPublication do
     raise ArgumentError,
           "a fenced publication writes {:row, schema, id} with attrs, " <>
             "or {:document, athanor_id, key} with a staged id"
+  end
+
+  defp removal!(%Change{
+         resource: {:document, athanor_id, key},
+         staged: nil,
+         digest: nil,
+         attrs: attrs
+       })
+       when is_binary(athanor_id) and athanor_id != "" and is_binary(key) and key != "" and
+              attrs == %{},
+       do: {athanor_id, key}
+
+  defp removal!(%Change{}) do
+    raise ArgumentError,
+          "a fenced removal names {:document, athanor_id, key}, with nothing staged and no attrs"
   end
 end

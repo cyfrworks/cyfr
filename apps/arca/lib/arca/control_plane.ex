@@ -148,6 +148,44 @@ defmodule Arca.ControlPlane do
     end
   end
 
+  @doc """
+  The slot a host-owned write of this member names
+  (`Arca.FencedPublication`, `Arca.ProvisioningClaims.claim/5`), from the
+  cached standing alone — a term read, like `held?/0`. What it answers is
+  the writer's claim and never the guarantee: the write's own transaction
+  verifies it live (`verify_held/1`).
+
+    * `{:ok, slot}` — the slot this member won and still believes it
+      holds.
+    * `{:ok, :none}` — no claimant runs in this deployment (`claimed?/0`
+      is false) and no slot was recorded, so there is nothing to fence.
+    * `{:error, :not_owner}` — a claimant runs here and this member holds
+      no slot: before its first take, after a loss or a release, or past
+      its own countdown.
+  """
+  @spec member_slot() :: {:ok, slot()} | {:ok, :none} | {:error, :not_owner}
+  def member_slot do
+    with true <- held?(),
+         {:ok, slot} <- held() do
+      {:ok, slot}
+    else
+      :none -> if generation() == :none and not claimed?(), do: {:ok, :none}, else: not_owner()
+      false -> not_owner()
+    end
+  end
+
+  defp not_owner, do: {:error, :not_owner}
+
+  @doc """
+  Whether a claimant runs in this deployment. The in-code default is
+  true, and no environment variable reads it; only the test configuration
+  turns it off, and only an explicit `false` does. Without a claimant no
+  member holds a slot, so a host-owned write has none to be fenced by
+  (`member_slot/0`).
+  """
+  @spec claimed?() :: boolean()
+  def claimed?, do: Application.get_env(:arca, :control_plane_claim_enabled, true) != false
+
   @doc "The slice of a won lease a member does not count as its own."
   @spec margin_ms() :: pos_integer()
   def margin_ms, do: @margin_ms
@@ -303,10 +341,23 @@ defmodule Arca.ControlPlane do
   exactly as a takeover does. Never touches the cached standing:
   `renew/1` writes that, and it is not called here.
 
+  `:none` is the slot `member_slot/0` answers where no claimant runs: it
+  is `:ok` while `claimed?/0` is false, with nothing read, and `:lost`
+  wherever a claimant runs, so a writer that holds no slot is never taken
+  for one with nothing to fence.
+
   Raises outside a transaction and on a store that cannot answer, so the
   caller's transaction rolls back.
   """
-  @spec verify_held(slot()) :: :ok | :lost
+  @spec verify_held(slot() | :none) :: :ok | :lost
+  def verify_held(:none) do
+    unless Arca.Repo.in_transaction?() do
+      raise ArgumentError, "Arca.ControlPlane.verify_held/1 runs inside a locking transaction"
+    end
+
+    if claimed?(), do: :lost, else: :ok
+  end
+
   # arca:db-raise-ok a step inside the caller's locking transaction; a raise rolls it back.
   def verify_held(%{node: node, owner: owner, generation: generation})
       when is_binary(node) and is_binary(owner) and is_integer(generation) do
@@ -338,7 +389,7 @@ defmodule Arca.ControlPlane do
   lease, `:lost` once it does not. A store that cannot answer raises, as
   `verify_held/1` does.
   """
-  @spec check_held(slot()) :: :ok | :lost
+  @spec check_held(slot() | :none) :: :ok | :lost
   def check_held(slot) do
     {:ok, standing} = Arca.Repo.locking_transaction(fn -> verify_held(slot) end)
     standing
@@ -619,9 +670,9 @@ defmodule Arca.ControlPlane do
 
   defp lease_end(now, lease_ms), do: DateTime.add(now, lease_ms, :millisecond)
 
-  # Whether a claimant runs in this deployment at all. With one, a member
-  # that has recorded nothing holds nothing — the fail-closed direction,
-  # and the state of every member between its start and its first claim.
-  # Without one there is no slot to take, so every boot holds.
-  defp claimed_here?, do: Application.get_env(:arca, :control_plane_claim_enabled, true)
+  # With a claimant, a member that has recorded nothing holds nothing —
+  # the fail-closed direction, and the state of every member between its
+  # start and its first claim. Without one there is no slot to take, so
+  # every boot holds.
+  defp claimed_here?, do: claimed?()
 end

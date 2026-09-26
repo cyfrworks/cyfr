@@ -21,7 +21,7 @@ defmodule Sanctum.ProvisioningReadinessTest do
   # Another attempt — another boot's — holding the athanor's claim.
   defp held_elsewhere!(athanor_id) do
     actor = %Prima.Actor{athanor_id: athanor_id}
-    {:ok, claim} = Claims.claim(actor, "boot_elsewhere/own_held", "first_need", 60_000)
+    {:ok, claim} = Claims.claim(actor, "boot_elsewhere/own_held", "first_need", 60_000, :none)
     claim
   end
 
@@ -171,7 +171,9 @@ defmodule Sanctum.ProvisioningReadinessTest do
       assert {:ok, %{entry_kind: "first_need", outcome: outcome} = claim} = Claims.current(actor)
       assert outcome in ["ready", "failed"]
       refute Claims.live?(claim)
-      assert {:ok, %{fence: 2}} = Claims.claim(actor, "boot_elsewhere/next", "provision", 1_000)
+
+      assert {:ok, %{fence: 2}} =
+               Claims.claim(actor, "boot_elsewhere/next", "provision", 1_000, :none)
     end
   end
 

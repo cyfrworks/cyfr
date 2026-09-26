@@ -282,7 +282,7 @@ defmodule Sanctum.ProvisioningRemoteDepsTest do
     # Another caller's attempt holds the claim — a background fill in
     # flight. The explicit verb does not queue behind it.
     actor = %Prima.Actor{athanor_id: group.id}
-    {:ok, _held} = Claims.claim(actor, "boot_elsewhere/own_held", "first_need", 60_000)
+    {:ok, _held} = Claims.claim(actor, "boot_elsewhere/own_held", "first_need", 60_000, :none)
 
     started = System.monotonic_time(:millisecond)
     assert {:error, :provisioning_busy} = Provisioning.provision(group, ctx)
@@ -430,7 +430,9 @@ defmodule Sanctum.ProvisioningRemoteDepsTest do
 
       # The athanor is free: the next claim is a new attempt at the next
       # fence, and the dead one's writes would be stale.
-      assert {:ok, %{fence: 2}} = Claims.claim(actor, "boot_elsewhere/next", "provision", 1_000)
+      assert {:ok, %{fence: 2}} =
+               Claims.claim(actor, "boot_elsewhere/next", "provision", 1_000, :none)
+
       assert :stale = Claims.settle(actor, held.owner, held.fence, "ready", nil)
     end
 

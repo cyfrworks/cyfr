@@ -5,8 +5,15 @@ defmodule Aqua.Notes do
   @moduledoc """
   What somebody chose to keep out of a thread.
 
-  Notes use their own storage root and survive deletion or retention
-  cleanup of the threads they came from.
+  Notes survive deletion or retention cleanup of the threads they came
+  from. Each note is a fenced document (`Arca.FencedPublication`) keyed
+  `notes/<name>.md`, the one store every note lives in: its bytes are
+  staged (`Arca.Storage.stage/3`) and its reference published under this
+  member's live ownership of its slot and the revision the writer read,
+  so a member that lost its slot writes nothing and a writer that read an
+  older revision is refused rather than writing over a newer note. The
+  Files page shows the same documents as its `notes/` folder
+  (`Arca.Files`).
 
   ## One pile, two temperatures
 
@@ -49,11 +56,13 @@ defmodule Aqua.Notes do
   alias Sanctum.Context
   alias Sanctum.Tenancy.Users
 
-  # The layout (`Arca.Storage`) is where the root is declared — host-only,
-  # by having no guest name; this module reads it and pins that it is a
-  # tenant root of that layout, so the two cannot drift.
+  # The folder the Files page shows these documents under
+  # (`Arca.Files.document_roots/0`); pinned here so the key prefix and the
+  # folder cannot drift.
   @root "notes"
-  true = @root in Arca.Storage.tenant_roots()
+  true = @root in Arca.Files.document_roots()
+  @key_prefix @root <> "/"
+  @key_suffix ".md"
   @name_format ~r/\A[A-Za-z0-9][A-Za-z0-9 _.-]{0,80}\z/
   @pinned_names ~w(about-you about-us)
   @pin_max_bytes 2048
@@ -82,6 +91,7 @@ defmodule Aqua.Notes do
   @type refusal ::
           {:invalid_argument, String.t()}
           | {:not_found, String.t(), String.t()}
+          | {:conflict, String.t()}
           | {:unavailable, String.t()}
 
   @doc """
@@ -137,6 +147,10 @@ defmodule Aqua.Notes do
   File a note in the focused athanor. A pinned name is refused — `pin/4` is
   the verb for those, and the difference (short, read every turn) is the
   point of having two.
+
+  The note is published over the revision read just before it, so a write
+  that landed in between is answered `{:conflict, _}` rather than
+  overwritten.
   """
   @spec keep(Context.t(), String.t(), String.t(), provenance()) ::
           {:ok, %{kept: String.t(), athanor_id: String.t(), replaced: boolean()}}
@@ -144,14 +158,48 @@ defmodule Aqua.Notes do
   def keep(%Context{} = ctx, name, content, provenance \\ []) when is_binary(content) do
     with :ok <- check_name(name),
          :ok <- refuse_pinned(name, "keep", "pin"),
-         # Keeping under a name that exists replaces what was there — said
-         # so in the answer, so the tape can say so too, never silently.
-         replaced? = Arca.exists?(Sanctum.Context.actor(ctx), path(name)),
-         :ok <-
-           written(
-             Arca.put(Sanctum.Context.actor(ctx), path(name), encode(ctx, content, provenance))
-           ) do
-      {:ok, %{kept: name, athanor_id: Context.athanor!(ctx), replaced: replaced?}}
+         {:ok, current} <- document(ctx, name) do
+      keep_over(ctx, name, content, revision(current), provenance)
+    end
+  end
+
+  @doc """
+  The revision a filed note stands at — 0 for a name nothing holds — with
+  the note itself, or `nil` for none: what a writer that must not write
+  over a newer note reads before `keep_over/5`.
+  """
+  @spec current(Context.t(), String.t()) ::
+          {:ok, %{revision: non_neg_integer(), note: note() | nil}} | {:error, refusal()}
+  def current(%Context{} = ctx, name) do
+    with :ok <- check_name(name),
+         {:ok, doc} <- document(ctx, name) do
+      note =
+        case doc && content(ctx, doc) do
+          {:ok, binary} -> decode(ctx, name, binary)
+          _none_or_unreadable -> nil
+        end
+
+      {:ok, %{revision: revision(doc), note: note}}
+    end
+  end
+
+  @doc """
+  `keep/4` over the revision the writer read (`current/2`): while the note
+  still stands at `revision_read` it is replaced, and a note written since
+  is answered `{:conflict, _}` and left as it is. A pinned name is
+  refused, as in `keep/4`.
+  """
+  @spec keep_over(Context.t(), String.t(), String.t(), non_neg_integer(), provenance()) ::
+          {:ok, %{kept: String.t(), athanor_id: String.t(), replaced: boolean()}}
+          | {:error, refusal()}
+  def keep_over(%Context{} = ctx, name, content, revision_read, provenance \\ [])
+      when is_binary(content) and is_integer(revision_read) and revision_read >= 0 do
+    with :ok <- check_name(name),
+         :ok <- refuse_pinned(name, "keep", "pin"),
+         :ok <- publish(ctx, name, encode(ctx, content, provenance), revision_read) do
+      # Keeping under a name that exists replaces what was there — said so
+      # in the answer, so the tape can say so too, never silently.
+      {:ok, %{kept: name, athanor_id: Context.athanor!(ctx), replaced: revision_read > 0}}
     end
   end
 
@@ -182,11 +230,15 @@ defmodule Aqua.Notes do
           {:ok, %{forgot: String.t(), athanor_id: String.t()}} | {:error, refusal()}
   def forget(%Context{} = ctx, name) do
     with :ok <- check_name(name),
-         :ok <- refuse_pinned(name, "forget", "pin with empty content to clear it") do
-      case Arca.delete(Sanctum.Context.actor(ctx), path(name)) do
-        :ok -> {:ok, %{forgot: name, athanor_id: Context.athanor!(ctx)}}
-        {:error, :not_found} -> {:error, {:not_found, "note", name}}
-        {:error, reason} -> {:error, storage_refusal(reason)}
+         :ok <- refuse_pinned(name, "forget", "pin with empty content to clear it"),
+         {:ok, current} <- document(ctx, name) do
+      case current do
+        nil ->
+          {:error, {:not_found, "note", name}}
+
+        doc ->
+          with :ok <- unpublish(ctx, name, doc),
+               do: {:ok, %{forgot: name, athanor_id: Context.athanor!(ctx)}}
       end
     end
   end
@@ -262,8 +314,8 @@ defmodule Aqua.Notes do
       entries =
         for name <- shown do
           line =
-            case Arca.get(Sanctum.Context.actor(ctx), path(name)) do
-              {:ok, binary} -> ctx |> decode(name, binary) |> Map.fetch!(:content) |> first_line()
+            case fetch(ctx, name) do
+              {:ok, note} -> first_line(note.content)
               _ -> ""
             end
 
@@ -449,7 +501,7 @@ defmodule Aqua.Notes do
   # Internal
   # ---------------------------------------------------------------------------
 
-  defp path(name), do: [@root, name]
+  defp key(name), do: @key_prefix <> name <> @key_suffix
 
   defp refuse_pinned(name, verb, instead) do
     if pinned?(name),
@@ -487,10 +539,8 @@ defmodule Aqua.Notes do
         "a pinned page holds at most #{@pin_max_bytes} bytes and this one is #{size} — " <>
           "trim it, or keep the detail as a note"}}
     else
-      with :ok <-
-             written(
-               Arca.put(Sanctum.Context.actor(ctx), path(name), encode(ctx, body, provenance))
-             ) do
+      with {:ok, current} <- document(ctx, name),
+           :ok <- publish(ctx, name, encode(ctx, body, provenance), revision(current)) do
         {:ok, %{pinned: name, athanor_id: Context.athanor!(ctx)}}
       end
     end
@@ -498,18 +548,98 @@ defmodule Aqua.Notes do
 
   # Clearing a page nobody set is already clear.
   defp clear(ctx, name) do
-    case Arca.delete(Sanctum.Context.actor(ctx), path(name)) do
-      :ok -> {:ok, %{cleared: name, athanor_id: Context.athanor!(ctx)}}
-      {:error, :not_found} -> {:ok, %{cleared: name, athanor_id: Context.athanor!(ctx)}}
-      {:error, reason} -> {:error, storage_refusal(reason)}
+    with {:ok, current} <- document(ctx, name),
+         :ok <- if(current, do: unpublish(ctx, name, current), else: :ok) do
+      {:ok, %{cleared: name, athanor_id: Context.athanor!(ctx)}}
     end
   end
 
-  # A write's answer at this module's boundary — the same line `names/1`
-  # holds for reads.
-  @spec written(:ok | {:error, term()}) :: :ok | {:error, refusal()}
-  defp written(:ok), do: :ok
-  defp written({:error, reason}), do: {:error, storage_refusal(reason)}
+  # ---------------------------------------------------------------------------
+  # The store: one fenced document per note
+  # ---------------------------------------------------------------------------
+
+  # The note's document as it stands, or `nil` where nothing holds the
+  # name. A store that cannot answer is unavailable, never an absence.
+  defp document(ctx, name) do
+    case Arca.FencedPublication.document(Sanctum.Context.actor(ctx), key(name)) do
+      %{} = doc ->
+        {:ok, doc}
+
+      :not_found ->
+        {:ok, nil}
+
+      {:error, reason} ->
+        Logger.error("[Aqua.Notes] a note could not be read: #{inspect(reason)}")
+        {:error, {:unavailable, "Notes"}}
+    end
+  end
+
+  defp revision(nil), do: 0
+  defp revision(%{revision: revision}), do: revision
+
+  # The bytes a document names, where they were staged.
+  defp content(ctx, %{blob_key: blob_key}),
+    do: Arca.get(Sanctum.Context.actor(ctx), String.split(blob_key, "/"))
+
+  # Stage the bytes, then publish their reference over the revision read,
+  # under this member's slot. The slot is asked first, so a member that
+  # holds none stages nothing; bytes a refused publication staged have
+  # their reservation ended, and the sweep removes them.
+  defp publish(ctx, name, bytes, revision_read) do
+    actor = Sanctum.Context.actor(ctx)
+
+    with {:ok, slot} <- slot(),
+         {:ok, staged} <- staged(Arca.Storage.stage(actor, "notes", bytes)) do
+      change = %Arca.FencedPublication.Change{
+        resource: {:document, actor.athanor_id, key(name)},
+        staged: staged
+      }
+
+      case Arca.FencedPublication.publish(change, revision_read, slot) do
+        {:ok, _revision} ->
+          :ok
+
+        {:error, reason} ->
+          _ = Arca.Storage.cancel_stage(actor, staged)
+          {:error, publication_refusal(name, reason)}
+      end
+    end
+  end
+
+  defp unpublish(ctx, name, %{revision: revision_read}) do
+    actor = Sanctum.Context.actor(ctx)
+    change = %Arca.FencedPublication.Change{resource: {:document, actor.athanor_id, key(name)}}
+
+    with {:ok, slot} <- slot() do
+      case Arca.FencedPublication.remove(change, revision_read, slot) do
+        :ok -> :ok
+        {:error, reason} -> {:error, publication_refusal(name, reason)}
+      end
+    end
+  end
+
+  defp slot do
+    case Arca.ControlPlane.member_slot() do
+      {:ok, slot} -> {:ok, slot}
+      {:error, :not_owner} -> {:error, publication_refusal(nil, :not_owner)}
+    end
+  end
+
+  defp staged({:ok, staged}), do: {:ok, staged}
+  defp staged({:error, reason}), do: {:error, storage_refusal(reason)}
+
+  # A note written since the writer read it is the one refusal the writer
+  # can act on; everything else — a member that no longer holds its slot,
+  # an outrun budget, an attempt the sweep reclaimed, a store that could
+  # not answer — writes nothing and is answered as a retry.
+  defp publication_refusal(name, :stale) do
+    {:conflict, "the note '#{name}' changed while it was being written — read it and try again"}
+  end
+
+  defp publication_refusal(_name, reason) do
+    Logger.warning("[Aqua.Notes] a note was not published: #{inspect(reason)}")
+    {:unavailable, "Notes"}
+  end
 
   # The athanor's cap is the one storage refusal a person can act on, so it
   # keeps a sentence of its own; everything else (a plane that may not
@@ -528,32 +658,39 @@ defmodule Aqua.Notes do
   end
 
   defp fetch(ctx, name) do
-    case Arca.get(Sanctum.Context.actor(ctx), path(name)) do
-      {:ok, binary} -> {:ok, decode(ctx, name, binary)}
+    with {:ok, %{} = doc} <- document(ctx, name),
+         {:ok, binary} <- content(ctx, doc) do
+      {:ok, decode(ctx, name, binary)}
+    else
       _ -> {:error, {:not_found, "note", name}}
     end
   end
 
-  # Only names the grammar admits are notes; anything else under the root
-  # is not this module's to report.
+  # Only names the grammar admits are notes; any other key under the
+  # prefix is not this module's to report.
   defp names(ctx) do
-    case Arca.list_typed(Sanctum.Context.actor(ctx), [@root]) do
-      {:ok, entries} ->
-        {:ok, for({name, :file} <- entries, name =~ @name_format, do: name) |> Enum.sort()}
+    case Arca.FencedPublication.list(Sanctum.Context.actor(ctx), @key_prefix) do
+      {:ok, docs} ->
+        names =
+          for %{key: @key_prefix <> file} <- docs,
+              String.ends_with?(file, @key_suffix),
+              name = String.replace_suffix(file, @key_suffix, ""),
+              name =~ @name_format,
+              do: name
+
+        {:ok, Enum.sort(names)}
 
       {:error, reason} ->
-        # The adapter's term is for the log; the wire gets the one word
+        # The store's term is for the log; the wire gets the one word
         # every storage-backed tool answers with.
-        Logger.error("[Aqua.Notes] the notes root could not be listed: #{inspect(reason)}")
+        Logger.error("[Aqua.Notes] the notes could not be listed: #{inspect(reason)}")
         {:error, {:unavailable, "Notes"}}
     end
   end
 
   defp match(ctx, name, needle) do
-    case Arca.get(Sanctum.Context.actor(ctx), path(name)) do
-      {:ok, binary} ->
-        %{content: body} = decode(ctx, name, binary)
-
+    case fetch(ctx, name) do
+      {:ok, %{content: body}} ->
         case snippet(name, body, needle) do
           {:ok, snippet} -> [%{name: name, athanor_id: ctx.athanor_id, snippet: snippet}]
           :none -> []
@@ -689,7 +826,7 @@ defmodule Aqua.Notes do
   end
 
   # ---------------------------------------------------------------------------
-  # On disk: provenance frontmatter over the body
+  # The bytes: provenance frontmatter over the body
   # ---------------------------------------------------------------------------
 
   # Values are JSON-encoded strings, which is the one YAML scalar spelling

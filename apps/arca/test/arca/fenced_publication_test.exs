@@ -368,6 +368,129 @@ defmodule Arca.FencedPublicationTest do
     end
   end
 
+  describe "no slot" do
+    test "publishes and removes, with the revision still compared, only where no claimant runs",
+         %{actor: actor, key: key} do
+      claimed(false)
+      staged = stage!(actor, "v1")
+      assert {:ok, 1} = FencedPublication.publish(document(actor, key, staged), 0, :none)
+      assert {:error, :stale} = FencedPublication.publish(document(actor, key, staged), 3, :none)
+      assert {:error, :stale} = FencedPublication.remove(removal(actor, key), 0, :none)
+
+      claimed(true)
+      again = stage!(actor, "v2")
+
+      assert {:error, :not_owner} =
+               FencedPublication.publish(document(actor, key, again), 1, :none)
+
+      assert {:error, :not_owner} = FencedPublication.remove(removal(actor, key), 1, :none)
+
+      assert %{revision: 1, digest: digest} = FencedPublication.document(actor, key)
+      assert digest == Prima.Digest.sha256("v1")
+      assert %StorageStaging{state: "reserved"} = staging(again)
+    end
+
+    test "a slot of no known shape raises before any statement", %{actor: actor, key: key} do
+      staged = stage!(actor, "v1")
+
+      assert_raise ArgumentError, fn ->
+        FencedPublication.publish(document(actor, key, staged), 0, :someone)
+      end
+    end
+  end
+
+  describe "list/2" do
+    test "the actor's documents under a prefix, ordered by key, and no one else's", %{
+      actor: actor
+    } do
+      slot = slot!()
+      prefix = "list-#{System.unique_integer([:positive])}/"
+
+      for key <- ["b.md", "a.md", "deeper/c.md"] do
+        staged = stage!(actor, key)
+
+        assert {:ok, 1} =
+                 FencedPublication.publish(document(actor, prefix <> key, staged), 0, slot)
+      end
+
+      # A key that only shares the prefix's letters, a pattern character
+      # and another athanor's document are not listed.
+      staged = stage!(actor, "near")
+      near = String.trim_trailing(prefix, "/") <> "-near/x.md"
+      assert {:ok, 1} = FencedPublication.publish(document(actor, near, staged), 0, slot)
+      other = actor("ath_fp_list_other_#{System.unique_integer([:positive])}")
+      theirs = stage!(other, "theirs")
+
+      assert {:ok, 1} =
+               FencedPublication.publish(document(other, prefix <> "a.md", theirs), 0, slot)
+
+      assert {:ok, docs} = FencedPublication.list(actor, prefix)
+
+      assert Enum.map(docs, & &1.key) ==
+               Enum.map(["a.md", "b.md", "deeper/c.md"], &(prefix <> &1))
+
+      assert Enum.all?(docs, &(&1.athanor_id == actor.athanor_id and &1.revision == 1))
+      assert {:ok, []} = FencedPublication.list(actor, "list-%/")
+      assert {:ok, []} = FencedPublication.list(actor, String.upcase(prefix))
+      assert {:error, :no_athanor} = FencedPublication.list(%{actor | athanor_id: ""}, prefix)
+    end
+  end
+
+  describe "remove/3" do
+    test "removes the document at the revision read and hands its bytes to the sweep", %{
+      actor: actor,
+      key: key
+    } do
+      slot = slot!()
+      first = stage!(actor, "v1")
+      second = stage!(actor, "v2")
+      assert {:ok, 1} = FencedPublication.publish(document(actor, key, first), 0, slot)
+      assert {:ok, 2} = FencedPublication.publish(document(actor, key, second), 1, slot)
+
+      assert {:error, :stale} = FencedPublication.remove(removal(actor, key), 1, slot)
+      assert %{revision: 2} = FencedPublication.document(actor, key)
+      assert %StorageStaging{state: "published"} = staging(second)
+
+      assert :ok = FencedPublication.remove(removal(actor, key), 2, slot)
+      assert :not_found = FencedPublication.document(actor, key)
+      assert %StorageStaging{state: "deleting"} = staging(second)
+
+      # Removed is absent: nothing to remove again, and a publication that
+      # read it absent creates it anew.
+      assert {:error, :stale} = FencedPublication.remove(removal(actor, key), 2, slot)
+      third = stage!(actor, "v3")
+      assert {:ok, 1} = FencedPublication.publish(document(actor, key, third), 0, slot)
+    end
+
+    test "a slot taken over, or run out, removes nothing", %{actor: actor, key: key} do
+      slot = slot!()
+      staged = stage!(actor, "v1")
+      assert {:ok, 1} = FencedPublication.publish(document(actor, key, staged), 0, slot)
+
+      successor = take_over!(slot)
+      assert {:error, :not_owner} = FencedPublication.remove(removal(actor, key), 1, slot)
+      assert %{revision: 1} = FencedPublication.document(actor, key)
+      assert %StorageStaging{state: "published"} = staging(staged)
+
+      expire!(successor)
+      assert {:error, :not_owner} = FencedPublication.remove(removal(actor, key), 1, successor)
+      assert %{revision: 1} = FencedPublication.document(actor, key)
+    end
+
+    test "a removal of no known shape raises before any statement", %{actor: actor, key: key} do
+      slot = slot!()
+      staged = stage!(actor, "v1")
+
+      for change <- [
+            document(actor, key, staged),
+            %Change{resource: {:document, actor.athanor_id, key}, attrs: %{a: 1}},
+            %Change{resource: {:row, RetentionSettings, actor.athanor_id}}
+          ] do
+        assert_raise ArgumentError, fn -> FencedPublication.remove(change, 1, slot) end
+      end
+    end
+  end
+
   describe "the budget" do
     test "stays under the lease margin" do
       assert FencedPublication.budget_ms() < ControlPlane.margin_ms()
@@ -381,6 +504,21 @@ defmodule Arca.FencedPublicationTest do
 
   defp document(actor, key, staged),
     do: %Change{resource: {:document, actor.athanor_id, key}, staged: staged}
+
+  defp removal(actor, key), do: %Change{resource: {:document, actor.athanor_id, key}}
+
+  # The deployment's claimant switch, restored when the case ends.
+  defp claimed(enabled) do
+    previous = Application.get_env(:arca, :control_plane_claim_enabled)
+
+    ExUnit.Callbacks.on_exit(fn ->
+      if is_nil(previous),
+        do: Application.delete_env(:arca, :control_plane_claim_enabled),
+        else: Application.put_env(:arca, :control_plane_claim_enabled, previous)
+    end)
+
+    Application.put_env(:arca, :control_plane_claim_enabled, enabled)
+  end
 
   defp stage!(actor, bytes) do
     assert {:ok, id} = Arca.Storage.stage(actor, "attempt-#{System.unique_integer()}", bytes)

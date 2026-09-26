@@ -12,11 +12,14 @@ defmodule Arca.ProvisioningClaims do
   an actor without one is refused (`{:error, :no_athanor}`) before any
   query.
 
-    * `claim/4` takes the row for `owner`: a fresh row at fence 1, or a
+    * `claim/5` takes the row for `owner`: a fresh row at fence 1, or a
       takeover — fence raised by one, a new attempt — of a row whose lease
       ran out or whose outcome is settled. A live claim of another owner
       answers `{:busy, claim}`; a live claim of the same owner answers
-      itself, attempt and fence unchanged.
+      itself, attempt and fence unchanged. The take runs in one
+      transaction under the claiming member's slot, verified live first
+      (`Arca.ControlPlane.verify_held/1`): a member that lost its slot
+      takes no athanor, `{:error, :not_owner}`.
     * `renew/4` moves the lease forward, `settle/5` writes the outcome and
       `release/3` settles `released`. Each lands only while the row still
       reads the caller's `owner` and `fence` and carries no outcome;
@@ -47,24 +50,51 @@ defmodule Arca.ProvisioningClaims do
 
   @doc """
   Take the actor's athanor's claim for `owner`, entering through
-  `entry_kind`, for `lease_ms`.
+  `entry_kind`, for `lease_ms`, under the claiming member's `slot`
+  (`Arca.ControlPlane.member_slot/0`).
+
+  The slot is verified live in the take's own transaction before the row
+  is read (`Arca.ControlPlane.verify_held/1`, which holds the lease row
+  until commit), so a takeover of the member's slot either lands first —
+  and this answers `{:error, :not_owner}` with nothing taken — or waits
+  until the claim has committed. This is the member's check, beside the
+  athanor's own fence (the claim row's owner and fence), not a second one.
   """
-  @spec claim(Prima.Actor.t(), String.t(), String.t(), pos_integer()) ::
-          {:ok, map()} | {:busy, map()} | refusal()
-  def claim(%Prima.Actor{athanor_id: athanor_id}, owner, entry_kind, lease_ms)
+  @spec claim(
+          Prima.Actor.t(),
+          String.t(),
+          String.t(),
+          pos_integer(),
+          Arca.ControlPlane.slot() | :none
+        ) ::
+          {:ok, map()} | {:busy, map()} | {:error, :not_owner} | refusal()
+  def claim(%Prima.Actor{athanor_id: athanor_id}, owner, entry_kind, lease_ms, slot)
       when is_binary(athanor_id) and athanor_id != "" and is_binary(owner) and
              is_binary(entry_kind) and
              is_integer(lease_ms) and lease_ms > 0 do
     if entry_kind not in ProvisioningClaim.entry_kinds(),
-      do: raise(ArgumentError, "unknown provisioning entry kind #{Prima.LoggerContext.shape(entry_kind)}")
+      do:
+        raise(
+          ArgumentError,
+          "unknown provisioning entry kind #{Prima.LoggerContext.shape(entry_kind)}"
+        )
 
     Arca.Repo.Errors.with_db_rescue("Arca.ProvisioningClaims.claim", fn ->
-      take(athanor_id, owner, entry_kind, lease_ms, @rounds)
+      Arca.Repo.locking_transaction(fn ->
+        case Arca.ControlPlane.verify_held(slot) do
+          :ok -> take(athanor_id, owner, entry_kind, lease_ms, @rounds)
+          :lost -> Arca.Repo.rollback(:not_owner)
+        end
+      end)
+      |> case do
+        {:ok, answer} -> answer
+        {:error, :not_owner} -> {:error, :not_owner}
+      end
     end)
     |> Arca.Data.project()
   end
 
-  def claim(%Prima.Actor{}, _owner, _entry_kind, _lease_ms), do: {:error, :no_athanor}
+  def claim(%Prima.Actor{}, _owner, _entry_kind, _lease_ms, _slot), do: {:error, :no_athanor}
 
   @doc "Move the lease `lease_ms` past now, while `owner` still holds `fence`."
   @spec renew(Prima.Actor.t(), String.t(), pos_integer(), pos_integer()) ::
@@ -95,7 +125,8 @@ defmodule Arca.ProvisioningClaims do
       when is_binary(athanor_id) and athanor_id != "" and is_binary(owner) and is_integer(fence) and
              is_binary(outcome) and (is_binary(detail) or is_nil(detail)) do
     if outcome not in ProvisioningClaim.outcomes(),
-      do: raise(ArgumentError, "unknown provisioning outcome #{Prima.LoggerContext.shape(outcome)}")
+      do:
+        raise(ArgumentError, "unknown provisioning outcome #{Prima.LoggerContext.shape(outcome)}")
 
     Arca.Repo.Errors.with_db_rescue("Arca.ProvisioningClaims.settle", fn ->
       athanor_id
@@ -160,7 +191,7 @@ defmodule Arca.ProvisioningClaims do
     do: Arca.QueryHelpers.no_athanor!("Arca.ProvisioningClaims.hold?/3")
 
   @doc """
-  Whether `claim`, as `claim/4` or `current/1` answered it, still stands on
+  Whether `claim`, as `claim/5` or `current/1` answered it, still stands on
   the lease clock: unsettled, its lease not run out.
   """
   @spec live?(map()) :: boolean()
