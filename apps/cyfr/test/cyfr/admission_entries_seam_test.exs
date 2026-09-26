@@ -64,6 +64,7 @@ defmodule Cyfr.AdmissionEntriesSeamTest do
     {Emissary.Web.MCPController, :handle} => :mcp_batch,
     {Emissary.Web.MCPController, :method_not_allowed} => :mcp_get,
     {CyfrWeb.Plugs.Authenticate, :call} => :invalid_api_key,
+    {CyfrWeb.Plugs.FrameRequest, :call} => :frame_request,
     {CyfrWeb.Plugs.MCPOrigin, :call} => :origin_rejected,
     {CyfrWeb.Plugs.MCPRateLimit, :call} => :mcp_rate_limited,
     {Emissary.Web.Plugs.MCPRequestMetadata, :call} => :missing_protocol_header,
@@ -251,6 +252,16 @@ defmodule Cyfr.AdmissionEntriesSeamTest do
     conn =
       conn
       |> put_req_header("origin", "http://evil.example")
+      |> mcp_call("system", %{"action" => "status"})
+
+    assert json_response(conn, 403)
+    {request_id_of(conn), refused("forbidden", :none)}
+  end
+
+  def frame_request(conn, _ctx) do
+    conn =
+      conn
+      |> put_req_header("sec-fetch-dest", "iframe")
       |> mcp_call("system", %{"action" => "status"})
 
     assert json_response(conn, 403)

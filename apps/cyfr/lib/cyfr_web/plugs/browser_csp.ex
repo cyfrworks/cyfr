@@ -5,8 +5,10 @@ defmodule CyfrWeb.Plugs.BrowserCSP do
   @moduledoc """
   Sets the Prism pages' same-origin content security policy for scripts,
   styles, images, fonts, LiveView and tincture iframes. Allows inline styles
-  and data-URL images. Install after `put_secure_browser_headers` to replace
-  its default CSP.
+  and data-URL images. A Prism page frames tinctures and is framed by
+  nothing, itself included: `frame-ancestors 'none'` and
+  `x-frame-options: DENY`. Install after `put_secure_browser_headers` to
+  replace its default CSP.
   """
 
   @behaviour Plug
@@ -22,7 +24,7 @@ defmodule CyfrWeb.Plugs.BrowserCSP do
            "font-src 'self'",
            "connect-src 'self'",
            "frame-src 'self'",
-           "frame-ancestors 'self'",
+           "frame-ancestors 'none'",
            "base-uri 'self'",
            "object-src 'none'"
          ],
@@ -36,7 +38,7 @@ defmodule CyfrWeb.Plugs.BrowserCSP do
   def call(conn, _opts) do
     conn
     |> put_resp_header("content-security-policy", @csp)
-    |> put_resp_header("x-frame-options", "SAMEORIGIN")
+    |> put_resp_header("x-frame-options", "DENY")
     |> put_resp_header("x-content-type-options", "nosniff")
     |> put_resp_header("referrer-policy", "strict-origin-when-cross-origin")
     |> CyfrWeb.Plugs.ApiSecurityHeaders.maybe_hsts()

@@ -39,6 +39,7 @@ defmodule CyfrWeb do
       Plugs.CallIdentity,
       Plugs.ConfiguredUeberauth,
       Plugs.ControlPlaneOwnership,
+      Plugs.FrameRequest,
       Plugs.Headless,
       Plugs.MCPOrigin,
       Plugs.MCPRateLimit,

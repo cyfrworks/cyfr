@@ -103,6 +103,7 @@ defmodule Prima.RefusalTest do
     {:ip_not_allowed, :forbidden},
     {:auth_provider_error, :unavailable},
     {:origin_rejected, :forbidden},
+    {:frame_request, :forbidden},
     {:parse_error, :invalid_argument},
     {:invalid_request, :invalid_argument},
     {:header_mismatch, :invalid_argument},

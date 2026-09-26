@@ -54,6 +54,8 @@ defmodule Prism.Router do
       pipeline :attachment do
         # A headless node serves no page surface, and a chat attachment is one.
         plug CyfrWeb.Plugs.Headless
+        # Before the session: a frame's request reaches none.
+        plug CyfrWeb.Plugs.FrameRequest
         plug :fetch_session
         # GET only, so this never verifies a token — but a pipeline that reads
         # the session carries the same forgery guard as `:browser`.

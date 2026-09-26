@@ -5,7 +5,6 @@ defmodule CyfrWeb.Ingress.TinctureControllerTest do
   use CyfrWeb.ConnCase, async: false
 
   import Prima.Test.Wait
-  require Ecto.Query
 
   # A version's artifact digest, and its release digest (its bytes bound to
   # its manifest, `Compendium.ReleaseDigest`) as the registry records them:
@@ -246,6 +245,20 @@ defmodule CyfrWeb.Ingress.TinctureControllerTest do
       conn = get(conn, "/t/test/local/pub-dash")
       assert conn.status == 200
       assert conn.resp_body =~ "Public"
+    end
+
+    test "serves a frame: the tincture routes read no session to refuse it for",
+         %{conn: conn} do
+      page = conn |> put_req_header("sec-fetch-dest", "iframe") |> get("/t/test/local/pub-dash")
+      assert page.status == 200
+      assert page.resp_body =~ "Public"
+
+      asset =
+        build_conn()
+        |> put_req_header("sec-fetch-dest", "iframe")
+        |> get("/t/test/local/pub-dash/style.css")
+
+      assert asset.status == 200
     end
 
     test "its policy is the frame's rules' derivation, sandboxed like a private one's",

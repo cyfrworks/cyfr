@@ -23,6 +23,9 @@ defmodule Emissary.Router do
         plug :accepts, ["json", "event-stream"]
         plug CyfrWeb.Plugs.ApiSecurityHeaders
         plug CyfrWeb.Plugs.CORS, methods: ~w(POST)
+        # After CORS, whose preflight answer halts first; before the caller
+        # is authenticated.
+        plug CyfrWeb.Plugs.FrameRequest, errors: Emissary.Web.MCPError
         plug CyfrWeb.Plugs.MCPOrigin, errors: Emissary.Web.MCPError
         # Before Authenticate so unauthenticated floods never touch DB state.
         plug CyfrWeb.Plugs.MCPRateLimit, errors: Emissary.Web.MCPError

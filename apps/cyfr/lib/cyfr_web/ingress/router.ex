@@ -44,6 +44,9 @@ defmodule CyfrWeb.Ingress.Router do
         plug :accepts, ["json", "event-stream"]
         plug CyfrWeb.Plugs.ApiSecurityHeaders
         plug CyfrWeb.Plugs.CORS, methods: ~w(GET), headers: ~w(last-event-id)
+        # After CORS, whose preflight answer halts first; before the caller
+        # is authenticated.
+        plug CyfrWeb.Plugs.FrameRequest
         plug CyfrWeb.Plugs.MCPOrigin
         plug CyfrWeb.Plugs.MCPRateLimit, bucket: :api
         plug CyfrWeb.Plugs.Authenticate
