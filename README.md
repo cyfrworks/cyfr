@@ -88,7 +88,7 @@ cyfr -h
 open http://localhost:4000
 ```
 
-`cyfr init` downloads your project files and pulls the server images: `docker-compose.yml`, `Caddyfile`, `.env.example` and the services' own env examples, `cyfr.yaml`, WIT interface definitions, the `aqua/` soul, roles and scrolls, and the included guides ([integration-guide.md](integration-guide.md), [component-guide.md](component-guide.md), [tincture-guide.md](tincture-guide.md)). It writes `.env` from `.env.example`, prompting for the hostname, the operator's sign-in email (the first platform admin), and — for a real hostname — a Let's Encrypt email, and mints the stack's keys into it: `CYFR_SECRET_KEY_BASE`, `CYFR_LOCUS_BACKENDS_KEY`, the worker root `CYFR_OPUS_KEY` with the `OPUS_SERVICE_KEY` derived from it, and `CYFR_LOCUS_BUILDS_KEY` beside `CYFR_LOCUS_BUILDS_URL`, so builds are on. Pass `--no-interactive` to take the defaults. It does not install Docker itself. The scaffolded `docker-compose.yml` is the full self-hosted stack — `cyfr` (the one endpoint on `:4000`: Prism, API, MCP, tinctures), `opus` (the execution worker that runs components), `locus-builds` (the builds service behind `cyfr build compile`), `locus-backends` (the backends service that runs stdio MCP servers) and `caddy` (TLS + reverse proxy at `:80`/`:443`, for real-hostname deployments); `cyfr up` brings up the first four, and `caddy` too when you enabled TLS at init. See [Deploy to a Server](#deploy-to-a-server) for the same stack on a VPS.
+`cyfr init` downloads your project files and pulls the server images: `docker-compose.yml`, `Caddyfile`, `.env.example` and the services' own env examples, `cyfr.yaml`, WIT interface definitions, the `aqua/` soul, roles and scrolls, and the included guides ([configuration-guide.md](configuration-guide.md), [integration-guide.md](integration-guide.md), [component-guide.md](component-guide.md), [tincture-guide.md](tincture-guide.md)). It writes `.env` from `.env.example`, prompting for the hostname, the operator's sign-in email (the first platform admin), and — for a real hostname — a Let's Encrypt email, and mints the stack's keys into it: `CYFR_SECRET_KEY_BASE`, `CYFR_LOCUS_BACKENDS_KEY`, the worker root `CYFR_OPUS_KEY` with the `OPUS_SERVICE_KEY` derived from it, and `CYFR_LOCUS_BUILDS_KEY` beside `CYFR_LOCUS_BUILDS_URL`, so builds are on. Pass `--no-interactive` to take the defaults. It does not install Docker itself. The scaffolded `docker-compose.yml` is the full self-hosted stack — `cyfr` (the one endpoint on `:4000`: Prism, API, MCP, tinctures), `opus` (the execution worker that runs components), `locus-builds` (the builds service behind `cyfr build compile`), `locus-backends` (the backends service that runs stdio MCP servers) and `caddy` (TLS + reverse proxy at `:80`/`:443`, for real-hostname deployments); `cyfr up` brings up the first four, and `caddy` too when you enabled TLS at init. See [Deploy to a Server](#deploy-to-a-server) for the same stack on a VPS.
 
 ## Prism — the web face
 
@@ -110,6 +110,7 @@ After `cyfr init`, your project looks like this:
 
 ```
 your-project/
+├── configuration-guide.md # Every setting the server reads, with its default
 ├── integration-guide.md   # How to use CYFR as your app backend
 ├── component-guide.md      # Full guide to building components
 ├── tincture-guide.md       # Guide to building tinctures
@@ -117,7 +118,7 @@ your-project/
 ├── Caddyfile               # Reverse proxy (TLS mode only): everything → cyfr:4000
 ├── cyfr.yaml
 ├── .env                    # The stack's keys and config, written by `cyfr init` (do not commit)
-├── .env.example            # Everything .env can set
+├── .env.example            # The starting .env: init's keys and the deployment choices
 ├── .env.opus.example       # The opus service's own settings (copy to .env.opus)
 ├── .env.locus.example      # The locus-builds and locus-backends services' own settings (copy to .env.locus)
 ├── .gitignore
@@ -458,10 +459,18 @@ Everything below is optional — the defaults (GitHub/Google sign-in, SQLite,
 local `./data` storage) run a full instance with zero extra configuration —
 with one exception: a server (release) deployment must assign the CORS
 allowlist, because sign-in is enabled by default, and `.env.example` and
-`cyfr init` assign it empty for you. Each option is set in
-`.env` (see the matching blocks in `.env.example`) and fails loud: if an
-option is enabled but incompletely configured, the server refuses to start
-rather than silently falling back.
+`cyfr init` assign it empty for you. Each option below is a deployment
+variable, set in `.env` (`.env.example` carries the common choices
+commented out) and read at boot, and fails loud: if an option is enabled
+but incompletely configured, the server refuses to start rather than
+silently falling back.
+
+The server's limits, windows and log level are **platform settings**: stored
+in the database, the same on every member, and changed by a platform admin
+on Prism's **Settings** page or with `cyfr settings`, a live one reaching
+new work within seconds. [configuration-guide.md](configuration-guide.md)
+lists every deployment variable and every platform setting with its
+default, and says how to change a setting on a node with no console.
 
 ### CORS allowlist (required for server deployments)
 
@@ -541,24 +550,19 @@ a reopen admits only runs started after it.
 
 `cyfr admin allow '*'` admits any identity your provider authenticates —
 that is the public-hosting configuration, and it is the one where the limits
-matter. They are all optional and **off unless set** — except the group,
-DM and thread caps, which ship at 50, 200 and 1000 and are each turned off
-with `0`; a private box needs none of the others.
-
-| Variable | Bounds |
-|---|---|
-| `CYFR_MAX_ATHANORS` | athanors on this server, active ones only — an archived furnace frees its place |
-| `CYFR_MINT_PER_HOUR` | personal athanors minted per hour, i.e. how fast strangers can arrive |
-| `CYFR_MAX_GROUPS_PER_PERSON` | groups one person may **create** (default 50; they may belong to more) |
-| `CYFR_MAX_PAIRS_PER_PERSON` | DMs one person may hold open (default 200). A DM is minted for two, so either person at the ceiling refuses it; an ended DM frees its place |
-| `CYFR_MAX_MEMBERS_PER_GROUP` | seats in one group, invitations included |
-| `CYFR_MAX_THREADS_PER_ATHANOR` | threads one athanor may hold (default 1000) — a thread is a row any member's client can mint from the wire, each with a follow row of its own |
-| `CYFR_ATHANOR_STORAGE_BYTES` | bytes one athanor may hold — everything in its tree, its copies of the shipped bundle included; copying a shipped version in is never refused by the cap, but its bytes count from then on |
+matter. They are the platform settings of the `tenancy` group in
+[configuration-guide.md](configuration-guide.md): athanors on the server,
+athanors minted per hour, groups one person creates, DMs one person holds,
+seats in a group, threads in an athanor, and the bytes one athanor holds.
+Each is off unless set, except the group, DM and thread caps, which ship
+at 50, 200 and 1000 and are each turned off with `0`; a private box needs
+none of the others.
 
 A new athanor is provisioned with its own copy of the shipped bundle and
-AQUA tree, so `CYFR_MAX_ATHANORS` bounds tenancy and
-`CYFR_ATHANOR_STORAGE_BYTES` bounds each athanor's whole tree.
-A specific `cyfr admin deny` always beats `*`.
+AQUA tree, so the athanor cap bounds tenancy and the storage cap each
+athanor's whole tree; copying a shipped version in is never refused by the
+storage cap, but its bytes count from then on. A specific `cyfr admin deny`
+always beats `*`.
 
 Closing the door again — `cyfr admin remove` on the `*` entry — ejects
 everyone it was the only reason for: their sessions end and the API keys they
@@ -733,21 +737,12 @@ All four required vars must be set or the server refuses to start.
   exactly one (Caddy). Stack a CDN or another proxy in front and you must
   raise it (or list the proxies in `CYFR_TRUSTED_PROXY_CIDRS`), otherwise
   client IPs resolve to the proxy address and API-key IP allowlists fail
-  closed.
-- `CYFR_MCP_RATE_LIMIT_MAX` / `CYFR_MCP_RATE_LIMIT_WINDOW_MS` (default
-  120/60s) — per-client-IP transport throttle on the `/mcp` endpoint.
-- `CYFR_CRUCIBLE_MAX_CONCURRENT` (default 128) and
-  `CYFR_CRUCIBLE_MAX_CONCURRENT_PER_TENANT` (default 16) — global and
-  per-athanor WASM concurrency caps. The container CPU quota
+  closed. A count outside 0 to 16, or a `CYFR_TRUSTED_PROXY_CIDRS` entry
+  that is neither an address nor a CIDR, refuses the boot, naming it.
+- The rate limits, stream limits and execution concurrency caps are
+  platform settings ([configuration-guide.md](configuration-guide.md) has
+  each with its default and range). The container CPU quota
   (`CYFR_CPU_LIMIT`, default 4) bounds aggregate CPU use.
-- Every rate-limit maximum and window, concurrency ceiling and stream
-  limit is a whole number from 1 up (`CYFR_CRUCIBLE_MAX_CONCURRENT` from
-  32, so its chain reserve holds a chain of the full depth), since zero
-  would admit nothing or read as no limit. A value outside its range, or
-  not a whole number, refuses the boot, naming the variable; unset, the
-  default stands. `CYFR_TRUSTED_PROXY_HOPS` outside 0 to 16, or a
-  `CYFR_TRUSTED_PROXY_CIDRS` entry that is neither an address nor a CIDR,
-  refuses the boot the same way.
 
 ### Backup and restore
 
@@ -916,6 +911,7 @@ Every setting of the control plane is a `CYFR_` variable; a part named with a pr
 
 | Document | Description |
 |----------|-------------|
+| [Configuration Guide](configuration-guide.md) | Every deployment variable and platform setting, with its default |
 | [Integration Guide](integration-guide.md) | How to use CYFR as your application backend |
 | [Component Guide](component-guide.md) | Practical guide to building catalysts, reagents, and formulas |
 | [Tincture Guide](tincture-guide.md) | Practical guide to building tinctures |

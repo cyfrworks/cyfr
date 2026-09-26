@@ -363,7 +363,7 @@ var initCmd = &cobra.Command{
 	GroupID: "server",
 	Long: `Set up a CYFR project in the current directory so you can start the self-hosted stack with "cyfr up": cyfr (the one endpoint), opus (the execution worker), locus-builds (the builds service), locus-backends (stdio MCP servers) and, in TLS mode, caddy.
 
-Downloads docker-compose.yml, Caddyfile, .env.example, the services' own env examples and the bundled scaffold (component/tincture/integration guides, wit/ definitions, the aqua/ soul, roles and scrolls) for this CLI's version; generates cyfr.yaml, .gitignore, and the data/aqua directories; writes .env from .env.example, prompting for the hostname, an allowed sign-in email, a TLS y/n choice, and (if TLS) a Let's Encrypt email; and pulls the images the stack starts. Run with --no-interactive to take the defaults silently.
+Downloads docker-compose.yml, Caddyfile, .env.example, the services' own env examples and the bundled scaffold (configuration/component/tincture/integration guides, wit/ definitions, the aqua/ soul, roles and scrolls) for this CLI's version; generates cyfr.yaml, .gitignore, and the data/aqua directories; writes .env from .env.example, prompting for the hostname, an allowed sign-in email, a TLS y/n choice, and (if TLS) a Let's Encrypt email; and pulls the images the stack starts. Run with --no-interactive to take the defaults silently.
 
 .env gets the stack's keys: CYFR_SECRET_KEY_BASE, CYFR_LOCUS_BACKENDS_KEY, the worker root CYFR_OPUS_KEY with the OPUS_SERVICE_KEY derived from it for OPUS_SERVICE_ID (wrk_opus unless .env names another), and CYFR_LOCUS_BUILDS_URL=http://locus-builds:4100 with a minted CYFR_LOCUS_BUILDS_KEY, so builds are on. It also assigns CYFR_CORS_ALLOWED_ORIGINS the empty allowlist, since cyfr serves Prism, the API, /mcp and the tinctures from its own origin and no browser client of this stack is cross-origin — a release with sign-in configured refuses to boot on the wildcard default, which init never writes.
 
@@ -533,7 +533,7 @@ database_path: ./data/cyfr.db
 			if caddyfileExists {
 				fmt.Println("  Caddyfile ready")
 			}
-			fmt.Println("  component-guide.md / tincture-guide.md / integration-guide.md downloaded")
+			fmt.Println("  configuration-guide.md / component-guide.md / tincture-guide.md / integration-guide.md downloaded")
 			fmt.Println("  wit/ interface definitions downloaded")
 			fmt.Println("  aqua/ soul, roles and scrolls downloaded")
 		}
@@ -684,14 +684,26 @@ func ask(r *bufio.Reader, question, def string) string {
 	return line
 }
 
+// The template lines renderEnvFile rewrites, matched by prefix as the
+// template spells them: three assignments, and the operators' line, which
+// the template ships commented and init uncomments. A line the template
+// lacks is one init cannot write, so each must appear in .env.example
+// exactly once (TestRenderEnvFileShippedTemplate).
+const (
+	hostAnchor        = "CYFR_HOST="
+	behindProxyAnchor = "CYFR_BEHIND_PROXY="
+	acmeEmailAnchor   = "CADDY_ACME_EMAIL="
+	adminEmailsAnchor = "# CYFR_PLATFORM_ADMIN_EMAILS="
+)
+
 // renderEnvFile fills in a .env.example template with the answers to init's
 // prompts: sets CYFR_HOST, sets CADDY_ACME_EMAIL if non-empty, flips
 // CYFR_BEHIND_PROXY based on the TLS choice, and (if adminEmail is
 // non-empty) un-comments and sets CYFR_PLATFORM_ADMIN_EMAILS. Everything
 // else is left as-is; the keys are ensureStackKeys'.
-// TestRenderEnvFileShippedTemplate binds this key set, and the keys, to the
-// real .env.example — a template edit that strands a key fails there, not
-// on a user's first `cyfr up`.
+// TestRenderEnvFileShippedTemplate binds these anchors, and the keys, to
+// the real .env.example — a template edit that strands one fails there,
+// not on a user's first `cyfr up`.
 func renderEnvFile(template, host, adminEmail, acmeEmail string, tls bool) string {
 	behindProxy := "false"
 	if tls {
@@ -700,14 +712,14 @@ func renderEnvFile(template, host, adminEmail, acmeEmail string, tls bool) strin
 	lines := strings.Split(template, "\n")
 	for i, line := range lines {
 		switch {
-		case strings.HasPrefix(line, "CYFR_HOST="):
-			lines[i] = "CYFR_HOST=" + host
-		case strings.HasPrefix(line, "CYFR_BEHIND_PROXY="):
-			lines[i] = "CYFR_BEHIND_PROXY=" + behindProxy
-		case acmeEmail != "" && strings.HasPrefix(line, "CADDY_ACME_EMAIL="):
-			lines[i] = "CADDY_ACME_EMAIL=" + acmeEmail
-		case adminEmail != "" && strings.HasPrefix(line, "# CYFR_PLATFORM_ADMIN_EMAILS="):
-			lines[i] = "CYFR_PLATFORM_ADMIN_EMAILS=" + adminEmail
+		case strings.HasPrefix(line, hostAnchor):
+			lines[i] = hostAnchor + host
+		case strings.HasPrefix(line, behindProxyAnchor):
+			lines[i] = behindProxyAnchor + behindProxy
+		case acmeEmail != "" && strings.HasPrefix(line, acmeEmailAnchor):
+			lines[i] = acmeEmailAnchor + acmeEmail
+		case adminEmail != "" && strings.HasPrefix(line, adminEmailsAnchor):
+			lines[i] = strings.TrimPrefix(adminEmailsAnchor, "# ") + adminEmail
 		}
 	}
 	return strings.Join(lines, "\n")

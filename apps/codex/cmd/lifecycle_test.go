@@ -126,17 +126,63 @@ func TestWorkerKeyReproducesTheVectorFile(t *testing.T) {
 	}
 }
 
+// readShippedTemplate reads the .env.example `cyfr init` downloads.
+func readShippedTemplate(t *testing.T) string {
+	t.Helper()
+	raw, err := os.ReadFile(filepath.Join("..", "..", "..", ".env.example"))
+	if err != nil {
+		t.Fatalf("read shipped .env.example: %v", err)
+	}
+	return string(raw)
+}
+
+// Each line renderEnvFile rewrites is in the shipped template exactly once,
+// in the comment state it matches: the three assignments uncommented, the
+// operators' line commented and nowhere assigned. And each key
+// ensureStackKeys writes is assigned there once, empty, or with the value
+// init completes (the builds URL), so init writes every one on its own line.
+func TestShippedTemplateCarriesInitsAnchors(t *testing.T) {
+	lines := strings.Split(readShippedTemplate(t), "\n")
+	count := func(prefix string) int {
+		n := 0
+		for _, line := range lines {
+			if strings.HasPrefix(line, prefix) {
+				n++
+			}
+		}
+		return n
+	}
+	for _, anchor := range []string{hostAnchor, behindProxyAnchor, acmeEmailAnchor, adminEmailsAnchor} {
+		if n := count(anchor); n != 1 {
+			t.Errorf("the shipped template has %d lines beginning %q, want 1", n, anchor)
+		}
+	}
+	if n := count(strings.TrimPrefix(adminEmailsAnchor, "# ")); n != 0 {
+		t.Errorf("the shipped template assigns CYFR_PLATFORM_ADMIN_EMAILS on %d lines; init uncomments its anchor", n)
+	}
+
+	f := parseEnvFile(readShippedTemplate(t))
+	for _, key := range []string{secretKeyBaseVar, backendsKeyVar, workerRootVar, serviceKeyVar, buildsKeyVar, corsOriginsVar} {
+		if v, assigned := f.value(key); !assigned || v != "" || len(f.assignments(key)) != 1 {
+			t.Errorf("the shipped template does not assign %s empty on one line (%q, assigned: %v)", key, v, assigned)
+		}
+	}
+	if v, _ := f.value(buildsURLVar); v != defaultBuildsURL || len(f.assignments(buildsURLVar)) != 1 {
+		t.Errorf("the shipped template's %s is %q, want %s on one line", buildsURLVar, v, defaultBuildsURL)
+	}
+	if _, assigned := f.value(serviceIDVar); assigned {
+		t.Errorf("the shipped template assigns %s; compose's default names the opus service", serviceIDVar)
+	}
+}
+
 // Every key ensureStackKeys adds to the shipped .env.example lands on the
 // line the template documents it on, so nothing is appended below the
 // template's last section, and the result is the pair-consistent .env the
 // stack boots from.
 func TestRenderEnvFileShippedTemplate(t *testing.T) {
-	raw, err := os.ReadFile(filepath.Join("..", "..", "..", ".env.example"))
-	if err != nil {
-		t.Fatalf("read shipped .env.example: %v", err)
-	}
+	raw := readShippedTemplate(t)
 
-	rendered := renderEnvFile(string(raw), "example.com", "me@example.com", "ops@example.com", true)
+	rendered := renderEnvFile(raw, "example.com", "me@example.com", "ops@example.com", true)
 	for _, want := range []string{
 		"\nCYFR_HOST=example.com\n",
 		"\nCYFR_BEHIND_PROXY=true\n",
@@ -146,6 +192,9 @@ func TestRenderEnvFileShippedTemplate(t *testing.T) {
 		if !strings.Contains(rendered, want) {
 			t.Errorf("shipped template: renderEnvFile did not produce %q", strings.TrimSpace(want))
 		}
+	}
+	if strings.Contains(rendered, adminEmailsAnchor) {
+		t.Errorf("shipped template: the operators' anchor is still commented after init set it")
 	}
 
 	got, changes, err := ensureStackKeys(rendered)
@@ -159,7 +208,8 @@ func TestRenderEnvFileShippedTemplate(t *testing.T) {
 	for _, c := range changes {
 		added = append(added, c.key)
 	}
-	if want := []string{secretKeyBaseVar, backendsKeyVar, workerRootVar, serviceKeyVar, buildsURLVar, buildsKeyVar}; !slices.Equal(added, want) {
+	// The template carries the builds URL; init mints the key beside it.
+	if want := []string{secretKeyBaseVar, backendsKeyVar, workerRootVar, serviceKeyVar, buildsKeyVar}; !slices.Equal(added, want) {
 		t.Errorf("added %v, want %v", added, want)
 	}
 	assertStackPairs(t, got, defaultServiceID)
@@ -179,6 +229,39 @@ func TestRenderEnvFileShippedTemplate(t *testing.T) {
 	}
 	if _, again, err := ensureStackKeys(got); err != nil || len(again) != 0 {
 		t.Errorf("a second init changes %v (%v)", again, err)
+	}
+}
+
+// `cyfr init --no-interactive` takes every default: the template's host and
+// direct mode, the operators' line left commented and the ACME address
+// empty, and the same keys minted, builds on, so `cyfr up` starts
+// locus-builds and no Caddy.
+func TestRenderEnvFileShippedTemplateNoInteractive(t *testing.T) {
+	raw := readShippedTemplate(t)
+	rendered := renderEnvFile(raw, "localhost", "", "", false)
+	for _, want := range []string{
+		"\nCYFR_HOST=localhost\n",
+		"\nCYFR_BEHIND_PROXY=false\n",
+		"\nCADDY_ACME_EMAIL=\n",
+		"\n" + adminEmailsAnchor + "\n",
+	} {
+		if !strings.Contains(rendered, want) {
+			t.Errorf("shipped template, no answers: renderEnvFile did not produce %q", strings.TrimSpace(want))
+		}
+	}
+
+	got, _, err := ensureStackKeys(rendered)
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertStackPairs(t, got, defaultServiceID)
+
+	env := filepath.Join(t.TempDir(), ".env")
+	if err := os.WriteFile(env, []byte(got), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if profiles := composeProfiles(env); !slices.Equal(profiles, []string{buildsProfile}) {
+		t.Errorf("a direct project fresh from init runs profiles %v, want only %s", profiles, buildsProfile)
 	}
 }
 
@@ -489,6 +572,11 @@ func TestComposeProfilesFollowTheProjectEnv(t *testing.T) {
 		{"# CYFR_LOCUS_BUILDS_URL=http://locus-builds:4100\n", nil},
 		{"CYFR_LOCUS_BUILDS_URL=\n", nil},
 		{"CYFR_LOCUS_BUILDS_URL=https://builds.example.com\n", nil},
+		// A remote builder starts no local container, whatever its name
+		// begins or ends with: the profile keys on the compose service's
+		// own host.
+		{"CYFR_LOCUS_BUILDS_URL=https://locus-builds.example.com:4100\n", nil},
+		{"CYFR_LOCUS_BUILDS_URL=http://builds.example.com/locus-builds\n", nil},
 		// The retired variable and host start nothing: a project still
 		// carrying them builds nothing until it names the builds service.
 		{"CYFR_" + "BUILDER_URL=http://builder:4100\n", nil},
@@ -531,14 +619,10 @@ func TestShippedComposePullsTheLocusImageOnce(t *testing.T) {
 		t.Errorf("without the builds profile the Locus image is not pulled once for locus-backends: %v", got)
 	}
 
-	raw, err := os.ReadFile(filepath.Join("..", "..", "..", ".env.example"))
-	if err != nil {
-		t.Fatalf("read shipped .env.example: %v", err)
-	}
 	var offered string
-	for _, line := range strings.Split(string(raw), "\n") {
-		if strings.HasPrefix(line, "# CYFR_LOCUS_BUILDS_URL=") {
-			offered = strings.TrimPrefix(line, "# ")
+	for _, line := range strings.Split(readShippedTemplate(t), "\n") {
+		if strings.HasPrefix(line, buildsURLVar+"=") {
+			offered = line
 		}
 	}
 	if offered == "" {

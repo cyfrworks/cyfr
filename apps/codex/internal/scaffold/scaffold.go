@@ -87,7 +87,7 @@ func isManagedAqua(path string) bool {
 // shipped AQUA soul, roles and scrolls).
 func isManaged(path string) bool {
 	switch path {
-	case "component-guide.md", "tincture-guide.md", "integration-guide.md":
+	case "configuration-guide.md", "component-guide.md", "tincture-guide.md", "integration-guide.md":
 		return true
 	}
 	// Everything under wit/ is managed.
