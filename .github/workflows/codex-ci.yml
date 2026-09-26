@@ -20,6 +20,8 @@ on:
       - 'docker-compose.yml'
       - 'tests/fixtures/**'
       - 'seed/aqua/**'
+      # TestShippedGuidesAreManaged reads the tarball's ITEMS list.
+      - 'scripts/scaffold-tarball.sh'
       - '.github/workflows/codex-ci.yml'
   pull_request:
     paths:
@@ -28,6 +30,7 @@ on:
       - 'docker-compose.yml'
       - 'tests/fixtures/**'
       - 'seed/aqua/**'
+      - 'scripts/scaffold-tarball.sh'
       - '.github/workflows/codex-ci.yml'
 
 permissions:
