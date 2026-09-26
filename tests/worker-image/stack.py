@@ -180,6 +180,13 @@ class Stack:
     # Inside the container
     # ------------------------------------------------------------------
 
+    def host_gateway(self):
+        """The address the container reaches this machine at, compose's host
+        gateway (`host.docker.internal`), as the IPv4 literal a pin names; the
+        engine resolves nothing itself."""
+        out = self.exec("getent ahostsv4 host.docker.internal").stdout.split()
+        return out[0] if out else None
+
     def exec(self, script, user=None):
         user_args = ["-u", user] if user else []
         return run("docker", "exec", *user_args, self.container, "sh", "-c", script, check=False)

@@ -24,7 +24,8 @@ defmodule Locus.BuilderService do
   1. **The header, before any of the body.** The `x-cyfr-auth` header is
      verified under this service's request key
      (`Prima.BuilderProtocol.verify_request_header/3`) and refused as
-     `unauthorized`, in the protocol's order: `malformed`,
+     `unauthorized`, in the protocol's order: `unknown_version` (a
+     version token other than the protocol's), `malformed`,
      `outside_window`, `bad_mac`. A service holding no key verifies
      nothing.
   2. **Replay.** A verified header's nonce is kept for as long as the
