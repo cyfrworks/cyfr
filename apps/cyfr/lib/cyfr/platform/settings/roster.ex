@@ -385,7 +385,7 @@ defmodule Cyfr.Platform.Settings.Roster do
         apply: @apply_log_level
       },
 
-      # ——— the tincture credentials and the per-frame rate, not yet read ———
+      # ——— the tincture credentials (read by Sanctum.TinctureAuth since C0) and the per-frame rate (read from C2b) ———
       unread(
         "asset_credential_window_s",
         "CYFR_ASSET_CREDENTIAL_WINDOW_S",
