@@ -171,8 +171,8 @@ defmodule Cyfr.Cell do
   @spec facts() :: map()
   def facts do
     %{
-      repo_adapter: Arca.Repo.adapter(),
-      storage_adapter: Application.get_env(:arca, :storage_adapter, Arca.Adapters.Local),
+      repo_adapter: Arca.repo_adapter(),
+      storage_adapter: Arca.storage_adapter(),
       proto_dist: proto_dist(),
       dist_certificates?: dist_certificates?(),
       cell_cookie: Application.get_env(:cyfr, :cell_cookie),
@@ -195,9 +195,11 @@ defmodule Cyfr.Cell do
     """
   end
 
-  defp shared_storage(%{storage_adapter: Arca.Adapters.S3}), do: []
-
   defp shared_storage(%{storage_adapter: adapter}) do
+    if Arca.shared_storage?(adapter), do: [], else: shared_storage_refusal(adapter)
+  end
+
+  defp shared_storage_refusal(adapter) do
     """
     CYFR_CLUSTER=1 needs shared object storage, and this member's storage \
     adapter is #{inspect(adapter)}. Local storage is one member's \

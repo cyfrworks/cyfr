@@ -36,6 +36,8 @@ defmodule Mix.Tasks.Cyfr.Bench.Step do
   flush to disk). Numbers from a loaded machine are indicative only.
   """
 
+  use Boundary, classify_to: Cyfr.Mix
+
   use Mix.Task
 
   # The harness is test support, compiled only under MIX_ENV=test.

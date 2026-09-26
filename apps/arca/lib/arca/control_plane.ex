@@ -325,6 +325,18 @@ defmodule Arca.ControlPlane do
     end
   end
 
+  @doc """
+  `verify_held/1` in a locking transaction of its own, for a caller that
+  holds none: `:ok` while `slot` still names the row under a standing
+  lease, `:lost` once it does not. A store that cannot answer raises, as
+  `verify_held/1` does.
+  """
+  @spec check_held(slot()) :: :ok | :lost
+  def check_held(slot) do
+    {:ok, standing} = Arca.Repo.locking_transaction(fn -> verify_held(slot) end)
+    standing
+  end
+
   # ---- the roster ------------------------------------------------------------
 
   @doc """

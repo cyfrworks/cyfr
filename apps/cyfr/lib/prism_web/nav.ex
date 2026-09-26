@@ -262,7 +262,7 @@ defmodule PrismWeb.Nav do
   def page?(href) when is_binary(href) do
     path = href |> String.split("?", parts: 2) |> hd()
 
-    case Phoenix.Router.route_info(Cyfr.Boundaries.router(), "GET", path, "") do
+    case Phoenix.Router.route_info(CyfrWeb.Router, "GET", path, "") do
       %{phoenix_live_view: live} when is_tuple(live) -> not redirect_stub?(elem(live, 0))
       %{} -> true
       :error -> false

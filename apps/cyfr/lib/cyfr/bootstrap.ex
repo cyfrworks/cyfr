@@ -208,9 +208,9 @@ defmodule Cyfr.Bootstrap do
   defp still_held(:none), do: :ok
 
   defp still_held(slot) do
-    case Arca.Repo.locking_transaction(fn -> Arca.ControlPlane.verify_held(slot) end) do
-      {:ok, :ok} -> :ok
-      {:ok, :lost} -> {:error, :slot_lost}
+    case Arca.ControlPlane.check_held(slot) do
+      :ok -> :ok
+      :lost -> {:error, :slot_lost}
     end
   end
 

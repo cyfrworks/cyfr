@@ -103,7 +103,7 @@ defmodule Cyfr.RuntimeConfig do
   the application's DB setup cannot disagree about what was built.
   """
   @spec repo_adapter() :: module()
-  defdelegate repo_adapter(), to: Arca.Repo, as: :adapter
+  defdelegate repo_adapter(), to: Arca
 
   @doc """
   The configured auth provider module, or `nil` when the deployment runs

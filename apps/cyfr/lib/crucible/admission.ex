@@ -423,8 +423,8 @@ defmodule Crucible.Admission do
         retained_input: opts[:retained_input],
         schedule_id: opts[:schedule_id]
       ]
-      |> Arca.QueryHelpers.maybe_put(:execution_id, opts[:execution_id])
-      |> Arca.QueryHelpers.maybe_put(:reservation, reservation(opts))
+      |> maybe_put(:execution_id, opts[:execution_id])
+      |> maybe_put(:reservation, reservation(opts))
 
     ctx
     |> Record.new(reference, input, record_opts)
@@ -1016,4 +1016,8 @@ defmodule Crucible.Admission do
       end
     end
   end
+
+  # An option is kept only when it carries a value.
+  defp maybe_put(opts, _key, nil), do: opts
+  defp maybe_put(opts, key, value), do: Keyword.put(opts, key, value)
 end

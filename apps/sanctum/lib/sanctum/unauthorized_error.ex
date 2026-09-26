@@ -37,6 +37,8 @@ defmodule Sanctum.UnauthorizedError do
 end
 
 defimpl Plug.Exception, for: Sanctum.UnauthorizedError do
+  use Boundary, classify_to: Sanctum
+
   def status(%{reason: reason}) do
     if Sanctum.Unauthorized.reason?(reason) and
          Sanctum.Unauthorized.class(reason) == :unauthenticated,

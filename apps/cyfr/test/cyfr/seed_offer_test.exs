@@ -91,15 +91,18 @@ defmodule Cyfr.SeedOfferTest do
     Supervisor.stop(supervisor)
   end
 
-  # The work the offer runs by default is the component domain's facade
-  # entry: the host names no internal of the domain it offers seeds for.
-  # A capture is no call, so it is read off the compiled definition.
-  test "the default sync is Compendium.sync_seeds/0" do
+  # The work the boot's offer runs is the component domain's facade entry,
+  # and the composition root names it: the host names no domain. A capture
+  # is no call, so it is read off the compiled definition.
+  test "the composition root offers Compendium.sync_seeds/0" do
     {:ok, {_, [debug_info: {:debug_info_v1, backend, data}]}} =
-      :beam_lib.chunks(:code.which(SeedOffer), [:debug_info])
+      :beam_lib.chunks(:code.which(Cyfr.Application), [:debug_info])
 
-    {:ok, %{definitions: definitions}} = backend.debug_info(:elixir_v1, SeedOffer, data, [])
-    {_run, _kind, _meta, clauses} = Enum.find(definitions, &match?({{:run, 1}, _, _, _}, &1))
+    {:ok, %{definitions: definitions}} =
+      backend.debug_info(:elixir_v1, Cyfr.Application, data, [])
+
+    {_offer, _kind, _meta, clauses} =
+      Enum.find(definitions, &match?({{:seed_offer, 0}, _, _, _}, &1))
 
     captured =
       for {_meta, _args, _guards, body} <- clauses,

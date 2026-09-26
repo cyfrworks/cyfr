@@ -6,6 +6,11 @@ defmodule Cyfr.Boundaries do
   The one catalog of the architectural boundaries this repository holds
   itself to, and the pure checks that read a tree against it.
 
+  The catalog names every module it judges, from the gate to the routers,
+  so it is a boundary of its own beside the host rather than a host
+  module: its dependencies are the boundaries its rows name, and nothing
+  depends on it.
+
   Eight roster tests used to hold these, each scanning the tree its own
   way and each carrying its own copy of what a layer is. The rows are
   here now, and `Cyfr.BoundariesTest` is the one reader: it plants a
@@ -66,6 +71,22 @@ defmodule Cyfr.Boundaries do
   reader's, which is what keeps a catalog that ships in `lib` off the
   test support.
   """
+
+  use Boundary,
+    top_level?: true,
+    deps: [
+      Grimoire,
+      Crucible,
+      Emissary,
+      Emissary.Router,
+      Emissary.Web,
+      Prism.Router,
+      CyfrWeb,
+      CyfrWeb.Ingress,
+      CyfrWeb.Router
+    ],
+    exports: [],
+    check: [aliases: true]
 
   # ---------------------------------------------------------------------------
   # 1. The applications

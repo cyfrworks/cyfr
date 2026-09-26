@@ -13,4 +13,13 @@ defmodule Prism do
 
   `Aqua` owns agent orchestration; Prism renders its state.
   """
+
+  use Boundary,
+    deps: [Grimoire, Sanctum, Arca, Cyfr, Compendium, Aqua, Crucible, CyfrWeb],
+    exports: [
+      Labels,
+      TinctureRegistry,
+      Tray
+    ],
+    check: [aliases: true]
 end

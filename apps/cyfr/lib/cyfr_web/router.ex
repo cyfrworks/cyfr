@@ -12,6 +12,28 @@ defmodule CyfrWeb.Router do
   prefixes are disjoint, so their order here does not change matching.
   """
 
+  use Boundary,
+    top_level?: true,
+    deps: [
+      Arca,
+      Sanctum,
+      Grimoire,
+      Cyfr,
+      Compendium,
+      Aqua,
+      Crucible,
+      Emissary,
+      Emissary.Router,
+      Emissary.Web,
+      Prism,
+      Prism.Router,
+      PrismWeb,
+      CyfrWeb,
+      CyfrWeb.Ingress
+    ],
+    exports: [],
+    check: [aliases: true]
+
   use CyfrWeb, :router
 
   require CyfrWeb.Ingress.Router

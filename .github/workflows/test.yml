@@ -210,8 +210,16 @@ jobs:
           fi
       - name: Install dependencies
         run: mix deps.get
+      # Every layer edge is a Boundary declaration, and a forbidden
+      # reference is a compiler warning: a plain compile only warns, and
+      # incremental state can keep a declaration the tree no longer has, so
+      # both environments compile forced with warnings as errors.
       - name: Compile with warnings as errors
-        run: mix compile --warnings-as-errors
+        run: mix compile --force --warnings-as-errors
+      - name: Compile the dev target with warnings as errors
+        env:
+          MIX_ENV: dev
+        run: mix compile --force --warnings-as-errors
       - name: Static analysis
         run: mix credo --only=warning
       - name: Check formatting
