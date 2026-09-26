@@ -17,7 +17,10 @@ defmodule Arca.UsageTest do
 
   use ExUnit.Case, async: false
 
-  setup do
+  # The usage walk reaches the storage cap, which the settings accessor
+  # reads from the store since B2, so the tests need a sandbox owner.
+  setup tags do
+    Arca.Test.Sandbox.setup!(tags)
     base = Path.join(System.tmp_dir!(), "usage_#{System.unique_integer([:positive])}")
 
     prev_base = Application.fetch_env!(:arca, :base_path)
