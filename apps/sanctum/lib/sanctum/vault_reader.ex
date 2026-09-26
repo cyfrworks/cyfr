@@ -10,15 +10,22 @@ defmodule Sanctum.VaultReader do
 
   1. the caller is not anonymous (a public invocation must never reach
      operator credentials, whatever its edges say)
-  2. the entry exists in the caller's tenant and is `active`
-  3. the binding digest **derived from the row's binding fields** equals
+  2. the edge's projection names what it reads: a key or bundle edge its
+     non-empty `fields` (`fetch/2`), an OAuth edge its non-empty `scopes`
+     (`oauth_token/3`). An edge without one — including every edge stored
+     before projections named their fields — is corrupt and dispenses
+     nothing; re-consenting to the component's current version writes a
+     named projection
+  3. the entry exists in the caller's tenant and is `active`
+  4. the binding digest **derived from the row's binding fields** equals
      the consent's copy — the stored column is a cache, never an
      authority, so a write path that edited endpoints without recomputing
      it cannot pass
-  4. the payload unseals under the entry's AEAD (a tampered pointer fails
+  5. the payload unseals under the entry's AEAD (a tampered pointer fails
      decrypt)
-  5. the projection filters what the edge may see; nothing outside
-     `projection.fields` leaves this module
+  6. every projected field is present in the entry's material, and
+     nothing outside `projection.fields` leaves this module: a field the
+     entry lacks refuses the whole resolution, never a partial projection
 
   ## Payload versions
 
@@ -59,30 +66,47 @@ defmodule Sanctum.VaultReader do
           | {:provider_mismatch, String.t()}
           | {:scope_projection_unsatisfiable, [String.t()]}
           | :no_oauth_material
+          | :corrupt
+          | {:missing_field, String.t()}
           | term()
 
   @doc """
   Resolve the entry's secret material as a name → value map, projected.
+
+  The edge's `projection.fields` is required: an edge without a non-empty
+  field list answers `{:error, :corrupt}` before the entry is read, and a
+  projected field the entry's material lacks answers
+  `{:error, {:missing_field, name}}`. Either way nothing is dispensed.
   """
   @spec fetch(Context.t(), vault_resource()) ::
           {:ok, %{String.t() => String.t()}} | {:error, error()}
+  def fetch(%Context{anonymous: true}, _resource), do: {:error, :anonymous_denied}
+
   def fetch(%Context{} = ctx, resource) do
-    with {:ok, entry, payload} <- load_and_unseal(ctx, resource) do
-      resolve_secrets(ctx, entry, payload, projection_fields(resource))
+    with {:ok, fields} <- projection_fields(resource),
+         {:ok, entry, payload} <- load_and_unseal(ctx, resource) do
+      resolve_secrets(ctx, entry, payload, fields)
     end
   end
 
   @doc """
   Resolve an OAuth access token for `provider` from the entry.
 
-  The requested provider must match both the entry's provider hint (when
-  set) and a pointer entry — a consent for one provider can never dispense
-  another's token.
+  The edge's projection is its `scopes`: an edge naming none is corrupt
+  (`{:error, :corrupt}`) unless it names fields, which makes it a key or
+  bundle edge that carries no OAuth grant (`{:error, :no_oauth_material}`);
+  either way the entry is not read. The requested provider must match
+  both the entry's provider hint (when set) and a pointer entry — a
+  consent for one provider can never dispense another's token.
   """
   @spec oauth_token(Context.t(), vault_resource(), String.t()) ::
           {:ok, String.t()} | {:error, error()}
+  def oauth_token(%Context{anonymous: true}, _resource, provider) when is_binary(provider),
+    do: {:error, :anonymous_denied}
+
   def oauth_token(%Context{} = ctx, resource, provider) when is_binary(provider) do
-    with {:ok, entry, payload} <- load_and_unseal(ctx, resource),
+    with :ok <- oauth_projection(resource),
+         {:ok, entry, payload} <- load_and_unseal(ctx, resource),
          :ok <- check_provider_hint(entry, provider),
          :ok <- check_scope_projection(entry, resource) do
       resolve_oauth(ctx, entry, payload, provider)
@@ -186,8 +210,6 @@ defmodule Sanctum.VaultReader do
     JCS.hash(input)
   end
 
-  defp load_and_unseal(%Context{anonymous: true}, _resource), do: {:error, :anonymous_denied}
-
   defp load_and_unseal(%Context{} = ctx, %{entry_id: entry_id} = resource) do
     actor = Context.actor(ctx)
 
@@ -287,13 +309,17 @@ defmodule Sanctum.VaultReader do
   # Secret material
   # ---------------------------------------------------------------------------
 
-  defp resolve_secrets(_ctx, _entry, %{"v" => 2, "fields" => material}, fields) do
-    projected =
-      material
-      |> Enum.filter(fn {name, _value} -> fields == :all or name in fields end)
-      |> Map.new()
-
-    {:ok, projected}
+  # Every projected field must be in the material: a partial projection
+  # would hand the guest less than the operator consented to without saying
+  # so, so the first absent field (in sorted order) refuses the whole read.
+  defp resolve_secrets(_ctx, _entry, %{"v" => 2, "fields" => material}, fields)
+       when is_map(material) do
+    Enum.reduce_while(fields, {:ok, %{}}, fn name, {:ok, acc} ->
+      case Map.fetch(material, name) do
+        {:ok, value} -> {:cont, {:ok, Map.put(acc, name, value)}}
+        :error -> {:halt, {:error, {:missing_field, name}}}
+      end
+    end)
   end
 
   # Exclude decrypted material from error tuples.
@@ -313,19 +339,28 @@ defmodule Sanctum.VaultReader do
 
   defp check_provider_hint(_entry, provider), do: {:error, {:provider_mismatch, provider}}
 
+  # An OAuth edge names its scopes; a token is never dispensed under an
+  # edge that names none, which would be the whole grant the entry holds.
+  defp oauth_projection(%{projection: %{scopes: [_ | _] = scopes}} = resource) do
+    if Enum.all?(scopes, &(is_binary(&1) and &1 != "")),
+      do: :ok,
+      else: corrupt_projection(resource)
+  end
+
+  defp oauth_projection(%{projection: %{fields: [_ | _]}}), do: {:error, :no_oauth_material}
+  defp oauth_projection(resource), do: corrupt_projection(resource)
+
   # A scope projection narrows an OAuth grant, but the provider cannot
   # attenuate an issued token — so a projection asking for scopes the
   # entry was never authorized for is unsatisfiable and refused, never
-  # silently served with a broader token.
-  defp check_scope_projection(entry, %{projection: %{scopes: scopes}})
-       when is_list(scopes) and scopes != [] do
+  # silently served with a broader token. `oauth_projection/1` has already
+  # refused an edge that names no scopes.
+  defp check_scope_projection(entry, %{projection: %{scopes: scopes}}) do
     case scopes -- decode_list(entry.oauth_scopes, "oauth_scopes") do
       [] -> :ok
       missing -> {:error, {:scope_projection_unsatisfiable, Enum.sort(missing)}}
     end
   end
-
-  defp check_scope_projection(_entry, _resource), do: :ok
 
   defp resolve_oauth(%Context{} = ctx, entry, %{"v" => 2} = payload, provider) do
     case payload["oauth"] do
@@ -340,8 +375,29 @@ defmodule Sanctum.VaultReader do
   # Helpers
   # ---------------------------------------------------------------------------
 
-  defp projection_fields(%{projection: %{fields: fields}}) when is_list(fields), do: fields
-  defp projection_fields(_), do: :all
+  # A key or bundle projection names its fields. An absent projection, an
+  # absent or non-list field list, an empty one or a non-string name is a
+  # corrupt edge — never "every field" — and the refusal names its remedy.
+  defp projection_fields(%{projection: %{fields: [_ | _] = fields}} = resource) do
+    if Enum.all?(fields, &(is_binary(&1) and &1 != "")),
+      do: {:ok, fields |> Enum.uniq() |> Enum.sort()},
+      else: corrupt_projection(resource)
+  end
+
+  defp projection_fields(resource), do: corrupt_projection(resource)
+
+  defp corrupt_projection(resource) do
+    Logger.warning(
+      "[Sanctum.VaultReader] the consent edge for vault entry #{entry_label(resource)} " <>
+        "names no projection and dispenses nothing; " <>
+        "re-consent to the component's current version"
+    )
+
+    {:error, :corrupt}
+  end
+
+  defp entry_label(%{entry_id: entry_id}) when is_binary(entry_id), do: entry_id
+  defp entry_label(_resource), do: "(unnamed)"
 
   defp decode_list(nil, _field), do: []
 

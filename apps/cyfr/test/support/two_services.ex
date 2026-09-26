@@ -48,6 +48,7 @@ defmodule Cyfr.Test.TwoServices do
   @scripted "reagent:local.two-workers"
   @version "0.1.0"
   @key_field "STUB_API_KEY"
+  @stub_scopes ["stub.chat"]
 
   @stub_limits %{
     "timeout" => "1m",
@@ -60,6 +61,13 @@ defmodule Cyfr.Test.TwoServices do
   @doc "The step stub's name-level reference: the catalyst `lay_seed!/2` lays."
   @spec stub() :: String.t()
   def stub, do: @stub
+
+  @doc """
+  The scopes the step stub's OAuth need declares and `arm!/3` authorizes
+  its entry for; a catalyst armed through `arm!/4` declares the same.
+  """
+  @spec stub_scopes() :: [String.t()]
+  def stub_scopes, do: @stub_scopes
 
   @doc "The version the step stub is laid at."
   @spec version() :: String.t()
@@ -446,10 +454,11 @@ defmodule Cyfr.Test.TwoServices do
       "contracts" => [Prima.Model.chat_contract()],
       "needs" => %{
         "api_key" => %{
-          "type" => "api_key:step-stub",
-          "reason" => "to read a key as a model catalyst does",
+          "type" => "oauth:step-stub",
+          "reason" => "to read a key and a token as a model catalyst does",
           "required" => true,
-          "fields" => [@key_field]
+          "fields" => [@key_field],
+          "scopes" => @stub_scopes
         }
       },
       "caps" => %{"limits" => Map.merge(@stub_limits, Keyword.get(opts, :limits, %{}))}
@@ -472,10 +481,12 @@ defmodule Cyfr.Test.TwoServices do
   end
 
   @doc """
-  Bind `key` as the stub's vault field, in an entry whose OAuth bundle
-  holds `token`, and dispense `token` to every run of the stub once its
-  runner has attached, before the attach is answered and its guest runs,
-  as a guest's `cyfr:oauth` call dispenses one (`dispense_after_attach!/3`).
+  Bind `key` as the stub's vault field, in an OAuth entry whose bundle
+  holds `token` under the stub's scopes — the attach reads the key and the
+  token is dispensed under the scopes — and dispense `token` to every run
+  of the stub once its runner has attached, before the attach is answered
+  and its guest runs, as a guest's `cyfr:oauth` call dispenses one
+  (`dispense_after_attach!/3`).
   Answers both, the credentials to look for.
   """
   @spec arm!(Sanctum.Context.t(), key: String.t(), token: String.t()) :: [String.t()]
@@ -487,9 +498,10 @@ defmodule Cyfr.Test.TwoServices do
     {:ok, entry} =
       Sanctum.Vault.create(ctx, %{
         name: "#{ref} key",
-        kind: "api_key",
+        kind: "oauth",
         fields: %{@key_field => key},
-        oauth: %{"access_token" => token}
+        oauth: %{"access_token" => token},
+        oauth_scopes: @stub_scopes
       })
 
     {:ok, plan} = Plan.plan(ctx, %{ref: ref})

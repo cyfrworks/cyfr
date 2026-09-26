@@ -364,6 +364,83 @@ defmodule Sanctum.Consent.ShapeDerivationTest do
     end
   end
 
+  describe "a vault need names its projection" do
+    defp fieldless(need_type, fields) do
+      need = %{"type" => need_type, "reason" => "to call the API with your key"}
+      need = if fields == :absent, do: need, else: Map.put(need, "fields", fields)
+      %{"needs" => %{"api_key" => need}}
+    end
+
+    test "a need without its list, or with an empty one, is refused as a manifest error",
+         %{ctx: ctx} do
+      for {name, manifest} <- [
+            {"shape-nofields", fieldless("api_key:example.com", :absent)},
+            {"shape-emptyfields", fieldless("api_key:example.com", [])},
+            {"shape-oauth-noscopes", fieldless("oauth:google", :absent)},
+            {"shape-oauth-emptyscopes",
+             put_in(fieldless("oauth:google", :absent), ["needs", "api_key", "scopes"], [])},
+            {"shape-bundle-nofields", fieldless("bundle:example.com", [])}
+          ] do
+        publish!(ctx, name, "1.0.0", %{manifest: Jason.encode!(manifest)})
+        ref = "reagent:local.#{name}"
+
+        assert {:error, {:invalid_argument, message} = reason} =
+                 ShapeDerivation.shape_input(ctx, ref)
+
+        # The sentence names the component and the need, and renders as is.
+        assert message =~ ref
+        assert message =~ ~s("api_key")
+
+        assert %Prima.Refusal{class: :invalid_argument, message: ^message} =
+                 Prima.Refusal.classify(reason)
+
+        # The live shape refuses the same way, so a load fails closed.
+        assert ShapeDerivation.live_digest(ctx, ref) == {:error, reason}
+      end
+    end
+
+    test "a fieldless need is refused at consent time and mints nothing", %{ctx: ctx} do
+      publish!(ctx, "shape-nofields-mint", "1.0.0", %{
+        manifest: Jason.encode!(fieldless("api_key:example.com", :absent))
+      })
+
+      ref = "reagent:local.shape-nofields-mint"
+
+      assert {:error, {:invalid_argument, _message}} =
+               Sanctum.Consent.Plan.plan(ctx, %{ref: ref})
+
+      {:ok, _} = Bootstrap.run(ctx)
+      assert {:ok, []} = Arca.ConsentStorage.profiles(Sanctum.Context.actor(ctx), ref)
+    end
+
+    test "an OAuth need's projection is its scopes; it needs no fields", %{ctx: ctx} do
+      manifest =
+        put_in(fieldless("oauth:google", :absent), ["needs", "api_key", "scopes"], ["b", "a"])
+
+      publish!(ctx, "shape-oauth-scopes", "1.0.0", %{manifest: Jason.encode!(manifest)})
+      {:ok, input} = ShapeDerivation.shape_input(ctx, "reagent:local.shape-oauth-scopes")
+
+      assert [%{name: "api_key", fields: [], scopes: ["a", "b"]}] = input.needs
+    end
+
+    test "every derived vault need row carries its declared fields", %{ctx: ctx} do
+      manifest = %{
+        "needs" => %{
+          "api_key" => %{
+            "type" => "api_key:example.com",
+            "reason" => "to call the API with your key",
+            "fields" => ["ORG", "KEY"]
+          }
+        }
+      }
+
+      publish!(ctx, "shape-fields", "1.0.0", %{manifest: Jason.encode!(manifest)})
+      {:ok, input} = ShapeDerivation.shape_input(ctx, "reagent:local.shape-fields")
+
+      assert [%{name: "api_key", fields: ["KEY", "ORG"]}] = input.needs
+    end
+  end
+
   describe "a stored manifest that does not decode" do
     # A row altered outside the publish path: its manifest column holds
     # bytes that are not JSON. The real facts port hands consent those

@@ -112,7 +112,11 @@ defmodule Crucible.CredentialedIngressGateTest do
 
       # With it: exactly the granted fields, and only through the reader.
       assert {:ok, %{"api_key" => "sk-operator-only"}} =
-               VaultReader.fetch(ctx, %{entry_id: entry.id, binding_digest: digest})
+               VaultReader.fetch(ctx, %{
+                 entry_id: entry.id,
+                 binding_digest: digest,
+                 projection: %{fields: ["api_key"], scopes: []}
+               })
     end
 
     test "an anonymous caller is refused even holding a valid edge", %{ctx: ctx} do
@@ -121,7 +125,8 @@ defmodule Crucible.CredentialedIngressGateTest do
       assert {:error, :anonymous_denied} =
                VaultReader.fetch(%{ctx | anonymous: true}, %{
                  entry_id: entry.id,
-                 binding_digest: digest
+                 binding_digest: digest,
+                 projection: %{fields: ["api_key"], scopes: []}
                })
     end
   end

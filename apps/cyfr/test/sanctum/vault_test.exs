@@ -34,7 +34,8 @@ defmodule Sanctum.VaultTest do
   defp resource_for(ctx, id) do
     {:ok, entry} = Arca.VaultStorage.get(actor(ctx), id)
     {:ok, digest} = VaultReader.binding_digest(entry)
-    %{entry_id: id, binding_digest: digest}
+    fields = entry.field_names |> Jason.decode!() |> Enum.sort()
+    %{entry_id: id, binding_digest: digest, projection: %{fields: fields, scopes: []}}
   end
 
   defp mint_profile_with_ref(ctx, entry_id, binding_digest) do

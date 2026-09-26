@@ -29,6 +29,9 @@ defmodule Sanctum.Vault.NoPlaintextLeakTest do
   alias Sanctum.Vault
   alias Sanctum.VaultReader
 
+  # The edge a consent writes for these entries names the one field they hold.
+  @token_projection %{fields: ["token"], scopes: []}
+
   setup do
     :ok = Ecto.Adapters.SQL.Sandbox.checkout(Arca.Repo)
     Ecto.Adapters.SQL.Sandbox.mode(Arca.Repo, {:shared, self()})
@@ -98,14 +101,23 @@ defmodule Sanctum.Vault.NoPlaintextLeakTest do
             Vault.blocked_profile_status()
           ),
           Arca.VaultStorage.get(%Prima.Actor{athanor_id: "ath_other"}, view.id),
-          VaultReader.fetch(ctx, %{entry_id: view.id, binding_digest: "sha256:wrong"}),
+          VaultReader.fetch(ctx, %{
+            entry_id: view.id,
+            binding_digest: "sha256:wrong",
+            projection: @token_projection
+          }),
           VaultReader.fetch(%{ctx | anonymous: true}, %{
             entry_id: view.id,
-            binding_digest: "sha256:wrong"
+            binding_digest: "sha256:wrong",
+            projection: @token_projection
           }),
           VaultReader.oauth_token(
             ctx,
-            %{entry_id: view.id, binding_digest: "sha256:wrong"},
+            %{
+              entry_id: view.id,
+              binding_digest: "sha256:wrong",
+              projection: %{fields: [], scopes: ["x"]}
+            },
             "google"
           )
         ]
@@ -122,7 +134,11 @@ defmodule Sanctum.Vault.NoPlaintextLeakTest do
         {:ok, digest} = VaultReader.binding_digest(stored)
 
         assert {:ok, %{"token" => ^value}} =
-                 VaultReader.fetch(ctx, %{entry_id: view.id, binding_digest: digest})
+                 VaultReader.fetch(ctx, %{
+                   entry_id: view.id,
+                   binding_digest: digest,
+                   projection: @token_projection
+                 })
       end)
 
     refute String.contains?(log, value), "the credential reached a log line"
@@ -150,7 +166,12 @@ defmodule Sanctum.Vault.NoPlaintextLeakTest do
           })
 
         {:ok, digest} = VaultReader.binding_digest(entry)
-        result = VaultReader.fetch(ctx, %{entry_id: id, binding_digest: digest})
+        result =
+          VaultReader.fetch(ctx, %{
+            entry_id: id,
+            binding_digest: digest,
+            projection: @token_projection
+          })
 
         assert {:error, {:invalid_payload, {:unknown_keys, ["extra"]}}} = result
         refute contains?(result, value)

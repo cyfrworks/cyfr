@@ -782,6 +782,73 @@ defmodule Sanctum.Consent.FlowTest do
       assert auth.resources.egress.domains == ["api.anthropic.com"]
     end
 
+    test "an explicit empty projection is refused, never read as every field", %{ctx: ctx} do
+      publish_needs!(ctx, "flow-needs-empty")
+      entry = entry!(ctx, %{fields: %{"ANTHROPIC_API_KEY" => "sk-1"}})
+      ref = "reagent:local.flow-needs-empty"
+
+      for over <- [%{fields: []}, %{scopes: []}] do
+        binding = Map.merge(%{need: "api_key", entry_id: entry.id}, over)
+
+        assert {:error, {:invalid_argument, message}} =
+                 Commit.preview(ctx, %{ref: ref, bindings: [binding]})
+
+        assert message =~ "api_key"
+      end
+    end
+
+    test "a key need grants no scopes, so its edge never dispenses a token", %{ctx: ctx} do
+      publish_needs!(ctx, "flow-needs-scopes")
+      entry = entry!(ctx, %{fields: %{"ANTHROPIC_API_KEY" => "sk-1"}})
+
+      assert {:error, {:invalid_argument, message}} =
+               Commit.preview(ctx, %{
+                 ref: "reagent:local.flow-needs-scopes",
+                 bindings: [%{need: "api_key", entry_id: entry.id, scopes: ["s"]}]
+               })
+
+      assert message =~ "api_key"
+    end
+
+    test "an ingress binding on a manifest without needs names the entry's fields",
+         %{ctx: ctx} do
+      publish!(ctx, "flow-ingress-named")
+      entry = entry!(ctx)
+      ref = "reagent:local.flow-ingress-named"
+
+      assert {:ok, %{revision: 1}} =
+               walk!(ctx, ref, %{bindings: [%{need: "@ingress", entry_id: entry.id}]})
+
+      {:ok, [profile]} = Arca.ConsentStorage.profiles(Sanctum.Context.actor(ctx), ref)
+
+      {:ok, component} =
+        Compendium.Registry.get_latest(ctx, "flow-ingress-named", "local", "reagent")
+
+      {:ok, live} = Compendium.Activation.resolve_verified(ctx, component)
+      {:ok, auth, _} = Loader.load_root(ctx, profile, live: {:ok, live})
+
+      # The edge references its entry under a named projection, and the
+      # attach's read answers exactly those fields.
+      assert auth.resources.vault.projection.fields == ["anon_key", "url"]
+
+      assert {:ok, %{"url" => "https://db.example", "anon_key" => "anon"}} =
+               Sanctum.VaultReader.fetch(ctx, auth.resources.vault)
+    end
+
+    test "the preview names the fields the edge projects", %{ctx: ctx} do
+      publish_needs!(ctx, "flow-needs-sheet")
+      entry = entry!(ctx, %{fields: %{"ANTHROPIC_API_KEY" => "sk-1", "OTHER" => "x"}})
+
+      {:ok, preview} =
+        Commit.preview(ctx, %{
+          ref: "reagent:local.flow-needs-sheet",
+          bindings: [%{need: "api_key", entry_id: entry.id}]
+        })
+
+      assert "Uses #{entry.name} (ANTHROPIC_API_KEY)" in preview.summary
+      refute Enum.any?(preview.summary, &(&1 =~ "all fields"))
+    end
+
     test "the implicit slot retires when needs are declared", %{ctx: ctx} do
       publish_needs!(ctx, "flow-needs-implicit")
       entry = entry!(ctx)

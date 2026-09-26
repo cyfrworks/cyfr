@@ -4,6 +4,8 @@
 defmodule Sanctum.VaultReaderTest do
   use ExUnit.Case, async: false
 
+  import ExUnit.CaptureLog
+
   alias Sanctum.CipherAAD
   alias Sanctum.Vault.Payload
   alias Sanctum.VaultReader
@@ -39,7 +41,17 @@ defmodule Sanctum.VaultReaderTest do
 
     {:ok, entry} = Arca.VaultStorage.put(actor(ctx), attrs)
     {:ok, digest} = VaultReader.binding_digest(entry)
-    {entry, %{entry_id: entry.id, binding_digest: digest}}
+
+    # The edge a consent writes: its projection names the fields it reads
+    # and, for an OAuth grant, the scopes the entry was authorized for.
+    scopes = if json = Map.get(over, :oauth_scopes), do: Jason.decode!(json), else: []
+    projection = %{fields: fields |> Map.keys() |> Enum.sort(), scopes: Enum.sort(scopes)}
+    {entry, %{entry_id: entry.id, binding_digest: digest, projection: projection}}
+  end
+
+  defp last_used_at(ctx, entry) do
+    {:ok, row} = Arca.VaultStorage.get(actor(ctx), entry.id)
+    row.last_used_at
   end
 
   describe "fetch/2 — v2 material" do
@@ -53,11 +65,43 @@ defmodule Sanctum.VaultReaderTest do
       refute Map.has_key?(resolved, "service_key")
     end
 
-    test "no projection resolves every field", %{ctx: ctx} do
-      fields = %{"a" => "1", "b" => "2"}
-      {_entry, resource} = mint_material_entry(ctx, fields)
+    test "an edge whose projection names no fields is corrupt and dispenses nothing",
+         %{ctx: ctx} do
+      {entry, resource} = mint_material_entry(ctx, %{"a" => "sealed-a", "b" => "sealed-b"})
+      before = last_used_at(ctx, entry)
 
-      assert {:ok, ^fields} = VaultReader.fetch(ctx, resource)
+      # An edge stored before projections named their fields carries no
+      # projection at all; the rest are the same defect spelled otherwise.
+      unnamed = [
+        Map.delete(resource, :projection),
+        %{resource | projection: nil},
+        %{resource | projection: %{scopes: []}},
+        %{resource | projection: %{fields: [], scopes: []}},
+        %{resource | projection: %{fields: "a", scopes: []}},
+        %{resource | projection: %{fields: ["a", nil], scopes: []}},
+        %{resource | projection: %{fields: ["a", ""], scopes: []}}
+      ]
+
+      for edge <- unnamed do
+        log =
+          capture_log(fn ->
+            assert {:error, :corrupt} = VaultReader.fetch(ctx, edge)
+          end)
+
+        assert log =~ "re-consent to the component's current version"
+        refute log =~ "sealed-"
+      end
+
+      # Refused before the entry is read: no use is recorded.
+      assert last_used_at(ctx, entry) == before
+    end
+
+    test "a projected field the entry lacks refuses the whole resolution", %{ctx: ctx} do
+      {_entry, resource} = mint_material_entry(ctx, %{"url" => "https://db.example"})
+      resource = %{resource | projection: %{fields: ["url", "anon_key"], scopes: []}}
+
+      # Never the partial map with `url` alone, and never a silent skip.
+      assert {:error, {:missing_field, "anon_key"}} = VaultReader.fetch(ctx, resource)
     end
 
     test "anonymous callers are refused before any load", %{ctx: ctx} do
@@ -124,25 +168,35 @@ defmodule Sanctum.VaultReaderTest do
         })
 
       {:ok, digest} = VaultReader.binding_digest(entry)
+      resource = %{entry_id: id, binding_digest: digest, projection: %{fields: ["k"], scopes: []}}
 
       assert {:error, {:invalid_payload, {:unknown_keys, ["extra"]}}} =
-               VaultReader.fetch(ctx, %{entry_id: id, binding_digest: digest})
+               VaultReader.fetch(ctx, resource)
     end
   end
 
   describe "oauth_token/3 — v2 material" do
     @valid_oauth %{"access_token" => "tok-live", "token_type" => "bearer"}
+    @readonly Jason.encode!(["gmail.readonly"])
 
     test "dispenses a valid token without touching any provider", %{ctx: ctx} do
       {_entry, resource} =
-        mint_material_entry(ctx, %{}, %{provider_hint: "google", oauth: @valid_oauth})
+        mint_material_entry(ctx, %{}, %{
+          provider_hint: "google",
+          oauth: @valid_oauth,
+          oauth_scopes: @readonly
+        })
 
       assert {:ok, "tok-live"} = VaultReader.oauth_token(ctx, resource, "google")
     end
 
     test "a consent for one provider never dispenses another's token", %{ctx: ctx} do
       {_entry, resource} =
-        mint_material_entry(ctx, %{}, %{provider_hint: "google", oauth: @valid_oauth})
+        mint_material_entry(ctx, %{}, %{
+          provider_hint: "google",
+          oauth: @valid_oauth,
+          oauth_scopes: @readonly
+        })
 
       assert {:error, {:provider_mismatch, "github"}} =
                VaultReader.oauth_token(ctx, resource, "github")
@@ -179,9 +233,67 @@ defmodule Sanctum.VaultReaderTest do
 
     test "a material entry without an oauth bundle has no token to dispense", %{ctx: ctx} do
       {_entry, resource} =
-        mint_material_entry(ctx, %{"k" => "v"}, %{provider_hint: "google"})
+        mint_material_entry(ctx, %{"k" => "v"}, %{
+          provider_hint: "google",
+          oauth_scopes: @readonly
+        })
 
       assert {:error, :no_oauth_material} = VaultReader.oauth_token(ctx, resource, "google")
+    end
+
+    test "an OAuth edge that names no scopes is corrupt and dispenses nothing", %{ctx: ctx} do
+      {entry, resource} =
+        mint_material_entry(ctx, %{}, %{
+          provider_hint: "google",
+          oauth: @valid_oauth,
+          oauth_scopes: @readonly
+        })
+
+      before = last_used_at(ctx, entry)
+
+      for edge <- [
+            Map.delete(resource, :projection),
+            %{resource | projection: nil},
+            %{resource | projection: %{fields: [], scopes: []}},
+            %{resource | projection: %{fields: [], scopes: [""]}}
+          ] do
+        log =
+          capture_log(fn ->
+            assert {:error, :corrupt} = VaultReader.oauth_token(ctx, edge, "google")
+          end)
+
+        assert log =~ "re-consent to the component's current version"
+        refute log =~ "tok-live"
+      end
+
+      assert last_used_at(ctx, entry) == before
+    end
+
+    test "a key edge carries no OAuth grant, whatever its entry holds", %{ctx: ctx} do
+      {entry, resource} =
+        mint_material_entry(ctx, %{"k" => "v"}, %{
+          provider_hint: "google",
+          oauth: @valid_oauth,
+          oauth_scopes: @readonly
+        })
+
+      key_edge = %{resource | projection: %{fields: ["k"], scopes: []}}
+      before = last_used_at(ctx, entry)
+
+      assert {:error, :no_oauth_material} = VaultReader.oauth_token(ctx, key_edge, "google")
+      assert last_used_at(ctx, entry) == before
+    end
+
+    test "anonymous callers are refused before any load", %{ctx: ctx} do
+      {_entry, resource} =
+        mint_material_entry(ctx, %{}, %{
+          provider_hint: "google",
+          oauth: @valid_oauth,
+          oauth_scopes: @readonly
+        })
+
+      assert {:error, :anonymous_denied} =
+               VaultReader.oauth_token(%{ctx | anonymous: true}, resource, "google")
     end
   end
 end
