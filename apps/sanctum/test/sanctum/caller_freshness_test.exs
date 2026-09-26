@@ -106,6 +106,21 @@ defmodule Sanctum.CallerFreshnessTest do
     )
   end
 
+  # The wall clock `fresh?/1` reads is a whole millisecond past `instant`,
+  # the unit its bound is counted in.
+  defp clock_past!(instant),
+    do: poll!(fn -> DateTime.diff(DateTime.utc_now(), instant, :millisecond) >= 1 end)
+
+  # `check`'s first truthy answer, polled every millisecond for at most
+  # five seconds.
+  defp poll!(check, attempts \\ 5_000) do
+    cond do
+      result = check.() -> result
+      attempts == 0 -> flunk("condition never held")
+      true -> Process.sleep(1) && poll!(check, attempts - 1)
+    end
+  end
+
   defp archive_row!(athanor_id),
     do:
       Arca.Repo.update_all(from(a in Arca.Schemas.Athanor, where: a.id == ^athanor_id),
@@ -334,33 +349,56 @@ defmodule Sanctum.CallerFreshnessTest do
 
   describe "fresh?/1" do
     test "the bound runs from the validation; reusing the context never extends it" do
-      Application.put_env(:sanctum, :caller_memo_ttl_ms, 300)
+      # A bound no run outlasts, so every reuse below is inside it.
+      Application.put_env(:sanctum, :caller_memo_ttl_ms, 60_000)
       %{session: session, athanor: athanor} = person!()
 
       {:ok, ctx} = Caller.establish(session.token, focus: athanor.id)
       assert Caller.fresh?(ctx)
 
-      # Reused through the memo within the bound, as a busy socket would:
-      # the same validation every time.
-      for _ <- 1..3 do
-        Process.sleep(60)
-        {:ok, reused} = Caller.establish(session.token, focus: athanor.id)
-        assert reused.validated_at == ctx.validated_at
-        assert Caller.fresh?(reused)
-      end
+      # Reused through the memo after the validation, as a busy socket
+      # would: the same validation every time.
+      clock_past!(ctx.validated_at)
 
-      # Past the bound from the validation the held context is stale,
-      # however recently it was reused — and the memo that served it has
-      # run out with it, so the next establish reads the store again.
-      Process.sleep(160)
+      reused =
+        for _ <- 1..3 do
+          {:ok, reused} = Caller.establish(session.token, focus: athanor.id)
+          assert reused.validated_at == ctx.validated_at
+          assert Caller.fresh?(reused)
+          reused
+        end
+
+      # A bound as long as the time since the validation has run out for
+      # the held context, however recently it was reused: every reuse came
+      # after the validation, so less than that length before now.
+      elapsed = DateTime.diff(DateTime.utc_now(), ctx.validated_at, :millisecond)
+      Application.put_env(:sanctum, :caller_memo_ttl_ms, elapsed)
       refute Caller.fresh?(ctx)
+      for held <- reused, do: refute(Caller.fresh?(held))
 
-      {:ok, again} = Caller.establish(session.token, focus: athanor.id)
-      assert DateTime.compare(again.validated_at, ctx.validated_at) == :gt
-      assert Caller.fresh?(again)
-
+      # Revalidation reads the store, and its bound runs from then.
       assert {:ok, revalidated} = Caller.revalidate_session(ctx)
+      assert DateTime.compare(revalidated.validated_at, ctx.validated_at) == :gt
+      Application.put_env(:sanctum, :caller_memo_ttl_ms, 60_000)
       assert Caller.fresh?(revalidated)
+    end
+
+    test "the memo runs out with the bound: the establish after it reads the store again" do
+      Application.put_env(:sanctum, :caller_memo_ttl_ms, 100)
+      # Established, and memoized, under the bound.
+      %{session: session, athanor: athanor, ctx: ctx} = person!()
+
+      # The memo answers the validation it holds until it runs out; the
+      # first establish that reads the store again answers a new one, and
+      # by then the context the memo served is past the bound.
+      again =
+        poll!(fn ->
+          {:ok, again} = Caller.establish(session.token, focus: athanor.id)
+          if again.validated_at != ctx.validated_at, do: again
+        end)
+
+      refute Caller.fresh?(ctx)
+      assert DateTime.compare(again.validated_at, ctx.validated_at) == :gt
     end
 
     test "a zero bound makes every context stale, and an unvalidated one is never fresh" do

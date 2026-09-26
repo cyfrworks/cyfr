@@ -37,11 +37,11 @@ defmodule Compendium.SignInSyncTest do
     original_url = Application.get_env(:cyfr, :registry_url)
     original_scheme = Application.get_env(:cyfr, :registry_scheme)
     original_oci = Application.get_env(:cyfr, :oci_registry_url)
+    original_budget = Application.get_env(:cyfr, :returning_probe_ms)
 
     Application.put_env(:cyfr, :registry_url, "127.0.0.1:#{bypass.port}")
     Application.put_env(:cyfr, :registry_scheme, "http")
     Application.put_env(:cyfr, :oci_registry_url, "registry.test")
-    Application.put_env(:cyfr, :returning_probe_ms, 300)
 
     on_exit(fn ->
       restore = fn key, value ->
@@ -53,7 +53,7 @@ defmodule Compendium.SignInSyncTest do
       restore.(:registry_url, original_url)
       restore.(:registry_scheme, original_scheme)
       restore.(:oci_registry_url, original_oci)
-      Application.delete_env(:cyfr, :returning_probe_ms)
+      restore.(:returning_probe_ms, original_budget)
     end)
 
     {:ok, bypass: bypass}
@@ -277,6 +277,10 @@ defmodule Compendium.SignInSyncTest do
     end
 
     test "is not held past the budget by a registry that never answers", %{bypass: bypass} do
+      # The one case the budget decides runs under a short one; every other
+      # case here probes under the shipped budget, so a loaded machine's
+      # slow answer does not decide its outcome.
+      Application.put_env(:cyfr, :returning_probe_ms, 300)
       user = person("returning-slow")
 
       Bypass.expect(bypass, "POST", "/v1/identity/probe", fn conn ->
