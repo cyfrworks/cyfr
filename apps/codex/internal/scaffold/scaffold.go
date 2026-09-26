@@ -36,7 +36,8 @@ func Download(version string) error {
 
 // Update fetches the scaffold tarball for the given version and extracts it
 // into the current working directory. Managed files (guides, wit/
-// definitions, the shipped AQUA soul, roles and scrolls) are overwritten
+// definitions, the keeper's seccomp profile, the shipped AQUA soul, roles
+// and scrolls) are overwritten
 // with the latest content. Component files that already exist are skipped;
 // new components are created. Version "dev" or "" is a no-op.
 func Update(version string) error {
@@ -82,12 +83,17 @@ func isManagedAqua(path string) bool {
 	return false
 }
 
+// SeccompProfile is the keeper's seccomp profile, which the opus service of
+// docker-compose.yml names beside it. It follows the image it lets start,
+// so `cyfr update`, which pulls the image, refreshes it too.
+const SeccompProfile = "keeper.seccomp.json"
+
 // isManaged returns true for files that are maintained by cyfr and should be
-// overwritten during an upgrade (guides, WIT interface definitions, and the
-// shipped AQUA soul, roles and scrolls).
+// overwritten during an upgrade (guides, WIT interface definitions, the
+// keeper's seccomp profile, and the shipped AQUA soul, roles and scrolls).
 func isManaged(path string) bool {
 	switch path {
-	case "configuration-guide.md", "component-guide.md", "tincture-guide.md", "integration-guide.md":
+	case "configuration-guide.md", "component-guide.md", "tincture-guide.md", "integration-guide.md", SeccompProfile:
 		return true
 	}
 	// Everything under wit/ is managed.

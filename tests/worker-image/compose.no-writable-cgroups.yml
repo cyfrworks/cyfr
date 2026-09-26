@@ -5,9 +5,11 @@
 # `Stack(writable_cgroups=False)`): the opus service as a deployment
 # without the `writable-cgroups=true` security option runs it, on a Docker
 # Engine before 28 or from a compose file that predates the option. The
-# list replaces the shipped one instead of joining it; every other setting
+# list replaces the shipped one instead of joining it, keeping its other
+# entries, the keeper's seccomp profile among them; every other setting
 # stays the shipped service's.
 services:
   opus:
     security_opt: !override
       - no-new-privileges:true
+      - seccomp=./keeper.seccomp.json

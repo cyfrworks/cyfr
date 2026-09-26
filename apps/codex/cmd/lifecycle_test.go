@@ -12,6 +12,8 @@ import (
 	"slices"
 	"strings"
 	"testing"
+
+	"github.com/cyfr/codex/internal/scaffold"
 )
 
 func TestRenderEnvFile(t *testing.T) {
@@ -670,6 +672,27 @@ func TestEnvFlagTrue(t *testing.T) {
 
 	if envFlagTrue(filepath.Join(dir, "no-such-file"), "ANYTHING") {
 		t.Error("envFlagTrue should be false for a missing file")
+	}
+}
+
+// `cyfr init --force` lays the tarball's deploy files down again, the
+// keeper's seccomp profile among them as `cyfr update` refreshes it, so a
+// forced init never keeps a profile older than the image it pulls; a dev
+// build, whose tarball is a no-op, removes none.
+func TestForceRefetchesTheSeccompProfile(t *testing.T) {
+	got := forceRefetched(true)
+	for _, want := range []string{"docker-compose.yml", "Caddyfile", scaffold.SeccompProfile} {
+		if !slices.Contains(got, want) {
+			t.Errorf("init --force re-fetches %v, which lacks %s", got, want)
+		}
+	}
+	for _, kept := range []string{".env", ".env.example", "cyfr.yaml"} {
+		if slices.Contains(got, kept) {
+			t.Errorf("init --force re-fetches %s, which it must keep", kept)
+		}
+	}
+	if dev := forceRefetched(false); len(dev) != 0 {
+		t.Errorf("a dev build's init --force removes %v, which its no-op tarball cannot replace", dev)
 	}
 }
 

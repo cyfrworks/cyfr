@@ -350,8 +350,20 @@ func describeChanges(changes []envChange) string {
 	return strings.Join(parts, ", ")
 }
 
+// forceRefetched names the deploy files `cyfr init --force` removes so the
+// scaffold tarball lays them down again: docker-compose.yml, the Caddyfile
+// and the keeper's seccomp profile beside them, which `cyfr update` also
+// refreshes. On a dev build the tarball is a no-op, so nothing is removed
+// that could not be replaced.
+func forceRefetched(releaseBuild bool) []string {
+	if !releaseBuild {
+		return nil
+	}
+	return []string{"docker-compose.yml", "Caddyfile", scaffold.SeccompProfile}
+}
+
 func init() {
-	initCmd.Flags().Bool("force", false, "Re-fetch docker-compose.yml + Caddyfile and regenerate cyfr.yaml even if they already exist (never replaces .env or .env.example)")
+	initCmd.Flags().Bool("force", false, "Re-fetch docker-compose.yml, Caddyfile and keeper.seccomp.json and regenerate cyfr.yaml even if they already exist (never replaces .env or .env.example)")
 	rootCmd.AddCommand(initCmd)
 	rootCmd.AddCommand(upCmd)
 	rootCmd.AddCommand(downCmd)
@@ -363,11 +375,11 @@ var initCmd = &cobra.Command{
 	GroupID: "server",
 	Long: `Set up a CYFR project in the current directory so you can start the self-hosted stack with "cyfr up": cyfr (the one endpoint), opus (the execution worker), locus-builds (the builds service), locus-backends (stdio MCP servers) and, in TLS mode, caddy.
 
-Downloads docker-compose.yml, Caddyfile, .env.example, the services' own env examples and the bundled scaffold (configuration/component/tincture/integration guides, wit/ definitions, the aqua/ soul, roles and scrolls) for this CLI's version; generates cyfr.yaml, .gitignore, and the data/aqua directories; writes .env from .env.example, prompting for the hostname, an allowed sign-in email, a TLS y/n choice, and (if TLS) a Let's Encrypt email; and pulls the images the stack starts. Run with --no-interactive to take the defaults silently.
+Downloads docker-compose.yml, Caddyfile, keeper.seccomp.json (the opus service's seccomp profile), .env.example, the services' own env examples and the bundled scaffold (configuration/component/tincture/integration guides, wit/ definitions, the aqua/ soul, roles and scrolls) for this CLI's version; generates cyfr.yaml, .gitignore, and the data/aqua directories; writes .env from .env.example, prompting for the hostname, an allowed sign-in email, a TLS y/n choice, and (if TLS) a Let's Encrypt email; and pulls the images the stack starts. Run with --no-interactive to take the defaults silently.
 
 .env gets the stack's keys: CYFR_SECRET_KEY_BASE, CYFR_LOCUS_BACKENDS_KEY, the worker root CYFR_OPUS_KEY with the OPUS_SERVICE_KEY derived from it for OPUS_SERVICE_ID (wrk_opus unless .env names another), and CYFR_LOCUS_BUILDS_URL=http://locus-builds:4100 with a minted CYFR_LOCUS_BUILDS_KEY, so builds are on. It also assigns CYFR_CORS_ALLOWED_ORIGINS the empty allowlist, since cyfr serves Prism, the API, /mcp and the tinctures from its own origin and no browser client of this stack is cross-origin — a release with sign-in configured refuses to boot on the wildcard default, which init never writes.
 
-Re-running in an existing project is safe: docker-compose.yml, Caddyfile, cyfr.yaml and .env.example are kept if they already exist, and .env gains only the keys it lacks. A key already in .env is never rewritten. A service key without the root it derives from, or one that does not derive from the root beside it, is refused with a sentence naming the fix, and nothing is written. A builds URL set empty with no key is builds turned off, and stays off. Use --force to re-fetch docker-compose.yml + Caddyfile and regenerate cyfr.yaml.`,
+Re-running in an existing project is safe: docker-compose.yml, Caddyfile, cyfr.yaml and .env.example are kept if they already exist, and .env gains only the keys it lacks. A key already in .env is never rewritten. A service key without the root it derives from, or one that does not derive from the root beside it, is refused with a sentence naming the fix, and nothing is written. A builds URL set empty with no key is builds turned off, and stays off. Use --force to re-fetch docker-compose.yml, Caddyfile and keeper.seccomp.json and regenerate cyfr.yaml.`,
 	Example: `  cyfr init
   cyfr init --force
   cyfr up`,
@@ -387,14 +399,12 @@ Re-running in an existing project is safe: docker-compose.yml, Caddyfile, cyfr.y
 			envChanges = changes
 		}
 
-		// On --force, drop the tarball-managed deploy files so scaffold.Download
+		// On --force, drop the tarball's deploy files so scaffold.Download
 		// re-extracts them, and regenerate cyfr.yaml. .env / .env.example are
-		// deliberately never removed. (On a dev build the tarball is a no-op, so
-		// don't delete docker-compose.yml/Caddyfile we couldn't replace.)
+		// deliberately never removed.
 		if force {
-			if releaseBuild {
-				_ = os.Remove("docker-compose.yml")
-				_ = os.Remove("Caddyfile")
+			for _, name := range forceRefetched(releaseBuild) {
+				_ = os.Remove(name)
 			}
 			_ = os.Remove("cyfr.yaml")
 		}

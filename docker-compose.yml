@@ -11,7 +11,9 @@
 #                 assigns them, on the internal `worker` network. Every
 #                 request between cyfr and opus is signed under the worker
 #                 key CYFR derives for OPUS_SERVICE_ID; opus holds no
-#                 tenant state.
+#                 tenant state. It runs under keeper.seccomp.json,
+#                 shipped beside this file, on a host that allows
+#                 unprivileged user namespaces (see the service).
 #   locus-builds — the builder: compiles components and tinctures, each
 #                 build under a uid and a memory bound of its own. Every
 #                 build request is signed under CYFR_LOCUS_BUILDS_KEY; the
@@ -21,8 +23,9 @@
 #   caddy      — TLS + reverse proxy in front of cyfr. Opt-in via the `tls`
 #                 profile.                                   [profile: tls]
 #
-# `cyfr init` writes this file (and Caddyfile + .env) into a fresh project dir;
-# from a source checkout, `cp .env.example .env` instead. Then:
+# `cyfr init` writes this file (and Caddyfile, keeper.seccomp.json + .env)
+# into a fresh project dir; from a source checkout, `cp .env.example .env`
+# and `cp apps/keeper/seccomp/keeper.json keeper.seccomp.json` instead. Then:
 #   docker compose --profile locus-builds up -d   # cyfr + locus-backends + opus + locus-builds
 #   docker compose --profile locus-builds --profile tls up -d   # also Caddy for TLS
 # `cyfr up` selects each profile from .env: `locus-builds` when
@@ -199,7 +202,10 @@ services:
 
   # The execution worker. cyfr reaches it at http://opus:4200 (CYFR_OPUS_WORKERS)
   # and it reaches cyfr's host API at OPUS_HOST_URL; both sit on the worker
-  # network, which nothing else joins.
+  # network, which nothing else joins. The network is the service's alone:
+  # a runner has no interface on it or on any other, and its host calls and
+  # pinned fetches leave through its relay to the service, which posts and
+  # connects for it.
   opus:
     container_name: cyfr-opus
     image: ghcr.io/cyfrworks/cyfr-opus:latest
@@ -239,9 +245,22 @@ services:
     # mounts the container's own cgroup writable, which adds no capability:
     # cyfr-keeper bounds a spawn's memory with a group of its own there, and
     # refuses a spawn that asks for a bound where it cannot make one.
+    # cyfr-keeper clones every runner into a user and network namespace of
+    # its own, with no route out. Docker's default seccomp profile denies a
+    # clone that makes a namespace, so the service runs under
+    # keeper.seccomp.json, shipped beside this file (the image's
+    # /etc/cyfr/keeper.json): Docker's default with that clone allowed and
+    # unshare and setns denied. The host must allow unprivileged user
+    # namespaces: user.max_user_namespaces above 0 and, where AppArmor
+    # restricts them (kernel.apparmor_restrict_unprivileged_userns=1, as on
+    # Ubuntu 24.04 and later), the container keeps Docker's default
+    # AppArmor profile, under which the clone is allowed. Without either,
+    # cyfr-keeper refuses to start, naming both, and the container
+    # restart-loops.
     security_opt:
       - no-new-privileges:true
       - writable-cgroups=true
+      - seccomp=./keeper.seccomp.json
     # The engine holds no tenant state: read-only root, and the tmpfs
     # mounts below are the only writable surfaces; cyfr-keeper refuses to
     # start if any other location is writable by a runner's uid
@@ -437,8 +456,10 @@ networks:
   # cyfr <-> locus-builds only (see the locus-builds service).
   locus-builds: {}
   # cyfr <-> opus only: the Locus services and caddy never see port
-  # 4200. The network is not `internal` — a guest's consented HTTP egress
-  # leaves from the worker — so the isolation is who is attached.
+  # 4200, and no runner is on it (see the opus service). The network is
+  # not `internal` — a guest's consented HTTP egress leaves from the worker
+  # service, which connects to the pinned address for it — so the isolation
+  # is who is attached.
   worker: {}
 
 volumes:

@@ -25,6 +25,7 @@ func TestIsManaged(t *testing.T) {
 		"component-guide.md",
 		"tincture-guide.md",
 		"integration-guide.md",
+		"keeper.seccomp.json",
 		"wit",
 		"wit/cyfr/oauth/token.wit",
 		"aqua/aqua.md",
@@ -94,6 +95,44 @@ func TestShippedGuidesAreManaged(t *testing.T) {
 		if !isManaged(guide) {
 			t.Errorf("the tarball ships %s, which `cyfr update` does not refresh", guide)
 		}
+	}
+}
+
+// TestShippedProfileIsManaged binds the seccomp profile the scaffold tarball
+// packs beside docker-compose.yml to the managed set and to the name the
+// opus service gives it: a profile shipped but not managed would stay
+// behind the image `cyfr update` pulls, and one named otherwise than the
+// compose file names it would never be read.
+func TestShippedProfileIsManaged(t *testing.T) {
+	root := filepath.Join("..", "..", "..", "..")
+	raw, err := os.ReadFile(filepath.Join(root, "scripts", "scaffold-tarball.sh"))
+	if err != nil {
+		t.Fatalf("read scaffold-tarball.sh: %v", err)
+	}
+	script := string(raw)
+	source := regexp.MustCompile(`(?m)^PROFILE=(\S+)$`).FindStringSubmatch(script)
+	name := regexp.MustCompile(`(?m)^PROFILE_NAME=(\S+)$`).FindStringSubmatch(script)
+	if source == nil || name == nil {
+		t.Fatal("scaffold-tarball.sh names no PROFILE and PROFILE_NAME")
+	}
+	if source[1] != "apps/keeper/seccomp/keeper.json" || name[1] != SeccompProfile {
+		t.Errorf("the tarball ships %s as %s, want apps/keeper/seccomp/keeper.json as %s", source[1], name[1], SeccompProfile)
+	}
+	if !strings.Contains(script, `-C "$STAGE" "$PROFILE_NAME"`) {
+		t.Error("scaffold-tarball.sh does not pack the staged profile")
+	}
+	if _, err := os.Stat(filepath.Join(root, source[1])); err != nil {
+		t.Errorf("the profile the tarball ships: %v", err)
+	}
+	if !isManaged(SeccompProfile) {
+		t.Errorf("the tarball ships %s, which `cyfr update` does not refresh", SeccompProfile)
+	}
+	compose, err := os.ReadFile(filepath.Join(root, "docker-compose.yml"))
+	if err != nil {
+		t.Fatalf("read docker-compose.yml: %v", err)
+	}
+	if !strings.Contains(string(compose), "      - seccomp=./"+SeccompProfile+"\n") {
+		t.Errorf("docker-compose.yml does not name ./%s", SeccompProfile)
 	}
 }
 

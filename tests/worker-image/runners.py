@@ -596,11 +596,18 @@ def test_service_death(stack, plane):
     beam = stack.service_beam_pid()
     expect(beam is not None, f"the service's VM is pid {beam}", stack.processes())
 
+    # From the kill until the restarted service answers, the processes are
+    # listed from the host: an exec landing as the container restarts
+    # would leave runc's own processes in the cgroup the new keeper drains
+    # (Stack.host_processes).
+    def host_gone(uid):
+        return not any(uid in p["uids"] for p in stack.host_processes())
+
     t_kill = time.time()
     stack.exec(f"kill -9 {beam}")
     t_cut = plane.elapsed()
-    gone = wait_gone(stack, runner, LOST_GRACE_S + 10, "the busy runner's process to be gone")
-    expect(all(uid_gone(stack, r["uid"]) for r in others),
+    gone = wait_until(lambda: host_gone(runner["uid"]) and time.time(), LOST_GRACE_S + 10, "the busy runner's process to be gone")
+    expect(all(host_gone(r["uid"]) for r in others),
            f"detection: every runner was retired {ms(gone - t_kill)} ms after the service's VM died (cyfr-keeper's lost grace is {LOST_GRACE_S} s)",
            stack.runner_processes())
 

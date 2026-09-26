@@ -51,9 +51,12 @@ const (
 	SelfPath = "/proc/self/cgroup"
 	// keeperLeaf is the group the namespace root's processes move to.
 	keeperLeaf = "keeper"
-	// drainAttempts bounds the passes that empty the namespace root; a
-	// process joining it between two passes is moved by the next.
+	// drainAttempts and drainInterval bound the passes that empty the
+	// namespace root and the wait between two: a process joining it between
+	// two passes is moved by the next, and one of another pid namespace,
+	// which no write here moves, has that long to leave.
 	drainAttempts = 20
+	drainInterval = 50 * time.Millisecond
 	// removeAttempts and removeInterval bound the wait for a group's last
 	// exited process to be reaped before the group can be removed.
 	removeAttempts = 100
@@ -61,6 +64,9 @@ const (
 )
 
 var namePattern = regexp.MustCompile(`^keeper-[1-9][0-9]{0,9}$`)
+
+// pause waits between two passes over the namespace root.
+var pause = time.Sleep
 
 // Name is the group of the spawn running under uid.
 func Name(uid int) string { return "keeper-" + strconv.Itoa(uid) }
@@ -102,16 +108,21 @@ func Delegate(root string, self []byte) (*Manager, error) {
 		return nil, fmt.Errorf("%s is not writable: %w", root, err)
 	}
 	for attempt := 1; ; attempt++ {
-		if err := drain(root, leaf); err != nil {
+		hidden, err := drain(root, leaf)
+		if err != nil {
 			return nil, err
 		}
-		err := os.WriteFile(filepath.Join(root, "cgroup.subtree_control"), []byte("+memory"), 0o644)
+		err = os.WriteFile(filepath.Join(root, "cgroup.subtree_control"), []byte("+memory"), 0o644)
 		if err == nil {
 			break
 		}
 		if attempt == drainAttempts {
+			if hidden > 0 {
+				err = fmt.Errorf("%w, with %d processes of another pid namespace in it", err, hidden)
+			}
 			return nil, fmt.Errorf("enabling the memory controller under %s: %w", root, err)
 		}
+		pause(drainInterval)
 	}
 	// A child of the root now has the files a spawn's group is bounded
 	// with, or this kernel cannot hold a group to its bound: without swap
@@ -128,23 +139,39 @@ func Delegate(root string, self []byte) (*Manager, error) {
 // boundFiles are the control files Create writes.
 var boundFiles = []string{"memory.max", "memory.swap.max", "memory.oom.group"}
 
-// drain moves every process of root into leaf. A process that exited
-// between the read and the write cannot be moved and need not be; one that
-// is still listed after every pass is named in the error with what the
-// last write to move it answered and what /proc says it is, so a leftover
-// process, an unreaped zombie and a write the cgroup driver refuses read
-// apart.
-func drain(root, leaf string) error {
+// drain moves every process of root it can see into leaf, and reports how
+// many entries it could not see. cgroup.procs lists a process of another
+// pid namespace as 0: a process no write here can name, and none of the
+// keeper's, such as the runtime's own process entering the container for a
+// `docker exec` as it restarts in place, so it is skipped, and the passes
+// wait drainInterval apart for it to leave. A process that exited between
+// the read and the write cannot be moved and need not be; one it can see
+// that is still listed after every pass is named in the error with what
+// the last write to move it answered and what /proc says it is, so a
+// leftover process, an unreaped zombie and a write the cgroup driver
+// refuses read apart.
+func drain(root, leaf string) (int, error) {
 	var pids []string
+	hidden := 0
 	failed := map[string]error{}
 	for attempt := 0; attempt < drainAttempts; attempt++ {
+		if attempt > 0 {
+			pause(drainInterval)
+		}
 		raw, err := os.ReadFile(filepath.Join(root, "cgroup.procs"))
 		if err != nil {
-			return err
+			return 0, err
 		}
-		pids = strings.Fields(string(raw))
+		pids, hidden = pids[:0], 0
+		for _, pid := range strings.Fields(string(raw)) {
+			if pid == "0" {
+				hidden++
+			} else {
+				pids = append(pids, pid)
+			}
+		}
 		if len(pids) == 0 {
-			return nil
+			return hidden, nil
 		}
 		clear(failed)
 		for _, pid := range pids {
@@ -161,7 +188,7 @@ func drain(root, leaf string) error {
 		}
 		remaining = append(remaining, fmt.Sprintf("pid %s (%s; %s)", pid, describe(pid), moved))
 	}
-	return fmt.Errorf("processes remain in %s: %s", root, strings.Join(remaining, ", "))
+	return hidden, fmt.Errorf("processes remain in %s: %s", root, strings.Join(remaining, ", "))
 }
 
 // describe is what /proc says of a process: its command and its state, a
