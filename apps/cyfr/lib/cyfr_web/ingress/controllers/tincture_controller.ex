@@ -15,10 +15,10 @@ defmodule CyfrWeb.Ingress.TinctureController do
   GET  /t/:athanor/:publisher/:tincture_name           — a public tincture's entry page
   GET  /t/:athanor/:publisher/:tincture_name/*path     — a public tincture's files
   GET  /_s/:credential/:publisher/:name/:version/*file — a private tincture version's files
-  GET  /t/access-token                                 — mint a short-lived ?_t= token
-  POST /t/:athanor/:publisher/:tincture_name/invoke    — invoke a backend component
 
-  The bytes and their headers are `CyfrWeb.Ingress.TinctureAssets`'.
+  The bytes and their headers are `CyfrWeb.Ingress.TinctureAssets`'. A
+  tincture's data — its invocations, actions and streams — is
+  `CyfrWeb.Ingress.TinctureDataController`'s.
   """
 
   use CyfrWeb.Ingress, :controller
@@ -29,82 +29,6 @@ defmodule CyfrWeb.Ingress.TinctureController do
   # A public tincture's files may be cached for this long; its address,
   # which follows its latest version, is revalidated.
   @public_max_age 3600
-
-  # A public URL is the public route regardless of authentication, and
-  # names the tincture by its address; the private fallback is the
-  # protected route, in the caller's own athanor. The action fixes the
-  # route.
-  defp action_args(:public, athanor), do: %{"action" => "invoke_public", "athanor" => athanor}
-  defp action_args(_private, _athanor), do: %{"action" => "invoke_protected"}
-
-  # -------------------------------------------------------------------
-  # Access-token mint — a cross-origin client (a CLI, an integration) exchanges its
-  # session/Bearer credential (sent as a header, never a URL) for a
-  # short-lived, single-purpose `?_t=` token, so a raw credential never
-  # travels in a tincture iframe/`<img>` URL. Same-origin Prism mints
-  # server-side via `Sanctum.TinctureAuth.issue_access_token/3` directly.
-  # -------------------------------------------------------------------
-
-  def access_token(conn, _params) do
-    # Credential query params are scrubbed for every response on these routes by
-    # `CyfrWeb.Plugs.ScrubTinctureCredentials` (a `before_send` callback), so
-    # `authenticate/1` still sees the raw value here and nothing downstream does.
-    result = Sanctum.TinctureAuth.authenticate(conn)
-
-    case result do
-      {:ok, %{auth_method: :tincture}} ->
-        # A `?_t=` token must not mint its own successor — that would turn a
-        # leaked one-hour token into a permanent credential. Minting requires
-        # the primary credential; expiry means re-authenticating with it.
-        # 403, not 401: the caller IS authenticated, just not with a
-        # credential that may mint.
-        CyfrWeb.ApiError.send(conn, 403, :not_primary, nil)
-
-      {:ok, ctx} ->
-        # The token opens one tincture, so the mint asks which. Without that
-        # the endpoint could only issue an athanor-wide credential, which is
-        # the thing the scoping exists to prevent.
-        case {conn.params["publisher"], conn.params["tincture_name"]} do
-          {publisher, name} when is_binary(publisher) and is_binary(name) ->
-            # `expires_in` is the signed deadline's remainder: a source that
-            # expires sooner than the hour shortens the token with it.
-            with {:ok, token} <- Sanctum.TinctureAuth.issue_access_token(ctx, publisher, name),
-                 {:ok, expires_in} <- Sanctum.TinctureAuth.expires_in(token) do
-              conn
-              |> put_status(200)
-              |> json(%{token: token, expires_in: expires_in})
-            else
-              {:error, reason} -> mint_refused(conn, reason)
-            end
-
-          _ ->
-            CyfrWeb.ApiError.send(
-              conn,
-              400,
-              {:invalid_argument, "Name the tincture: publisher and tincture_name"},
-              nil
-            )
-        end
-
-      :unauthenticated ->
-        # ApiError attaches the RFC 9110 §15.5.2 challenge on every 401.
-        CyfrWeb.ApiError.send(
-          conn,
-          401,
-          :unauthenticated,
-          nil
-        )
-
-      {:error, :unavailable} ->
-        CyfrWeb.ApiError.send(conn, 503, :unavailable, nil)
-
-      {:error, reason} ->
-        # A presented-but-dead credential says so, at its class's status —
-        # the named refusal is what tells a client "re-authenticate" apart
-        # from "you never sent anything".
-        CyfrWeb.ApiError.refuse(conn, reason)
-    end
-  end
 
   # -------------------------------------------------------------------
   # A public tincture: its entry page at its address, and its files
@@ -255,63 +179,6 @@ defmodule CyfrWeb.Ingress.TinctureController do
 
   defp decode_manifest(_manifest), do: %{}
 
-  # -------------------------------------------------------------------
-  # Invoke — execute a backend component on behalf of the tincture
-  # -------------------------------------------------------------------
-
-  def invoke(
-        conn,
-        %{
-          "athanor" => athanor,
-          "publisher" => publisher,
-          "tincture_name" => tincture_name
-        } = params
-      ) do
-    with {:ok, _tincture, visibility, ctx} <-
-           resolve_tincture(conn, athanor, publisher, tincture_name) do
-      # The same declared operation the console shell and `/mcp` call,
-      # through the one gate: it authorizes, casts and logs the call, and
-      # `Crucible.invoke_tincture/3` reads the tincture again. The rate
-      # limit and the origin rules stay this route's own.
-      args =
-        %{
-          "publisher" => publisher,
-          "tincture_name" => tincture_name,
-          "reference" => params["reference"],
-          "input" => params["input"] || %{}
-        }
-        |> Map.merge(action_args(visibility, athanor))
-        |> Map.reject(fn {_key, value} -> is_nil(value) end)
-
-      # The context carries the request's identity (the pipeline's,
-      # `CyfrWeb.Plugs.CallIdentity`), so the gate's decision is this
-      # request's; a refusal it answers is its row, and the renderer
-      # appends no second one.
-      ctx = CyfrWeb.Plugs.CallIdentity.stamp(conn, ctx)
-
-      case Grimoire.call_external(
-             "tincture",
-             %{ctx | client_ip: Sanctum.ClientIp.resolve(conn)},
-             args,
-             call_id: ctx.call_id
-           ) do
-        {:ok, result} ->
-          json(conn, result)
-
-        {:error, refusal} ->
-          conn
-          |> CyfrWeb.Plugs.CallIdentity.decided()
-          |> CyfrWeb.ApiError.refuse(refusal)
-      end
-    else
-      {:error, :unavailable} ->
-        unavailable(conn)
-
-      {:error, :not_found} ->
-        CyfrWeb.ApiError.send(conn, 404, :not_found, nil)
-    end
-  end
-
   # A store that could not say whether the credential stands: retryable,
   # and nothing is served — never read as "not found" or as allowed.
   defp unavailable(conn) do
@@ -319,21 +186,6 @@ defmodule CyfrWeb.Ingress.TinctureController do
     |> put_resp_header("retry-after", "5")
     |> CyfrWeb.ApiError.send(503, :unavailable, nil)
   end
-
-  # A mint that did not happen is a named state, never a URL: an outage or
-  # a member that lost the control plane is retryable, anything else is the
-  # caller's credential refusing.
-  defp mint_refused(conn, :unavailable), do: unavailable(conn)
-
-  defp mint_refused(conn, :not_owner) do
-    conn
-    |> put_resp_header("retry-after", "5")
-    |> CyfrWeb.ApiError.send(503, :not_owner, nil)
-  end
-
-  # A credential presented and refused is `unauthenticated` — a 401 with
-  # its challenge — and one that stands but may not mint is `forbidden`.
-  defp mint_refused(conn, reason), do: CyfrWeb.ApiError.refuse(conn, reason)
 
   # -------------------------------------------------------------------
   # Resolution
@@ -347,35 +199,6 @@ defmodule CyfrWeb.Ingress.TinctureController do
     with {:ok, public_ctx} <- TinctureAccess.public_context(athanor),
          {:ok, tincture} <- TinctureAccess.get_public(public_ctx, publisher, tincture_name) do
       {:ok, tincture, public_ctx}
-    end
-  end
-
-  # The invoke route's reading: the public tincture, or else a private one
-  # in the authenticated caller's own athanor — the URL's athanor must be
-  # the resolved context's, or one athanor's tincture would run under
-  # another's URL. A store that cannot say who is asking is an outage,
-  # never a stranger.
-  defp resolve_tincture(conn, athanor, publisher, tincture_name) do
-    with {:ok, public_ctx} <- TinctureAccess.public_context(athanor) do
-      case TinctureAccess.get_public(public_ctx, publisher, tincture_name) do
-        {:ok, tincture} ->
-          {:ok, tincture, :public, public_ctx}
-
-        {:error, :not_found} ->
-          case Sanctum.TinctureAuth.authenticate(conn) do
-            {:ok, %Sanctum.Context{athanor_id: id} = ctx} when id == public_ctx.athanor_id ->
-              case TinctureAccess.get_private(ctx, publisher, tincture_name) do
-                {:ok, tincture} -> {:ok, tincture, :private, ctx}
-                {:error, _} -> {:error, :not_found}
-              end
-
-            {:error, :unavailable} ->
-              {:error, :unavailable}
-
-            _ ->
-              {:error, :not_found}
-          end
-      end
     end
   end
 end

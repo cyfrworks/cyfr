@@ -28,6 +28,9 @@ defmodule Arca.Schemas.FrameCredential do
   schema "frame_credentials" do
     field :athanor_id, :string
     field :user_id, :string
+    field :publisher, :string
+    field :name, :string
+    field :version, :string
     field :version_digest, :string
     field :grant_revision, :integer
     field :frame_id, :string

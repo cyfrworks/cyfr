@@ -360,14 +360,19 @@ defmodule Arca.Repo.Migrations.Baseline do
     }
 
     # One row per frame a shell opened: the standing of the bearer the
-    # frame holds, read by every member. `source_kind`/`source_id` name the
-    # session (its base64url token hash) or the key it was minted under,
-    # lookup identifiers and never bearer credentials. A revoked row is
-    # terminal; `Arca.Retention.FrameCredentials` removes it once aged.
+    # frame holds, read by every member. `publisher`, `name` and `version`
+    # are the tincture version the frame opened, whose release digest is
+    # `version_digest`. `source_kind`/`source_id` name the session (its
+    # base64url token hash) or the key it was minted under, lookup
+    # identifiers and never bearer credentials. A revoked row is terminal;
+    # `Arca.Retention.FrameCredentials` removes it once aged.
     create table(:frame_credentials, primary_key: false) do
       add :id, :string, primary_key: true
       add :athanor_id, :string, null: false
       add :user_id, :string, null: false
+      add :publisher, :string, null: false
+      add :name, :string, null: false
+      add :version, :string, null: false
       add :version_digest, :string, null: false
 
       add :grant_revision, :bigint,

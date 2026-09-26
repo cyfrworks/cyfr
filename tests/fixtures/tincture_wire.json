@@ -1,5 +1,5 @@
 {
-  "comment": "The vectors pinning Prima.TinctureWire: the requests a tincture's frame posts to the endpoint, each with the frame credential as a bearer in the authorization header and a JSON body carrying v, the wire version; the answer each is given; one refusal, the projection of a Prima.Refusal a frame may read; and one message of each shell verb the frame posts over its MessagePort. Prima's test and the SDK's JavaScript test both read this file: every body decodes and encodes back to itself, every answer reads back, and every message decodes.",
+  "comment": "The vectors pinning Prima.TinctureWire: the requests a tincture's frame posts to the endpoint, each with the frame credential as a bearer in the authorization header and a JSON body carrying v, the wire version; one request a public tincture's page posts with no bearer, naming the tincture as public; the answer each is given, the stream grant as the SDK's reader decodes it among them; one refusal, the projection of a Prima.Refusal a frame may read; the text/event-stream body an admitted stream_open is answered with, and the events it reads back as, ending with the refusal event of a stream the endpoint closed; and one message of each shell verb the frame posts over its MessagePort. Prima's test and the SDK's JavaScript test both read this file: every body decodes and encodes back to itself, every answer reads back, the stream reads back as its events, and every message decodes.",
   "version": 1,
   "bearer_header": "authorization",
   "routes": {
@@ -47,6 +47,23 @@
       }
     }
   ],
+  "public_request": {
+    "kind": "invoke",
+    "headers": {},
+    "body": {
+      "v": 1,
+      "ref": "c:local.weather:1.0.0",
+      "operation": "run",
+      "args": {
+        "city": "Lisbon"
+      },
+      "public": {
+        "athanor": "@alice",
+        "publisher": "local",
+        "name": "weather-lookup"
+      }
+    }
+  },
   "answers": [
     {
       "kind": "invoke",
@@ -103,6 +120,38 @@
         "stage": "admission"
       }
     }
+  },
+  "stream": {
+    "kind": "stream_open",
+    "content_type": "text/event-stream",
+    "body": ": open\n\nid: 1\nevent: executions.deltas\ndata: {\"delta\":\"Lis\",\"seq\":1}\n\nid: 2\nevent: executions.deltas\ndata: {\"delta\":\"bon\",\"seq\":2}\n\nevent: refusal\ndata: {\"class\":\"rate_limited\",\"message\":\"The stream fell too far behind and was closed — open it again\",\"stage\":\"execution\"}\n\n",
+    "events": [
+      {
+        "id": 1,
+        "event": "executions.deltas",
+        "data": {
+          "delta": "Lis",
+          "seq": 1
+        }
+      },
+      {
+        "id": 2,
+        "event": "executions.deltas",
+        "data": {
+          "delta": "bon",
+          "seq": 2
+        }
+      },
+      {
+        "id": null,
+        "event": "refusal",
+        "data": {
+          "class": "rate_limited",
+          "message": "The stream fell too far behind and was closed — open it again",
+          "stage": "execution"
+        }
+      }
+    ]
   },
   "shell": [
     {

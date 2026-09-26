@@ -30,6 +30,17 @@ defmodule Sanctum.Caller do
       they are now (`derived_standing/2`): a retired source, a denial or
       an archive since, or the membership its focus rested on gone,
       refuses it for good.
+    * `{:frame_credential, bearer}` — the per-open credential of one
+      frame the shell created (`Sanctum.TinctureAuth.verify_frame_credential/2`,
+      `client_ip:` for a key's allowlist). Its row and its source's rows
+      are read at every establish, never from the memo, so each use is
+      within the session-freshness bound; a suspended, revoked or expired
+      row, or a retired source, refuses it. The context acts as the person
+      in the row's athanor, bound to the frame (`Sanctum.Context`'s
+      `frame`: the tincture version and its digest, the grant revision,
+      the frame id and the row's id), with the frame's deadline as its
+      credential deadline and no interactive class. A holder that keeps it
+      establishes the bearer again rather than revalidating the context.
     * `{:webhook, webhook}` — a verified webhook row (`request_id:`).
       Stands while its athanor is open and its creator is not denied.
 
@@ -55,6 +66,7 @@ defmodule Sanctum.Caller do
       admits. The context rides along for surfaces that forward it to the
       anonymous surface rather than halting.
     * `:wrong_tincture` — a tincture token presented to another tincture.
+    * `:suspended` — a frame credential whose frame the shell suspended.
     * `:no_athanor` — authenticated, but no athanor resolved.
     * `:not_member` / `:archived` / `:not_found` — the requested focus
       refused.
@@ -76,6 +88,7 @@ defmodule Sanctum.Caller do
           | :ip_not_allowed
           | {:denied, Context.t()}
           | :wrong_tincture
+          | :suspended
           | :no_athanor
           | :not_member
           | :archived
@@ -86,6 +99,7 @@ defmodule Sanctum.Caller do
           {:session, String.t() | nil}
           | {:api_key, String.t()}
           | {:tincture_token, String.t()}
+          | {:frame_credential, String.t()}
           | {:webhook, %{required(:slug) => String.t(), optional(atom()) => term()}}
 
   @doc """
@@ -179,6 +193,39 @@ defmodule Sanctum.Caller do
     end
   end
 
+  def establish({:frame_credential, bearer}, opts) when is_binary(bearer) do
+    case Sanctum.TinctureAuth.verify_frame_credential(bearer,
+           client_ip: Keyword.get(opts, :client_ip)
+         ) do
+      {:ok, authority} ->
+        ctx =
+          Context.build(
+            user_id: authority.user_id,
+            namespace: Sanctum.Namespace.lookup(authority.user_id),
+            athanor_id: authority.athanor_id,
+            permissions: frame_permissions(authority.credential_binding),
+            scope: :athanor,
+            auth_method: :tincture,
+            credential_binding: authority.credential_binding,
+            credential_deadline: authority.deadline,
+            client_ip: Keyword.get(opts, :client_ip),
+            frame: %{
+              id: authority.id,
+              frame_id: authority.frame_id,
+              reference: authority.reference,
+              version_digest: authority.version_digest,
+              grant_revision: authority.grant_revision
+            },
+            authenticated: true
+          )
+
+        with :ok <- tenant_ok(ctx), do: {:ok, validated(ctx)}
+
+      {:error, reason} ->
+        {:error, frame_refusal(reason)}
+    end
+  end
+
   def establish({:webhook, %{slug: slug} = webhook}, opts) when is_binary(slug) do
     # The stored row must not remain a standing execution channel once its
     # athanor is archived or its creator denied here.
@@ -220,6 +267,30 @@ defmodule Sanctum.Caller do
   defp api_key_refusal(reason) when reason in [:revoked, :channel_closed], do: :revoked
   defp api_key_refusal(:ip_not_allowed), do: :ip_not_allowed
   defp api_key_refusal(:database_error), do: :unavailable
+
+  # A frame acts as its person, whose session holds every person
+  # permission; what it may reach of them is its tincture's declaration,
+  # which the data routes hold it to before anything is dispatched. A
+  # frame minted under a key carries none: the key's own scopes are not
+  # read here, and a frame is never wider than its source.
+  defp frame_permissions(%{source_kind: :session}), do: Context.person_permissions()
+  defp frame_permissions(_binding), do: []
+
+  # The frame credential's refusals, in this module's vocabulary: a source
+  # or standing that no longer holds is a presented credential that opens
+  # nothing.
+  defp frame_refusal(reason)
+       when reason in [
+              :invalid_credential,
+              :expired_credential,
+              :suspended,
+              :revoked,
+              :ip_not_allowed,
+              :unavailable
+            ],
+       do: reason
+
+  defp frame_refusal(_retired), do: :unauthenticated
 
   # The token opens the tincture it was minted for and no other. A route
   # that names none (the access-token mint) has nothing to compare.

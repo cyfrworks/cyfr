@@ -22,6 +22,7 @@ defmodule CyfrWeb.Ingress do
       OAuthCallbackController,
       Router,
       TinctureController,
+      TinctureDataController,
       WebhookController
     ],
     check: [aliases: true]

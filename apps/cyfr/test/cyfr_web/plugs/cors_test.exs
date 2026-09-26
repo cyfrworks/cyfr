@@ -159,6 +159,55 @@ defmodule CyfrWeb.Plugs.CORSTest do
     end
   end
 
+  # A sandboxed frame's origin is `null`: only the tincture data routes'
+  # mount answers it, and never with credentials.
+  describe "the null origin" do
+    defp from_null(method, opts) do
+      conn(method, "/_f/v1/invoke")
+      |> put_req_header("origin", "null")
+      |> CORS.call(CORS.init(opts))
+    end
+
+    test "the data routes' mount answers it, echoing null and allowing no credentials" do
+      for allowed <- [[], ["https://app.cyfr.run"], ["*"]] do
+        Application.put_env(:cyfr, :cors_allowed_origins, allowed)
+
+        preflight = from_null(:options, methods: ~w(POST), null_origin: true)
+        assert preflight.status == 204 and preflight.halted
+        assert get_resp_header(preflight, "access-control-allow-origin") == ["null"]
+        assert get_resp_header(preflight, "access-control-allow-credentials") == []
+
+        assert get_resp_header(preflight, "access-control-allow-headers") |> hd() =~
+                 "authorization"
+
+        post = from_null(:post, methods: ~w(POST), null_origin: true)
+        refute post.halted
+        assert get_resp_header(post, "access-control-allow-origin") == ["null"]
+        assert get_resp_header(post, "access-control-allow-credentials") == []
+      end
+    end
+
+    test "every other mount refuses it, the wildcard included" do
+      for allowed <- [[], ["null"], ["*"]], method <- [:options, :post] do
+        Application.put_env(:cyfr, :cors_allowed_origins, allowed)
+        conn = from_null(method, methods: ~w(GET POST))
+        assert get_resp_header(conn, "access-control-allow-origin") == [], inspect(allowed)
+        assert get_resp_header(conn, "access-control-allow-credentials") == []
+      end
+    end
+
+    test "the data routes' mount keeps the deployment's list for every other origin" do
+      Application.put_env(:cyfr, :cors_allowed_origins, ["https://app.cyfr.run"])
+
+      conn =
+        conn(:post, "/_f/v1/invoke")
+        |> put_req_header("origin", "https://evil.com")
+        |> CORS.call(CORS.init(methods: ~w(POST), null_origin: true))
+
+      assert get_resp_header(conn, "access-control-allow-origin") == []
+    end
+  end
+
   describe "non-OPTIONS requests" do
     test "adds CORS headers without halting" do
       Application.put_env(:cyfr, :cors_allowed_origins, ["*"])

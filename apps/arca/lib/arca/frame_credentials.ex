@@ -39,13 +39,16 @@ defmodule Arca.FrameCredentials do
   alias Arca.QueryHelpers
   alias Arca.Schemas.FrameCredential
 
-  @required ~w(user_id version_digest grant_revision frame_id source_kind source_id deadline)a
+  @required ~w(user_id publisher name version version_digest grant_revision frame_id source_kind source_id deadline)a
 
   @typedoc "A frame credential row, as a plain map."
   @type row :: %{
           id: String.t(),
           athanor_id: String.t(),
           user_id: String.t(),
+          publisher: String.t(),
+          name: String.t(),
+          version: String.t(),
           version_digest: String.t(),
           grant_revision: non_neg_integer(),
           frame_id: String.t(),
@@ -62,7 +65,8 @@ defmodule Arca.FrameCredentials do
 
   @doc """
   Record the frame credential of a frame `attrs.frame_id` opened in the
-  actor's athanor: `user_id`, `version_digest`, `grant_revision`,
+  actor's athanor: `user_id`, the tincture version it opened (`publisher`,
+  `name`, `version`) and its `version_digest`, `grant_revision`,
   `frame_id`, `source_kind` (`"session"` or `"api_key"`), `source_id` and
   `deadline`, each required. The row starts `active`.
 

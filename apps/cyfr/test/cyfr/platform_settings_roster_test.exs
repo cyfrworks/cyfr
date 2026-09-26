@@ -227,6 +227,7 @@ defmodule Cyfr.PlatformSettingsRosterTest do
                  api_rate_limit_window_ms webhook_per_ip_rate_limit_max
                  mcp_subscription_max_concurrent mcp_subscription_max_ms
                  crucible_events_max_concurrent crucible_events_max_ms
+                 frame_stream_max_concurrent
                  session_ttl_hours webhook_max_skew_seconds webhook_idempotency_ttl_seconds
                  device_label health_ready_cache_ms decision_retention_days
                  opus_watch_poll_ms opus_watch_misses locus_backends_lease_ms

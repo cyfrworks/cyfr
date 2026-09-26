@@ -437,12 +437,15 @@ defmodule Cyfr.Boundaries do
       depth: 3,
       allow: ~w(
         Sanctum Sanctum.Auth.EmailVerification Sanctum.BearerToken
-        Sanctum.Caller Sanctum.ClientIp Sanctum.Context Sanctum.Door Sanctum.Session
-        Sanctum.SignIn Sanctum.Tenancy Sanctum.Tenancy.Users Sanctum.TinctureAccess
-        Sanctum.TinctureAuth Sanctum.Vault.OAuthGrant Sanctum.Webhook
+        Sanctum.Caller Sanctum.ClientIp Sanctum.Consent Sanctum.Context Sanctum.Door
+        Sanctum.Session Sanctum.SignIn Sanctum.Tenancy Sanctum.Tenancy.Users
+        Sanctum.TinctureAccess Sanctum.TinctureAuth Sanctum.Vault.OAuthGrant Sanctum.Webhook
       ),
       reason:
         "the auth fabric's own ingress — a wide roster is the front door doing its job. " <>
+          "`Sanctum.Consent` is the tincture data routes' read of the grant revision a " <>
+          "frame credential names (`Sanctum.Consent.profiles/2`, `head_consent/2`), read " <>
+          "as the shell reads it when it mints. " <>
           "Boundary's exports are global, and `Sanctum` exports more than this roster to " <>
           "every boundary that lists it, so no declaration can say it."
     },
@@ -1340,11 +1343,8 @@ defmodule Cyfr.Boundaries do
     ],
     "Sanctum.TinctureAccess" => [get_private: 3, get_public: 3, public_context: 1],
     "Sanctum.TinctureAuth" => [
-      authenticate: 1,
-      expires_in: 1,
-      issue_access_token: 3,
       mint_asset_credential: 2,
-      mint_frame_credential: 4,
+      mint_frame_credential: 5,
       resume_frame: 2,
       revoke_frame: 2,
       suspend_frame: 2,
@@ -1446,10 +1446,19 @@ defmodule Cyfr.Boundaries do
           "anyone to its files; a private tincture version's files (`/_s/`) admit the " <>
           "asset credential in their path, verified on every request " <>
           "(`Sanctum.TinctureAuth.verify_asset_credential/2`) and redacted from the " <>
-          "request path by `CyfrWeb.Plugs.ScrubTinctureCredentials`; the invoke and " <>
-          "mint routes admit a signed `?_t=` token or an Authorization bearer. No " <>
+          "request path by `CyfrWeb.Plugs.ScrubTinctureCredentials`. No " <>
           "session cookie: a tincture page is embeddable cross-origin, and an ambient " <>
           "cookie credential on a cross-origin surface is the CSRF food the design refuses"
+    },
+    frame_credential: %{
+      admits: :credential,
+      why:
+        "the tincture data routes: a frame's per-open credential as a bearer, established " <>
+          "at every request (`Sanctum.Caller.establish({:frame_credential, bearer}, …)`) " <>
+          "and held to the tincture version and grant it names, or a public tincture's " <>
+          "page naming a tincture whose public profile admits it. No session cookie and " <>
+          "no CSRF token: the bearer is the only credential, and the `null` origin of a " <>
+          "sandboxed frame is answered on these routes alone"
     },
     browser_authenticated: %{
       admits: :session,
@@ -1905,12 +1914,16 @@ defmodule Cyfr.Boundaries do
     # The endpoint's ownership plug: a stale owner refusing is an admission
     # refusal, class not_owner.
     %{module: CyfrWeb.Plugs.ControlPlaneOwnership, site: :call, plane: :external},
-    # The tincture routes: a tincture the address does not resolve, a mint
-    # without a credential that may mint, and the routes' rate limit.
+    # The tincture routes: a tincture the address does not resolve, and the
+    # routes' rate limit.
     %{module: CyfrWeb.Ingress.TinctureController, site: :index, plane: :external},
-    %{module: CyfrWeb.Ingress.TinctureController, site: :invoke, plane: :external},
-    %{module: CyfrWeb.Ingress.TinctureController, site: :access_token, plane: :external},
     %{module: CyfrWeb.Plugs.TinctureRateLimit, site: :call, plane: :external},
+    # The tincture data routes: a request with no frame credential and no
+    # public tincture, a credential that no longer stands, an undeclared
+    # operation or stream, and the per-frame limits.
+    %{module: CyfrWeb.Ingress.TinctureDataController, site: :invoke, plane: :external},
+    %{module: CyfrWeb.Ingress.TinctureDataController, site: :system_action, plane: :external},
+    %{module: CyfrWeb.Ingress.TinctureDataController, site: :stream, plane: :external},
     # The webhook route: the caller the row establishes, its signature,
     # its idempotency key and its rate limit.
     %{module: CyfrWeb.Ingress.WebhookController, site: :invoke, plane: :external},

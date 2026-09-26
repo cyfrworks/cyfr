@@ -248,6 +248,7 @@ defmodule PrismWeb.ShellFrameTest do
       assert row.state == "active"
       assert row.user_id == user.user_id
       assert row.version_digest == release_digest
+      assert {row.publisher, row.name, row.version} == {"local", "cred-dash", "1.0.0"}
       assert row.grant_revision == 3
 
       # The bearer is in no URL and nowhere in the page.

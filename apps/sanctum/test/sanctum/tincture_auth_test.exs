@@ -232,6 +232,7 @@ defmodule Sanctum.TinctureAuthTest do
 
   @person "github|https://github.com|frame-person"
   @digest "sha256:" <> String.duplicate("c", 64)
+  @tincture %{publisher: "acme", name: "dash", version: "1.0.0"}
   @other_digest "sha256:" <> String.duplicate("d", 64)
 
   # The two settings the credentials read, installed beside whatever the
@@ -399,7 +400,7 @@ defmodule Sanctum.TinctureAuthTest do
       assert {:error, :invalid_credential} = TinctureAuth.verify_asset_credential(access)
 
       {:ok, %{credential: bearer}} =
-        TinctureAuth.mint_frame_credential(ctx, @digest, 1, "frm_asset_not")
+        TinctureAuth.mint_frame_credential(ctx, @tincture, @digest, 1, "frm_asset_not")
 
       assert {:error, :invalid_credential} = TinctureAuth.verify_asset_credential(bearer)
       assert {:error, :invalid_version} = TinctureAuth.mint_asset_credential(ctx, "sha256:nope")
@@ -422,7 +423,7 @@ defmodule Sanctum.TinctureAuthTest do
       frame = frame_id()
 
       assert {:ok, %{credential: bearer, id: id, deadline: deadline}} =
-               TinctureAuth.mint_frame_credential(ctx, @digest, 4, frame)
+               TinctureAuth.mint_frame_credential(ctx, @tincture, @digest, 4, frame)
 
       refute bearer =~ ctx.user_id
       assert DateTime.diff(deadline, DateTime.utc_now()) in 890..900
@@ -433,6 +434,7 @@ defmodule Sanctum.TinctureAuthTest do
                id: ^id,
                frame_id: ^frame,
                athanor_id: "ath_acme",
+               reference: @tincture,
                version_digest: @digest,
                grant_revision: 4,
                deadline: ^deadline
@@ -442,16 +444,21 @@ defmodule Sanctum.TinctureAuthTest do
       assert authority.credential_binding.source_kind == :session
     end
 
-    test "without a frame id, or without a deadline, nothing is minted", %{source: ctx} do
+    test "without a frame id, a tincture version or a deadline, nothing is minted", %{source: ctx} do
       for missing <- [nil, "", "short", "has space in it"] do
         assert {:error, :missing_frame_id} =
-                 TinctureAuth.mint_frame_credential(ctx, @digest, 1, missing)
+                 TinctureAuth.mint_frame_credential(ctx, @tincture, @digest, 1, missing)
+      end
+
+      for reference <- [nil, %{@tincture | version: nil}, %{@tincture | version: "latest"}] do
+        assert {:error, :invalid_reference} =
+                 TinctureAuth.mint_frame_credential(ctx, reference, @digest, 1, frame_id())
       end
 
       settings!(3_600, 0)
 
       assert {:error, :missing_deadline} =
-               TinctureAuth.mint_frame_credential(ctx, @digest, 1, frame_id())
+               TinctureAuth.mint_frame_credential(ctx, @tincture, @digest, 1, frame_id())
 
       assert Arca.Repo.aggregate(Arca.Schemas.FrameCredential, :count) == 0
     end
@@ -460,7 +467,7 @@ defmodule Sanctum.TinctureAuthTest do
       source: ctx
     } do
       {:ok, %{credential: bearer, id: id}} =
-        TinctureAuth.mint_frame_credential(ctx, @digest, 1, frame_id())
+        TinctureAuth.mint_frame_credential(ctx, @tincture, @digest, 1, frame_id())
 
       assert {:ok, %{state: "suspended"}} = TinctureAuth.suspend_frame(ctx, id)
       assert {:error, :suspended} = TinctureAuth.verify_frame_credential(bearer)
@@ -472,7 +479,7 @@ defmodule Sanctum.TinctureAuthTest do
     end
 
     test "another person's frame reads as absent", %{source: ctx} do
-      {:ok, %{id: id}} = TinctureAuth.mint_frame_credential(ctx, @digest, 1, frame_id())
+      {:ok, %{id: id}} = TinctureAuth.mint_frame_credential(ctx, @tincture, @digest, 1, frame_id())
 
       {:ok, other} =
         Sanctum.Tenancy.Users.upsert_from_provider(%{
@@ -496,7 +503,7 @@ defmodule Sanctum.TinctureAuthTest do
       ends = expire_session_in!(session, 100)
 
       {:ok, %{credential: bearer, id: id, deadline: deadline}} =
-        TinctureAuth.mint_frame_credential(ctx, @digest, 1, frame_id())
+        TinctureAuth.mint_frame_credential(ctx, @tincture, @digest, 1, frame_id())
 
       refute DateTime.compare(deadline, ends) == :gt
 
@@ -514,14 +521,14 @@ defmodule Sanctum.TinctureAuthTest do
       session: session,
       user: user
     } do
-      {:ok, %{credential: first}} = TinctureAuth.mint_frame_credential(ctx, @digest, 1, frame_id())
+      {:ok, %{credential: first}} = TinctureAuth.mint_frame_credential(ctx, @tincture, @digest, 1, frame_id())
       end_session!(session)
       assert {:error, :not_standing} = TinctureAuth.verify_frame_credential(first)
 
       {_session, fresh} = session_ctx!(user)
 
       {:ok, %{credential: second, id: id}} =
-        TinctureAuth.mint_frame_credential(fresh, @digest, 1, frame_id())
+        TinctureAuth.mint_frame_credential(fresh, @tincture, @digest, 1, frame_id())
 
       {:ok, _} = Sanctum.Tenancy.Users.deny(user)
       assert {:error, :revoked} = TinctureAuth.verify_frame_credential(second)
@@ -529,8 +536,46 @@ defmodule Sanctum.TinctureAuthTest do
       assert %{state: "revoked"} = Arca.Repo.get(Arca.Schemas.FrameCredential, id)
     end
 
+    test "establishes a context bound to the frame, refused once the frame stops standing", %{
+      source: ctx
+    } do
+      frame = frame_id()
+
+      {:ok, %{credential: bearer, id: id, deadline: deadline}} =
+        TinctureAuth.mint_frame_credential(ctx, @tincture, @digest, 2, frame)
+
+      assert {:ok, framed} =
+               Sanctum.Caller.establish({:frame_credential, bearer}, client_ip: "127.0.0.1")
+
+      assert framed.frame == %{
+               id: id,
+               frame_id: frame,
+               reference: @tincture,
+               version_digest: @digest,
+               grant_revision: 2
+             }
+
+      assert {framed.user_id, framed.athanor_id} == {ctx.user_id, "ath_acme"}
+      assert framed.auth_method == :tincture
+      assert framed.authenticated
+      assert framed.credential_deadline == deadline
+      assert %DateTime{} = framed.validated_at
+      # No other clause stamps a frame.
+      assert ctx.frame == nil
+
+      {:ok, _} = TinctureAuth.suspend_frame(ctx, id)
+      assert {:error, :suspended} = Sanctum.Caller.establish({:frame_credential, bearer})
+      {:ok, _} = TinctureAuth.resume_frame(ctx, id)
+      assert {:ok, _} = Sanctum.Caller.establish({:frame_credential, bearer})
+      {:ok, _} = TinctureAuth.revoke_frame(ctx, id)
+      assert {:error, :revoked} = Sanctum.Caller.establish({:frame_credential, bearer})
+
+      assert {:error, :invalid_credential} =
+               Sanctum.Caller.establish({:frame_credential, bearer <> "x"})
+    end
+
     test "a bearer this server did not sign as one opens nothing", %{source: ctx} do
-      {:ok, %{credential: bearer}} = TinctureAuth.mint_frame_credential(ctx, @digest, 1, frame_id())
+      {:ok, %{credential: bearer}} = TinctureAuth.mint_frame_credential(ctx, @tincture, @digest, 1, frame_id())
       assert {:error, :invalid_credential} = TinctureAuth.verify_frame_credential(bearer <> "x")
 
       {:ok, %{credential: asset}} = TinctureAuth.mint_asset_credential(ctx, @digest)

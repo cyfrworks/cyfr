@@ -83,6 +83,21 @@ defmodule Sanctum.Context do
           athanor_generation: pos_integer() | nil
         }
 
+  @typedoc """
+  The frame a context acts for, when a frame credential established it
+  (`Sanctum.Caller.establish({:frame_credential, bearer}, …)`): the
+  credential row's `id`, the shell's `frame_id`, the tincture version the
+  frame opened (`reference`) and its release digest (`version_digest`),
+  and the `grant_revision` the frame was opened under.
+  """
+  @type frame :: %{
+          id: String.t(),
+          frame_id: String.t(),
+          reference: %{publisher: String.t(), name: String.t(), version: String.t()},
+          version_digest: String.t(),
+          grant_revision: non_neg_integer()
+        }
+
   @type t :: %__MODULE__{
           user_id: String.t() | nil,
           email: String.t() | nil,
@@ -100,6 +115,7 @@ defmodule Sanctum.Context do
           credential_binding: credential_binding() | nil,
           credential_deadline: DateTime.t() | nil,
           validated_at: DateTime.t() | nil,
+          frame: frame() | nil,
           authenticated: boolean(),
           anonymous: boolean(),
           platform_admin: boolean(),
@@ -140,6 +156,10 @@ defmodule Sanctum.Context do
     # the freshness bound (`Sanctum.Caller.fresh?/1`) revalidates before
     # acting on it; reusing a context never moves this instant.
     :validated_at,
+    # The frame this context acts for (`t:frame/0`), or nil. Only
+    # `Sanctum.Caller`'s frame-credential clause sets it: it names the one
+    # tincture version whose declaration bounds what the context may reach.
+    :frame,
     # The caller's resolved address, where the ingress knew one
     # (`Sanctum.ClientIp`). It is not identity and authorizes nothing — it
     # is what an anonymous, per-action budget can be charged to. Without
@@ -329,6 +349,7 @@ defmodule Sanctum.Context do
       credential_binding: binding!(Map.get(attrs, :credential_binding)),
       credential_deadline: deadline!(Map.get(attrs, :credential_deadline)),
       validated_at: validated_at!(Map.get(attrs, :validated_at)),
+      frame: frame!(Map.get(attrs, :frame)),
       client_ip: Map.get(attrs, :client_ip),
       authenticated: Map.get(attrs, :authenticated, false),
       anonymous: Map.get(attrs, :anonymous, false) == true,
@@ -380,6 +401,24 @@ defmodule Sanctum.Context do
         ArgumentError,
         "credential_deadline must be a DateTime or nil, got: #{Prima.LoggerContext.shape(other)}"
       )
+
+  defp frame!(nil), do: nil
+
+  defp frame!(
+         %{
+           id: id,
+           frame_id: frame_id,
+           reference: %{publisher: publisher, name: name, version: version},
+           version_digest: digest,
+           grant_revision: revision
+         } = frame
+       )
+       when is_binary(id) and is_binary(frame_id) and is_binary(publisher) and is_binary(name) and
+              is_binary(version) and is_binary(digest) and is_integer(revision) and revision >= 0,
+       do: frame
+
+  defp frame!(other),
+    do: raise(ArgumentError, "frame is malformed: #{Prima.LoggerContext.shape(other)}")
 
   defp validated_at!(nil), do: nil
   defp validated_at!(%DateTime{} = at), do: at

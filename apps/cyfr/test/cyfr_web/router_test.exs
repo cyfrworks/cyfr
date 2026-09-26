@@ -202,7 +202,7 @@ defmodule CyfrWeb.RouterTest do
       end
     end
 
-    test "the MCP and authenticated API pipelines check the origin; tincture invoke does not" do
+    test "the MCP and authenticated API pipelines check the origin; the tincture data routes do not" do
       for name <- ["mcp", "authenticated_api"] do
         assert declared(name) != [], "no section declares the #{name} pipeline"
 
@@ -212,12 +212,18 @@ defmodule CyfrWeb.RouterTest do
         end
       end
 
-      assert declared("tincture_invoke") != [], "no section declares tincture_invoke"
+      assert declared("tincture_data") != [], "no section declares tincture_data"
 
-      for {provider, plugs} <- declared("tincture_invoke") do
+      for {provider, plugs} <- declared("tincture_data") do
         refute "CyfrWeb.Plugs.MCPOrigin" in plugs,
-               "#{provider}'s tincture_invoke pipeline checks the origin; a public " <>
-                 "tincture is cross-origin by design"
+               "#{provider}'s tincture_data pipeline checks the origin; a sandboxed " <>
+                 "frame's origin is null by design"
+
+        # The bearer is the only credential: no session is fetched and no
+        # forgery token is asked for.
+        for plug <- [":fetch_session", ":protect_from_forgery"] do
+          refute plug in plugs, "#{provider}'s tincture_data pipeline runs #{plug}"
+        end
       end
     end
 

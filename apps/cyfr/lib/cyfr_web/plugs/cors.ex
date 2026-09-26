@@ -36,6 +36,18 @@ defmodule CyfrWeb.Plugs.CORS do
   the wildcard and credentials are mutually exclusive per the Fetch standard, so
   a deployment that needs cookie-bearing cross-origin calls must name its
   origins.
+
+  ## The null origin
+
+  A tincture's frame is a sandboxed document without `allow-same-origin`,
+  so every request it makes carries `Origin: null`. Only a mount that sets
+  `null_origin: true` — the tincture data routes, which authenticate the
+  frame's bearer and nothing else — answers that origin, echoing `null`
+  and never allowing credentials, so no cookie is ever sent on its behalf.
+  Everywhere else a `null` origin is answered as a disallowed one, the
+  wildcard included: an opaque origin is any sandboxed document at all,
+  and a route that keeps the deployment's list and its session never
+  serves one.
   """
 
   import Plug.Conn
@@ -68,10 +80,13 @@ defmodule CyfrWeb.Plugs.CORS do
       common set. `last-event-id` is the case that motivated it: it belongs to
       the execution event stream, not to MCP, and advertising it on the MCP
       endpoint claimed support for something no MCP handler reads.
+    * `:null_origin` — answer the `null` origin (default `false`); see
+      "The null origin" above.
 
   Mounts share this plug but route different verbs and accept different
-  headers — `/mcp` is POST-only in this protocol revision, while `/t` also
-  serves `GET /t/access-token` — so neither list can be a module constant.
+  headers — `/mcp` is POST-only in this protocol revision, while
+  `/api/executions/:id/events` is a GET — so neither list can be a module
+  constant.
   """
   @impl true
   def init(opts) do
@@ -92,6 +107,7 @@ defmodule CyfrWeb.Plugs.CORS do
     opts
     |> Keyword.put(:allowed_methods, methods)
     |> Keyword.put(:allowed_headers, headers)
+    |> Keyword.put(:null_origin, Keyword.get(opts, :null_origin, false) == true)
   end
 
   @impl true
@@ -123,6 +139,7 @@ defmodule CyfrWeb.Plugs.CORS do
 
     allow_origin =
       cond do
+        origin == "null" -> if Keyword.get(opts, :null_origin, false), do: "null"
         "*" in allowed -> "*"
         origin != nil and origin in allowed -> origin
         true -> nil
@@ -139,7 +156,9 @@ defmodule CyfrWeb.Plugs.CORS do
         |> put_resp_header("access-control-expose-headers", @expose_headers)
         |> put_resp_header("access-control-max-age", @max_age)
 
-      if allow_origin != "*" do
+      # Neither the wildcard nor an opaque origin is ever told credentials
+      # may travel: the one a null origin presents is its bearer.
+      if allow_origin not in ["*", "null"] do
         put_resp_header(conn, "access-control-allow-credentials", "true")
       else
         conn
