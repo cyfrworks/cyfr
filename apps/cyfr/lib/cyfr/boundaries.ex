@@ -1341,7 +1341,12 @@ defmodule Cyfr.Boundaries do
       expires_in: 1,
       issue_access_token: 3,
       issue_asset_token: 3,
+      mint_asset_credential: 2,
+      mint_frame_credential: 4,
+      resume_frame: 2,
+      revoke_frame: 2,
       scrub_conn: 1,
+      suspend_frame: 2,
       verify_asset_token: 4
     ],
     "Sanctum.ToolGrants" => [for_thread: 2, grant_row: 2, put: 2, revoke: 2],
