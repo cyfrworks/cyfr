@@ -511,6 +511,13 @@ if config_env() != :test do
         "https://[::1]:#{port}"
       ]
 
+      # The deployment's own origin, which Sanctum answers when no
+      # CYFR_PUBLIC_URL is set: the same host and port the endpoint's url
+      # names, so a tincture's frame-ancestors and connect-src, the OAuth
+      # callback and every other self-reference agree with the endpoint.
+      # A TLS deployment sets CYFR_PUBLIC_URL, as the guide says.
+      config :sanctum, :fallback_origin, "http://#{host}:#{port}"
+
       config :cyfr, CyfrWeb.Endpoint,
         url: [host: host, port: port],
         http: [
