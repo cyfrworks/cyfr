@@ -583,21 +583,25 @@ defmodule Cyfr.Cluster.Fixtures do
     end
   end
 
-  @doc "Mint an access token from `ctx` on this member, for one tincture of its athanor."
-  @spec mint_access(Sanctum.Context.t()) :: {:ok, String.t()} | {:error, term()}
-  def mint_access(ctx), do: Sanctum.TinctureAuth.issue_access_token(ctx, "local", "cluster-dash")
+  @doc """
+  Mint an asset credential from `ctx` on this member, for one tincture
+  version's release digest.
+  """
+  @spec mint_asset(Sanctum.Context.t()) :: {:ok, String.t()} | {:error, term()}
+  def mint_asset(ctx) do
+    digest = "sha256:" <> String.duplicate("a", 64)
 
-  @doc "What `token` opens on this member: the context's athanor, or the refusal."
-  @spec open_access(String.t()) :: {:ok, String.t()} | {:error, term()}
-  def open_access(token) do
-    conn = %Plug.Conn{
-      query_string: "_t=#{token}",
-      remote_ip: {127, 0, 0, 1},
-      path_params: %{"publisher" => "local", "tincture_name" => "cluster-dash"}
-    }
+    case Sanctum.TinctureAuth.mint_asset_credential(ctx, digest) do
+      {:ok, %{credential: credential}} -> {:ok, credential}
+      other -> other
+    end
+  end
 
-    case Sanctum.TinctureAuth.authenticate(conn) do
-      {:ok, ctx} -> {:ok, ctx.athanor_id}
+  @doc "What the asset credential `credential` opens on this member: its athanor, or the refusal."
+  @spec open_asset(String.t()) :: {:ok, String.t()} | {:error, term()}
+  def open_asset(credential) do
+    case Sanctum.TinctureAuth.verify_asset_credential(credential, client_ip: "127.0.0.1") do
+      {:ok, authority} -> {:ok, authority.athanor_id}
       other -> other
     end
   end

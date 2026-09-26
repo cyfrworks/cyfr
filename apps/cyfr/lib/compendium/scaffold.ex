@@ -602,7 +602,8 @@ defmodule Compendium.Scaffold do
   defp next_steps("tincture", reference, _template) do
     [
       "Edit index.html, app.js, and style.css to build your UI",
-      "The cyfr SDK (window.cyfr) is auto-injected — use cyfr.invoke() to call backend components",
+      "The cyfr SDK (window.cyfr) is injected into the page — use " <>
+        "cyfr.invoke(ref, operation, args) to call the components the manifest declares",
       "Add backend components to dependencies.static in #{Compendium.ComponentPath.manifest_name()}",
       "Replace #{Path.join(Compendium.Tincture.default_icon())} and " <>
         "#{Path.join(Compendium.Tincture.default_preview())} to brand the picker card " <>
@@ -639,14 +640,20 @@ defmodule Compendium.Scaffold do
 
   defp tincture_app_js do
     """
-    // Tincture app entry point
-    // cyfr.mode is "shell" (inside Prism) or "public" (standalone page)
-    console.log("cyfr mode:", cyfr.mode)
-
-    // Example: invoke a backend component
-    // cyfr.invoke("c:local.my-component", { key: "value" })
-    //   .then(result => console.log(result.output))
-    //   .catch(err => console.error(err))
+    // Tincture app entry point. window.cyfr is injected before this script
+    // runs. Invoke a component the manifest declares in dependencies.static;
+    // it runs with the input {"operation": "run", "params": {key: "value"}}:
+    // cyfr.invoke("c:local.my-component", "run", { key: "value" })
+    //   .then((result) => console.log(result.output))
+    //   .catch((error) => console.error(error.code, error.message))
+    //
+    // A declared system action, and a declared stream (close() ends it):
+    // cyfr.action("tool.action", {})
+    // const feed = await cyfr.stream("tool.topic", null, ({ event, data }) => console.log(event, data))
+    //
+    // Shell verbs: cyfr.title("…"), cyfr.focus(), cyfr.close(), cyfr.open("t:local.other").
+    // At a public tincture's address the same calls run with no credential,
+    // under its public profile.
 
     cyfr.ready()
     """
@@ -781,31 +788,40 @@ defmodule Compendium.Scaffold do
     """
     import { useState, useEffect } from "react";
 
+    // window.cyfr, injected before the page's scripts run.
     declare const cyfr: {
-      mode: "shell" | "public";
-      ready(): Promise<{ ok: true }>;
-      invoke(reference: string, input?: Record<string, unknown>): Promise<{
+      readonly frame: string | null;
+      readonly public: { athanor: string; publisher: string; name: string } | null;
+      invoke(ref: string, operation: string, args?: Record<string, unknown>): Promise<{
         status: string;
-        output: Record<string, unknown>;
-        execution_id: string;
-        duration_ms: number;
+        output: unknown;
+        execution_id: string | null;
+        duration_ms: number | null;
       }>;
-      setTitle(title: string): Promise<{ ok: true }>;
-      close(): Promise<{ ok: true }>;
-      getContext(): Promise<{ tincture_id: string; window_id: string }>;
-      on(event: string, callback: (data: unknown) => void): void;
-      off(event: string, callback: (data: unknown) => void): void;
+      action(name: string, args?: Record<string, unknown>): Promise<unknown>;
+      stream(
+        name: string,
+        subject: string | null,
+        onEvent: (event: { id: number | null; event: string; data: unknown }) => void
+      ): Promise<{ close(): void; closed: Promise<void> }>;
+      open(ref: string): void;
+      close(): void;
+      title(title: string): void;
+      ready(): void;
+      focus(): void;
     };
 
     export default function App() {
       const [data, setData] = useState<Record<string, unknown> | null>(null);
 
       useEffect(() => {
-        // Example: invoke a backend component
-        // cyfr.invoke("c:local.my-component", { key: "value" })
-        //   .then(result => setData(result.output))
-        //   .catch(err => console.error(err));
-        cyfr.ready().then(() => setData(null));
+        // Invoke a component the manifest declares in dependencies.static;
+        // it runs with the input {"operation": "run", "params": {key: "value"}}:
+        // cyfr.invoke("c:local.my-component", "run", { key: "value" })
+        //   .then((result) => setData(result.output as Record<string, unknown>))
+        //   .catch((error) => console.error(error.code, error.message));
+        cyfr.ready();
+        setData(null);
       }, []);
 
       return (
@@ -874,14 +890,23 @@ defmodule Compendium.Scaffold do
     """
     import "./style.css";
 
-    // cyfr.mode is "shell" (inside Prism) or "public" (standalone page).
     const app = document.getElementById("app");
     app.innerHTML = "<h1>#{name}</h1><p>Edit src/main.js to build your UI.</p>";
 
-    // Example: invoke a backend component
-    // cyfr.invoke("c:local.my-component", { key: "value" })
-    //   .then(result => console.log(result.output))
-    //   .catch(err => console.error(err));
+    // window.cyfr is injected before this module runs. Invoke a component the
+    // manifest declares in dependencies.static; it runs with the input
+    // {"operation": "run", "params": {key: "value"}}:
+    // cyfr.invoke("c:local.my-component", "run", { key: "value" })
+    //   .then((result) => console.log(result.output))
+    //   .catch((error) => console.error(error.code, error.message));
+    //
+    // A declared system action, and a declared stream (close() ends it):
+    // cyfr.action("tool.action", {});
+    // const feed = await cyfr.stream("tool.topic", null, ({ event, data }) => console.log(event, data));
+    //
+    // Shell verbs: cyfr.title("…"), cyfr.focus(), cyfr.close(), cyfr.open("t:local.other").
+    // At a public tincture's address the same calls run with no credential,
+    // under its public profile.
 
     cyfr.ready();
     """

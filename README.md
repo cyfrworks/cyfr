@@ -255,19 +255,25 @@ open http://localhost:4000/a/@alice/tinctures
 cyfr tincture visibility get local stock-dashboard
 ```
 
-**Data.** Tinctures are self-contained frontends — CYFR serves their web content, not a database. Pull backend data at runtime by calling formulas or catalysts through the auto-injected `cyfr` SDK; if you need static seed data, ship a `data.db` (or any file) as a static asset and read it client-side.
+**Data.** Tinctures are self-contained frontends — CYFR serves their web content, not a database. Pull backend data at runtime by calling formulas or catalysts through the injected `cyfr` SDK; if you need static seed data, ship a JSON file (or any served type) as a static asset and read it client-side.
 
-**SDK.** The `cyfr` SDK is auto-injected into every tincture's `<head>` — no script tag needed:
+**SDK.** The `cyfr` SDK is injected into every tincture's entry page — no script tag needed. The shell hands each frame a credential of its own; the SDK sends it to the endpoint as a bearer, and reaches only what the manifest declares:
 
 ```javascript
-// Invoke a backend component (PostMessage in Prism, HTTP in public mode)
-const { status, output } = await cyfr.invoke("c:local.my-api", { key: "value" });
+// Invoke a declared component: it runs with {"operation": "quote", "params": {...}}
+const { status, output } = await cyfr.invoke("c:local.my-api", "quote", { symbol: "AAPL" });
 
-// React to shell events, update the window title, signal ready
-cyfr.on("focus", () => { /* ... */ });
-await cyfr.setTitle("Stock Dashboard");
-await cyfr.ready();
+// A declared system action, and a declared stream (close() ends it)
+await cyfr.action("tool.action", {});
+const feed = await cyfr.stream("mcp_servers.changes", null, ({ event, data }) => console.log(event, data));
+feed.close();
+
+// Shell verbs: title, focus, close, open another tincture; ready when loaded
+cyfr.title("Stock Dashboard");
+cyfr.ready();
 ```
+
+A public tincture opened at its address makes the same calls with no credential, under its public profile. The [Tincture Guide](tincture-guide.md) is the full reference.
 
 Vanilla tinctures are simple static frontends; the React template gives you Vite + TypeScript out of the box. Tinctures default to private; publishing one is a consent decision — the profile tool's `publish` (plan → preview → commit) mints its public profile, and revoking that profile unpublishes it. If you make file changes outside the normal build flow, run `cyfr register` to rescan local components.
 

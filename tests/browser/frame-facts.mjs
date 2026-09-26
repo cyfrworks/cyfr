@@ -1,16 +1,19 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright 2026 CYFR Works Inc.
 //
-// The frame-facts experiment: what a sandboxed frame on today's /t/ page
-// may do, per browser.
+// The frame-facts experiment: what a sandboxed tincture frame may do, per
+// browser.
 //
 // Run inside the official Playwright image (tests/browser/run.sh), against a
 // `cyfr` release serving two public tinctures, frame-probe and
 // frame-neighbour (tests/browser/tinctures/). For every browser the image
-// ships (Chromium, Firefox, WebKit), a page on the server's own origin — the
-// origin the Prism shell frames tinctures from — holds frame-probe's /t/
-// page in an <iframe sandbox="allow-scripts">, as the shell does, and the
-// probe (tinctures/frame-probe/probe.js) makes nine attempts from inside it:
+// ships (Chromium, Firefox, WebKit), the fixture's person, signed in, opens
+// frame-probe from the Prism shell on the site origin, and the shell creates
+// its frame as it creates every frame — `sandbox` and `allow` derived from
+// the declaration, which declares no capability, so `sandbox="allow-scripts"`
+// — at the probe's public address, whose document carries the policy the
+// frame's rules derive. The probe (tinctures/frame-probe/probe.js) makes nine
+// attempts from inside it:
 //
 //   self_navigation    the frame navigates itself to its own page
 //   fetch              fetch() of an asset of its own
@@ -25,25 +28,24 @@
 //
 // Each attempt is recorded as allowed or refused with what was observed:
 // the frame's own view, the requests that reached the network with the
-// Origin they carried, the messages that arrived, the CSP violations the
-// frame reported and the browser's console. No outcome is asserted — the
-// experiment establishes facts — and the run fails only when an attempt
-// could not be observed.
+// Origin they carried, the messages that arrived at the shell's window, the
+// CSP violations the frame reported and the browser's console. No outcome
+// is asserted — the experiment establishes facts — and the run fails only
+// when an attempt could not be observed.
 //
-// Every browser reaches the server through a proxy of the harness's own,
-// under the name `cyfr.test` (a name no browser exempts from its proxy, as
-// each exempts loopback addresses differently). The proxy answers two
-// requests itself — the page that frames the probe, and a 302 from
-// frame-probe's moved.json to its asset.json, since no /t/ route redirects
-// today and not every engine lets a harness answer a redirect in the page
-// — and forwards every other request, unchanged, to the server.
+// Every browser reaches the server through the harness's proxy under the
+// name `cyfr.test` (tests/browser/lib.mjs), the name the server is started
+// with. The proxy answers one kind of request itself — a 302 from
+// frame-probe's moved.json (and its bare twin) to its asset.json, since no
+// tincture route redirects — and forwards every other request, unchanged.
 //
-// Usage: node frame-facts.mjs SERVER_URL PROBE_PATH OUT_DIR
+// Usage: node frame-facts.mjs SERVER_URL PROBE_PATH SEGMENT COOKIE OUT_DIR
 
-import { chromium, firefox, webkit } from "playwright-core";
 import { mkdirSync, writeFileSync } from "node:fs";
-import { createServer, request as forward } from "node:http";
 import { join } from "node:path";
+import {
+  SITE, chromium, firefox, webkit, launch, openShell, signedIn, sleep, startProxy,
+} from "./lib.mjs";
 
 const PROBES = [
   "self_navigation",
@@ -64,69 +66,35 @@ const DONE = () => {
 };
 const READ = () => document.getElementById("results").textContent;
 
-function hostPage(probePath) {
-  return `<!doctype html>
-<html><head><title>frame-facts host</title></head>
-<body>
-<script>
+// The shell's window keeps every message that reaches it, and whether it
+// came from the probe's frame. Installed before the shell's own scripts, in
+// the top window only.
+const RECORD_MESSAGES = () => {
+  if (window !== window.top) return;
   window.__messages = [];
-  window.addEventListener("message", function (event) {
-    var frame = document.getElementById("frame");
+  window.addEventListener("message", (event) => {
+    const frames = [...document.querySelectorAll("iframe[phx-hook=IframeBridge]")];
+    let data = event.data;
+    try { data = JSON.parse(JSON.stringify(event.data)); } catch (_error) { data = String(event.data); }
     window.__messages.push({
       origin: event.origin,
-      data: event.data,
-      from_frame: !!frame && event.source === frame.contentWindow
+      data,
+      from_frame: frames.some((f) => event.source === f.contentWindow),
     });
   });
-</script>
-<iframe id="frame" sandbox="allow-scripts" src="${probePath}" width="800" height="600"></iframe>
-</body></html>
-`;
-}
+};
 
-// The origin the browsers see the server at, through the proxy.
-const NAME = "cyfr.test";
-
-// The harness's proxy: the two answers of its own, and every other request
-// forwarded to `server` as it came.
-function startProxy(server, probePath) {
-  const target = new URL(server);
-  const proxy = createServer((req, res) => {
-    const url = new URL(req.url, `http://${req.headers.host}`);
-    // What reached the network, and with which Origin: the one account of
-    // a request leaving that every engine gives alike.
-    proxy.seen.push({ method: req.method, url: url.href, origin: req.headers.origin ?? null });
-    if (url.pathname === "/__frame_facts/host") {
-      res.writeHead(200, { "content-type": "text/html; charset=utf-8" });
-      res.end(hostPage(probePath));
-      return;
-    }
-    // The 302 carries the CORS header today's asset answers carry
+// The two redirects the proxy answers for the probe.
+function redirects(probePath) {
+  return (_req, url) => {
+    if (url.pathname !== `${probePath}/moved.json` && url.pathname !== `${probePath}/moved-bare.json`) return null;
+    // The 302 carries the CORS header the asset answers carry
     // (`access-control-allow-origin: *`); its bare twin carries none.
-    if (url.pathname === `${probePath}/moved.json` || url.pathname === `${probePath}/moved-bare.json`) {
-      const headers = { location: `${probePath}/asset.json`, "content-length": "0" };
-      if (url.pathname.endsWith("/moved.json")) headers["access-control-allow-origin"] = "*";
-      res.writeHead(302, headers);
-      res.end();
-      return;
-    }
-    const upstream = forward(
-      { host: target.hostname, port: target.port, method: req.method, path: url.pathname + url.search, headers: req.headers },
-      (answer) => {
-        res.writeHead(answer.statusCode, answer.rawHeaders);
-        answer.pipe(res);
-      });
-    upstream.on("error", (error) => {
-      res.writeHead(502, { "content-type": "text/plain" });
-      res.end(`proxy: ${error.message}`);
-    });
-    req.pipe(upstream);
-  });
-  proxy.seen = [];
-  return new Promise((resolve) => proxy.listen(0, "127.0.0.1", () => resolve(proxy)));
+    const headers = { location: `${probePath}/asset.json`, "content-length": "0" };
+    if (url.pathname.endsWith("/moved.json")) headers["access-control-allow-origin"] = "*";
+    return [302, headers, ""];
+  };
 }
-
-const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
 async function waitFrame(page, accept, timeoutMs = 30_000) {
   const deadline = Date.now() + timeoutMs;
@@ -140,28 +108,29 @@ async function waitFrame(page, accept, timeoutMs = 30_000) {
 
 // One browser's run: the frame's results, the requests that left and the
 // messages that arrived.
-async function observe(browserType, base, proxy, probePath) {
+async function observe(browserType, base, proxy, probePath, segment, cookie) {
   proxy.seen = [];
   const consoleLines = [];
   const browser = await browserType.launch({ proxy: { server: `http://127.0.0.1:${proxy.address().port}` } });
   try {
-    const page = await browser.newPage();
+    const context = await signedIn(browser, base, cookie);
+    await context.addInitScript(RECORD_MESSAGES);
+    const page = await context.newPage();
     page.on("console", (message) => {
       if (message.type() === "error" || message.type() === "warning") {
         consoleLines.push({ type: message.type(), text: message.text(), url: message.location().url });
       }
     });
-    await page.goto(`${base}/__frame_facts/host`);
-
-    const frame = await waitFrame(page, (url) => url.includes(probePath) && !url.includes("navigated=1"));
-    if (!frame) throw new Error(`no frame loaded ${probePath}`);
+    await openShell(page, base, segment, "frame-probe");
+    const { frame, attributes } = await launch(page, "frame-probe");
+    if (!frame.url().includes(probePath)) throw new Error(`the shell framed ${frame.url()}, not ${probePath}`);
     await frame.waitForFunction(DONE, null, { timeout: 60_000 });
     const results = JSON.parse(await frame.evaluate(READ));
     const messages = await page.evaluate(() => window.__messages);
 
     // The ninth attempt: the frame navigates itself once told to.
-    await page.evaluate(() =>
-      document.getElementById("frame").contentWindow.postMessage({ frameFacts: "navigate" }, "*"));
+    await page.evaluate((id) =>
+      document.getElementById(id).contentWindow.postMessage({ frameFacts: "navigate" }, "*"), attributes.id);
     let navigated = null;
     const moved = await waitFrame(page, (url) => url.includes(probePath) && url.includes("navigated=1"), 10_000);
     if (moved) {
@@ -177,6 +146,7 @@ async function observe(browserType, base, proxy, probePath) {
     await sleep(250);
     return {
       version: browser.version(),
+      host: { page: new URL(page.url()).pathname, frame: attributes },
       results,
       messages,
       requests: proxy.seen,
@@ -321,20 +291,21 @@ function summary(facts, observed) {
 }
 
 async function main() {
-  const [server, probePath, outDir] = process.argv.slice(2);
-  if (!server || !probePath || !outDir) {
-    console.error("usage: node frame-facts.mjs SERVER_URL PROBE_PATH OUT_DIR");
+  const [server, probePath, segment, cookie, outDir] = process.argv.slice(2);
+  if (!server || !probePath || !segment || !cookie || !outDir) {
+    console.error("usage: node frame-facts.mjs SERVER_URL PROBE_PATH SEGMENT COOKIE OUT_DIR");
     process.exit(64);
   }
   mkdirSync(outDir, { recursive: true });
-  const proxy = await startProxy(server, probePath);
-  const base = `http://${NAME}:${new URL(server).port || 80}`;
+  const proxy = await startProxy(server, { answer: redirects(probePath) });
+  const base = `http://${SITE}:${new URL(server).port || 80}`;
   const record = {};
   for (const [name, browserType] of [["chromium", chromium], ["firefox", firefox], ["webkit", webkit]]) {
-    const observed = await observe(browserType, base, proxy, probePath);
+    const observed = await observe(browserType, base, proxy, probePath, segment, cookie);
     const facts = decide(observed);
-    record[name] = { version: observed.version, facts, summary: summary(facts, observed), observed };
-    console.log(`== ${name} ${observed.version}`);
+    record[name] = { version: observed.version, host: observed.host, facts, summary: summary(facts, observed), observed };
+    console.log(`== ${name} ${observed.version}: the shell at ${observed.host.page} framed ${observed.host.frame.src} ` +
+      `with sandbox="${observed.host.frame.sandbox}"`);
     for (const [probe, line] of Object.entries(record[name].summary)) console.log(`  ${probe}: ${line}`);
   }
   proxy.close();

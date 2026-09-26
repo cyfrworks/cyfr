@@ -1,11 +1,13 @@
 # The browser harness and its record
 
 `run.sh` starts the `cyfr` release as `tests/release-boot/` starts one
-(`tests/release-boot/release.sh`), on SQLite, signs a person in
-(`tests/release-boot/fixture.exs`), publishes the two tinctures under
-`tinctures/` publicly in that person's athanor, and runs `frame-facts.mjs`
-in the official Playwright image against it. The `browser` job of
-`.github/workflows/test.yml` runs it.
+(`tests/release-boot/release.sh`), on SQLite, under the name `cyfr.test`
+(`harness.sh`), signs a person in (`tests/release-boot/fixture.exs`),
+publishes the two tinctures under `tinctures/` publicly in that person's
+athanor, and runs `frame-facts.mjs` in the official Playwright image
+against it. `harness.sh` and `lib.mjs` are shared with the tincture
+proof (`tests/tincture-proof/`). The `browser` job of
+`.github/workflows/test.yml` runs them.
 
 The harness is JavaScript. The Playwright images carry the browsers but not
 Playwright's library: the Python image's `playwright` wheel ships a Node
@@ -31,13 +33,13 @@ in `run.sh`, driven by `playwright-core` 1.63.0:
 | Firefox | 155.0 |
 | WebKit | 26.6 |
 
-## Frame facts
+## Frame facts the rules were frozen against
 
-A page on the server's own origin, where the Prism shell frames tinctures
-from, holds `frame-probe`'s `/t/` page in `<iframe sandbox="allow-scripts">`
-as the shell does, and the probe (`tinctures/frame-probe/probe.js`) makes
-nine attempts from inside it. The page is served as today's `/t/` route
-serves any public tincture: its CSP is
+The first record: a page the harness's proxy answered on the server's own
+origin, where the Prism shell frames tinctures from, held `frame-probe`'s `/t/` page in `<iframe sandbox="allow-scripts">`
+as the shell does, and the probe (`tinctures/frame-probe/probe.js`) made
+nine attempts from inside it, under the policy the `/t/` route served
+before the frame's rules: its CSP was
 `default-src 'self'; script-src 'self' 'nonce-…'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self'; connect-src 'self'; object-src 'none'; base-uri 'self'; frame-ancestors 'self'`,
 and its assets answer `access-control-allow-origin: *`. Every browser reaches
 the server through the harness's proxy under the name `cyfr.test`; the
@@ -69,6 +71,50 @@ of the origin run under `script-src 'self'` in all three, including another
 tincture's; `worker-src` and WebAssembly are closed by today's `script-src`;
 forms are closed by the sandbox; messages to the parent arrive with origin
 `"null"`, so the parent cannot tell one frame from another by origin.
+
+## Frame facts through the shell
+
+The fixture's person, signed in (`session.exs` signs the session's cookie as
+a sign-in's response does), opens `frame-probe` from the Prism shell at
+`/a/<athanor>/tinctures` on the site origin. The shell creates the frame as
+it creates every frame: the probe declares no capability, so
+`sandbox="allow-scripts"`, at the probe's public address, whose document
+carries the policy the frame's rules derive
+(`Compendium.Tincture.Rules.csp/2`, with `frame-ancestors` and
+`connect-src` naming the site origin and a `sandbox allow-scripts`
+directive). The probe (`tinctures/frame-probe/probe.js`) makes nine attempts
+from inside it. Every browser reaches the server through the harness's proxy
+(`lib.mjs`) under the name `cyfr.test`, which the server is started with
+(`CYFR_HOST` and `CYFR_PUBLIC_URL`, `harness.sh`); the proxy answers only the
+302s of the redirect attempt (no tincture route redirects) and forwards the
+rest unchanged. The document's origin is `null` in all three browsers.
+
+Recorded on 2026-09-26 on the host below, each browser seeing the shell at
+`/a/@release-proof/tinctures` frame `/t/@release-proof/local/frame-probe`;
+`frame-facts.json`, written by each run, holds every request, message, CSP
+report and console line behind a row.
+
+| Attempt | Chromium 153 | Firefox 155 | WebKit 26.6 |
+|---|---|---|---|
+| self-navigation (`location.assign` to its own page) | allowed: the frame loaded its page again | allowed | allowed |
+| fetch of its own asset (`asset.json`) | allowed: sent with `Origin: null`, answered 200, readable (`type: cors`) | allowed, as Chromium | allowed, as Chromium (`connect-src` names the site origin) |
+| form POST to its own path | refused: no request; "Blocked form submission … the 'allow-forms' permission is not set" | refused: no request | refused: no request; the same console line as Chromium |
+| `postMessage` to the parent | allowed: arrived at the shell's window with `event.origin` `"null"` | allowed, `"null"` | allowed, `"null"` |
+| `<script>` from another tincture's path on the origin (`frame-neighbour/neighbour.js`) | allowed: sent with `Origin: null`, ran; no CSP report | allowed, ran | allowed, ran |
+| module script of its own (`module.js`) | allowed: sent with `Origin: null` (cors), ran; no CSP report | allowed, as Chromium | allowed, as Chromium |
+| Worker from a `blob:` URL | allowed: the worker ran (`worker-src 'self' blob:`) | allowed | allowed |
+| `WebAssembly.instantiate` of the smallest module | allowed (`'wasm-unsafe-eval'`) | allowed | allowed |
+| fetch of an asset answered 302 to another asset | allowed when the 302 carries `access-control-allow-origin: *` (followed, `redirected: true`, readable); refused when it carries no CORS header; the server's own 302 (`/chat` to `/login`) refused the same way | as Chromium | as Chromium |
+
+What the rows mean for the rules: a sandboxed frame without
+`allow-same-origin` is a `null` origin to every browser, so any data request
+it makes is cross-origin and needs an explicit CORS answer, and `connect-src`
+names the site origin rather than `'self'`; scripts from any path of the
+origin run under `script-src 'self'`, another tincture's included; blob
+workers and WebAssembly run because the policy opens them; forms are closed
+by the sandbox and `form-action 'none'`; messages to the parent arrive with
+origin `"null"`, so the shell tells its frames apart by the port it handed
+each, never by origin.
 
 ## Host
 
@@ -113,6 +159,7 @@ The Trivy scans of those jobs were not run here.
 | worker-image: `runners.py`, on the Docker-in-Docker host | 86 pass, including every pinned-egress, kill, taint, stream, late-child and control-plane-cut case; then fail: after the case that kills the service's VM, the restarted container's cyfr-keeper reports "memory bounds are unavailable … processes remain in /sys/fs/cgroup" and starts no runner, so the pool never refills and the memory cases after it do not run. A harness artefact: the case polled the container with `docker exec` while it restarted in place, and runc's processes entering it for the exec sat in the reused cgroup root, in the host's pid namespace, when the new keeper drained it, listed there as pid 0. The case now lists processes from the host (`docker top`) across the restart, and the keeper's drain skips an entry of another pid namespace and waits between its passes |
 | worker-image: `runners.py` and `namespace.py`, native engine, harness in a container on a shared network | pass: 172 and 28, the service-death case and the restart step among them |
 | browser: `run.sh` | pass, every attempt observed in every browser |
+| tincture proof: `tests/tincture-proof/run.sh` | pass in every browser (its README holds the record) |
 | release-boot: `boot.sh sqlite`, with the backup round trip | pass |
 | release-boot: `boot.sh postgres`, with the backup round trip | pass |
 | s3-minio: `--only s3_integration` against `pgsty/minio` (RELEASE.2026-08-04T00-00-00Z) | pass, 35 of 35 |

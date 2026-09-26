@@ -545,4 +545,29 @@ defmodule Compendium.ScaffoldTest do
       assert msg =~ "already exists"
     end
   end
+
+  describe "every tincture template speaks the shipped SDK" do
+    # The retired SDK's calls: no template may show one.
+    @retired ~w(cyfr.mode cyfr.setTitle cyfr.getContext cyfr.on\( cyfr.off\( cyfr.query\()
+
+    test "the app source calls the SDK as it ships", %{ctx: ctx} do
+      for {template, file} <- [{nil, "app.js"}, {"vite", "src/main.js"}, {"react", "src/App.tsx"}] do
+        name = "sdk-#{template || "vanilla"}"
+        opts = if template, do: [template: template], else: []
+        assert {:ok, _} = Scaffold.create(ctx, name, "tincture", "0.1.0", opts)
+
+        source = File.read!(Path.join(tincture_base(ctx, name), file))
+
+        for call <- @retired, do: refute(source =~ call, "#{file} shows #{call}")
+
+        assert source =~ ~s{cyfr.invoke("c:local.my-component", "run", }, file
+        assert source =~ "cyfr.ready()", file
+      end
+
+      react = File.read!(Path.join(tincture_base(ctx, "sdk-react"), "src/App.tsx"))
+
+      for member <- ~w(invoke action stream open close title ready focus),
+          do: assert(react =~ ~r/^\s+#{member}\(/m, "App.tsx declares no cyfr.#{member}")
+    end
+  end
 end
