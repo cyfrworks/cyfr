@@ -5,11 +5,11 @@ defmodule CyfrWeb.ErrorRenderer do
   @moduledoc """
   How an ingress plug says no.
 
-  `Plugs.Authenticate`, `Plugs.MCPOrigin` and `Plugs.MCPRateLimit` decide
-  *whether* to reject a request; the pipeline they are mounted in decides what
-  the rejection looks like on the wire. The MCP endpoint answers in JSON-RPC
-  (`Emissary.Web.MCPError`); an ordinary HTTP route answers in plain JSON
-  (`CyfrWeb.ApiError`).
+  `Plugs.Authenticate`, `Plugs.FrameRequest`, `Plugs.MCPOrigin` and
+  `Plugs.MCPRateLimit` decide *whether* to reject a request; the pipeline
+  they are mounted in decides what the rejection looks like on the wire. The
+  MCP endpoint answers in JSON-RPC (`Emissary.Web.MCPError`); an ordinary
+  HTTP route answers in plain JSON (`CyfrWeb.ApiError`).
 
   Splitting it this way is what stops the two from drifting apart: one
   implementation of "is this caller who they say they are", two renderings. The

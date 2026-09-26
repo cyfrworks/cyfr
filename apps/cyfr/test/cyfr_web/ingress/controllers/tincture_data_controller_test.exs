@@ -44,7 +44,7 @@ defmodule CyfrWeb.Ingress.TinctureDataControllerTest do
   # A tincture version in the source's athanor declaring `block` (its
   # actions and streams) and `deps` (its static dependencies). Answers
   # its release digest.
-  defp tincture!(ctx, name, block \\ %{}, deps \\ []) do
+  defp tincture!(ctx, name, block, deps) do
     manifest = %{
       "name" => name,
       "type" => "tincture",

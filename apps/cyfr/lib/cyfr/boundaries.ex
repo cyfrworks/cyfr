@@ -819,7 +819,8 @@ defmodule Cyfr.Boundaries do
       allow: ~w(
         CyfrWeb CyfrWeb.ContextGuard CyfrWeb.Endpoint CyfrWeb.PendingProbe
         CyfrWeb.Pipelines CyfrWeb.Plugs.ApiSecurityHeaders CyfrWeb.Plugs.AuthRateLimit
-        CyfrWeb.Plugs.Headless CyfrWeb.Router CyfrWeb.SafeRedirect CyfrWeb.SignInResponse
+        CyfrWeb.Plugs.FrameRequest CyfrWeb.Plugs.Headless CyfrWeb.Router CyfrWeb.SafeRedirect
+        CyfrWeb.SignInResponse
       ),
       reason:
         "the console reads the host's shared web tier and the composition triple its " <>
@@ -980,7 +981,8 @@ defmodule Cyfr.Boundaries do
       allow: ~w(
         CyfrWeb.ContextGuard CyfrWeb.ErrorRenderer CyfrWeb.Plugs.ApiSecurityHeaders
         CyfrWeb.Plugs.Authenticate CyfrWeb.Plugs.CORS CyfrWeb.Plugs.CallIdentity
-        CyfrWeb.Plugs.MCPOrigin CyfrWeb.Plugs.MCPRateLimit CyfrWeb.SSE
+        CyfrWeb.Plugs.FrameRequest CyfrWeb.Plugs.MCPOrigin CyfrWeb.Plugs.MCPRateLimit
+        CyfrWeb.SSE
       ),
       reason:
         "the MCP adapter reads the host's shared web tier and never its root router, " <>
@@ -1909,6 +1911,7 @@ defmodule Cyfr.Boundaries do
     %{module: Emissary.Web.MCPController, site: :method_not_allowed, plane: :external},
     # The MCP pipeline's plugs, after routing.
     %{module: CyfrWeb.Plugs.Authenticate, site: :call, plane: :external},
+    %{module: CyfrWeb.Plugs.FrameRequest, site: :call, plane: :external},
     %{module: CyfrWeb.Plugs.MCPOrigin, site: :call, plane: :external},
     %{module: CyfrWeb.Plugs.MCPRateLimit, site: :call, plane: :external},
     %{module: Emissary.Web.Plugs.MCPRequestMetadata, site: :call, plane: :external},

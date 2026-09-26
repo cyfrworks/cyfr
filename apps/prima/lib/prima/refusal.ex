@@ -535,6 +535,7 @@ defmodule Prima.Refusal do
 
   defp row(:ip_not_allowed), do: {:forbidden, "Request IP not in API key allowlist"}
   defp row(:origin_rejected), do: {:forbidden, "Origin not allowed"}
+  defp row(:frame_request), do: {:forbidden, "A request made by a frame is refused"}
 
   # A context that was admitted, whose later action its standing no
   # longer covers. A credential presented and refused is `:unauthenticated`.

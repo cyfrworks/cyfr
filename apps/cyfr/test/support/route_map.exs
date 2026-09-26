@@ -14,6 +14,7 @@
         "auth_api_throttle" => ["CyfrWeb.Plugs.AuthRateLimit"],
         "auth_browser" => [
           "CyfrWeb.Plugs.Headless",
+          "CyfrWeb.Plugs.FrameRequest",
           ":accepts",
           ":fetch_session",
           ":fetch_live_flash",
@@ -26,6 +27,7 @@
           ":accepts",
           "CyfrWeb.Plugs.ApiSecurityHeaders",
           "CyfrWeb.Plugs.CORS",
+          "CyfrWeb.Plugs.FrameRequest",
           "CyfrWeb.Plugs.MCPOrigin",
           "CyfrWeb.Plugs.MCPRateLimit",
           "CyfrWeb.Plugs.Authenticate"
@@ -264,6 +266,7 @@
           ":accepts",
           "CyfrWeb.Plugs.ApiSecurityHeaders",
           "CyfrWeb.Plugs.CORS",
+          "CyfrWeb.Plugs.FrameRequest",
           "CyfrWeb.Plugs.MCPOrigin",
           "CyfrWeb.Plugs.MCPRateLimit",
           "CyfrWeb.Plugs.Authenticate",
@@ -305,6 +308,7 @@
       pipelines: %{
         "attachment" => [
           "CyfrWeb.Plugs.Headless",
+          "CyfrWeb.Plugs.FrameRequest",
           ":fetch_session",
           ":protect_from_forgery",
           ":put_secure_browser_headers",
@@ -313,6 +317,7 @@
         "attachment_throttle" => ["CyfrWeb.Plugs.AuthRateLimit"],
         "browser" => [
           "CyfrWeb.Plugs.Headless",
+          "CyfrWeb.Plugs.FrameRequest",
           ":accepts",
           ":fetch_session",
           ":fetch_live_flash",
