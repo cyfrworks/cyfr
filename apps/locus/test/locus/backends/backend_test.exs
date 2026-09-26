@@ -10,8 +10,8 @@ defmodule Locus.Backends.BackendTest do
   in the stderr tail; the backend's own request answered and never taken
   for a call's answer; a stdout line past the frame bound killing the
   process, which is started again after its backoff; crashes past the
-  window marking it failed, and a failed backend refusing calls in the
-  bridge's words; an idle backend keeping its tools and woken by the next
+  window marking it failed, and a failed backend refusing calls as not
+  ready, naming its last exit; an idle backend keeping its tools and woken by the next
   call, concurrent calls sharing one start; a stop with a grace. Against
   `Locus.Test.FakeKeeper` through `Locus.Keeper`: the spawn a backend asks
   for is in the pool `backends`, its argv the command under `/bin/sh -c`,

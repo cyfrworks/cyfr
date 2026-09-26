@@ -45,8 +45,8 @@ defmodule Cyfr.Bootstrap do
   is the test suite's sandboxed boot omitting this child altogether
   (`Cyfr.Application`), and nothing here reads it.
 
-  The seed offer that used to ride along is `Cyfr.SeedOffer`: optional
-  work under a claim of its own, started after everything this gates.
+  The seed offer is `Cyfr.SeedOffer`: optional work under a claim of its
+  own, started after everything this gates.
   """
 
   use GenServer, restart: :transient

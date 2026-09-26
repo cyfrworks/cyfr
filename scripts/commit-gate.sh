@@ -142,6 +142,9 @@ leg_islands() {
   # of the suite and of the arca island answered `:database_error` on the
   # SQLite writer's wait on one gate in three.
   await_marker "$LOGDIR/static.done"
+  # Under --close the PostgreSQL suite's four partitions follow the SQLite
+  # suite's; the islands' own SQLite writers waited out its I/O too.
+  if $CLOSE; then await_marker "$LOGDIR/postgres.done"; fi
   island prima apps/prima tests/fixtures seed/components & local p1=$!
   island arca apps/prima apps/arca config/database_choice.exs & local p2=$!
   island sanctum apps/prima apps/arca apps/sanctum config/database_choice.exs & local p3=$!

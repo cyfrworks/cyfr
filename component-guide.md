@@ -554,7 +554,7 @@ An OAuth need declares only the provider and scopes (`"type": "oauth:google"`, `
 
 ### `caps` Section
 
-The declared capability **ask**. Unlike the `setup.policy` block it replaces, `caps` is never applied by itself — it is rendered on the consent sheet and becomes effective capability only when a human commits a consent (`effective = ask ∩ operator choices ∩ platform ceiling`). Declaring more here widens what the operator is *asked* for, never what the component *gets*.
+The declared capability **ask**. `caps` is never applied by itself — it is rendered on the consent sheet and becomes effective capability only when a human commits a consent (`effective = ask ∩ operator choices ∩ platform ceiling`). Declaring more here widens what the operator is *asked* for, never what the component *gets*.
 
 | Field | Type | Description |
 |-------|------|-------------|
@@ -1102,7 +1102,7 @@ What a component may do at runtime comes from its consent, not from stored polic
 effective capability = manifest ask (caps) ∩ operator choices ∩ platform ceiling
 ```
 
-All three are frozen at consent time. Nothing auto-applies the manifest's `caps` — it is rendered on the consent sheet and a human commits every widening. (This is the key break from `setup.policy`, which silently widened effective policy at read time.)
+All three are frozen at consent time. Nothing auto-applies the manifest's `caps` — it is rendered on the consent sheet and a human commits every widening.
 
 ### Egress (`caps.egress`)
 

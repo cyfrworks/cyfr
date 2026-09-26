@@ -148,7 +148,7 @@ defmodule Cyfr.Boundaries do
       layer: :locus,
       lib: "apps/locus/lib",
       umbrella_deps: [:prima],
-      note: "the builds island; CYFR reaches it over the build wire alone",
+      note: "the builds and backends island; CYFR reaches it over its two wires alone",
       dependency_roots: ~w(Plug Bandit ThousandIsland)
     }
   ]

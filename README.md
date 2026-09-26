@@ -654,9 +654,19 @@ What a cell gives up and what it keeps:
   The tenant's durable ceilings — its consented invocation rate and its
   budget — are rows, and hold for the cell.
 
-`mix test --only cluster apps/cyfr/test/cluster` is the suite that proves
-this: two real nodes, one Postgres, one object store, with both process
-death and a live partitioned owner.
+`scripts/test-partitioned.sh -n 1 -a postgres -- --only cluster
+apps/cyfr/test/cluster` is the suite that proves this: two real nodes, one
+Postgres, one object store, with both process death and a live
+partitioned owner.
+
+Before it admits any work, every member reconciles the platform
+administrators against `CYFR_PLATFORM_ADMIN_EMAILS` under its own slot,
+ending the sessions of anyone the list no longer names, and a
+reconciliation that fails or stalls refuses the boot. The same holds after
+a restart inside a running member: when the database checks, discovery,
+the member's claim, the bus or anything else before the reconciliation
+restarts, it runs again before anything that admits work comes back, and
+the web tier, whose crashes restart it alone, never restarts the rest.
 
 ### Headless nodes
 
@@ -858,36 +868,36 @@ CLI environment variables: `CYFR_TOKEN` (credential), `CYFR_NO_INTERACTIVE=1` (n
 
 ## Glossary
 
-Each part of CYFR has one name, and the name is its directory, its binary or image, its environment variable prefix, its MAC domain, its provider's service label and its log label. Words for a role inside a part stay English.
+Each part of CYFR has one name, and the name is its directory, its binary or image, its compose service, its environment variable prefix, its MAC domain, its provider's service label and its log label. Words for a role inside a part stay English.
 
-| Name | Is | Directory | Binary or image | Environment prefix | MAC domain | Service label | Log label |
-|------|----|-----------|-----------------|--------------------|------------|---------------|-----------|
-| Prima | the contracts every side agrees on: shapes, protocols, and the shared runtime primitives | `apps/prima` | in every release | — | — | — | `[Prima…]` |
-| Arca | persistence: rows, blobs, cache, leases, retention, the records and file doors | `apps/arca` | the `cyfr` release | — | — | `arca` | `[Arca…]` |
-| Sanctum | decisions: identity, tenancy, authority, consent, the vault, caps | `apps/sanctum` | the `cyfr` release | — | — | `sanctum` | `[Sanctum…]` |
-| Grimoire | the operation table and its gate: dispatch, the request log | `apps/cyfr/lib/grimoire` | the `cyfr` release | — | — | `grimoire` | `[Grimoire…]` |
-| Cyfr | the host: boot, control-plane ownership, the bus, telemetry, configuration, the one endpoint | `apps/cyfr/lib/cyfr`, `apps/cyfr/lib/cyfr_web` | the `cyfr` release and image | `CYFR_` | — | — | `[Cyfr…]` |
-| Compendium | components: the registry, sources and builds | `apps/cyfr/lib/compendium` | the `cyfr` release | — | — | `compendium` | `[Compendium…]` |
-| Aqua | the assistant: threads, notes and approvals | `apps/cyfr/lib/aqua` | the `cyfr` release | — | — | `aqua` | `[Aqua…]` |
-| Crucible | execution: admission, attempts, the host and worker protocols, schedules | `apps/cyfr/lib/crucible` | the `cyfr` release | `CYFR_CRUCIBLE_`, `CYFR_HOST_API_` | — | `crucible` | `[Crucible…]` |
-| Emissary | MCP in both directions: `/mcp`, and external MCP servers over HTTP or on the Locus backends service | `apps/cyfr/lib/emissary` | the `cyfr` release | — | — | `emissary` | `[Emissary…]` |
-| Prism | the console | `apps/cyfr/lib/prism`, `apps/cyfr/lib/prism_web` | the `cyfr` release | — | — | — | `[Prism…]` |
-| Codex | the command-line client | `apps/codex` | the `cyfr` binary | — | — | — | — |
-| Opus | the WASM engine: a worker service and the runners it starts under the keeper | `apps/opus` | the `opus` release, image `cyfr-opus` | `OPUS_`, `CYFR_OPUS_` | `cyfr-opus/v1` | — | `[Opus…]` |
-| Locus | where untrusted native processes run: builds, and the stdio MCP backends of external servers | `apps/locus` | the `locus` release, image `cyfr-locus` (the `locus-builds` and `locus-backends` services) | `LOCUS_BUILDS_`, `LOCUS_BACKENDS_` | `cyfr-locus/v1` | — | `[Locus…]` |
-| keeper | the role of the privileged companion binary that starts Opus's runners and Locus's builds and backends under uids of their own | `apps/keeper` | `cyfr-keeper`, the entrypoint of the `cyfr-opus` and `cyfr-locus` images | `KEEPER_` | — | — | `[cyfr-keeper]` |
-| provider | the implementation of a tool's operations, `<Name>.Provider` or `<Name>.Providers.<Tool>`; its service label is its part's name | — | — | — | — | — | — |
-| facade | a part's own module, the one entry the parts above it call | — | — | — | — | — | — |
-| port | one of five behaviours a lower part declares and a higher one implements, installed at boot; `Sanctum.Grimoire` is consent's view of the operation table, and `Grimoire` is the table | — | — | — | — | — | — |
-| plane | the kind of caller an operation is admitted for: an external caller, or a call inside a running chain | — | — | — | — | — | — |
-| actor | the tenant and identity a call carries | — | — | — | — | — | — |
-| lease | a control-plane member's database-held claim to its slot | — | — | — | — | — | — |
-| fence | the number that refuses a write from an owner that has been replaced | — | — | — | — | — | — |
-| attempt | one try at running an execution on a worker service | — | — | — | — | — | — |
-| backend | one stdio process of an external MCP server, run by the Locus backends service | — | — | — | — | — | — |
-| cell | several control-plane members sharing one database | — | — | — | — | — | — |
+| Name | Is | Directory | Binary or image | Compose service | Environment prefix | MAC domain | Service label | Log label |
+|------|----|-----------|-----------------|-----------------|--------------------|------------|---------------|-----------|
+| Prima | the contracts every side agrees on: shapes, protocols, and the shared runtime primitives | `apps/prima` | in every release | — | — | — | — | `[Prima…]` |
+| Arca | persistence: rows, blobs, cache, leases, retention, the records and file doors | `apps/arca` | the `cyfr` release | — | — | — | `arca` | `[Arca…]` |
+| Sanctum | decisions: identity, tenancy, authority, consent, the vault, caps | `apps/sanctum` | the `cyfr` release | — | — | — | `sanctum` | `[Sanctum…]` |
+| Grimoire | the operation table and its gate: dispatch, the request log, the decision record | `apps/cyfr/lib/grimoire` | the `cyfr` release | — | — | — | `grimoire` | `[Grimoire…]` |
+| Cyfr | the host: boot, control-plane ownership, the bus, telemetry, configuration, the one endpoint and its non-MCP ingress | `apps/cyfr/lib/cyfr`, `apps/cyfr/lib/cyfr_web` | the `cyfr` release, image `cyfr` | `cyfr`, and `caddy` in front of it in TLS mode | `CYFR_` | — | — | `[Cyfr…]` |
+| Compendium | components: the registry, sources and builds | `apps/cyfr/lib/compendium` | the `cyfr` release | — | — | — | `compendium` | `[Compendium…]` |
+| Aqua | the assistant: threads, notes and approvals | `apps/cyfr/lib/aqua` | the `cyfr` release | — | — | — | `aqua` | `[Aqua…]` |
+| Crucible | execution: admission, attempts, the host and worker protocols, guest egress, schedules | `apps/cyfr/lib/crucible` | the `cyfr` release | — | `CYFR_CRUCIBLE_`, `CYFR_HOST_API_` | — | `crucible` | `[Crucible…]` |
+| Emissary | MCP in both directions: `/mcp`, and external MCP servers over HTTP or on the Locus backends service | `apps/cyfr/lib/emissary`, `apps/cyfr/lib/emissary/web` | the `cyfr` release | — | — | — | `emissary` | `[Emissary…]` |
+| Prism | the console | `apps/cyfr/lib/prism`, `apps/cyfr/lib/prism_web` | the `cyfr` release | — | — | — | — | `[Prism…]` |
+| Codex | the command-line client | `apps/codex` | the `cyfr` binary | — | — | — | — | — |
+| Opus | the WASM engine: a worker service and the runners it starts under the keeper | `apps/opus` | the `opus` release, image `cyfr-opus` | `opus` | `OPUS_`, `CYFR_OPUS_` | `cyfr-opus/v1` | — | `[Opus…]` |
+| Locus | where untrusted native processes run: builds, and the stdio MCP backends of external servers | `apps/locus` | the `locus` release, image `cyfr-locus` | `locus-builds`, `locus-backends` | `LOCUS_BUILDS_`, `LOCUS_BACKENDS_`, `CYFR_LOCUS_BUILDS_`, `CYFR_LOCUS_BACKENDS_` | `cyfr-locus/v1`, with its `builds` and `backends` services, each under a key of its own | — | `[Locus…]` |
+| keeper | the role of the privileged companion binary that starts Opus's runners and Locus's builds and backends under uids of their own | `apps/keeper` | `cyfr-keeper`, the entrypoint of the `cyfr-opus` and `cyfr-locus` images | — | `KEEPER_` | — | — | `[cyfr-keeper]` |
+| provider | the implementation of a tool's operations, `<Name>.Provider` or `<Name>.Providers.<Tool>`; its service label is its part's name | — | — | — | — | — | — | — |
+| facade | a part's own module, the one entry the parts above it call | — | — | — | — | — | — | — |
+| port | one of five behaviours a lower part declares and a higher one implements, installed at boot; `Sanctum.Grimoire` is consent's view of the operation table, and `Grimoire` is the table | — | — | — | — | — | — | — |
+| plane | the kind of caller an operation is admitted for: an external caller, or a call inside a running chain | — | — | — | — | — | — | — |
+| actor | the tenant and identity a call carries | — | — | — | — | — | — | — |
+| lease | a control-plane member's database-held claim to its slot | — | — | — | — | — | — | — |
+| fence | the number that refuses a write from an owner that has been replaced | — | — | — | — | — | — | — |
+| attempt | one try at running an execution on a worker service | — | — | — | — | — | — | — |
+| backend | one stdio process of an external MCP server, run by the Locus backends service | — | — | — | — | — | — | — |
+| cell | several control-plane members sharing one database | — | — | — | — | — | — | — |
 
-Every setting of the control plane is a `CYFR_` variable; a part named with a prefix of its own beneath it owns those settings. `HostAPI` and `WorkerAPI` are protocol names, and `CYFR_HOST_API_` serves the first.
+Every setting of the control plane is a `CYFR_` variable; a part named with a prefix of its own beneath it owns those settings. A setting an island's release reads carries the island's own prefix, and the control plane's copy of an island's key carries `CYFR_` before it: `CYFR_LOCUS_BACKENDS_KEY` in `.env` is `LOCUS_BACKENDS_KEY` in the `locus-backends` service. `HostAPI` and `WorkerAPI` are protocol names, and `CYFR_HOST_API_` serves the first.
 
 ## Documentation
 

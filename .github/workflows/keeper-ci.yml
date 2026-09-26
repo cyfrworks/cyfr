@@ -12,7 +12,7 @@ on:
     branches: [main]
     paths:
       - 'apps/keeper/**'
-      # The spawner-protocol vectors the suite reproduces, and the residue
+      # The keeper-protocol vectors the suite reproduces, and the residue
       # canary, which the gofmt step checks with them.
       - 'tests/fixtures/keeper_protocol.json'
       - 'tests/fixtures/residue-canary.go'
