@@ -7,7 +7,7 @@ defmodule Arca.McpServerStorage do
 
   Follows the same tenant-scoped patterns as the other `Arca.*Storage`
   modules. All queries are scoped via `where_tenant(actor)`, except
-  `fenced/1`, which reads named rows across athanors for the MCP bridge
+  `fenced/1`, which reads named rows across athanors for the backends
   controller and matches each row to its athanor itself.
 
   ## Schema
@@ -235,7 +235,7 @@ defmodule Arca.McpServerStorage do
 
   @doc """
   The named rows, read in one statement with the status of each row's
-  athanor, for the MCP bridge controller's fence: each `{athanor_id,
+  athanor, for the backends controller's fence: each `{athanor_id,
   server_id}` pair maps to the row when the row exists in that athanor,
   along with whether that athanor is active (not archived). A pair with no
   such row is absent from the map.

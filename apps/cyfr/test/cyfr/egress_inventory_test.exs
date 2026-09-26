@@ -17,11 +17,12 @@ defmodule Cyfr.EgressInventoryTest do
   pinned options. Sanctum and Opus own their DNS resolution; Sanctum.Egress
   sends control-plane requests, and Opus owns the guest HTTP handlers.
 
-  The JS bridge (`apps/mcp-bridge/server.mjs`) is its own egress arm: it
-  runs stdio MCP backends, which reach the network as their commands do,
-  and speaks to them only over their stdio. It ships with the server, is
-  scanned by nothing here, and is called out so this inventory is honest
-  about its edge. CYFR reaches the bridge through `Sanctum.Egress`.
+  The Locus backends service (`Locus.Backends.Service`) is its own egress
+  arm: it runs stdio MCP backends (`Locus.Backends.Backend`) under the
+  keeper, which reach the network as their commands do, and speaks to them
+  only over their stdio. The service itself sends no HTTP, so the scan
+  finds nothing there; it is called out so this inventory is honest about
+  its edge. CYFR reaches the service through `Sanctum.Egress`.
   """
 
   use ExUnit.Case, async: true
@@ -100,7 +101,10 @@ defmodule Cyfr.EgressInventoryTest do
            """
   end
 
-  test "the bridge's egress arm still exists where this inventory says" do
-    assert File.exists?(Path.join(root(), "apps/mcp-bridge/server.mjs"))
+  test "the backends service's egress arm still exists where this inventory says" do
+    for path <-
+          ~w(apps/locus/lib/locus/backends/service.ex apps/locus/lib/locus/backends/backend.ex) do
+      assert File.exists?(Path.join(root(), path)), path
+    end
   end
 end

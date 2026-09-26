@@ -40,8 +40,8 @@ func generateSecretKey() (string, error) {
 }
 
 // generateHexKey returns 32 cryptographically random bytes as 64
-// hexadecimal digits: the one form of CYFR_MCP_BRIDGE_KEY, CYFR_OPUS_KEY
-// and CYFR_LOCUS_BUILDS_KEY that cyfr and each service accept.
+// hexadecimal digits: the one form of CYFR_LOCUS_BACKENDS_KEY,
+// CYFR_OPUS_KEY and CYFR_LOCUS_BUILDS_KEY that cyfr and each service accept.
 func generateHexKey() (string, error) {
 	b := make([]byte, 32)
 	if _, err := rand.Read(b); err != nil {
@@ -53,7 +53,7 @@ func generateHexKey() (string, error) {
 // The stack's keys and the settings they pair with, as .env names them.
 const (
 	secretKeyBaseVar = "CYFR_SECRET_KEY_BASE"
-	bridgeKeyVar     = "CYFR_MCP_BRIDGE_KEY"
+	backendsKeyVar   = "CYFR_LOCUS_BACKENDS_KEY"
 	workerRootVar    = "CYFR_OPUS_KEY"
 	serviceIDVar     = "OPUS_SERVICE_ID"
 	serviceKeyVar    = "OPUS_SERVICE_KEY"
@@ -73,7 +73,7 @@ const (
 // read from exactly one assignment, so what init reads is what compose and
 // cyfr read.
 var stackVars = []string{
-	secretKeyBaseVar, bridgeKeyVar, workerRootVar, serviceIDVar, serviceKeyVar, buildsURLVar,
+	secretKeyBaseVar, backendsKeyVar, workerRootVar, serviceIDVar, serviceKeyVar, buildsURLVar,
 	buildsKeyVar, corsOriginsVar,
 }
 
@@ -216,8 +216,8 @@ func ensureStackKeys(text string) (string, []envChange, error) {
 			return "", nil, err
 		}
 	}
-	if v, _ := f.value(bridgeKeyVar); v == "" {
-		if err := mint(bridgeKeyVar, "generated", generateHexKey); err != nil {
+	if v, _ := f.value(backendsKeyVar); v == "" {
+		if err := mint(backendsKeyVar, "generated", generateHexKey); err != nil {
 			return "", nil, err
 		}
 	}
@@ -361,11 +361,11 @@ var initCmd = &cobra.Command{
 	Use:     "init",
 	Short:   "Scaffold a CYFR project and mint the stack's keys into .env",
 	GroupID: "server",
-	Long: `Set up a CYFR project in the current directory so you can start the self-hosted stack with "cyfr up": cyfr (the one endpoint), opus (the execution worker), locus-builds (the builds service), mcp-bridge (stdio MCP servers) and, in TLS mode, caddy.
+	Long: `Set up a CYFR project in the current directory so you can start the self-hosted stack with "cyfr up": cyfr (the one endpoint), opus (the execution worker), locus-builds (the builds service), locus-backends (stdio MCP servers) and, in TLS mode, caddy.
 
 Downloads docker-compose.yml, Caddyfile, .env.example, the services' own env examples and the bundled scaffold (component/tincture/integration guides, wit/ definitions, the aqua/ soul, roles and scrolls) for this CLI's version; generates cyfr.yaml, .gitignore, and the data/aqua directories; writes .env from .env.example, prompting for the hostname, an allowed sign-in email, a TLS y/n choice, and (if TLS) a Let's Encrypt email; and pulls the images the stack starts. Run with --no-interactive to take the defaults silently.
 
-.env gets the stack's keys: CYFR_SECRET_KEY_BASE, CYFR_MCP_BRIDGE_KEY, the worker root CYFR_OPUS_KEY with the OPUS_SERVICE_KEY derived from it for OPUS_SERVICE_ID (wrk_opus unless .env names another), and CYFR_LOCUS_BUILDS_URL=http://locus-builds:4100 with a minted CYFR_LOCUS_BUILDS_KEY, so builds are on. It also assigns CYFR_CORS_ALLOWED_ORIGINS the empty allowlist, since cyfr serves Prism, the API, /mcp and the tinctures from its own origin and no browser client of this stack is cross-origin — a release with sign-in configured refuses to boot on the wildcard default, which init never writes.
+.env gets the stack's keys: CYFR_SECRET_KEY_BASE, CYFR_LOCUS_BACKENDS_KEY, the worker root CYFR_OPUS_KEY with the OPUS_SERVICE_KEY derived from it for OPUS_SERVICE_ID (wrk_opus unless .env names another), and CYFR_LOCUS_BUILDS_URL=http://locus-builds:4100 with a minted CYFR_LOCUS_BUILDS_KEY, so builds are on. It also assigns CYFR_CORS_ALLOWED_ORIGINS the empty allowlist, since cyfr serves Prism, the API, /mcp and the tinctures from its own origin and no browser client of this stack is cross-origin — a release with sign-in configured refuses to boot on the wildcard default, which init never writes.
 
 Re-running in an existing project is safe: docker-compose.yml, Caddyfile, cyfr.yaml and .env.example are kept if they already exist, and .env gains only the keys it lacks. A key already in .env is never rewritten. A service key without the root it derives from, or one that does not derive from the root beside it, is refused with a sentence naming the fix, and nothing is written. A builds URL set empty with no key is builds turned off, and stays off. Use --force to re-fetch docker-compose.yml + Caddyfile and regenerate cyfr.yaml.`,
 	Example: `  cyfr init
@@ -400,9 +400,9 @@ Re-running in an existing project is safe: docker-compose.yml, Caddyfile, cyfr.y
 		}
 
 		// Download scaffold files (non-fatal): guides, wit/, aqua/, and the
-		// deploy files (docker-compose.yml, Caddyfile, .env.example,
-		// Dockerfile.node). Idempotent — existing files kept. No-op for dev
-		// builds (version.Version=="dev"/"").
+		// deploy files (docker-compose.yml, Caddyfile, .env.example and the
+		// services' env examples). Idempotent — existing files kept. No-op
+		// for dev builds (version.Version=="dev"/"").
 		if err := scaffold.Download(version.Version); err != nil {
 			fmt.Fprintf(os.Stderr, "Warning: failed to download scaffold files: %v (continuing anyway)\n", err)
 		}
@@ -470,10 +470,10 @@ database_path: ./data/cyfr.db
 		}
 
 		// Warm-pull the images docker-compose.yml starts with this project's
-		// profiles, read from the .env just written (cyfr and opus, plus
-		// locus-builds with builds on and caddy in TLS mode — mcp-bridge is
-		// `build:`-only). Falls back to the published cyfr image on a dev
-		// build (no compose).
+		// profiles, read from the .env just written (cyfr, opus and
+		// cyfr-locus for locus-backends, the same image serving locus-builds
+		// with builds on, and caddy in TLS mode). Falls back to the published
+		// cyfr image on a dev build (no compose).
 		images := imagesFromCompose("docker-compose.yml", composeProfiles(".env"))
 		if len(images) == 0 {
 			images = []string{"ghcr.io/cyfrworks/cyfr:latest"}
@@ -528,7 +528,7 @@ database_path: ./data/cyfr.db
 		fmt.Println("CYFR project initialized.")
 		if releaseBuild {
 			if composeExists {
-				fmt.Println("  docker-compose.yml ready (cyfr, opus, locus-builds, mcp-bridge; caddy via the `tls` profile)")
+				fmt.Println("  docker-compose.yml ready (cyfr, opus, locus-builds, locus-backends; caddy via the `tls` profile)")
 			}
 			if caddyfileExists {
 				fmt.Println("  Caddyfile ready")
@@ -592,9 +592,10 @@ func fileExists(path string) bool {
 // imagesFromCompose returns every `image:` value referenced by the services
 // of the compose file at path that start with the given profiles active: a
 // service with no `profiles:`, or one naming any of them. Images are in the
-// order the services appear. Build-only services (e.g. mcp-bridge, which has
-// only `build:`) are skipped. Returns nil if the file can't be read or parsed
-// — callers should fall back to a sensible default.
+// order the services first name them, each once (locus-builds and
+// locus-backends run one image). A service with only `build:` is skipped.
+// Returns nil if the file can't be read or parsed — callers should fall
+// back to a sensible default.
 func imagesFromCompose(path string, profiles []string) []string {
 	data, err := os.ReadFile(path)
 	if err != nil {
@@ -614,7 +615,7 @@ func imagesFromCompose(path string, profiles []string) []string {
 		if svc.Kind != yaml.MappingNode || !startsWith(svc, profiles) {
 			continue
 		}
-		if img := mapValue(svc, "image"); img != nil && img.Value != "" {
+		if img := mapValue(svc, "image"); img != nil && img.Value != "" && !slices.Contains(images, img.Value) {
 			images = append(images, img.Value)
 		}
 	}
@@ -714,13 +715,13 @@ func renderEnvFile(template, host, adminEmail, acmeEmail string, tls bool) strin
 
 var upCmd = &cobra.Command{
 	Use:     "up",
-	Short:   "Start the CYFR stack (cyfr, opus, locus-builds, mcp-bridge; caddy in TLS mode)",
+	Short:   "Start the CYFR stack (cyfr, opus, locus-builds, locus-backends; caddy in TLS mode)",
 	GroupID: "server",
 	Long: `Start the CYFR stack with Docker Compose in detached mode. Requires a docker-compose.yml in the current directory (run 'cyfr init' first).
 
-The stack is five services: cyfr (the one endpoint: Prism, API, MCP, tinctures), opus (the execution worker that runs components), locus-builds (the builds service that compiles components and tinctures), mcp-bridge (runs the stdio/npx MCP servers an athanor adds on Prism's "MCP Servers" page, each backend under a uid of its own; cyfr tells it what to run) and caddy (TLS and reverse proxy).
+The stack is five services: cyfr (the one endpoint: Prism, API, MCP, tinctures), opus (the execution worker that runs components), locus-builds (the builds service that compiles components and tinctures), locus-backends (the backends service that runs the stdio/npx MCP servers an athanor adds on Prism's "MCP Servers" page, each backend under a uid and a memory bound of its own; cyfr tells it what to run) and caddy (TLS and reverse proxy).
 
-cyfr, opus and mcp-bridge always start. locus-builds starts when CYFR_LOCUS_BUILDS_URL in .env names it (http://locus-builds:4100, which 'cyfr init' writes; --profile locus-builds). caddy starts when CYFR_BEHIND_PROXY=true in .env (--profile tls) and fronts cyfr on :80/:443; otherwise cyfr is reachable directly at http://localhost:4000.`,
+cyfr, opus and locus-backends always start. locus-builds starts when CYFR_LOCUS_BUILDS_URL in .env names it (http://locus-builds:4100, which 'cyfr init' writes; --profile locus-builds). caddy starts when CYFR_BEHIND_PROXY=true in .env (--profile tls) and fronts cyfr on :80/:443; otherwise cyfr is reachable directly at http://localhost:4000.`,
 	Example: `  cyfr up`,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		// Registry auth is per-user: `cyfr login` (device flow) after
@@ -789,7 +790,7 @@ var downCmd = &cobra.Command{
 	Use:     "down",
 	Short:   "Stop the CYFR stack",
 	GroupID: "server",
-	Long:    "Stop the CYFR stack and remove its containers via Docker Compose: cyfr, opus, mcp-bridge, and the profile services locus-builds (--profile locus-builds) and caddy (--profile tls), so a stack started with `cyfr up` with either is fully torn down.",
+	Long:    "Stop the CYFR stack and remove its containers via Docker Compose: cyfr, opus, locus-backends, and the profile services locus-builds (--profile locus-builds) and caddy (--profile tls), so a stack started with `cyfr up` with either is fully torn down.",
 	Example: "  cyfr down",
 	RunE: func(cmd *cobra.Command, args []string) error {
 		// Every profile, so down considers the opt-in services too; harmless

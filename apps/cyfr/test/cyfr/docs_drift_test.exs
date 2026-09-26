@@ -26,7 +26,7 @@ defmodule Cyfr.DocsDriftTest do
 
   # The glossary names each part once, with the environment prefixes it
   # owns. The prefixes are this roster, each named by one row.
-  @env_prefixes ~w(CYFR_ CYFR_OPUS_ CYFR_CRUCIBLE_ CYFR_HOST_API_ OPUS_ LOCUS_BUILDS_ KEEPER_ MCP_BRIDGE_)
+  @env_prefixes ~w(CYFR_ CYFR_OPUS_ CYFR_CRUCIBLE_ CYFR_HOST_API_ OPUS_ LOCUS_BUILDS_ LOCUS_BACKENDS_ KEEPER_)
   @glossary_names ~w(Prima Arca Sanctum Grimoire Cyfr Compendium Aqua Crucible Emissary Prism Codex Opus Locus keeper)
 
   defp glossary do
@@ -338,7 +338,7 @@ defmodule Cyfr.DocsDriftTest do
   # The documentation texts the rules read, by the name a failure shows.
   defp homes do
     Map.new(
-      ~w(.env.example .env.opus.example .env.locus.example .env.bridge.example integration-guide.md),
+      ~w(.env.example .env.opus.example .env.locus.example integration-guide.md),
       &{&1, File.read!(Path.join(@repo_root, &1))}
     )
   end

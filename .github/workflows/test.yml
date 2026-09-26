@@ -4,7 +4,7 @@ on:
     branches: [main]
     paths:
       # Every app: the Elixir suite also pins the CLI's grammar and the
-      # bridge's protocol literals (ClientProtocolDriftTest, StackShapeTest).
+      # stack's shape (ClientProtocolDriftTest, StackShapeTest).
       - 'apps/**'
       - 'config/**'
       - 'mix.exs'
@@ -37,7 +37,7 @@ on:
   pull_request:
     paths:
       # Every app: the Elixir suite also pins the CLI's grammar and the
-      # bridge's protocol literals (ClientProtocolDriftTest, StackShapeTest).
+      # stack's shape (ClientProtocolDriftTest, StackShapeTest).
       - 'apps/**'
       - 'config/**'
       - 'mix.exs'
@@ -704,114 +704,112 @@ jobs:
           ignore-unfixed: true
           trivyignores: .trivyignore.yaml
 
-  # D15: bridge backends isolated from each other and from the bridge. All
-  # four suites run here, in the workflow the tag's `verify` calls, so the
-  # release gates on them; three of them used to run in node-ci.yml, which
-  # nothing at the tag waited for. One job, because both images are built
-  # once for every suite that needs them.
-  bridge-image:
-    name: Bridge image (isolation, refusals, residue, failures and leaks)
+  # D15: stdio backends isolated from each other and from the backends
+  # service, under the locus-backends service's own settings. The suites
+  # run here, in the workflow the tag's `verify` calls, so the release gates
+  # on them.
+  locus-backends-image:
+    name: Backends image (end to end, isolation, refusals, residue, memory bound)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
-      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
-        with:
-          node-version: '24'
+      # The service bounds every backend with a cgroup of its own, which
+      # needs the security option writable-cgroups=true: Docker Engine 28 or
+      # later on a cgroup v2 host. Without either every case below fails for
+      # a reason the suite does not name, so this names it first.
+      - name: Docker Engine 28 or later on cgroup v2
+        run: |
+          set -euo pipefail
+          version="$(docker version --format '{{.Server.Version}}')"
+          cgroup="$(docker info --format '{{.CgroupVersion}}')"
+          echo "Docker Engine $version on cgroup v$cgroup"
+          fail=0
+          if [ "${version%%.*}" -lt 28 ]; then
+            echo "::error::Docker Engine $version is older than 28: writable-cgroups=true, which bounds every backend, needs Docker Engine 28 or later"
+            fail=1
+          fi
+          if [ "$cgroup" != "2" ]; then
+            echo "::error::this runner's Docker Engine runs on cgroup v$cgroup: writable-cgroups=true, which bounds every backend, needs a cgroup v2 host"
+            fail=1
+          fi
+          exit "$fail"
       - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
+      - name: Build the Locus image
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
+        with:
+          context: .
+          file: Dockerfile.locus
+          load: true
+          tags: cyfr-locus:backends
+          cache-from: |
+            type=gha,scope=locus
+            type=gha,scope=locus-backends
+          cache-to: type=gha,scope=locus-backends,mode=max
       - name: Build the app image
         uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
         with:
           context: .
           file: Dockerfile
           load: true
-          tags: cyfr:bridge-e2e
-          cache-from: type=gha,scope=cyfr-bridge-e2e
-          cache-to: type=gha,scope=cyfr-bridge-e2e,mode=max
-      - name: Build the bridge image
-        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
-        with:
-          context: .
-          file: Dockerfile.node
-          target: mcp-bridge
-          load: true
-          tags: cyfr-mcp-bridge:bridge-e2e
-          cache-from: type=gha,scope=mcp-bridge-e2e
-          cache-to: type=gha,scope=mcp-bridge-e2e,mode=max
+          tags: cyfr:push
+          cache-from: type=gha,scope=cyfr-push
+          cache-to: type=gha,scope=cyfr-push,mode=max
 
-      # Two owners' probe backends under the mcp-bridge service's own
-      # settings, driven by requests signed as CYFR signs them
-      # (tests/bridge-image/controller.mjs): each runs under its own pooled
-      # uid (never 0 or the bridge's), neither can read the other's home or
-      # /proc environ or signal it, the spawner holds exactly
-      # SETUID|SETGID|KILL (CapEff 0xe0) and no inet socket, the bridge holds
-      # no capability, the root is read-only, and releasing an owner leaves no
-      # process of its uid, a setsid daemon ignoring SIGTERM included, and no
-      # home. Also: the refused boot without a valid key, the spawner's
-      # refusal of Docker's default capabilities, and retirement on loss and
-      # on stop.
+      # Every suite drives docker-compose.yml's locus-backends service with
+      # its own settings (layered with
+      # tests/locus-backends-image/compose.locus-backends.yml for the image
+      # under test, a loopback port and the probe backend) through a
+      # scripted control plane that signs as CYFR does
+      # (tests/locus-backends-image/harness.py, checked against
+      # tests/fixtures/locus_backends.json before any container starts).
+
+      # A backend synced, called and listed, its sealed credential masked in
+      # every result, error and stderr tail, retired once idle with its
+      # tools still listed, and woken by its next call.
+      - name: End to end
+        run: python3 tests/locus-backends-image/e2e.py cyfr-locus:backends
+
+      # Each backend under its own pooled uid, alone in its group, in a 0700
+      # home, with an environment of its sealed block alone; none can read
+      # another's home or /proc environ or the release's, nor signal
+      # another backend, a relay, the release or cyfr-keeper; cyfr-keeper
+      # holds exactly SETUID|SETGID|KILL and the release none; releasing an
+      # owner leaves no process of its uid, a setsid daemon ignoring SIGTERM
+      # included, and no home; and when the release dies cyfr-keeper
+      # retires every backend and exits.
       - name: Backend isolation
-        env:
-          BRIDGE_IMAGE: cyfr-mcp-bridge:bridge-e2e
-        run: node --test tests/bridge-image/isolation.test.mjs
+        run: python3 tests/locus-backends-image/isolation.py cyfr-locus:backends
 
-      # A forged MAC, a timestamp outside the window, a control message below
-      # the high-water mark, a stale or future epoch, a replayed nonce and a
-      # captured invoke sent again after `docker restart` are refused, and a
-      # sync the uid pool cannot hold spawns nothing.
+      # A captured invoke sent again after `docker restart` (stale_boot), a
+      # control message at or below the high-water mark (stale_control), an
+      # invoke at a stale epoch, a replayed nonce and a sync the uid pool
+      # cannot hold (capacity) are refused over the wire, and a refused sync
+      # spawns nothing.
       - name: Refusals
-        env:
-          BRIDGE_IMAGE: cyfr-mcp-bridge:bridge-e2e
-        run: node --test tests/bridge-image/refusals.test.mjs
+        run: python3 tests/locus-backends-image/refusals.py cyfr-locus:backends
 
       # With a pool of one uid: a backend can write outside its home only
       # into the home root; the entries it leaves there, a directory tree it
       # made unwritable, System V shared memory, semaphores and message
       # queues and a POSIX message queue (tests/fixtures/residue-canary.go)
-      # are gone before the next owner runs under the same uid. The spawner
-      # refuses a writable root, a shared /tmp and Docker's default /dev/shm.
+      # are gone before the next owner runs under the same uid.
       - name: Residue across uid reuse
-        env:
-          BRIDGE_IMAGE: cyfr-mcp-bridge:bridge-e2e
-        run: node --test tests/bridge-image/residue.test.mjs
+        run: python3 tests/locus-backends-image/residue.py cyfr-locus:backends
 
-      # Both images under docker compose with the services' own settings and
-      # a 5 s bridge lease (tests/bridge-image/compose.e2e.yml): a crash of
-      # cyfr between an update's commit and its sync, a sync held back across
-      # a bridge restart, a revoke while the control channel is down, a dead
-      # controller, a killed spawner and a crash-looping backend, each with
-      # what cyfr and the bridge observe; and a canary vault entry echoed by
-      # a backend that reaches no log, request-log row, execution payload or
-      # file under cyfr's data volume.
-      - name: Failures and leaks
-        env:
-          CYFR_IMAGE: cyfr:bridge-e2e
-          BRIDGE_IMAGE: cyfr-mcp-bridge:bridge-e2e
-        run: node --test tests/bridge-image/e2e.test.mjs
+      # A backend past LOCUS_BACKENDS_MEMORY_BYTES is ended at its bound in
+      # a cgroup of its own, alone: its sibling and the service keep
+      # running, and it restarts.
+      - name: Every backend's memory bound
+        run: python3 tests/locus-backends-image/memory.py cyfr-locus:backends
 
-      # The same scan docker.yml runs before publishing the bridge image.
-      - name: Scan the bridge image
-        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
-        with:
-          image-ref: cyfr-mcp-bridge:bridge-e2e
-          format: table
-          exit-code: '1'
-          severity: CRITICAL,HIGH
-          ignore-unfixed: true
-          # Findings with no fix in any distribution, each scoped to the
-          # path it was observed at, with its reason and what would lift it.
-          # Everything else fixable still fails, including the same id in
-          # the bridge's own dependency tree.
-          trivyignores: .trivyignore.yaml
-
-      # The app image is built here, for the end-to-end run above, and this
-      # is the one push-time build of it — so it is scanned here too. Until
-      # now `cyfr` was the only shipped image scanned at tag time alone,
-      # where a finding stops a release instead of the commit that brought
-      # it in. Same scan docker.yml runs before publishing it.
+      # The app image is built here, and this is the one push-time build of
+      # it — so it is scanned here, where a finding stops the commit that
+      # brought it in rather than a release. Same scan docker.yml runs
+      # before publishing it. The Locus image is scanned in builder-image.
       - name: Scan the app image
         uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
         with:
-          image-ref: cyfr:bridge-e2e
+          image-ref: cyfr:push
           format: table
           exit-code: '1'
           severity: CRITICAL,HIGH
@@ -1070,7 +1068,7 @@ jobs:
       - name: Tier A/B fossil patterns must be absent
         run: |
           set -uo pipefail
-          paths='apps config wit scripts tests Caddyfile docker-compose.yml Dockerfile Dockerfile.node Dockerfile.locus Dockerfile.opus docker-entrypoint.sh .env.example .env.bridge.example .env.locus.example .env.opus.example .gitignore .dockerignore README.md CONTRIBUTING.md component-guide.md integration-guide.md tincture-guide.md'
+          paths='apps config wit scripts tests Caddyfile docker-compose.yml Dockerfile Dockerfile.locus Dockerfile.opus docker-entrypoint.sh .env.example .env.locus.example .env.opus.example .gitignore .dockerignore README.md CONTRIBUTING.md component-guide.md integration-guide.md tincture-guide.md'
           excl=':(exclude)docs/** :(exclude)**/node_modules/** :(exclude)**/package-lock.json :(exclude)**/priv/static/**'
           fail=0
           for p in \

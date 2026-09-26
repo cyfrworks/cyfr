@@ -16,8 +16,8 @@ func validSpec() Spec {
 		UID:      20007,
 		GID:      20007,
 		User:     "cyfr-b007",
-		HomeRoot: "/var/lib/cyfr-bridge/homes",
-		Home:     "/var/lib/cyfr-bridge/homes/20007-0123456789abcdef0123456789abcdef",
+		HomeRoot: "/var/lib/locus/homes",
+		Home:     "/var/lib/locus/homes/20007-0123456789abcdef0123456789abcdef",
 		Argv:     []string{"/bin/sh", "-c", "npx -y pkg"},
 		Env:      map[string]string{"NODE_ENV": "production", "API_KEY": "k"},
 		Limits:   protocol.Ceilings,
@@ -27,10 +27,10 @@ func validSpec() Spec {
 func TestEnvironIsBuiltFromNothing(t *testing.T) {
 	got := validSpec().Environ()
 	want := []string{
-		"HOME=/var/lib/cyfr-bridge/homes/20007-0123456789abcdef0123456789abcdef",
+		"HOME=/var/lib/locus/homes/20007-0123456789abcdef0123456789abcdef",
 		"LOGNAME=cyfr-b007",
 		"PATH=" + Path,
-		"TMPDIR=/var/lib/cyfr-bridge/homes/20007-0123456789abcdef0123456789abcdef/tmp",
+		"TMPDIR=/var/lib/locus/homes/20007-0123456789abcdef0123456789abcdef/tmp",
 		"USER=cyfr-b007",
 		"API_KEY=k",
 		"NODE_ENV=production",

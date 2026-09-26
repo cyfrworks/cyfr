@@ -148,8 +148,8 @@ def builds(stack, sources):
 
 
 def main(image, settings):
-    empty = tempfile.mkdtemp(prefix="cyfr-builder-headroom-")
-    stack = Stack("cyfr-builder-headroom", image, empty)
+    empty = tempfile.mkdtemp(prefix="locus-builds-headroom-")
+    stack = Stack("locus-builds-headroom", image, empty)
     try:
         # The container's limits are compose's to read; the rest is the service's.
         for name in COMPOSE_SETTINGS & settings.keys():

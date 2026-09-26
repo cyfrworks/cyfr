@@ -19,8 +19,8 @@ defmodule Opus.Keeper.Channel do
 
   A `spawn` request names the pool, the runner's argv and its explicit
   environment (only `OPUS_*` variables and the release's own: the keeper
-  refuses `CYFR_` and `MCP_BRIDGE_` names, and sets `PATH`, `HOME`, `USER`,
-  `LOGNAME` and `TMPDIR` itself), asks for a control channel
+  refuses `CYFR_`, `LOCUS_` and `KEEPER_` names, and sets `PATH`, `HOME`,
+  `USER`, `LOGNAME` and `TMPDIR` itself), asks for a control channel
   (`"control": true`) and names the attach socket and a token. The keeper
   runs the command under a pooled uid with fd 3 as one end of an AF_UNIX
   socketpair, and its relay, running as the service's user, connects to

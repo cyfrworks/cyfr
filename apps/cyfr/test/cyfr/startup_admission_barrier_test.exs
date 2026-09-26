@@ -29,8 +29,8 @@ defmodule Cyfr.StartupAdmissionBarrierTest do
   The same holds after boot. A stand-in killed before the gate restarts
   everything after it, the gate first; one killed after the gate restarts
   only what follows it; a refused rerun fails the tier and then the root;
-  an endpoint in a crash loop exhausts the web tier alone; and a dead MCP
-  bridge controller restarts the servers that release through it.
+  an endpoint in a crash loop exhausts the web tier alone; and a dead
+  backends controller restarts the servers that release through it.
 
   A stop is the start backwards: the endpoint first, the cell last, and
   every child that holds a claim stopped before its tier returns.
@@ -580,7 +580,7 @@ defmodule Cyfr.StartupAdmissionBarrierTest do
     # it, with the reconciler that fills them; the registry before it,
     # and everything outside the group, keep running.
     @tag :capture_log
-    test "a dead MCP bridge controller restarts the servers it releases, and nothing else", %{
+    test "a dead backends controller restarts the servers it releases, and nothing else", %{
       key: key
     } do
       {starter, root} = booted!(key)

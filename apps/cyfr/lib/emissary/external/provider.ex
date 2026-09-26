@@ -10,16 +10,18 @@ defmodule Emissary.External.Provider do
   A server has a transport:
 
     * `http` — a URL and a header map that may name vault entries;
-    * `stdio` — backends (`Emissary.External.BackendDefinition`) the MCP bridge
-      runs, each a command and an env map whose credentials are vault
-      templates. Refused when this server runs no bridge controller
-      (`Emissary.External.Backends`) or runs as a cluster.
+    * `stdio` — backends (`Emissary.External.BackendDefinition`) the
+      backends service runs, each a command and an env map whose
+      credentials are vault templates. Refused when this server runs no
+      backends controller (`Emissary.External.Backends`) or runs as a
+      cluster.
 
   Both carry the tool patterns the server is allowed to offer at all. Every
   action but `list` is `permission: :admin`, because it reads or changes
-  where this server sends requests, what the bridge runs and which stored
-  credential rides along; the listing (names, transport, status and the
-  vault entries a server reads) is open to any authenticated caller.
+  where this server sends requests, what the backends service runs and
+  which stored credential rides along; the listing (names, transport,
+  status and the vault entries a server reads) is open to any
+  authenticated caller.
 
   `create` and `update` are also `consent: :interactive`: a definition
   binds vault entries to a command, a URL or headers, and the server
@@ -32,8 +34,8 @@ defmodule Emissary.External.Provider do
   Every write raises the row's epoch. `update` names the epoch it read and
   is refused when the row has moved on. A write that changes what runs —
   update, delete, disable, restart — stops the server's process, which
-  releases a stdio server's backends on the bridge; the next use starts it
-  again at the new epoch.
+  releases a stdio server's backends on the backends service; the next use
+  starts it again at the new epoch.
 
   A literal credential in a credential-shaped header is refused rather than
   sealed — `mcp_servers.config_json` is not an encrypted column, and a token
@@ -109,7 +111,7 @@ defmodule Emissary.External.Provider do
              description: "The tools the server may offer (default: all)"
            ),
            Arg.new("transport", :string,
-             description: "http (default): a URL. stdio: backends the MCP bridge runs.",
+             description: "http (default): a URL. stdio: backends the backends service runs.",
              enum: ["http", "stdio"]
            ),
            Arg.new("url", :string, description: "MCP server endpoint URL (http)")
@@ -269,7 +271,7 @@ defmodule Emissary.External.Provider do
         )
       ],
       description:
-        "Manage external MCP server connections: HTTP servers (Notion, GitHub, custom servers) and stdio servers the MCP bridge runs (npx packages). Create, update, delete, enable/disable, restart and test them. External server tools appear in tools/list as server_name:tool_name.",
+        "Manage external MCP server connections: HTTP servers (Notion, GitHub, custom servers) and stdio servers the backends service runs (npx packages). Create, update, delete, enable/disable, restart and test them. External server tools appear in tools/list as server_name:tool_name.",
       title: "MCP Servers"
     )
   end
@@ -414,7 +416,8 @@ defmodule Emissary.External.Provider do
     cond do
       Map.has_key?(config, "url") ->
         {:error,
-         {:invalid_argument, "A stdio server has no url — its backends run on the bridge"}}
+         {:invalid_argument,
+          "A stdio server has no url — its backends run on the backends service"}}
 
       Map.has_key?(config, "headers") ->
         {:error, {:invalid_argument, "A stdio server has no headers — use backend env"}}
@@ -439,8 +442,8 @@ defmodule Emissary.External.Provider do
       not Emissary.External.Backends.running?() ->
         {:error,
          {:invalid_argument,
-          "No MCP bridge is configured — set CYFR_MCP_BRIDGE_URL and CYFR_MCP_BRIDGE_KEY " <>
-            "to run stdio servers"}}
+          "No backends service is configured — set CYFR_LOCUS_BACKENDS_URL and " <>
+            "CYFR_LOCUS_BACKENDS_KEY to run stdio servers"}}
 
       true ->
         :ok
@@ -717,9 +720,9 @@ defmodule Emissary.External.Provider do
     end
   end
 
-  # What the bridge reports for a stdio server's backends: status, restarts,
-  # tool count and a masked stderr tail. Nil for an http server, or when the
-  # bridge runs nothing for it.
+  # What the backends service reports for a stdio server's backends:
+  # status, restarts, tool count and a masked stderr tail. Nil for an http
+  # server, or when the service runs nothing for it.
   defp backend_status(ctx, %{transport: "stdio"} = server) do
     case Emissary.External.Backends.status(ctx.athanor_id, server.id) do
       {:ok, %{"backends" => backends}} -> backends

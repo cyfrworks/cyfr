@@ -91,7 +91,7 @@ defmodule Locus.Keeper do
   @channel_fd 3
   @channel_env "KEEPER_CHANNEL"
   @pool "build"
-  @attach_dir "/run/cyfr-builder"
+  @attach_dir "/run/locus"
 
   # The bytes of a relay's attach frame: its header, an empty frame's
   # length, and the spawn's token.

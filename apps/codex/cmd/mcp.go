@@ -45,8 +45,8 @@ An http server's config uses the same JSON format as mcp.json entries.
 Header values can reference a stored vault entry with the vault: prefix.
 
 A stdio server ({"transport":"stdio","backends":[...]}) runs its backends
-on the MCP bridge: each backend is a command and an env whose credentials
-are vault: templates.`,
+on the backends service: each backend is a command and an env whose
+credentials are vault: templates.`,
 }
 
 var mcpAddCmd = &cobra.Command{
@@ -399,7 +399,7 @@ var mcpRefreshCmd = &cobra.Command{
 var mcpRestartCmd = &cobra.Command{
 	Use:     "restart <name>",
 	Short:   "Restart a stdio MCP server's backends",
-	Long:    "Release a stdio server's backends on the MCP bridge and start them again at the server's next epoch.",
+	Long:    "Release a stdio server's backends on the backends service and start them again at the server's next epoch.",
 	Example: "  cyfr mcp restart gh",
 	Args:    cobra.RangeArgs(0, 1),
 	RunE: func(cmd *cobra.Command, args []string) error {

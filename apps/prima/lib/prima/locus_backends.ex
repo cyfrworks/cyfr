@@ -110,7 +110,7 @@ defmodule Prima.LocusBackends do
     mcp: "/locus/v1/backends/mcp"
   }
 
-  # The bridge's: a control message is at most a sync of sixteen backends
+  # A control message is at most a sync of sixteen backends
   # and its sealed environment; an MCP request is one call's arguments, at
   # most the platform's request ceiling, and its JSON-RPC envelope.
   @max_control_bytes 1_048_576

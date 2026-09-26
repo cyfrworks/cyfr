@@ -82,12 +82,12 @@ defmodule Sanctum.NetworkPrivatePolicyTest do
 
   test "a listed hostname, address or CIDR admits the target" do
     Application.put_env(:sanctum, :private_egress_targets, [
-      "MCP-Bridge",
+      "Locus-Backends",
       "10.0.0.0/8",
       "192.168.1.5"
     ])
 
-    assert Sanctum.Network.private_allowed?("mcp-bridge", {172, 18, 0, 3})
+    assert Sanctum.Network.private_allowed?("locus-backends", {172, 18, 0, 3})
     assert Sanctum.Network.private_allowed?("db.internal", {10, 3, 4, 5})
     assert Sanctum.Network.private_allowed?("lights.local", {192, 168, 1, 5})
     refute Sanctum.Network.private_allowed?("other.internal", {192, 168, 1, 6})

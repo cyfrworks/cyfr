@@ -78,6 +78,9 @@ defmodule Locus.Test.FakeKeeper do
   @doc "Every request received so far, decoded, oldest first."
   def requests(fake), do: GenServer.call(fake, :requests)
 
+  @doc "The spawn ids whose exit the fake has reported, in order."
+  def exits(fake), do: GenServer.call(fake, :exits)
+
   @doc "Closes the channel, as cyfr-keeper exiting would."
   def close(fake), do: GenServer.call(fake, :close)
 
@@ -85,7 +88,9 @@ defmodule Locus.Test.FakeKeeper do
   def init(channel) do
     fake = self()
     spawn_link(fn -> read(channel, fake) end)
-    {:ok, %{channel: channel, buffer: "", mode: :normal, requests: [], spawns: %{}, next: 0}}
+
+    {:ok,
+     %{channel: channel, buffer: "", mode: :normal, requests: [], exits: [], spawns: %{}, next: 0}}
   end
 
   defp read(channel, fake) do
@@ -102,6 +107,7 @@ defmodule Locus.Test.FakeKeeper do
   @impl true
   def handle_call({:mode, mode}, _from, state), do: {:reply, :ok, %{state | mode: mode}}
   def handle_call(:requests, _from, state), do: {:reply, Enum.reverse(state.requests), state}
+  def handle_call(:exits, _from, state), do: {:reply, Enum.reverse(state.exits), state}
 
   def handle_call(:close, _from, state) do
     :socket.close(state.channel)
@@ -121,6 +127,13 @@ defmodule Locus.Test.FakeKeeper do
       end)
 
     {:noreply, state}
+  end
+
+  # An exit the fake reports is recorded, so a test can tell a spawn the
+  # keeper saw end from one it had to release.
+  def handle_info({:send, %{type: "exited", spawn_id: spawn_id} = message}, state) do
+    :socket.send(state.channel, [Jason.encode!(Map.put(message, :v, 1)), ?\n])
+    {:noreply, %{state | exits: [spawn_id | state.exits]}}
   end
 
   def handle_info({:send, message}, state) do

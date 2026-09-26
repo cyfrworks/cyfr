@@ -64,7 +64,7 @@ defmodule Prima.KeeperProtocol do
   @max_memory_bytes 1024 * 1024 * 1024 * 1024
   @signals ~w(SIGTERM SIGKILL SIGINT SIGHUP SIGQUIT SIGUSR1 SIGUSR2)
   @reserved_env ~w(PATH HOME USER LOGNAME SHELL TMPDIR PWD)
-  @reserved_env_prefixes ~w(CYFR_ MCP_BRIDGE_ KEEPER_)
+  @reserved_env_prefixes ~w(CYFR_ LOCUS_ KEEPER_)
   # Each limit's least and most, the most being the keeper's ceiling.
   @rlimits [
     core: {0, 0},

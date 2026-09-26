@@ -5,7 +5,7 @@ defmodule Emissary.External.BackendDefinition do
   @moduledoc """
   The backends of a `stdio` MCP server: what `config.backends` may hold.
 
-  A stdio server runs its backends on the MCP bridge
+  A stdio server runs its backends on the backends service Locus serves
   (`Emissary.External.Backends`), each a shell command with an environment:
 
       [%{"name" => "github", "command" => "npx -y @modelcontextprotocol/server-github",
@@ -16,26 +16,26 @@ defmodule Emissary.External.BackendDefinition do
   `{:error, {:invalid_argument, message}}`:
 
     * a name matches `^[a-z0-9][a-z0-9-]{0,31}$` and is unique;
-    * a command is a non-empty string of at most 4096 bytes with no NUL
-      byte and no `vault:` — every process in the bridge can read a command
-      line, so a credential never goes in one;
-    * an env name matches `^[A-Z_][A-Z0-9_]{0,63}$` and is none of
-      `PATH HOME USER LOGNAME SHELL TMPDIR PWD`, nor prefixed with one of
-      `reserved_prefixes/0` (`CYFR_`, `MCP_BRIDGE_`, `KEEPER_`) — the
-      bridge sets the first, and the prefixes are CYFR's, the bridge's and
-      the keeper's, the list the keeper and the bridge refuse too;
+    * a command is a non-empty string of at most
+      `Prima.LocusBackends.max_command_bytes/0` bytes with no NUL byte and
+      no `vault:` — every process on the service can read a command line,
+      so a credential never goes in one;
+    * an env name matches `^[A-Z_][A-Z0-9_]{0,63}$` and is none of the
+      wire's reserved names (`Prima.LocusBackends.reserved_env_names/0`:
+      `PATH HOME USER LOGNAME SHELL TMPDIR PWD`), nor prefixed with one of
+      `reserved_prefixes/0` (`CYFR_`, `LOCUS_`, `KEEPER_`) — the keeper sets
+      the names, and the prefixes are CYFR's, Locus's and the keeper's, the
+      list the keeper and the service refuse too;
     * an env value is a vault template (`Prima.VaultRef`); only the
-      non-secret names in `literal_names/0` may hold a literal instead.
+      non-secret names in `literal_names/0` may hold a literal, of at most
+      4096 bytes, instead.
   """
 
-  alias Prima.VaultRef
+  alias Prima.{LocusBackends, VaultRef}
 
   @name ~r/\A[a-z0-9][a-z0-9-]{0,31}\z/
   @env_name ~r/\A[A-Z_][A-Z0-9_]{0,63}\z/
-  @reserved_names ~w(PATH HOME USER LOGNAME SHELL TMPDIR PWD)
-  @reserved_prefixes ~w(CYFR_ MCP_BRIDGE_ KEEPER_)
-  @literal_names ~w(NODE_ENV LOG_LEVEL TZ LANG LC_ALL NO_COLOR DEBUG)
-  @max_text_bytes 4096
+  @max_literal_bytes 4096
 
   @typedoc "One validated backend."
   @type backend :: %{String.t() => String.t() | %{String.t() => String.t()}}
@@ -44,13 +44,13 @@ defmodule Emissary.External.BackendDefinition do
   @spec max_backends() :: pos_integer()
   def max_backends, do: Application.get_env(:cyfr, :max_backends_per_server, 4)
 
-  @doc "The env names that may hold a literal value."
+  @doc "The env names that may hold a literal value: the wire's (`Prima.LocusBackends`)."
   @spec literal_names() :: [String.t()]
-  def literal_names, do: @literal_names
+  def literal_names, do: LocusBackends.literal_env_names()
 
-  @doc "The prefixes no env name may carry."
+  @doc "The prefixes no env name may carry: the wire's (`Prima.LocusBackends`)."
   @spec reserved_prefixes() :: [String.t()]
-  def reserved_prefixes, do: @reserved_prefixes
+  def reserved_prefixes, do: LocusBackends.reserved_env_prefixes()
 
   @doc "Validate and normalize a stdio server's backends."
   @spec validate(term()) :: {:ok, [backend()]} | {:error, {:invalid_argument, String.t()}}
@@ -117,8 +117,10 @@ defmodule Emissary.External.BackendDefinition do
       String.trim(command) == "" ->
         invalid("Backend '#{name}' needs a command")
 
-      byte_size(command) > @max_text_bytes ->
-        invalid("Backend '#{name}' has a command longer than #{@max_text_bytes} bytes")
+      byte_size(command) > LocusBackends.max_command_bytes() ->
+        invalid(
+          "Backend '#{name}' has a command longer than #{LocusBackends.max_command_bytes()} bytes"
+        )
 
       String.contains?(command, <<0>>) ->
         invalid("Backend '#{name}' has a NUL byte in its command")
@@ -126,7 +128,7 @@ defmodule Emissary.External.BackendDefinition do
       String.contains?(String.downcase(command), VaultRef.prefix()) ->
         invalid(
           "Backend '#{name}' names a vault entry in its command — command lines are " <>
-            "visible to every process in the bridge; pass it through env instead"
+            "visible to every process on the backends service; pass it through env instead"
         )
 
       true ->
@@ -155,7 +157,8 @@ defmodule Emissary.External.BackendDefinition do
           "Backend '#{backend}' env name #{inspect(key)} must match #{Regex.source(@env_name)}"
         )
 
-      key in @reserved_names or String.starts_with?(key, @reserved_prefixes) ->
+      key in LocusBackends.reserved_env_names() or
+          String.starts_with?(key, reserved_prefixes()) ->
         invalid("Backend '#{backend}' env name #{key} is reserved")
 
       VaultRef.unresolved_ref?(value) ->
@@ -167,13 +170,13 @@ defmodule Emissary.External.BackendDefinition do
       VaultRef.vault_ref?(value) ->
         {:ok, {key, value}}
 
-      key not in @literal_names ->
+      key not in literal_names() ->
         invalid(
           "Backend '#{backend}' env #{key} must reference a vault entry (\"vault:ENTRY\"); " <>
-            "only #{Enum.join(@literal_names, ", ")} may hold a literal"
+            "only #{Enum.join(literal_names(), ", ")} may hold a literal"
         )
 
-      byte_size(value) > @max_text_bytes or String.contains?(value, <<0>>) ->
+      byte_size(value) > @max_literal_bytes or String.contains?(value, <<0>>) ->
         invalid("Backend '#{backend}' env #{key} is not a valid value")
 
       true ->

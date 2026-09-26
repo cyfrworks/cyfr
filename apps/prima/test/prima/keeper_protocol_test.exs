@@ -4,8 +4,8 @@
 defmodule Prima.KeeperProtocolTest do
   @moduledoc """
   The keeper codec reproduces every category of the shared vectors
-  (`tests/fixtures/keeper_protocol.json`, which the keeper's Go suite and
-  the Node bridge read too), and the file carries no category this test
+  (`tests/fixtures/keeper_protocol.json`, which the keeper's Go suite
+  reads too), and the file carries no category this test
   does not read and none empty: every frame and control frame encodes to
   its bytes and parses back; the attach frame presents its token; every
   valid request encodes to the line its clients have always written, name

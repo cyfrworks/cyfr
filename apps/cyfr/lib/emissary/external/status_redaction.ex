@@ -3,7 +3,7 @@
 
 defmodule Emissary.External.StatusRedaction do
   @moduledoc """
-  What the MCP bridge controller (`Emissary.External.Backends`) and a server
+  What the backends controller (`Emissary.External.Backends`) and a server
   process (`Emissary.External.Server`) show of themselves in
   `:sys.get_status/1` and in crash reports.
 

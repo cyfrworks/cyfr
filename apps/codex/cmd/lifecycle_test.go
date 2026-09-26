@@ -15,7 +15,7 @@ import (
 )
 
 func TestRenderEnvFile(t *testing.T) {
-	tmpl := "CYFR_SECRET_KEY_BASE=\nCYFR_MCP_BRIDGE_KEY=\nCYFR_HOST=localhost\nCYFR_BEHIND_PROXY=false\nCADDY_ACME_EMAIL=\n# CYFR_PLATFORM_ADMIN_EMAILS=alice@example.com\nCYFR_PORT=4000\n"
+	tmpl := "CYFR_SECRET_KEY_BASE=\nCYFR_LOCUS_BACKENDS_KEY=\nCYFR_HOST=localhost\nCYFR_BEHIND_PROXY=false\nCADDY_ACME_EMAIL=\n# CYFR_PLATFORM_ADMIN_EMAILS=alice@example.com\nCYFR_PORT=4000\n"
 
 	// TLS mode: real hostname + allowed user + ACME email. tls=true flips
 	// CYFR_BEHIND_PROXY.
@@ -35,7 +35,7 @@ func TestRenderEnvFile(t *testing.T) {
 		t.Errorf("CYFR_PLATFORM_ADMIN_EMAILS should be uncommented:\n%s", got)
 	}
 	// The keys are ensureStackKeys', not the prompts'.
-	if !strings.Contains(got, "CYFR_SECRET_KEY_BASE=\nCYFR_MCP_BRIDGE_KEY=\n") {
+	if !strings.Contains(got, "CYFR_SECRET_KEY_BASE=\nCYFR_LOCUS_BACKENDS_KEY=\n") {
 		t.Errorf("renderEnvFile touched a key:\n%s", got)
 	}
 
@@ -57,7 +57,7 @@ func TestRenderEnvFile(t *testing.T) {
 }
 
 // A generated key is 32 random bytes as 64 lowercase hexadecimal digits,
-// the form cyfr, the bridge, the worker and the builder all accept, and
+// the form cyfr, the worker and both Locus services all accept, and
 // never repeats.
 func TestGenerateHexKey(t *testing.T) {
 	first, err := generateHexKey()
@@ -159,7 +159,7 @@ func TestRenderEnvFileShippedTemplate(t *testing.T) {
 	for _, c := range changes {
 		added = append(added, c.key)
 	}
-	if want := []string{secretKeyBaseVar, bridgeKeyVar, workerRootVar, serviceKeyVar, buildsURLVar, buildsKeyVar}; !slices.Equal(added, want) {
+	if want := []string{secretKeyBaseVar, backendsKeyVar, workerRootVar, serviceKeyVar, buildsURLVar, buildsKeyVar}; !slices.Equal(added, want) {
 		t.Errorf("added %v, want %v", added, want)
 	}
 	assertStackPairs(t, got, defaultServiceID)
@@ -189,7 +189,7 @@ func assertStackPairs(t *testing.T, text, serviceID string) {
 	t.Helper()
 	f := parseEnvFile(text)
 	hexKey := regexp.MustCompile(`^[0-9A-Fa-f]{64}$`)
-	for _, key := range []string{bridgeKeyVar, workerRootVar, serviceKeyVar, buildsKeyVar} {
+	for _, key := range []string{backendsKeyVar, workerRootVar, serviceKeyVar, buildsKeyVar} {
 		if v, _ := f.value(key); !hexKey.MatchString(v) {
 			t.Errorf("%s is %q, not 64 hexadecimal digits", key, v)
 		}
@@ -227,7 +227,7 @@ func TestEnsureStackKeysOverAnExistingEnv(t *testing.T) {
 	opusKey := hex.EncodeToString(workerKey(rootBytes, "wrk_opus"))
 	otherKey := hex.EncodeToString(workerKey(rootBytes, "wrk_other"))
 	const buildsKey = "b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1"
-	const base = "CYFR_SECRET_KEY_BASE=kept-secret-key-base-kept-secret-key-base-kept-secret-key-base-kept\nCYFR_MCP_BRIDGE_KEY=" + buildsKey + "\n"
+	const base = "CYFR_SECRET_KEY_BASE=kept-secret-key-base-kept-secret-key-base-kept-secret-key-base-kept\nCYFR_LOCUS_BACKENDS_KEY=" + buildsKey + "\n"
 
 	cases := []struct {
 		name    string
@@ -334,7 +334,7 @@ func TestEnsureStackKeysOverAnExistingEnv(t *testing.T) {
 		{
 			name:    "no line for any key: each is appended",
 			body:    "CYFR_HOST=localhost",
-			added:   []string{secretKeyBaseVar, bridgeKeyVar, workerRootVar, serviceKeyVar, corsOriginsVar, buildsURLVar, buildsKeyVar},
+			added:   []string{secretKeyBaseVar, backendsKeyVar, workerRootVar, serviceKeyVar, corsOriginsVar, buildsURLVar, buildsKeyVar},
 			kept:    map[string]string{"CYFR_HOST": "localhost"},
 			service: "wrk_opus",
 		},
@@ -446,10 +446,11 @@ func TestImagesFromCompose(t *testing.T) {
   locus-builds:
     image: ghcr.io/cyfrworks/cyfr-locus:latest
     profiles: ["locus-builds"]
-  mcp-bridge:
+  locus-backends:
+    image: ghcr.io/cyfrworks/cyfr-locus:latest
+  source-built:
     build:
       context: .
-      dockerfile: Dockerfile.node
 `
 	if err := os.WriteFile(path, []byte(body), 0644); err != nil {
 		t.Fatal(err)
@@ -458,10 +459,10 @@ func TestImagesFromCompose(t *testing.T) {
 		profiles []string
 		want     []string
 	}{
-		{nil, []string{"ghcr.io/cyfrworks/cyfr:latest"}},
+		{nil, []string{"ghcr.io/cyfrworks/cyfr:latest", "ghcr.io/cyfrworks/cyfr-locus:latest"}},
 		{[]string{"locus-builds"}, []string{"ghcr.io/cyfrworks/cyfr:latest", "ghcr.io/cyfrworks/cyfr-locus:latest"}},
 		{[]string{"tls", "locus-builds"}, []string{"ghcr.io/cyfrworks/cyfr:latest", "caddy:2-alpine", "ghcr.io/cyfrworks/cyfr-locus:latest"}},
-		{[]string{"other"}, []string{"ghcr.io/cyfrworks/cyfr:latest"}},
+		{[]string{"other"}, []string{"ghcr.io/cyfrworks/cyfr:latest", "ghcr.io/cyfrworks/cyfr-locus:latest"}},
 	} {
 		got := imagesFromCompose(path, tc.profiles)
 		if strings.Join(got, ",") != strings.Join(tc.want, ",") {
@@ -510,14 +511,24 @@ func TestComposeProfilesFollowTheProjectEnv(t *testing.T) {
 	}
 }
 
-// The shipped compose file and .env.example: a project that points builds at
-// the locus-builds service pulls and starts the cyfr-locus image, and the
-// value .env.example offers is the one that does.
-func TestShippedComposePullsTheBuilderWhenBuildsUseIt(t *testing.T) {
+// The shipped compose file and .env.example: the cyfr-locus image is pulled
+// for locus-backends, which always starts; a project that points builds at
+// the locus-builds service selects its profile with the value .env.example
+// offers, and the one image is pulled once for both services.
+func TestShippedComposePullsTheLocusImageOnce(t *testing.T) {
 	const image = "ghcr.io/cyfrworks/cyfr-locus:latest"
 	compose := filepath.Join("..", "..", "..", "docker-compose.yml")
-	if got := imagesFromCompose(compose, nil); slices.Contains(got, image) {
-		t.Errorf("the builds image is pulled without its profile: %v", got)
+	count := func(images []string) int {
+		n := 0
+		for _, img := range images {
+			if img == image {
+				n++
+			}
+		}
+		return n
+	}
+	if got := imagesFromCompose(compose, nil); count(got) != 1 {
+		t.Errorf("without the builds profile the Locus image is not pulled once for locus-backends: %v", got)
 	}
 
 	raw, err := os.ReadFile(filepath.Join("..", "..", "..", ".env.example"))
@@ -538,8 +549,12 @@ func TestShippedComposePullsTheBuilderWhenBuildsUseIt(t *testing.T) {
 	if err := os.WriteFile(env, []byte(offered+"\n"), 0644); err != nil {
 		t.Fatal(err)
 	}
-	if got := imagesFromCompose(compose, composeProfiles(env)); !slices.Contains(got, image) {
-		t.Errorf("a project using the builds service (%s) does not pull its image: %v", offered, got)
+	profiles := composeProfiles(env)
+	if !slices.Contains(profiles, buildsProfile) {
+		t.Errorf("a project using the builds service (%s) does not select its profile: %v", offered, profiles)
+	}
+	if got := imagesFromCompose(compose, profiles); count(got) != 1 {
+		t.Errorf("a project using the builds service (%s) does not pull the Locus image once: %v", offered, got)
 	}
 }
 

@@ -606,7 +606,7 @@ defmodule Arca.Adapters.LocalTest do
       # tmp-shaped files where OTHER programs live ("another program's
       # file" per Arca.Storage) — never touched, symlinks there never
       # reported.
-      sidecar = Path.join(@test_base_path, "mcp-bridge")
+      sidecar = Path.join(@test_base_path, "sidecar")
       File.mkdir_p!(sidecar)
       sidecar_file = Path.join(sidecar, "state.tmp.3")
       File.write!(sidecar_file, "sidecar's own")

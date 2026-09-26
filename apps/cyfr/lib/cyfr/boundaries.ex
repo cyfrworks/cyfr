@@ -365,7 +365,7 @@ defmodule Cyfr.Boundaries do
       ),
       reason:
         "the MCP transport carries tenancy, reads a server's vault edge, and uses " <>
-          "Sanctum.Network/Egress for external servers and the bridge. " <>
+          "Sanctum.Network/Egress for external servers and the backends service. " <>
           "An outbound call's row runs under its caller's grant, checked through " <>
           "Sanctum.ExecutionStanding as it is admitted and closed, and the MCP " <>
           "controller answers a `Sanctum.UnauthorizedError` raised in the request " <>

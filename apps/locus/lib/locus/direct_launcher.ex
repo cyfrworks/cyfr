@@ -364,6 +364,7 @@ defmodule Locus.DirectLauncher.Child do
          home: home,
          log: log,
          exited: false,
+         ended: nil,
          relay_open: true
        }}
     else
@@ -427,11 +428,12 @@ defmodule Locus.DirectLauncher.Child do
 
   # The leader is gone: what is left of its group goes with it, as
   # cyfr-keeper retires a spawn whose leader exited.
+  # The exit is told once the streams are drained, so an owner hears every
+  # byte the process wrote before it hears that the process is gone.
   def handle_info({port, {:exit_status, status}}, %{port: port} = state) do
-    notify(state, ended(status))
     DirectLauncher.signal_group(state.os_pid, "KILL")
     Process.send_after(self(), :drained, @drain_timeout_ms)
-    finish_if_drained(%{state | exited: true})
+    finish_if_drained(%{state | exited: true, ended: ended(status)})
   end
 
   def handle_info({relay, {:data, data}}, %{relay: relay} = state) do
@@ -487,6 +489,7 @@ defmodule Locus.DirectLauncher.Child do
 
   defp finish(state) do
     remove_home(state)
+    if state.ended, do: notify(state, state.ended)
     notify(state, :released)
     {:stop, :normal, %{state | exited: true}}
   end

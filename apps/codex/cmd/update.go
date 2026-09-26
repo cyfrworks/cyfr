@@ -23,7 +23,7 @@ func init() {
 var updateCmd = &cobra.Command{
 	Use:     "update",
 	Short:   "Update project scaffold files (docs, WIT definitions, aqua prompts)",
-	Long:    "Update managed scaffold files (docs, WIT interface definitions, bundled aqua prompts) in the current project directory and pull the stack's images. Also ensures that docker-compose.yml has all the volume mounts and fields the cyfr server requires, adding any missing ones in place, and notes a service of the bundled stack (opus, locus-builds, mcp-bridge) that it lacks.",
+	Long:    "Update managed scaffold files (docs, WIT interface definitions, bundled aqua prompts) in the current project directory and pull the stack's images. Also ensures that docker-compose.yml has all the volume mounts and fields the cyfr server requires, adding any missing ones in place, and notes a service of the bundled stack (opus, locus-builds, locus-backends) that it lacks.",
 	GroupID: "server",
 	Example: "  cyfr update",
 	RunE: func(cmd *cobra.Command, args []string) error {
@@ -34,11 +34,10 @@ var updateCmd = &cobra.Command{
 
 		fmt.Println("Updating project scaffold files...")
 
-		// Pull latest Docker images for the whole stack (cyfr and opus, plus
-		// caddy when TLS mode is on and locus-builds when .env points builds
-		// at it) via compose so they're kept in sync. mcp-bridge is built
-		// locally and skipped by `compose pull`. Non-fatal — the project runs
-		// via Docker.
+		// Pull latest Docker images for the whole stack (cyfr, opus and
+		// locus-backends, plus caddy when TLS mode is on and locus-builds
+		// when .env points builds at it) via compose so they're kept in
+		// sync. Non-fatal — the project runs via Docker.
 		if _, err := exec.LookPath("docker"); err == nil {
 			fmt.Println("Pulling latest Docker images...")
 			pullArgs := append(append([]string{"compose"}, profileArgs(composeProfiles(".env"))...), "pull")
@@ -77,7 +76,7 @@ var updateCmd = &cobra.Command{
 // bundledServices are the services of the bundled stack besides cyfr, whose
 // fields ensureCyfrComposeFields keeps; caddy is the TLS profile's and
 // optional to a project that never runs one.
-var bundledServices = []string{"opus", "locus-builds", "mcp-bridge"}
+var bundledServices = []string{"opus", "locus-builds", "locus-backends"}
 
 // missingStackServices returns the bundled services the compose file at
 // path lacks, in bundledServices' order; nil when it has them all or cannot

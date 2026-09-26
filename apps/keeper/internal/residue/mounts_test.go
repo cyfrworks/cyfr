@@ -11,7 +11,7 @@ import (
 	"testing"
 )
 
-// A container's mount table as Docker writes it for the bridge service.
+// A container's mount table as Docker writes it for the backends service.
 const dockerMountinfo = `135 84 0:62 / / ro,relatime - overlay overlay rw,lowerdir=/l,upperdir=/u,workdir=/w
 137 135 0:71 / /proc rw,nosuid,nodev,noexec,relatime - proc proc rw
 138 135 0:72 / /dev rw,nosuid - tmpfs tmpfs rw,size=65536k,mode=755
@@ -19,9 +19,9 @@ const dockerMountinfo = `135 84 0:62 / / ro,relatime - overlay overlay rw,lowerd
 140 135 0:74 / /sys ro,nosuid,nodev,noexec,relatime - sysfs sysfs ro
 141 140 0:39 / /sys/fs/cgroup ro,nosuid,nodev,noexec,relatime - cgroup2 cgroup rw
 142 138 0:69 / /dev/mqueue rw,nosuid,nodev,noexec,relatime - mqueue mqueue rw
-144 135 0:75 / /run/cyfr-bridge rw,nosuid,nodev,noexec,relatime - tmpfs tmpfs rw,mode=700,uid=10001,gid=10001
+144 135 0:75 / /run/locus rw,nosuid,nodev,noexec,relatime - tmpfs tmpfs rw,mode=700,uid=10001,gid=10001
 145 135 254:1 /docker/containers/c/resolv.conf /etc/resolv.conf ro,relatime - ext4 /dev/vda1 rw,discard
-148 135 0:76 / /var/lib/cyfr-bridge/homes rw,nosuid,nodev,relatime - tmpfs tmpfs rw,mode=1733
+148 135 0:76 / /var/lib/locus/homes rw,nosuid,nodev,relatime - tmpfs tmpfs rw,mode=1733
 90 137 0:72 /null /proc/interrupts rw,nosuid - tmpfs tmpfs rw,size=65536k,mode=755
 93 137 0:77 / /proc/scsi ro,relatime - tmpfs tmpfs ro
 96 135 0:78 / /mnt/with\040space rw,relatime shared:1 master:2 - tmpfs tmpfs rw
@@ -38,12 +38,12 @@ func TestParseMountinfoReadsPointsTypesAndWritability(t *testing.T) {
 		byPoint[m.Point] = m
 	}
 	for point, want := range map[string]Mount{
-		"/":                          {Point: "/", FSType: "overlay", Writable: false},
-		"/dev/mqueue":                {Point: "/dev/mqueue", FSType: "mqueue", Writable: true},
-		"/var/lib/cyfr-bridge/homes": {Point: "/var/lib/cyfr-bridge/homes", FSType: "tmpfs", Writable: true},
-		"/mnt/with space":            {Point: "/mnt/with space", FSType: "tmpfs", Writable: true},
-		"/mnt/ro-super":              {Point: "/mnt/ro-super", FSType: "ext4", Writable: false},
-		"/sys/fs/cgroup":             {Point: "/sys/fs/cgroup", FSType: "cgroup2", Writable: false},
+		"/":                    {Point: "/", FSType: "overlay", Writable: false},
+		"/dev/mqueue":          {Point: "/dev/mqueue", FSType: "mqueue", Writable: true},
+		"/var/lib/locus/homes": {Point: "/var/lib/locus/homes", FSType: "tmpfs", Writable: true},
+		"/mnt/with space":      {Point: "/mnt/with space", FSType: "tmpfs", Writable: true},
+		"/mnt/ro-super":        {Point: "/mnt/ro-super", FSType: "ext4", Writable: false},
+		"/sys/fs/cgroup":       {Point: "/sys/fs/cgroup", FSType: "cgroup2", Writable: false},
 	} {
 		if got := byPoint[point]; got != want {
 			t.Errorf("%s: got %+v, want %+v", point, got, want)
@@ -64,18 +64,18 @@ func TestRootsAreTheWritableRealFilesystemsAndTheQueueMount(t *testing.T) {
 	}
 	roots := RootsOf(mounts)
 	want := Roots{
-		Dirs:   []string{"/dev", "/mnt/with space", "/proc/interrupts", "/run/cyfr-bridge", "/var/lib/cyfr-bridge/homes"},
+		Dirs:   []string{"/dev", "/mnt/with space", "/proc/interrupts", "/run/locus", "/var/lib/locus/homes"},
 		Queues: "/dev/mqueue",
 	}
 	if !reflect.DeepEqual(roots, want) {
 		t.Fatalf("roots\n got %+v\nwant %+v", roots, want)
 	}
 	for path, inside := range map[string]bool{
-		"/var/lib/cyfr-bridge/homes/20001-x": true,
-		"/var/lib/cyfr-bridge/homes":         false,
-		"/var/lib/cyfr-bridge/homesick":      false,
-		"/dev/mqueue/q":                      true,
-		"/etc/passwd":                        false,
+		"/var/lib/locus/homes/20001-x": true,
+		"/var/lib/locus/homes":         false,
+		"/var/lib/locus/homesick":      false,
+		"/dev/mqueue/q":                true,
+		"/etc/passwd":                  false,
 	} {
 		if roots.Contains(path) != inside {
 			t.Errorf("Contains(%s) = %t", path, !inside)

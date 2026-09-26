@@ -66,7 +66,13 @@ defmodule Emissary.External.BackendDefinitionTest do
     assert refused([backend(%{"command" => "run --token vault:gh-token"})]) =~ "visible"
     assert refused([backend(%{"command" => "run VAULT:gh"})]) =~ "visible"
     assert refused([backend(%{"command" => "a" <> <<0>>})]) =~ "NUL"
-    assert refused([backend(%{"command" => String.duplicate("a", 4097)})]) =~ "longer"
+    too_long = String.duplicate("a", Prima.LocusBackends.max_command_bytes() + 1)
+    assert refused([backend(%{"command" => too_long})]) =~ "longer"
+
+    assert {:ok, _} =
+             BackendDefinition.validate([
+               backend(%{"command" => binary_part(too_long, 1, byte_size(too_long) - 1)})
+             ])
   end
 
   test "env names are well formed and none is reserved" do
@@ -75,21 +81,32 @@ defmodule Emissary.External.BackendDefinitionTest do
     end
 
     for name <-
-          ~w(PATH HOME USER LOGNAME SHELL TMPDIR PWD CYFR_MCP_BRIDGE_KEY MCP_BRIDGE_PORT KEEPER_CHANNEL) do
+          ~w(PATH HOME USER LOGNAME SHELL TMPDIR PWD CYFR_LOCUS_BACKENDS_KEY LOCUS_BACKENDS_PORT KEEPER_CHANNEL) do
       assert refused([backend(%{"env" => %{name => "vault:x"}})]) =~ "reserved"
     end
   end
 
-  # The keeper's vectors hold the list the keeper and the bridge refuse, so
-  # a backend CYFR accepts is one neither of them refuses for its names.
-  test "the reserved prefixes are the keeper's vectors'" do
-    vectors =
-      Path.expand("../../../../../tests/fixtures/keeper_protocol.json", __DIR__)
+  # The keeper's vectors and the backends wire's hold the list the keeper
+  # and the backends service refuse, so a backend CYFR accepts is one
+  # neither of them refuses for its names.
+  test "the reserved names and prefixes are the keeper's and the backends wire's vectors'" do
+    vectors = fn name ->
+      Path.expand("../../../../../tests/fixtures/#{name}", __DIR__)
       |> File.read!()
       |> Jason.decode!()
+    end
 
-    assert [_ | _] = vectors["reserved_env_prefixes"]
-    assert BackendDefinition.reserved_prefixes() == vectors["reserved_env_prefixes"]
+    keeper = vectors.("keeper_protocol.json")
+    wire = vectors.("locus_backends.json")
+
+    assert [_ | _] = keeper["reserved_env_prefixes"]
+    assert BackendDefinition.reserved_prefixes() == keeper["reserved_env_prefixes"]
+    assert BackendDefinition.reserved_prefixes() == wire["reserved_env_prefixes"]
+    assert BackendDefinition.literal_names() == wire["literal_env_names"]
+
+    for name <- Prima.LocusBackends.reserved_env_names() do
+      assert refused([backend(%{"env" => %{name => "vault:x"}})]) =~ "reserved"
+    end
   end
 
   test "an env value is a vault template; only the non-secret names may hold a literal" do

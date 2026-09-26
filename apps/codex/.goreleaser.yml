@@ -29,9 +29,9 @@ archives:
 checksum:
   name_template: checksums.txt
   algorithm: sha256
-  # The scaffold tarball carries docker-compose.yml, Dockerfile.node and the
-  # bridge source that `cyfr up` builds and runs — it must be in the signed
-  # checksum manifest, not just attached beside it.
+  # The scaffold tarball carries docker-compose.yml, which names the images
+  # `cyfr up` pulls and runs — it must be in the signed checksum manifest,
+  # not just attached beside it.
   extra_files:
     - glob: cyfr-scaffold.tar.gz
 

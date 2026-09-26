@@ -341,31 +341,27 @@ if config_env() != :test do
       {:error, message} -> raise "[Cyfr] FATAL: " <> message
     end
 
-    # The MCP bridge that runs stdio MCP servers (`Emissary.External.Backends`):
-    # its base URL (compose: http://mcp-bridge:8001) and the root key this
-    # server and the bridge both derive their signing and sealing keys from
-    # — 32 random bytes as 64 hexadecimal digits, the same value in the
-    # bridge's environment (`cyfr init` generates it). With either unset,
-    # no stdio server can be created or started; a malformed key refuses
-    # the boot.
-    config :cyfr, :mcp_bridge_url, env_str.("CYFR_MCP_BRIDGE_URL", nil)
+    # The Locus backends service that runs stdio MCP servers
+    # (`Emissary.External.Backends`): CYFR_LOCUS_BACKENDS_URL, the base URL
+    # of its listener (compose: http://locus-backends:4101), and
+    # CYFR_LOCUS_BACKENDS_KEY, the service key as 64 hexadecimal digits, the
+    # value the service holds as LOCUS_BACKENDS_KEY (`cyfr init` generates
+    # it). With either unset, no stdio server can be created or started; a
+    # malformed value refuses the boot naming the variable and never the key.
+    locus_backends_setting = fn read ->
+      case read do
+        {:ok, value} -> value
+        {:error, message} -> raise "[Cyfr] FATAL: #{message}"
+      end
+    end
 
     config :cyfr,
-           :mcp_bridge_key,
-           (case env_str.("CYFR_MCP_BRIDGE_KEY", nil) do
-              nil ->
-                nil
+           :locus_backends_url,
+           locus_backends_setting.(Prima.EnvValue.url(getenv, "CYFR_LOCUS_BACKENDS_URL"))
 
-              text ->
-                case Prima.BridgeAuth.decode_root(text) do
-                  {:ok, root} ->
-                    root
-
-                  :error ->
-                    raise "[Cyfr] FATAL: CYFR_MCP_BRIDGE_KEY must be exactly 64 hexadecimal " <>
-                            "digits (32 bytes); generate one with `openssl rand -hex 32`"
-                end
-            end)
+    config :cyfr,
+           :locus_backends_key,
+           locus_backends_setting.(Prima.EnvValue.hex_key(getenv, "CYFR_LOCUS_BACKENDS_KEY"))
 
     # The worker root every key CYFR issues derives from, resolved above.
     config :cyfr, :opus_key, worker_root
@@ -398,31 +394,28 @@ if config_env() != :test do
       {:error, message} -> raise "[Cyfr] FATAL: #{message}"
     end
 
-    # How long the bridge runs a stdio server's backends without hearing from
-    # this server, in milliseconds: 1000 to 60000, default 30000. Every sync
-    # and renewal asks for this lease and renewals go out every third of it,
-    # so backends whose server crashed, lost the control plane or cannot
-    # reach the bridge are retired within one lease. Anything but a whole
-    # number in the range refuses the boot.
-    mcp_bridge_ms = fn key, range ->
-      case Prima.EnvValue.milliseconds(getenv, key, range) do
-        {:ok, ms} -> ms
-        {:error, message} -> raise "[Cyfr] FATAL: #{message}"
-      end
+    # How long the backends service runs a stdio server's backends without
+    # hearing from this server, in milliseconds: 1000 to 60000, default
+    # 30000. Every sync and renewal asks for this lease and renewals go out
+    # every third of it, so backends whose server crashed, lost the control
+    # plane or cannot reach the service are retired within one lease.
+    # Anything but a whole number in the range refuses the boot.
+    locus_backends_ms = fn key, range ->
+      locus_backends_setting.(Prima.EnvValue.milliseconds(getenv, key, range))
     end
 
-    if lease_ms = mcp_bridge_ms.("CYFR_MCP_BRIDGE_LEASE_MS", 1_000..60_000) do
-      config :cyfr, :mcp_bridge_lease_ms, lease_ms
+    if lease_ms = locus_backends_ms.("CYFR_LOCUS_BACKENDS_LEASE_MS", 1_000..60_000) do
+      config :cyfr, :locus_backends_lease_ms, lease_ms
     end
 
-    # How long the bridge keeps a stdio backend running with no tool call to
-    # it, in milliseconds: 1000 to 86400000, default 900000 (15 minutes).
-    # An idle backend's processes are retired and its pool slot freed; its
-    # tools stay listed, and the next call to it starts it again, which for
-    # an `npx -y` package means downloading it again. Anything but a whole
-    # number in the range refuses the boot.
-    if idle_ms = mcp_bridge_ms.("CYFR_MCP_BRIDGE_IDLE_MS", 1_000..86_400_000) do
-      config :cyfr, :mcp_bridge_idle_ms, idle_ms
+    # How long the backends service keeps a stdio backend running with no
+    # tool call to it, in milliseconds: 1000 to 86400000, default 900000 (15
+    # minutes). An idle backend's processes are retired and its pool slot
+    # freed; its tools stay listed, and the next call to it starts it again,
+    # which for an `npx -y` package means downloading it again. Anything but
+    # a whole number in the range refuses the boot.
+    if idle_ms = locus_backends_ms.("CYFR_LOCUS_BACKENDS_IDLE_MS", 1_000..86_400_000) do
+      config :cyfr, :locus_backends_idle_ms, idle_ms
     end
 
     # Device label attached to registry credentials (unset = hostname).

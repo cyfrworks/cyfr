@@ -19,8 +19,8 @@
 #   islands   prima, arca and sanctum compiled and tested from a copy that
 #             holds only what CI gives them; opus and locus with --close
 # With --close the static leg also forces a rebuild on both adapters and
-# compiles the SQLite dev target. Image suites, the S3 suite, the Go and
-# Node checks, the security scanners and the benchmark are not part of
+# compiles the SQLite dev target. Image suites, the S3 suite, the Go
+# checks, the security scanners and the benchmark are not part of
 # this gate: a closing record names each of those with its own result.
 # Stopping the gate (INT, TERM) stops its legs.
 set -uo pipefail

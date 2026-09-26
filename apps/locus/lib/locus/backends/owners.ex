@@ -470,13 +470,12 @@ defmodule Locus.Backends.Owners do
   end
 
   # A version not held: its environment opened and checked against its
-  # definitions, the version it replaces retired, and the pool read.
+  # definitions, then the pool read; the version it replaces is retired on
+  # admission alone.
   defp admit_sync(state, from, message, {g, e}, definition, existing, open_env) do
     with true <- length(definition) <= LocusBackends.max_backends() || :error,
          {:ok, env} <- open(open_env),
          :ok <- environment(definition, env) do
-      state = if existing, do: retire(state, existing), else: state
-
       sync = %{
         athanor: message.owner.athanor,
         server: message.owner.server,
@@ -557,6 +556,15 @@ defmodule Locus.Backends.Owners do
           GenServer.reply(from, {:error, :capacity})
           control_done(state)
         else
+          # The version it replaces is retired only now, once the replacement
+          # is admitted: a sync the pool cannot hold leaves the owner it
+          # named running as it ran.
+          state =
+            case sync.replacing && Map.get(state.owners, sync.replacing) do
+              nil -> state
+              held -> retire(state, held)
+            end
+
           owner = new_owner(state, sync)
 
           state = %{

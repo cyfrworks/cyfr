@@ -21,9 +21,8 @@ func TestMissingStackServices(t *testing.T) {
 	old := `services:
   cyfr:
     image: ghcr.io/cyfrworks/cyfr:latest
-  mcp-bridge:
-    build:
-      context: .
+  locus-backends:
+    image: ghcr.io/cyfrworks/cyfr-locus:latest
   caddy:
     image: caddy:2.11-alpine
     profiles: ["tls"]
@@ -32,7 +31,7 @@ func TestMissingStackServices(t *testing.T) {
 		t.Fatal(err)
 	}
 	if got := missingStackServices(path); !slices.Equal(got, []string{"opus", "locus-builds"}) {
-		t.Errorf("a compose file with cyfr, mcp-bridge and caddy lacks %v", got)
+		t.Errorf("a compose file with cyfr, locus-backends and caddy lacks %v", got)
 	}
 
 	if got := missingStackServices(filepath.Join(t.TempDir(), "missing.yml")); got != nil {

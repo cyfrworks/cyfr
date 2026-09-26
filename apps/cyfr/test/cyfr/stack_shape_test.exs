@@ -4,9 +4,10 @@
 defmodule Cyfr.StackShapeTest do
   @moduledoc """
   The shipped stack is one origin: every request Caddy takes reaches cyfr's
-  one endpoint, and compose runs cyfr, the execution worker, the bridge and
-  (optionally) caddy and the builds service — nothing else. Read the files,
-  assert the shape; the same style as the ingress inventory.
+  one endpoint, and compose runs cyfr, the execution worker, the Locus
+  backends service and (optionally) caddy and the Locus builds service —
+  nothing else. Read the files, assert the shape; the same style as the
+  ingress inventory.
   """
   use ExUnit.Case, async: true
 
@@ -45,7 +46,7 @@ defmodule Cyfr.StackShapeTest do
     refute caddy =~ ~r/porta|4001/
   end
 
-  test "compose runs cyfr, opus, mcp-bridge and caddy — one web origin" do
+  test "compose runs cyfr, opus, locus-backends, locus-builds and caddy — one web origin" do
     compose = read!("docker-compose.yml")
 
     # Only the keys under `services:` — the file also has `volumes:` and
@@ -58,12 +59,12 @@ defmodule Cyfr.StackShapeTest do
       |> List.flatten()
       |> Enum.sort()
 
-    assert services == ["caddy", "cyfr", "locus-builds", "mcp-bridge", "opus"]
+    assert services == ["caddy", "cyfr", "locus-backends", "locus-builds", "opus"]
     refute compose =~ ~r/porta|4001|8080/
 
     # The execution worker is attached to the worker network and no other,
     # which cyfr joins: cyfr reaches it there, it reaches cyfr's host API
-    # there, and the bridge and caddy never see either port.
+    # there, and the Locus services and caddy never see either port.
     [_, opus_block | _] = Regex.split(~r/^  opus:\s*$/m, services_block)
     [opus_block | _] = Regex.split(~r/^  [a-z]/m, opus_block)
     [_, opus_networks | _] = Regex.split(~r/^    networks:\s*$/m, opus_block)
@@ -82,10 +83,21 @@ defmodule Cyfr.StackShapeTest do
     assert cyfr_block =~ ~r/^\s*- worker$/m
 
     assert cyfr_block =~ ~r/^\s*- locus-builds$/m
+    assert cyfr_block =~ ~r/^\s*- locus-backends$/m
 
-    # The builds service is attached to its own network and no other: what
+    assert cyfr_block =~
+             ~r/^\s*- CYFR_LOCUS_BACKENDS_URL=\$\{CYFR_LOCUS_BACKENDS_URL:-http:\/\/locus-backends:4101\}$/m
+
+    assert cyfr_block =~
+             ~r/^\s*- CYFR_PRIVATE_EGRESS_TARGETS=\$\{CYFR_PRIVATE_EGRESS_TARGETS:-locus-backends\}$/m
+
+    # Each Locus service is attached to its own network and no other: what
     # it listens on is that network, which is its isolation.
     assert list_entries(service_block(compose, "locus-builds"), "networks") == ["locus-builds"]
+
+    assert list_entries(service_block(compose, "locus-backends"), "networks") == [
+             "locus-backends"
+           ]
 
     # Runtime storage uses one data root.
     refute compose =~ ~r/^\s*- \.\/components:/m
@@ -94,23 +106,24 @@ defmodule Cyfr.StackShapeTest do
   # cyfr reaches the builder over the builds network, which only the two of
   # them join, and a build reaches crates.io and the npm registry over the
   # same network: it is not `internal`, so the isolation is who is attached.
-  # The worker network is the same shape for a guest's consented egress.
-  test "the builds and worker networks carry cyfr to its worker and the worker out" do
+  # The backends network is the same shape for a backend's registry and
+  # upstream API, and the worker network for a guest's consented egress.
+  test "the builds, backends and worker networks carry cyfr to each service and the service out" do
     compose = read!("docker-compose.yml")
     [_, networks] = Regex.split(~r/^networks:\s*$/m, compose)
     [networks | _] = Regex.split(~r/^[a-z]/m, networks)
 
-    for network <- ["locus-builds", "worker"] do
+    for network <- ["locus-backends", "locus-builds", "worker"] do
       assert networks =~ ~r/^  #{network}: \{\}$/m, "#{network} must be declared plain"
 
       attached =
-        for service <- ["caddy", "cyfr", "locus-builds", "mcp-bridge", "opus"],
+        for service <- ["caddy", "cyfr", "locus-backends", "locus-builds", "opus"],
             block = service_block(compose, service),
             block =~ ~r/^    networks:\s*$/m,
             network in list_entries(block, "networks"),
             do: service
 
-      expected = if network == "worker", do: ["cyfr", "opus"], else: ["cyfr", "locus-builds"]
+      expected = if network == "worker", do: ["cyfr", "opus"], else: ["cyfr", network]
       assert attached == expected, "#{network} joins #{inspect(attached)}"
     end
 
@@ -138,20 +151,47 @@ defmodule Cyfr.StackShapeTest do
     assert builds =~ ~r/^          memory: \$\{LOCUS_BUILDS_MEMORY_LIMIT:-[0-9]+[MG]\}$/m
     assert builds =~ ~r/^          cpus: "\$\{LOCUS_BUILDS_CPU_LIMIT:-[0-9]+\}"$/m
 
-    # Spelled split so the retired names are not themselves found here. The
-    # release's user and its directories keep the name cyfr-builder.
+    # Spelled split so the retired names are not themselves found here.
     refute compose =~
              ~r/CYFR_BUILDE[R]_|CYFR_BUIL[D]_|CYFR_MAX_CONCURRENT_BUILD[S]|Dockerfile\.builde[r]|cyfrworks\/cyfr-builde[r]/
 
     refute compose =~ ~r/\.env\.builde[r]/
   end
 
-  test "the builds service and the worker keep their hardening, and can bound a spawn's memory" do
+  # The backends service runs the Locus image as compose runs the builds
+  # service, with the backend pool in place of the build pool; its key is
+  # the one cyfr reads as CYFR_LOCUS_BACKENDS_KEY, and it always starts.
+  test "the backends service is the locus image under the shipped names, holding only its own settings" do
+    compose = read!("docker-compose.yml")
+    backends = service_block(compose, "locus-backends")
+
+    assert backends =~ ~r/^    container_name: cyfr-locus-backends$/m
+    assert backends =~ ~r/^    image: ghcr\.io\/cyfrworks\/cyfr-locus:latest$/m
+    assert backends =~ ~r/^      dockerfile: Dockerfile\.locus$/m
+    refute backends =~ ~r/^    profiles:/m
+    assert backends =~ ~r/^      - path: \.env\.locus$/m
+    assert list_entries(backends, "expose") == [~s("4101")]
+
+    assert list_entries(backends, "environment") == [
+             "LOCUS_BACKENDS_KEY=${CYFR_LOCUS_BACKENDS_KEY:-}"
+           ]
+
+    assert backends =~
+             ~r{^    entrypoint: \["cyfr-keeper", "serve", "--pool", "backends:20001-20032", "--home-root", "/var/lib/locus/homes", "--client-user", "locus", "--", "/app/bin/locus", "start"\]$}m
+
+    # The release's own health probe is the builds wire's; this service
+    # probes the backends wire's instead.
+    assert backends =~ Prima.LocusBackends.route(:health)
+  end
+
+  test "the Locus services and the worker keep their hardening, and can bound a spawn's memory" do
     compose = read!("docker-compose.yml")
 
     for {service, homes, run_dir} <- [
-          {"locus-builds", "/var/lib/cyfr-builder/homes:mode=1733,exec,size=2g",
-           "/run/cyfr-builder:uid=10001,gid=10001,mode=0700,size=16m"},
+          {"locus-builds", "/var/lib/locus/homes:mode=1733,exec,size=2g",
+           "/run/locus:uid=10001,gid=10001,mode=0700,size=16m"},
+          {"locus-backends", "/var/lib/locus/homes:mode=1733,exec,size=2g",
+           "/run/locus:uid=10001,gid=10001,mode=0700,size=16m"},
           {"opus", "/var/lib/opus/homes:mode=1733,exec,size=256m",
            "/run/opus:uid=10002,gid=10002,mode=0700,size=16m"}
         ] do
@@ -205,7 +245,7 @@ defmodule Cyfr.StackShapeTest do
 
     # No setting of the control plane's is offered here: `Locus.Config`
     # refuses to start with the keyring, the database, the worker root or
-    # the bridge key in its environment.
+    # the control plane's backends key in its environment.
     refute example =~ ~r/^#? ?CYFR_[A-Z_]*=/m
     refute File.exists?(Path.join(@root, ".env.builder.example"))
   end

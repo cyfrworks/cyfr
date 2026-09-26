@@ -111,10 +111,11 @@ func extract(version string, overwriteManaged bool) error {
 
 	client := &http.Client{Timeout: requestTimeout}
 
-	// The tarball carries docker-compose.yml, Dockerfile.node and the bridge
-	// source that `cyfr up` will build and run — verify it against the
-	// release's cosign-signed checksums.txt before extracting a byte. The
-	// release binary itself gets the same treatment from install.sh.
+	// The tarball carries docker-compose.yml, which names the images `cyfr
+	// up` will pull and run (cyfr, cyfr-opus and cyfr-locus) — verify it
+	// against the release's cosign-signed checksums.txt before extracting a
+	// byte. The release binary itself gets the same treatment from
+	// install.sh.
 	want, err := fetchScaffoldChecksum(client, version)
 	if err != nil {
 		return err

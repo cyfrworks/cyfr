@@ -11,12 +11,11 @@ ITEMS=(
   LICENSE LICENSES/ FAIR_SOURCE.md
   wit/
   # Package deployment files for cyfr init: the app, the execution worker,
-  # MCP bridge, TLS proxy and optional builds profile. The bridge and its
-  # process helper are built from the sources shipped here; the app, worker
-  # and builder images are pulled as published.
-  docker-compose.yml Caddyfile .env.example Dockerfile.node apps/mcp-bridge/ apps/keeper/
+  # the backends service, TLS proxy and optional builds profile. Every
+  # image is pulled as published.
+  docker-compose.yml Caddyfile .env.example
   # One example per env file docker-compose.yml names beside .env.
-  .env.locus.example .env.opus.example .env.bridge.example
+  .env.locus.example .env.opus.example
 )
 # Every item is shipped or the script fails: a file renamed or removed
 # without this list following must not leave the tarball quietly short.

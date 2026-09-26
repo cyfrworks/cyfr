@@ -259,7 +259,7 @@ defmodule Emissary.External.ProviderTest do
       ]
     }
 
-    test "are refused while no MCP bridge is configured", %{ctx: ctx} do
+    test "are refused while no backends service is configured", %{ctx: ctx} do
       refute Emissary.External.Backends.running?()
 
       assert {:error, {:invalid_argument, message}} =
@@ -269,7 +269,7 @@ defmodule Emissary.External.ProviderTest do
                  "config" => @stdio_config
                })
 
-      assert message =~ "CYFR_MCP_BRIDGE_KEY"
+      assert message =~ "CYFR_LOCUS_BACKENDS_KEY"
       assert {:error, :not_found} = Arca.McpServerStorage.get(Sanctum.Context.actor(ctx), "piped")
     end
 

@@ -197,7 +197,15 @@ defmodule Locus.KeeperTest do
       {result, _lines} = run(name, "head -c 5000 /dev/zero", max_stdout_bytes: 1_000)
 
       assert result == {:error, {:output_too_large, 1_000}}
-      assert [_] = awaited_releases(fake, 0)
+
+      # The fake reports the command's output at its exit, so the exit report
+      # and the output race: a spawn the keeper already saw end has nothing
+      # to release, and one still running is released with no grace.
+      wait_until(fn -> releases(fake, 0) != [] or FakeKeeper.exits(fake) != [] end)
+
+      if FakeKeeper.exits(fake) == [] do
+        assert [_] = releases(fake, 0)
+      end
     end
 
     test "a caller that dies has its spawn released", %{name: name, fake: fake} do

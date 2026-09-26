@@ -750,8 +750,8 @@ defmodule Arca.Adapters.Local do
   def sweep_stale_tmp(max_age_seconds) do
     cutoff = System.os_time(:second) - max_age_seconds
 
-    # The volume holds more than Arca paths (`cyfr.db*`, the `mcp-bridge/`
-    # sidecar tree — "another program's file" per `Arca.Storage`). `put/3`
+    # The volume holds more than Arca paths (`cyfr.db*`, a sidecar's tree —
+    # "another program's file" per `Arca.Storage`). `put/3`
     # lands tmp files only where Arca writes: under `athanors/` and the
     # global roots — so the sweep walks exactly those.
     removed =

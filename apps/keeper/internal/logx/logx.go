@@ -2,8 +2,9 @@
 // Copyright 2026 CYFR Works Inc.
 
 // Package logx writes cyfr-keeper's log lines to stderr: plain text, or one
-// JSON object per line when CYFR_LOG_FORMAT=json, in the shape the bridge
-// uses. Lines never carry environment values or backend output.
+// JSON object per line when CYFR_LOG_FORMAT=json, in the shape
+// Prima.JsonFormatter writes. Lines never carry environment values or
+// backend output.
 package logx
 
 import (

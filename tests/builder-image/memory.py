@@ -512,8 +512,8 @@ def test_build(stack, case, limit, measure):
 
 
 def main(image, measure, cases):
-    canary = tempfile.mkdtemp(prefix="cyfr-builder-memory-")
-    stack = Stack("cyfr-builder-memory", image, canary)
+    canary = tempfile.mkdtemp(prefix="locus-builds-memory-")
+    stack = Stack("locus-builds-memory", image, canary)
     try:
         for case in cases:
             # A fresh container per case, so one case's damage is not the next one's start.

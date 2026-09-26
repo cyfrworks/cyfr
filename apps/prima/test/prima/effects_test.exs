@@ -34,7 +34,6 @@ defmodule Prima.EffectsTest do
     Prima.UUID7 => {:id, [:entropy, :wall_clock]},
     Prima.Hex => {:id, [:entropy]},
     Prima.MacEnvelope => {:encryption_iv, [:entropy]},
-    Prima.BridgeAuth => {:encryption_iv, [:entropy]},
     Prima.LocusBackends => {:encryption_iv, [:entropy]},
     Prima.WorkerAuth => {:encryption_iv, [:entropy]},
     Prima.WIT => {:compile_time, [:file]},
@@ -58,7 +57,6 @@ defmodule Prima.EffectsTest do
 
   # The default IV of each seal.
   @iv_entropy_pins [
-    {Prima.BridgeAuth, {:seal, 5}},
     {Prima.LocusBackends, {:seal, 5}},
     {Prima.MacEnvelope, {:seal, 6}},
     {Prima.WorkerAuth, {:seal_attempt_keys, 3}},
