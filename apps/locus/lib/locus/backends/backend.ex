@@ -33,9 +33,23 @@ defmodule Locus.Backends.Backend do
 
   `retire_idle/1` ends a `ready` backend with no call awaiting it: its
   process is released with the stop grace, its tools stay listed, and it
-  is `idle`. The next call wakes it: the process is started again once
-  the last one is retired, and every call that arrives meanwhile shares
-  that one start, then goes to the backend once it is ready.
+  is `idle`. `retire_if_idle/2` does the same for a backend no call has
+  used within a period, and leaves any other as it is. The next call
+  wakes it: the process is started again once the last one is retired,
+  and every call that arrives meanwhile shares that one start, then goes
+  to the backend once it is ready.
+
+  ## Its owner's accounting
+
+  A backend started with `:notify` tells that process of each change its
+  owner accounts for, as `{Locus.Backends.Backend, pid, event}`:
+  `{:view, view}` when it starts a process, begins its handshake or goes
+  idle; `{:ready, tools_changed?, view}`; `{:crashed, tools_withdrawn?,
+  view}`; `{:failed, view}`; and `:vacated` once it no longer holds a uid
+  of the pool — its idle retirement or the release after its last crash
+  done — and holds none until it wakes. A backend started with `:claim`
+  asks it, before a wake's process is started with no uid held, for one:
+  a refusal leaves it idle and fails the calls waiting on it.
 
   ## Stopping
 
@@ -96,14 +110,25 @@ defmodule Locus.Backends.Backend do
 
   @type status :: :starting | :ready | :idle | :failed | :stopped
 
-  @typedoc "What `status/1` answers, masked."
+  @typedoc """
+  Where a `starting` backend is: its process being started, its handshake
+  under way (or ending, refused), or waiting to restart after a crash.
+  """
+  @type phase :: :spawning | :initializing | :crashed | nil
+
+  @typedoc "What `status/1` answers, masked, with the last time a call used the backend."
   @type report :: %{
           status: status(),
+          phase: phase(),
           restarts: non_neg_integer(),
           tools: non_neg_integer(),
           error: String.t() | nil,
-          stderr_tail: String.t()
+          stderr_tail: String.t(),
+          last_used: integer()
         }
+
+  @typedoc "What `:notify` hears of the backend's state."
+  @type view :: %{status: status(), phase: phase(), tools: non_neg_integer()}
 
   @doc """
   Starts a backend. Options:
@@ -116,6 +141,11 @@ defmodule Locus.Backends.Backend do
       module's registered name);
     * `:memory_bytes`, the bound each process is spawned under, if any;
     * `:bounds`, overriding `Prima.LocusBackends.bounds/0` by name;
+    * `:notify`, the process told of each change its owner accounts for;
+    * `:claim`, a function answering `:ok` or `{:error, :capacity}` (or
+      another reason) for a uid of the pool a wake needs;
+    * `:clock`, the milliseconds `last_used` and `retire_if_idle/2` are
+      read on (default monotonic);
     * `:rpc_timeout_ms` (30 s), `:init_timeout_ms` (15 s),
       `:spawn_timeout_ms` (15 s), `:stop_grace_ms` (2 s),
       `:release_timeout_ms` (15 s);
@@ -160,6 +190,15 @@ defmodule Locus.Backends.Backend do
   def retire_idle(server), do: GenServer.call(server, :retire_idle)
 
   @doc """
+  Retires the backend as `retire_idle/1` does if it is `ready`, no call
+  awaits it and none has used it within the last `idle_ms`; anything else
+  is left as it is. Answers at once.
+  """
+  @spec retire_if_idle(GenServer.server(), non_neg_integer()) :: :ok
+  def retire_if_idle(server, idle_ms) when is_integer(idle_ms) and idle_ms >= 0,
+    do: GenServer.cast(server, {:retire_if_idle, idle_ms})
+
+  @doc """
   Stops the backend: its process released with `grace_ms`, answered once
   it is retired or its bound passes.
   """
@@ -177,6 +216,8 @@ defmodule Locus.Backends.Backend do
     case launcher(opts) do
       {:ok, launcher} ->
         bounds = Map.merge(LocusBackends.bounds(), Map.new(Keyword.get(opts, :bounds, [])))
+
+        clock = Keyword.get(opts, :clock, fn -> System.monotonic_time(:millisecond) end)
 
         state = %{
           owner: owner,
@@ -204,7 +245,12 @@ defmodule Locus.Backends.Backend do
           waking: false,
           waiters: [],
           wake_timer: nil,
-          stoppers: []
+          stoppers: [],
+          notify: Keyword.get(opts, :notify),
+          claim: Keyword.get(opts, :claim),
+          clock: clock,
+          slot: true,
+          last_used: clock.()
         }
 
         {:ok, state, {:continue, :spawn}}
@@ -234,10 +280,12 @@ defmodule Locus.Backends.Backend do
     {:reply,
      %{
        status: state.status,
+       phase: phase(state),
        restarts: state.restarts,
        tools: length(state.tools),
        error: mask(state.error, state),
-       stderr_tail: Relay.stderr_tail(state.relay, state.secrets)
+       stderr_tail: Relay.stderr_tail(state.relay, state.secrets),
+       last_used: state.last_used
      }, state}
   end
 
@@ -245,6 +293,7 @@ defmodule Locus.Backends.Backend do
 
   def handle_call({:call_tool, tool, arguments, timeout}, from, state) do
     call = %{from: from, tool: tool, arguments: arguments, timeout: timeout}
+    state = used(state)
 
     cond do
       state.status == :idle or state.waking -> {:noreply, wake(state, call)}
@@ -268,6 +317,16 @@ defmodule Locus.Backends.Backend do
       do: {:reply, :ok, state},
       else: {:noreply, %{state | stoppers: [from | state.stoppers]}}
   end
+
+  @impl GenServer
+  def handle_cast({:retire_if_idle, idle_ms}, %{status: :ready} = state) do
+    if state.waking or Relay.pending_count(state.relay) > 0 or
+         state.clock.() - state.last_used < idle_ms,
+       do: {:noreply, state},
+       else: {:noreply, retire_idle_process(state)}
+  end
+
+  def handle_cast({:retire_if_idle, _idle_ms}, state), do: {:noreply, state}
 
   @impl GenServer
   def handle_info({launcher, ref, event}, %{launcher: launcher} = state) do
@@ -364,9 +423,13 @@ defmodule Locus.Backends.Backend do
         relay_dead: false
     }
 
+    notify_view(state)
+
     case state.launcher.spawn(state.launcher_server, spec) do
       {:ok, handle} ->
-        initialize(%{state | handle: handle, phase: :initializing})
+        state = %{state | handle: handle, phase: :initializing}
+        notify_view(state)
+        initialize(state)
 
       {:error, reason} ->
         crashed(%{state | handle: nil}, "spawn refused: #{refusal_code(reason)}")
@@ -491,7 +554,7 @@ defmodule Locus.Backends.Backend do
         _ -> []
       end
 
-    ready(%{state | tools: tools})
+    ready(%{state | tools: tools}, tools != state.tools)
   end
 
   defp on_message({:answer, {:init, _method} = tag, {:error, error}}, state),
@@ -499,12 +562,12 @@ defmodule Locus.Backends.Backend do
 
   defp on_message({:answer, {:call, call}, {:result, result}}, state) do
     reply(call, {:ok, mask(result, state)})
-    state
+    used(state)
   end
 
   defp on_message({:answer, {:call, call}, {:error, error}}, state) do
     reply(call, refusal(state, error_text(error)))
-    state
+    used(state)
   end
 
   defp timed_out(state, {:init, method} = tag), do: init_failed(state, tag, "timeout: #{method}")
@@ -525,9 +588,10 @@ defmodule Locus.Backends.Backend do
 
   defp init_failed(state, _tag, _text), do: state
 
-  defp ready(state) do
+  defp ready(state, changed?) do
     Logger.info("[Locus.Backends.Backend] #{label(state)}: ready, #{length(state.tools)} tools")
-    state = %{state | status: :ready, phase: nil, error: nil}
+    state = used(%{state | status: :ready, phase: nil, error: nil})
+    notify(state, {:ready, changed?, view(state)})
 
     calls = Enum.reverse(state.waiters)
     state = %{state | waking: false, waiters: [], wake_timer: nil}
@@ -539,6 +603,7 @@ defmodule Locus.Backends.Backend do
 
   defp crashed(state, reason) do
     error = if state.init_error, do: "#{state.init_error}; #{reason}", else: reason
+    withdrawn? = state.tools != []
 
     state =
       %{state | error: error, init_error: nil, tools: [], phase: :crashed}
@@ -554,7 +619,9 @@ defmodule Locus.Backends.Backend do
         "[Locus.Backends.Backend] #{label(state)}: failed after #{length(crashes)} crashes"
       )
 
-      %{state | status: :failed, phase: nil}
+      state = %{state | status: :failed, phase: nil}
+      notify(state, {:failed, view(state)})
+      maybe_vacate(state)
     else
       backoff = state.bounds.restart_backoff_ms
       delay = Enum.at(backoff, min(length(crashes), length(backoff)) - 1)
@@ -563,7 +630,9 @@ defmodule Locus.Backends.Backend do
 
       timer = make_ref()
       Process.send_after(self(), {:restart, timer}, delay)
-      %{state | status: :starting, phase: :backoff, restart_timer: timer}
+      state = %{state | status: :starting, phase: :backoff, restart_timer: timer}
+      notify(state, {:crashed, withdrawn?, view(state)})
+      state
     end
   end
 
@@ -575,9 +644,13 @@ defmodule Locus.Backends.Backend do
     :ok =
       state.launcher.release(state.launcher_server, state.handle, state.timeouts.stop_grace_ms)
 
+    state =
+      state
+      |> retiring(state.handle.ref)
+      |> Map.merge(%{handle: nil, status: :idle, phase: nil})
+
+    notify_view(state)
     state
-    |> retiring(state.handle.ref)
-    |> Map.merge(%{handle: nil, status: :idle, phase: nil})
   end
 
   # Every call that finds the backend idle, or waking, waits on one start,
@@ -590,12 +663,48 @@ defmodule Locus.Backends.Backend do
   end
 
   defp start_wake(state) do
-    Logger.info("[Locus.Backends.Backend] #{label(state)}: starting for a call")
-    timer = make_ref()
-    wake_ms = state.timeouts.spawn_timeout_ms + state.timeouts.init_timeout_ms
-    Process.send_after(self(), {:wake_timeout, timer}, wake_ms)
-    spawn_process(%{state | wake_timer: timer})
+    case claim_slot(state) do
+      {:ok, state} ->
+        Logger.info("[Locus.Backends.Backend] #{label(state)}: starting for a call")
+        timer = make_ref()
+        wake_ms = state.timeouts.spawn_timeout_ms + state.timeouts.init_timeout_ms
+        Process.send_after(self(), {:wake_timeout, timer}, wake_ms)
+        spawn_process(%{state | wake_timer: timer})
+
+      {:error, sentence} ->
+        fail_waiters(state, fn _state -> sentence end)
+    end
   end
+
+  # A wake whose backend gave its uid back asks its owner for one first;
+  # one that still holds its uid, or has no owner accounting for it, starts.
+  defp claim_slot(%{slot: true} = state), do: {:ok, state}
+  defp claim_slot(%{claim: nil} = state), do: {:ok, %{state | slot: true}}
+
+  defp claim_slot(state) do
+    case state.claim.() do
+      :ok ->
+        {:ok, %{state | slot: true}}
+
+      {:error, :capacity} ->
+        {:error, "backend '#{state.name}' is idle and no uid of the pool is free to start it"}
+
+      {:error, _reason} ->
+        {:error, "backend '#{state.name}' is idle and cannot be started now"}
+    end
+  end
+
+  # The backend's uid is given back once nothing of its processes is left
+  # and it will not start one of its own accord: idle and not waking, or
+  # failed.
+  defp maybe_vacate(%{slot: true, status: status} = state)
+       when map_size(state.retiring) == 0 and
+              (status == :failed or (status == :idle and not state.waking)) do
+    notify(state, :vacated)
+    %{state | slot: false}
+  end
+
+  defp maybe_vacate(state), do: state
 
   defp stop_backend(state, grace_ms) do
     state =
@@ -642,7 +751,7 @@ defmodule Locus.Backends.Backend do
         start_wake(state)
 
       true ->
-        state
+        maybe_vacate(state)
     end
   end
 
@@ -697,4 +806,24 @@ defmodule Locus.Backends.Backend do
   defp mask(value, state), do: LocusBackends.mask(value, state.secrets)
 
   defp label(state), do: "#{state.owner.athanor}/#{state.owner.server} #{state.name}"
+
+  # ————— the owner's accounting —————
+
+  defp used(state), do: %{state | last_used: state.clock.()}
+
+  defp phase(%{status: :starting, phase: phase}) when phase in [:initializing, :ending],
+    do: :initializing
+
+  defp phase(%{status: :starting, phase: phase}) when phase in [:crashed, :backoff],
+    do: :crashed
+
+  defp phase(%{status: :starting}), do: :spawning
+  defp phase(_state), do: nil
+
+  defp view(state), do: %{status: state.status, phase: phase(state), tools: length(state.tools)}
+
+  defp notify_view(state), do: notify(state, {:view, view(state)})
+
+  defp notify(%{notify: nil}, _event), do: :ok
+  defp notify(%{notify: pid}, event), do: send(pid, {__MODULE__, self(), event})
 end
