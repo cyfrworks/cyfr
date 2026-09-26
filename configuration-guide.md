@@ -131,6 +131,7 @@ refused, naming the variable or key and the form it must take.
 | `CYFR_MCP_SUBSCRIPTION_MAX_MS` | `mcp_subscription_max_ms` | `integer` | `1800000` | `streams` | live | serve | How long one MCP subscription stream lives before the client reconnects, in milliseconds. |
 | `CYFR_CRUCIBLE_EVENTS_MAX_CONCURRENT` | `crucible_events_max_concurrent` | `integer` | `8` | `streams` | live | serve | Concurrent execution-event streams per caller (athanor and credential). |
 | `CYFR_CRUCIBLE_EVENTS_MAX_MS` | `crucible_events_max_ms` | `integer` | `1800000` | `streams` | live | serve | How long one execution-event stream lives before the client reconnects, in milliseconds. |
+| `CYFR_FRAME_STREAM_MAX_CONCURRENT` | `frame_stream_max_concurrent` | `integer` | `8` | `streams` | live | serve | Concurrent streams one tincture frame holds open (per frame credential). |
 | `CYFR_SESSION_TTL_HOURS` | `session_ttl_hours` | `integer` | `720` | `sessions` | live | refuse | Hours a session may sit idle before it ends; 0 never ends one. |
 | `CYFR_WEBHOOK_MAX_SKEW_SECONDS` | `webhook_max_skew_seconds` | `duration_s` | `300` | `webhooks` | live | refuse | How far a delivery's timestamp may sit from now before it is refused as a replay: how long a captured delivery stays replayable. |
 | `CYFR_WEBHOOK_IDEMPOTENCY_TTL_SECONDS` | `webhook_idempotency_ttl_seconds` | `duration_s` | `86400` | `webhooks` | live | refuse | How long delivered idempotency keys are kept: the window in which a retried delivery is recognised as a duplicate. |

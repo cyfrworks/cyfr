@@ -5,8 +5,10 @@ defmodule Prima.TinctureWireTest do
   @moduledoc """
   The frame's wire as data: every request body of
   `tests/fixtures/tincture_wire.json` decodes and encodes back to itself
-  and carries its credential as a bearer; every answer reads back; the
-  refusal is a `Prima.Refusal`'s projection and nothing more; every shell
+  and carries its credential as a bearer, and the public request names its
+  tincture in place of one; every answer reads back; the refusal is a
+  `Prima.Refusal`'s projection and nothing more; the event stream is the
+  one the encoders write and reads back as its events; every shell
   message decodes. Beside them, the tincture URL grammar of
   `tests/fixtures/component_refs.json`.
   """
@@ -64,6 +66,72 @@ defmodule Prima.TinctureWireTest do
 
     assert {:ok, %{subject: nil}} =
              TinctureWire.decode_request(:stream_open, %{stream | "subject" => nil})
+  end
+
+  test "a public request names its tincture and carries no bearer" do
+    %{"kind" => name, "headers" => headers, "body" => body} = vectors()["public_request"]
+    kind = kind(name)
+    assert headers == %{}
+
+    assert {:ok,
+            %{public: %{athanor: "@alice", publisher: "local", name: "weather-lookup"}} = decoded} =
+             TinctureWire.decode_request(kind, body)
+
+    assert TinctureWire.request(kind, decoded) == body
+
+    public = body["public"]
+
+    for bad <- [
+          Map.put(public, "athanor_id", "ath_x"),
+          Map.delete(public, "name"),
+          %{public | "athanor" => "Not A Segment"},
+          %{public | "publisher" => "../x"},
+          "@alice/local/weather-lookup"
+        ] do
+      assert {:error, _} = TinctureWire.decode_request(kind, %{body | "public" => bad})
+    end
+
+    assert TinctureWire.public_identity?(%{athanor: "home", publisher: "local", name: "w"})
+    refute TinctureWire.public_identity?(%{athanor: "home", publisher: "local"})
+  end
+
+  test "an admitted stream is the event stream the encoders write, and reads back as its events" do
+    %{"kind" => "stream_open", "content_type" => type, "body" => body, "events" => events} =
+      vectors()["stream"]
+
+    assert type == TinctureWire.stream_content_type()
+
+    expected =
+      for %{"id" => id, "event" => event, "data" => data} <- events,
+          do: %{id: id, event: event, data: data}
+
+    assert TinctureWire.decode_stream(body) == expected
+
+    {deliveries, [%{event: "refusal", data: projection}]} =
+      Enum.split_while(expected, &(&1.event != TinctureWire.refusal_event()))
+
+    refusal = %Prima.Refusal{
+      class: String.to_existing_atom(projection["class"]),
+      reason: :stream_overflow,
+      message: projection["message"],
+      stage: String.to_existing_atom(projection["stage"])
+    }
+
+    written =
+      Enum.map_join(deliveries, &TinctureWire.stream_event(&1.id, &1.event, &1.data)) <>
+        TinctureWire.stream_refusal(refusal)
+
+    assert ": open\n\n" <> written == body
+    refute body =~ "stream_overflow"
+  end
+
+  test "a stream event not ended by its blank line, without data or with data that is not JSON is dropped" do
+    assert TinctureWire.decode_stream("event: a\ndata: {\"x\":1}") == []
+    assert TinctureWire.decode_stream("event: a\n\n") == []
+    assert TinctureWire.decode_stream("event: a\ndata: {x\n\n") == []
+
+    assert TinctureWire.decode_stream("id: 7\r\nretry: 5\r\ndata: {\"a\":\r\ndata: 1}\r\n\r\n") ==
+             [%{id: 7, event: "message", data: %{"a" => 1}}]
   end
 
   test "a bearer is `Bearer <credential>` and nothing else" do

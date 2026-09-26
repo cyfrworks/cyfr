@@ -61,12 +61,12 @@ defmodule Sanctum.TinctureAuth do
 
   A frame the shell opens holds a **frame credential**: a bearer naming
   one row of `Arca.FrameCredentials`, which is its standing on every
-  member, bound to the person, the version digest, the grant revision and
-  the frame id, with a deadline of its own (`frame_credential_deadline_s`,
+  member, bound to the person, the tincture version (its reference and its
+  digest), the grant revision and the frame id, with a deadline of its own (`frame_credential_deadline_s`,
   capped the same way). The shell suspends, resumes and revokes it here;
   a standing transition revokes it in its own transaction
   (`Arca.SecurityTransitions`); every use reads the row and the standing
-  again (`mint_frame_credential/4`, `verify_frame_credential/2`,
+  again (`mint_frame_credential/5`, `verify_frame_credential/2`,
   `suspend_frame/2`, `resume_frame/2`, `revoke_frame/2`).
 
   ## Returns
@@ -110,16 +110,20 @@ defmodule Sanctum.TinctureAuth do
           remaining_s: pos_integer()
         }
 
+  @typedoc "A tincture version, as a frame credential names it."
+  @type tincture_version :: %{publisher: String.t(), name: String.t(), version: String.t()}
+
   @typedoc """
   What a verified frame credential opens: its row's id, the frame id, the
-  person, the athanor, the version digest, the grant revision, the
-  deadline and the source binding.
+  person, the athanor, the tincture version the frame opened and its
+  digest, the grant revision, the deadline and the source binding.
   """
   @type frame_authority :: %{
           id: String.t(),
           frame_id: String.t(),
           user_id: String.t(),
           athanor_id: String.t(),
+          reference: tincture_version(),
           version_digest: String.t(),
           grant_revision: non_neg_integer(),
           deadline: DateTime.t(),
@@ -645,33 +649,43 @@ defmodule Sanctum.TinctureAuth do
   Mint the credential of one frame the shell opened, from a person's
   session or key context: a bearer the frame presents on every request
   (`Prima.TinctureWire`), whose row (`Arca.FrameCredentials`) is its
-  standing on every member. It binds the person, the tincture version
-  digest, the grant revision and the frame id.
+  standing on every member. It binds the person, the tincture version the
+  frame opened — `reference`, its `publisher`, `name` and `version` — and
+  that version's release digest, the grant revision and the frame id.
 
   Its deadline is the platform setting `frame_credential_deadline_s` from
   now, capped by the source's own expiry. A frame id that is not one is
   `:missing_frame_id`; a setting that cannot be read as a positive number
   of seconds is `:missing_deadline`. Otherwise refused as
-  `issue_access_token/3` refuses, `:invalid_version` for a digest that is
-  not one, `:invalid_grant_revision`, and `:conflict` for a frame id the
+  `issue_access_token/3` refuses, `:invalid_reference` for a reference
+  that does not name a tincture version, `:invalid_version` for a digest
+  that is not one, `:invalid_grant_revision`, and `:conflict` for a frame id the
   athanor already holds.
 
   Answers the bearer, the row's id — which `suspend_frame/2`,
   `resume_frame/2` and `revoke_frame/2` name — and the deadline.
   """
-  @spec mint_frame_credential(Context.t(), String.t(), non_neg_integer(), String.t()) ::
+  @spec mint_frame_credential(
+          Context.t(),
+          tincture_version(),
+          String.t(),
+          non_neg_integer(),
+          String.t()
+        ) ::
           {:ok, %{credential: String.t(), id: String.t(), deadline: DateTime.t()}}
           | {:error,
              mint_refusal()
              | :missing_frame_id
              | :missing_deadline
+             | :invalid_reference
              | :invalid_version
              | :invalid_grant_revision
              | :conflict}
-  def mint_frame_credential(%Context{} = ctx, version_digest, grant_revision, frame_id) do
+  def mint_frame_credential(%Context{} = ctx, reference, version_digest, grant_revision, frame_id) do
     with :ok <- owner(),
          :ok <- primary(ctx),
          :ok <- frame_id(frame_id),
+         :ok <- tincture_version(reference),
          :ok <- version_digest(version_digest),
          :ok <- grant_revision(grant_revision),
          {:ok, lifetime} <- setting("frame_credential_deadline_s", :missing_deadline),
@@ -683,6 +697,9 @@ defmodule Sanctum.TinctureAuth do
            stored(
              Arca.FrameCredentials.mint(Context.actor(ctx), %{
                user_id: claims.user_id,
+               publisher: reference.publisher,
+               name: reference.name,
+               version: reference.version,
                version_digest: version_digest,
                grant_revision: grant_revision,
                frame_id: frame_id,
@@ -722,8 +739,8 @@ defmodule Sanctum.TinctureAuth do
   (`Sanctum.Caller.fresh?/1`). `client_ip:` is the request's address, for
   a key's allowlist.
 
-  Answers the frame's authority — the person, the athanor, the version
-  digest, the grant revision, the frame id, the row's id, its deadline and
+  Answers the frame's authority — the person, the athanor, the tincture
+  version (`reference`) and its digest, the grant revision, the frame id, the row's id, its deadline and
   the source binding — or `:invalid_credential` for a bearer this server
   did not sign as one, `:suspended`, `:revoked`, `:expired_credential`
   past its deadline, and a source's or a standing's refusal
@@ -755,6 +772,7 @@ defmodule Sanctum.TinctureAuth do
            frame_id: row.frame_id,
            user_id: row.user_id,
            athanor_id: row.athanor_id,
+           reference: %{publisher: row.publisher, name: row.name, version: row.version},
            version_digest: row.version_digest,
            grant_revision: row.grant_revision,
            deadline: row.deadline,
@@ -784,7 +802,7 @@ defmodule Sanctum.TinctureAuth do
   a member that owns its slot and while the context's own source still
   stands. `:expired` past its deadline, `:revoked` for one revoked,
   `:not_owner` on a member that lost its slot, and the standing's
-  refusals as `mint_frame_credential/4` answers them.
+  refusals as `mint_frame_credential/5` answers them.
   """
   @spec resume_frame(Context.t(), String.t()) ::
           {:ok, frame_row()}
@@ -814,6 +832,19 @@ defmodule Sanctum.TinctureAuth do
   end
 
   defp frame_id(id), do: if(Prima.TinctureWire.frame_id?(id), do: :ok, else: {:error, :missing_frame_id})
+
+  # A tincture version by its publisher, name and exact version.
+  defp tincture_version(%{publisher: publisher, name: name, version: version})
+       when is_binary(publisher) and is_binary(name) and is_binary(version) do
+    with :ok <- Prima.ComponentRef.validate_ref_parts(publisher, name),
+         :ok <- Prima.ComponentRef.validate_version(version) do
+      :ok
+    else
+      _ -> {:error, :invalid_reference}
+    end
+  end
+
+  defp tincture_version(_reference), do: {:error, :invalid_reference}
 
   defp grant_revision(revision) when is_integer(revision) and revision >= 0, do: :ok
   defp grant_revision(_revision), do: {:error, :invalid_grant_revision}

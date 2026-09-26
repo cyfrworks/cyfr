@@ -310,6 +310,8 @@ defmodule Cyfr.Platform.Settings.Roster do
       "Concurrent execution-event streams per caller (athanor and credential).",
     "crucible_events_max_ms" =>
       "How long one execution-event stream lives before the client reconnects, in milliseconds.",
+    "frame_stream_max_concurrent" =>
+      "Concurrent streams one tincture frame holds open (per frame credential).",
     "session_ttl_hours" => "Hours a session may sit idle before it ends; 0 never ends one.",
     "webhook_max_skew_seconds" =>
       "How far a delivery's timestamp may sit from now before it is refused as a replay: how long a captured delivery stays replayable.",
@@ -453,6 +455,13 @@ defmodule Cyfr.Platform.Settings.Roster do
         window(),
         :streams
       ),
+      limit(
+        :frame_stream_max_concurrent,
+        "CYFR_FRAME_STREAM_MAX_CONCURRENT",
+        8,
+        whole(1..1_000_000, "streams"),
+        :streams
+      ),
 
       # ——— sessions and webhooks: security windows, refused stale ———
       %Entry{
@@ -567,23 +576,23 @@ defmodule Cyfr.Platform.Settings.Roster do
         apply: @apply_log_level
       },
 
-      # ——— the tincture credentials (read by Sanctum.TinctureAuth since C0) and the per-frame rate (read from C2b) ———
-      unread(
+      # ——— the tincture credentials (read by Sanctum.TinctureAuth) and the per-frame rate (read by the tincture data routes) ———
+      tincture(
         "asset_credential_window_s",
         "CYFR_ASSET_CREDENTIAL_WINDOW_S",
         :duration_s,
         3_600,
         whole(1..86_400, "seconds")
       ),
-      unread(
+      tincture(
         "frame_credential_deadline_s",
         "CYFR_FRAME_CREDENTIAL_DEADLINE_S",
         :duration_s,
         3_600,
         whole(1..86_400, "seconds")
       ),
-      unread("frame_invocation_max", "CYFR_FRAME_INVOCATION_MAX", :integer, 120, requests()),
-      unread(
+      tincture("frame_invocation_max", "CYFR_FRAME_INVOCATION_MAX", :integer, 120, requests()),
+      tincture(
         "frame_invocation_window_ms",
         "CYFR_FRAME_INVOCATION_WINDOW_MS",
         :integer,
@@ -623,7 +632,7 @@ defmodule Cyfr.Platform.Settings.Roster do
     }
   end
 
-  defp unread(key, variable, type, default, validator) do
+  defp tincture(key, variable, type, default, validator) do
     %Entry{
       key: key,
       app: :cyfr,

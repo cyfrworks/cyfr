@@ -4,8 +4,9 @@
 defmodule CyfrWeb.Ingress.Router do
   @moduledoc """
   The host's HTTP ingress routes: sign-in and sign-out, the OAuth grant
-  callback, tincture serving, health, the execution-events stream and
-  inbound webhooks, with the pipelines they pass through.
+  callback, tincture serving and the tincture data routes, health, the
+  execution-events stream and inbound webhooks, with the pipelines they
+  pass through.
 
   The composition router invokes `routes/0` where these routes stand, so
   its `__routes__/0` stays the total table. The quoted calls resolve where
@@ -88,7 +89,7 @@ defmodule CyfrWeb.Ingress.Router do
       # Tincture serving — a public tincture at its address, a private
       # tincture version's files under the asset credential in their path.
       # No session cookie auth: a tincture page is embeddable cross-origin (see
-      # the invoke pipeline below), and an ambient cookie credential on a
+      # the data pipeline below), and an ambient cookie credential on a
       # cross-origin surface is exactly the CSRF/rebinding food the design
       # refuses — there is one session store, and this surface ignores it.
       # Tinctures set their own CSP (the controller); the closed set here only
@@ -106,27 +107,32 @@ defmodule CyfrWeb.Ingress.Router do
           window_ms: CyfrWeb.Plugs.TinctureRateLimit.default_window_ms()
       end
 
-      pipeline :tincture_invoke do
+      # The tincture data routes (`Prima.TinctureWire`): a frame's invoke,
+      # action and stream open, under the per-open frame credential as a
+      # bearer, or a public tincture's page naming itself. No session and no
+      # CSRF token: the bearer is the only credential, and a session cookie
+      # is never consulted. Deliberately NO MCPOrigin: a frame's document is
+      # sandboxed, so its origin is `null`, which only this mount's CORS
+      # answers (`null_origin: true`); the DNS-rebinding class MCPOrigin
+      # defends against needs an ambient credential to steal, and these
+      # routes read none.
+      pipeline :tincture_data do
         plug CyfrWeb.Plugs.CallIdentity, tool: "tincture"
-        plug :accepts, ["json"]
+        plug :accepts, ["json", "event-stream"]
         plug CyfrWeb.Plugs.ApiSecurityHeaders
-        # Deliberately NO MCPOrigin here, unlike /mcp and /api: a public
-        # tincture is embeddable from any origin, so this surface is
-        # cross-origin BY DESIGN (the CORS plug below is its contract). The
-        # DNS-rebinding class MCPOrigin defends against needs an ambient
-        # credential to steal; invoke authenticates per request (Bearer or the
-        # short-lived ?_t= mint) and the public route is credential-less.
-        # POST for invoke, GET for the cross-origin `/t/access-token` mint.
-        plug CyfrWeb.Plugs.CORS, methods: ~w(GET POST)
+        plug CyfrWeb.Plugs.CORS, methods: ~w(POST), null_origin: true
         # Before the rate limiter so a 429 is scrubbed too — it is logged like any
-        # other response, and it never reaches the action that reads the credential.
+        # other response.
         plug CyfrWeb.Plugs.ScrubTinctureCredentials
         # After CORS on purpose: OPTIONS preflights are halted with 204 above and
-        # must never be counted or answered 429 without CORS headers.
+        # must never be counted or answered 429 without CORS headers. A
+        # per-address back-stop under the per-frame limits the controller
+        # holds, answered in the wire's own refusal shape.
         plug CyfrWeb.Plugs.TinctureRateLimit,
           bucket: :invoke,
           max_requests: CyfrWeb.Plugs.TinctureRateLimit.default_invoke_max(),
-          window_ms: CyfrWeb.Plugs.TinctureRateLimit.default_window_ms()
+          window_ms: CyfrWeb.Plugs.TinctureRateLimit.default_window_ms(),
+          errors: CyfrWeb.Ingress.TinctureDataController
       end
 
       pipeline :tincture_asset do
@@ -216,23 +222,28 @@ defmodule CyfrWeb.Ingress.Router do
         end
       end
 
-      scope "/t", CyfrWeb.Ingress do
-        pipe_through :tincture_invoke
-        # Cross-origin token mint: session/Bearer header → short-lived ?_t=.
-        get "/access-token", TinctureController, :access_token,
-          metadata: %{auth: :tincture_handler_auth}
+      # The data routes' paths are `Prima.TinctureWire.routes/0`'s.
+      scope "/_f/v1", CyfrWeb.Ingress do
+        pipe_through :tincture_data
 
-        match :options, "/access-token", TinctureController, :access_token,
-          metadata: %{auth: :tincture_handler_auth}
+        post "/invoke", TinctureDataController, :invoke, metadata: %{auth: :frame_credential}
 
-        post "/:athanor/:publisher/:tincture_name/invoke", TinctureController, :invoke,
-          metadata: %{auth: :tincture_handler_auth}
+        post "/action", TinctureDataController, :system_action,
+          metadata: %{auth: :frame_credential}
 
-        # OPTIONS preflight — CORS plug intercepts and sends 204 before reaching controller.
-        # Required because sandboxed iframes (opaque origin) + POST with JSON content-type
-        # triggers CORS preflight from the browser.
-        match :options, "/:athanor/:publisher/:tincture_name/invoke", TinctureController, :invoke,
-          metadata: %{auth: :tincture_handler_auth}
+        post "/stream", TinctureDataController, :stream, metadata: %{auth: :frame_credential}
+
+        # OPTIONS preflight — the CORS plug answers 204 before the controller.
+        # A sandboxed frame's POST with a JSON body and a bearer is always
+        # preflighted.
+        match :options, "/invoke", TinctureDataController, :invoke,
+          metadata: %{auth: :frame_credential}
+
+        match :options, "/action", TinctureDataController, :system_action,
+          metadata: %{auth: :frame_credential}
+
+        match :options, "/stream", TinctureDataController, :stream,
+          metadata: %{auth: :frame_credential}
       end
 
       scope "/t", CyfrWeb.Ingress do

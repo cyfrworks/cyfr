@@ -42,16 +42,16 @@
           "CyfrWeb.Plugs.ScrubTinctureCredentials",
           "CyfrWeb.Plugs.TinctureRateLimit"
         ],
-        "tincture_asset" => [
-          "CyfrWeb.Plugs.ApiSecurityHeaders",
-          "CyfrWeb.Plugs.ScrubTinctureCredentials",
-          "CyfrWeb.Plugs.TinctureRateLimit"
-        ],
-        "tincture_invoke" => [
+        "tincture_data" => [
           "CyfrWeb.Plugs.CallIdentity",
           ":accepts",
           "CyfrWeb.Plugs.ApiSecurityHeaders",
           "CyfrWeb.Plugs.CORS",
+          "CyfrWeb.Plugs.ScrubTinctureCredentials",
+          "CyfrWeb.Plugs.TinctureRateLimit"
+        ],
+        "tincture_asset" => [
+          "CyfrWeb.Plugs.ApiSecurityHeaders",
           "CyfrWeb.Plugs.ScrubTinctureCredentials",
           "CyfrWeb.Plugs.TinctureRateLimit"
         ],
@@ -65,6 +65,60 @@
         ]
       },
       routes: [
+        %{
+          verb: "OPTIONS",
+          path: "/_f/v1/action",
+          plug: "CyfrWeb.Ingress.TinctureDataController",
+          plug_opts: ":system_action",
+          auth: "frame_credential",
+          live_view: nil,
+          pipe_through: ["tincture_data"]
+        },
+        %{
+          verb: "POST",
+          path: "/_f/v1/action",
+          plug: "CyfrWeb.Ingress.TinctureDataController",
+          plug_opts: ":system_action",
+          auth: "frame_credential",
+          live_view: nil,
+          pipe_through: ["tincture_data"]
+        },
+        %{
+          verb: "OPTIONS",
+          path: "/_f/v1/invoke",
+          plug: "CyfrWeb.Ingress.TinctureDataController",
+          plug_opts: ":invoke",
+          auth: "frame_credential",
+          live_view: nil,
+          pipe_through: ["tincture_data"]
+        },
+        %{
+          verb: "POST",
+          path: "/_f/v1/invoke",
+          plug: "CyfrWeb.Ingress.TinctureDataController",
+          plug_opts: ":invoke",
+          auth: "frame_credential",
+          live_view: nil,
+          pipe_through: ["tincture_data"]
+        },
+        %{
+          verb: "OPTIONS",
+          path: "/_f/v1/stream",
+          plug: "CyfrWeb.Ingress.TinctureDataController",
+          plug_opts: ":stream",
+          auth: "frame_credential",
+          live_view: nil,
+          pipe_through: ["tincture_data"]
+        },
+        %{
+          verb: "POST",
+          path: "/_f/v1/stream",
+          plug: "CyfrWeb.Ingress.TinctureDataController",
+          plug_opts: ":stream",
+          auth: "frame_credential",
+          live_view: nil,
+          pipe_through: ["tincture_data"]
+        },
         %{
           verb: "GET",
           path: "/_s/*path",
@@ -199,42 +253,6 @@
           auth: "tincture_handler_auth",
           live_view: nil,
           pipe_through: ["tincture_asset"]
-        },
-        %{
-          verb: "OPTIONS",
-          path: "/t/:athanor/:publisher/:tincture_name/invoke",
-          plug: "CyfrWeb.Ingress.TinctureController",
-          plug_opts: ":invoke",
-          auth: "tincture_handler_auth",
-          live_view: nil,
-          pipe_through: ["tincture_invoke"]
-        },
-        %{
-          verb: "POST",
-          path: "/t/:athanor/:publisher/:tincture_name/invoke",
-          plug: "CyfrWeb.Ingress.TinctureController",
-          plug_opts: ":invoke",
-          auth: "tincture_handler_auth",
-          live_view: nil,
-          pipe_through: ["tincture_invoke"]
-        },
-        %{
-          verb: "GET",
-          path: "/t/access-token",
-          plug: "CyfrWeb.Ingress.TinctureController",
-          plug_opts: ":access_token",
-          auth: "tincture_handler_auth",
-          live_view: nil,
-          pipe_through: ["tincture_invoke"]
-        },
-        %{
-          verb: "OPTIONS",
-          path: "/t/access-token",
-          plug: "CyfrWeb.Ingress.TinctureController",
-          plug_opts: ":access_token",
-          auth: "tincture_handler_auth",
-          live_view: nil,
-          pipe_through: ["tincture_invoke"]
         }
       ]
     },

@@ -229,18 +229,6 @@ defmodule CyfrWeb.Ingress.TinctureControllerTest do
       end
     end
 
-    test "is not found under a ?_t= token", %{session: session} do
-      minted =
-        build_conn()
-        |> put_req_header("authorization", "Bearer #{session.token}")
-        |> get("/t/access-token?publisher=local&tincture_name=auth-dash")
-        |> json_response(200)
-
-      for path <- ["/t/test/local/auth-dash", "/t/test/local/auth-dash/app.js"] do
-        assert get(build_conn(), path <> "?_t=#{minted["token"]}").status == 404
-      end
-    end
-
     test "the old in-address asset prefix opens nothing", %{session: session} do
       {:ok, ctx} = Sanctum.Caller.establish(session.token)
       {:ok, token} = Sanctum.TinctureAuth.issue_asset_token(ctx, "local", "auth-dash")
@@ -651,95 +639,6 @@ defmodule CyfrWeb.Ingress.TinctureControllerTest do
     end
   end
 
-  # ── Invoke endpoint ──────────────────────────────────────────────
-
-  describe "POST /t/:publisher/:tincture_name/invoke" do
-    test "rejects invoke for nonexistent tincture", %{conn: conn} do
-      conn =
-        conn
-        |> put_req_header("content-type", "application/json")
-        |> post(
-          "/t/test/local/no-such/invoke",
-          Jason.encode!(%{reference: "r:local.echo", input: %{}})
-        )
-
-      body = json_response(conn, 404)
-      assert body["code"] == "not_found"
-    end
-
-    test "rejects invoke with missing reference", %{conn: conn} do
-      conn =
-        conn
-        |> put_req_header("content-type", "application/json")
-        |> post("/t/test/local/pub-dash/invoke", Jason.encode!(%{input: %{}}))
-
-      # The gate casts the declared arguments, and says which is missing.
-      body = json_response(conn, 400)
-      assert body["code"] == "invalid_argument"
-      assert body["message"] == "Missing required field: reference"
-    end
-
-    test "a public tincture's invoke is the public action, named by the URL's address",
-         %{conn: conn} do
-      conn =
-        conn
-        |> put_req_header("content-type", "application/json")
-        |> post(
-          "/t/test/local/pub-dash/invoke",
-          Jason.encode!(%{reference: "reagent:local.echo:1.0.0", input: %{}})
-        )
-
-      # Past the gate's cast: whatever the run answers, the address was the
-      # path's.
-      refute conn.status in [400, 404]
-
-      athanor_id = Sanctum.TestContext.athanor_id()
-
-      assert [row] =
-               Arca.Repo.all(
-                 Ecto.Query.from(l in Arca.Schemas.McpLog,
-                   where: l.tool == "tincture" and l.athanor_id == ^athanor_id
-                 )
-               )
-
-      assert row.action == "invoke_public"
-      assert %{"athanor" => "test", "publisher" => "local"} = Jason.decode!(row.input)
-    end
-
-    test "rejects invoke for private tincture without auth", %{conn: conn} do
-      conn =
-        conn
-        |> put_req_header("content-type", "application/json")
-        |> post(
-          "/t/test/local/auth-dash/invoke",
-          Jason.encode!(%{reference: "r:local.echo", input: %{}})
-        )
-
-      body = json_response(conn, 404)
-      assert body["code"] == "not_found"
-    end
-
-    test "OPTIONS preflight returns 204 with CORS headers", %{conn: conn} do
-      # The configured allowlist is empty (no cross-origin caller); a
-      # deployment that serves a frontend elsewhere names it, and the
-      # wildcard is the widest such answer.
-      original = Application.get_env(:cyfr, :cors_allowed_origins)
-      Application.put_env(:cyfr, :cors_allowed_origins, ["*"])
-      on_exit(fn -> Application.put_env(:cyfr, :cors_allowed_origins, original) end)
-
-      conn =
-        conn
-        |> put_req_header("origin", "null")
-        |> put_req_header("access-control-request-method", "POST")
-        |> put_req_header("access-control-request-headers", "content-type")
-        |> options("/t/test/local/pub-dash/invoke")
-
-      assert conn.status == 204
-      assert get_resp_header(conn, "access-control-allow-origin") == ["*"]
-      assert get_resp_header(conn, "access-control-allow-methods") != []
-    end
-  end
-
   describe "transport rate limiting" do
     setup do
       # Earlier tests in this file already counted requests under the disabled
@@ -775,37 +674,6 @@ defmodule CyfrWeb.Ingress.TinctureControllerTest do
       end
 
       assert get(build_conn(), "/t/test/local/pub-dash/app.js").status == 429
-    end
-
-    test "invoke requests over the limit get 429 before reaching the controller",
-         %{conn: _conn} do
-      # Missing reference → 400 in the controller; keeps the request from
-      # reaching the executor (unavailable in standalone cyfr runs) while
-      # still exercising the limiter, which runs before the controller.
-      post_invoke = fn ->
-        build_conn()
-        |> put_req_header("content-type", "application/json")
-        |> post("/t/test/local/pub-dash/invoke", Jason.encode!(%{input: %{}}))
-      end
-
-      for _ <- 1..2 do
-        assert post_invoke.().status == 400
-      end
-
-      assert post_invoke.().status == 429
-    end
-
-    test "OPTIONS preflights are not counted against the invoke limit", %{conn: _conn} do
-      preflight = fn ->
-        build_conn()
-        |> put_req_header("origin", "null")
-        |> put_req_header("access-control-request-method", "POST")
-        |> options("/t/test/local/pub-dash/invoke")
-      end
-
-      for _ <- 1..5 do
-        assert preflight.().status == 204
-      end
     end
   end
 end

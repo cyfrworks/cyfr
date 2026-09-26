@@ -19,9 +19,9 @@ defmodule PrismWeb.ShellLive do
   declaration through `Compendium`, renders the frame's `sandbox` and
   `allow` attributes from the rules for the capabilities it declares
   (`frame_attributes/2`), and mints the frame's credential
-  (`Sanctum.TinctureAuth.mint_frame_credential/4`), bound to the person,
-  the version's release digest, the grant revision of the tincture's
-  owner profile and a fresh frame id. A private tincture's page is served
+  (`Sanctum.TinctureAuth.mint_frame_credential/5`), bound to the person,
+  the tincture version and its release digest, the grant revision of the
+  tincture's owner profile and a fresh frame id. A private tincture's page is served
   under an asset credential (`Prima.TinctureUrl`'s `/_s/` path), a public
   one's at its `/t/` address; no URL carries the frame credential.
 
@@ -410,7 +410,9 @@ defmodule PrismWeb.ShellLive do
          {:ok, src} <- frame_src(ctx, card, digest),
          {:ok, revision} <- grant_revision(ctx, card),
          frame_id = new_frame_id(),
-         {:ok, minted} <- TinctureAuth.mint_frame_credential(ctx, digest, revision, frame_id) do
+         reference = %{publisher: card.publisher, name: card.name, version: card.version},
+         {:ok, minted} <-
+           TinctureAuth.mint_frame_credential(ctx, reference, digest, revision, frame_id) do
       %{
         id: frame_id,
         tincture_id: card.id,

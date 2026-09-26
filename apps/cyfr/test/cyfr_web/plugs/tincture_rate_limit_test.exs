@@ -34,6 +34,19 @@ defmodule CyfrWeb.Plugs.TinctureRateLimitTest do
     :ok
   end
 
+  defmodule Renderer do
+    @moduledoc false
+    @behaviour CyfrWeb.ErrorRenderer
+
+    @impl true
+    def send(conn, status, reason, _message),
+      do: Plug.Conn.send_resp(conn, status, "rendered #{reason}")
+
+    @impl true
+    def halt(conn, status, reason, message),
+      do: conn |> send(status, reason, message) |> Plug.Conn.halt()
+  end
+
   defp opts(overrides \\ []) do
     [bucket: :test_page, max_requests: 3, window_ms: 60_000]
     |> Keyword.merge(overrides)
@@ -103,7 +116,7 @@ defmodule CyfrWeb.Plugs.TinctureRateLimitTest do
 
     test "routes without tincture segments key as unknown (per-IP)" do
       conn =
-        Plug.Test.conn(:get, "/t/access-token")
+        Plug.Test.conn(:post, "/_f/v1/invoke")
         |> Map.put(:remote_ip, {127, 0, 0, 4})
 
       for _ <- 1..3 do
@@ -111,6 +124,36 @@ defmodule CyfrWeb.Plugs.TinctureRateLimitTest do
       end
 
       assert TinctureRateLimit.call(conn, opts()).halted
+      refute TinctureRateLimit.call(Map.put(conn, :remote_ip, {127, 0, 0, 44}), opts()).halted
+    end
+
+    test "a private version's files key per asset credential, whatever the address" do
+      served = fn credential, ip ->
+        Plug.Test.conn(:get, "/_s/#{credential}/local/dash/1.0.0/app.js")
+        |> Map.put(:remote_ip, ip)
+      end
+
+      mine = String.duplicate("a", 24)
+      theirs = String.duplicate("b", 24)
+
+      for n <- 1..3 do
+        refute TinctureRateLimit.call(served.(mine, {127, 0, 1, n}), opts()).halted
+      end
+
+      # Another address does not refill the credential's budget, and
+      # another credential from the same address has its own.
+      assert TinctureRateLimit.call(served.(mine, {127, 0, 1, 9}), opts()).halted
+      refute TinctureRateLimit.call(served.(theirs, {127, 0, 1, 1}), opts()).halted
+    end
+
+    test "a refusal renders through the pipeline's renderer" do
+      conn = build_conn({127, 0, 0, 7})
+
+      for _ <- 1..3, do: TinctureRateLimit.call(conn, opts(errors: __MODULE__.Renderer))
+
+      result = TinctureRateLimit.call(conn, opts(errors: __MODULE__.Renderer))
+      assert result.halted
+      assert result.resp_body == "rendered rate_limited"
     end
 
     test "config override raises the effective limit" do

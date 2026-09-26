@@ -58,6 +58,9 @@ defmodule Arca.FrameCredentialsTest do
     Map.merge(
       %{
         user_id: "usr_frc",
+        publisher: "acme",
+        name: "dash",
+        version: "1.0.0",
         version_digest: "sha256:" <> String.duplicate("a", 64),
         grant_revision: 3,
         frame_id: "frm_#{System.unique_integer([:positive])}",
@@ -81,6 +84,7 @@ defmodule Arca.FrameCredentialsTest do
       assert "frc_" <> _ = row.id
       assert row.state == "active"
       assert row.athanor_id == actor.athanor_id
+      assert {row.publisher, row.name, row.version} == {"acme", "dash", "1.0.0"}
       assert FrameCredentials.get(actor, row.id) == {:ok, row}
     end
 
@@ -99,6 +103,9 @@ defmodule Arca.FrameCredentialsTest do
 
       assert {:error, {:invalid, %{grant_revision: _}}} =
                FrameCredentials.mint(actor, attrs(%{grant_revision: -1}))
+
+      assert {:error, {:invalid, %{version: _}}} =
+               FrameCredentials.mint(actor, Map.delete(attrs(), :version))
 
       assert Arca.Repo.aggregate(FrameCredential, :count) == 0
     end

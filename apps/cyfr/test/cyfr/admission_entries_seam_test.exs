@@ -69,9 +69,10 @@ defmodule Cyfr.AdmissionEntriesSeamTest do
     {Emissary.Web.Plugs.MCPRequestMetadata, :call} => :missing_protocol_header,
     {CyfrWeb.Plugs.ControlPlaneOwnership, :call} => :slot_lost,
     {CyfrWeb.Ingress.TinctureController, :index} => :tincture_index_unknown,
-    {CyfrWeb.Ingress.TinctureController, :invoke} => :tincture_invoke_unknown,
-    {CyfrWeb.Ingress.TinctureController, :access_token} => :tincture_mint_refused,
     {CyfrWeb.Plugs.TinctureRateLimit, :call} => :tincture_rate_limited,
+    {CyfrWeb.Ingress.TinctureDataController, :invoke} => :tincture_data_invoke_no_frame,
+    {CyfrWeb.Ingress.TinctureDataController, :system_action} => :tincture_data_action_no_frame,
+    {CyfrWeb.Ingress.TinctureDataController, :stream} => :tincture_data_stream_no_frame,
     {CyfrWeb.Ingress.WebhookController, :invoke} => :webhook_archived_athanor,
     {CyfrWeb.Plugs.VerifyWebhookSignature, :call} => :webhook_unsigned,
     {CyfrWeb.Plugs.WebhookIdempotency, :call} => :webhook_missing_idempotency_key,
@@ -304,21 +305,31 @@ defmodule Cyfr.AdmissionEntriesSeamTest do
     {request_id_of(conn), refused(api_class(conn), :none)}
   end
 
-  def tincture_invoke_unknown(conn, _ctx) do
+  # A data request with no frame credential and no public tincture: the
+  # wire's own refusal, whose class the row carries.
+  defp tincture_data_no_frame(conn, kind, fields) do
     conn =
       conn
       |> put_req_header("content-type", "application/json")
-      |> post("/t/test/local/" <> unique("no-such-tincture") <> "/invoke", %{"input" => %{}})
+      |> put_req_header("origin", "null")
+      |> post(Prima.TinctureWire.route(kind), Prima.TinctureWire.request(kind, fields))
 
-    assert conn.status == 404
-    {request_id_of(conn), refused(api_class(conn), :none)}
+    assert conn.status == 401
+
+    assert {:refused, %{class: class, stage: "admission"}} =
+             Prima.TinctureWire.decode_answer(kind, Jason.decode!(conn.resp_body))
+
+    {request_id_of(conn), refused(class, :none)}
   end
 
-  def tincture_mint_refused(conn, _ctx) do
-    # No credential that may mint, and no tincture named: refused either way.
-    conn = get(conn, "/t/access-token")
-    {request_id_of(conn), refused(api_class(conn), :none)}
-  end
+  def tincture_data_invoke_no_frame(conn, _ctx),
+    do: tincture_data_no_frame(conn, :invoke, %{ref: "c:local.echo", operation: "run", args: %{}})
+
+  def tincture_data_action_no_frame(conn, _ctx),
+    do: tincture_data_no_frame(conn, :action, %{operation: "system.status", args: %{}})
+
+  def tincture_data_stream_no_frame(conn, _ctx),
+    do: tincture_data_no_frame(conn, :stream_open, %{stream: "mcp_servers.changes", subject: nil})
 
   def tincture_rate_limited(conn, _ctx) do
     Application.put_env(:cyfr, :tincture_rate_limit_max, 1)

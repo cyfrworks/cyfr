@@ -19,9 +19,17 @@ defmodule CyfrWeb.Plugs.TinctureRateLimit do
         max_requests: 60,
         window_ms: 60_000
 
-  Routes without tincture path params (e.g. `/t/access-token`) key as
-  `{"unknown", "unknown", "unknown"}`, making their limit effectively
-  per-IP.
+  A private tincture version's files (`/_s/<credential>/…`) key per asset
+  credential instead: the credential is the whole of what such a request
+  presents, so one person's version window is one budget whatever address
+  it is fetched from. The key holds the credential's SHA-256, never the
+  credential. Routes without tincture path params (the tincture data
+  routes, `/_f/v1/*`) key as `{"unknown", "unknown", "unknown"}`, making
+  their limit effectively per-IP — a transport back-stop under the
+  per-frame limits the data routes hold themselves.
+
+  `:errors` names the `CyfrWeb.ErrorRenderer` a refusal is rendered with
+  (`CyfrWeb.ApiError` unless the pipeline speaks another wire).
 
   This is a transport back-stop under the policy-level limit: a tincture
   policy's `rate_limit` (when configured) throttles invokes per
@@ -42,6 +50,8 @@ defmodule CyfrWeb.Plugs.TinctureRateLimit do
   # naming THIS plug was the one console→transport back-edge). The HTTP
   # pipeline keys it by IP through this plug; the console shell keys the
   # same budget by person — deliberately separate buckets, one number.
+  @asset_prefix Prima.TinctureUrl.asset_prefix()
+
   @doc "The default per-window invoke budget (both ingress surfaces)."
   defdelegate default_invoke_max, to: Cyfr.RuntimeConfig, as: :tincture_default_invoke_max
 
@@ -63,12 +73,31 @@ defmodule CyfrWeb.Plugs.TinctureRateLimit do
     %{
       bucket: Keyword.fetch!(opts, :bucket),
       max_requests: Keyword.fetch!(opts, :max_requests),
-      window_ms: Keyword.fetch!(opts, :window_ms)
+      window_ms: Keyword.fetch!(opts, :window_ms),
+      errors: Keyword.get(opts, :errors, CyfrWeb.ApiError)
     }
   end
 
-  def call(conn, %{bucket: bucket, max_requests: default_max, window_ms: window_ms}) do
+  def call(conn, %{bucket: bucket, max_requests: default_max, window_ms: window_ms} = opts) do
     max_requests = Application.get_env(:cyfr, :tincture_rate_limit_max) || default_max
+
+    case Prima.RateLimiter.check(key(conn, bucket), max_requests, window_ms) do
+      :ok ->
+        conn
+
+      {:deny, retry_after} ->
+        CyfrWeb.RateLimitRefusal.halt(conn, retry_after, Map.get(opts, :errors, CyfrWeb.ApiError))
+    end
+  end
+
+  # A served private file is its asset credential's; everything else is
+  # its address's, per tincture where the path names one.
+  defp key(%Plug.Conn{path_info: [@asset_prefix, credential | _]}, bucket)
+       when is_binary(credential) do
+    {:rate_limit, bucket, :asset_credential, :crypto.hash(:sha256, credential)}
+  end
+
+  defp key(conn, bucket) do
     ip = Sanctum.ClientIp.resolve(conn)
 
     {athanor, publisher, tincture_name} =
@@ -85,14 +114,6 @@ defmodule CyfrWeb.Plugs.TinctureRateLimit do
           end
       end
 
-    key = {:rate_limit, bucket, ip, athanor, publisher, tincture_name}
-
-    case Prima.RateLimiter.check(key, max_requests, window_ms) do
-      :ok ->
-        conn
-
-      {:deny, retry_after} ->
-        CyfrWeb.RateLimitRefusal.halt(conn, retry_after, CyfrWeb.ApiError)
-    end
+    {:rate_limit, bucket, ip, athanor, publisher, tincture_name}
   end
 end

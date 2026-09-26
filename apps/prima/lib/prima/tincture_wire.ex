@@ -13,21 +13,40 @@ defmodule Prima.TinctureWire do
   (`authorization: Bearer <credential>`, `bearer_header/0`), never in the
   URL or the body:
 
-    * `invoke` — run a component: `ref` (a component reference),
-      `operation` (a name) and `args` (an object);
+    * `invoke` — run a component the tincture declares: `ref` (a
+      component reference), `operation` (a name) and `args` (an object).
+      The component runs with the input
+      `{"operation": <operation>, "params": <args>}`;
     * `action` — run a system action the tincture declares: `operation`
       (`tool.action`) and `args`;
     * `stream_open` — open a stream the tincture declares: `stream` (the
       provider stream's name) and `subject` (a literal, or null for a
       stream that takes none).
 
+  A public tincture's page opened at its address has no frame credential:
+  its requests carry no bearer and name the tincture instead, as
+  `public: {"athanor", "publisher", "name"}` (the athanor's URL segment,
+  the publisher and the name, `public_identity?/1`). The endpoint admits
+  such a request only for a tincture that is public, under its public
+  profile.
+
   A body carries `v`, the wire version; one at no version or another is
-  refused before anything else is read. An answer is `{"v", "ok": true,
-  "result"}` for `invoke` and `action`, `{"v", "ok": true, "stream"}` for
-  `stream_open` (the grant's id, stream, subject, projection and
-  deadline, never its bus topic), and for a refusal `{"v", "ok": false,
-  "error": {"class", "message", "stage"}}`: the projection of a
-  `Prima.Refusal` a frame may read, never its reason term.
+  refused before anything else is read. An answer to `invoke` and
+  `action` is `{"v", "ok": true, "result"}`, and for a refusal
+  `{"v", "ok": false, "error": {"class", "message", "stage"}}`: the
+  projection of a `Prima.Refusal` a frame may read, never its reason
+  term. A refused `stream_open` is answered the same way.
+
+  An admitted `stream_open` is answered as `text/event-stream`
+  (`stream_content_type/0`), one event per delivery under the grant
+  (`stream_event/3`): `id` the payload's sequence number where the topic
+  carries one, `event` the stream's name and `data` the payload projected
+  to the grant's fields, as JSON. The stream ends at the grant's deadline
+  or when the endpoint closes it; one it closes for a reason the frame
+  should know ends with a `refusal` event (`stream_refusal/1`) whose data
+  is the refusal's projection. The grant's bus topic never leaves the
+  server, and a reconnect is a new open. `stream/2` is the grant as a
+  frame may read it, the JSON form the SDK's reader still decodes.
 
   The frame's document is sandboxed without `allow-same-origin`, so its
   origin is `null` and every request is cross-origin to the endpoint.
@@ -41,8 +60,9 @@ defmodule Prima.TinctureWire do
     * `title` — set the frame's title: `args.title`;
     * `ready`, `focus`, `close` — no arguments.
 
-  `tests/fixtures/tincture_wire.json` holds one example of each and one
-  refusal; this module's test and the SDK's JavaScript test both read it.
+  `tests/fixtures/tincture_wire.json` holds one example of each, one
+  public request, one refusal and one event stream; this module's test
+  and the SDK's JavaScript test both read it.
   """
 
   @version 1
@@ -56,7 +76,11 @@ defmodule Prima.TinctureWire do
 
   @verbs ~w(open close title ready focus)a
 
+  @stream_content_type "text/event-stream"
+  @refusal_event "refusal"
+
   @frame_id ~r/\A[A-Za-z0-9_-]{8,64}\z/
+  @athanor_segment ~r/\A@?[a-z0-9]+(-[a-z0-9]+)*\z/
   @component_operation ~r/\A[a-z][a-z0-9_-]{0,62}\z/
   @max_title 120
 
@@ -66,11 +90,24 @@ defmodule Prima.TinctureWire do
   @typedoc "A message the frame sends the shell."
   @type verb :: :open | :close | :title | :ready | :focus
 
-  @typedoc "A decoded request: the kind's fields, atom-keyed."
-  @type request ::
-          %{ref: String.t(), operation: String.t(), args: map()}
-          | %{operation: String.t(), args: map()}
-          | %{stream: String.t(), subject: String.t() | nil}
+  @typedoc "The public tincture a request names in place of a bearer."
+  @type public_identity :: %{athanor: String.t(), publisher: String.t(), name: String.t()}
+
+  @typedoc """
+  A decoded request: the kind's fields, atom-keyed, with `public` only
+  when the body names a public tincture.
+  """
+  @type request :: %{
+          optional(:ref) => String.t(),
+          optional(:operation) => String.t(),
+          optional(:args) => map(),
+          optional(:stream) => String.t(),
+          optional(:subject) => String.t() | nil,
+          optional(:public) => public_identity()
+        }
+
+  @typedoc "One event of a stream, read back: its id, its name and its data."
+  @type stream_event :: %{id: non_neg_integer() | nil, event: String.t(), data: term()}
 
   @typedoc "What a frame may read of a refusal."
   @type refusal_projection :: %{class: String.t(), message: String.t(), stage: String.t()}
@@ -106,6 +143,28 @@ defmodule Prima.TinctureWire do
   @spec frame_id?(term()) :: boolean()
   def frame_id?(id), do: is_binary(id) and Regex.match?(@frame_id, id)
 
+  @doc """
+  Whether `identity` names a public tincture: an athanor URL segment
+  (`@<namespace>` or a group's slug), a publisher and a name, and nothing
+  else.
+  """
+  @spec public_identity?(term()) :: boolean()
+  def public_identity?(%{athanor: athanor, publisher: publisher, name: name} = identity)
+      when map_size(identity) == 3 and is_binary(athanor) do
+    Regex.match?(@athanor_segment, athanor) and
+      Prima.ComponentRef.validate_ref_parts(publisher, name) == :ok
+  end
+
+  def public_identity?(_identity), do: false
+
+  @doc "The content type of an admitted `stream_open`'s answer."
+  @spec stream_content_type() :: String.t()
+  def stream_content_type, do: @stream_content_type
+
+  @doc "The name of the event a stream the endpoint closes with a refusal ends with."
+  @spec refusal_event() :: String.t()
+  def refusal_event, do: @refusal_event
+
   # ---- the bearer ------------------------------------------------------------
 
   @doc "The header value that carries `credential`."
@@ -128,8 +187,18 @@ defmodule Prima.TinctureWire do
 
   # ---- requests --------------------------------------------------------------
 
-  @doc "The JSON body of a `kind` request with `fields` (atom-keyed, as `decode_request/2` answers)."
+  @doc """
+  The JSON body of a `kind` request with `fields` (atom-keyed, as
+  `decode_request/2` answers), naming the public tincture when `fields`
+  carry `public`.
+  """
   @spec request(kind(), map()) :: map()
+  def request(kind, %{public: %{athanor: athanor, publisher: publisher, name: name}} = fields) do
+    kind
+    |> request(Map.delete(fields, :public))
+    |> Map.put("public", %{"athanor" => athanor, "publisher" => publisher, "name" => name})
+  end
+
   def request(:invoke, %{ref: ref, operation: operation, args: args}),
     do: %{"v" => @version, "ref" => ref, "operation" => operation, "args" => args}
 
@@ -141,13 +210,14 @@ defmodule Prima.TinctureWire do
 
   @doc """
   A decoded `kind` request body, or `{:error, sentence}`: a body at no
-  version or another, a missing or malformed field, or a field the kind
-  does not carry.
+  version or another, a missing or malformed field, a field the kind
+  does not carry, or a `public` that names no public tincture.
   """
   @spec decode_request(kind(), term()) :: {:ok, request()} | {:error, String.t()}
   def decode_request(kind, %{"v" => @version} = body) when is_map_key(@routes, kind) do
-    with :ok <- only(body, fields(kind)) do
-      fields(kind, body)
+    with :ok <- only(body, ["public" | fields(kind)]),
+         {:ok, fields} <- fields(kind, body) do
+      public(fields, body)
     end
   end
 
@@ -192,6 +262,23 @@ defmodule Prima.TinctureWire do
     end
   end
 
+  @public_refusal "public must name a public tincture: athanor, publisher and name"
+
+  defp public(fields, %{"public" => %{} = public}) when map_size(public) == 3 do
+    identity = %{
+      athanor: public["athanor"],
+      publisher: public["publisher"],
+      name: public["name"]
+    }
+
+    if public_identity?(identity),
+      do: {:ok, Map.put(fields, :public, identity)},
+      else: {:error, @public_refusal}
+  end
+
+  defp public(_fields, %{"public" => _other}), do: {:error, @public_refusal}
+  defp public(fields, _body), do: {:ok, fields}
+
   defp component_ref(ref) when is_binary(ref) do
     case Prima.ComponentRef.parse(ref) do
       {:ok, _parsed} -> {:ok, ref}
@@ -227,9 +314,9 @@ defmodule Prima.TinctureWire do
   def result(value), do: %{"v" => @version, "ok" => true, "result" => value}
 
   @doc """
-  The answer to a `stream_open` request the gate admitted: the grant as a
-  frame may read it, under the stream name it was opened by. The bus
-  topic stays on the server.
+  A stream grant as a frame may read it, under the stream name it was
+  opened by: the JSON form the SDK's reader decodes for `stream_open`.
+  The bus topic stays on the server.
   """
   @spec stream(Prima.StreamGrant.t(), String.t()) :: map()
   def stream(%Prima.StreamGrant{} = grant, name) when is_binary(name) do
@@ -248,17 +335,93 @@ defmodule Prima.TinctureWire do
 
   @doc "The answer to a request that was refused: the refusal's class, message and stage."
   @spec refusal(Prima.Refusal.t()) :: map()
-  def refusal(%Prima.Refusal{} = refusal) do
+  def refusal(%Prima.Refusal{} = refusal),
+    do: %{"v" => @version, "ok" => false, "error" => projection(refusal)}
+
+  defp projection(%Prima.Refusal{} = refusal) do
     %{
-      "v" => @version,
-      "ok" => false,
-      "error" => %{
-        "class" => Atom.to_string(refusal.class),
-        "message" => refusal.message,
-        "stage" => Atom.to_string(refusal.stage)
-      }
+      "class" => Atom.to_string(refusal.class),
+      "message" => refusal.message,
+      "stage" => Atom.to_string(refusal.stage)
     }
   end
+
+  # ---- the event stream ------------------------------------------------------
+
+  @doc """
+  One event of an admitted stream: `id` the payload's sequence number
+  (nil for a topic that carries none), `event` the stream's name and
+  `data` the projected payload, encoded as JSON on one line.
+  """
+  @spec stream_event(non_neg_integer() | nil, String.t(), term()) :: String.t()
+  def stream_event(id, name, data)
+      when (is_nil(id) or (is_integer(id) and id >= 0)) and is_binary(name) do
+    id_line = if is_nil(id), do: "", else: "id: #{id}\n"
+    id_line <> "event: " <> name <> "\ndata: " <> Jason.encode!(data) <> "\n\n"
+  end
+
+  @doc """
+  The last event of a stream the endpoint closed for a reason the frame
+  should know: `event: refusal`, its data the refusal's class, message
+  and stage.
+  """
+  @spec stream_refusal(Prima.Refusal.t()) :: String.t()
+  def stream_refusal(%Prima.Refusal{} = refusal),
+    do: stream_event(nil, @refusal_event, projection(refusal))
+
+  @doc """
+  The events of a `text/event-stream` body read back, in order: each
+  group of lines ended by a blank line, `id` a number or nil, `event`
+  its name (`"message"` when it names none) and `data` its JSON (data
+  lines joined with a newline). A comment line (`:`) and any other field
+  are skipped, an event not ended by its blank line is incomplete, and an
+  event with no data or data that is not JSON is dropped, as the SDK's
+  reader drops it.
+  """
+  @spec decode_stream(String.t()) :: [stream_event()]
+  def decode_stream(body) when is_binary(body) do
+    body
+    |> String.split(~r/\r\n|\r|\n/)
+    |> Enum.chunk_while(
+      [],
+      fn
+        "", acc -> {:cont, Enum.reverse(acc), []}
+        line, acc -> {:cont, [line | acc]}
+      end,
+      fn _incomplete -> {:cont, []} end
+    )
+    |> Enum.flat_map(&stream_group/1)
+  end
+
+  defp stream_group(lines) do
+    event =
+      Enum.reduce(lines, %{id: nil, event: "message", data: []}, fn line, acc ->
+        case String.split(line, ":", parts: 2) do
+          ["", _comment] -> acc
+          [field, value] -> stream_field(acc, field, String.replace_prefix(value, " ", ""))
+          [field] -> stream_field(acc, field, "")
+        end
+      end)
+
+    with [_ | _] = data <- event.data,
+         {:ok, decoded} <- Jason.decode(data |> Enum.reverse() |> Enum.join("\n")) do
+      [%{id: event.id, event: event.event, data: decoded}]
+    else
+      _ -> []
+    end
+  end
+
+  defp stream_field(acc, "data", value), do: %{acc | data: [value | acc.data]}
+  defp stream_field(acc, "event", value), do: %{acc | event: value}
+
+  defp stream_field(acc, "id", value) do
+    case Integer.parse(value) do
+      {id, ""} when id >= 0 -> %{acc | id: id}
+      _ -> %{acc | id: nil}
+    end
+  end
+
+  defp stream_field(acc, _field, _value), do: acc
 
   @doc """
   An answer read back: `{:ok, result}` for `invoke` and `action`,
