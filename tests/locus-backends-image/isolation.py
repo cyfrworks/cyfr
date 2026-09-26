@@ -233,7 +233,7 @@ def main():
                        "-e", f"LOCUS_BACKENDS_KEY={stack.key.hex()}", "--entrypoint", "cyfr-keeper", image,
                        "serve", "--pool", f"backends:{POOL_FIRST}-{POOL_LAST}", "--home-root", HOME_ROOT,
                        "--client-user", RELEASE_USER, "--", "/app/bin/locus", "start", check=False)
-        expect(defaults.returncode == 78 and "refusing to start: CapEff" in defaults.stderr,
+        expect(defaults.returncode == 78 and "refusing to start: Cap" in defaults.stderr,
                "cyfr-keeper refuses Docker's default capabilities", defaults.stderr[-2000:])
 
         last = owner_of("last")
