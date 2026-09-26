@@ -24,6 +24,9 @@ defmodule CyfrWeb.Plugs.WebhookIdempotency do
       runs the target component.
     * On a duplicate hit → 200 with `{"status": "duplicate", "first_seen_at": "..."}`,
       controller is bypassed entirely (no double-execution of the target).
+    * If the store cannot answer the claim → **503** `unavailable`, and the
+      controller is bypassed. The replay control fails closed: without the
+      claim nothing proves this delivery has not already run.
 
   ## Why 200 on duplicate
 
@@ -129,11 +132,10 @@ defmodule CyfrWeb.Plugs.WebhookIdempotency do
         |> halt()
 
       {:error, _} ->
-        # Database error — let the request proceed rather than 500. The
-        # target component runs, possibly twice. Failing closed would
-        # create a hard outage on temporary DB hiccups. This is a fail-open
-        # in the REPLAY control specifically, so it leaves a structured
-        # trace an operator can alarm on, not just a warn log.
+        # The store could not say whether this delivery already ran, so it
+        # does not run: a replay control that admits on an outage admits
+        # the replay too. 503 is what the sender retries; the telemetry is
+        # the operator's alarm for the outage.
         :telemetry.execute(
           [:cyfr, :emissary, :webhook, :dedup_unavailable],
           %{count: 1},
@@ -141,6 +143,8 @@ defmodule CyfrWeb.Plugs.WebhookIdempotency do
         )
 
         conn
+        |> put_resp_header("retry-after", "5")
+        |> CyfrWeb.ApiError.halt(503, :unavailable, nil)
     end
   end
 
@@ -158,9 +162,9 @@ defmodule CyfrWeb.Plugs.WebhookIdempotency do
 
           {:error, reason} ->
             # The claim outlives a delivery that did not happen, so the
-            # sender's retry will read as a duplicate. Say so where an
-            # operator can alarm on it, the way the dedup-unavailable
-            # fail-open above does.
+            # sender's retry will read as a duplicate until the TTL sweep
+            # clears it, which is the fail-closed side. Say so where an
+            # operator can alarm on it.
             Logger.error(
               "[Webhook] could not release idempotency claim for #{webhook_id}: " <>
                 "#{inspect(reason)} — a retry of this delivery will read as a duplicate"
