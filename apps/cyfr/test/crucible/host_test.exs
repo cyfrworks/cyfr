@@ -823,6 +823,15 @@ defmodule Crucible.HostTest do
     AttemptFixtures.attached!(limits: limits)
   end
 
+  # A pin's host must be in the edge's egress domains.
+  defp vector_fixture("egress_pin") do
+    egress = %{domains: ["*"], methods: [], schemes: [], private_ips: []}
+
+    AttemptFixtures.attached!(
+      authority: %{Prima.Authority.zero() | resources: %Prima.Authority.Blob.Edge{egress: egress}}
+    )
+  end
+
   defp vector_fixture(_op), do: AttemptFixtures.attached!()
 
   # The vector's args, with the attempt and the execution they name bound to

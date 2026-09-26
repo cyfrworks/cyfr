@@ -206,6 +206,89 @@ defmodule Opus.HttpRequestValidationTest do
       assert msg =~ "localhost"
     end
 
+    test "a cross-origin hop goes without every header that carries a credential, in either shape" do
+      # The header vector of tests/fixtures/host_api.json: what a hop to
+      # another origin keeps of its request's headers.
+      vector =
+        Path.expand("../../../../tests/fixtures/host_api.json", __DIR__)
+        |> File.read!()
+        |> Jason.decode!()
+        |> Map.fetch!("egress_policy_cases")
+        |> Enum.find(&(&1["name"] == "redirect_strip_credentials"))
+
+      pairs = fn pairs ->
+        pairs |> Enum.map(fn [name, value] -> {name, value} end) |> Enum.sort()
+      end
+
+      before = pairs.(vector["headers_before"])
+
+      # The headers as an object of names to values, and as the vector's
+      # array of [name, value] pairs.
+      for headers <- [Map.new(before), vector["headers_before"]] do
+        {_host, client, ref} =
+          attached_host(%{
+            "api.example.test" => "203.0.113.10",
+            "static.cdn.example.test" => "203.0.113.12"
+          })
+
+        edge =
+          EdgeFixtures.edge(domains: ["api.example.test", "*.cdn.example.test"], methods: ["GET"])
+
+        start = "https://api.example.test/v1/items"
+
+        request = fn url ->
+          json = encode(%{"url" => url, "headers" => headers})
+          HttpRequestValidation.validate(json, edge, EdgeFixtures.limits(), client, ref)
+        end
+
+        assert {:ok, first} = request.(start)
+        assert Enum.sort(first.headers) == before
+
+        # A hop on the pin's origin keeps them all.
+        same = "https://api.example.test:443/v1/items/3"
+        :ok = Opus.Egress.redirected(client, first.pinned, start, same)
+        assert {:ok, %{headers: kept}} = request.(same)
+        assert Enum.sort(kept) == before
+
+        # A hop to another origin keeps what the vector keeps, `X-API-Key`
+        # and every `-token`, `-key` and `-secret` name dropped with it.
+        other = "https://static.cdn.example.test/v1/items/4"
+        :ok = Opus.Egress.redirected(client, first.pinned, start, other)
+        assert {:ok, %{headers: stripped} = hop} = request.(other)
+        assert Opus.Egress.cross_origin?(hop.pinned)
+        assert Enum.sort(stripped) == pairs.(vector["headers_after"])
+        refute Enum.any?(stripped, fn {name, _value} -> String.downcase(name) == "x-api-key" end)
+      end
+    end
+
+    test "headers in an array are [name, value] pairs, read as the object's are" do
+      assert {:ok, %{headers: [{"Accept", "a"}, {"X-Count", "2"}, {"accept", "b"}]}} =
+               validate(
+                 encode(%{"headers" => [["Accept", "a"], ["X-Count", 2], ["accept", "b"]]}),
+                 localhost_edge(),
+                 EdgeFixtures.limits()
+               )
+
+      for headers <- [
+            [["Authorization"]],
+            [["Authorization", "Bearer a", "extra"]],
+            [%{"Authorization" => "Bearer a"}],
+            ["Authorization: Bearer a"],
+            [[1, "a"]],
+            [["", "a"]],
+            [["X-Nested", ["a"]]],
+            %{"X-Nested" => %{"a" => "b"}}
+          ] do
+        assert {:error, :invalid_request, "Invalid headers: " <> _} =
+                 validate(
+                   encode(%{"headers" => headers}),
+                   localhost_edge(),
+                   EdgeFixtures.limits()
+                 ),
+               inspect(headers)
+      end
+    end
+
     test "rejects an edge-allowed but unsupported HTTP verb as method_blocked" do
       edge = localhost_edge(methods: ["TRACE"])
 

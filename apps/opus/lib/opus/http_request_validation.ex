@@ -22,7 +22,8 @@ defmodule Opus.HttpRequestValidation do
   connection by `Opus.Egress.pin/3`. The engine resolves no name, and
   duplicates neither the address classes nor the pinned transport policy.
   A redirect's next hop to another origin than the pin it came from goes
-  without the guest's `Authorization` and `Cookie` headers.
+  without any header that carries a credential
+  (`Prima.Network.strip_credentials/1`).
 
   `validate/6` returns a validated request map (including the pinned
   address, the pin and the Req method atom) that each handler then
@@ -130,7 +131,7 @@ defmodule Opus.HttpRequestValidation do
   # credentials: they were meant for the origin that redirected.
   defp hop_headers(request, pinned) do
     if Opus.Egress.cross_origin?(pinned),
-      do: %{request | headers: Opus.Egress.strip_credentials(request.headers)},
+      do: %{request | headers: Prima.Network.strip_credentials(request.headers)},
       else: request
   end
 
@@ -204,28 +205,31 @@ defmodule Opus.HttpRequestValidation do
         uri = URI.parse(url)
         hostname = uri.host
 
-        if is_nil(hostname) or hostname == "" do
-          {:error, :invalid_request, "Invalid URL: missing hostname"}
-        else
-          multipart = parse_multipart(req["multipart"])
-          body = req["body"] || ""
+        multipart = parse_multipart(req["multipart"])
+        body = req["body"] || ""
+
+        cond do
+          is_nil(hostname) or hostname == "" ->
+            {:error, :invalid_request, "Invalid URL: missing hostname"}
 
           # Body and multipart are mutually exclusive
-          if multipart != nil and body != "" do
+          multipart != nil and body != "" ->
             {:error, :invalid_request, "Request cannot have both 'body' and 'multipart'"}
-          else
-            {:ok,
-             %{
-               method: String.upcase(method),
-               url: url,
-               hostname: hostname,
-               headers: parse_headers(req["headers"]),
-               body: body,
-               body_encoding: req["body_encoding"],
-               response_encoding: req["response_encoding"],
-               multipart: multipart
-             }}
-          end
+
+          true ->
+            with {:ok, headers} <- parse_headers(req["headers"]) do
+              {:ok,
+               %{
+                 method: String.upcase(method),
+                 url: url,
+                 hostname: hostname,
+                 headers: headers,
+                 body: body,
+                 body_encoding: req["body_encoding"],
+                 response_encoding: req["response_encoding"],
+                 multipart: multipart
+               }}
+            end
         end
 
       {:ok, _} ->
@@ -236,14 +240,47 @@ defmodule Opus.HttpRequestValidation do
     end
   end
 
-  defp parse_headers(nil), do: []
+  # Headers are an object of names to values or an array of `[name, value]`
+  # pairs, each read into a `{name, value}` pair, the one shape every later
+  # check — the request size, the credential strip of a cross-origin hop —
+  # reads. An array holding anything else, or a value that is not a
+  # scalar, is refused rather than passed on unread.
+  defp parse_headers(nil), do: {:ok, []}
 
-  defp parse_headers(headers) when is_map(headers) do
-    Enum.map(headers, fn {k, v} -> {to_string(k), to_string(v)} end)
+  defp parse_headers(headers) when is_map(headers),
+    do: headers |> Enum.map(fn {name, value} -> [name, value] end) |> parse_header_pairs()
+
+  defp parse_headers(headers) when is_list(headers), do: parse_header_pairs(headers)
+  defp parse_headers(_), do: {:ok, []}
+
+  defp parse_header_pairs(pairs) do
+    Enum.reduce_while(pairs, {:ok, []}, fn
+      [name, value], {:ok, acc} when is_binary(name) and name != "" ->
+        case header_value(value) do
+          {:ok, value} -> {:cont, {:ok, [{name, value} | acc]}}
+          :error -> {:halt, invalid_headers()}
+        end
+
+      _other, _acc ->
+        {:halt, invalid_headers()}
+    end)
+    |> case do
+      {:ok, pairs} -> {:ok, Enum.reverse(pairs)}
+      refused -> refused
+    end
   end
 
-  defp parse_headers(headers) when is_list(headers), do: headers
-  defp parse_headers(_), do: []
+  defp header_value(value) when is_binary(value), do: {:ok, value}
+
+  defp header_value(value) when is_number(value) or is_boolean(value) or is_nil(value),
+    do: {:ok, to_string(value)}
+
+  defp header_value(_value), do: :error
+
+  defp invalid_headers,
+    do:
+      {:error, :invalid_request,
+       "Invalid headers: an object of names to values, or an array of [name, value] pairs"}
 
   defp parse_multipart(nil), do: nil
   defp parse_multipart(parts) when is_list(parts), do: parts

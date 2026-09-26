@@ -480,6 +480,28 @@ defmodule Emissary.External.ProviderTest do
     end
   end
 
+  describe "handle/3 - create refuses a literal credential" do
+    test "in every header Prima names a credential carrier, in any case", %{ctx: ctx} do
+      names = Prima.Network.credential_headers() ++ ["X-API-Key", "Cookie", "X-Client-Secret"]
+
+      for name <- names do
+        assert {:error, reason} =
+                 Provider.handle("mcp_servers", ctx, %{
+                   "action" => "create",
+                   "name" => "hdr-literal",
+                   "config" => %{
+                     "url" => "https://localhost:99999/mcp",
+                     "headers" => %{name => "literal-credential"}
+                   }
+                 }),
+               name
+
+        assert inspect(reason) =~ "looks like a credential", name
+        refute inspect(reason) =~ "literal-credential"
+      end
+    end
+  end
+
   describe "handle/3 - a disabled server" do
     test "is neither tested nor refreshed by name, and a refresh of all skips it", %{ctx: ctx} do
       {:ok, _} =

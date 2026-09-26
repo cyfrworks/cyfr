@@ -23,8 +23,9 @@ defmodule Opus.HttpHandler do
   - **Size Enforcement**: Request and response bodies validated against node limits
   - **Redirects**: `redirect: false`; a guest that follows a redirect makes
     its next hop as a request of its own, pinned from the pin the redirect
-    came from, and a hop to another origin goes without the guest's
-    `Authorization` and `Cookie` headers
+    came from, and CYFR refuses a hop to another origin; were one pinned,
+    it would go without any header that carries a credential
+    (`Prima.Network.strip_credentials/1`)
 
   ## Architecture
 

@@ -123,11 +123,47 @@ defmodule Opus.EdgeGuardTest do
       assert {:error, _} = EdgeGuard.check_domain(e, "example.com")
     end
 
-    test "\"*\" allows any host" do
+    test "host and pattern match case-folded, one trailing dot aside" do
+      e =
+        egress_edge(%{
+          domains: ["API.example.com", "*.Example.ORG."],
+          methods: [],
+          schemes: [],
+          private_ips: []
+        })
+
+      assert :ok = EdgeGuard.check_domain(e, "api.EXAMPLE.com")
+      assert :ok = EdgeGuard.check_domain(e, "api.example.com.")
+      assert :ok = EdgeGuard.check_domain(e, "a.b.example.org")
+      assert {:error, _} = EdgeGuard.check_domain(e, "example.org")
+    end
+
+    test "\"*\" allows any host, and no empty one" do
       e = egress_edge(%{domains: ["*"], methods: [], schemes: [], private_ips: []})
 
       assert :ok = EdgeGuard.check_domain(e, "example.com")
       assert :ok = EdgeGuard.check_domain(e, "169.254.169.254")
+      assert {:error, _} = EdgeGuard.check_domain(e, "")
+    end
+
+    test "\"*.\" matches no host" do
+      e = egress_edge(%{domains: ["*."], methods: [], schemes: [], private_ips: []})
+
+      for host <- ["example.com", "a.b", "."] do
+        assert {:error, _} = EdgeGuard.check_domain(e, host), host
+      end
+    end
+
+    test "matches exactly as the pin CYFR answers does" do
+      patterns = ["api.example.com", "*.example.org", "2001:db8::20"]
+      e = egress_edge(%{domains: patterns, methods: [], schemes: [], private_ips: []})
+
+      for host <-
+            ~w(api.example.com API.example.com a.example.org example.org 2001:db8::20 2001:0db8::20 other.test) do
+        assert EdgeGuard.check_domain(e, host) == :ok ==
+                 Prima.Network.domain_allowed?(host, patterns),
+               host
+      end
     end
 
     test "the denial names the domain and the allowlist" do
