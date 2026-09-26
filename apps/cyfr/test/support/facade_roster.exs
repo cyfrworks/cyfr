@@ -20,7 +20,12 @@
     "Sanctum.ToolGrants",
     "Sanctum.Webhook"
   ],
-  "Grimoire" => ["Grimoire.Proxy", "Grimoire.RequestLog", "Grimoire.RunningTasks"],
+  "Grimoire" => [
+    "Grimoire.Proxy",
+    "Grimoire.RequestLog",
+    "Grimoire.RunningTasks",
+    "Grimoire.VirtualTools"
+  ],
   "Compendium" => ["Compendium.Providers.Component"],
   "Crucible" => [],
   "Aqua" => ["Aqua.Text"]

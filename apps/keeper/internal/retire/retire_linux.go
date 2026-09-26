@@ -20,7 +20,7 @@ import (
 )
 
 // SpecFD is the read end of the spec pipe; 0-2 are /dev/null, /dev/null and
-// the spawner's stderr.
+// the keeper's stderr.
 const SpecFD = 3
 
 const (

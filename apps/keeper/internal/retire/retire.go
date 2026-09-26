@@ -8,7 +8,7 @@
 // owns or created and its POSIX message queues, and then each path of its
 // spec (package residue). Signalling with pid -1 as the uid itself reaches
 // exactly that uid's processes, including daemons that left the spawn's
-// session, without the spawner naming a pid that could be reused.
+// session, without the keeper naming a pid that could be reused.
 package retire
 
 import (
@@ -37,7 +37,7 @@ const (
 // MaxSpecBytes bounds the spec a retire process reads.
 const MaxSpecBytes = 1 << 20
 
-// Spec is what the spawner hands a retire process over its spec pipe: the
+// Spec is what the keeper hands a retire process over its spec pipe: the
 // uid, the grace its processes get after SIGTERM, and the entries it owns
 // that are to be removed, each lying below a writable mount.
 type Spec struct {

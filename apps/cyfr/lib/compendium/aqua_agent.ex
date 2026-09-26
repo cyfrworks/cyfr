@@ -45,7 +45,7 @@ defmodule Compendium.AquaAgent do
   """
 
   alias Compendium.AquaPath
-  alias Prima.VirtualTools
+  alias Grimoire.VirtualTools
   alias Sanctum.Context
 
   @type t :: %{
@@ -318,9 +318,9 @@ defmodule Compendium.AquaAgent do
   written past this door reaches the guest already demoted.
 
   An action's kind is the gate's classification (`Grimoire.tool_kind/2`:
-  a virtual hand's from `Prima.VirtualTools`, `:external` for a
+  a virtual hand's from `Grimoire.VirtualTools`, `:external` for a
   `server:tool`, else the catalogued tool's annotation); only a kind
-  `Prima.VirtualTools.auto_permitted_kind?/1` admits may be `auto`, and an
+  `Grimoire.VirtualTools.auto_permitted_kind?/1` admits may be `auto`, and an
   action whose kind is unknown is left to that ceiling.
 
   `:ok`, a typed grammar refusal, or `{:error, sentence}` — the sentence

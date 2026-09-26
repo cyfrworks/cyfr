@@ -17,7 +17,10 @@ defmodule Grimoire do
   its own — a webhook, a schedule's fire — records its decision through
   `open_decision/3` and `close_decision/3`. `Grimoire.Catalog` is the
   implementation: outside Grimoire only the composition root names it, to
-  load its table and install it as consent's port.
+  load its table and install it as consent's port. `Grimoire.VirtualTools`
+  declares the assistant's virtual tools, dispatched inside a formula
+  rather than through the table; the gate classifies them from it, and
+  Aqua and Compendium read it.
   """
 
   use Boundary,
@@ -28,7 +31,8 @@ defmodule Grimoire do
       Proxy,
       RequestLog,
       RunningTasks,
-      Supervisor
+      Supervisor,
+      VirtualTools
     ],
     check: [aliases: true]
 

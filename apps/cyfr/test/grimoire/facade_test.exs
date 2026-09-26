@@ -96,11 +96,13 @@ defmodule Grimoire.FacadeTest do
   end
 
   describe "the tool classification" do
-    test "a virtual hand answers from Prima.VirtualTools" do
-      assert Grimoire.tool_kind("files", "read") == Prima.VirtualTools.kind_for("files", "read")
+    test "a virtual hand answers from Grimoire.VirtualTools" do
+      assert Grimoire.tool_kind("files", "read") ==
+               Grimoire.VirtualTools.kind_for("files", "read")
+
       assert Grimoire.tool_kind("files", "read") == :read
       assert Grimoire.tool_kind("files", "delete") == :destructive
-      assert Grimoire.tool_actions("files") == Prima.VirtualTools.actions_of("files")
+      assert Grimoire.tool_actions("files") == Grimoire.VirtualTools.actions_of("files")
       assert Grimoire.tool_actions("files") != []
     end
 

@@ -26,7 +26,7 @@ import (
 // Path is the PATH every spawned process receives.
 const Path = "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
 
-// Spec is what the spawner hands a stage process over its spec pipe.
+// Spec is what the keeper hands a stage process over its spec pipe.
 type Spec struct {
 	UID      int               `json:"uid"`
 	GID      int               `json:"gid"`
@@ -36,17 +36,17 @@ type Spec struct {
 	Argv     []string          `json:"argv"`
 	Env      map[string]string `json:"env"`
 	Limits   protocol.Limits   `json:"limits"`
-	// Control says the spawner handed the control channel's socket on
+	// Control says the keeper handed the control channel's socket on
 	// ControlFD, to become the command's fd 3.
 	Control bool `json:"control"`
-	// Cgroup is the memory-bounded group the spawner moved this process
+	// Cgroup is the memory-bounded group the keeper moved this process
 	// into before it sent the spec, as /proc/self/cgroup names it; empty
 	// for a spawn without a bound. The stage executes the command only
 	// from inside it.
 	Cgroup string `json:"cgroup"`
 }
 
-// Validate checks the spec independently of the spawner: a non-root uid
+// Validate checks the spec independently of the keeper: a non-root uid
 // and gid, a user name, a home named for the uid under the home root, a
 // valid command, and limits within the ceilings.
 func (s Spec) Validate() error {

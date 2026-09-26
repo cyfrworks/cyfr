@@ -35,7 +35,7 @@ import (
 )
 
 // TestMain lets the test binary stand in for cyfr-keeper's helpers, which
-// the spawner under test starts as `<self> stage`, `<self> relay` and
+// the keeper under test starts as `<self> stage`, `<self> relay` and
 // `<self> retire`, dispatched as main.go dispatches them. `<self> hold` is
 // the memory tests' command.
 func TestMain(m *testing.M) {
@@ -220,7 +220,7 @@ func newKeeper(t *testing.T) *keeper {
 	return k
 }
 
-// reply reads the next line the spawner sent on the channel.
+// reply reads the next line the keeper sent on the channel.
 func (k *keeper) reply(t *testing.T) map[string]any {
 	t.Helper()
 	line, tooLong, err := k.channel.Next()
@@ -340,12 +340,37 @@ func (rc *relayConn) send(t *testing.T, stream byte, payload []byte) {
 	}
 }
 
+// An undeclared KEEPER_ variable stops `serve` before it looks at its
+// privileges, so the refusal names the variable whoever runs the test.
+func TestServeRefusesAnUndeclaredKeeperVariableNamingIt(t *testing.T) {
+	t.Setenv("KEEPER_POOL", "build:30001-30016")
+	logFile, err := os.CreateTemp(t.TempDir(), "stderr")
+	if err != nil {
+		t.Fatal(err)
+	}
+	stderr := os.Stderr
+	os.Stderr = logFile
+	code := Main(strings.Fields("--pool build:30001-30016 --home-root /var/lib/locus/homes --client-user locus -- /app/bin/locus start"))
+	os.Stderr = stderr
+
+	logged, err := os.ReadFile(logFile.Name())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if code != ExitConfig || !strings.Contains(string(logged), "refusing to start: KEEPER_POOL: not a variable cyfr-keeper reads") {
+		t.Fatalf("exit %d, logged %q", code, logged)
+	}
+	if strings.Contains(string(logged), "30001") {
+		t.Fatalf("the refusal carries the variable's value: %q", logged)
+	}
+}
+
 func TestRunnerLifecycleUnderAPooledUID(t *testing.T) {
 	k := newKeeper(t)
 	t.Setenv("SPAWN_TEST_CANARY", "leaked")
 
 	// A runner: its control channel is fd 3, its environment is the
-	// request's and nothing of the spawner's, and closing fd 3 ends the
+	// request's and nothing of the keeper's, and closing fd 3 ends the
 	// control stream while the process lives.
 	script := `if [ -e /proc/self/fd/3 ]; then echo fd3:open; else echo fd3:closed; fi
 env
@@ -376,7 +401,7 @@ sleep 60`
 		}
 	}
 	if strings.Contains(stdout, "SPAWN_TEST_CANARY") {
-		t.Fatalf("the spawner's environment reached the runner:\n%s", stdout)
+		t.Fatalf("the keeper's environment reached the runner:\n%s", stdout)
 	}
 	if c, err := procfs.ScanUID("/proc", uid, 0); err != nil || c.Live == 0 {
 		t.Fatalf("no live process under uid %d: %+v %v", uid, c, err)
@@ -399,7 +424,7 @@ sleep 60`
 	}
 	assertRetired(t, k, uid)
 
-	// Releasing it again names a spawn the spawner no longer holds.
+	// Releasing it again names a spawn the keeper no longer holds.
 	k.release(t, spawnID)
 	if again := k.reply(t); again["type"] != protocol.TypeError || again["code"] != protocol.CodeUnknownSpawn || again["spawn_id"] != spawnID {
 		t.Fatalf("second release: %v", again)

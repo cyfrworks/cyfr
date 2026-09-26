@@ -90,12 +90,12 @@ func TestDelegateSaysWhyBoundsAreUnavailable(t *testing.T) {
 		files map[string]string
 		want  string
 	}{
-		"a spawner outside a namespace root": {"0::/docker/0123abcd\n", delegated(), "not the root of a cgroup namespace"},
-		"a cgroup v1 host":                   {"12:memory:/docker/0123abcd\n0::/\n", delegated(), "cgroup v2"},
-		"no cgroup v2 mount":                 {"0::/\n", without("cgroup.controllers"), "not a cgroup v2 mount"},
-		"no memory controller":               {"0::/\n", noMemory, "memory controller is not enabled"},
-		"the machine's root cgroup":          {"0::/\n", without("memory.max"), "not a delegated cgroup"},
-		"processes that do not move":         {"0::/\n", stuck, "processes remain"},
+		"a keeper outside a namespace root": {"0::/docker/0123abcd\n", delegated(), "not the root of a cgroup namespace"},
+		"a cgroup v1 host":                  {"12:memory:/docker/0123abcd\n0::/\n", delegated(), "cgroup v2"},
+		"no cgroup v2 mount":                {"0::/\n", without("cgroup.controllers"), "not a cgroup v2 mount"},
+		"no memory controller":              {"0::/\n", noMemory, "memory controller is not enabled"},
+		"the machine's root cgroup":         {"0::/\n", without("memory.max"), "not a delegated cgroup"},
+		"processes that do not move":        {"0::/\n", stuck, "processes remain"},
 	} {
 		m, err := Delegate(namespaceRoot(t, c.files), []byte(c.self))
 		if err == nil || m != nil || !strings.Contains(err.Error(), c.want) {

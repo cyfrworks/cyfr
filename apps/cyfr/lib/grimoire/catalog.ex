@@ -85,9 +85,11 @@ defmodule Grimoire.Catalog do
 
   A provider that cannot load, or does not export `tools/0`, refuses the
   boot: every consent shape is digested against the table, and a partial
-  table would read as the whole. A run without the sibling applications
-  (one application's tests) says so with `:tool_providers_lenient`, and
-  each such provider is skipped with its reason logged. An action the
+  table would read as the whole. Under test only, a run without the
+  sibling applications (one application's tests) says so with
+  `:tool_providers_lenient`, and each such provider is skipped with its
+  reason logged; a build for any other environment compiles neither that
+  setting's read nor `with_providers/2`. An action the
   gates cannot classify, a handler input the gate cannot honour, and a
   resource read the gate cannot name refuse the boot the same way.
   """
@@ -98,67 +100,83 @@ defmodule Grimoire.Catalog do
     |> install!()
   end
 
-  @doc false
-  # The table for a block, then the table as it was. A test that plants a
-  # probe provider runs it through here, synchronously (`async: false`):
-  # the planted providers join the configured roster, pass the same audits
-  # as a booted provider, and are gone when the block returns, however it
-  # returns.
-  @spec with_providers([module()], (-> result)) :: result when result: term()
-  def with_providers(providers, fun) when is_list(providers) and is_function(fun, 0) do
-    for provider <- providers, not loadable?(provider) do
-      raise ArgumentError,
-            "#{inspect(provider)} is not a provider: it does not export tools/0"
+  # The test seams: a planted provider and a lenient roster. Both are
+  # compiled into the test build alone, so no setting of a release can
+  # narrow its table or skip a provider it cannot load.
+  if Mix.env() == :test do
+    @doc false
+    # The table for a block, then the table as it was. A test that plants a
+    # probe provider runs it through here, synchronously (`async: false`):
+    # the planted providers join the configured roster, pass the same audits
+    # as a booted provider, and are gone when the block returns, however it
+    # returns.
+    @spec with_providers([module()], (-> result)) :: result when result: term()
+    def with_providers(providers, fun) when is_list(providers) and is_function(fun, 0) do
+      for provider <- providers, not loadable?(provider) do
+        raise ArgumentError,
+              "#{inspect(provider)} is not a provider: it does not export tools/0"
+      end
+
+      saved =
+        {:persistent_term.get(@operations), :persistent_term.get(@tool_list),
+         Grimoire.Resources.table()}
+
+      try do
+        configured_providers()
+        |> loadable_roster!()
+        |> Enum.concat(providers)
+        |> Enum.uniq()
+        |> install!()
+
+        fun.()
+      after
+        {operations, tool_list, resources} = saved
+        :persistent_term.put(@operations, operations)
+        :persistent_term.put(@tool_list, tool_list)
+        Grimoire.Resources.put(resources)
+      end
     end
 
-    saved =
-      {:persistent_term.get(@operations), :persistent_term.get(@tool_list),
-       Grimoire.Resources.table()}
+    # The roster without the configured providers that cannot load: a
+    # refusal, or — leniently — each skipped with its reason.
+    @spec without_unloadable!([module()], [module()]) :: [module()]
+    defp without_unloadable!(configured, missing) do
+      unless Application.get_env(:cyfr, :tool_providers_lenient, false),
+        do: refuse_unloadable!(missing)
 
-    try do
-      configured_providers()
-      |> loadable_roster!()
-      |> Enum.concat(providers)
-      |> Enum.uniq()
-      |> install!()
+      for module <- missing do
+        Logger.warning(
+          "[Grimoire.Catalog] tool provider #{inspect(module)} skipped (lenient): " <>
+            unloadable_reason(module)
+        )
+      end
 
-      fun.()
-    after
-      {operations, tool_list, resources} = saved
-      :persistent_term.put(@operations, operations)
-      :persistent_term.put(@tool_list, tool_list)
-      Grimoire.Resources.put(resources)
+      configured -- missing
     end
+
+    defp unloadable_reason(module) do
+      if Code.ensure_loaded?(module),
+        do: "it does not export tools/0",
+        else: "the module is not available"
+    end
+  else
+    @spec without_unloadable!([module()], [module()]) :: no_return()
+    defp without_unloadable!(_configured, missing), do: refuse_unloadable!(missing)
   end
 
-  # The configured providers this boot can load. One that cannot is a
-  # refusal, or — leniently — a skip with its reason.
+  # The configured providers this boot can load. One that cannot refuses
+  # the boot, the test build's lenient skip aside.
   defp loadable_roster!(configured) do
     case Enum.reject(configured, &loadable?/1) do
-      [] ->
-        configured
-
-      missing ->
-        unless Application.get_env(:cyfr, :tool_providers_lenient, false) do
-          raise "configured tool providers failed to load: #{inspect(missing)} — " <>
-                  "a catalog missing a provider narrows every consent digest; refusing to boot"
-        end
-
-        for module <- missing do
-          Logger.warning(
-            "[Grimoire.Catalog] tool provider #{inspect(module)} skipped (lenient): " <>
-              unloadable_reason(module)
-          )
-        end
-
-        configured -- missing
+      [] -> configured
+      missing -> without_unloadable!(configured, missing)
     end
   end
 
-  defp unloadable_reason(module) do
-    if Code.ensure_loaded?(module),
-      do: "it does not export tools/0",
-      else: "the module is not available"
+  @spec refuse_unloadable!([module()]) :: no_return()
+  defp refuse_unloadable!(missing) do
+    raise "configured tool providers failed to load: #{inspect(missing)} — " <>
+            "a catalog missing a provider narrows every consent digest; refusing to boot"
   end
 
   defp install!(providers) do
@@ -312,7 +330,7 @@ defmodule Grimoire.Catalog do
 
   @doc """
   What `tool.action` is, for every caller that classifies an action: a
-  virtual hand's kind from `Prima.VirtualTools`; `:external` for an
+  virtual hand's kind from `Grimoire.VirtualTools`; `:external` for an
   upstream `server:tool`, which is namespaced and enumerates no verbs,
   whatever the action; otherwise the catalogued tool's declared kind. No
   default: an unknown tool or an undeclared action is nil, a visible gap.
@@ -320,7 +338,7 @@ defmodule Grimoire.Catalog do
   @spec tool_kind(String.t(), String.t()) :: atom() | nil
   def tool_kind(tool, action) when is_binary(tool) and is_binary(action) do
     cond do
-      kind = Prima.VirtualTools.kind_for(tool, action) ->
+      kind = Grimoire.VirtualTools.kind_for(tool, action) ->
         kind
 
       String.contains?(tool, ":") ->
@@ -337,14 +355,14 @@ defmodule Grimoire.Catalog do
   def tool_kind(_tool, _action), do: nil
 
   @doc """
-  The action verbs a tool has — a virtual hand's from `Prima.VirtualTools`,
+  The action verbs a tool has — a virtual hand's from `Grimoire.VirtualTools`,
   a catalogued tool's `action` enum in declared order — and `[]` for a
   tool neither holds. What a `tool.*` glob stands for.
   """
   @spec tool_actions(String.t()) :: [String.t()]
   def tool_actions(tool) when is_binary(tool) do
-    if Prima.VirtualTools.tool?(tool) do
-      Prima.VirtualTools.actions_of(tool)
+    if Grimoire.VirtualTools.tool?(tool) do
+      Grimoire.VirtualTools.actions_of(tool)
     else
       with {:ok, tool_def} <- get_tool(tool),
            verbs when is_list(verbs) <-

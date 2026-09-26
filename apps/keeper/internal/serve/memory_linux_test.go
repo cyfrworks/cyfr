@@ -22,7 +22,7 @@ import (
 )
 
 // boundedKeeper is a keeper that enforces memory bounds. Beyond root it
-// needs what the shipped services give the spawner: a cgroup namespace whose
+// needs what the shipped services give the keeper: a cgroup namespace whose
 // root is mounted writable (`docker run --security-opt writable-cgroups=true`).
 func boundedKeeper(t *testing.T) *keeper {
 	t.Helper()

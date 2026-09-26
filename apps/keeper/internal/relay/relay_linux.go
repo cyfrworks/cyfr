@@ -18,7 +18,7 @@ import (
 )
 
 // File descriptors of a relay process; 0-2 are /dev/null, /dev/null and
-// the spawner's stderr. ControlFD is present only when the spec says so.
+// the keeper's stderr. ControlFD is present only when the spec says so.
 const (
 	SpecFD    = 3
 	StdinFD   = 4

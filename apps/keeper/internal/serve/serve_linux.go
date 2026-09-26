@@ -44,7 +44,7 @@ const (
 	ExitLost = 70
 	// ExitStart reports that the client could not be started.
 	ExitStart = 71
-	// ExitConfig reports a privilege or environment the spawner refuses.
+	// ExitConfig reports a privilege or environment the keeper refuses.
 	ExitConfig = 78
 )
 
@@ -75,6 +75,10 @@ func Main(args []string) int {
 		log.Error("%v; usage: %s", err, Usage)
 		return ExitUsage
 	}
+	if err := CheckEnviron(os.Environ()); err != nil {
+		log.Error("refusing to start: %v", err)
+		return ExitConfig
+	}
 
 	raw, err := os.ReadFile("/proc/self/status")
 	if err != nil {
@@ -86,7 +90,7 @@ func Main(args []string) int {
 		log.Error("%v", err)
 		return ExitConfig
 	}
-	if err := procfs.CheckSpawnerCaps(st); err != nil {
+	if err := procfs.CheckKeeperCaps(st); err != nil {
 		log.Error("refusing to start: %v", err)
 		return ExitConfig
 	}
@@ -142,7 +146,7 @@ func Main(args []string) int {
 	return s.run()
 }
 
-// delegateMemory prepares the spawner's cgroup for memory-bounded spawns, or
+// delegateMemory prepares the keeper's cgroup for memory-bounded spawns, or
 // reports why a spawn asking for a bound will be refused here.
 func delegateMemory(log *logx.Logger) *cgroup.Manager {
 	self, err := os.ReadFile(cgroup.SelfPath)
@@ -159,7 +163,7 @@ func delegateMemory(log *logx.Logger) *cgroup.Manager {
 	return m
 }
 
-// child is a process this spawner started and will reap.
+// child is a process this keeper started and will reap.
 type child struct {
 	pid    int
 	done   chan struct{}
@@ -203,7 +207,7 @@ type server struct {
 	// leave something behind in.
 	roots residue.Roots
 	// memory makes the cgroups of memory-bounded spawns; nil where the
-	// spawner cannot, and a spawn asking for a bound is refused.
+	// keeper cannot, and a spawn asking for a bound is refused.
 	memory *cgroup.Manager
 
 	// mu guards pools, spawns and waiters, and is held across every fork,
@@ -344,7 +348,7 @@ func (s *server) reap() {
 }
 
 // start forks and executes a process in a session of its own as uid and
-// gid with no supplementary groups, killed if this spawner dies.
+// gid with no supplementary groups, killed if this keeper dies.
 func (s *server) start(argv0 string, argv, env []string, files []uintptr, uid, gid int, dir string) (*child, error) {
 	attr := &syscall.ProcAttr{
 		Dir:   dir,
@@ -589,7 +593,7 @@ func (s *server) launch(sp *spawn, req *protocol.Request) (string, error) {
 	}
 	// The control channel is one socketpair: commandCtl becomes the
 	// command's fd 3 (stage.ControlFD to the stage), relayCtl the relay's
-	// relay.ControlFD. The spawner keeps neither end.
+	// relay.ControlFD. The keeper keeps neither end.
 	var commandCtl, relayCtl *os.File
 	if req.Control {
 		fds, err := unix.Socketpair(unix.AF_UNIX, unix.SOCK_STREAM|unix.SOCK_CLOEXEC, 0)
@@ -793,7 +797,7 @@ func (s *server) retire(sp *spawn, grace time.Duration, notify bool) {
 
 // scrub retires a uid until nothing of it remains: `cyfr-keeper retire` ends
 // its processes and removes its IPC objects, its message queues and the
-// given paths; then the spawner looks for anything else the uid owns on the
+// given paths; then the keeper looks for anything else the uid owns on the
 // writable mounts and retires it again with what it found. It reports
 // whether the uid is clean.
 func (s *server) scrub(acct Account, grace time.Duration, paths []string) bool {

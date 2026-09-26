@@ -78,6 +78,11 @@ BOUNDS = WIRE["bounds"]
 WINDOW_MS = WIRE["window_ms"]
 
 
+def pool_user(uid):
+    """The name the image gives a backend uid: uid 20000+N is locus-backendNN (Dockerfile.locus)."""
+    return f"locus-backend{uid - 20000:02d}"
+
+
 def run(*args, check=True, env=None, timeout=None):
     result = subprocess.run(args, capture_output=True, text=True, env=env, timeout=timeout)
     if check and result.returncode != 0:

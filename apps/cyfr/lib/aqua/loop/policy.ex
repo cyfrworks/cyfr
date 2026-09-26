@@ -50,7 +50,7 @@ defmodule Aqua.Loop.Policy do
   """
   @spec replay_safe?(Call.t()) :: boolean()
   def replay_safe?(%Call{kind: :hand, tool: tool, action: action}),
-    do: Prima.VirtualTools.recovery(tool, action) == :replay_safe
+    do: Grimoire.VirtualTools.recovery(tool, action) == :replay_safe
 
   def replay_safe?(%Call{kind: :catalog, tool: tool, action: action}),
     do: Aqua.Ops.replay_safe?(tool, action)

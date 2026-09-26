@@ -31,7 +31,8 @@ defmodule CyfrWeb.Ingress.TinctureAssets do
 
   Validates path segments against the reserved files, dotfiles, traversal
   and the extension allowlist. Returns conn with the file (Local:
-  zero-copy via `Plug.Conn.send_file`; S3: in-memory body) or 404.
+  zero-copy via `Plug.Conn.send_file`; S3: in-memory body) or a JSON
+  `not_found` refusal (`CyfrWeb.ApiError`).
   """
   @spec serve_asset(
           Plug.Conn.t(),
@@ -45,10 +46,10 @@ defmodule CyfrWeb.Ingress.TinctureAssets do
 
     cond do
       Enum.any?(asset_segs, fn s -> s in reserved or String.starts_with?(s, ".") end) ->
-        send_resp(conn, 404, "Not Found")
+        not_found(conn)
 
       Prima.PathSafety.validate_relative_path(Enum.join(asset_segs, "/")) != :ok ->
-        send_resp(conn, 404, "Not Found")
+        not_found(conn)
 
       true ->
         filename = List.last(asset_segs) || ""
@@ -83,10 +84,10 @@ defmodule CyfrWeb.Ingress.TinctureAssets do
                  []
                ) do
             {:ok, conn} -> conn
-            {:error, _} -> send_resp(conn, 404, "Not Found")
+            {:error, _} -> not_found(conn)
           end
         else
-          send_resp(conn, 404, "Not Found")
+          not_found(conn)
         end
     end
   end
@@ -131,8 +132,19 @@ defmodule CyfrWeb.Ingress.TinctureAssets do
         |> send_resp(200, content)
 
       {:error, _} ->
-        send_resp(conn, 404, "Not Found")
+        not_found(conn)
     end
+  end
+
+  # Every miss answers the same JSON refusal, so a reserved file, an unsafe
+  # path, a disallowed extension and an absent one read alike. The asset's
+  # content type and cache lifetime were set before the read and describe
+  # the file, not the refusal: they go, and the JSON body names its own type.
+  defp not_found(conn) do
+    conn
+    |> delete_resp_header("content-type")
+    |> delete_resp_header("cache-control")
+    |> CyfrWeb.ApiError.send(404, :not_found, nil)
   end
 
   defp entry_dir(entry) do

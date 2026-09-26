@@ -14,6 +14,7 @@ import (
 	"io"
 	"os/user"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 
@@ -164,7 +165,35 @@ func toAccount(u *user.User) (Account, error) {
 	return Account{UID: uid, GID: gid, Name: u.Username, Home: u.HomeDir}, nil
 }
 
-// ClientEnviron is the client's environment: the spawner's own, with HOME,
+// EnvPrefix is the prefix of the keeper's own variable names.
+const EnvPrefix = "KEEPER_"
+
+// DeclaredEnv are the KEEPER_ names the keeper knows. ChannelEnv is the
+// one it sets for its client; an inherited value is replaced, never read
+// (ClientEnviron).
+var DeclaredEnv = []string{protocol.ChannelEnv}
+
+// CheckEnviron is the one reader of the keeper's KEEPER_ environment: it
+// refuses every KEEPER_ name DeclaredEnv does not hold, naming each, so a
+// misspelled or retired setting stops the start instead of being ignored.
+// The error never carries a value.
+func CheckEnviron(environ []string) error {
+	var unknown []string
+	for _, kv := range environ {
+		name, _, _ := strings.Cut(kv, "=")
+		if strings.HasPrefix(name, EnvPrefix) && !slices.Contains(DeclaredEnv, name) {
+			unknown = append(unknown, name)
+		}
+	}
+	if len(unknown) == 0 {
+		return nil
+	}
+	slices.Sort(unknown)
+	return fmt.Errorf("%s: not a variable cyfr-keeper reads (it knows %s)",
+		strings.Join(slices.Compact(unknown), ", "), strings.Join(DeclaredEnv, ", "))
+}
+
+// ClientEnviron is the client's environment: the keeper's own, with HOME,
 // USER and LOGNAME describing the client user and protocol.ChannelEnv
 // naming the channel socket on fd 3.
 func ClientEnviron(environ []string, client Account, channel string) []string {

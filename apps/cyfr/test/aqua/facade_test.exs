@@ -80,7 +80,7 @@ defmodule Aqua.FacadeTest do
     refute Aqua.auto_permitted?("files", "delete")
     refute Aqua.auto_permitted?("server:tool", "anything")
 
-    assert Aqua.virtual_tool_catalog() == Prima.VirtualTools.action_kinds()
+    assert Aqua.virtual_tool_catalog() == Grimoire.VirtualTools.action_kinds()
     assert Aqua.virtual_tool_catalog() == Aqua.Hands.list_for_panel()
   end
 

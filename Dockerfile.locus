@@ -14,8 +14,8 @@
 # Process model: cyfr-keeper runs as root holding only SETUID, SETGID and
 # KILL (it refuses to start with any other capability), starts the locus
 # release as locus, and runs every build or backend under a pooled uid of
-# its own — builds as cyfr-build01…cyfr-build16 (30001-30016), backends as
-# cyfr-backend01…cyfr-backend32 (20001-20032) — with a 0700 home under
+# its own — builds as locus-build01…locus-build16 (30001-30016), backends as
+# locus-backend01…locus-backend32 (20001-20032) — with a 0700 home under
 # /var/lib/locus/homes, inside a memory bound of its own
 # (LOCUS_BUILDS_MEMORY_BYTES, 1 GiB, and LOCUS_BACKENDS_MEMORY_BYTES, 512
 # MiB, unless set). When a build or a backend ends every process of its uid
@@ -158,12 +158,12 @@ RUN ln -s /usr/local/cargo/bin/* /usr/local/bin/
 RUN groupadd -r -g 10001 locus \
     && useradd -r -u 10001 -g locus -d /nonexistent -M -s /usr/sbin/nologin locus \
     && for i in $(seq 1 16); do \
-         name="$(printf 'cyfr-build%02d' "$i")"; uid=$((30000 + i)); \
+         name="$(printf 'locus-build%02d' "$i")"; uid=$((30000 + i)); \
          groupadd -r -g "$uid" "$name" \
          && useradd -r -u "$uid" -g "$name" -d /nonexistent -M -s /usr/sbin/nologin "$name" || exit 1; \
        done \
     && for i in $(seq 1 32); do \
-         name="$(printf 'cyfr-backend%02d' "$i")"; uid=$((20000 + i)); \
+         name="$(printf 'locus-backend%02d' "$i")"; uid=$((20000 + i)); \
          groupadd -r -g "$uid" "$name" \
          && useradd -r -u "$uid" -g "$name" -d /nonexistent -M -s /usr/sbin/nologin "$name" || exit 1; \
        done \

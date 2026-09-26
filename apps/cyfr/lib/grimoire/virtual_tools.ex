@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: Apache-2.0
 # Copyright 2026 CYFR Works Inc.
 
-defmodule Prima.VirtualTools do
+defmodule Grimoire.VirtualTools do
   @moduledoc """
   The one declaration of the assistant's virtual tools — `files`,
   `storage`, `http` and `request_setup` — and of the kinds an action may

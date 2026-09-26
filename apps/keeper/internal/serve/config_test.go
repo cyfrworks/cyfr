@@ -137,6 +137,26 @@ func TestClientEnvironDescribesTheClientUserAndItsChannel(t *testing.T) {
 	}
 }
 
+func TestCheckEnvironRefusesEveryUndeclaredKeeperVariableByName(t *testing.T) {
+	accepted := []string{"PATH=/usr/bin", "CYFR_LOG_FORMAT=json", "LOCUS_BUILDS_KEY=secret", "KEEPERS=1", "KEEPER_CHANNEL=socket:[1]"}
+	if err := CheckEnviron(accepted); err != nil {
+		t.Fatalf("refused %q: %v", accepted, err)
+	}
+
+	err := CheckEnviron(append(accepted, "KEEPER_POOL=build:1-2", "KEEPER_=x", "KEEPER_POOL=again"))
+	if err == nil {
+		t.Fatal("an undeclared KEEPER_ variable was accepted")
+	}
+	if !strings.HasPrefix(err.Error(), "KEEPER_, KEEPER_POOL: ") {
+		t.Fatalf("error %q does not name each undeclared variable once, sorted", err)
+	}
+	for _, value := range []string{"build:1-2", "again", "socket:[1]", "secret"} {
+		if strings.Contains(err.Error(), value) {
+			t.Fatalf("error %q carries the value %q", err, value)
+		}
+	}
+}
+
 func TestPoolAccountsNamesEveryPooledUidAndGid(t *testing.T) {
 	got := PoolAccounts(map[int]Account{20001: {UID: 20001, GID: 20001}, 20002: {UID: 20002, GID: 30002}})
 	if !got.UIDs[20001] || !got.UIDs[20002] || !got.GIDs[20001] || !got.GIDs[30002] || got.GIDs[20002] || len(got.UIDs) != 2 {

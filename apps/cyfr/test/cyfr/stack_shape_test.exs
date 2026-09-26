@@ -218,6 +218,44 @@ defmodule Cyfr.StackShapeTest do
     end
   end
 
+  # Each image names its pooled uids for the service that runs under them,
+  # `printf '<name>%02d'` over `<base> + i`; cyfr-keeper refuses pools that
+  # overlap within one container, and this keeps the images' pools and
+  # their services' own users apart across containers too.
+  test "every pooled uid is named for its service, and no two pools or services share a uid" do
+    pool_loop =
+      ~r/for i in \$\(seq 1 (\d+)\); do \\\s+name="\$\(printf '([a-z-]+)%02d' "\$i"\)"; uid=\$\(\((\d+) \+ i\)\)/
+
+    pools =
+      for file <- ["Dockerfile.locus", "Dockerfile.opus"],
+          [count, name, base] <- Regex.scan(pool_loop, read!(file), capture: :all_but_first) do
+        base = String.to_integer(base)
+        {name, (base + 1)..(base + String.to_integer(count))}
+      end
+
+    assert Enum.sort(pools) == [
+             {"locus-backend", 20_001..20_032},
+             {"locus-build", 30_001..30_016},
+             {"opus-runner", 30_101..30_108}
+           ]
+
+    ranges = Enum.map(pools, &elem(&1, 1))
+
+    for {a, i} <- Enum.with_index(ranges),
+        b <- Enum.drop(ranges, i + 1),
+        do: assert(Range.disjoint?(a, b), "#{inspect(a)} and #{inspect(b)} overlap")
+
+    for service_uid <- [10_001, 10_002], range <- ranges, do: refute(service_uid in range)
+
+    # The shipped entrypoints serve exactly those ranges.
+    assert read!("Dockerfile.locus") =~ ~s("--pool", "build:30001-30016")
+    assert read!("Dockerfile.opus") =~ ~s("--pool", "runner:30101-30108")
+
+    # Spelled split so the retired names are not themselves found here.
+    refute read!("Dockerfile.locus") =~
+             ~r/cyfr-buil[d]\d|cyfr-backen[d]\d|'cyfr-(buil[d]|backen[d])%/
+  end
+
   test "the builds service's example names every setting of the locus release, and none of the control plane's" do
     example = read!(".env.locus.example")
 
