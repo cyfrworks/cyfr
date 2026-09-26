@@ -36,6 +36,12 @@ export function startProxy(server, { receiver = null, answer = () => null } = {}
       host: url.hostname,
       origin: req.headers.origin ?? null,
       referer: req.headers.referer ?? null,
+      cookie: !!req.headers.cookie,
+      fetch: {
+        site: req.headers["sec-fetch-site"] ?? null,
+        dest: req.headers["sec-fetch-dest"] ?? null,
+        mode: req.headers["sec-fetch-mode"] ?? null,
+      },
       conditional: !!(req.headers["if-none-match"] || req.headers["if-modified-since"]),
     });
     const own = answer(req, url);
