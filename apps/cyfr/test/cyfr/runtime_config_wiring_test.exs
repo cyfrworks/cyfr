@@ -114,44 +114,175 @@ defmodule Cyfr.RuntimeConfigWiringTest do
     end
   end
 
-  describe "a setting under a replaced name" do
-    # Each old name and the name that replaced it. The old names are spelled
-    # in two parts, as config/runtime.exs spells them, so the vocabulary
-    # gate, which refuses them everywhere else, stays whole.
-    @replaced [
-      {"CYFR_WORKER" <> "_KEY", "CYFR_OPUS_KEY"},
-      {"CYFR_WORKER" <> "S", "CYFR_OPUS_WORKERS"},
-      {"CYFR_WORKER" <> "_WATCH_POLL_MS", "CYFR_OPUS_WATCH_POLL_MS"},
-      {"CYFR_WORKER" <> "_WATCH_MISSES", "CYFR_OPUS_WATCH_MISSES"},
-      {"CYFR_SPAWN" <> "_CHANNEL", "KEEPER_CHANNEL"},
-      {"CYFR_EXECUTION" <> "_EVENTS_MAX_CONCURRENT", "CYFR_CRUCIBLE_EVENTS_MAX_CONCURRENT"},
-      {"CYFR_EXECUTION" <> "_EVENTS_MAX_MS", "CYFR_CRUCIBLE_EVENTS_MAX_MS"},
-      {"CYFR_MAX_CONCURRENT" <> "_EXECUTIONS", "CYFR_CRUCIBLE_MAX_CONCURRENT"},
-      {"CYFR_MAX_CONCURRENT" <> "_EXECUTIONS_PER_TENANT",
-       "CYFR_CRUCIBLE_MAX_CONCURRENT_PER_TENANT"}
+  describe "the admission floors" do
+    # Each rate-limit maximum and window, concurrency ceiling, subscription
+    # and event limit, the key it configures and the least value it takes.
+    @floors [
+      {"CYFR_CRUCIBLE_MAX_CONCURRENT", :crucible_max_concurrent, 32},
+      {"CYFR_CRUCIBLE_MAX_CONCURRENT_PER_TENANT", :crucible_max_concurrent_per_tenant, 1},
+      {"CYFR_MCP_RATE_LIMIT_MAX", :mcp_rate_limit_max, 1},
+      {"CYFR_MCP_RATE_LIMIT_WINDOW_MS", :mcp_rate_limit_window_ms, 1},
+      {"CYFR_WEBHOOK_PER_IP_RATE_LIMIT_MAX", :webhook_per_ip_rate_limit_max, 1},
+      {"CYFR_API_RATE_LIMIT_MAX", :api_rate_limit_max, 1},
+      {"CYFR_API_RATE_LIMIT_WINDOW_MS", :api_rate_limit_window_ms, 1},
+      {"CYFR_MCP_SUBSCRIPTION_MAX_CONCURRENT", :mcp_subscription_max_concurrent, 1},
+      {"CYFR_MCP_SUBSCRIPTION_MAX_MS", :mcp_subscription_max_ms, 1},
+      {"CYFR_CRUCIBLE_EVENTS_MAX_CONCURRENT", :crucible_events_max_concurrent, 1},
+      {"CYFR_CRUCIBLE_EVENTS_MAX_MS", :crucible_events_max_ms, 1}
     ]
 
-    test "refuses the boot of either release, set or blank, naming its replacement and never its value" do
-      value = "0123456789abcdef" <> "0123456789abcdef"
+    test "unset leaves the code's default; set, the least value and above are taken" do
+      with_env(Map.new(@floors, fn {name, _key, _least} -> {name, nil} end), fn ->
+        cyfr = read_prod_config!()[:cyfr]
 
-      for {old, new} <- @replaced, release <- ["cyfr", "opus"], set <- [value, ""] do
-        with_env(%{old => set, "RELEASE_NAME" => release}, fn ->
-          error = assert_raise RuntimeError, fn -> read_prod_config!() end
-          message = Exception.message(error)
+        for {_name, key, _least} <- @floors do
+          refute Keyword.has_key?(cyfr, key), "#{key} is configured with its variable unset"
+        end
+      end)
 
-          assert message =~ "#{old} (now #{new})", "#{old} under #{release}: #{message}"
-          refute message =~ value
+      for {name, key, least} <- @floors, value <- [least, least + 1] do
+        with_env(%{name => Integer.to_string(value)}, fn ->
+          assert read_prod_config!()[:cyfr][key] == value, "#{name}=#{value}"
         end)
       end
     end
 
-    test "names every one that is set" do
-      [{first, first_new}, {second, second_new} | _] = @replaced
+    test "zero, a negative number, anything below the least value or not a whole number refuses the boot naming the variable" do
+      for {name, _key, least} <- @floors,
+          bad <- Enum.uniq(["0", "-1", Integer.to_string(least - 1), "ten", "1.5", "60s"]) do
+        with_env(%{name => bad}, fn ->
+          message = Exception.message(assert_raise(RuntimeError, &read_prod_config!/0))
 
-      with_env(%{first => "x", second => "y"}, fn ->
-        message = Exception.message(assert_raise(RuntimeError, &read_prod_config!/0))
-        assert message =~ "#{first} (now #{first_new})"
-        assert message =~ "#{second} (now #{second_new})"
+          assert message =~ "[Cyfr] FATAL: #{name}=#{inspect(bad)} must be a whole number",
+                 "#{name}=#{bad}: #{message}"
+
+          assert message =~ "from #{least} to "
+        end)
+      end
+    end
+  end
+
+  describe "the trusted proxies" do
+    @proxy_unset %{
+      "CYFR_BEHIND_PROXY" => nil,
+      "CYFR_TRUSTED_PROXY_HOPS" => nil,
+      "CYFR_TRUSTED_PROXY_CIDRS" => nil
+    }
+
+    test "behind a proxy, one hop unless set, any count from 0 to 16, and the CIDRs as listed" do
+      with_env(Map.put(@proxy_unset, "CYFR_BEHIND_PROXY", "on"), fn ->
+        sanctum = read_prod_config!()[:sanctum]
+        assert sanctum[:trust_x_forwarded_for] == true
+        assert sanctum[:trusted_proxy_hops] == 1
+        refute Keyword.has_key?(sanctum, :trusted_proxy_cidrs)
+      end)
+
+      for hops <- [0, 1, 16] do
+        env = %{"CYFR_BEHIND_PROXY" => "on", "CYFR_TRUSTED_PROXY_HOPS" => "#{hops}"}
+
+        with_env(Map.merge(@proxy_unset, env), fn ->
+          assert read_prod_config!()[:sanctum][:trusted_proxy_hops] == hops
+        end)
+      end
+
+      env = %{
+        "CYFR_BEHIND_PROXY" => "on",
+        "CYFR_TRUSTED_PROXY_CIDRS" => "10.0.0.0/8, 192.0.2.7, fd00::/8"
+      }
+
+      with_env(Map.merge(@proxy_unset, env), fn ->
+        assert read_prod_config!()[:sanctum][:trusted_proxy_cidrs] ==
+                 ["10.0.0.0/8", "192.0.2.7", "fd00::/8"]
+      end)
+    end
+
+    test "not behind a proxy, nothing is trusted" do
+      with_env(@proxy_unset, fn ->
+        sanctum = read_prod_config!()[:sanctum]
+        refute Keyword.has_key?(sanctum, :trust_x_forwarded_for)
+        refute Keyword.has_key?(sanctum, :trusted_proxy_hops)
+      end)
+    end
+
+    test "a hop count outside 0 to 16 refuses the boot naming it, behind a proxy or not" do
+      for behind <- ["on", nil], bad <- ["17", "-1", "one", "1.0"] do
+        env = %{"CYFR_BEHIND_PROXY" => behind, "CYFR_TRUSTED_PROXY_HOPS" => bad}
+
+        with_env(Map.merge(@proxy_unset, env), fn ->
+          message = Exception.message(assert_raise(RuntimeError, &read_prod_config!/0))
+
+          assert message =~
+                   "[Cyfr] FATAL: CYFR_TRUSTED_PROXY_HOPS=#{inspect(bad)} must be a whole " <>
+                     "number of proxy hops from 0 to 16"
+        end)
+      end
+    end
+
+    test "an entry that is neither an address nor a CIDR refuses the boot naming the entry" do
+      for behind <- ["on", nil],
+          bad <- ["10.0.0.0/33", "10.0.0.0/8/1", "proxy.internal", "10.0.0.0/x", "::1/129"] do
+        env = %{
+          "CYFR_BEHIND_PROXY" => behind,
+          "CYFR_TRUSTED_PROXY_CIDRS" => "10.0.0.0/8, #{bad}"
+        }
+
+        with_env(Map.merge(@proxy_unset, env), fn ->
+          message = Exception.message(assert_raise(RuntimeError, &read_prod_config!/0))
+
+          assert message =~
+                   "[Cyfr] FATAL: CYFR_TRUSTED_PROXY_CIDRS entry #{inspect(bad)} is neither"
+        end)
+      end
+    end
+  end
+
+  describe "the signing salts" do
+    # The names the salts were read under before, spelled in parts so the
+    # vocabulary scans do not find them here.
+    @old_session_salt "CYFR_EMISSARY" <> "_SESSION_SALT"
+    @old_live_salt "CYFR_LV" <> "_SALT"
+    @salts_unset %{
+      "CYFR_SESSION_SALT" => nil,
+      "CYFR_LIVE_SALT" => nil,
+      @old_session_salt => nil,
+      @old_live_salt => nil
+    }
+
+    defp salts(config) do
+      {config[:cyfr][:session_salt], config[:cyfr][CyfrWeb.Endpoint][:live_view][:signing_salt]}
+    end
+
+    test "CYFR_SESSION_SALT and CYFR_LIVE_SALT are the session's and the LiveView socket's" do
+      env = %{"CYFR_SESSION_SALT" => "session-salt-set", "CYFR_LIVE_SALT" => "live-salt-set"}
+
+      with_env(Map.merge(@salts_unset, env), fn ->
+        assert salts(read_prod_config!()) == {"session-salt-set", "live-salt-set"}
+      end)
+    end
+
+    test "unset, each is derived from the key base, and the old names are not read" do
+      key_base = Base.encode64(:crypto.strong_rand_bytes(48))
+
+      derived =
+        for label <- ["emissary_session", "live_view"] do
+          :sha256
+          |> :crypto.hash(label <> key_base)
+          |> Base.url_encode64(padding: false)
+          |> binary_part(0, 16)
+        end
+
+      for old <- [%{}, %{@old_session_salt => "old-session", @old_live_salt => "old-live"}] do
+        env = Map.merge(%{"CYFR_SECRET_KEY_BASE" => key_base}, old)
+
+        with_env(Map.merge(@salts_unset, env), fn ->
+          assert salts(read_prod_config!()) == List.to_tuple(derived)
+        end)
+      end
+    end
+
+    test "the old key is not configured" do
+      with_env(Map.put(@salts_unset, @old_session_salt, "old-session"), fn ->
+        refute Keyword.has_key?(read_prod_config!()[:cyfr], :emissary_session_salt)
       end)
     end
   end
@@ -303,21 +434,20 @@ defmodule Cyfr.RuntimeConfigWiringTest do
   end
 
   describe "OPUS_KEEPER" do
-    test "names the channel keeper or the direct one, and nothing else" do
-      for {value, keeper} <- [{"channel", :channel}, {"direct", :direct}] do
+    test "is retired: set to any keeper, or blank, it refuses the boot naming it and cyfr-keeper" do
+      for value <- ["direct", "channel", ""] do
         with_env(opus_env(%{"OPUS_KEEPER" => value}), fn ->
-          assert read_prod_config!()[:opus][:keeper] == keeper
+          message = Exception.message(assert_raise(RuntimeError, &read_prod_config!/0))
+          assert message =~ "[Cyfr] FATAL: OPUS_KEEPER is retired"
+          assert message =~ "cyfr-keeper"
         end)
       end
+    end
 
-      for bad <- ["spawn", "local", "Channel"] do
-        with_env(opus_env(%{"OPUS_KEEPER" => bad}), fn ->
-          error = assert_raise RuntimeError, fn -> read_prod_config!() end
-
-          assert Exception.message(error) =~
-                   "OPUS_KEEPER=#{inspect(bad)} names no keeper; use channel or direct"
-        end)
-      end
+    test "unset, no keeper is configured: the channel keeper is the one launcher" do
+      with_env(opus_env(%{"OPUS_KEEPER" => nil}), fn ->
+        refute Keyword.has_key?(read_prod_config!()[:opus], :keeper)
+      end)
     end
   end
 

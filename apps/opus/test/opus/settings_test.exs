@@ -4,8 +4,9 @@
 defmodule Opus.SettingsTest do
   @moduledoc """
   The service's pool settings come from `config :opus` with defaults in
-  code, each validated, the keeper following the environment when unset,
-  a runner's memory bound in the keeper's own range and never none; a
+  code, each validated, the keeper the cyfr-keeper channel when unset and
+  the retired `OPUS_KEEPER` refused, a runner's memory bound in the
+  keeper's own range and never none; a
   runner's settings come from its process environment alone, and a
   runner that can see the service's key refuses to start.
   """
@@ -30,7 +31,7 @@ defmodule Opus.SettingsTest do
                 idle_ttl_ms: 30_000,
                 watchdog_grace_ms: 5_000,
                 release_grace_ms: 2_000,
-                keeper: :direct,
+                keeper: :channel,
                 attach_dir: "/run/opus",
                 runner_memory_bytes: 402_653_184
               }} = Settings.pool([], %{})
@@ -38,9 +39,10 @@ defmodule Opus.SettingsTest do
       assert {:ok, 402_653_184} = Settings.runner_memory_bytes([])
     end
 
-    test "the keeper follows the environment when unset, and is what the configuration names when set" do
-      assert {:ok, %{keeper: :channel}} = Settings.pool([], %{"KEEPER_CHANNEL" => "socket:[1]"})
-      assert {:ok, %{keeper: :direct}} = Settings.pool([], %{"KEEPER_CHANNEL" => ""})
+    test "unset, the keeper is the channel whatever the environment says; set, what the configuration names" do
+      for system <- [%{}, %{"KEEPER_CHANNEL" => ""}, %{"KEEPER_CHANNEL" => "socket:[1]"}] do
+        assert {:ok, %{keeper: :channel}} = Settings.pool([], system)
+      end
 
       assert {:ok, %{keeper: :direct}} =
                Settings.pool([keeper: :direct], %{"KEEPER_CHANNEL" => "socket:[1]"})
@@ -49,12 +51,41 @@ defmodule Opus.SettingsTest do
       assert {:error, {:malformed, :keeper}} = Settings.pool([keeper: :local], %{})
       assert {:error, {:malformed, :keeper}} = Settings.pool([keeper: "channel"], %{})
       assert {:error, {:malformed, :keeper}} = Settings.pool([keeper: :spawn], %{})
+      assert {:error, {:malformed, :keeper}} = Settings.pool([keeper: Opus.Keeper.Direct], %{})
+    end
+
+    test "OPUS_KEEPER is retired: set to any keeper, or blank, it refuses naming it and the channel" do
+      for value <- ["direct", "channel", ""], env <- [[], [keeper: :direct]] do
+        assert {:error, {:retired, "OPUS_KEEPER"}} =
+                 Settings.pool(env, %{"OPUS_KEEPER" => value})
+      end
+
+      assert Settings.retired("OPUS_KEEPER") =~ "OPUS_KEEPER is retired"
+      assert Settings.retired("OPUS_KEEPER") =~ "cyfr-keeper"
     end
 
     # A subtree runs in a runner's VM of its own in every build, the test
     # build included: there is no keeper that runs one in the service's.
-    test "the keepers are channel and direct, in every build" do
+    # The direct keeper is the test build's: without it, the channel alone.
+    test "the keepers are the channel and the test build's direct keeper, and the channel alone without it" do
       assert Settings.keepers() == [:channel, :direct]
+      assert Opus.Keeper.direct_keeper() == Opus.Keeper.Direct
+
+      previous = Application.fetch_env!(:opus, :direct_keeper)
+      Application.delete_env(:opus, :direct_keeper)
+
+      try do
+        assert Opus.Keeper.direct_keeper() == nil
+        assert Settings.keepers() == [:channel]
+        assert {:error, {:malformed, :keeper}} = Settings.pool([keeper: :direct], %{})
+        assert Settings.expected(:keeper) == "one of :channel"
+        assert_raise ArgumentError, ~r/no direct keeper/, fn -> Opus.Keeper.module(:direct) end
+
+        Application.put_env(:opus, :direct_keeper, Opus.Keeper.NotCompiled)
+        assert Settings.keepers() == [:channel]
+      after
+        Application.put_env(:opus, :direct_keeper, previous)
+      end
     end
 
     test "a bound that is not a positive integer refuses, naming its key" do

@@ -13,16 +13,18 @@ defmodule Opus.Settings do
   (`:watchdog_grace_ms`, 5 000), how long a released runner is given to
   report its open attempts before its process group is killed
   (`:release_grace_ms`, 2 000), which keeper starts its runners
-  (`:keeper`: `:channel`, the `cyfr-keeper` channel the image inherits, or
-  `:direct`, a launcher of plain OS processes for a machine without a
-  keeper), where the keeper's relays attach (`:attach_dir`,
-  `/run/opus`), and the memory bound of every runner `cyfr-keeper` starts
-  (`:runner_memory_bytes`, 384 MiB). Unset, the keeper follows the
-  environment: `:channel` when `KEEPER_CHANNEL` names an inherited
-  channel, `:direct` otherwise; set, it is checked against that
-  environment when the pool starts (`Opus.Keeper`). A value that is not a
-  positive integer, or a keeper that is not one of the two (`keepers/0`),
-  refuses the boot with the key named.
+  (`:keeper`, `:channel`: the `cyfr-keeper` channel the image inherits;
+  the test build alone also knows `:direct`, `Opus.Keeper.direct_keeper/0`),
+  where the keeper's relays attach (`:attach_dir`, `/run/opus`), and the
+  memory bound of every runner `cyfr-keeper` starts
+  (`:runner_memory_bytes`, 384 MiB). Unset, the keeper is `:channel`,
+  whatever the environment says: the service refuses to boot when no
+  channel was inherited (`Opus.Keeper.check!/3`), and never falls back to
+  anything else. A value that is not a positive integer, or a keeper this
+  build does not know (`keepers/0`), refuses the boot with the key named.
+  `OPUS_KEEPER`, which once chose the keeper, is retired: an environment
+  that sets it, blank or not, refuses the boot naming it, since the keeper
+  channel is the only launcher.
 
   `:runner_memory_bytes` is what `Opus.Keeper.Channel` asks `cyfr-keeper` to
   hold each runner to (`runner_memory_bytes/1`): a cgroup of the runner's
@@ -32,9 +34,9 @@ defmodule Opus.Settings do
   Its range is the keeper's own for a spawn's `memory_bytes`, 16 MiB to
   1 TiB, so a value accepted here is never refused there; a value outside
   it, or not an integer, refuses the boot. There is no value that asks
-  for no bound. The `:direct` keeper applies none: it has no cgroup to
-  give a runner. The default is 1.8 times the largest peak of a runner
-  under the seed components, rounded up (`tests/worker-image/memory.py
+  for no bound. The test build's `:direct` keeper applies none: it has no
+  cgroup to give a runner. The default is 1.8 times the largest peak of a
+  runner under the seed components, rounded up (`tests/worker-image/memory.py
   --measure` repeats the measurement). The runner's own VM is most of
   that peak, so the default leaves a subtree's guests room for two or
   three at the default 64 MiB of linear memory at once, not for one at
@@ -56,8 +58,8 @@ defmodule Opus.Settings do
   @service_id ~r/\Awrk_[A-Za-z0-9_-]{1,64}\z/
   @id ~r/\A[\x21-\x7E]{1,256}\z/
 
-  @keepers [:channel, :direct]
   @channel_env "KEEPER_CHANNEL"
+  @retired_keeper_env "OPUS_KEEPER"
 
   # cyfr-keeper's range for a spawn's `memory_bytes`
   # (`apps/keeper/internal/protocol`: MinMemoryBytes, MaxMemoryBytes).
@@ -93,9 +95,12 @@ defmodule Opus.Settings do
           watchdog_grace_ms: pos_integer()
         }
 
-  @doc "The keeper choices: `:channel` and `:direct`."
+  @doc """
+  The keepers this build knows: `:channel` in every build, and `:direct`
+  where the test build has its direct keeper (`Opus.Keeper.direct_keeper/0`).
+  """
   @spec keepers() :: [atom()]
-  def keepers, do: @keepers
+  def keepers, do: if(Opus.Keeper.direct_keeper(), do: [:channel, :direct], else: [:channel])
 
   @doc "The environment variable the keeper sets to name the inherited channel."
   @spec channel_env() :: String.t()
@@ -114,18 +119,23 @@ defmodule Opus.Settings do
   end
 
   @doc "The pool settings `config :opus` spells, or the first key that refuses."
-  @spec pool() :: {:ok, pool()} | {:error, {:malformed, atom()}}
+  @spec pool() :: {:ok, pool()} | {:error, {:malformed, atom()} | {:retired, String.t()}}
   def pool, do: pool(Application.get_all_env(:opus), System.get_env())
 
-  @doc "The pool settings `env` (the `:opus` application environment) spells, under the process environment `system`."
+  @doc """
+  The pool settings `env` (the `:opus` application environment) spells,
+  under the process environment `system`, which must not set the retired
+  `OPUS_KEEPER`.
+  """
   @spec pool(keyword(), %{optional(String.t()) => String.t()}) ::
-          {:ok, pool()} | {:error, {:malformed, atom()}}
+          {:ok, pool()} | {:error, {:malformed, atom()} | {:retired, String.t()}}
   def pool(env, system) when is_list(env) and is_map(system) do
-    with {:ok, size} <- positive(env, :pool_size),
+    with :ok <- no_retired_keeper(system),
+         {:ok, size} <- positive(env, :pool_size),
          {:ok, idle} <- positive(env, :idle_ttl_ms),
          {:ok, watchdog} <- positive(env, :watchdog_grace_ms),
          {:ok, release} <- positive(env, :release_grace_ms),
-         {:ok, keeper} <- keeper(Keyword.get(env, :keeper), system),
+         {:ok, keeper} <- keeper(Keyword.get(env, :keeper)),
          {:ok, attach_dir} <- attach_dir(Keyword.get(env, :attach_dir)),
          {:ok, memory_bytes} <- runner_memory_bytes(env) do
       {:ok,
@@ -170,7 +180,17 @@ defmodule Opus.Settings do
       {:error, {:malformed, key}} ->
         raise ArgumentError,
               "[Opus.Settings] config :opus, #{inspect(key)} is malformed: #{expected(key)}"
+
+      {:error, {:retired, name}} ->
+        raise ArgumentError, "[Opus.Settings] " <> retired(name)
     end
+  end
+
+  @doc "Why the retired variable `name` refuses the boot, for the message that refuses it."
+  @spec retired(String.t()) :: String.t()
+  def retired(@retired_keeper_env) do
+    "#{@retired_keeper_env} is retired and must not be set: the keeper channel " <>
+      "cyfr-keeper starts the service with (#{@channel_env}) is the only launcher of runners"
   end
 
   @doc "The runner settings the process environment spells, or the first variable that refuses."
@@ -243,9 +263,22 @@ defmodule Opus.Settings do
     end
   end
 
-  defp keeper(nil, system), do: {:ok, if(channel_inherited?(system), do: :channel, else: :direct)}
-  defp keeper(keeper, _system) when keeper in @keepers, do: {:ok, keeper}
-  defp keeper(_keeper, _system), do: {:error, {:malformed, :keeper}}
+  # Unset is the channel keeper in every build: an environment without a
+  # channel refuses the boot where the pool starts, and never selects a
+  # keeper that isolates nothing.
+  defp keeper(nil), do: {:ok, :channel}
+
+  defp keeper(keeper) when is_atom(keeper) do
+    if keeper in keepers(), do: {:ok, keeper}, else: {:error, {:malformed, :keeper}}
+  end
+
+  defp keeper(_keeper), do: {:error, {:malformed, :keeper}}
+
+  defp no_retired_keeper(system) do
+    if is_map_key(system, @retired_keeper_env),
+      do: {:error, {:retired, @retired_keeper_env}},
+      else: :ok
+  end
 
   defp attach_dir(nil), do: {:ok, @pool_defaults.attach_dir}
 
@@ -320,7 +353,7 @@ defmodule Opus.Settings do
   def expected(key) when key in [:pool_size, :idle_ttl_ms, :watchdog_grace_ms, :release_grace_ms],
     do: "a positive integer"
 
-  def expected(:keeper), do: "one of #{Enum.map_join(@keepers, ", ", &inspect/1)}"
+  def expected(:keeper), do: "one of #{Enum.map_join(keepers(), ", ", &inspect/1)}"
   def expected(:attach_dir), do: "a clean absolute directory path"
 
   def expected(:runner_memory_bytes) do

@@ -8,9 +8,11 @@ defmodule Locus.DirectLauncher do
   isolates nothing — a build can read and signal this node and every other
   build, and reach this node's environment through `/proc` — and it
   applies no memory bound: a build here may take whatever memory the
-  machine gives it. `Locus.Executor` knows it under the test environment
-  alone, so the suites can run a real toolchain on a machine without
-  cyfr-keeper; no release and no development node builds through it, and
+  machine gives it. It is compiled from the test support alone and named
+  by the test build's application environment
+  (`Locus.Executor.direct_launcher/0`), so the suites can run a real
+  toolchain on a machine without cyfr-keeper; no release and no
+  development node compiles it or builds through it, and
   the builds service refuses to serve without cyfr-keeper anywhere else
   (`Locus.Application`).
 

@@ -11,11 +11,13 @@ defmodule Locus.Executor do
   inside it, `USER`, `LOGNAME` and `PATH`; `env` is everything else the
   command sees. `Locus.Keeper` runs the command through cyfr-keeper: under
   a pooled uid, inside the memory bound the builder runs every build under
-  (`Locus.Config.memory_bytes/0`). `Locus.DirectLauncher` runs it as this
-  node's own user with no bound at all, so it is an executor of the test
-  build alone (`executors/0`): no release and no development node knows
-  it, whatever its configuration says, and a node that holds no cyfr-keeper
-  channel there runs no build (`executor/0`).
+  (`Locus.Config.memory_bytes/0`), and it is the one executor of every
+  build (`executors/0`). The suites run a real toolchain on a machine
+  without cyfr-keeper through a launcher of their own, compiled from the
+  test support alone and named by the test build's application
+  environment (`direct_launcher/0`): no release and no development node
+  compiles it, and a node that holds no cyfr-keeper channel there runs no
+  build (`executor/0`).
 
   A run ends on every path with everything the command started gone: at
   its exit, at its deadline, when `cancel/1` reaches the process running
@@ -63,34 +65,50 @@ defmodule Locus.Executor do
 
   @callback run(command(), opts()) :: {:ok, outcome()} | {:error, error()}
 
-  # The direct launcher isolates and bounds nothing, so the choice exists
-  # where the suites run and nowhere else: a release is compiled without it
-  # and no setting brings it back.
-  @executors if Mix.env() == :test,
-               do: [Locus.Keeper, Locus.DirectLauncher],
-               else: [Locus.Keeper]
-
-  @doc "The executors this build knows: the spawner, and the direct launcher under the test environment alone."
+  @doc "The executors every build knows: the spawner alone."
   @spec executors() :: [module()]
-  def executors, do: @executors
+  def executors, do: [Locus.Keeper]
+
+  @doc """
+  The launcher the test build runs builds and long-lived processes through
+  when no cyfr-keeper channel was inherited, or `nil`.
+
+  It isolates and bounds nothing, so it is named by the application
+  environment of the test build alone (`apps/locus/mix.exs`) and compiled
+  from its test support: every other build compiles no such module, so a
+  name that reaches this key from anywhere else resolves to nothing.
+  """
+  @spec direct_launcher() :: module() | nil
+  def direct_launcher do
+    case Application.get_env(:locus, :direct_launcher) do
+      launcher when is_atom(launcher) and not is_nil(launcher) ->
+        if Code.ensure_loaded?(launcher), do: launcher
+
+      _ ->
+        nil
+    end
+  end
 
   @doc """
   The executor builds run with: the spawner when its client is running,
-  the direct launcher otherwise where this build knows it, and
+  the test build's direct launcher otherwise where it has one, and
   `{:error, :no_keeper}` everywhere else. A build is never run outside
   cyfr-keeper by a release.
   """
   @spec executor() :: {:ok, module()} | {:error, :no_keeper}
   def executor do
-    executor = if Locus.Keeper.running?(), do: Locus.Keeper, else: Locus.DirectLauncher
-    if executor in @executors, do: {:ok, executor}, else: {:error, :no_keeper}
+    cond do
+      Locus.Keeper.running?() -> {:ok, Locus.Keeper}
+      launcher = direct_launcher() -> {:ok, launcher}
+      true -> {:error, :no_keeper}
+    end
   end
 
   @doc """
   The `Locus.Launcher` a long-lived process is launched with, by the rule
-  `executor/0` follows: the keeper's client when it runs, the direct
-  launcher otherwise where this build knows it, and `{:error, :no_keeper}`
-  everywhere else.
+  `executor/0` follows: the keeper's client when it runs, the test
+  build's direct launcher otherwise where it has one, and
+  `{:error, :no_keeper}` everywhere else.
   """
   @spec launcher() :: {:ok, module()} | {:error, :no_keeper}
   def launcher, do: executor()

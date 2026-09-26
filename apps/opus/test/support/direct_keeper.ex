@@ -3,7 +3,9 @@
 
 defmodule Opus.Keeper.Direct do
   @moduledoc """
-  The keeper for a machine without `cyfr-keeper`: a runner is a child
+  The test build's keeper for a machine without `cyfr-keeper`, compiled
+  from the test support alone and named by the test build's application
+  environment (`Opus.Keeper.direct_keeper/0`): a runner is a child
   process of this VM, started with the argv and the explicit environment
   the pool gives it and nothing inherited (`env -i`), as this VM's own
   user, in a temporary home of its own. Its control channel is its

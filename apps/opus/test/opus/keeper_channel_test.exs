@@ -369,6 +369,13 @@ defmodule Opus.KeeperChannelTest do
     assert :ok = Opus.Keeper.Direct.available(%{}, [])
     assert {:error, _} = Opus.Keeper.Direct.available(%{"KEEPER_CHANNEL" => "socket:[3]"}, [])
     assert_raise ArgumentError, ~r/cannot run here/, fn -> Opus.Keeper.check!(Channel, []) end
+
+    # The refusal names the one process that can start the service with
+    # its channel.
+    error = assert_raise ArgumentError, fn -> Opus.Keeper.check!(Channel, [], %{}) end
+    assert Exception.message(error) =~ "no keeper channel was inherited"
+    assert Exception.message(error) =~ "only through cyfr-keeper"
+    assert :ok = Opus.Keeper.check!(Channel, [], %{"KEEPER_CHANNEL" => "socket:[3]"})
   end
 
   defp attempt do
