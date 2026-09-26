@@ -26,6 +26,7 @@
 //
 // Usage: node proof.mjs SERVER_URL SEGMENT COOKIE OUT_DIR PUBLIC_NEIGHBOUR_PATH
 
+import { request } from "node:http";
 import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import {
@@ -286,6 +287,43 @@ async function phase(browser, browserName, phaseName, tincture, base, proxy, rec
       fetch: arrivedAt ? arrivedAt.fetch : null,
     };
 
+    // ---- navigating itself to a page that reads the session ---------------
+    // A third open, whose only attempt this is: the frame navigates itself
+    // to the shell's own address. The request may leave with the cookie
+    // (the browser's decision, as above); no page of the person's is drawn
+    // in the frame, because a Prism page is framed by nothing, and a
+    // browser that names the request's destination is answered a refusal
+    // before the session is read (frame_request_refused).
+    const third = await context.newPage();
+    await openShell(third, base, segment, tincture);
+    const last = await launch(third, tincture);
+    await last.frame.waitForFunction(ready, null, { timeout: 60_000 });
+    const shellPath = new URL(shellUrl).pathname;
+    const from = proxy.seen.length;
+    await call(last.frame, "self_navigation", { ...args, target: shellPath }).catch(() => null);
+    const reached = await waitFor(
+      () => proxy.seen.slice(from).find((r) => r.url.includes("carried=") && new URL(r.url).pathname === shellPath),
+      { timeoutMs: 10_000, what: "the navigation to the shell's page" }).catch(() => null);
+    await sleep(4 * SETTLE_MS);
+    let drawn = false;
+    for (const child of third.frames()) {
+      if (child === third.mainFrame()) continue;
+      // A frame whose page the browser refused may never answer.
+      const seen = await Promise.race([
+        child.evaluate(() => !!document.querySelector("[data-phx-main], [data-phx-session]")).catch(() => false),
+        sleep(3000).then(() => false),
+      ]);
+      drawn = drawn || seen;
+    }
+    const refused = !!reached && !drawn && third.url() === shellUrl;
+    check(refused, browserName, phaseName, "self_navigation_session_page",
+      "a frame that navigates itself to a page of the person's draws none of it",
+      reached ? { drawn, cookie: reached.cookie } : "nothing arrived");
+    record.shell_path = shellPath;
+    record.attempts.self_navigation_session_page = {
+      column: "refused", outcome: refused ? "held" : "FAILED", drawn, cookie: reached ? reached.cookie : null,
+    };
+
     // Nothing of this phase reached the recording endpoint.
     check(receiver.log.length === 0, browserName, phaseName, "recording_endpoint",
       "nothing reached the recording endpoint",
@@ -330,6 +368,33 @@ async function sessionBlind(server, path, cookie) {
   return same;
 }
 
+// A page that reads the session refuses a request whose destination is a
+// frame, before it reads the session, and tells every browser it is framed
+// by nothing. Asked of the server, because a browser names a request's
+// destination only to a secure origin, which the harness's is not.
+function get(server, path, headers) {
+  return new Promise((resolve, reject) => {
+    const target = new URL(path, server);
+    const req = request({ host: target.hostname, port: target.port, path: target.pathname, method: "GET", headers },
+      (res) => { res.resume(); res.on("end", () => resolve({ status: res.statusCode, headers: res.headers })); });
+    req.on("error", reject);
+    req.end();
+  });
+}
+
+async function frameRequestRefused(server, path, cookie) {
+  const signed = { cookie: `_cyfr_key=${cookie}`, accept: "text/html" };
+  const framed = await get(server, path, { ...signed, "sec-fetch-dest": "iframe" });
+  const plain = await get(server, path, signed);
+  const policy = String(plain.headers["content-security-policy"] || "");
+  const held = framed.status === 403 && !framed.headers["set-cookie"] && !framed.headers.location &&
+    plain.status === 200 && policy.includes("frame-ancestors 'none'") && plain.headers["x-frame-options"] === "DENY";
+  check(held, "server", "both", "frame_request_refused",
+    "a page of the person's refuses a frame's request before the session, and is framed by nothing",
+    { framed: framed.status, plain: plain.status, policy: policy.includes("frame-ancestors 'none'"), options: plain.headers["x-frame-options"] });
+  return held;
+}
+
 const NOT_DRIVEN = [
   ["grant_prompt_fullscreen",
     "fullscreen reacquired while a grant prompt is up: the shell draws no grant prompt until the system layer exists (slice D1b)"],
@@ -362,14 +427,16 @@ async function main() {
   proxy.close();
   receiver.close();
   const blind = await sessionBlind(server, `${publicNeighbour}/index.html`, cookie);
+  const framed = await frameRequestRefused(server, record[BROWSERS[0]].private.shell_path, cookie);
   writeFileSync(join(outDir, "containment-proof.json"),
-    JSON.stringify({ record, session_blind_page: blind ? "held" : "FAILED", not_driven: NOT_DRIVEN }, null, 2));
+    JSON.stringify({ record, session_blind_page: blind ? "held" : "FAILED",
+      frame_request_refused: framed ? "held" : "FAILED", not_driven: NOT_DRIVEN }, null, 2));
 
   const names = [...EXPECTED.map((e) => e.name), "suspended_invoke", "self_navigation_foreign",
-    "sibling_message", "shared_credential_url", "self_navigation_site"];
+    "self_navigation_session_page", "sibling_message", "shared_credential_url", "self_navigation_site"];
   const columnOf = (name) =>
     (EXPECTED.find((e) => e.name === name) || {}).column ||
-    (["suspended_invoke", "self_navigation_foreign"].includes(name) ? "refused" : "disclosure");
+    (["suspended_invoke", "self_navigation_foreign", "self_navigation_session_page"].includes(name) ? "refused" : "disclosure");
   const cell = (b, name) => {
     const p = (record[b].private.attempts[name] || {}).outcome || "not run";
     const q = (record[b].public.attempts[name] || {}).outcome || "not run";
@@ -380,6 +447,7 @@ async function main() {
     `|---|---|${BROWSERS.map(() => "---|").join("")}`,
     ...names.map((name) => `| ${name} | ${columnOf(name)} | ${BROWSERS.map((b) => cell(b, name)).join(" | ")} |`),
     `| session_blind_page | disclosure | ${blind ? "held" : "FAILED"} (asked of the server, with the cookie and without) |`,
+    `| frame_request_refused | refused | ${framed ? "held" : "FAILED"} (asked of the server, as a frame and not) |`,
     ...NOT_DRIVEN.map(([name, why]) => `| ${name} | not driven | ${why} |`),
   ];
   writeFileSync(join(outDir, "containment-proof.md"), table.join("\n") + "\n");

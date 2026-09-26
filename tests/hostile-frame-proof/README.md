@@ -42,6 +42,8 @@ Every attempt has one column, and the proof fails when an attempt leaves it:
 | `cookie_and_storage` | refused | the frame reads no cookie and holds no storage |
 | `suspended_invoke` | refused | a call made after the shell suspended the frame is refused |
 | `self_navigation_foreign` | refused | the frame's navigation of itself to a foreign origin reaches nothing: the shell's `frame-src 'self'` governs where its frames navigate |
+| `self_navigation_session_page` | refused | the frame's navigation of itself to a page that reads the session draws none of it: a Prism page is framed by nothing |
+| `frame_request_refused` | refused | a page that reads the session answers 403 to a request whose destination is a frame, before the session is read, and sets no cookie |
 | `sibling_message` | disclosure | a post to a sibling's window arrives as a message from an opaque origin, and changes neither the sibling's frame identity nor the shell |
 | `shared_credential_url` | disclosure | a credential address serves that version's bytes to whoever holds it, for the credential's window (private only) |
 | `self_navigation_site` | disclosure | the frame may navigate itself within the site; the navigation carries the frame's own address and no referrer |
@@ -59,8 +61,12 @@ Where the cookie is sent, the tincture does not receive it. The cookie is
 `HttpOnly`; the document that lands replaces the tincture's and stays in the
 frame's sandbox under an opaque origin; and the only pages of the site that
 run a tincture's code are served by routes that read no session
-(`session_blind_page`). A route that does read the session answers the
-person's browser, in a frame no tincture's code runs in.
+(`session_blind_page`). A route that does read the session refuses a request
+whose destination is a frame (`CyfrWeb.Plugs.FrameRequest`), and its pages are
+framed by nothing, so a browser that does not name the destination still draws
+none of them (`self_navigation_session_page`). Browsers name a request's
+destination only to a secure origin, which the harness's is not, so
+`frame_request_refused` asks the server directly.
 
 ## Not driven
 
@@ -81,5 +87,7 @@ cell private / public.
 | `sibling_message` | held / held | held / held | held / held |
 | `shared_credential_url` | held / not applicable | held / not applicable | held / not applicable |
 | `self_navigation_site` | held / held | held / held | held / held |
+| `self_navigation_session_page` | held / held | held / held | held / held |
 | session cookie sent on `self_navigation_site` | no | no | yes |
 | `session_blind_page` | held (asked of the server) | | |
+| `frame_request_refused` | held (asked of the server) | | |
