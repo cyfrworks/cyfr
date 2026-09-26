@@ -932,6 +932,29 @@ defmodule Cyfr.BoundariesTest do
                inspect(stale)
     end
 
+    test "the :setting class is the platform settings roster's keys, and nothing else" do
+      classes = Boundaries.config_key_classes(Cyfr.Platform.Settings.Roster.config_keys())
+      settings = for {key, :setting} <- classes, into: MapSet.new(), do: key
+
+      rostered =
+        for {app, key} <- Cyfr.Platform.Settings.Roster.config_keys(),
+            app in Boundaries.config_applications(),
+            into: MapSet.new(),
+            do: key
+
+      assert settings == rostered
+      # The caps are one keyword under Sanctum, the worker watch one under
+      # the host; each is one key of the class.
+      assert :caps in settings and :opus_watch in settings
+      assert :mcp_rate_limit_max in settings and :session_ttl_hours in settings
+      refute :max_athanors in settings
+
+      # No hand-written class shadows a setting's, and the hand-written ones
+      # are all still there.
+      assert MapSet.disjoint?(MapSet.new(Map.keys(Boundaries.config_key_classes())), rostered)
+      assert Map.drop(classes, MapSet.to_list(rostered)) == Boundaries.config_key_classes()
+    end
+
     test "the gaps are named, so they are a decision and not an oversight" do
       gaps =
         Boundaries.config_key_classes()
@@ -972,7 +995,17 @@ defmodule Cyfr.BoundariesTest do
       SourceTree.files!(Path.join(root(), "config/*.exs")) ++
         SourceTree.files!(Path.join(root(), "apps/*/config/*.exs"))
 
-    for path <- files, source = File.read!(path), reduce: [] do
+    # `config/runtime.exs` writes each platform setting's key from the
+    # roster, in one loop over its entries, so the declaration is the
+    # roster's rather than a literal in the file.
+    runtime = Path.join(root(), "config/runtime.exs")
+
+    rostered =
+      for {app, key} <- Cyfr.Platform.Settings.Roster.config_keys(),
+          app in Boundaries.config_applications(),
+          do: {runtime, app, key}
+
+    for path <- files, source = File.read!(path), reduce: rostered do
       acc ->
         rows =
           for [app, key] <- Regex.scan(single, source, capture: :all_but_first),

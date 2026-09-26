@@ -409,6 +409,15 @@ defmodule Cyfr.Telemetry.Catalog do
           "tenant shows up as a rising count rather than a quiet console"
     },
 
+    # ——— platform settings ———
+    [:cyfr, :platform_settings, :stale_served] => %{
+      consumers: [:operator],
+      note:
+        "a `serve` setting answered its last value because its cache had expired " <>
+          "and the store could not answer (`Arca.PlatformSettings.effective/1`): " <>
+          "counted, so a store outage that settings rode through is still seen"
+    },
+
     # ——— record sink ———
     [:cyfr, :record_sink, :dropped] => %{
       consumers: [:operator],

@@ -260,7 +260,7 @@ defmodule Cyfr.RuntimeConfigWiringTest do
       end)
     end
 
-    test "unset, each is derived from the key base, and the old names are not read" do
+    test "unset, each is derived from the key base" do
       key_base = Base.encode64(:crypto.strong_rand_bytes(48))
 
       derived =
@@ -271,18 +271,21 @@ defmodule Cyfr.RuntimeConfigWiringTest do
           |> binary_part(0, 16)
         end
 
-      for old <- [%{}, %{@old_session_salt => "old-session", @old_live_salt => "old-live"}] do
-        env = Map.merge(%{"CYFR_SECRET_KEY_BASE" => key_base}, old)
-
-        with_env(Map.merge(@salts_unset, env), fn ->
-          assert salts(read_prod_config!()) == List.to_tuple(derived)
-        end)
-      end
+      with_env(Map.put(@salts_unset, "CYFR_SECRET_KEY_BASE", key_base), fn ->
+        assert salts(read_prod_config!()) == List.to_tuple(derived)
+      end)
     end
 
-    test "the old key is not configured" do
-      with_env(Map.put(@salts_unset, @old_session_salt, "old-session"), fn ->
-        refute Keyword.has_key?(read_prod_config!()[:cyfr], :emissary_session_salt)
+    # No roster declares the old names, so the boot refuses each by name
+    # rather than ignoring it (`Cyfr.Platform.Settings.Roster.unknown/2`).
+    test "the old names refuse the boot, naming them" do
+      old = %{@old_session_salt => "old-session", @old_live_salt => "old-live"}
+
+      with_env(Map.merge(@salts_unset, old), fn ->
+        message = Exception.message(assert_raise(RuntimeError, &read_prod_config!/0))
+        assert message =~ "[Cyfr] FATAL: "
+        assert message =~ @old_session_salt and message =~ @old_live_salt
+        assert message =~ "not a variable this server reads"
       end)
     end
   end

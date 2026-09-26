@@ -24,7 +24,10 @@ defmodule Opus.Settings do
   build does not know (`keepers/0`), refuses the boot with the key named.
   `OPUS_KEEPER`, which once chose the keeper, is retired: an environment
   that sets it, blank or not, refuses the boot naming it, since the keeper
-  channel is the only launcher.
+  channel is the only launcher. So does any other `OPUS_*` name the release
+  does not read (`variables/0`) and compose does not interpolate
+  (`compose_only/0`): this module declares the prefix, because the release
+  carries no host module to declare it.
 
   `:runner_memory_bytes` is what `Opus.Keeper.Channel` asks `cyfr-keeper` to
   hold each runner to (`runner_memory_bytes/1`): a cgroup of the runner's
@@ -60,6 +63,20 @@ defmodule Opus.Settings do
 
   @channel_env "KEEPER_CHANNEL"
   @retired_keeper_env "OPUS_KEEPER"
+
+  # Every `OPUS_*` name the release reads, in either role: the role itself
+  # (`Opus.Release.role/1`), the service's credentials and listener
+  # (`Opus.Credentials`, read by `config/runtime.exs`), its pool (`pool/2`)
+  # and the runner's environment (`runner/1`).
+  @variables ~w(OPUS_ROLE OPUS_SERVICE_ID OPUS_SERVICE_KEY OPUS_HOST_URL OPUS_BIND OPUS_PORT
+                OPUS_POOL_SIZE OPUS_IDLE_TTL_MS OPUS_WATCHDOG_GRACE_MS OPUS_RELEASE_GRACE_MS
+                OPUS_RUNNER_MEMORY_BYTES OPUS_ATTACH_DIR OPUS_RUNNER_ID OPUS_BOOT_ID
+                OPUS_CONTROL_FD)
+
+  # The opus container's limits, which docker-compose.yml interpolates from
+  # the project .env and no release reads. A development boot sources that
+  # file, so a name in it is compose's, not a stray one.
+  @compose_only ~w(OPUS_MEMORY_LIMIT OPUS_CPU_LIMIT)
 
   # cyfr-keeper's range for a spawn's `memory_bytes`
   # (`apps/keeper/internal/protocol`: MinMemoryBytes, MaxMemoryBytes).
@@ -118,19 +135,25 @@ defmodule Opus.Settings do
     end
   end
 
+  @typedoc "Why the pool's settings refuse the boot."
+  @type pool_refusal ::
+          {:malformed, atom()} | {:retired, String.t()} | {:unknown, [String.t(), ...]}
+
   @doc "The pool settings `config :opus` spells, or the first key that refuses."
-  @spec pool() :: {:ok, pool()} | {:error, {:malformed, atom()} | {:retired, String.t()}}
+  @spec pool() :: {:ok, pool()} | {:error, pool_refusal()}
   def pool, do: pool(Application.get_all_env(:opus), System.get_env())
 
   @doc """
   The pool settings `env` (the `:opus` application environment) spells,
-  under the process environment `system`, which must not set the retired
-  `OPUS_KEEPER`.
+  under the environment `system` (the process environment and whatever
+  files the boot sourced), which must not set the retired `OPUS_KEEPER`
+  nor any other `OPUS_*` name the release does not declare.
   """
   @spec pool(keyword(), %{optional(String.t()) => String.t()}) ::
-          {:ok, pool()} | {:error, {:malformed, atom()} | {:retired, String.t()}}
+          {:ok, pool()} | {:error, pool_refusal()}
   def pool(env, system) when is_list(env) and is_map(system) do
     with :ok <- no_retired_keeper(system),
+         :ok <- no_unknown(system),
          {:ok, size} <- positive(env, :pool_size),
          {:ok, idle} <- positive(env, :idle_ttl_ms),
          {:ok, watchdog} <- positive(env, :watchdog_grace_ms),
@@ -183,7 +206,40 @@ defmodule Opus.Settings do
 
       {:error, {:retired, name}} ->
         raise ArgumentError, "[Opus.Settings] " <> retired(name)
+
+      {:error, {:unknown, names}} ->
+        raise ArgumentError, "[Opus.Settings] " <> unknown(names)
     end
+  end
+
+  @doc "Every `OPUS_*` name the release reads, in either role."
+  @spec variables() :: [String.t()]
+  def variables, do: @variables
+
+  @doc "The `OPUS_*` names docker-compose.yml interpolates and no release reads."
+  @spec compose_only() :: [String.t()]
+  def compose_only, do: @compose_only
+
+  @doc """
+  The `OPUS_*` names `system` sets that the release neither reads nor
+  compose interpolates, sorted. The retired `OPUS_KEEPER` is refused with a
+  message of its own (`retired/1`) and is not among them.
+  """
+  @spec unknown_names(%{optional(String.t()) => String.t()}) :: [String.t()]
+  def unknown_names(system) when is_map(system) do
+    declared = [@retired_keeper_env | @variables ++ @compose_only]
+
+    system
+    |> Map.keys()
+    |> Enum.filter(&(String.starts_with?(&1, "OPUS_") and &1 not in declared))
+    |> Enum.sort()
+  end
+
+  @doc "Why the undeclared names `names` refuse the boot, for the message that refuses it."
+  @spec unknown([String.t(), ...]) :: String.t()
+  def unknown([_ | _] = names) do
+    "#{Enum.join(names, ", ")} #{if match?([_], names), do: "is", else: "are"} not a " <>
+      "variable the opus release reads: remove it, or use the name .env.opus.example gives"
   end
 
   @doc "Why the retired variable `name` refuses the boot, for the message that refuses it."
@@ -273,6 +329,13 @@ defmodule Opus.Settings do
   end
 
   defp keeper(_keeper), do: {:error, {:malformed, :keeper}}
+
+  defp no_unknown(system) do
+    case unknown_names(system) do
+      [] -> :ok
+      names -> {:error, {:unknown, names}}
+    end
+  end
 
   defp no_retired_keeper(system) do
     if is_map_key(system, @retired_keeper_env),

@@ -42,7 +42,10 @@ defmodule Locus.Config do
   does the control plane's configuration in the node's environment
   (`refused_environment/1`): the database URL, the keyring, the worker
   root and the control plane's copy of the backends key are CYFR's, and a
-  node that can see them was given more than it holds.
+  node that can see them was given more than it holds. And so does any
+  `LOCUS_*` name the table does not list (`unknown_names/1`): this module
+  declares the prefix, because the release carries no host module to
+  declare it.
 
   `:memory_bytes` is the bound every build's spawn asks cyfr-keeper for
   (`Locus.Keeper`), and `:backends_memory_bytes` the bound each backend's
@@ -98,6 +101,14 @@ defmodule Locus.Config do
   @control_plane_only ~w(CYFR_DATABASE_URL CYFR_CRYPTO_KEYRING CYFR_OPUS_KEY
                          CYFR_LOCUS_BACKENDS_KEY)
 
+  # Every `LOCUS_*` name a node reads: the table above.
+  @variables ~w(LOCUS_BUILDS_KEY LOCUS_BUILDS_BIND LOCUS_BUILDS_PORT LOCUS_BUILDS_TIMEOUT_MS
+                LOCUS_BUILDS_MAX_CONCURRENT LOCUS_BUILDS_MAX_CONCURRENT_PER_TENANT
+                LOCUS_BUILDS_MEMORY_BYTES LOCUS_BUILDS_CARGO_SEED LOCUS_BUILDS_LOG_LEVEL
+                LOCUS_BUILDS_LOG_FORMAT LOCUS_BACKENDS_KEY LOCUS_BACKENDS_BIND
+                LOCUS_BACKENDS_PORT LOCUS_BACKENDS_MAX_IN_FLIGHT LOCUS_BACKENDS_INIT_TIMEOUT_MS
+                LOCUS_BACKENDS_RPC_TIMEOUT_MS LOCUS_BACKENDS_MEMORY_BYTES)
+
   @typedoc "The `:locus` application environment `from_env/1` writes."
   @type settings :: [
           request_key: binary() | nil,
@@ -122,11 +133,15 @@ defmodule Locus.Config do
   @doc """
   The `:locus` settings the environment `getenv` spells, every one present
   with its default where unset, or the first refusal as a message naming
-  the variable.
+  the variable. `names` is every name that environment assigns, the
+  process environment's by default: a `LOCUS_*` one this node does not
+  declare refuses too.
   """
-  @spec from_env(EnvValue.getenv()) :: {:ok, settings()} | {:error, String.t()}
-  def from_env(getenv) when is_function(getenv, 1) do
+  @spec from_env(EnvValue.getenv(), [String.t()]) :: {:ok, settings()} | {:error, String.t()}
+  def from_env(getenv, names \\ Map.keys(System.get_env()))
+      when is_function(getenv, 1) and is_list(names) do
     with [] <- refused_environment(getenv),
+         :ok <- no_unknown(names),
          {:ok, builds} <- builds(getenv),
          {:ok, backends} <- backends(getenv),
          :ok <- some_key(builds, backends),
@@ -211,6 +226,32 @@ defmodule Locus.Config do
          "CYFR_LOCUS_BUILDS_KEY or CYFR_LOCUS_BACKENDS_KEY on the server)."}
     else
       :ok
+    end
+  end
+
+  @doc "Every `LOCUS_*` name a node reads."
+  @spec variables() :: [String.t()]
+  def variables, do: @variables
+
+  @doc "The `LOCUS_*` names in `names` that a node does not read, sorted."
+  @spec unknown_names([String.t()]) :: [String.t()]
+  def unknown_names(names) when is_list(names) do
+    names
+    |> Enum.filter(&(String.starts_with?(&1, "LOCUS_") and &1 not in @variables))
+    |> Enum.uniq()
+    |> Enum.sort()
+  end
+
+  defp no_unknown(names) do
+    case unknown_names(names) do
+      [] ->
+        :ok
+
+      unknown ->
+        {:error,
+         "#{Enum.join(unknown, ", ")} #{if match?([_], unknown), do: "is", else: "are"} not " <>
+           "a variable the locus release reads: remove it, or use the name " <>
+           ".env.locus.example gives"}
     end
   end
 
