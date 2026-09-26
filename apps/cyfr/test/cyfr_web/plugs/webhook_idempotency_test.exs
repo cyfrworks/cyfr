@@ -200,6 +200,83 @@ defmodule CyfrWeb.Plugs.WebhookIdempotencyTest do
     end
   end
 
+  describe "a store that cannot answer" do
+    # Renamed inside the sandbox transaction, which rolls it back.
+    defp make_store_unavailable! do
+      Arca.Repo.query!("ALTER TABLE webhook_deliveries RENAME TO webhook_deliveries_unavailable")
+    end
+
+    test "refuses the delivery before the handler runs", %{ctx: ctx} do
+      webhook = create_hook!(ctx, "store-down", %{idempotency_key_header: "X-Cyfr-Delivery"})
+      webhook_id = webhook.id
+      event = [:cyfr, :emissary, :webhook, :dedup_unavailable]
+      ref = :telemetry_test.attach_event_handlers(self(), [event])
+      on_exit(fn -> :telemetry.detach(ref) end)
+
+      make_store_unavailable!()
+
+      result =
+        webhook
+        |> build_conn_with_webhook([{"x-cyfr-delivery", "evt_down"}])
+        |> WebhookIdempotency.call([])
+
+      assert result.halted
+      assert result.status == 503
+      assert Jason.decode!(result.resp_body)["code"] == "unavailable"
+      assert Plug.Conn.get_resp_header(result, "retry-after") == ["5"]
+      refute result.assigns[:webhook_delivery_claim]
+
+      assert_received {^event, ^ref, %{count: 1}, %{webhook_id: ^webhook_id}}
+    end
+
+    test "refuses the timestamp path's signature nonce too", %{ctx: ctx} do
+      hook = create_hook!(ctx, "store-down-ts", %{timestamp_header: "x-timestamp"})
+      make_store_unavailable!()
+
+      result =
+        hook
+        |> build_conn_with_webhook([
+          {"x-timestamp", "1234567890"},
+          {"x-cyfr-signature", "sha256=deadbeef"}
+        ])
+        |> WebhookIdempotency.call([])
+
+      assert result.halted
+      assert result.status == 503
+      assert Jason.decode!(result.resp_body)["code"] == "unavailable"
+    end
+
+    test "to release a failed delivery's claim leaves the retry refused as a duplicate",
+         %{ctx: ctx} do
+      webhook = create_hook!(ctx, "release-down", %{idempotency_key_header: "X-Cyfr-Delivery"})
+      webhook_id = webhook.id
+      headers = [{"x-cyfr-delivery", "evt_unreleased"}]
+      event = [:cyfr, :emissary, :webhook, :dedup_release_failed]
+      ref = :telemetry_test.attach_event_handlers(self(), [event])
+      on_exit(fn -> :telemetry.detach(ref) end)
+
+      claimed = webhook |> build_conn_with_webhook(headers) |> WebhookIdempotency.call([])
+      refute claimed.halted
+
+      # The outage covers only the release: the savepoint rolls the rename
+      # back once the handler's failure has been sent.
+      {:error, sent} =
+        Arca.Repo.transaction(fn ->
+          make_store_unavailable!()
+          Arca.Repo.rollback(send_status(claimed, 502))
+        end)
+
+      assert sent.status == 502
+      assert_received {^event, ^ref, %{count: 1}, %{webhook_id: ^webhook_id}}
+
+      retry = webhook |> build_conn_with_webhook(headers) |> WebhookIdempotency.call([])
+
+      assert retry.halted
+      assert retry.status == 200
+      assert Jason.decode!(retry.resp_body)["status"] == "duplicate"
+    end
+  end
+
   describe "Arca.WebhookDeliveryStorage.sweep/1" do
     test "deletes rows older than the cutoff, keeps newer rows", %{ctx: ctx} do
       webhook = create_hook!(ctx, "sweep", %{idempotency_key_header: "X-Cyfr-Delivery"})
