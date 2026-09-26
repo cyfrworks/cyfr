@@ -3,29 +3,54 @@
 
 defmodule CyfrWeb.Plugs.ScrubTinctureCredentials do
   @moduledoc """
-  Redacts tincture credential query params (`_t`, `_key`, `_session`) from
-  `conn.query_string` before the response is sent.
+  Redacts the asset credential a private tincture's served files carry in
+  their path (`/_s/<credential>/…`, `Prima.TinctureUrl`) from
+  `conn.request_path`, by shape: the segment after the served-file prefix
+  is replaced whatever it holds, so a malformed or refused credential is
+  redacted as surely as a live one.
 
-  Registered as a `before_send` callback rather than scrubbing on the way in,
-  because `Sanctum.TinctureAuth.authenticate/1` reads the credential from the
-  query string during the action — it must still be there then, and gone by the
-  time anything logs the request.
+  Routing reads `conn.path_info` and the action its path parameters, so
+  both still carry the credential; `conn.request_path` is what a log line,
+  a request-log row, a telemetry span or a crash report names the request
+  by, and from this plug on it names `/_s/[REDACTED]/…`. The rewrite is
+  made at once and again before the response is sent, so a response the
+  pipeline answers before the action — the rate limit's 429 — carries it
+  too.
 
-  A plug rather than a call inside each action: the rate-limit 429, the
-  boot-window 503 and the athanor-mismatch 404 all return before the action
-  ever touches authentication, and those responses are logged too.
-
-  This is defense in depth for a credential that should not be in a URL at all.
-  Operators should also redact these keys at their reverse proxy.
+  A credential in a path is visible to every intermediary that logs paths;
+  this is the server's own part of keeping it out of logs.
   """
 
   @behaviour Plug
+
+  @redacted "[REDACTED]"
 
   @impl true
   def init(opts), do: opts
 
   @impl true
   def call(conn, _opts) do
-    Plug.Conn.register_before_send(conn, &Sanctum.TinctureAuth.scrub_conn/1)
+    conn
+    |> scrub()
+    |> Plug.Conn.register_before_send(&scrub/1)
+  end
+
+  @doc "The connection with its request path redacted (`redact_path/1`)."
+  @spec scrub(Plug.Conn.t()) :: Plug.Conn.t()
+  def scrub(%Plug.Conn{request_path: path} = conn),
+    do: %{conn | request_path: redact_path(path)}
+
+  @doc """
+  A request path with the segment after the served-file prefix replaced by
+  `[REDACTED]`; any other path unchanged.
+  """
+  @spec redact_path(String.t()) :: String.t()
+  def redact_path(path) when is_binary(path) do
+    prefix = Prima.TinctureUrl.asset_prefix()
+
+    case String.split(path, "/", parts: 4) do
+      ["", ^prefix, _credential | rest] -> Enum.join(["", prefix, @redacted | rest], "/")
+      _other -> path
+    end
   end
 end

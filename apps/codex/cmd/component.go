@@ -31,7 +31,7 @@ func init() {
 	// cyfr.run push tokens are provisioned by `cyfr login` through
 	// /v1/identity/probe.
 	newCmd.Flags().String("version", "0.1.0", "Component version (semver)")
-	newCmd.Flags().String("template", "", "Scaffold template (tincture only: react)")
+	newCmd.Flags().String("template", "", "Scaffold template (tincture only: vanilla, vite or react)")
 	rootCmd.AddCommand(newCmd)
 	forkCmd.Flags().String("name", "", "New component name (defaults to original)")
 	forkCmd.Flags().String("version", "", "New component version (defaults to original)")
@@ -315,11 +315,13 @@ var newCmd = &cobra.Command{
 	Long: `Create a new component project with the appropriate scaffold.
 
 WASM types (catalyst, reagent, formula) get Cargo/WIT scaffolding and starter Rust source.
-Tinctures get HTML/JS/CSS scaffolding. Use --template react for a React + TypeScript + Vite project.`,
+Tinctures get HTML/JS/CSS scaffolding. Use --template vite for a Vite project, or --template react
+for a React + TypeScript + Vite project; both ship the lockfile their build installs from.`,
 	Example: `  cyfr new catalyst my-api
   cyfr new formula my-workflow --version 0.2.0
   cyfr new reagent my-transform
   cyfr new tincture my-dashboard
+  cyfr new tincture my-game --template vite
   cyfr new tincture my-dashboard --template react`,
 	Args: cobra.ExactArgs(2),
 	RunE: func(cmd *cobra.Command, args []string) error {

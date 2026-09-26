@@ -805,7 +805,7 @@ type ComponentCreateArgs struct {
 	Type string `json:"type"`
 	// Semver version (create/fork action)
 	Version Field[string] `json:"version,omitzero"`
-	// Scaffold template (tincture only). Omit for vanilla HTML/JS/CSS.
+	// Scaffold template (tincture only): vanilla HTML/JS/CSS, Vite, or React on Vite; the built two ship the lockfile their build installs from. Omit for vanilla.
 	Template Field[string] `json:"template,omitzero"`
 }
 

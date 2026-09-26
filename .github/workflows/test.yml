@@ -655,6 +655,14 @@ jobs:
       - name: The container's limit holds the builds and the service
         run: python3 tests/builder-image/headroom.py cyfr-locus:smoke
 
+      # A tincture builds only from its lockfile: one without it is refused
+      # before anything runs, one out of step with its package.json fails
+      # in `npm ci`, and an install script runs under the build's uid and
+      # finds no credential — not the builds key, nor any variable named
+      # for one, nor an npm registry credential.
+      - name: A tincture builds from its lockfile, its install scripts with no credential
+        run: python3 tests/builder-image/lockfile.py cyfr-locus:smoke
+
       # The same scan docker.yml runs before publishing the Locus image.
       - name: Scan the image
         uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0

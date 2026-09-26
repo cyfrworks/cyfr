@@ -5,7 +5,8 @@ defmodule Compendium.Tincture do
   @moduledoc """
   The tincture rules the component domain owns: which file a tincture
   serves as its entry, where its media live and how they are found, which
-  extensions an asset may have and which files are never served.
+  extensions an asset may have, which files are never served, and the
+  publish check a version passes before it is installed.
 
   Publish, index and serve read the same rules. Inside this domain the
   validators and the scaffolder call the functions here and keep their
@@ -13,12 +14,22 @@ defmodule Compendium.Tincture do
   `tincture_entry/1` as a typed refusal and `tincture_asset_rules/0` as one
   immutable map, and the HTTP adapter (`CyfrWeb.Ingress.TinctureAssets`)
   serves by that map.
+
+  The served types and the declaration grammar are the frame's rules
+  (`Compendium.Tincture.Rules`), read here through the `Compendium` facade,
+  so the extensions an asset may have are exactly the types a version
+  serves.
   """
 
   alias Sanctum.Context
 
   @reserved_files ["data.db", Compendium.ComponentPath.manifest_name(), "schema.sql"]
-  @allowed_extensions ~w(.html .js .css .json .svg .png .jpg .jpeg .gif .ico .woff .woff2 .ttf .eot .map)
+
+  # What a version carries beside the files it serves: the registry's
+  # readme and source tree (`Compendium.OCI.Client` lays them into the
+  # unit), which the publish check does not hold to the served types.
+  @readme "README.md"
+  @source_dir "src"
 
   # The raster set the CSAM launch constraint blocks in the two DISCOVERY
   # slots (icon/preview): a tincture whose discovered media names one of
@@ -74,9 +85,9 @@ defmodule Compendium.Tincture do
     }
   end
 
-  @doc "Extensions the asset serve gate honors — the one spelling."
+  @doc "Extensions the asset serve gate honors: the served types' (`Compendium.tincture_served_types/0`)."
   @spec allowed_extensions() :: [String.t()]
-  def allowed_extensions, do: @allowed_extensions
+  def allowed_extensions, do: Compendium.tincture_served_types() |> Map.keys() |> Enum.sort()
 
   @doc "The files a tincture never serves, as an entry or as an asset."
   @spec reserved_files() :: [String.t()]
@@ -93,7 +104,102 @@ defmodule Compendium.Tincture do
   """
   @spec image_extensions() :: [String.t()]
   def image_extensions do
-    [".svg" | @blocked_raster_extensions] |> Enum.filter(&(&1 in @allowed_extensions))
+    allowed = allowed_extensions()
+    [".svg" | @blocked_raster_extensions] |> Enum.filter(&(&1 in allowed))
+  end
+
+  @doc """
+  The publish check a tincture version passes before it is installed: its
+  declaration held to the frame's rules (`Compendium.tincture_declaration/1`),
+  every file it serves of a served type
+  (`Compendium.tincture_served_types/0`), and its decompressed size within
+  the registry's ceiling
+  (`Compendium.Registry.tincture_max_decompressed_bytes/0`). `files` are
+  the version's files as `{relative_path, byte_count}`, the excluded ones
+  already out.
+
+  The files a version serves are all of them but the reserved files,
+  dotfiles, its readme and its `src/` tree; for a built tincture (one that
+  declares `tincture.build`) only those under the entry's directory and
+  the media directory, the rest being the build's input. A file of another
+  type is refused by name, and a version over the ceiling with its size.
+  Answers the size, stated before anything is installed.
+  """
+  @spec check_version(map(), [{String.t(), non_neg_integer()}]) ::
+          {:ok, non_neg_integer()} | {:error, String.t()}
+  def check_version(manifest, files) when is_map(manifest) and is_list(files) do
+    size = Enum.reduce(files, 0, fn {_path, bytes}, acc -> acc + bytes end)
+
+    with :ok <- check_size(size),
+         :ok <- check_declaration(manifest),
+         :ok <- check_types(manifest, files) do
+      {:ok, size}
+    end
+  end
+
+  defp check_size(size) do
+    ceiling = Compendium.Registry.tincture_max_decompressed_bytes()
+
+    if size > ceiling,
+      do:
+        {:error,
+         "the version is #{size} bytes decompressed, over the registry's ceiling of " <>
+           "#{ceiling} bytes"},
+      else: :ok
+  end
+
+  defp check_declaration(manifest) do
+    case Compendium.tincture_declaration(manifest) do
+      {:ok, _declaration} -> :ok
+      {:error, {:invalid_tincture, sentence}} -> {:error, sentence}
+    end
+  end
+
+  defp check_types(manifest, files) do
+    types = Compendium.tincture_served_types()
+    roots = served_roots(manifest)
+
+    refused =
+      for {path, _bytes} <- files,
+          served?(path, roots),
+          not Map.has_key?(types, path |> Path.extname() |> String.downcase()),
+          do: path
+
+    case Enum.sort(refused) do
+      [] ->
+        :ok
+
+      [path | rest] ->
+        more = if rest == [], do: "", else: " (and #{length(rest)} more)"
+
+        {:error,
+         "#{path} is not a type a tincture serves#{more}; a served file is one of " <>
+           (types |> Map.keys() |> Enum.sort() |> Enum.join(" "))}
+    end
+  end
+
+  # The directories a built tincture serves from: its entry's top directory
+  # and the media directory. `:all` for a tincture that is not built, or a
+  # built one whose entry sits at the root.
+  defp served_roots(manifest) do
+    with true <- Compendium.tincture_lockfile_required?(manifest),
+         {:ok, entry} <- entry_of(manifest),
+         [top, _ | _] <- String.split(entry, "/") do
+      [[top], media_dir()]
+    else
+      _ -> :all
+    end
+  end
+
+  defp served?(path, roots) do
+    segments = String.split(path, "/")
+    name = List.last(segments)
+
+    cond do
+      name in @reserved_files or String.starts_with?(name, ".") -> false
+      roots == :all -> path != @readme and hd(segments) != @source_dir
+      true -> Enum.any?(roots, &List.starts_with?(segments, &1))
+    end
   end
 
   @doc """

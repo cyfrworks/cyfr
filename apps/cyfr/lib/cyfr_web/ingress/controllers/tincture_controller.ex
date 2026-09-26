@@ -5,19 +5,30 @@ defmodule CyfrWeb.Ingress.TinctureController do
   @moduledoc """
   Tincture HTTP serving on the host's ingress (the platform API surface).
 
-  All clients (Prism shell, CLI, API keys) access tinctures
-  through this single controller. Authentication is delegated to
-  `Sanctum.TinctureAuth`, which accepts a Phoenix signed token (`?_t=`) or an
-  `Authorization: Bearer` credential. Account credentials are never read from
-  a query string.
+  A public tincture is served at its address, to anyone; a private
+  tincture version's files only under an asset credential in their path
+  (`Prima.TinctureUrl`), which `Sanctum.TinctureAuth` mints for a person
+  and verifies on every request. No other credential opens a private
+  tincture's files: the credential names the person, the version and its
+  window, so the path is the whole of the authority a frame carries.
 
+  GET  /t/:athanor/:publisher/:tincture_name           — a public tincture's entry page
+  GET  /t/:athanor/:publisher/:tincture_name/*path     — a public tincture's files
+  GET  /_s/:credential/:publisher/:name/:version/*file — a private tincture version's files
   GET  /t/access-token                                 — mint a short-lived ?_t= token
-  GET  /t/:athanor/:publisher/:tincture_name           — serve index.html
   POST /t/:athanor/:publisher/:tincture_name/invoke    — invoke a backend component
-  GET  /t/:athanor/:publisher/:tincture_name/*path     — serve static assets
+
+  The bytes and their headers are `CyfrWeb.Ingress.TinctureAssets`'.
   """
 
   use CyfrWeb.Ingress, :controller
+
+  alias CyfrWeb.Ingress.TinctureAssets
+  alias Sanctum.TinctureAccess
+
+  # A public tincture's files may be cached for this long; its address,
+  # which follows its latest version, is revalidated.
+  @public_max_age 3600
 
   # A public URL is the public route regardless of authentication, and
   # names the tincture by its address; the private fallback is the
@@ -25,26 +36,6 @@ defmodule CyfrWeb.Ingress.TinctureController do
   # route.
   defp action_args(:public, athanor), do: %{"action" => "invoke_public", "athanor" => athanor}
   defp action_args(_private, _athanor), do: %{"action" => "invoke_protected"}
-
-  alias Sanctum.TinctureAccess
-
-  # A private tincture's own assets are fetched under a signed `/_s/`
-  # prefix: the iframe is sandboxed without `allow-same-origin`, so it
-  # carries no cookie and the URL is the only credential it has. That
-  # token is `Sanctum.TinctureAuth`'s to mint and to verify — derived from
-  # the caller's session or key, held to its rows on every fetch — and this
-  # surface only renders the outcome.
-
-  # Base CSP — connect-src is extended dynamically from manifest tincture.connect
-  @base_csp_prefix "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; " <>
-                     "img-src 'self' data:; font-src 'self'; "
-
-  # Tinctures are framed by the Prism shell on this same origin — the one
-  # endpoint serves both — so nothing else may frame them. The iframe is
-  # sandboxed (`allow-scripts` only, no `allow-same-origin`) with a
-  # per-request nonce, and a private tincture additionally requires a
-  # credential a third-party framer cannot obtain.
-  @base_csp_suffix "object-src 'none'; base-uri 'self'; frame-ancestors 'self'"
 
   # -------------------------------------------------------------------
   # Access-token mint — a cross-origin client (a CLI, an integration) exchanges its
@@ -116,7 +107,7 @@ defmodule CyfrWeb.Ingress.TinctureController do
   end
 
   # -------------------------------------------------------------------
-  # Index — serve the tincture's entry HTML
+  # A public tincture: its entry page at its address, and its files
   # -------------------------------------------------------------------
 
   def index(conn, %{
@@ -124,55 +115,30 @@ defmodule CyfrWeb.Ingress.TinctureController do
         "publisher" => publisher,
         "tincture_name" => tincture_name
       }) do
-    case resolve_tincture(conn, athanor, publisher, tincture_name) do
-      {:ok, tincture, :public, ctx} ->
-        case Compendium.tincture_entry(tincture) do
-          {:ok, entry} ->
-            base_href = Prima.TinctureUrl.path(athanor, publisher, tincture_name) <> "/"
+    with {:ok, tincture, ctx} <- resolve_public(athanor, publisher, tincture_name),
+         {:ok, entry} <- Compendium.tincture_entry(tincture) do
+      TinctureAssets.serve(conn, ctx, tincture, String.split(entry, "/"),
+        cache: :revalidate,
+        base: Prima.TinctureUrl.path(athanor, publisher, tincture_name) <> "/"
+      )
+    else
+      {:error, :unavailable} -> unavailable(conn)
+      {:error, _not_found_or_no_entry} -> CyfrWeb.ApiError.send(conn, 404, :not_found, nil)
+    end
+  end
 
-            csp = build_csp(tincture.manifest)
-
-            conn
-            |> put_resp_header("x-frame-options", "SAMEORIGIN")
-            |> CyfrWeb.Ingress.TinctureAssets.serve_index(
-              ctx,
-              tincture.segments,
-              entry,
-              base_href,
-              csp
-            )
-
-          {:error, _no_entry} ->
-            CyfrWeb.ApiError.send(conn, 404, :not_found, nil)
-        end
-
-      {:ok, tincture, :private, ctx} ->
-        case Compendium.tincture_entry(tincture) do
-          {:ok, entry} ->
-            case Sanctum.TinctureAuth.issue_asset_token(ctx, publisher, tincture_name) do
-              {:ok, token} ->
-                base_href =
-                  Prima.TinctureUrl.path(athanor, publisher, tincture_name) <> "/_s/#{token}/"
-
-                csp = build_csp(tincture.manifest)
-
-                conn
-                |> put_resp_header("x-frame-options", "SAMEORIGIN")
-                |> CyfrWeb.Ingress.TinctureAssets.serve_index(
-                  ctx,
-                  tincture.segments,
-                  entry,
-                  base_href,
-                  csp
-                )
-
-              {:error, reason} ->
-                mint_refused(conn, reason)
-            end
-
-          {:error, _no_entry} ->
-            CyfrWeb.ApiError.send(conn, 404, :not_found, nil)
-        end
+  def asset(conn, %{
+        "athanor" => athanor,
+        "publisher" => publisher,
+        "tincture_name" => tincture_name,
+        "path" => segments
+      }) do
+    case resolve_public(athanor, publisher, tincture_name) do
+      {:ok, tincture, ctx} ->
+        TinctureAssets.serve(conn, ctx, tincture, segments,
+          cache: {:public, @public_max_age},
+          base: Prima.TinctureUrl.path(athanor, publisher, tincture_name) <> "/"
+        )
 
       {:error, :unavailable} ->
         unavailable(conn)
@@ -181,6 +147,113 @@ defmodule CyfrWeb.Ingress.TinctureController do
         CyfrWeb.ApiError.send(conn, 404, :not_found, nil)
     end
   end
+
+  # -------------------------------------------------------------------
+  # A private tincture version's files, under an asset credential
+  # -------------------------------------------------------------------
+
+  # The credential is verified on every request, against the rows it
+  # names as they are now: a retired source, a person or athanor that
+  # changed standing, or a window that ended refuses the next fetch. The
+  # version is read in the credential's athanor and served only when its
+  # release digest (`Compendium.ReleaseDigest`: its bytes bound to its
+  # manifest) is the one the credential names; the bytes are read through the
+  # context the credential narrows, and cached for no longer than it has
+  # left.
+  def served(conn, %{"path" => segments}) do
+    with {:ok, %{credential: credential, path: [publisher, name, version | file]}}
+         when file != [] <-
+           Prima.TinctureUrl.parse_asset_path([Prima.TinctureUrl.asset_prefix() | segments]),
+         client_ip = Sanctum.ClientIp.resolve(conn),
+         {:ok, authority} <-
+           Sanctum.TinctureAuth.verify_asset_credential(credential, client_ip: client_ip),
+         ctx = asset_context(authority, client_ip),
+         {:ok, tincture} <- version(ctx, publisher, name, version, authority.version_digest) do
+      TinctureAssets.serve(conn, ctx, tincture, file,
+        cache: {:private, authority.remaining_s},
+        base: Prima.TinctureUrl.asset_path(credential, [publisher, name, version]) <> "/"
+      )
+    else
+      {:error, reason}
+      when reason in [:invalid_credential, :expired_credential] ->
+        CyfrWeb.ApiError.send(conn, 401, reason, nil)
+
+      {:error, reason} when reason in [:not_member, :not_standing, :ip_not_allowed] ->
+        CyfrWeb.ApiError.send(conn, 403, reason, nil)
+
+      {:error, :unavailable} ->
+        unavailable(conn)
+
+      _not_found ->
+        CyfrWeb.ApiError.send(conn, 404, :not_found, nil)
+    end
+  end
+
+  # What the credential opens, as a context: reads in the person's
+  # athanor, bound to the credential's source and deadline. It is not an
+  # authenticated caller — only `Sanctum.Caller.establish/2` builds one —
+  # and carries no permission: it names whose bytes are read, and nothing
+  # runs under it.
+  defp asset_context(authority, client_ip) do
+    Sanctum.Context.build(
+      user_id: authority.user_id,
+      athanor_id: authority.athanor_id,
+      scope: :athanor,
+      authenticated: false,
+      credential_binding: authority.credential_binding,
+      credential_deadline: authority.expires_at,
+      client_ip: client_ip
+    )
+  end
+
+  # The version the path names, in the credential's athanor, when its
+  # release digest is the credential's; any other version, absent or not, is not
+  # found.
+  defp version(ctx, publisher, name, version, digest) do
+    with :ok <- Prima.ComponentRef.validate_ref_parts(publisher, name),
+         :ok <- Prima.ComponentRef.validate_version(version) do
+      reference =
+        Prima.ComponentRef.to_string(%Prima.ComponentRef{
+          type: "tincture",
+          namespace: publisher,
+          name: name,
+          version: version
+        })
+
+      case Compendium.inspect_component(ctx, reference) do
+        {:ok, %{"release_digest" => ^digest} = row} ->
+          {:ok,
+           %{
+             segments: Prima.ComponentPath.version_dir("tincture", publisher, name, version),
+             manifest: decode_manifest(row["manifest"])
+           }}
+
+        {:ok, _another_version} ->
+          {:error, :not_found}
+
+        {:error, {:not_found, _reference}} ->
+          {:error, :not_found}
+
+        # The reference was held to its grammar above, so any other refusal
+        # is the store's: it could not say, and nothing is served.
+        {:error, _unanswered} ->
+          {:error, :unavailable}
+      end
+    else
+      _malformed -> {:error, :not_found}
+    end
+  end
+
+  defp decode_manifest(manifest) when is_map(manifest), do: manifest
+
+  defp decode_manifest(manifest) when is_binary(manifest) do
+    case Jason.decode(manifest) do
+      {:ok, decoded} when is_map(decoded) -> decoded
+      _ -> %{}
+    end
+  end
+
+  defp decode_manifest(_manifest), do: %{}
 
   # -------------------------------------------------------------------
   # Invoke — execute a backend component on behalf of the tincture
@@ -239,103 +312,6 @@ defmodule CyfrWeb.Ingress.TinctureController do
     end
   end
 
-  # -------------------------------------------------------------------
-  # Assets — static files (JS, CSS, images).
-  #
-  # Three resolution paths, in order:
-  #   1. Path-prefixed signed token (`_s/{token}/...`) — used by the iframe
-  #      base_href that the entry route hands out for private tinctures.
-  #   2. Public tincture — anyone can fetch.
-  #   3. Authenticated session — a picker fetches icons/previews from
-  #      <img> tags outside any iframe, so it relies on the same auth that
-  #      the entry route uses (MCP session / API key / signed token via
-  #      query param, all handled by `Sanctum.TinctureAuth`).
-  # -------------------------------------------------------------------
-
-  def asset(conn, %{
-        "athanor" => athanor,
-        "publisher" => publisher,
-        "tincture_name" => tincture_name,
-        "path" => segments
-      }) do
-    # Assets are loaded by the same-origin tincture iframe.
-    conn = put_resp_header(conn, "x-frame-options", "SAMEORIGIN")
-
-    case segments do
-      ["_s", token | asset_segments] when asset_segments != [] ->
-        serve_signed_asset(conn, athanor, publisher, tincture_name, token, asset_segments)
-
-      _ ->
-        case resolve_tincture(conn, athanor, publisher, tincture_name) do
-          {:ok, tincture, :public, ctx} ->
-            conn
-            |> page_csp(tincture, segments)
-            |> CyfrWeb.Ingress.TinctureAssets.serve_asset(ctx, tincture.segments, segments,
-              public: true
-            )
-
-          {:ok, tincture, :private, ctx} ->
-            conn
-            |> page_csp(tincture, segments)
-            |> CyfrWeb.Ingress.TinctureAssets.serve_asset(ctx, tincture.segments, segments,
-              public: false
-            )
-
-          {:error, :unavailable} ->
-            unavailable(conn)
-
-          {:error, :not_found} ->
-            CyfrWeb.ApiError.send(conn, 404, :not_found, nil)
-        end
-    end
-  end
-
-  # The token is verified against this request's own athanor, tincture and
-  # client address; the bytes are served only through the context it
-  # narrows. A store that cannot answer serves nothing.
-  defp serve_signed_asset(conn, athanor, publisher, tincture_name, token, segments) do
-    outcome =
-      with {:ok, public_ctx} <- TinctureAccess.public_context(athanor),
-           request_ctx = %{public_ctx | client_ip: Sanctum.ClientIp.resolve(conn)},
-           {:ok, ctx} <-
-             Sanctum.TinctureAuth.verify_asset_token(token, request_ctx, publisher, tincture_name),
-           {:ok, tincture} <- TinctureAccess.lookup(ctx, publisher, tincture_name) do
-        {:serve, ctx, tincture}
-      end
-
-    case outcome do
-      {:serve, ctx, tincture} ->
-        conn
-        |> page_csp(tincture, segments)
-        |> CyfrWeb.Ingress.TinctureAssets.serve_asset(ctx, tincture.segments, segments,
-          public: false
-        )
-
-      {:error, :expired_credential} ->
-        CyfrWeb.ApiError.send(
-          conn,
-          401,
-          :expired_credential,
-          nil
-        )
-
-      {:error, :invalid_credential} ->
-        CyfrWeb.ApiError.send(conn, 401, :invalid_credential, nil)
-
-      {:error, :not_member} ->
-        CyfrWeb.ApiError.send(conn, 403, :not_member, nil)
-
-      {:error, reason} when reason in [:not_standing, :ip_not_allowed] ->
-        CyfrWeb.ApiError.send(conn, 403, reason, nil)
-
-      {:error, :unavailable} ->
-        unavailable(conn)
-
-      _ ->
-        CyfrWeb.ApiError.send(conn, 404, :not_found, nil)
-    end
-  end
-
   # A store that could not say whether the credential stands: retryable,
   # and nothing is served — never read as "not found" or as allowed.
   defp unavailable(conn) do
@@ -360,13 +336,25 @@ defmodule CyfrWeb.Ingress.TinctureController do
   defp mint_refused(conn, reason), do: CyfrWeb.ApiError.refuse(conn, reason)
 
   # -------------------------------------------------------------------
-  # Private helpers
+  # Resolution
   # -------------------------------------------------------------------
 
-  # Look up the tincture and return the auth context too, so callers can pass
-  # `ctx` into Arca-routed serving helpers without re-authenticating. An
-  # athanor segment that names no active athanor is a 404 before any lookup,
-  # and one the store cannot resolve is a 503.
+  # A public tincture in the athanor the address names, with the public
+  # context its bytes are read under. An athanor segment that names no
+  # active athanor is not found, and one the store cannot resolve is
+  # unavailable.
+  defp resolve_public(athanor, publisher, tincture_name) do
+    with {:ok, public_ctx} <- TinctureAccess.public_context(athanor),
+         {:ok, tincture} <- TinctureAccess.get_public(public_ctx, publisher, tincture_name) do
+      {:ok, tincture, public_ctx}
+    end
+  end
+
+  # The invoke route's reading: the public tincture, or else a private one
+  # in the authenticated caller's own athanor — the URL's athanor must be
+  # the resolved context's, or one athanor's tincture would run under
+  # another's URL. A store that cannot say who is asking is an outage,
+  # never a stranger.
   defp resolve_tincture(conn, athanor, publisher, tincture_name) do
     with {:ok, public_ctx} <- TinctureAccess.public_context(athanor) do
       case TinctureAccess.get_public(public_ctx, publisher, tincture_name) do
@@ -374,12 +362,6 @@ defmodule CyfrWeb.Ingress.TinctureController do
           {:ok, tincture, :public, public_ctx}
 
         {:error, :not_found} ->
-          # Private fallback: the authenticated caller may only see a private
-          # tincture in their OWN athanor, so the URL's athanor must be the
-          # resolved context's — otherwise we'd serve one athanor's tincture
-          # under another athanor's URL.
-          # A store that cannot say who is asking is an outage, never a
-          # stranger: it answers `:unavailable`, not an indistinguishable 404.
           case Sanctum.TinctureAuth.authenticate(conn) do
             {:ok, %Sanctum.Context{athanor_id: id} = ctx} when id == public_ctx.athanor_id ->
               case TinctureAccess.get_private(ctx, publisher, tincture_name) do
@@ -396,48 +378,4 @@ defmodule CyfrWeb.Ingress.TinctureController do
       end
     end
   end
-
-  # An `.html` asset is a PAGE of a multi-page tincture, not a static file:
-  # the `:tincture_asset` pipeline's `default-src 'none'; frame-ancestors
-  # 'none'` is right for a script or an image and wrong for a document, so a
-  # link from the entry to page2.html loaded nothing and could not be framed.
-  # `.html` is first in the served-extension roster, so this is the ordinary
-  # case, not an exotic one. Everything else keeps the locked-down header.
-  defp page_csp(conn, tincture, segments) do
-    if segments
-       |> List.last()
-       |> to_string()
-       |> String.downcase()
-       |> String.ends_with?(".html") do
-      conn
-      |> put_resp_header("content-security-policy", build_csp(tincture.manifest))
-      |> put_resp_header("x-frame-options", "SAMEORIGIN")
-    else
-      conn
-    end
-  end
-
-  defp build_csp(manifest) do
-    connect_domains = get_in(manifest || %{}, ["tincture", "connect"]) || []
-
-    extra =
-      connect_domains
-      |> Enum.filter(&valid_connect_domain?/1)
-      |> Enum.map_join(" ", &"https://#{&1}")
-
-    connect_src =
-      if extra == "" do
-        "connect-src 'self'; "
-      else
-        "connect-src 'self' #{extra}; "
-      end
-
-    @base_csp_prefix <> connect_src <> @base_csp_suffix
-  end
-
-  # Validate connect domain entries: allow domain names and wildcard subdomains only.
-  # The grammar is the component domain's (`Compendium.valid_tincture_connect_domain?/1`),
-  # which the manifest validator holds entries to at publish; this
-  # filter stays as defense in depth for manifests that predate the gate.
-  defp valid_connect_domain?(domain), do: Compendium.valid_tincture_connect_domain?(domain)
 end

@@ -96,6 +96,11 @@ defmodule CyfrWeb.Endpoint do
     plug(Phoenix.CodeReloader)
   end
 
+  # A private tincture's asset credential travels in its path (`/_s/…`).
+  # Redacted from `conn.request_path` before anything names the request by
+  # it — the endpoint's telemetry span, Phoenix's request log line, a
+  # refusal of the ownership plug — while routing still reads `path_info`.
+  plug(CyfrWeb.Plugs.ScrubTinctureCredentials)
   plug(CyfrWeb.MetricsPlug)
   plug(Plug.RequestId)
   # A boot that lost the control plane serves nothing but health.

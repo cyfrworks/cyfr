@@ -458,6 +458,66 @@ defmodule Compendium.BuildsTest do
     end
   end
 
+  describe "a tincture build" do
+    @tincture "tincture:local.board:0.1.0"
+    @tincture_unit ComponentPath.version_dir("tincture", "local", "board", "0.1.0")
+
+    setup %{ctx: ctx} do
+      {:ok, _} = Compendium.Scaffold.create(ctx, "board", "tincture", "0.1.0", template: "vite")
+      :ok
+    end
+
+    defp tincture_result(outputs),
+      do: %{language: :javascript, target_type: :tincture, outputs: outputs, diagnostics: []}
+
+    test "sends the package manifest with its lockfile, and keeps the notices the build answers",
+         %{ctx: ctx} do
+      notices = ~s([{"name":"left-pad","version":"1.3.0","license":"WTFPL","notices":[]}]\n)
+
+      ScriptedBuilder.script([
+        {:stream,
+         [
+           {:result,
+            tincture_result(%{
+              "index.html" => "<html><head></head><body></body></html>",
+              "third-party-notices.json" => notices
+            })}
+         ]}
+      ])
+
+      assert {:ok, %{status: "compiled", files: files}} =
+               Builds.compile(ctx, @tincture)
+
+      assert Enum.sort(files) == ["index.html", "third-party-notices.json"]
+
+      assert [request] = ScriptedBuilder.requests()
+      assert request.language == :javascript and request.target_type == :tincture
+
+      {:ok, lock} = Arca.get(Sanctum.Context.actor(ctx), @tincture_unit ++ ["package-lock.json"])
+      assert request.sources["package-lock.json"] == lock
+      assert Map.has_key?(request.sources, "package.json")
+      refute Enum.any?(Map.keys(request.sources), &String.starts_with?(&1, "dist/"))
+
+      assert {:ok, ^notices} =
+               Arca.get(
+                 Sanctum.Context.actor(ctx),
+                 @tincture_unit ++ ["dist", "third-party-notices.json"]
+               )
+
+      ScriptedBuilder.await_builds()
+    end
+
+    test "without its lockfile is refused before the builder is asked", %{ctx: ctx} do
+      :ok = Arca.delete(Sanctum.Context.actor(ctx), @tincture_unit ++ ["package-lock.json"])
+
+      assert {:error, message} = Builds.compile(ctx, @tincture)
+      assert message =~ "package-lock.json"
+      assert message =~ "only from its lockfile"
+      assert ScriptedBuilder.requests() == []
+      refute Arca.exists?(Sanctum.Context.actor(ctx), @tincture_unit ++ ["dist"])
+    end
+  end
+
   describe "validating bytes" do
     # A refusal whose reason is a tuple carries the binary's own bytes or
     # sizes after its tag; the answer is the tag, spelled as the builder

@@ -3,13 +3,13 @@
 
 defmodule Compendium.RegistryTest.FailingPutAdapter do
   @moduledoc false
-  # Delegates to the Local adapter but refuses to write `boom.txt` —
+  # Delegates to the Local adapter but refuses to write `boom.js` —
   # simulates an object-store write failing partway through a multi-file
   # tincture store.
   use Arca.Storage.TestDouble
 
   def put(actor, path, content) do
-    if List.last(path) == "boom.txt" do
+    if List.last(path) == "boom.js" do
       {:error, :injected_write_failure}
     else
       Arca.Adapters.Local.put(actor, path, content)
@@ -1233,7 +1233,7 @@ defmodule Compendium.RegistryTest do
           {"cyfr-manifest.json",
            Jason.encode!(%{"name" => "partial", "version" => "1.0.0", "type" => "tincture"})},
           {"index.html", "<html></html>"},
-          {"boom.txt", "this write fails"}
+          {"boom.js", "this write fails"}
         ])
 
       assert {:error, {:tincture_store_failed, :injected_write_failure}} =
