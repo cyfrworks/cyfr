@@ -175,7 +175,7 @@ defmodule Prima.WorkerAuth do
   # header before it reads the body it covers (`verify_host_call_header/4`,
   # `verify_request_header/3`, `verify_report_header/3`, then `verify_body/2`).
   @call %MacEnvelope{
-    prefix: "cyfr-opus/v1",
+    prefix: Prima.MacEnvelope.domain(:opus),
     kind: "call",
     fields:
       @attempt_fields ++
@@ -191,13 +191,13 @@ defmodule Prima.WorkerAuth do
 
   @dispatch_fields [service: :string, boot: :string, ts: :integer, nonce: :string]
   @request %MacEnvelope{
-    prefix: "cyfr-opus/v1",
+    prefix: Prima.MacEnvelope.domain(:opus),
     kind: "request",
     fields: @dispatch_fields,
     body_hash_in_header: true
   }
   @report %MacEnvelope{
-    prefix: "cyfr-opus/v1",
+    prefix: Prima.MacEnvelope.domain(:opus),
     kind: "report",
     fields: @dispatch_fields,
     body_hash_in_header: true
