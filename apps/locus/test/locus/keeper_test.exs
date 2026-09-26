@@ -3,7 +3,7 @@
 
 defmodule Locus.KeeperTest do
   @moduledoc """
-  The client side of cyfr-keeper's protocol. Against a fake spawner
+  The client side of cyfr-keeper's protocol. Against a fake keeper
   (`Locus.Test.FakeKeeper`): a run delivers stdin, answers stdout, the log
   line by line and the exit, and returns only after the spawn is reported
   released; every spawn asks for the builder's memory bound, and there is
@@ -62,7 +62,7 @@ defmodule Locus.KeeperTest do
     end
   end
 
-  describe "against the fake spawner" do
+  describe "against the fake keeper" do
     setup do
       {fake, channel} = FakeKeeper.start()
       attach_dir = FakeKeeper.short_tmp_dir()
@@ -155,7 +155,7 @@ defmodule Locus.KeeperTest do
       assert {{:ok, %{exit: {:signal, "SIGKILL"}}}, _} = run(name, "true")
     end
 
-    test "a spawner that cannot enforce the bound runs nothing: unavailable, naming the option",
+    test "a keeper that cannot enforce the bound runs nothing: unavailable, naming the option",
          %{
            name: name,
            fake: fake

@@ -352,10 +352,10 @@ class Origin:
 
 def test_process_model(stack):
     procs = stack.processes()
-    spawner = [p for p in procs if p["cmd"].startswith("cyfr-keeper serve")]
+    keeper = [p for p in procs if p["cmd"].startswith("cyfr-keeper serve")]
     service = [p for p in procs if p["uids"][0] == SERVICE_UID and "beam.smp" in p["cmd"]]
     runners = stack.runner_processes()
-    expect(len(spawner) == 1 and spawner[0]["uids"] == [0, 0, 0, 0] and spawner[0]["cap_eff"] == SPAWNER_CAPS,
+    expect(len(keeper) == 1 and keeper[0]["uids"] == [0, 0, 0, 0] and keeper[0]["cap_eff"] == SPAWNER_CAPS,
            "cyfr-keeper runs as root holding exactly SETUID, SETGID and KILL", procs)
     expect(len(service) == 1 and [p for p in procs if p["pid"] == service[0]["pid"]][0]["cap_eff"] == "0000000000000000",
            "the service runs as opus with no capability", procs)

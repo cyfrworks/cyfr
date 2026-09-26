@@ -28,7 +28,8 @@ defmodule Cyfr.DocsDriftTest do
   # owns. The prefixes are this roster, each named by one row.
   @env_prefixes ~w(CYFR_ CYFR_OPUS_ CYFR_CRUCIBLE_ CYFR_HOST_API_ CYFR_LOCUS_BUILDS_
                    CYFR_LOCUS_BACKENDS_ OPUS_ LOCUS_BUILDS_ LOCUS_BACKENDS_ KEEPER_)
-  @glossary_names ~w(Prima Arca Sanctum Grimoire Cyfr Compendium Aqua Crucible Emissary Prism Codex Opus Locus keeper)
+  @glossary_names ~w(Prima Arca Sanctum Grimoire Cyfr Compendium Aqua Crucible Emissary Prism Codex Opus Locus keeper
+                     actor athanor)
 
   # The files that read the releases' environment: the control plane's
   # configuration (the `CYFR_*` variables `config/runtime.exs` reads into
@@ -207,6 +208,132 @@ defmodule Cyfr.DocsDriftTest do
         assert service.dockerfile == built[published],
                "compose builds #{name} from #{service.dockerfile}, docker.yml from #{built[published]}"
       end
+    end
+  end
+
+  # ==========================================================================
+  # One vocabulary
+  #
+  # The glossary names each namespace once, and the retired name of the
+  # tenancy unit appears in no tracked file of the tree, the seed, the
+  # image suites or the root guides. The pattern is the vocabulary-gate
+  # job's, read from its step in the workflow, which owns it.
+  # ==========================================================================
+
+  @workflow Path.join(@repo_root, ".github/workflows/test.yml")
+  @fossil_step "Tier A/B fossil patterns must be absent"
+
+  # A shipped component version is immutable, and this one's README and
+  # manifest say the retired name; it changes only in a new version.
+  # Exact: the exception must still hold a hit.
+  @retired_name_exceptions ["seed/components/formulas/local/list-models/0.6.2/"]
+
+  # The directories that are namespaces: each application under apps/, and
+  # each directory under the control plane's lib/ with a facade module
+  # beside it, less the web tiers, which belong to their namespace.
+  defp namespace_directories do
+    apps =
+      for path <- Path.wildcard(Path.join(@repo_root, "apps/*")),
+          File.dir?(path),
+          do: Path.basename(path)
+
+    lib = Path.join(@repo_root, "apps/cyfr/lib")
+
+    control_plane =
+      for path <- Path.wildcard(Path.join(lib, "*")),
+          File.dir?(path),
+          name = Path.basename(path),
+          File.regular?(Path.join(lib, name <> ".ex")),
+          not String.ends_with?(name, "_web"),
+          do: name
+
+    Enum.uniq(apps ++ control_plane)
+  end
+
+  test "the glossary names every namespace directory under apps/ exactly once" do
+    {_header, rows} = glossary()
+    names = Enum.map(rows, &(&1 |> hd() |> String.downcase()))
+    directories = namespace_directories()
+
+    # Guards against the scan quietly matching nothing.
+    assert "keeper" in directories and "codex" in directories and "grimoire" in directories
+
+    counts =
+      for directory <- directories,
+          n = Enum.count(names, &(&1 == directory)),
+          n != 1,
+          do: {directory, n}
+
+    assert counts == [],
+           "each namespace directory is one glossary row; these are not ({directory, rows}): " <>
+             inspect(counts)
+  end
+
+  # The retired-name pattern of the vocabulary-gate job: the one pattern of
+  # its fossil loop that spells the capitalised form of the retired name.
+  defp retired_name_pattern do
+    workflow = File.read!(@workflow)
+
+    [_, run] =
+      Regex.run(
+        ~r/- name: #{Regex.escape(@fossil_step)}\n\s+run: \|\n(.*?)\n\s+; do\n/s,
+        workflow
+      ) ||
+        flunk("test.yml has no #{inspect(@fossil_step)} step with a fossil loop")
+
+    patterns =
+      for [pattern] <- Regex.scan(~r/^\s+'([^']+)' \\$/m, run, capture: :all_but_first),
+          pattern =~ "[Ee]state",
+          do: pattern
+
+    case patterns do
+      [pattern] -> Regex.compile!(pattern)
+      other -> flunk("the fossil loop holds #{length(other)} retired-name patterns, not one")
+    end
+  end
+
+  test "the retired-name pattern is read from the gate and reads the name, not English words" do
+    pattern = retired_name_pattern()
+    name = "e" <> "state"
+
+    for line <- ["an #{name}", String.capitalize(name) <> "s", "my" <> String.capitalize(name)],
+        do: assert(line =~ pattern, "the pattern misses #{inspect(line)}")
+
+    for line <- ["re" <> name <> "d", "inter" <> name, "athanor"],
+        do: refute(line =~ pattern, "the pattern reads #{inspect(line)}")
+  end
+
+  test "no tracked file under apps/, seed/, tests/ or the root guides says the retired name" do
+    pattern = retired_name_pattern()
+
+    {listing, 0} =
+      System.cmd("git", ["ls-files", "-z", "--", "apps", "seed", "tests", ":(glob)*.md"],
+        cd: @repo_root
+      )
+
+    files = String.split(listing, <<0>>, trim: true)
+    assert "README.md" in files and Enum.any?(files, &String.starts_with?(&1, "seed/"))
+
+    hits =
+      for rel <- files,
+          path = Path.join(@repo_root, rel),
+          File.regular?(path),
+          text = File.read!(path),
+          not String.contains?(text, <<0>>),
+          {line, n} <- text |> String.split("\n") |> Enum.with_index(1),
+          line =~ pattern,
+          do: {rel, n}
+
+    excepted? = fn {rel, _} -> String.starts_with?(rel, @retired_name_exceptions) end
+    {excepted, stray} = Enum.split_with(hits, excepted?)
+
+    assert stray == [],
+           "these lines say the retired name of the athanor: " <>
+             Enum.map_join(stray, ", ", fn {rel, n} -> "#{rel}:#{n}" end)
+
+    for prefix <- @retired_name_exceptions do
+      assert Enum.any?(excepted, fn {rel, _} -> String.starts_with?(rel, prefix) end),
+             "#{prefix} no longer says the retired name; remove its exception"
     end
   end
 
