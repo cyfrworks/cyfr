@@ -504,7 +504,7 @@ defmodule Locus.Backends.ServiceTest do
 
         message, {held, answers} ->
           at(ctx, message["now"])
-          if message == refused and given["stderr_bytes"], do: await_stderr(ctx, given)
+          if message == refused and given["stderr_bytes"], do: await_stderr(ctx, messages, given)
           {held, Map.put(answers, message, send_message(ctx.port, message))}
       end)
 
@@ -563,20 +563,32 @@ defmodule Locus.Backends.ServiceTest do
     true = :ets.insert(Service.Nonces, rows)
   end
 
-  # Every backend's stderr arrived: the status the vector asks for is
-  # whole.
-  defp await_stderr(ctx, %{"stderr_bytes" => bytes}) do
+  # Every backend the vector's syncs name has started and its stderr
+  # arrived: the status the vector asks for is whole. A sync is answered
+  # on admission and its backends start after the answer, one child at a
+  # time, so the children started so far need not be every backend.
+  defp await_stderr(ctx, messages, %{"stderr_bytes" => bytes}) do
     wanted = min(bytes, LB.stderr_tail_bytes())
+    named = messages |> Enum.flat_map(&synced_backends/1) |> length()
 
     wait_until(fn ->
       children = DynamicSupervisor.which_children(ctx.supervisor)
 
-      children != [] and
+      length(children) == named and
         Enum.all?(children, fn {_, pid, _, _} ->
           byte_size(Backend.status(pid).stderr_tail) >= wanted
         end)
     end)
   end
+
+  defp synced_backends(%{"route" => "control", "body" => body}) do
+    case Jason.decode(body) do
+      {:ok, %{"type" => "sync", "backends" => backends}} -> backends
+      _other -> []
+    end
+  end
+
+  defp synced_backends(_message), do: []
 
   # ————— MCP —————
 
