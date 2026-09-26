@@ -14,11 +14,11 @@ defmodule Locus.BuilderServiceTest do
   toolchain, a cap reached. After it, the answer is lines: a result, or the
   refusal the build ended with, its diagnostics bounded. A deadline reached
   mid-build ends the build's process group; a client that leaves ends its
-  build within a bound and its slot goes back; the spawner's memory answers
+  build within a bound and its slot goes back; the keeper's memory answers
   are the wire's `memory` and `unavailable`.
   """
 
-  # Serves on the application's build slots and, in places, as its spawner.
+  # Serves on the application's build slots and, in places, as its keeper.
   use ExUnit.Case, async: false
 
   alias Prima.{BuilderProtocol, Slots}
@@ -74,7 +74,7 @@ defmodule Locus.BuilderServiceTest do
     String.split(File.read!(file), "\n", trim: true)
   end
 
-  # The application's spawner for the test: `Locus.Keeper` under its own
+  # The application's keeper for the test: `Locus.Keeper` under its own
   # name, which is how the service finds it, against a fake cyfr-keeper.
   defp spawner!(mode) do
     {fake, channel} = FakeKeeper.start()
@@ -143,7 +143,7 @@ defmodule Locus.BuilderServiceTest do
 
   describe "a build refused before its stream, nothing spawned" do
     setup do
-      # Whatever reaches the spawner shows here; nothing may.
+      # Whatever reaches the keeper shows here; nothing may.
       fake = spawner!(:normal)
 
       on_exit(fn ->
@@ -499,7 +499,7 @@ defmodule Locus.BuilderServiceTest do
     end
   end
 
-  describe "under the spawner" do
+  describe "under the keeper" do
     @describetag :requires_node
 
     setup do
@@ -528,7 +528,7 @@ defmodule Locus.BuilderServiceTest do
       assert {:refusal, {:failed, {:signal, "SIGKILL"}}, _diagnostics} = List.last(lines)
     end
 
-    test "a spawner that cannot bound a build runs none: unavailable, naming the option", %{
+    test "a keeper that cannot bound a build runs none: unavailable, naming the option", %{
       port: port
     } do
       fake = spawner!(:memory_unavailable)

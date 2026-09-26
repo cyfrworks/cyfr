@@ -13,7 +13,7 @@ so only where the service mounts the container's cgroup writable
 that asks for a bound.
 
 `keeper` drives a second cyfr-keeper inside the running service, over its
-own uids, with a client that speaks the spawner's protocol
+own uids, with a client that speaks the keeper's protocol
 (tests/fixtures/keeper_protocol.json):
 
 - a bound that is zero, not a number or above the maximum is refused, and a
@@ -71,12 +71,12 @@ MIB = 1 << 20
 # A build nothing else ends is ended by this deadline.
 DEADLINE_MS = 60_000
 # The second cyfr-keeper's uids, one for each spawn of its scenario that
-# runs: the last of the image's pool, which the service's own spawner is
+# runs: the last of the image's pool, which the service's own keeper is
 # started without.
 PROBE_FIRST, PROBE_LAST = POOL_LAST - 5, POOL_LAST
 # The bound the keeper cases ask for.
 BOUND = 256 * MIB
-# The least and the most the spawner's protocol lets a bound be.
+# The least and the most the keeper's protocol lets a bound be.
 MIN_BOUND, MAX_BOUND = 16 * MIB, 1 << 40
 
 # One line per sample: `uid:rss_kb:processes,...|memory.current|shmem|uid:memory.peak,...`.
@@ -150,7 +150,7 @@ impl Guest for Hostile {
 
 # The keeper cases' client: cyfr-keeper starts it as the release's user with
 # the channel on fd 3. It sends every spawn of the scenario, attaches their
-# relays, and prints what the spawner answered for each.
+# relays, and prints what the keeper answered for each.
 CLIENT = r"""
 import fs from "node:fs";
 import net from "node:net";
@@ -404,7 +404,7 @@ def test_keeper(stack, limit, canary):
         print(f"{name}: {end}{measured}")
     for line in result.stderr.splitlines():
         if "memory" in line:
-            print("  spawner: " + line.split("] ", 1)[-1][:300])
+            print("  keeper: " + line.split("] ", 1)[-1][:300])
 
     expect(not report["timed_out"], "every spawn of the scenario was answered and released", report)
     for name in ("a bound of zero", "a bound that is not a number", "a bound above the maximum"):

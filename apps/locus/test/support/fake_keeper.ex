@@ -15,7 +15,7 @@ defmodule Locus.Test.FakeKeeper do
   - `:normal`
   - `:capacity` — every spawn is refused with `capacity`
   - `:memory_unavailable` — every spawn is refused with `memory_unavailable`,
-    as a spawner whose cgroup is not writable refuses a bounded spawn
+    as a keeper whose cgroup is not writable refuses a bounded spawn
   - `{:exit, exited}` — the command is never run: the relay writes one log
     line and the leader is reported ended as `exited` says (`:code`,
     `:signal`, `:memory_exceeded`), killed at its memory bound among them
