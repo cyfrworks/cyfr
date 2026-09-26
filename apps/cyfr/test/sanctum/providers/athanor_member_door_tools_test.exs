@@ -237,9 +237,9 @@ defmodule Sanctum.Providers.AthanorMemberDoorToolsTest do
 
   test "a person's own athanor cannot be archived here",
        %{alice: alice, ctx: ctx, n: n} do
-    {:ok, estate} = Athanors.create_group(alice, "Door #{n}")
-    {:ok, _} = Members.ensure(alice, scope: "athanor", athanor_id: estate.id)
-    a = ctx.(alice, estate.id, [])
+    {:ok, athanor} = Athanors.create_group(alice, "Door #{n}")
+    {:ok, _} = Members.ensure(alice, scope: "athanor", athanor_id: athanor.id)
+    a = ctx.(alice, athanor.id, [])
 
     {:ok, personal} =
       Athanors.create(%{
@@ -456,7 +456,7 @@ defmodule Sanctum.Providers.AthanorMemberDoorToolsTest do
   end
 
   describe "athanor.pair" do
-    test "mints a frozen DM with someone you share an estate with — and finds it again",
+    test "mints a frozen DM with someone you share an athanor with — and finds it again",
          %{alice: alice, bob: bob, ctx: ctx, n: n} do
       a = ctx.(alice, Sanctum.TestContext.athanor_id(), [])
 
@@ -478,7 +478,7 @@ defmodule Sanctum.Providers.AthanorMemberDoorToolsTest do
       assert same.id == pair.id
     end
 
-    test "a stranger is unreachable — no shared estate, no pair", %{
+    test "a stranger is unreachable — no shared athanor, no pair", %{
       alice: alice,
       bob: bob,
       ctx: ctx
@@ -491,7 +491,7 @@ defmodule Sanctum.Providers.AthanorMemberDoorToolsTest do
       assert {:error, {:invalid_argument, msg}} =
                call(a, "athanor", %{"action" => "pair", "user" => bob})
 
-      assert msg =~ "already share an estate"
+      assert msg =~ "already share an athanor"
 
       assert {:error, {:invalid_argument, ^msg}} =
                call(a, "athanor", %{

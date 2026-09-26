@@ -45,7 +45,7 @@ defmodule Prima.AgentRef do
   def ref(name) when is_binary(name), do: Prima.ComponentRef.build(@type_name, @publisher, name)
 
   @doc """
-  The soul's reserved name: the one assistant an estate has, the file at
+  The soul's reserved name: the one assistant an athanor has, the file at
   the root of its tree and never a role.
 
   ## Examples

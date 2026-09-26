@@ -2,7 +2,7 @@
 # Copyright 2026 CYFR Works Inc.
 
 defmodule PrismWeb.AquaPanelLiveTest do
-  # The person's own AQUA beside a room: two panes on two estates on one
+  # The person's own AQUA beside a room: two panes on two athanors on one
   # page, and nothing bleeds — the panel's send lands in You with the room
   # read into the turn, and an answer pastes back onto the room, attributed.
   # The panel itself: what the assistant points at stays in the panel, a
@@ -47,8 +47,8 @@ defmodule PrismWeb.AquaPanelLiveTest do
 
     {:ok, room} = Athanors.create_group(user.user_id, "Team #{n}")
 
-    # Both estates are set up: a turn pins the baseline consent, and the
-    # composer is held on an estate that is still being prepared.
+    # Both athanors are set up: a turn pins the baseline consent, and the
+    # composer is held on an athanor that is still being prepared.
     {:ok, mine} = Athanors.mark_provisioned(mine)
     {:ok, _} = Athanors.mark_provisioned(room)
 
@@ -66,9 +66,9 @@ defmodule PrismWeb.AquaPanelLiveTest do
     in_room = %{me | athanor_id: room.id}
     them = %{in_room | user_id: other.user_id}
 
-    # Both estates filled, their souls' consents minted; the model is scripted.
-    ready_estate!(mine.id, user.user_id)
-    ready_estate!(room.id, user.user_id)
+    # Both athanors filled, their souls' consents minted; the model is scripted.
+    ready_athanor!(mine.id, user.user_id)
+    ready_athanor!(room.id, user.user_id)
     script_model!()
 
     {:ok, thread} = Threads.create(Sanctum.Context.actor(in_room))
@@ -323,7 +323,7 @@ defmodule PrismWeb.AquaPanelLiveTest do
     Cyfr.Test.ScriptedWorker.script([model_reply("ok")])
     {pane, you_thread} = panel_thread(panel, me, "where were we?")
 
-    # The estate alone, no `c`: not a thread the panel could turn to.
+    # The athanor alone, no `c`: not a thread the panel could turn to.
     to = PrismWeb.ChatLive.chat_path(route(mine))
     html = intents(pane, you_thread, user, [%{kind: "navigate", to: to}])
     refute_push_event(pane, "aqua:intents", %{intents: _})

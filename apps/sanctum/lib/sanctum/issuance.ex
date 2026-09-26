@@ -13,9 +13,9 @@ defmodule Sanctum.Issuance do
   # a `:generation_snapshot` read from the rows
   # (`Sanctum.Tenancy.generation_snapshot/2`). Neither is
   # `{:error, :missing_generation}`, and so is a key with no person behind
-  # it and a person focused on an estate through no membership. The rows it names are then locked and reread inside the issuing
+  # it and a person focused on an athanor through no membership. The rows it names are then locked and reread inside the issuing
   # transaction (`Arca.SecurityTransitions.Issuance`): the person must be
-  # active at the generation read, the focused estate active at its
+  # active at the generation read, the focused athanor active at its
   # generation read, the membership that authorized the focus still an
   # active seat, and the credential the context holds still live. A
   # generation that moved is `{:error, :stale_generation}`; a row that no
@@ -72,7 +72,7 @@ defmodule Sanctum.Issuance do
     end
   end
 
-  # A snapshot of another person or another estate proves nothing about
+  # A snapshot of another person or another athanor proves nothing about
   # this context.
   defp from_snapshot(_ctx, _snapshot), do: {:error, :missing_generation}
 
@@ -95,7 +95,7 @@ defmodule Sanctum.Issuance do
 
   defp from_binding(%Context{}), do: {:error, :missing_generation}
 
-  # A focused estate needs the generation it was read at; an unfocused
+  # A focused athanor needs the generation it was read at; an unfocused
   # context needs none.
   defp generation_for(nil, _generation), do: :ok
   defp generation_for(_athanor_id, generation) when is_integer(generation), do: :ok
@@ -138,7 +138,7 @@ defmodule Sanctum.Issuance do
   def verify(expectation) do
     fn rows ->
       with :ok <- person(rows.user, expectation),
-           :ok <- estate(rows.athanor, expectation),
+           :ok <- athanor(rows.athanor, expectation),
            :ok <- seat(rows.membership, expectation) do
         holder(rows.source, rows.now, expectation)
       end
@@ -151,15 +151,15 @@ defmodule Sanctum.Issuance do
   defp person(%{status: "active"}, _expectation), do: {:error, :stale_generation}
   defp person(_user, _expectation), do: {:error, :unauthenticated}
 
-  defp estate(_athanor, %{athanor_id: nil}), do: :ok
+  defp athanor(_athanor, %{athanor_id: nil}), do: :ok
 
-  defp estate(%{status: "active", security_generation: generation}, %{
+  defp athanor(%{status: "active", security_generation: generation}, %{
          athanor_generation: generation
        }),
        do: :ok
 
-  defp estate(%{status: "active"}, _expectation), do: {:error, :stale_generation}
-  defp estate(_athanor, _expectation), do: {:error, :unauthenticated}
+  defp athanor(%{status: "active"}, _expectation), do: {:error, :stale_generation}
+  defp athanor(_athanor, _expectation), do: {:error, :unauthenticated}
 
   defp seat(_membership, %{membership_id: nil}), do: :ok
 

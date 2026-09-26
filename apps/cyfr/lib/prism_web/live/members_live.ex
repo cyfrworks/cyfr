@@ -231,7 +231,7 @@ defmodule PrismWeb.MembersLive do
 
     socket
     |> assign(:athanor, athanor)
-    |> assign(:athanor_label, athanor && PrismWeb.Estates.label(athanor, ctx))
+    |> assign(:athanor_label, athanor && PrismWeb.Athanors.label(athanor, ctx))
     |> assign(:members, members)
     |> assign(:groups, groups)
   end
@@ -258,7 +258,7 @@ defmodule PrismWeb.MembersLive do
       <div :if={!@loading} class="space-y-6">
         <.card>
           <h3 class="text-sm font-medium text-gray-400 mb-1">
-            {@athanor_label || "Estate"}
+            {@athanor_label || "Athanor"}
           </h3>
           <p class="text-xs text-gray-500 mb-4">
             <%= cond do %>
@@ -270,7 +270,7 @@ defmodule PrismWeb.MembersLive do
                 a new group with the three of you and leaves this one as it is.
               <% true -> %>
                 Every member is this group's admin: anyone here may add or remove anyone.
-                You can only DM someone you already share an estate with — anyone on
+                You can only DM someone you already share an athanor with — anyone on
                 this list qualifies.
             <% end %>
           </p>

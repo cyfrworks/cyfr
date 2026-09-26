@@ -22,7 +22,7 @@ defmodule Mix.Tasks.Cyfr.Bench.Step do
       and fill the caches (non-negative, default 20)
 
   The bench runs in the test environment, from the umbrella root: the
-  estate is built from test fixtures inside one SQL sandbox checkout of
+  athanor is built from test fixtures inside one SQL sandbox checkout of
   the test database and rolled back, so nothing it writes outlives it.
   `mix cyfr.bench.step` selects `MIX_ENV=test` and migrates the test
   database first. On Postgres, name the database and a build path of its

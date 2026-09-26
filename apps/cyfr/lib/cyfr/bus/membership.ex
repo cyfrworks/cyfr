@@ -4,7 +4,7 @@
 defmodule Cyfr.Bus.Membership do
   @moduledoc """
   One person's seat in one athanor changed, on the global
-  `Cyfr.Bus.memberships/1` topic keyed by the person: which estates they
+  `Cyfr.Bus.memberships/1` topic keyed by the person: which athanors they
   may now reach. `change` is one of a closed set (`changes/0`); anything
   else raises, as a kind outside `kinds/0` does.
   """

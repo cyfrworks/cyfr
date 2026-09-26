@@ -117,7 +117,7 @@ defmodule Arca.ThreadStorage do
       when is_binary(athanor_id) and athanor_id != "" do
     Arca.Repo.Errors.with_db_rescue("ThreadStorage.create", fn ->
       # A thread is a row any member's client can mint from the wire, so
-      # the estate's count is held to the operator's cap like its DMs are.
+      # the athanor's count is held to the operator's cap like its DMs are.
       with :ok <-
              Prima.Caps.check_counted(actor, :max_threads_per_athanor, fn ->
                {:ok, count(actor)}
@@ -140,7 +140,7 @@ defmodule Arca.ThreadStorage do
 
   def create(%Prima.Actor{}, _attrs), do: {:error, :no_athanor}
 
-  # How many threads the estate holds — read inside `create/2`'s rescue.
+  # How many threads the athanor holds — read inside `create/2`'s rescue.
   defp count(%Prima.Actor{} = actor) do
     Repo.aggregate(from(c in Thread, where: c.athanor_id == ^actor.athanor_id), :count)
   end

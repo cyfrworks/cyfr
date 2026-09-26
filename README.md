@@ -32,7 +32,7 @@ Formulas support **execution event streaming** — long-running formulas (like a
 CYFR exposes two surfaces over the same runtime:
 
 - **Codex** — the `cyfr` command-line client. Scriptable; talks to a running CYFR instance over MCP. Run it locally (or on the box CYFR runs on) for project setup, builds, component management, and CI.
-- **Prism** — the web face, served by CYFR on its one endpoint (`:4000`, or `/` behind Caddy) and installable as a PWA: the chat with **AQUA** — your friendly assistant — one zone across every estate you belong to (a shared thread every member of an estate sees, with approvals any member can decide), your own AQUA in a panel on every page, each estate's AQUA page, and the developer views — executions, components, builds, activities, enforcements, the vault, API keys, schedules, MCP servers, tinctures.
+- **Prism** — the web face, served by CYFR on its one endpoint (`:4000`, or `/` behind Caddy) and installable as a PWA: the chat with **AQUA** — your friendly assistant — one zone across every athanor you belong to (a shared thread every member of an athanor sees, with approvals any member can decide), your own AQUA in a panel on every page, each athanor's AQUA page, and the developer views — executions, components, builds, activities, enforcements, the vault, API keys, schedules, MCP servers, tinctures.
 
 ## Quick Start
 
@@ -92,11 +92,11 @@ open http://localhost:4000
 
 ## Prism — the web face
 
-**Prism** is CYFR's one web face, at `http://localhost:4000` (the same origin as the API — one endpoint, one login), and it is chat-first: `/` lands in your athanor's chat with **AQUA**. A person's athanor is your thread with your own AQUA — the same thread on your phone and your laptop. A group athanor is a group chat every member sees, with approval cards any member can decide; whether a line starts AQUA is derived, never configured: an estate with one person in it answers every message, and any room with two or more answers only an `@mention`, so people can talk to people. Your own AQUA rides along in a floating panel on every page — a private thread in your own estate that reads the room you have open and whose answers you paste into the room yourself — a DM is a small frozen estate minted by clicking a person in the chat rail (anyone you share an estate with is there; it ends when either person leaves — clicking again starts a new, empty one), following a thread decides your sidebar and notifications (never access), and a line from your private thread reaches a group only when you say it aloud — a deliberate, attributed copy. Sign in on a phone and "Add to Home Screen" — Prism installs like a native app.
+**Prism** is CYFR's one web face, at `http://localhost:4000` (the same origin as the API — one endpoint, one login), and it is chat-first: `/` lands in your athanor's chat with **AQUA**. A person's athanor is your thread with your own AQUA — the same thread on your phone and your laptop. A group athanor is a group chat every member sees, with approval cards any member can decide; whether a line starts AQUA is derived, never configured: an athanor with one person in it answers every message, and any room with two or more answers only an `@mention`, so people can talk to people. Your own AQUA rides along in a floating panel on every page — a private thread in your own athanor that reads the room you have open and whose answers you paste into the room yourself — a DM is a small frozen athanor minted by clicking a person in the chat rail (anyone you share an athanor with is there; it ends when either person leaves — clicking again starts a new, empty one), following a thread decides your sidebar and notifications (never access), and a line from your private thread reaches a group only when you say it aloud — a deliberate, attributed copy. Sign in on a phone and "Add to Home Screen" — Prism installs like a native app.
 
 Around the chat:
 
-- **The chat** — one page, `/chat`: a rail of your own thread, your DMs, and the threads of every group you belong to (`/chat?a=<estate>&c=<thread>` deep-links one). The estate's **AQUA** page at `/a/<estate>/aqua` holds the soul, its roles, its scrolls, the pinned page and the notes drawer. What AQUA keeps out of a thread is a note — the `notes` tool's `keep`, `pin`, `list`, `read`, `search` and `forget` — and a schedule with `keep_outcome` in its metadata files each run's output as one.
+- **The chat** — one page, `/chat`: a rail of your own thread, your DMs, and the threads of every group you belong to (`/chat?a=<athanor>&c=<thread>` deep-links one). The athanor's **AQUA** page at `/a/<athanor>/aqua` holds the soul, its roles, its scrolls, the pinned page and the notes drawer. What AQUA keeps out of a thread is a note — the `notes` tool's `keep`, `pin`, `list`, `read`, `search` and `forget` — and a schedule with `keep_outcome` in its metadata files each run's output as one.
 - **The switcher** — You, then the groups you belong to (hidden as a list when it is only you), each row badged with what happened there while you were elsewhere. The one create is **New group…**.
 - **The drawer** — off the chat, on every screen size: **AQUA**, **Apps** (tinctures), **Members**, **Vault**, **Schedules**, **Webhooks**, **MCP Servers**, **Settings**, **Legal**. Connect a model to AQUA from **AQUA** — the grant sheet binds a sealed vault entry to the model's catalyst — no developer view needed.
 - **`lite` / `dev`** — a per-person preference in Settings, not an edition. `dev` adds the developer views — **Executions**, **Activities**, **Enforcements**, **Components**, **Builds**, **Registry**, **API Keys**, **Reports** — in a sidebar with live indicators; the ops surface stays reachable in `lite`, it just isn't the face. `lite` is the default when the server has a door (an auth provider); operators and private boxes start in `dev`.
@@ -550,7 +550,7 @@ with `0`; a private box needs none of the others.
 | `CYFR_MAX_GROUPS_PER_PERSON` | groups one person may **create** (default 50; they may belong to more) |
 | `CYFR_MAX_PAIRS_PER_PERSON` | DMs one person may hold open (default 200). A DM is minted for two, so either person at the ceiling refuses it; an ended DM frees its place |
 | `CYFR_MAX_MEMBERS_PER_GROUP` | seats in one group, invitations included |
-| `CYFR_MAX_THREADS_PER_ATHANOR` | threads one estate may hold (default 1000) — a thread is a row any member's client can mint from the wire, each with a follow row of its own |
+| `CYFR_MAX_THREADS_PER_ATHANOR` | threads one athanor may hold (default 1000) — a thread is a row any member's client can mint from the wire, each with a follow row of its own |
 | `CYFR_ATHANOR_STORAGE_BYTES` | bytes one athanor may hold — everything in its tree, its copies of the shipped bundle included; copying a shipped version in is never refused by the cap, but its bytes count from then on |
 
 A new athanor is provisioned with its own copy of the shipped bundle and
@@ -605,7 +605,7 @@ boots only with all seven of:
   writer and no server clock, so members could not agree which lease
   stands.
 - **Shared object storage** (`CYFR_STORAGE=s3`). Local storage is one
-  member's filesystem; two members would each hold half of every estate.
+  member's filesystem; two members would each hold half of every athanor.
 - **TLS distribution** — `-proto_dist inet_tls` with an
   `-ssl_dist_optfile` naming the member's certificate, key and CA. Plain
   distribution between control planes is an unauthenticated remote shell
@@ -803,7 +803,7 @@ Commands marked with `[i]` support interactive selection when run without argume
 | `cyfr push <ref>` | Sign and push to the registry |
 | `cyfr deprecate <ref>` | Mark a published component version as deprecated |
 | `cyfr yank <ref>` | Yank a published component version from the registry |
-| `cyfr schedule create/list/get/update/pause/resume/delete` | Manage cron schedules for recurring execution `[i]`; `"keep_outcome": true` in a schedule's metadata files each run's output as a note in its estate |
+| `cyfr schedule create/list/get/update/pause/resume/delete` | Manage cron schedules for recurring execution `[i]`; `"keep_outcome": true` in a schedule's metadata files each run's output as a note in its athanor |
 | `cyfr report [component-ref]` | File an abuse report on a component or namespace |
 
 ### Tinctures

@@ -288,9 +288,9 @@ defmodule CyfrWeb.Plugs.Authenticate do
         {:error, :unavailable} ->
           {:error, :unavailable}
 
-        # The memo named an estate the session no longer reaches: this
+        # The memo named an athanor the session no longer reaches: this
         # member's copy is stale, and one establish without it resolves
-        # the session's standing estate again.
+        # the session's standing athanor again.
         {:error, :not_member} when not retried? ->
           Sanctum.Caller.drop_memo(ctx.session_token_hash)
           establish_session(token, true)

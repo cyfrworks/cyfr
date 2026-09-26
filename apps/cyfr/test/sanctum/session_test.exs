@@ -241,7 +241,7 @@ defmodule Sanctum.SessionTest do
 
     test "establishing slides a session only when it is due, on Sanctum's own pool" do
       import Ecto.Query
-      # Seated in an estate, so the session establishes.
+      # Seated in an athanor, so the session establishes.
       {:ok, session} = Session.create(Sanctum.TestContext.issuer!(Sanctum.TestContext.local()))
       token_hash = :crypto.hash(:sha256, session.token)
       expiry = fn -> elem(Session.get(session.token), 1).expires_at end

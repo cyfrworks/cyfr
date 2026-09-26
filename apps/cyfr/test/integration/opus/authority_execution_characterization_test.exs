@@ -49,14 +49,14 @@ defmodule Opus.AuthorityExecutionCharacterizationTest do
     {:ok, ctx: ctx}
   end
 
-  test "a pinned profile id from another estate is not found, not rooted", %{ctx: ctx} do
+  test "a pinned profile id from another athanor is not found, not rooted", %{ctx: ctx} do
     {:ok, %{profile_id: profile_id}} =
       Crucible.authority_for(ctx, :default, @probe_node)
 
     # The one place an agent-authored string selects an authority is the
     # approved `execution.run`/`run_stream` arm, which forwards
     # args["profile"] verbatim. The containment is that candidates load
-    # for the CALLER's focused estate — so a profile id minted elsewhere
+    # for the CALLER's focused athanor — so a profile id minted elsewhere
     # answers not-found instead of rooting a foreign authority.
     elsewhere = %{ctx | athanor_id: "ath_b"}
 

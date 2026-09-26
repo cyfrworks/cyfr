@@ -32,7 +32,7 @@ defmodule Crucible.RecordTest do
         authenticated: true
       )
 
-    # A run is admitted only in an estate that stands: the test's own has a row.
+    # A run is admitted only in an athanor that stands: the test's own has a row.
     Arca.Test.Actor.athanor!(ctx.athanor_id)
 
     on_exit(fn ->

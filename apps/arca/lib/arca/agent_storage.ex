@@ -8,7 +8,7 @@ defmodule Arca.AgentStorage do
   they are read and written).
 
   Both functions take the `Prima.Actor` first and match it in the head, so
-  the estate whose index is rewritten comes from the caller; an actor
+  the athanor whose index is rewritten comes from the caller; an actor
   whose athanor is nil or the empty string is `{:error, :no_athanor}`
   before any query.
 
@@ -16,7 +16,7 @@ defmodule Arca.AgentStorage do
   against a snapshot of that root (`Arca.StorageProjectionChanges.snapshot/3`)
   and acknowledged in the same transaction. A rewrite made under a
   provisioning claim carries that claim, and then the claim guard is in
-  that transaction too: the index speaks for the estate, so it is
+  that transaction too: the index speaks for the athanor, so it is
   published only by the attempt that still holds it.
   """
 

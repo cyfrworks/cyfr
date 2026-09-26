@@ -121,7 +121,7 @@ defmodule Prism.Router do
           metadata: %{auth: :browser_focus_handler}
       end
 
-      # Opening an estate is a link. `PrismWeb.Focus` resolves the segment and narrows
+      # Opening an athanor is a link. `PrismWeb.Focus` resolves the segment and narrows
       # the context (`Sanctum.Context.focus/2`) before the page mounts.
       scope "/", PrismWeb do
         pipe_through :browser
@@ -134,8 +134,8 @@ defmodule Prism.Router do
           ] do
           live "/", RootRedirectLive, :index, metadata: %{auth: :browser_authenticated}
           live "/a", RootRedirectLive, :index, metadata: %{auth: :browser_authenticated}
-          # The chat is one zone across every estate the person belongs to; it
-          # names its estate in the query, not the path, and mounts under the
+          # The chat is one zone across every athanor the person belongs to; it
+          # names its athanor in the query, not the path, and mounts under the
           # session's default (`PrismWeb.Focus` passes a bare mount through).
           live "/chat", ChatLive, :index, metadata: %{auth: :browser_authenticated}
 

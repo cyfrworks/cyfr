@@ -156,8 +156,8 @@ defmodule Sanctum.Consent.BootstrapSelectionTest do
     {_, list_first, _} = head!(ctx, "formula:local.list-models")
     old_digest = first.activation |> Jason.decode!() |> Map.fetch!(@claude)
 
-    # A release retires the claude version this estate holds and ships a
-    # new one. Until the estate takes the new version, its copy of the old
+    # A release retires the claude version this athanor holds and ships a
+    # new one. Until the athanor takes the new version, its copy of the old
     # one is no longer a shipped path — but it is unchanged and the head
     # names it, so the selection stays and nothing is re-minted.
     seed_dir = Application.get_env(:arca, :seed_path)
@@ -179,7 +179,7 @@ defmodule Sanctum.Consent.BootstrapSelectionTest do
     assert kept.revision == first.revision
     assert %{via: %{label: "default"}} = edge!(kept.resolved_policy, @aqua, @claude).vault
 
-    # The estate takes the new release: the assistant's closure moves, and
+    # The athanor takes the new release: the assistant's closure moves, and
     # every node of it is the seed's own or unchanged since the head.
     {:ok, _copied} = Arca.Overlay.materialize_shipped(Sanctum.Context.actor(ctx), "components")
     {:ok, %{errors: 0}} = Compendium.AutoIndexer.scan(ctx: ctx)

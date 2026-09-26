@@ -5,7 +5,7 @@ defmodule Sanctum.TenancyContinuationTest do
   @moduledoc """
   A recovered turn continues as the person, with the person's surface,
   or not at all: a denied user with a surviving membership, a removed
-  member and an archived estate are refused, never degraded.
+  member and an archived athanor are refused, never degraded.
   """
 
   use ExUnit.Case, async: false
@@ -28,23 +28,23 @@ defmodule Sanctum.TenancyContinuationTest do
         name: "Cont #{n}"
       })
 
-    {:ok, estate} =
+    {:ok, athanor} =
       Athanors.create_group(user.id, "Continuation #{System.unique_integer([:positive])}")
 
-    {:ok, _} = Members.ensure(user.id, scope: "athanor", athanor_id: estate.id)
-    {:ok, user: user, estate: estate}
+    {:ok, _} = Members.ensure(user.id, scope: "athanor", athanor_id: athanor.id)
+    {:ok, user: user, athanor: athanor}
   end
 
-  test "a seated person continues with the person's surface", %{user: user, estate: estate} do
-    assert {:ok, ctx} = Tenancy.continuation(user.id, estate.id)
-    assert ctx.user_id == user.id and ctx.athanor_id == estate.id
+  test "a seated person continues with the person's surface", %{user: user, athanor: athanor} do
+    assert {:ok, ctx} = Tenancy.continuation(user.id, athanor.id)
+    assert ctx.user_id == user.id and ctx.athanor_id == athanor.id
     assert ctx.auth_method == :oidc and ctx.authenticated
     assert ctx.scope == :athanor
     assert MapSet.equal?(ctx.permissions, MapSet.new(Sanctum.Atoms.person_permissions()))
     assert {:ok, :interactive} = Sanctum.Consent.Authz.authorize_interactive(ctx)
   end
 
-  test "a person not seated in the turn's estate, and an unknown person, are refused", %{
+  test "a person not seated in the turn's athanor, and an unknown person, are refused", %{
     user: user
   } do
     {:ok, other} =
@@ -60,14 +60,14 @@ defmodule Sanctum.TenancyContinuationTest do
 
   test "a denied person is refused even while a membership row survives", %{
     user: user,
-    estate: estate
+    athanor: athanor
   } do
-    # Another member keeps the estate open through the denial, so the
-    # surviving row lands in an estate that still stands.
-    {:ok, _} = Members.ensure("usr_keeper", scope: "athanor", athanor_id: estate.id)
+    # Another member keeps the athanor open through the denial, so the
+    # surviving row lands in an athanor that still stands.
+    {:ok, _} = Members.ensure("usr_keeper", scope: "athanor", athanor_id: athanor.id)
     {:ok, _} = Users.deny(user)
-    {:ok, _} = Members.ensure(user.id, scope: "athanor", athanor_id: estate.id)
-    assert Members.member?(user.id, estate.id)
-    assert {:error, :denied} = Tenancy.continuation(user.id, estate.id)
+    {:ok, _} = Members.ensure(user.id, scope: "athanor", athanor_id: athanor.id)
+    assert Members.member?(user.id, athanor.id)
+    assert {:error, :denied} = Tenancy.continuation(user.id, athanor.id)
   end
 end

@@ -3,7 +3,7 @@
 
 defmodule Compendium.AgentIndex do
   @moduledoc """
-  The `agents` rows: a derived index of the estate's `aqua/` tree.
+  The `agents` rows: a derived index of the athanor's `aqua/` tree.
 
   The tree is the source. After a write to it — a role created, edited
   or dropped, the seed synced — the index is rewritten from what the
@@ -24,7 +24,7 @@ defmodule Compendium.AgentIndex do
   against a snapshot of the root and acknowledged with it. A unit still
   pending holds the whole rewrite back.
 
-  A rewrite sweeps the estate's activation and live-shape caches: an agent
+  A rewrite sweeps the athanor's activation and live-shape caches: an agent
   is a consent source (`Compendium.AgentSource`), and its shape must be
   re-derived from the file as it now stands.
   """

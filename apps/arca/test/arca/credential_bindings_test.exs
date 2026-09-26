@@ -4,7 +4,7 @@
 defmodule Arca.CredentialBindingsTest do
   @moduledoc """
   The rows a derived credential names, read under lock: the caller's
-  policy is handed plain maps of the person, the estate, the membership
+  policy is handed plain maps of the person, the athanor, the membership
   and the source credential — nil where there is none — with the
   database's own time, and its answer is the check's. Only the identity
   domain calls it.

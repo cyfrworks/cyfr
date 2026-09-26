@@ -17,7 +17,7 @@ defmodule Cyfr.Telemetry.Catalog do
   - `:metrics` — `CyfrWeb.Telemetry` metric definitions. Pinned equal
     by test.
   - `:log` — a dedicated Logger attach (`Cyfr.Application`).
-  - `:estate` — `Compendium.Provisioning`, the component domain's answer
+  - `:athanor` — `Compendium.Provisioning`, the component domain's answer
     to the identity domain's "this athanor needs filling". A foundation
     below the host announces and never calls up, and this is the one
     event whose consumer does work rather than fan out.
@@ -83,7 +83,7 @@ defmodule Cyfr.Telemetry.Catalog do
     [:cyfr, :sanctum, :platform_context] => %{consumers: [:audit]},
     [:cyfr, :sanctum, :notify] => %{
       consumers: [:bridge],
-      note: "the tray fan-in: what an estate's members, or the operator, see happened"
+      note: "the tray fan-in: what an athanor's members, or the operator, see happened"
     },
     [:cyfr, :sanctum, :caller, :invalidated] => %{
       consumers: [:bridge],
@@ -101,7 +101,7 @@ defmodule Cyfr.Telemetry.Catalog do
     },
     [:cyfr, :sanctum, :membership, :changed] => %{
       consumers: [:bridge],
-      note: "which estates a person may now reach"
+      note: "which athanors a person may now reach"
     },
     [:cyfr, :sanctum, :vault, :entry_changed] => %{
       consumers: [:bridge],
@@ -116,7 +116,7 @@ defmodule Cyfr.Telemetry.Catalog do
     [:cyfr, :sanctum, :api_keys, :changed] => %{consumers: [:bridge]},
     [:cyfr, :sanctum, :webhooks, :changed] => %{consumers: [:bridge]},
     [:cyfr, :sanctum, :provisioning, :fill_requested] => %{
-      consumers: [:estate],
+      consumers: [:athanor],
       note:
         "an athanor needs filling; the component domain fills it " <>
           "(`Compendium.Provisioning`) — the identity domain owns the claim and the " <>
@@ -212,7 +212,7 @@ defmodule Cyfr.Telemetry.Catalog do
     [:cyfr, :storage_gc, :sweep] => %{
       consumers: [:operator],
       note:
-        "one estate's staged-revision sweep: prefixes examined, collected, kept and repaired, " <>
+        "one athanor's staged-revision sweep: prefixes examined, collected, kept and repaired, " <>
           "moves still pending and errors, so an operator sees staging that is not draining"
     },
     [:cyfr, :opus, :execution, :unreaped_kill] => %{

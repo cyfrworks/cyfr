@@ -66,7 +66,7 @@ defmodule Sanctum.Context do
   context was established: which credential (`source_kind`, `source_id`),
   which membership authorized its focus (`focus_basis`: the membership
   row id, `:key` for an athanor's key, or nil where no row does), and the
-  person's and the focused estate's standing generations. A freshly
+  person's and the focused athanor's standing generations. A freshly
   admitted sign-in, which holds no credential yet, carries
   `source_kind: :identity` and `source_id: nil`.
 
@@ -597,7 +597,7 @@ defmodule Sanctum.Context do
 
   The athanor is named by its id, or by a map carrying it (`:id`), and
   only the id is read: its row, its standing and the seat are read again
-  here, so a caller's stale copy of a row cannot focus an estate that has
+  here, so a caller's stale copy of a row cannot focus an athanor that has
   since been archived or bind the context to a generation it no longer
   has. A store that cannot answer either read is `{:error, :unavailable}`,
   never an absence.
@@ -642,7 +642,7 @@ defmodule Sanctum.Context do
   end
 
   # A new focus is a new standing read: the binding follows it, naming the
-  # estate's generation as read now and the membership that authorized
+  # athanor's generation as read now and the membership that authorized
   # it. An athanor's key keeps `:key` — its standing is the key's, not a
   # seat's.
   defp refocused(%__MODULE__{credential_binding: nil} = ctx, %{id: id}, _basis),

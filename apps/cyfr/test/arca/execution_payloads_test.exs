@@ -226,7 +226,7 @@ defmodule Arca.ExecutionPayloadsTest do
              ExecutionPayloads.get(actor, exec, "result")
   end
 
-  test "a payload is the athanor's: another estate reads nothing", %{actor: actor, exec: exec} do
+  test "a payload is the athanor's: another athanor reads nothing", %{actor: actor, exec: exec} do
     {:ok, _} = ExecutionPayloads.put(actor, exec, "result", "mine", "api")
 
     assert {:error, :not_found} =

@@ -8,9 +8,9 @@ defmodule Cyfr.Test.ChatFixture do
   runs for real, which plays the script the turn's message carries and
   answers what it was given.
 
-  - The estate: `lay_seed!/2` lays a seed whose only catalyst is the
+  - The athanor: `lay_seed!/2` lays a seed whose only catalyst is the
     fixture and whose soul runs on it with a small tool policy of catalog
-    operations; `estate!/0` fills a fresh group estate from the configured
+    operations; `athanor!/0` fills a fresh group athanor from the configured
     seed the way a person's is filled (`Compendium.Provisioning.provision/2`);
     `bind_key!/2` connects a key to the fixture through the consent walk.
   - The script: `message/2` is the line a person sends, the script in a
@@ -20,7 +20,7 @@ defmodule Cyfr.Test.ChatFixture do
     fixture's own words (see its README).
   - Watching: `observe!/2` starts a viewer that holds no handle on the
     engine — it keeps what the thread's topic carries and, for every
-    execution the estate's execution topic announces, what that
+    execution the athanor's execution topic announces, what that
     execution's event stream carries in the order it arrives, caught up
     from the replay window so nothing emitted before it subscribed is
     missed. `seen/1` answers both.
@@ -72,7 +72,7 @@ defmodule Cyfr.Test.ChatFixture do
   def readme_path, do: @readme
 
   # ---------------------------------------------------------------------------
-  # The estate
+  # The athanor
   # ---------------------------------------------------------------------------
 
   @doc """
@@ -125,11 +125,11 @@ defmodule Cyfr.Test.ChatFixture do
   end
 
   @doc """
-  A fresh group estate of a person of its own, filled from the configured
-  seed as a person's estate is. Answers the person's context in it.
+  A fresh group athanor of a person of its own, filled from the configured
+  seed as a person's athanor is. Answers the person's context in it.
   """
-  @spec estate!() :: Sanctum.Context.t()
-  def estate! do
+  @spec athanor!() :: Sanctum.Context.t()
+  def athanor! do
     n = System.unique_integer([:positive])
 
     {:ok, user} =
@@ -299,7 +299,7 @@ defmodule Cyfr.Test.ChatFixture do
     end
   end
 
-  @doc "Start a viewer of `thread_id` and of every execution the estate starts."
+  @doc "Start a viewer of `thread_id` and of every execution the athanor starts."
   @spec observe!(Sanctum.Context.t(), String.t()) :: pid()
   def observe!(ctx, thread_id) do
     ExUnit.Callbacks.start_supervised!(

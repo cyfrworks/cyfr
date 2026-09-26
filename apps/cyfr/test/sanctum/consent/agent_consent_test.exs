@@ -3,7 +3,7 @@
 
 defmodule Sanctum.Consent.AgentConsentTest do
   @moduledoc """
-  The estate's agents consent as sources: the fill mints the shipped soul
+  The athanor's agents consent as sources: the fill mints the shipped soul
   and roles with the soul's edges into its roles and each agent's edge
   into its model selecting the model's default profile; the shape reads
   the model target and never the prompt; a role a member authors, and a

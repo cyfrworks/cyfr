@@ -27,10 +27,10 @@ defmodule Aqua.AgentConfig do
   # What a storage fault reads as on the tape: the adapter's term is for
   # the log, the person gets the one sentence every storage-backed answer
   # gives.
-  @unavailable {:unavailable, "The estate's AQUA tree"}
+  @unavailable {:unavailable, "The athanor's AQUA tree"}
 
   @doc """
-  The estate's agents, read once: the soul first, then the roles by name,
+  The athanor's agents, read once: the soul first, then the roles by name,
   disabled ones dropped — each as the string-keyed map the `aqua` tool's
   `list` with `detail` answers (`"name"`, `"title"`, `"description"`,
   `"type"`, `"content"`, `"tool_policy"`, `"catalyst_ref"`, `"model"`).
@@ -41,8 +41,8 @@ defmodule Aqua.AgentConfig do
   and logged — one broken role must not take the soul down
   (`Compendium.agents/1`).
 
-  The read is also where an estate gets its bundle on first need
-  (`Sanctum.Provisioning.start_provisioning/1`): a group estate is minted
+  The read is also where an athanor gets its bundle on first need
+  (`Sanctum.Provisioning.start_provisioning/1`): a group athanor is minted
   as a bare row and filled the first time something reads it, and a turn
   roots an authority in that bundle right after this read. The `aqua`
   tool hooks its own reads the same way for callers outside the harness.
@@ -104,13 +104,13 @@ defmodule Aqua.AgentConfig do
   @doc """
   The role definitions a turn hands the formula — every role in `roster`
   (the tree the running agent lives in, read once by the caller), flat: a
-  role has no roles of its own, and a soul spawns every role its estate
-  keeps. An estate's soul reads its own tree and a person's agent theirs,
-  so an estate's soul can never clone into a role that lives in someone's
+  role has no roles of its own, and a soul spawns every role its athanor
+  keeps. An athanor's soul reads its own tree and a person's agent theirs,
+  so an athanor's soul can never clone into a role that lives in someone's
   private tree.
 
-  `listing` is the WORKING estate's catalyst listing
-  (`catalyst_listing/1`): components belong to the estate the turn runs
+  `listing` is the WORKING athanor's catalyst listing
+  (`catalyst_listing/1`): components belong to the athanor the turn runs
   in, not to the agent's owner, so a role's own catalyst resolves against
   it and falls back to the parent's when it does not.
 
@@ -274,7 +274,7 @@ defmodule Aqua.AgentConfig do
   @doc """
   The AUTHORED prompt of one agent, read from the tree `ctx` is focused
   on. What a turn is finally told — the runtime section, the approval
-  prelude, whose estate it is working in — is `Aqua.Prompt.compose/2`'s,
+  prelude, whose athanor it is working in — is `Aqua.Prompt.compose/2`'s,
   so exactly one place decides what the model is claimed to be able to
   do; a turn that already holds the roster hands the composer the prompt
   and never comes here.

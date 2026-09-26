@@ -260,7 +260,7 @@ defmodule Cyfr.Application do
       # its slot without bookkeeping.
       CyfrWeb.SSE.Registry,
       # The domains' subtrees, in order: the gate's handlers, the
-      # component estate, execution, the assistant, then the MCP surface.
+      # component athanor, execution, the assistant, then the MCP surface.
       Grimoire.Supervisor,
       Compendium.Supervisor,
       # The slots' caps and the host API's bind and port
@@ -296,7 +296,7 @@ defmodule Cyfr.Application do
   end
 
   # Last in the infra tier, and optional: offers new seed media to the
-  # estates that exist. Its failure is logged and never stops the boot; the
+  # athanors that exist. Its failure is logged and never stops the boot; the
   # sandboxed test boot omits it with the gate's runtime switch.
   defp seed_offer do
     if boot_work_enabled?(),

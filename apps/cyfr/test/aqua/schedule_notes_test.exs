@@ -3,7 +3,7 @@
 
 defmodule Aqua.ScheduleNotesTest do
   # A schedule that asked to keep its outcome: the committed completion
-  # files a note in the schedule's estate with the run as provenance,
+  # files a note in the schedule's athanor with the run as provenance,
   # capped, once per execution, and only on the member that issued it; a
   # run nobody asked to keep, a closed furnace or a lost slot writes
   # nothing.
@@ -33,15 +33,15 @@ defmodule Aqua.ScheduleNotesTest do
 
     n = System.unique_integer([:positive])
     user = "local|idp|sched-#{n}"
-    {:ok, estate} = Sanctum.Tenancy.Athanors.create_group(user, "Ops #{n}")
-    ctx = %{Sanctum.TestContext.local() | user_id: user, athanor_id: estate.id}
-    {:ok, user: user, estate: estate, ctx: ctx}
+    {:ok, athanor} = Sanctum.Tenancy.Athanors.create_group(user, "Ops #{n}")
+    ctx = %{Sanctum.TestContext.local() | user_id: user, athanor_id: athanor.id}
+    {:ok, user: user, athanor: athanor, ctx: ctx}
   end
 
   # What the scheduler publishes once the occurrence's close and the run's
   # record committed, from this member's own slot.
-  defp completed(estate, user, overrides \\ %{}) do
-    actor = %{Prima.Actor.in_athanor(estate.id) | user_id: user}
+  defp completed(athanor, user, overrides \\ %{}) do
+    actor = %{Prima.Actor.in_athanor(athanor.id) | user_id: user}
 
     fields =
       Map.merge(
@@ -61,8 +61,8 @@ defmodule Aqua.ScheduleNotesTest do
   end
 
   test "a completed run that asked to be kept files a note, named by the schedule's id, with the run as provenance",
-       %{estate: estate, user: user, ctx: ctx} do
-    completion = completed(estate, user)
+       %{athanor: athanor, user: user, ctx: ctx} do
+    completion = completed(athanor, user)
     assert :kept = ScheduleNotes.keep(completion)
 
     assert {:ok, note} = Aqua.Notes.read(ctx, completion.schedule_id)
@@ -71,12 +71,15 @@ defmodule Aqua.ScheduleNotesTest do
     assert note.execution == completion.execution_id
   end
 
-  test "the next run replaces the note before it", %{estate: estate, user: user, ctx: ctx} do
-    first = completed(estate, user)
+  test "the next run replaces the note before it", %{athanor: athanor, user: user, ctx: ctx} do
+    first = completed(athanor, user)
     assert :kept = ScheduleNotes.keep(first)
 
     next =
-      completed(estate, user, %{schedule_id: first.schedule_id, output: %{"summary" => "43 rows"}})
+      completed(athanor, user, %{
+        schedule_id: first.schedule_id,
+        output: %{"summary" => "43 rows"}
+      })
 
     assert :kept = ScheduleNotes.keep(next)
 
@@ -87,11 +90,11 @@ defmodule Aqua.ScheduleNotesTest do
   end
 
   test "the same completion delivered twice keeps one note, once", %{
-    estate: estate,
+    athanor: athanor,
     user: user,
     ctx: ctx
   } do
-    completion = completed(estate, user)
+    completion = completed(athanor, user)
     assert :kept = ScheduleNotes.keep(completion)
     {:ok, %{kept_at: kept_at}} = Aqua.Notes.read(ctx, completion.schedule_id)
 
@@ -101,9 +104,9 @@ defmodule Aqua.ScheduleNotesTest do
   end
 
   test "note_name names the note; a string output is kept as it is; a long one is cut with a marker",
-       %{estate: estate, user: user, ctx: ctx} do
+       %{athanor: athanor, user: user, ctx: ctx} do
     long = String.duplicate("é", 40_000)
-    completion = completed(estate, user, %{output: long, note_name: "reconciliation"})
+    completion = completed(athanor, user, %{output: long, note_name: "reconciliation"})
     assert completion.truncated
 
     assert :kept = ScheduleNotes.keep(completion)
@@ -116,42 +119,42 @@ defmodule Aqua.ScheduleNotesTest do
   end
 
   test "a note_name the ledger's grammar refuses writes nothing, and the id is not used instead",
-       %{estate: estate, user: user, ctx: ctx} do
+       %{athanor: athanor, user: user, ctx: ctx} do
     assert :not_kept =
-             ScheduleNotes.keep(completed(estate, user, %{note_name: "nightly: sync"}))
+             ScheduleNotes.keep(completed(athanor, user, %{note_name: "nightly: sync"}))
 
-    assert :not_kept = ScheduleNotes.keep(completed(estate, user, %{note_name: "../escape"}))
+    assert :not_kept = ScheduleNotes.keep(completed(athanor, user, %{note_name: "../escape"}))
     assert {:ok, %{notes: []}} = Aqua.Notes.list(ctx)
   end
 
-  test "a run nobody asked to keep writes nothing", %{estate: estate, user: user, ctx: ctx} do
-    assert :skipped = ScheduleNotes.keep(completed(estate, user, %{keep_outcome: false}))
+  test "a run nobody asked to keep writes nothing", %{athanor: athanor, user: user, ctx: ctx} do
+    assert :skipped = ScheduleNotes.keep(completed(athanor, user, %{keep_outcome: false}))
     assert {:ok, %{notes: []}} = Aqua.Notes.list(ctx)
   end
 
-  test "an archived athanor's schedule writes nothing", %{estate: estate, user: user, ctx: ctx} do
-    {:ok, _} = Sanctum.Tenancy.Athanors.archive(estate)
-    assert :skipped = ScheduleNotes.keep(completed(estate, user))
+  test "an archived athanor's schedule writes nothing", %{athanor: athanor, user: user, ctx: ctx} do
+    {:ok, _} = Sanctum.Tenancy.Athanors.archive(athanor)
+    assert :skipped = ScheduleNotes.keep(completed(athanor, user))
     assert {:ok, %{notes: []}} = Aqua.Notes.list(ctx)
   end
 
   describe "the issuer" do
     test "another member's completion writes nothing here", %{
-      estate: estate,
+      athanor: athanor,
       user: user,
       ctx: ctx
     } do
       peer = %{node: "peer@host", owner: "boot_peer", generation: 1}
-      assert :skipped = ScheduleNotes.keep(completed(estate, user, %{issuer_member: peer}))
+      assert :skipped = ScheduleNotes.keep(completed(athanor, user, %{issuer_member: peer}))
       assert {:ok, %{notes: []}} = Aqua.Notes.list(ctx)
     end
 
     test "a member that does not hold its slot writes nothing", %{
-      estate: estate,
+      athanor: athanor,
       user: user,
       ctx: ctx
     } do
-      completion = completed(estate, user)
+      completion = completed(athanor, user)
       ControlPlane.record(:lost)
       assert :skipped = ScheduleNotes.keep(completion)
       assert {:ok, %{notes: []}} = Aqua.Notes.list(ctx)
@@ -160,11 +163,11 @@ defmodule Aqua.ScheduleNotesTest do
 
   describe "the process" do
     test "hears the committed completion on the bus and keeps its note", %{
-      estate: estate,
+      athanor: athanor,
       user: user,
       ctx: ctx
     } do
-      completion = completed(estate, user)
+      completion = completed(athanor, user)
       :ok = Cyfr.Bus.broadcast_global(Cyfr.Bus.schedule_completions(), completion)
 
       # One round trip: the completion ahead of it has been handled.
@@ -173,7 +176,7 @@ defmodule Aqua.ScheduleNotesTest do
       assert execution == completion.execution_id
     end
 
-    test "is subscribed again after a restart", %{estate: estate, user: user, ctx: ctx} do
+    test "is subscribed again after a restart", %{athanor: athanor, user: user, ctx: ctx} do
       before = Process.whereis(ScheduleNotes)
       ref = Process.monitor(before)
       Process.exit(before, :kill)
@@ -189,7 +192,7 @@ defmodule Aqua.ScheduleNotesTest do
       restarted = Process.whereis(ScheduleNotes)
       assert Cyfr.Bus.schedule_completions() in Registry.keys(Cyfr.PubSub, restarted)
 
-      completion = completed(estate, user)
+      completion = completed(athanor, user)
       :ok = Cyfr.Bus.broadcast_global(Cyfr.Bus.schedule_completions(), completion)
       :sys.get_state(ScheduleNotes)
       assert {:ok, _note} = Aqua.Notes.read(ctx, completion.schedule_id)

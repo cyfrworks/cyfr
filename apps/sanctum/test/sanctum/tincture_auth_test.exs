@@ -135,16 +135,16 @@ defmodule Sanctum.TinctureAuthTest do
     } do
       {ctx, _user} = Sanctum.TestContext.person!(ctx)
 
-      {:ok, estate} =
+      {:ok, athanor} =
         Sanctum.Tenancy.Athanors.create_group(
           ctx.user_id,
           "Tincture #{System.unique_integer([:positive])}"
         )
 
       {:ok, _} =
-        Sanctum.Tenancy.Members.ensure(ctx.user_id, scope: "athanor", athanor_id: estate.id)
+        Sanctum.Tenancy.Members.ensure(ctx.user_id, scope: "athanor", athanor_id: athanor.id)
 
-      session_ctx = %{ctx | namespace: nil, athanor_id: estate.id}
+      session_ctx = %{ctx | namespace: nil, athanor_id: athanor.id}
 
       {:ok, session} =
         Sanctum.Session.create(session_ctx,
@@ -155,7 +155,7 @@ defmodule Sanctum.TinctureAuthTest do
       assert out.scope == :athanor
       assert out.authenticated
       assert out.namespace == nil
-      assert out.athanor_id == estate.id
+      assert out.athanor_id == athanor.id
     end
   end
 

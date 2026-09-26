@@ -170,7 +170,7 @@ defmodule Cyfr.Cluster.Fixtures do
     Map.merge(attrs, %{root_execution_id: execution.id, attempt: attempt.attempt})
   end
 
-  # A root's admission reads its estate's standing now and checks it again
+  # A root's admission reads its athanor's standing now and checks it again
   # in the admission transaction, as `Crucible.Record` does.
   defp standing(athanor_id) do
     {:ok, grant} =
@@ -414,8 +414,8 @@ defmodule Cyfr.Cluster.Fixtures do
   scoped owner a fill runs under. `{:ok, claim}` or
   `{:error, :provisioning_busy}` — what a second first touch is answered.
   """
-  @spec take_estate(String.t(), String.t()) :: {:ok, map()} | {:error, term()}
-  def take_estate(athanor_id, entry_kind) do
+  @spec take_athanor(String.t(), String.t()) :: {:ok, map()} | {:error, term()}
+  def take_athanor(athanor_id, entry_kind) do
     case Sanctum.Provisioning.take_claim(athanor_id, entry_kind) do
       {:ok, claim} -> {:ok, %{owner: claim.owner, fence: claim.fence, attempt: claim.attempt}}
       other -> other
@@ -423,8 +423,8 @@ defmodule Cyfr.Cluster.Fixtures do
   end
 
   @doc "What this member sees of `athanor_id`'s filling: `:ready | :filling | :failed | :unfilled | :unavailable`."
-  @spec estate_status(String.t()) :: atom()
-  def estate_status(athanor_id),
+  @spec athanor_status(String.t()) :: atom()
+  def athanor_status(athanor_id),
     do:
       Sanctum.Provisioning.status(
         Sanctum.Context.internal(athanor_id: athanor_id, scope: :athanor)
@@ -583,7 +583,7 @@ defmodule Cyfr.Cluster.Fixtures do
     end
   end
 
-  @doc "Mint an access token from `ctx` on this member, for one tincture of its estate."
+  @doc "Mint an access token from `ctx` on this member, for one tincture of its athanor."
   @spec mint_access(Sanctum.Context.t()) :: {:ok, String.t()} | {:error, term()}
   def mint_access(ctx), do: Sanctum.TinctureAuth.issue_access_token(ctx, "local", "cluster-dash")
 

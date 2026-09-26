@@ -33,11 +33,11 @@ defmodule Sanctum.EstablishBoundaryTest do
     # already established caller's, or the public identity.
     "apps/sanctum/lib/sanctum.ex" => 1,
     # `Provisioning`'s person context: the server filling an admitted
-    # person's estate with their pull credential; no credential of its own.
+    # person's athanor with their pull credential; no credential of its own.
     "apps/sanctum/lib/sanctum/provisioning.ex" => 1,
     # `Tenancy.continuation/2`: the person-shaped context a recovered
     # turn continues under, rebuilt from the turn's rows and refused when
-    # the person is denied, unseated or the estate archived.
+    # the person is denied, unseated or the athanor archived.
     "apps/sanctum/lib/sanctum/tenancy.ex" => 1,
     # The suite's own builders. They live in `test/support`, which only the
     # test build compiles, and the roster reaches outside lib to keep them

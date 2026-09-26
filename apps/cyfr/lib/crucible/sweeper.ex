@@ -4,7 +4,7 @@
 defmodule Crucible.Sweeper do
   @moduledoc """
   Periodic sweep that lapses running executions whose lease lapsed, and
-  cancels the open work of an estate that was archived.
+  cancels the open work of an athanor that was archived.
 
   Runs every 60 seconds. A running row's attempt carries a lease
   (`execution_attempts.lease_until`) that its runner renews while the work
@@ -30,7 +30,7 @@ defmodule Crucible.Sweeper do
 
   ## Retired grants
 
-  An archive retires the grant of every execution admitted in the estate
+  An archive retires the grant of every execution admitted in the athanor
   (`Sanctum.ExecutionStanding`), and `Crucible.ArchiveWatch`
   cancels what is running when it hears of it. The announcement is only
   an accelerator: each sweep also pages through every open attempt whose

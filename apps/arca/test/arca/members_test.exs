@@ -117,7 +117,7 @@ defmodule Arca.MembersTest do
       assert {:error, :cross_tenant} = Members.delete(member, row.id)
       assert {:error, :cross_tenant} = Members.list_platform(member)
       assert {:error, :cross_tenant} = Members.list_active_for_user(member, "usr_1")
-      assert {:error, :cross_tenant} = Members.shared_estate?(member, "usr_1", "usr_2")
+      assert {:error, :cross_tenant} = Members.shared_athanor?(member, "usr_1", "usr_2")
 
       assert {:error, :cross_tenant} =
                Members.activate_invited(member, "usr_1", "a@example.com", DateTime.utc_now())
@@ -271,7 +271,7 @@ defmodule Arca.MembersTest do
       assert {:ok, true} = shared?(a.id, user)
     end
 
-    test "two people share an estate only while both seats are active and the estate is" do
+    test "two people share an athanor only while both seats are active and the athanor is" do
       athanor = group!()
       alice = person_id()
       bob = person_id()
@@ -279,13 +279,13 @@ defmodule Arca.MembersTest do
       {:ok, _} = Members.seat(in_athanor(athanor.id), %{user_id: alice, added_by: "x"})
       {:ok, _} = Members.seat(in_athanor(athanor.id), %{user_id: bob, added_by: "x"})
 
-      assert {:ok, true} = Members.shared_estate?(server(), alice, bob)
-      assert {:ok, false} = Members.shared_estate?(server(), alice, carol)
+      assert {:ok, true} = Members.shared_athanor?(server(), alice, bob)
+      assert {:ok, false} = Members.shared_athanor?(server(), alice, carol)
 
       {:ok, _} =
         Arca.SecurityTransitions.archive_athanor(server(), athanor.id, verify: fn _ -> :ok end)
 
-      assert {:ok, false} = Members.shared_estate?(server(), alice, bob)
+      assert {:ok, false} = Members.shared_athanor?(server(), alice, bob)
     end
   end
 

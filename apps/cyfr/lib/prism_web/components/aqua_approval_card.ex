@@ -18,7 +18,7 @@ defmodule PrismWeb.AquaApprovalCard do
       `tool.action` in this thread (a `tool_grants` row; it survives
       a restart and ends with the thread)
     - `:always`       — run it, and record the standing allow for the agent
-      wherever it works (an agent-scope row in its home estate). The row
+      wherever it works (an agent-scope row in its home athanor). The row
       belongs to the athanor, not to whoever clicks: in a group the control
       says so, because one member is deciding for everyone.
 

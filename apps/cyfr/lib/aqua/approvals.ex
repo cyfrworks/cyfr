@@ -110,7 +110,7 @@ defmodule Aqua.Approvals do
   def proposal?(_approval, _proposal), do: false
 
   @doc """
-  How long a card stays open, in seconds: the estate's
+  How long a card stays open, in seconds: the athanor's
   `settings["approvals"]["expiry_hours"]` (a positive integer, read
   defensively — member-writable settings are not trusted to have a
   shape), else `config :cyfr, Aqua.Approvals, expiry_hours:`.
@@ -137,7 +137,7 @@ defmodule Aqua.Approvals do
   end
 
   @doc """
-  Resolve every pending approval of the estate past its expiry as
+  Resolve every pending approval of the athanor past its expiry as
   `expired`. Answers how many were settled.
   """
   @spec expire_due(Context.t()) :: {:ok, non_neg_integer()} | {:error, term()}

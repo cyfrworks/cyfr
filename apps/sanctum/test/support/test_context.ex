@@ -53,11 +53,11 @@ defmodule Sanctum.TestContext do
   @doc """
   Mark `athanor_id` filled — what a test says when it drives a turn —
   with the shipped AQUA tree and bundle copied in, as a fill copies
-  them, so the estate has a soul to answer with.
+  them, so the athanor has a soul to answer with.
 
-  A turn pins the baseline consent provisioning mints, so an estate a
+  A turn pins the baseline consent provisioning mints, so an athanor a
   test chats in is one that has been set up. Left off by default: the
-  seeded rows are bare estates, as a fresh server's are, and a
+  seeded rows are bare athanors, as a fresh server's are, and a
   server-wide sweep must not find work on every one of them.
   """
   def provisioned!(athanor_id) when is_binary(athanor_id) do
@@ -75,7 +75,7 @@ defmodule Sanctum.TestContext do
   end
 
   @doc """
-  Copy every shipped unit the estate lacks into `athanor_id` — the
+  Copy every shipped unit the athanor lacks into `athanor_id` — the
   shipped AQUA tree and the bundle — without marking it provisioned.
   """
   def shipped!(athanor_id) when is_binary(athanor_id) do

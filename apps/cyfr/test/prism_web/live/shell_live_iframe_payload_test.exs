@@ -20,7 +20,7 @@ defmodule PrismWeb.ShellLiveIframePayloadTest do
 
   setup %{conn: conn} do
     conn = log_in_user(conn, test_user())
-    estate = seated_athanor()
+    athanor = seated_athanor()
 
     base = Path.join(System.tmp_dir!(), "shell_payload_#{System.unique_integer([:positive])}")
     original_path = Application.get_env(:arca, :base_path)
@@ -28,7 +28,7 @@ defmodule PrismWeb.ShellLiveIframePayloadTest do
 
     dir =
       Arca.Adapters.Local.build_path(
-        Sanctum.Context.actor(%{Sanctum.TestContext.local() | athanor_id: estate.id}),
+        Sanctum.Context.actor(%{Sanctum.TestContext.local() | athanor_id: athanor.id}),
         ["components", "tinctures", "local", @tincture, "1.0.0"]
       )
 
@@ -48,7 +48,7 @@ defmodule PrismWeb.ShellLiveIframePayloadTest do
     File.write!(Path.join(dir, "index.html"), "<html><body>payload</body></html>")
 
     # Reload the registry after writing fixtures directly to disk without an AutoIndexer notification.
-    Prism.TinctureRegistry.reload_athanor(estate.id)
+    Prism.TinctureRegistry.reload_athanor(athanor.id)
 
     on_exit(fn ->
       Application.put_env(:arca, :base_path, original_path)

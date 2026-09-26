@@ -308,7 +308,7 @@ defmodule Cyfr.Bus do
       template: "sanctum:memberships:<user_id>",
       producers: ["Cyfr.TelemetryBridge"],
       consumers: ["CyfrWeb.ContextGuard", "PrismWeb.TopbarLive", "PrismWeb.ChatLive"],
-      reason: "the subject is the person, not an athanor: which estates they may now reach"
+      reason: "the subject is the person, not an athanor: which athanors they may now reach"
     },
     %{
       key: :platform_notify,
@@ -351,7 +351,7 @@ defmodule Cyfr.Bus do
       template: "page:viewing:<page_pid>",
       producers: ["PrismWeb.TopbarLive"],
       consumers: ["PrismWeb.TopbarLive"],
-      reason: "a page tells the bar over it which estate it has in view"
+      reason: "a page tells the bar over it which athanor it has in view"
     },
     %{
       key: :room_feed,

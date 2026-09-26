@@ -169,7 +169,7 @@ defmodule Aqua.RunnerTest do
     stranger = %{ctx | user_id: "usr_nobody"}
     assert {:error, :not_member} = Runner.send_message(stranger, thread.id, "@aqua hi")
 
-    # An estate not yet filled refuses an addressed send before any row.
+    # An athanor not yet filled refuses an addressed send before any row.
     {:ok, fresh} =
       Athanors.create_group(ctx.user_id, "Fresh #{System.unique_integer([:positive])}")
 
@@ -832,7 +832,7 @@ defmodule Aqua.RunnerTest do
       assert {:ok, %{active_turn_id: nil}} = Tape.thread(ctx, thread.id)
     end
 
-    test "recovery names a turn of the caller's own estate, and anything else is absent", %{
+    test "recovery names a turn of the caller's own athanor, and anything else is absent", %{
       ctx: ctx,
       thread: thread
     } do
@@ -844,7 +844,7 @@ defmodule Aqua.RunnerTest do
       # a takeover.
       assert {:error, :not_suspended} = Runner.recover_turn(ctx, thread.id, turn_id)
 
-      # Another estate's caller is told the turn does not exist — the same
+      # Another athanor's caller is told the turn does not exist — the same
       # answer an id nobody minted gets, so an id cannot be probed for.
       {:ok, other} =
         Athanors.create_group(ctx.user_id, "Other #{System.unique_integer([:positive])}")
@@ -855,7 +855,7 @@ defmodule Aqua.RunnerTest do
       assert {:error, :not_found} = Runner.recover_turn(other_ctx, thread.id, turn_id)
       assert {:error, :not_found} = Runner.recover_turn(ctx, thread.id, "trn_never_minted")
 
-      # And a turn of another thread of the same estate is absent too: the
+      # And a turn of another thread of the same athanor is absent too: the
       # pair has to agree.
       {:ok, elsewhere} = Threads.create(Sanctum.Context.actor(ctx))
       assert {:error, :not_found} = Runner.recover_turn(ctx, elsewhere.id, turn_id)

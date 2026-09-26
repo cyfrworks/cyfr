@@ -9,7 +9,7 @@ defmodule Arca.Test.Actor do
   directly rather than projecting a context from the layer above. The
   three shapes here are the three the facades distinguish: a tenant's own
   caller, the server's own platform-scope caller, and a bare athanor for
-  work the control plane has already narrowed to one estate.
+  work the control plane has already narrowed to one athanor.
   """
 
   @athanor_id "ath_test"
@@ -98,7 +98,7 @@ defmodule Arca.Test.Actor do
 
   @doc """
   The identity domain's decision over a grant, for a storage test that
-  exercises it: the estate row locked and read at the grant's generation
+  exercises it: the athanor row locked and read at the grant's generation
   (`Sanctum.ExecutionStanding.verify/1` spells the same rule).
   """
   @spec verify(Prima.ExecutionGrant.t()) :: :ok | {:error, :not_standing | :unavailable}

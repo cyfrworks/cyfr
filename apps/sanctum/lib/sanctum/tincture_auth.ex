@@ -37,9 +37,9 @@ defmodule Sanctum.TinctureAuth do
   Minting and every use hold the token to the rows it names as they are
   now (`Sanctum.Caller.derived_standing/2`): a source logged out, deleted,
   expired, revoked or rotated, a person denied and allowed again, an
-  estate archived and reopened, or the membership a session's focus rested
+  athanor archived and reopened, or the membership a session's focus rested
   on removed — rejoining is a new row — refuses it for good. A key's focus
-  is the key, so its creator leaving the estate does not end it. A store
+  is the key, so its creator leaving the athanor does not end it. A store
   that cannot answer is `{:error, :unavailable}`: nothing is minted and
   nothing served.
 

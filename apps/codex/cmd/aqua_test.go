@@ -40,7 +40,7 @@ func TestAquaCommandTree(t *testing.T) {
 	}
 }
 
-// TestAquaHelpVocabulary keeps the help in the estate's words — the soul,
+// TestAquaHelpVocabulary keeps the help in the athanor's words — the soul,
 // its roles, the scrolls, the guides — across every string cobra prints.
 func TestAquaHelpVocabulary(t *testing.T) {
 	banned := []string{"agent", "orchestrator", "sub-agent"}
@@ -73,7 +73,7 @@ func TestAquaHelpVocabulary(t *testing.T) {
 func TestRenderAquaList(t *testing.T) {
 	result := map[string]any{
 		"guides": []any{
-			map[string]any{"name": "aqua", "title": "AQUA", "type": "soul", "description": "The estate's assistant"},
+			map[string]any{"name": "aqua", "title": "AQUA", "type": "soul", "description": "The athanor's assistant"},
 			map[string]any{"name": "builder", "title": "Builder", "type": "role", "description": "Builds components"},
 			map[string]any{"name": "component-guide", "title": "Component Guide", "type": "doc", "description": "Building WASM components"},
 		},
@@ -86,7 +86,7 @@ func TestRenderAquaList(t *testing.T) {
 
 	// Sections in the server's order, each entry under its own heading.
 	ordered := []string{
-		"Soul", "aqua ", "AQUA — The estate's assistant",
+		"Soul", "aqua ", "AQUA — The athanor's assistant",
 		"Roles", "builder", "Builder — Builds components",
 		"Guides", "component-guide", "Component Guide — Building WASM components",
 		"Scrolls", "release-notes", "How to write release notes",
@@ -111,7 +111,7 @@ func TestRenderAquaList(t *testing.T) {
 func TestRenderAquaList_NoScrolls(t *testing.T) {
 	result := map[string]any{
 		"guides": []any{
-			map[string]any{"name": "aqua", "title": "AQUA", "type": "soul", "description": "The estate's assistant"},
+			map[string]any{"name": "aqua", "title": "AQUA", "type": "soul", "description": "The athanor's assistant"},
 		},
 		"skills": []any{},
 	}
@@ -131,7 +131,7 @@ func TestRenderAquaList_NoScrolls(t *testing.T) {
 func TestRenderAquaList_ScrollsUnavailable(t *testing.T) {
 	result := map[string]any{
 		"guides": []any{
-			map[string]any{"name": "aqua", "title": "AQUA", "type": "soul", "description": "The estate's assistant"},
+			map[string]any{"name": "aqua", "title": "AQUA", "type": "soul", "description": "The athanor's assistant"},
 			map[string]any{"name": "builder", "title": "Builder", "type": "role", "description": "Builds components"},
 		},
 		"skills_error": "connection reset",

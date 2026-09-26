@@ -11,7 +11,7 @@ defmodule Aqua.Prompt do
 
     * `agent` — the resolved agent: its authored prompt (under
       `"prompt"`, read with the roster the turn already holds; absent, it
-      is read from the estate's tree here), its policy.
+      is read from the athanor's tree here), its policy.
     * `authority` — what the consent edge grants. The only source for what
       the prompt may claim the agent can reach.
 
@@ -84,7 +84,7 @@ defmodule Aqua.Prompt do
   # Sections
   # ---------------------------------------------------------------------------
 
-  # The authored prompt the turn handed over, else read from the estate's
+  # The authored prompt the turn handed over, else read from the athanor's
   # tree — with its documented generic fallback.
   defp base(_ctx, %{"prompt" => prompt}) when is_binary(prompt), do: prompt
   defp base(ctx, %{"name" => name}), do: Aqua.AgentConfig.base_prompt(ctx, name)
@@ -153,19 +153,19 @@ defmodule Aqua.Prompt do
   defp several_people(true), do: @several_people
   defp several_people(_), do: []
 
-  # The estate's scrolls — procedures kept as Agent Skills — as an index
+  # The athanor's scrolls — procedures kept as Agent Skills — as an index
   # of name and line, read on demand with `aqua.skill_get`. The same
   # in-process read the `aqua` tool's `skill_list` makes
   # (`Compendium.skills_index/2`), so the two cannot list different
   # sets. Sorted by name and free of anything that changes between turns;
-  # an estate with no scrolls gets no section rather than an empty one,
+  # an athanor with no scrolls gets no section rather than an empty one,
   # and one whose scrolls cannot be listed gets none — said in the log,
   # never silently.
   defp scrolls(ctx) do
     case Compendium.skills_index(ctx, Compendium.skills_index_limit()) do
       {:ok, %{entries: [_ | _] = skills, more: more}} ->
         [
-          "\n\n---\n\n## Scrolls\n\nProcedures this estate has learned. Read one with " <>
+          "\n\n---\n\n## Scrolls\n\nProcedures this athanor has learned. Read one with " <>
             "`aqua.skill_get` before doing what it describes; propose `aqua.skill_create` " <>
             "when a procedure worth repeating has just worked.\n",
           Enum.map(skills, fn %{name: name, description: description} ->
@@ -186,11 +186,11 @@ defmodule Aqua.Prompt do
     end
   end
 
-  # The estate's notes, and the boundary said out loud. A room's turn is
+  # The athanor's notes, and the boundary said out loud. A room's turn is
   # told it sees the room's pile and nothing else; a turn in the person's
-  # own athanor is told it may also search every estate they belong to.
+  # own athanor is told it may also search every athanor they belong to.
   # The model never has to discover either by being refused.
-  @notes_rule "These notes belong to the estate this thread is in. Propose " <>
+  @notes_rule "These notes belong to the athanor this thread is in. Propose " <>
                 "`notes.keep` for what people would want found again — a decision, a " <>
                 "fact, a preference — and `notes.pin` only for what every future turn " <>
                 "needs; never keep a secret or a credential."
@@ -199,10 +199,10 @@ defmodule Aqua.Prompt do
   # them. A turn started any other way is not told to read what it cannot.
   @read_rule " Read a filed note with `notes.read` before answering from your memory of it."
 
-  @room_rule " Notes in other estates, and a person's own, are not readable from " <>
+  @room_rule " Notes in other athanors, and a person's own, are not readable from " <>
                "here — a person reads those from their own assistant."
 
-  @home_rule " You may also search the notes of every estate this person belongs to " <>
+  @home_rule " You may also search the notes of every athanor this person belongs to " <>
                "(`notes.search` with scope `everywhere`)."
 
   defp notes(ctx) do

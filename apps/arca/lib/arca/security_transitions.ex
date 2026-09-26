@@ -4,21 +4,21 @@
 defmodule Arca.SecurityTransitions do
   @moduledoc """
   The four standing transitions — deny and allow a person, archive and
-  reopen an estate — each as ONE transaction over every row it must
+  reopen an athanor — each as ONE transaction over every row it must
   change, or nothing.
 
   A transition changes a standing and retires what that standing issued:
-  a denial marks the person denied, archives their own estate, every
-  frozen estate they sit in and every group they leave empty, removes
+  a denial marks the person denied, archives their own athanor, every
+  frozen athanor they sit in and every group they leave empty, removes
   their memberships, the invitations their address still holds and their
   thread follows, deletes their sessions and revokes the keys they created
-  and the keys of every estate it archives. An archive revokes the
-  estate's keys with it. Each commits together or not at all: a statement
+  and the keys of every athanor it archives. An archive revokes the
+  athanor's keys with it. Each commits together or not at all: a statement
   that fails rolls the whole transition back and the caller is answered
   the failure, so a denial can never report success with a credential of
   the person still standing. An allow restores the person's standing and
-  their own estate and seat and nothing else; a reopen restores the
-  estate and nothing else. Neither un-revokes, re-creates or re-seats
+  their own athanor and seat and nothing else; a reopen restores the
+  athanor and nothing else. Neither un-revokes, re-creates or re-seats
   anything the retirement took.
 
   Every real change of a standing raises the row's `security_generation`
@@ -30,21 +30,21 @@ defmodule Arca.SecurityTransitions do
 
   Every transition, and every credential issuance, takes its row locks in
   one order: any global cap lock the operation needs, people sorted by id,
-  estates sorted by id, then memberships, invitations and follows, then
+  athanors sorted by id, then memberships, invitations and follows, then
   sessions, then API keys. A transition taking only a suffix of that order
   never goes back for an earlier lock. On PostgreSQL the order is the
   deadlock rule; on SQLite the write lock every transaction takes at entry is the lock
   and the order is code order (`Arca.Repo.locking_transaction/2`).
 
-  A denial computes the estates it touches from the person's memberships,
+  A denial computes the athanors it touches from the person's memberships,
   locks them, then locks the memberships and computes the set again, and
   once more after the caller's policy, right before it writes. A set that
-  moved in between (a seat taken while the estates were being locked, or
-  while the policy was asked) rolls the attempt back, because the estate
+  moved in between (a seat taken while the athanors were being locked, or
+  while the policy was asked) rolls the attempt back, because the athanor
   locks cannot be taken after the membership locks; the transition runs
   again, three times at most, and then answers `{:error, :conflict}`. It
-  never continues on a partial view. A seat into an estate the denial
-  holds waits for it (`Arca.Members.seat/2` locks the estate first).
+  never continues on a partial view. A seat into an athanor the denial
+  holds waits for it (`Arca.Members.seat/2` locks the athanor first).
 
   ## The caller's decision
 
@@ -60,11 +60,11 @@ defmodule Arca.SecurityTransitions do
 
   `{:ok, change}` only after commit. `change` is the committed data the
   caller announces from: the session hashes each DELETE returned, the key
-  ids each UPDATE returned, the estates archived or reopened with their
+  ids each UPDATE returned, the athanors archived or reopened with their
   new generations, the memberships removed, invitations withdrawn and
-  seats restored, the members of each archived estate and the person's
+  seats restored, the members of each archived athanor and the person's
   generation. Refusals: `:not_found`, `:dangling_personal_athanor` (a
-  person's own-estate pointer names no row), `:conflict`,
+  person's own-athanor pointer names no row), `:conflict`,
   `:postcondition_failed`, `:cross_tenant`, `:database_error`, or the
   callback's own reason.
   """
@@ -115,7 +115,7 @@ defmodule Arca.SecurityTransitions do
   def deny_user(%Prima.Actor{}, _user_id, _opts), do: {:error, :cross_tenant}
 
   @doc """
-  Restore the person `user_id`: their standing, their own estate when it
+  Restore the person `user_id`: their standing, their own athanor when it
   is archived, and their seat in it. Sessions, keys, group seats and
   invitations the denial took stay taken.
   """
@@ -129,7 +129,7 @@ defmodule Arca.SecurityTransitions do
   def allow_user(%Prima.Actor{}, _user_id, _opts), do: {:error, :cross_tenant}
 
   @doc """
-  Archive the estate `athanor_id` and revoke its keys. An estate already
+  Archive the athanor `athanor_id` and revoke its keys. An athanor already
   archived keeps its generation; its keys are revoked again and checked.
   """
   @spec archive_athanor(Prima.Actor.t(), String.t(), keyword()) ::
@@ -143,8 +143,8 @@ defmodule Arca.SecurityTransitions do
   def archive_athanor(%Prima.Actor{}, _athanor_id, _opts), do: {:error, :cross_tenant}
 
   @doc """
-  Reopen the archived estate `athanor_id`. Its revoked keys stay revoked.
-  An estate already active is answered unchanged.
+  Reopen the archived athanor `athanor_id`. Its revoked keys stay revoked.
+  An athanor already active is answered unchanged.
   """
   @spec unarchive_athanor(Prima.Actor.t(), String.t(), keyword()) ::
           {:ok, change()} | {:error, term()}
@@ -188,11 +188,11 @@ defmodule Arca.SecurityTransitions do
   defp deny(user_id, verify) do
     result =
       with {:ok, user} <- lock_user(user_id),
-           planned = estates_of(user, unlocked_rows(user_id)),
+           planned = athanors_of(user, unlocked_rows(user_id)),
            athanors = lock_athanors(planned),
            :ok <- personal_present(user, athanors),
            rows = lock_person_rows(user_id),
-           :ok <- same_set(planned, estates_of(user, rows)),
+           :ok <- same_set(planned, athanors_of(user, rows)),
            peers = lock_peers(user_id, group_ids(athanors)),
            invitations = lock_invitations(user.email),
            retire = to_retire(user, athanors, rows, peers),
@@ -207,7 +207,7 @@ defmodule Arca.SecurityTransitions do
              }),
            # Asked again after the policy, right before the first write, so
            # the set the policy was shown is the set the statements act on.
-           :ok <- same_set(planned, estates_of(user, lock_person_rows(user_id))) do
+           :ok <- same_set(planned, athanors_of(user, lock_person_rows(user_id))) do
         now = Arca.ServerMetaStorage.now!()
 
         with {:ok, generation, moved?} <- deny_row(user, now),
@@ -237,7 +237,7 @@ defmodule Arca.SecurityTransitions do
                 removed_membership_ids: Enum.map(removed, & &1.id),
                 removed_memberships: removed,
                 withdrawn_invitations: withdrawn,
-                member_user_ids: members_by_estate(Map.keys(archived), peers),
+                member_user_ids: members_by_athanor(Map.keys(archived), peers),
                 unfollowed: unfollowed
             }
           end
@@ -247,9 +247,9 @@ defmodule Arca.SecurityTransitions do
     committed(result)
   end
 
-  # The estates a denial touches: the person's own and every one a row of
+  # The athanors a denial touches: the person's own and every one a row of
   # theirs names.
-  defp estates_of(%User{personal_athanor_id: personal}, rows) do
+  defp athanors_of(%User{personal_athanor_id: personal}, rows) do
     rows
     |> Enum.map(& &1.athanor_id)
     |> Enum.concat(List.wrap(personal))
@@ -260,7 +260,7 @@ defmodule Arca.SecurityTransitions do
 
   defp same_set(planned, locked), do: if(planned == locked, do: :ok, else: {:error, :set_changed})
 
-  # A person may have no own estate; a pointer to one that has no row is
+  # A person may have no own athanor; a pointer to one that has no row is
   # a broken relationship, and a denial does not skip it.
   defp personal_present(%User{personal_athanor_id: id}, athanors) when is_binary(id) do
     if Map.has_key?(athanors, id), do: :ok, else: {:error, :dangling_personal_athanor}
@@ -273,7 +273,7 @@ defmodule Arca.SecurityTransitions do
   end
 
   # What a denial archives, under the policy every leave follows: the
-  # person's own estate; a frozen estate the moment anyone leaves it; an
+  # person's own athanor; a frozen athanor the moment anyone leaves it; an
   # open group the person leaves with no other active member.
   defp to_retire(%User{personal_athanor_id: personal}, athanors, rows, peers) do
     seated = for %Membership{athanor_id: id} <- rows, is_binary(id), uniq: true, do: id
@@ -316,7 +316,7 @@ defmodule Arca.SecurityTransitions do
     end
   end
 
-  # arca:unscoped-ok a denial retires every membership of one person, across every estate.
+  # arca:unscoped-ok a denial retires every membership of one person, across every athanor.
   defp delete_person_rows(user_id) do
     {_count, rows} =
       Arca.Repo.delete_all(
@@ -345,7 +345,7 @@ defmodule Arca.SecurityTransitions do
 
   defp delete_follows(_user_id, []), do: 0
 
-  # arca:unscoped-ok a denial drops one person's follows in every estate it touches.
+  # arca:unscoped-ok a denial drops one person's follows in every athanor it touches.
   defp delete_follows(user_id, athanor_ids) do
     {count, _} =
       Arca.Repo.delete_all(
@@ -365,7 +365,7 @@ defmodule Arca.SecurityTransitions do
     hashes || []
   end
 
-  # arca:unscoped-ok a denial revokes a person's keys in every estate, and every key of an estate it archives.
+  # arca:unscoped-ok a denial revokes a person's keys in every athanor, and every key of an athanor it archives.
   defp revoke_keys(user_id, athanor_ids, now) do
     {_count, ids} =
       Arca.Repo.update_all(
@@ -380,7 +380,7 @@ defmodule Arca.SecurityTransitions do
     Enum.sort(ids || [])
   end
 
-  # arca:unscoped-ok the postconditions of one person's denial, read across every estate.
+  # arca:unscoped-ok the postconditions of one person's denial, read across every athanor.
   defp deny_holds(user_id, athanor_ids) do
     survivors = [
       from(u in User, where: u.id == ^user_id and u.status != "denied"),
@@ -397,7 +397,7 @@ defmodule Arca.SecurityTransitions do
       else: :ok
   end
 
-  defp members_by_estate(athanor_ids, peers) do
+  defp members_by_athanor(athanor_ids, peers) do
     for id <- athanor_ids, into: %{} do
       {id, for(%Membership{athanor_id: ^id, user_id: user} <- peers, do: user)}
     end
@@ -468,7 +468,7 @@ defmodule Arca.SecurityTransitions do
   defp archived_ids(%Athanor{status: "archived", id: id}), do: [id]
   defp archived_ids(_athanor), do: []
 
-  # The owner's seat in their own estate, which the denial removed with
+  # The owner's seat in their own athanor, which the denial removed with
   # every other row of theirs. A new row: the one the denial deleted is
   # never restored.
   defp reseat(_user_id, nil, _seats, _now), do: {:ok, []}
@@ -512,7 +512,7 @@ defmodule Arca.SecurityTransitions do
 
         with {:ok, archived} <-
                archive_rows(active_ids([athanor_id], %{athanor_id => athanor}), now) do
-          key_ids = revoke_estate_keys(athanor_id, now)
+          key_ids = revoke_athanor_keys(athanor_id, now)
 
           with :ok <- archive_holds(athanor_id) do
             %{
@@ -588,7 +588,7 @@ defmodule Arca.SecurityTransitions do
   defp exactly({count, rows}, count), do: {:ok, Map.new(rows)}
   defp exactly(_result, _count), do: {:error, :conflict}
 
-  defp revoke_estate_keys(athanor_id, now) do
+  defp revoke_athanor_keys(athanor_id, now) do
     {_count, ids} =
       Arca.Repo.update_all(
         from(k in ApiKey,
@@ -639,11 +639,11 @@ defmodule Arca.SecurityTransitions do
     |> Map.new(&{&1.id, &1})
   end
 
-  # arca:unscoped-ok the plan of a denial reads one person's memberships across every estate.
+  # arca:unscoped-ok the plan of a denial reads one person's memberships across every athanor.
   defp unlocked_rows(user_id),
     do: Arca.Repo.all(from(m in Membership, where: m.user_id == ^user_id))
 
-  # arca:unscoped-ok a denial locks one person's memberships across every estate.
+  # arca:unscoped-ok a denial locks one person's memberships across every athanor.
   defp lock_person_rows(user_id) do
     from(m in Membership, where: m.user_id == ^user_id, order_by: [asc: m.id])
     |> QueryHelpers.for_update()
@@ -654,7 +654,7 @@ defmodule Arca.SecurityTransitions do
   # group is left empty is decided on them.
   defp lock_peers(_user_id, []), do: []
 
-  # arca:unscoped-ok the rosters of the groups a denial touches, estates the caller named.
+  # arca:unscoped-ok the rosters of the groups a denial touches, athanors the caller named.
   defp lock_peers(user_id, athanor_ids) do
     from(m in Membership,
       where:
@@ -666,7 +666,7 @@ defmodule Arca.SecurityTransitions do
     |> Arca.Repo.all()
   end
 
-  # arca:unscoped-ok invitations are keyed by address, across every estate that holds one.
+  # arca:unscoped-ok invitations are keyed by address, across every athanor that holds one.
   defp lock_invitations(email) when is_binary(email) and email != "" do
     from(m in Membership,
       where: m.email == ^email and m.status == "invited" and m.scope == "athanor",
@@ -706,7 +706,7 @@ defmodule Arca.SecurityTransitions do
   defp committed(%{} = change), do: change
   defp committed({:error, reason}), do: Arca.Repo.rollback(reason)
 
-  # The estates a statement moved, as they stand after it.
+  # The athanors a statement moved, as they stand after it.
   defp moved(athanors, generations, status, now) do
     for {id, generation} <- Enum.sort(generations) do
       %{

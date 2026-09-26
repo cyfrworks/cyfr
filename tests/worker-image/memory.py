@@ -650,7 +650,7 @@ def seed(kind, name):
 
 def chat_request(model):
     """A model turn with a long thread, a tool result and an image: some 600 KB of input."""
-    notes = ("The estate's notes, read back in full so the model sees every line of them. " * 64)[:4_000]
+    notes = ("The athanor's notes, read back in full so the model sees every line of them. " * 64)[:4_000]
     image = base64.b64encode(os.urandom(150_000)).decode()
     messages = []
     for i in range(50):
@@ -662,9 +662,9 @@ def chat_request(model):
             {"type": "tool_result", "tool_call_id": f"call_{i}", "name": "files.read", "content": notes, "is_error": False}]})
     messages.append({"role": "user", "content": [{"type": "text", "text": "And this?"},
                                                  {"type": "image", "media_type": "image/png", "data": image}]})
-    tools = [{"name": f"tool_{i}", "description": "A tool the estate offers. " * 8,
+    tools = [{"name": f"tool_{i}", "description": "A tool the athanor offers. " * 8,
               "parameters": {"type": "object", "properties": {"path": {"type": "string"}}, "required": ["path"]}} for i in range(40)]
-    return {"operation": "chat", "params": {"model": model, "system": "You are the estate's assistant. " * 20,
+    return {"operation": "chat", "params": {"model": model, "system": "You are the athanor's assistant. " * 20,
                                              "messages": messages, "tools": tools, "max_tokens": 4096}}
 
 

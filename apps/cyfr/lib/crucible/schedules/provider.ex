@@ -64,7 +64,7 @@ defmodule Crucible.Schedules.Provider do
               ),
               Arg.new("metadata", {:map, Arg.new(nil, :json)},
                 description:
-                  "Optional metadata (create/update). `keep_outcome: true` files every completed run's output as a note in the schedule's estate, named by `note_name` or, when unset, by the schedule's id; each run replaces the note before it."
+                  "Optional metadata (create/update). `keep_outcome: true` files every completed run's output as a note in the schedule's athanor, named by `note_name` or, when unset, by the schedule's id; each run replaces the note before it."
               ),
               Arg.new("concurrency", :string,
                 description:
@@ -135,7 +135,7 @@ defmodule Crucible.Schedules.Provider do
               Arg.new("metadata", {:map, Arg.new(nil, :json)},
                 nullable: true,
                 description:
-                  "Optional metadata (create/update). `keep_outcome: true` files every completed run's output as a note in the schedule's estate, named by `note_name` or, when unset, by the schedule's id; each run replaces the note before it."
+                  "Optional metadata (create/update). `keep_outcome: true` files every completed run's output as a note in the schedule's athanor, named by `note_name` or, when unset, by the schedule's id; each run replaces the note before it."
               ),
               Arg.new("concurrency", :string,
                 description:

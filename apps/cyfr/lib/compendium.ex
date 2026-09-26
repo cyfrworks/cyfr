@@ -12,7 +12,7 @@ defmodule Compendium do
   tincture rules (`Compendium.Tincture`); component inspection,
   resolution, activation and blobs for the execution domain; the
   component facts the assistant reads — its model catalysts, its agents,
-  skills and agent sources and the estate's own formulas — with the path
+  skills and agent sources and the athanor's own formulas — with the path
   grammars of those trees; and the registry's sign-in probe and legal
   pages. Every fact is read under the caller's context and names nothing
   it did not read; running a catalyst is not here.
@@ -46,7 +46,7 @@ defmodule Compendium do
   alias Compendium.Registry.Client
   alias Sanctum.Context
 
-  # The most rows one listing of the estate's catalysts reads.
+  # The most rows one listing of the athanor's catalysts reads.
   @catalyst_limit 1000
 
   @typedoc """
@@ -84,14 +84,14 @@ defmodule Compendium do
   defdelegate valid_tincture_connect_domain?(domain), to: Tincture, as: :valid_connect_domain?
 
   @doc """
-  Every installed catalyst release in the caller's estate, each with the
+  Every installed catalyst release in the caller's athanor, each with the
   contracts its manifest declares — what the assistant's model listing
   chooses from. Nothing is run.
 
-  The caller is an authenticated context focused on an estate that may
+  The caller is an authenticated context focused on an athanor that may
   read its components (`:component_read`); anything else is
   `{:error, :forbidden}`. A component index behind its tree, or a store
-  that cannot answer, is `{:error, :unavailable}`. An estate nobody has
+  that cannot answer, is `{:error, :unavailable}`. An athanor nobody has
   opened starts filling here, as the component listing does, and answers
   the rows that exist.
   """
@@ -131,10 +131,10 @@ defmodule Compendium do
   end
 
   @doc """
-  The estate's indexed agents as consent sources, the soul first:
+  The athanor's indexed agents as consent sources, the soul first:
   `{:ok, [%{ref, name, soul?}]}`. An index behind its tree, or a store
   that cannot answer, is `{:error, :unavailable}`; a context that names
-  no estate is `{:error, :forbidden}`.
+  no athanor is `{:error, :forbidden}`.
   """
   @spec agent_source_refs(Context.t()) ::
           {:ok, [agent_source()]} | {:error, :unavailable | :forbidden}
@@ -158,9 +158,9 @@ defmodule Compendium do
   end
 
   @doc """
-  The estate's own formulas, as the name-level refs a fill consents:
+  The athanor's own formulas, as the name-level refs a fill consents:
   `{:ok, ["formula:local.<name>"]}`. A store that cannot answer is
-  `{:error, :unavailable}`; a context that names no estate is
+  `{:error, :unavailable}`; a context that names no athanor is
   `{:error, :forbidden}`.
   """
   @spec local_formula_refs(Context.t()) ::
@@ -255,7 +255,7 @@ defmodule Compendium do
   defdelegate manifest_leaves(leaves), to: ComponentPath
 
   @doc """
-  The projection epoch the estate's `root` has acknowledged, after its
+  The projection epoch the athanor's `root` has acknowledged, after its
   barrier unless `await: false` (`Compendium.ProjectionReconciler.acknowledged_epoch/3`).
   """
   @spec acknowledged_projection_epoch(Context.t(), String.t(), keyword()) ::
@@ -264,7 +264,7 @@ defmodule Compendium do
     to: Compendium.ProjectionReconciler,
     as: :acknowledged_epoch
 
-  @doc "Refresh every filled estate's seeded components (`Compendium.Provisioning.sync_seeds/0`)."
+  @doc "Refresh every filled athanor's seeded components (`Compendium.Provisioning.sync_seeds/0`)."
   @spec sync_seeds() :: :ok
   defdelegate sync_seeds(), to: Compendium.Provisioning
 
@@ -272,11 +272,11 @@ defmodule Compendium do
   # The assistant's agents and skills
   # ---------------------------------------------------------------------------
 
-  @doc "The estate's agents and the files that did not parse (`Compendium.AquaAgent.list/1`)."
+  @doc "The athanor's agents and the files that did not parse (`Compendium.AquaAgent.list/1`)."
   @spec agents(Context.t()) :: {:ok, [AquaAgent.t()], [{String.t(), term()}]} | {:error, term()}
   defdelegate agents(ctx), to: AquaAgent, as: :list
 
-  @doc "One agent of the estate by name (`Compendium.AquaAgent.get/2`)."
+  @doc "One agent of the athanor by name (`Compendium.AquaAgent.get/2`)."
   @spec agent(Context.t(), String.t()) :: {:ok, AquaAgent.t()} | {:error, term()}
   defdelegate agent(ctx, name), to: AquaAgent, as: :get
 
@@ -326,11 +326,11 @@ defmodule Compendium do
   @spec agent_row(AquaAgent.t(), MapSet.t(String.t())) :: map()
   defdelegate agent_row(agent, roster), to: AgentSource, as: :row
 
-  @doc "The names of the estate's enabled agents (`Compendium.AgentSource.enabled_roster/1`)."
+  @doc "The names of the athanor's enabled agents (`Compendium.AgentSource.enabled_roster/1`)."
   @spec enabled_agent_roster(Context.t()) :: {:ok, MapSet.t(String.t())} | {:error, term()}
   defdelegate enabled_agent_roster(ctx), to: AgentSource, as: :enabled_roster
 
-  @doc "The estate's skills, at most `limit` of them (`Compendium.AquaSkills.index/2`)."
+  @doc "The athanor's skills, at most `limit` of them (`Compendium.AquaSkills.index/2`)."
   @spec skills_index(Context.t(), pos_integer() | :all) ::
           {:ok, %{entries: [AquaSkills.entry()], more: non_neg_integer()}} | {:error, term()}
   defdelegate skills_index(ctx, limit), to: AquaSkills, as: :index

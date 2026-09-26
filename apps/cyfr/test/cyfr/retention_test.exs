@@ -54,7 +54,7 @@ defmodule Arca.RetentionTest do
     {:ok, ctx: ctx, actor: Sanctum.Context.actor(ctx), system: system_actor(athanor)}
   end
 
-  # The actor the scheduler hands each estate: the server's own, inside
+  # The actor the scheduler hands each athanor: the server's own, inside
   # that one athanor.
   defp system_actor(athanor) do
     Sanctum.Context.actor(
@@ -154,7 +154,7 @@ defmodule Arca.RetentionTest do
       assert settings["builds"] == 3
     end
 
-    test "an estate with no athanor row sets and reads its own settings" do
+    test "an athanor with no athanor row sets and reads its own settings" do
       # The settings are the storage layer's own row, not a column of the
       # athanor's: nothing about the athanor row is asked for.
       actor = %Prima.Actor{athanor_id: "ath_rowless_#{System.unique_integer([:positive])}"}
@@ -523,7 +523,7 @@ defmodule Arca.RetentionTest do
   end
 
   # ============================================================================
-  # cleanup_athanor/2 — every kind, one estate, its own settings
+  # cleanup_athanor/2 — every kind, one athanor, its own settings
   # ============================================================================
 
   describe "cleanup_athanor/2" do
@@ -564,7 +564,7 @@ defmodule Arca.RetentionTest do
         create_build_with_timestamp(actor, "build_#{i}", "2025-01-0#{i}T10:00:00Z")
       end
 
-      # Another estate's rows are not this estate's to prune.
+      # Another athanor's rows are not this athanor's to prune.
       other = %Prima.Actor{athanor_id: actor.athanor_id <> "_other", user_id: "u9"}
 
       for i <- 1..3,
@@ -607,7 +607,7 @@ defmodule Arca.RetentionTest do
       assert length(executions(actor)) == 1
     end
 
-    test "corrupt settings refuse the whole estate before any kind runs", %{
+    test "corrupt settings refuse the whole athanor before any kind runs", %{
       actor: actor,
       system: system
     } do
@@ -621,7 +621,7 @@ defmodule Arca.RetentionTest do
       assert length(executions(actor)) == 3
     end
 
-    test "settings that cannot be read refuse the whole estate", %{system: system} do
+    test "settings that cannot be read refuse the whole athanor", %{system: system} do
       drop_settings!()
       assert {:error, :database_error} = Retention.cleanup_athanor(system)
     end

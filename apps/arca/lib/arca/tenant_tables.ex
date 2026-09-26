@@ -115,7 +115,7 @@ defmodule Arca.TenantTables do
   #
   # `cell_leases` and `job_claims` are the cell's: which node holds a member
   # slot, and who is running one of the cell's singleton jobs. A cell has no
-  # estate, and several job kinds have no athanor at all; a claim naming an
+  # athanor, and several job kinds have no athanor at all; a claim naming an
   # athanor's credential in its `key` is a mutual-exclusion token and grants
   # no reach into that athanor, so it is not the athanor's row to delete.
   @not_athanor_scoped ["registry_tokens", "server_meta", "cell_leases", "job_claims"]

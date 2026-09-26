@@ -68,7 +68,7 @@ defmodule PrismWeb.ActivitiesLiveTest do
 
   test "a row is keyed by its request, and expanding it correlates that request",
        %{conn: conn} do
-    ctx = estate_context()
+    ctx = athanor_context()
 
     # One recorded call under a request, and an execution the same request
     # started.
@@ -105,7 +105,7 @@ defmodule PrismWeb.ActivitiesLiveTest do
 
   test "a refusal is a row with its class, and a completion shows how the work ended",
        %{conn: conn} do
-    ctx = estate_context()
+    ctx = athanor_context()
 
     refused =
       decision(ctx,
@@ -148,7 +148,7 @@ defmodule PrismWeb.ActivitiesLiveTest do
   end
 
   test "?id=req_… focuses the request and correlates it", %{conn: conn} do
-    ctx = estate_context()
+    ctx = athanor_context()
     decision = decision(ctx, tool: "execution", action: "run")
     :ok = Grimoire.open_decision(ctx, decision, %{input: %{}})
 
@@ -160,7 +160,7 @@ defmodule PrismWeb.ActivitiesLiveTest do
   end
 
   # A context in the seated athanor under a request of its own.
-  defp estate_context do
+  defp athanor_context do
     %{
       Sanctum.TestContext.local()
       | athanor_id: seated_athanor().id,

@@ -17,7 +17,7 @@ defmodule Cyfr.MixProject do
     ]
   end
 
-  # The step bench builds its estate from test fixtures in the test database.
+  # The step bench builds its athanor from test fixtures in the test database.
   def cli do
     [preferred_envs: ["cyfr.bench.step": :test]]
   end

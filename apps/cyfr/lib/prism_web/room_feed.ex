@@ -19,7 +19,7 @@ defmodule PrismWeb.RoomFeed do
   (`Aqua.room_excerpt/2`).
   """
 
-  @typedoc "`athanor_id`, `thread_id`, and for display `title` and `estate`."
+  @typedoc "`athanor_id`, `thread_id`, and for display `title` and `athanor`."
   @type room :: %{optional(String.t()) => String.t() | nil}
 
   @doc """
@@ -40,19 +40,19 @@ defmodule PrismWeb.RoomFeed do
 
   @doc "A room as the page names it, for the session and the feed."
   @spec room(map(), map(), String.t() | nil) :: room()
-  def room(%{id: athanor_id}, %{id: thread_id, title: title}, estate) do
+  def room(%{id: athanor_id}, %{id: thread_id, title: title}, athanor) do
     %{
       "athanor_id" => athanor_id,
       "thread_id" => thread_id,
       "title" => title,
-      "estate" => estate
+      "athanor" => athanor
     }
   end
 
-  @doc "How a room is named to the person: the estate, then the thread."
+  @doc "How a room is named to the person: the athanor, then the thread."
   @spec label(room() | nil) :: String.t()
   def label(%{} = room) do
-    [room["estate"], room["title"]]
+    [room["athanor"], room["title"]]
     |> Enum.reject(&(&1 in [nil, ""]))
     |> Enum.join(" · ")
   end
@@ -64,14 +64,14 @@ defmodule PrismWeb.RoomFeed do
           required(:athanor_id) => String.t(),
           required(:thread_id) => String.t(),
           optional(:title) => String.t() | nil,
-          optional(:estate) => String.t() | nil
+          optional(:athanor) => String.t() | nil
         }
   def excerpt_room(%{"athanor_id" => athanor_id, "thread_id" => thread_id} = room) do
     %{
       athanor_id: athanor_id,
       thread_id: thread_id,
       title: room["title"],
-      estate: room["estate"]
+      athanor: room["athanor"]
     }
   end
 end

@@ -6,7 +6,7 @@ defmodule Arca.Retention do
   Retention policy for tenant data — which records an athanor keeps, and
   for how long.
 
-  Retention is per athanor: the estate owns its records, and every member
+  Retention is per athanor: the athanor owns its records, and every member
   sees the same ones. This module owns the roster and the policy.
   `kinds/0` names every retainable kind (`Arca.Retention.Kind` adapters;
   the row mechanics live with each kind's store), and the settings, the
@@ -29,10 +29,10 @@ defmodule Arca.Retention do
 
   `cleanup/3` applies one kind inside the actor's athanor, for a caller
   that asked for it. `cleanup_athanor/2` applies every kind under the
-  athanor's own settings, for the server's walk over the active estates;
-  that walk, and which estates are active, are the host's
+  athanor's own settings, for the server's walk over the active athanors;
+  that walk, and which athanors are active, are the host's
   (`Cyfr.RetentionScheduler`), and it hands this module one narrowly
-  scoped system actor per estate. An archived estate is never handed
+  scoped system actor per athanor. An archived athanor is never handed
   here: its records freeze with it.
 
   ## Usage
@@ -162,7 +162,7 @@ defmodule Arca.Retention do
   Answers `{:ok, affected_count}`, `{:error, {:unknown_kind, key}}` for a
   key outside the roster, the settings refusal when the athanor's
   settings are corrupt or cannot be read (`:corrupt`, `:database_error`)
-  — an override included, since nothing destructive runs for an estate
+  — an override included, since nothing destructive runs for an athanor
   whose settings cannot be established — or the kind's own store error.
   """
   @spec cleanup(Prima.Actor.t(), String.t(), keyword()) ::
@@ -203,7 +203,7 @@ defmodule Arca.Retention do
   @doc """
   Every kind's policy inside one athanor, under that athanor's own
   settings, read once. The unit `Cyfr.RetentionScheduler` walks across
-  the active estates, so the actor must be the server's own, narrowed to
+  the active athanors, so the actor must be the server's own, narrowed to
   that one athanor: `system: true`, `scope: :athanor` and its
   `athanor_id` (`{:error, :forbidden}` otherwise, `{:error, :no_athanor}`
   without an athanor). `dry_run: true` counts instead of deleting.

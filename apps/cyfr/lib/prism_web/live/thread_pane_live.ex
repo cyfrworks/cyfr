@@ -11,9 +11,9 @@ defmodule PrismWeb.ThreadPaneLive do
   and membership-checked athanor focus. Runner calls, row reads, and
   attachment writes use that context, independently of the host’s focus.
 
-  One pane per estate (`id: "pane-<athanor id>"`): the host names the
+  One pane per athanor (`id: "pane-<athanor id>"`): the host names the
   thread at mount and turns the pane to another with `{:switch_thread,
-  id | nil}` — the estate's reads (the row, the roster, the members, the
+  id | nil}` — the athanor's reads (the row, the roster, the members, the
   models) are made once, the thread's (its rows, the runner's live state,
   the subscription) on every turn. What the host must know travels back
   as `{:pane, id, message}` to `socket.parent_pid`, first of all
@@ -42,7 +42,7 @@ defmodule PrismWeb.ThreadPaneLive do
   # How many pages the assistant may leave pointed at in the panel at once.
   @max_links 5
 
-  # The session, focused on the estate the host names (`"athanor_id"`), is
+  # The session, focused on the athanor the host names (`"athanor_id"`), is
   # established and kept current by the guard; a refused one never mounts.
   on_mount {CyfrWeb.ContextGuard, :protected}
 
@@ -73,8 +73,8 @@ defmodule PrismWeb.ThreadPaneLive do
     |> assign(:read_room?, true)
   end
 
-  # Everything the pane knows of its estate, from its own context: the
-  # athanor row, the roster (the estate's soul and roles), the members and
+  # Everything the pane knows of its athanor, from its own context: the
+  # athanor row, the roster (the athanor's soul and roles), the members and
   # the models — read once, however many threads the pane is turned to.
   # The thread named at mount is opened last, the way any thread is.
   defp open(socket, ctx, session) do
@@ -83,7 +83,7 @@ defmodule PrismWeb.ThreadPaneLive do
     # Subscribe BEFORE reading the row: the fill may finish between the two,
     # and a page that read "not yet" without listening would sit on it until
     # someone reloaded.
-    if connected?(socket), do: subscribe_estate(ctx)
+    if connected?(socket), do: subscribe_athanor(ctx)
 
     athanor =
       case Sanctum.Tenancy.Athanors.get(ctx.athanor_id) do
@@ -130,21 +130,22 @@ defmodule PrismWeb.ThreadPaneLive do
     open_thread(socket, thread_of(ctx, session["thread_id"]))
   end
 
-  # The estate's own topic. `Sanctum.Provisioning` broadcasts
+  # The athanor's own topic. `Sanctum.Provisioning` broadcasts
   # `:athanor_changed` when a fill completes, which is what clears the
   # preparing state without a reload.
-  defp subscribe_estate(%Sanctum.Context{athanor_id: id} = ctx) when is_binary(id) and id != "" do
+  defp subscribe_athanor(%Sanctum.Context{athanor_id: id} = ctx)
+       when is_binary(id) and id != "" do
     actor = Sanctum.Context.actor(ctx)
     Cyfr.Bus.subscribe(actor, Cyfr.Bus.notify(actor))
   end
 
-  defp subscribe_estate(_ctx), do: :ok
+  defp subscribe_athanor(_ctx), do: :ok
 
   defp preparing?(%{provisioned_at: nil}), do: true
   defp preparing?(_athanor), do: false
 
   # The thread a host names, under the pane's own context — so a thread
-  # another estate holds is nothing here — or the blank slate, where the
+  # another athanor holds is nothing here — or the blank slate, where the
   # first message creates the row.
   defp thread_of(ctx, id) when is_binary(id) and id != "" do
     case Threads.get(Sanctum.Context.actor(ctx), id) do
@@ -207,7 +208,7 @@ defmodule PrismWeb.ThreadPaneLive do
 
   defp unsubscribe_thread(socket), do: socket
 
-  # A thread's broadcasts: the bus topic its estate's actor names.
+  # A thread's broadcasts: the bus topic its athanor's actor names.
   defp follow_thread(thread_id, athanor_id) do
     actor = Prima.Actor.in_athanor(athanor_id)
     Cyfr.Bus.subscribe(actor, Cyfr.Bus.thread(actor, thread_id))
@@ -534,7 +535,7 @@ defmodule PrismWeb.ThreadPaneLive do
   def handle_info(%Cyfr.Bus.RoomInView{room: room}, socket),
     do: {:noreply, assign(socket, :room, room)}
 
-  # The estate's row changed. When it was the fill completing, the reads
+  # The athanor's row changed. When it was the fill completing, the reads
   # skipped at mount are made now and the pane stops saying "preparing".
   def handle_info(%Cyfr.Bus.Notify{kind: :athanor_changed}, socket) do
     ctx = socket.assigns.context
@@ -807,7 +808,7 @@ defmodule PrismWeb.ThreadPaneLive do
   # One send, identified once: the envelope carries the message id, the
   # `client_id` and every argument, so a retry — the person's, the pane's
   # own when the fill completes, or one after a reload — offers the same
-  # send and is accepted once. The estate being prepared holds the send
+  # send and is accepted once. The athanor being prepared holds the send
   # with its attachments in place; any other refusal is final, and the
   # bytes written under the message id are discarded, since a refused
   # send would otherwise leave blobs that belong to no row.
@@ -922,13 +923,13 @@ defmodule PrismWeb.ThreadPaneLive do
         put_flash(socket, :error, "You are no longer a member here.")
 
       :archived ->
-        put_flash(socket, :error, "This estate has been archived.")
+        put_flash(socket, :error, "This athanor has been archived.")
 
       :no_agent ->
-        put_flash(socket, :error, "This estate has no assistant — see AQUA.")
+        put_flash(socket, :error, "This athanor has no assistant — see AQUA.")
 
       :storage_full ->
-        put_flash(socket, :error, "This estate's storage is full.")
+        put_flash(socket, :error, "This athanor's storage is full.")
 
       :storage_unverifiable ->
         put_flash(socket, :error, "Storage usage can't be verified right now — try again.")
@@ -1039,15 +1040,15 @@ defmodule PrismWeb.ThreadPaneLive do
   # AQUA" — theirs, not any person-kind athanor an operator opened — a DM
   # or a group goes by its label.
   defp athanor_label(%{} = athanor, ctx) do
-    if PrismWeb.Estates.own?(athanor, ctx),
+    if PrismWeb.Athanors.own?(athanor, ctx),
       do: "your AQUA",
-      else: PrismWeb.Estates.label(athanor, ctx)
+      else: PrismWeb.Athanors.label(athanor, ctx)
   end
 
-  defp athanor_label(_none, _ctx), do: "this estate"
+  defp athanor_label(_none, _ctx), do: "this athanor"
 
   # What a message would address, and what to call it: the soul or role
-  # the thread is on, or the roster's first — the estate's soul — before
+  # the thread is on, or the roster's first — the athanor's soul — before
   # any turn has run.
   defp assistant_handle(%{"name" => name} = o, _athanor) when is_binary(name) and name != "",
     do: {name, o["title"] || name}
@@ -1107,7 +1108,7 @@ defmodule PrismWeb.ThreadPaneLive do
       intents
       |> Enum.filter(&mode_permits?(&1, mode))
       |> Enum.map(fn
-        # One decision for "global page or under the estate": `Nav.href/2`.
+        # One decision for "global page or under the athanor": `Nav.href/2`.
         %{kind: "navigate", to: to} = intent -> %{intent | to: PrismWeb.Nav.href(to, route)}
         intent -> intent
       end)
@@ -1141,7 +1142,7 @@ defmodule PrismWeb.ThreadPaneLive do
 
   # A chat path onto one thread of the athanor this pane is on —
   # `/chat?a=<route>&c=<id>`, as `PrismWeb.ChatLive.chat_path/2` spells it.
-  # The estate alone, with no `c`, names no thread the panel could turn
+  # The athanor alone, with no `c`, names no thread the panel could turn
   # to: that is a page, and offered as a link like any other.
   defp own_thread(to, route) do
     uri = URI.parse(to)
@@ -1161,7 +1162,7 @@ defmodule PrismWeb.ThreadPaneLive do
   defp pane_id(socket), do: socket.assigns.dom <> "-pane"
 
   # A navigate lands on a page the console serves or nowhere: the link,
-  # focused on this pane's estate, must resolve in the router, and a
+  # focused on this pane's athanor, must resolve in the router, and a
   # redirect stub is not a page. The engine checks a path's shape alone;
   # this is where it is mapped to a route.
   defp served?(%{kind: "navigate", to: href}) do
@@ -1223,7 +1224,7 @@ defmodule PrismWeb.ThreadPaneLive do
           <span
             :if={@athanor && @athanor.roster == "frozen"}
             class="shrink-0 rounded bg-gray-800 px-1.5 py-0.5 text-[10px] text-gray-400"
-            title="A DM — a frozen two-person estate; it ends when either of you leaves"
+            title="A DM — a frozen two-person athanor; it ends when either of you leaves"
           >
             DM
           </span>
@@ -1541,7 +1542,7 @@ defmodule PrismWeb.ThreadPaneLive do
         class="flex items-center gap-2 border-t border-amber-900/60 bg-amber-900/10 px-3 py-2 text-xs text-amber-200"
       >
         <span class="truncate">
-          Still being prepared — your message is held and goes when the estate is ready.
+          Still being prepared — your message is held and goes when the athanor is ready.
         </span>
         <button
           type="button"

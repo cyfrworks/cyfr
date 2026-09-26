@@ -40,7 +40,7 @@ defmodule Crucible.ProviderTest do
         authenticated: true
       )
 
-    # A run is admitted only in an estate that stands: the test's own has a row.
+    # A run is admitted only in an athanor that stands: the test's own has a row.
     Arca.Test.Actor.athanor!(ctx.athanor_id)
 
     # Plant the test WASM in a private seed so bootstrap can mint it.

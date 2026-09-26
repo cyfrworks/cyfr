@@ -2764,7 +2764,7 @@ defmodule Arca.TurnStorage do
     end
   end
 
-  # A standing answer written with a decision is this turn's: its estate,
+  # A standing answer written with a decision is this turn's: its athanor,
   # its agent, the step's tool and action, and a thread-scope answer names
   # the turn's thread.
   defp grant_of?(grant, athanor_id, %Turn{} = turn, %TurnStep{} = step) when is_map(grant) do

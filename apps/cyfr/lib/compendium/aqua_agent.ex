@@ -198,7 +198,7 @@ defmodule Compendium.AquaAgent do
   @spec clone_glob(String.t()) :: String.t()
   def clone_glob(name) when is_binary(name), do: name <> ".*"
 
-  @doc "Whether this agent is the estate's soul, by the one reserved name."
+  @doc "Whether this agent is the athanor's soul, by the one reserved name."
   @spec soul?(t()) :: boolean()
   def soul?(%{name: name}), do: AquaPath.soul?(name)
 

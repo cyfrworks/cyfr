@@ -18,7 +18,7 @@ defmodule PrismWeb.ShellTinctureUrlTest do
   setup %{conn: conn} do
     user = test_user()
     conn = log_in_user(conn, user)
-    estate = seated_athanor()
+    athanor = seated_athanor()
 
     base = Path.join(System.tmp_dir!(), "shell_url_#{System.unique_integer([:positive])}")
     original_path = Application.get_env(:arca, :base_path)
@@ -26,7 +26,7 @@ defmodule PrismWeb.ShellTinctureUrlTest do
 
     dir =
       Arca.Adapters.Local.build_path(
-        Sanctum.Context.actor(%{Sanctum.TestContext.local() | athanor_id: estate.id}),
+        Sanctum.Context.actor(%{Sanctum.TestContext.local() | athanor_id: athanor.id}),
         ["components", "tinctures", "local", @tincture, "1.0.0"]
       )
 
@@ -44,7 +44,7 @@ defmodule PrismWeb.ShellTinctureUrlTest do
     )
 
     File.write!(Path.join(dir, "index.html"), "<html><body>url</body></html>")
-    Prism.TinctureRegistry.reload_athanor(estate.id)
+    Prism.TinctureRegistry.reload_athanor(athanor.id)
 
     on_exit(fn ->
       Arca.ControlPlane.record(:unclaimed)
@@ -53,7 +53,7 @@ defmodule PrismWeb.ShellTinctureUrlTest do
       Prism.TinctureRegistry.reload()
     end)
 
-    {:ok, conn: conn, user: user, estate: estate}
+    {:ok, conn: conn, user: user, athanor: athanor}
   end
 
   defp frame_src(html) do
@@ -66,7 +66,7 @@ defmodule PrismWeb.ShellTinctureUrlTest do
 
   test "the frame carries a token the tincture surface accepts, for this tincture alone", %{
     conn: conn,
-    estate: estate
+    athanor: athanor
   } do
     {view, _html} = mount_athanor(conn, "/tinctures")
     html = render_click(view, "select_tincture", %{"tincture" => @window_id})
@@ -82,7 +82,7 @@ defmodule PrismWeb.ShellTinctureUrlTest do
                path_params: %{"publisher" => "local", "tincture_name" => @tincture}
              })
 
-    assert athanor_id == estate.id
+    assert athanor_id == athanor.id
 
     # The HTTP mint and the console mint are the one codec.
     assert {:ok, seconds} = Sanctum.TinctureAuth.expires_in(token)

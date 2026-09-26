@@ -238,7 +238,7 @@ defmodule Opus.ExecutorMaskedOutputTest do
   end
 
   # ---------------------------------------------------------------------------
-  # The estate
+  # The athanor
   # ---------------------------------------------------------------------------
 
   defp lay_seed!(seed) do

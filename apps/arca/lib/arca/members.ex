@@ -27,7 +27,7 @@ defmodule Arca.Members do
       is the server's operator grant. A person's rows are read across
       every athanor to resolve which one they work in, an invitation is
       keyed on an email rather than on an athanor, and a deny sweeps a
-      person out of every estate at once. None of these can be filtered
+      person out of every athanor at once. None of these can be filtered
       by one athanor without ceasing to do their job, so they match
       `scope: :platform` and refuse an athanor-scoped actor with
       `{:error, :cross_tenant}`.
@@ -103,9 +103,9 @@ defmodule Arca.Members do
 
   The athanor row is locked before the seat is written, in one
   `Arca.Repo.locking_transaction/2`: a denial or an archive that is
-  retiring the estate (`Arca.SecurityTransitions`) holds that lock, so a
+  retiring the athanor (`Arca.SecurityTransitions`) holds that lock, so a
   seat waits for it and then reads what it committed. A seat never lands
-  in an archived estate: `{:error, :athanor_archived}`, the answer adding
+  in an archived athanor: `{:error, :athanor_archived}`, the answer adding
   a member to one already gets.
   """
   @spec seat(Prima.Actor.t(), map()) ::
@@ -594,14 +594,14 @@ defmodule Arca.Members do
   def withdraw_invites_for_email(%Prima.Actor{}, _email), do: {:error, :cross_tenant}
 
   @doc """
-  Whether two people currently sit together in at least one ACTIVE estate
+  Whether two people currently sit together in at least one ACTIVE athanor
   — active memberships in active athanors only, since an invitation is not
   a seat and an archived room is not a room.
   """
-  @spec shared_estate?(Prima.Actor.t(), String.t(), String.t()) :: {:ok, boolean()} | refusal()
-  def shared_estate?(%Prima.Actor{scope: :platform}, user_a, user_b)
+  @spec shared_athanor?(Prima.Actor.t(), String.t(), String.t()) :: {:ok, boolean()} | refusal()
+  def shared_athanor?(%Prima.Actor{scope: :platform}, user_a, user_b)
       when is_binary(user_a) and is_binary(user_b) do
-    Arca.Repo.Errors.with_db_rescue("Arca.Members.shared_estate?", fn ->
+    Arca.Repo.Errors.with_db_rescue("Arca.Members.shared_athanor?", fn ->
       count =
         Arca.Repo.one(
           from(a in Membership,
@@ -622,7 +622,7 @@ defmodule Arca.Members do
     end)
   end
 
-  def shared_estate?(%Prima.Actor{}, _user_a, _user_b), do: {:error, :cross_tenant}
+  def shared_athanor?(%Prima.Actor{}, _user_a, _user_b), do: {:error, :cross_tenant}
 
   # ---- internal --------------------------------------------------------------
 
@@ -765,7 +765,7 @@ defmodule Arca.Members do
     |> Map.put_new(:updated_at, now)
   end
 
-  # The estate a seat is written into, locked: an estate being retired
+  # The athanor a seat is written into, locked: an athanor being retired
   # holds this row until it commits.
   defp seatable(athanor_id) do
     from(a in Athanor, where: a.id == ^athanor_id, select: a.status)

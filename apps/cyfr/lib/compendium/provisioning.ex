@@ -3,10 +3,10 @@
 
 defmodule Compendium.Provisioning do
   @moduledoc """
-  Filling an athanor's component estate: the seed bundle copied into its
+  Filling an athanor's component athanor: the seed bundle copied into its
   `components/` and registered as rows, the shipped AQUA tree checked
   well-formed and copied into its `aqua/`, the published components the
-  bundle depends on pulled from the registry, and the estate's agents
+  bundle depends on pulled from the registry, and the athanor's agents
   indexed — so the athanor's AQUA answers from the first prompt. The seed
   tree is the shipped default: what a release ships later is offered,
   never pushed, and a reset copies it in again.
@@ -17,13 +17,13 @@ defmodule Compendium.Provisioning do
 
   ## Who asks, and who answers
 
-  The estate's claim, the baseline consent every fill mints, the
+  The athanor's claim, the baseline consent every fill mints, the
   readiness and failure writes on the row and the person's own athanor
   are the identity domain's (`Sanctum.Provisioning`), which this module
   calls down into. It never reads a tenancy row or mints a consent
   itself.
 
-  Identity announces that an estate needs filling
+  Identity announces that an athanor needs filling
   (`Sanctum.Provisioning.fill_event/0`) and this module is what reacts.
   The reaction is synchronous for the explicit `provision` verb — a
   person is holding the request open and gets the attempt's own answer,
@@ -36,7 +36,7 @@ defmodule Compendium.Provisioning do
   registered, the failure is recorded on the row, and the next attempt
   finds what is still missing by reading every installed component's
   manifest. A pull runs beside the attempt rather than inside it, so it is
-  started and stopped by the estate's claim
+  started and stopped by the athanor's claim
   (`Sanctum.Provisioning.bounded_work/3`) and never outlives it.
   """
 
@@ -46,12 +46,12 @@ defmodule Compendium.Provisioning do
 
   alias Compendium.{AutoIndexer, Pull}
   alias Sanctum.Context
-  alias Sanctum.Provisioning, as: Estate
+  alias Sanctum.Provisioning, as: Athanor
 
   @typedoc "An athanor's row, as the plain map the tenancy facade answers."
   @type athanor :: %{required(:id) => String.t(), optional(atom()) => term()}
 
-  # How long a boot's seed sync waits for an estate another attempt holds.
+  # How long a boot's seed sync waits for an athanor another attempt holds.
   @sync_wait_ms 30_000
   @sync_poll_ms 250
 
@@ -89,7 +89,7 @@ defmodule Compendium.Provisioning do
 
     case :telemetry.attach(
            @handler_id,
-           Estate.fill_event(),
+           Athanor.fill_event(),
            &__MODULE__.handle_fill_request/4,
            nil
          ) do
@@ -98,7 +98,7 @@ defmodule Compendium.Provisioning do
 
       {:error, reason} ->
         Logger.error(
-          "[Compendium.Provisioning] could not attach the estate filler: " <>
+          "[Compendium.Provisioning] could not attach the athanor filler: " <>
             "#{inspect(reason)} — no athanor will be filled on this node"
         )
     end
@@ -127,7 +127,7 @@ defmodule Compendium.Provisioning do
     :ok
   rescue
     # A raising handler is detached by the telemetry library, and every
-    # estate on the node would stop filling with it.
+    # athanor on the node would stop filling with it.
     e ->
       Logger.error("[Compendium.Provisioning] fill request raised: #{Exception.message(e)}")
       :ok
@@ -139,21 +139,21 @@ defmodule Compendium.Provisioning do
   defp reply(_metadata, _outcome), do: :ok
 
   # The claim is taken before the task starts, so a reader arriving with
-  # the session already finds the estate being filled; the task is what
+  # the session already finds the athanor being filled; the task is what
   # holds it, and `not_started` gives it back when the work will not run.
   # The member's standing is asked first: one that will not fill must not
-  # take the estate even briefly, or a reader on the member that would
+  # take the athanor even briefly, or a reader on the member that would
   # fill it sees an attempt in progress that is not one.
   defp claim_then_background(athanor, ctx) do
     if Arca.ControlPlane.held?(), do: claim_then_fill(athanor, ctx), else: :ok
   end
 
   defp claim_then_fill(%{id: athanor_id} = athanor, ctx) do
-    case Estate.take_claim(athanor_id, "sign_in") do
+    case Athanor.take_claim(athanor_id, "sign_in") do
       {:ok, claim} ->
         background(
-          fn -> Estate.hold(athanor_id, claim, &fill(&1, athanor, ctx)) end,
-          fn -> Estate.release(athanor_id, claim) end
+          fn -> Athanor.hold(athanor_id, claim, &fill(&1, athanor, ctx)) end,
+          fn -> Athanor.release(athanor_id, claim) end
         )
 
       _busy_or_unavailable ->
@@ -211,7 +211,7 @@ defmodule Compendium.Provisioning do
   the row either way; a failure is recorded on it and logged.
 
   Single-flighted per athanor: the fill is idempotent but the closure
-  pull is not free, so two callers finding a fresh estate at once would
+  pull is not free, so two callers finding a fresh athanor at once would
   each walk it.
   """
   @spec provision(athanor(), Context.t() | nil) ::
@@ -221,19 +221,19 @@ defmodule Compendium.Provisioning do
   def provision(athanor, acting_ctx), do: attempt(athanor, acting_ctx, "provision")
 
   defp attempt(%{id: athanor_id} = athanor, acting_ctx, entry_kind) do
-    Estate.under_claim(athanor_id, entry_kind, &fill(&1, athanor, acting_ctx))
+    Athanor.under_claim(athanor_id, entry_kind, &fill(&1, athanor, acting_ctx))
   end
 
   @doc false
   # One attempt under a claim already taken — what every filling entry
-  # point runs once it holds the estate. Public so a test can run an
+  # point runs once it holds the athanor. Public so a test can run an
   # attempt under a claim it took, and lost, itself.
-  @spec fill(Estate.claim(), athanor(), Context.t() | nil) ::
+  @spec fill(Athanor.claim(), athanor(), Context.t() | nil) ::
           {:ok, athanor()} | {:error, term()}
   def fill(claim, %{id: athanor_id} = athanor, acting_ctx) do
     # Re-read under the claim: the attempt that just held it may have been
     # filling this very athanor.
-    case Estate.athanor(athanor_id) do
+    case Athanor.athanor(athanor_id) do
       {:ok, %{provisioned_at: %DateTime{}} = filled} -> {:ok, filled}
       {:ok, fresh} -> do_fill(claim, fresh, acting_ctx)
       _ -> do_fill(claim, athanor, acting_ctx)
@@ -241,47 +241,47 @@ defmodule Compendium.Provisioning do
   end
 
   defp do_fill(claim, %{id: athanor_id} = athanor, acting_ctx) do
-    ctx = acting_ctx || Estate.seed_ctx(athanor_id)
+    ctx = acting_ctx || Athanor.seed_ctx(athanor_id)
 
     # The agents are indexed before the consents are minted: an agent is a
     # consent source, and its revision bytes are registered by the index
     # before any consent names it.
-    with :ok <- Arca.ensure_roots(Context.actor(Estate.seed_ctx(athanor_id))),
+    with :ok <- Arca.ensure_roots(Context.actor(Athanor.seed_ctx(athanor_id))),
          {:ok, _scan} <- register_bundle(athanor_id),
          :ok <- aqua_definitions(athanor_id),
          :ok <- index_agents(ctx, claim),
          {:ok, closure} <- pull_required_deps(ctx),
          optional <- pull_optional_deps(ctx),
-         {:ok, bootstrap} <- Estate.bootstrap_consents(ctx, claim),
-         :ok <- Estate.settle(athanor_id, claim, "ready", nil) do
+         {:ok, bootstrap} <- Athanor.bootstrap_consents(ctx, claim),
+         :ok <- Athanor.settle(athanor_id, claim, "ready", nil) do
       Logger.info(
         "[Provisioning] #{athanor_id} provisioned " <>
           "(pulled #{length(closure.pulled)} required and #{optional} optional, " <>
           "minted #{length(bootstrap.minted)})"
       )
 
-      Estate.mark_filled(athanor)
+      Athanor.mark_filled(athanor)
     else
       {:error, :claim_lost} ->
-        Estate.lost(athanor_id)
+        Athanor.lost(athanor_id)
 
       {:error, {:closure, detail}} ->
-        Estate.record_failure(claim, athanor, :closure, detail)
+        Athanor.record_failure(claim, athanor, :closure, detail)
 
       {:error, {:aqua_template, _} = reason} ->
-        Estate.record_failure(claim, athanor, :aqua_template, reason)
+        Athanor.record_failure(claim, athanor, :aqua_template, reason)
 
-      # The consent walk could not read what the estate holds. Recorded
-      # as its own step: an estate nothing could be read for is not an
-      # estate whose seed is missing.
+      # The consent walk could not read what the athanor holds. Recorded
+      # as its own step: an athanor nothing could be read for is not an
+      # athanor whose seed is missing.
       {:error, {:component_facts, _} = reason} ->
-        Estate.record_failure(claim, athanor, :bootstrap, reason)
+        Athanor.record_failure(claim, athanor, :bootstrap, reason)
 
       {:error, reason} ->
-        Estate.record_failure(claim, athanor, :seed, reason)
+        Athanor.record_failure(claim, athanor, :seed, reason)
 
       {:unminted, skipped} ->
-        Estate.record_failure(claim, athanor, :bootstrap, skipped)
+        Athanor.record_failure(claim, athanor, :bootstrap, skipped)
     end
   end
 
@@ -306,12 +306,12 @@ defmodule Compendium.Provisioning do
     # would interleave two mints over one athanor's sources. Tried once —
     # a person is holding this request open, and a refusal they can retry
     # beats queueing behind a fill. Released with no verdict on readiness.
-    Estate.under_claim(athanor_id, "install_shipped", fn claim ->
+    Athanor.under_claim(athanor_id, "install_shipped", fn claim ->
       with {:ok, pulled} <- Pull.pull_shipped(ctx, reference),
-           :ok <- Estate.bootstrap_consents_for(ctx, claim, pulled.component_ref) do
+           :ok <- Athanor.bootstrap_consents_for(ctx, claim, pulled.component_ref) do
         {:ok, pulled}
       else
-        {:error, :claim_lost} -> Estate.lost(athanor_id)
+        {:error, :claim_lost} -> Athanor.lost(athanor_id)
         other -> other
       end
     end)
@@ -329,21 +329,21 @@ defmodule Compendium.Provisioning do
   published dependencies are re-pulled and baseline consents minted for
   any row still without one. Newer shipped versions are NOT copied in:
   they read as available until a person pulls them, so an upgrade never
-  changes an estate under its members.
+  changes an athanor under its members.
 
   Runs at boot (`Cyfr.SeedOffer`); a failure logs and moves on — a sync
   must never take the server down or block another athanor's.
   """
   @spec sync_seeds() :: :ok
   def sync_seeds do
-    for athanor <- Estate.filled_athanors() do
-      # The same claim every fill takes, so a boot healing an estate and an
-      # install or a retry cannot walk one estate at once. Not `provision/2`:
+    for athanor <- Athanor.filled_athanors() do
+      # The same claim every fill takes, so a boot healing an athanor and an
+      # install or a retry cannot walk one athanor at once. Not `provision/2`:
       # this runs on athanors that are already filled, which is exactly what
       # that function short-circuits. The sync has no one to answer to, so
       # it waits out an attempt in progress — within a bound, since one
-      # held estate must not keep the boot from the next.
-      case Estate.await_claim(
+      # held athanor must not keep the boot from the next.
+      case Athanor.await_claim(
              athanor.id,
              "seed_sync",
              @sync_wait_ms,
@@ -362,7 +362,7 @@ defmodule Compendium.Provisioning do
   end
 
   defp sync_seed(athanor, claim) do
-    ctx = Estate.seed_ctx(athanor.id)
+    ctx = Athanor.seed_ctx(athanor.id)
 
     case Arca.ensure_roots(Context.actor(ctx)) do
       :ok ->
@@ -404,18 +404,18 @@ defmodule Compendium.Provisioning do
 
     _ = pull_optional_deps(ctx)
 
-    # The index and the mint speak for the estate, so they are this sync's
+    # The index and the mint speak for the athanor, so they are this sync's
     # only while the claim is. The index says so in the transaction that
     # writes it; the mint asks first, which is as close as it gets.
     case index_agents(ctx, claim) do
       :ok ->
-        case Estate.holding(athanor.id, claim) do
+        case Athanor.holding(athanor.id, claim) do
           :ok -> bootstrap_synced(ctx, claim, athanor.id)
-          {:error, :claim_lost} -> Estate.lost(athanor.id)
+          {:error, :claim_lost} -> Athanor.lost(athanor.id)
         end
 
       {:error, :claim_lost} ->
-        Estate.lost(athanor.id)
+        Athanor.lost(athanor.id)
     end
 
     :ok
@@ -485,9 +485,9 @@ defmodule Compendium.Provisioning do
   # `skipped`, so only what the release just added mints anything, and
   # only a bootstrap-only head the release moved is re-minted.
   defp bootstrap_synced(ctx, claim, athanor_id) do
-    case Estate.bootstrap_consents(ctx, claim) do
+    case Athanor.bootstrap_consents(ctx, claim) do
       {:error, :claim_lost} ->
-        Estate.lost(athanor_id)
+        Athanor.lost(athanor_id)
 
       {:ok, %{minted: minted, revised: revised}} when minted != [] or revised != [] ->
         Logger.info(
@@ -496,7 +496,7 @@ defmodule Compendium.Provisioning do
         )
 
       # A sync is a heal, not an attempt: a source the walk could not mint
-      # leaves the estate as it found it and is said out loud, where the
+      # leaves the athanor as it found it and is said out loud, where the
       # fill would record it on the row and stop.
       {:unminted, unminted} ->
         Logger.warning(
@@ -520,7 +520,7 @@ defmodule Compendium.Provisioning do
   # install without its bundle cannot provision anyone; say so rather than
   # minting an empty athanor.
   defp register_bundle(athanor_id) do
-    ctx = Estate.seed_ctx(athanor_id)
+    ctx = Athanor.seed_ctx(athanor_id)
     actor = Context.actor(ctx)
 
     with :ok <- bundle_present(actor),
@@ -549,18 +549,18 @@ defmodule Compendium.Provisioning do
   defp aqua_definitions(athanor_id) do
     with :ok <- Compendium.AquaTemplate.seed_check(),
          {:ok, _copied} <-
-           Arca.Overlay.materialize_shipped(Context.actor(Estate.seed_ctx(athanor_id)), "aqua") do
+           Arca.Overlay.materialize_shipped(Context.actor(Athanor.seed_ctx(athanor_id)), "aqua") do
       :ok
     else
       {:error, reason} -> {:error, {:aqua_template, reason}}
     end
   end
 
-  # The estate's agents as rows, derived from the tree the seed just
+  # The athanor's agents as rows, derived from the tree the seed just
   # filled or the release just moved, written in the same transaction that
   # holds the claim: an attempt a successor took over publishes no index,
   # and that is the one failure here that IS provisioning's, since the
-  # successor owns the estate from that moment. Anything else — a file
+  # successor owns the athanor from that moment. Anything else — a file
   # that would not parse, a tree that could not be read — leaves the rows
   # as they were and is reported.
   defp index_agents(ctx, claim) do
@@ -595,7 +595,7 @@ defmodule Compendium.Provisioning do
   # The bundle's optional dependencies — the model catalysts — are pulled
   # when a registry is configured to pull them from, as a courtesy with a
   # budget: a registry that is slow, unreachable or unset-by-default and
-  # absent leaves the estate provisioned on what the bundle ships, its
+  # absent leaves the athanor provisioned on what the bundle ships, its
   # activations covering what is there, and the catalysts arrive when a
   # model is connected. An optional dependency that fails to pull is never
   # a provisioning failure.
@@ -612,7 +612,7 @@ defmodule Compendium.Provisioning do
       {:ok, %{pulled: pulled, failed: failed}} ->
         Logger.warning(
           "[Provisioning] #{length(failed)} optional dependencies not pulled " <>
-            "(#{inspect(Enum.map(failed, &elem(&1, 0)))}); the estate provisions without them"
+            "(#{inspect(Enum.map(failed, &elem(&1, 0)))}); the athanor provisions without them"
         )
 
         length(pulled)
@@ -620,7 +620,7 @@ defmodule Compendium.Provisioning do
       :timeout ->
         Logger.warning(
           "[Provisioning] optional dependencies not pulled within " <>
-            "#{@optional_pull_budget_ms} ms; the estate provisions without them"
+            "#{@optional_pull_budget_ms} ms; the athanor provisions without them"
         )
 
         0
@@ -628,7 +628,7 @@ defmodule Compendium.Provisioning do
       {:exit, reason} ->
         Logger.warning(
           "[Provisioning] optional dependency pull exited (#{inspect(reason)}); " <>
-            "the estate provisions without them"
+            "the athanor provisions without them"
         )
 
         0
@@ -644,15 +644,15 @@ defmodule Compendium.Provisioning do
   # missing below them. A task that exits is reported, never the caller's
   # crash: a seed sync at boot must not take the server down.
   #
-  # The task is the estate's claim's (`Sanctum.Provisioning.bounded_work/3`),
+  # The task is the athanor's claim's (`Sanctum.Provisioning.bounded_work/3`),
   # not this process's: unlinked so its crash stays its own, it would
   # otherwise outlive an attempt killed where it stands and go on writing
-  # into an estate a successor already holds. The claim's keeper starts it
+  # into an athanor a successor already holds. The claim's keeper starts it
   # and stops it before the claim goes back.
   defp bounded_pull(_ctx, [], _budget_ms), do: {:ok, %{pulled: [], failed: [], present: []}}
 
   defp bounded_pull(ctx, refs, budget_ms) do
-    Estate.bounded_work(Compendium.ProvisioningSupervisor, budget_ms, fn ->
+    Athanor.bounded_work(Compendium.ProvisioningSupervisor, budget_ms, fn ->
       Pull.ensure_published_deps(ctx, refs)
     end)
   end

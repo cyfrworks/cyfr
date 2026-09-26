@@ -8,7 +8,7 @@ defmodule Cyfr.Cluster.ArchiveFenceTest do
   An archive on one member of work the other member runs, with the
   control channel cut so the archive is never heard there.
 
-  The archive retires the grant every attempt in the estate stores, in the
+  The archive retires the grant every attempt in the athanor stores, in the
   archiving member's transaction. What keeps the other member's attempt
   from acting on is the rows, not the announcement: its renewal, its
   storage write and its completion are refused `lost` under a grant that
@@ -25,12 +25,12 @@ defmodule Cyfr.Cluster.ArchiveFenceTest do
 
   test "a missed archive retires the peer's running work, and the sweep settles it once" do
     Cell.call(:a, Holder, :release!, [])
-    estate = Cell.call(:a, Fixtures, :athanor!, ["fence"])
+    athanor = Cell.call(:a, Fixtures, :athanor!, ["fence"])
 
     ctx =
       Sanctum.internal_context(
         user_id: "usr_cluster",
-        athanor_id: estate.id,
+        athanor_id: athanor.id,
         scope: :athanor,
         permissions: [:*]
       )
@@ -51,7 +51,7 @@ defmodule Cyfr.Cluster.ArchiveFenceTest do
     # announcement is lost everywhere: the transition commits and nobody
     # is told.
     Cell.partition(:a, :b)
-    assert Cell.call(:b, Fixtures, :archive_unheard!, [estate.id]) == "archived"
+    assert Cell.call(:b, Fixtures, :archive_unheard!, [athanor.id]) == "archived"
 
     # The member running the work never heard, and its host calls are
     # refused by the rows alone.
@@ -85,12 +85,12 @@ defmodule Cyfr.Cluster.ArchiveFenceTest do
 
   test "a reopen admits fresh work and revives none of the old" do
     Cell.call(:a, Holder, :release!, [])
-    estate = Cell.call(:a, Fixtures, :athanor!, ["reopen"])
+    athanor = Cell.call(:a, Fixtures, :athanor!, ["reopen"])
 
     ctx =
       Sanctum.internal_context(
         user_id: "usr_cluster",
-        athanor_id: estate.id,
+        athanor_id: athanor.id,
         scope: :athanor,
         permissions: [:*]
       )
@@ -98,8 +98,8 @@ defmodule Cyfr.Cluster.ArchiveFenceTest do
     old = Cell.call(:a, Holder, :attach!, [:old, [ctx: ctx]])
 
     Cell.partition(:a, :b)
-    assert Cell.call(:b, Fixtures, :archive_unheard!, [estate.id]) == "archived"
-    assert Cell.call(:b, Fixtures, :reopen!, [estate.id]) == "active"
+    assert Cell.call(:b, Fixtures, :archive_unheard!, [athanor.id]) == "archived"
+    assert Cell.call(:b, Fixtures, :reopen!, [athanor.id]) == "active"
     Cell.heal(:a, :b)
 
     assert Cell.call(:a, Holder, :call, [:old, "renew", %{"attempts" => [old.attempt]}])

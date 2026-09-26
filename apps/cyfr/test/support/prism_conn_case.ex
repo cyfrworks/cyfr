@@ -37,13 +37,13 @@ defmodule PrismWeb.ConnCase do
   end
 
   @doc """
-  Make `athanor_id` an estate a turn can run in: the shipped tree and
+  Make `athanor_id` an athanor a turn can run in: the shipped tree and
   bundle copied in, indexed, the baseline consent the soul pins minted —
   as a fill leaves it — and a key connected to the Claude catalyst, which
   its runs unseal when they attach. `user_id` is a member whose seat the
   bootstrap runs under.
   """
-  def ready_estate!(athanor_id, user_id) do
+  def ready_athanor!(athanor_id, user_id) do
     turn_env!()
     ctx = %{Sanctum.TestContext.local() | user_id: user_id, athanor_id: athanor_id}
     {:ok, _} = Sanctum.Tenancy.Members.ensure(user_id, scope: "athanor", athanor_id: athanor_id)
@@ -173,9 +173,9 @@ defmodule PrismWeb.ConnCase do
   their own athanor (or `opts[:athanor_id]`), create a `Sanctum.Session`, and
   put the token in the Plug session. Returns the conn.
 
-  The seat is the person's own estate, as it is in production — no estate is
+  The seat is the person's own athanor, as it is in production — no athanor is
   shared server-wide, so two signed-in test users are strangers to each other
-  unless a test seats them together. The estate is remembered for this test
+  unless a test seats them together. The athanor is remembered for this test
   process so `athanor_path/2` and `mount_athanor/3` name the same one.
   """
   def log_in_user(conn, user, opts \\ []) do
@@ -187,7 +187,7 @@ defmodule PrismWeb.ConnCase do
     {:ok, _membership} =
       Sanctum.Tenancy.Members.ensure(user.user_id, scope: "athanor", athanor_id: athanor_id)
 
-    # The estate holds what the server ships, as a fill leaves it.
+    # The athanor holds what the server ships, as a fill leaves it.
     :ok = Sanctum.TestContext.shipped!(athanor_id)
 
     ctx =
@@ -229,7 +229,7 @@ defmodule PrismWeb.ConnCase do
             created_by: user.user_id
           })
 
-        # Signed in on an estate that is set up, which is what a console
+        # Signed in on an athanor that is set up, which is what a console
         # test is about; filling one is `Sanctum.Provisioning`'s own suite.
         {:ok, provisioned} = Sanctum.Tenancy.Athanors.mark_provisioned(athanor)
         provisioned
@@ -237,7 +237,7 @@ defmodule PrismWeb.ConnCase do
   end
 
   @doc """
-  The athanor `log_in_user/3` seated this test's person in — the estate the
+  The athanor `log_in_user/3` seated this test's person in — the athanor the
   page helpers name by default.
   """
   def seated_athanor do
@@ -264,7 +264,7 @@ defmodule PrismWeb.ConnCase do
   @doc """
   The page path for an athanor: `/a/<route>` + `suffix`. Takes an athanor, a
   route string (for a test that names one without seating anybody), or
-  nothing — which is the estate `log_in_user/3` seated this test's person
+  nothing — which is the athanor `log_in_user/3` seated this test's person
   in. The empty suffix is the athanor's chat, which lives in the chat zone
   (`/chat?a=<route>`).
   """

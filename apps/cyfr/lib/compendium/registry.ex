@@ -734,7 +734,7 @@ defmodule Compendium.Registry do
   def latest_row(%Context{} = ctx, name, publisher \\ nil, component_type \\ nil)
       when is_binary(name) do
     if component_type == Compendium.AgentSource.type() do
-      # An agent is a source node projected from the estate's aqua/ tree,
+      # An agent is a source node projected from the athanor's aqua/ tree,
       # never a registry row; its one version is the file as it stands.
       Compendium.AgentSource.latest_row(ctx, name)
     else

@@ -51,13 +51,13 @@ defmodule PrismWeb.TopbarLiveTest do
     render_click(bar, "toggle_popover", %{"name" => "athanors"})
     assert render(bar) =~ "Bells"
 
-    # A row opens the estate's chat; the small link beside it, its AQUA.
+    # A row opens the athanor's chat; the small link beside it, its AQUA.
     route = Athanors.route_slug(group)
     assert has_element?(bar, ~s(a[href="#{PrismWeb.ChatLive.chat_path(route)}"]), "Bells")
     assert has_element?(bar, ~s(a[href="/a/#{route}/aqua"]), "AQUA")
 
     # something happens in a FOLLOWED thread of the group while another
-    # estate is in focus: a badge. The creator follows their own thread.
+    # athanor is in focus: a badge. The creator follows their own thread.
     group_ctx =
       Sanctum.Context.build(
         user_id: alice.user_id,
@@ -86,7 +86,7 @@ defmodule PrismWeb.TopbarLiveTest do
     assert render(bar) == before
   end
 
-  test "the bar follows the page only into an estate the person holds a seat in", %{conn: conn} do
+  test "the bar follows the page only into an athanor the person holds a seat in", %{conn: conn} do
     alice = test_user()
     conn = log_in_user(conn, alice)
     {:ok, group} = Athanors.create_group(alice.user_id, "Seen #{alice.namespace}")

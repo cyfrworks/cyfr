@@ -25,7 +25,7 @@ defmodule Arca.SessionStorage do
   (`Arca.SecurityTransitions.Issuance`): `lock:` names the rows the
   session's standing rests on and `verify:` is the caller's policy over
   them, asked with them locked. A standing transition that retires the
-  person or the estate either commits first and is reread here, or waits
+  person or the athanor either commits first and is reread here, or waits
   for this session and then retires it.
 
   Answers `:ok`, or the policy's refusal with nothing written.

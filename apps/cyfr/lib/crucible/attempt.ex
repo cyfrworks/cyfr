@@ -139,7 +139,7 @@ defmodule Crucible.Attempt do
   attach and the vault fields it projects, a keyed child's re-handed
   fields (`admitted/2`), `complete`, `push_deltas`, `oauth_token`, storage
   writes, appends and deletes, denials, children and catalog tools. A
-  call under a grant that no longer stands (its estate was archived,
+  call under a grant that no longer stands (its athanor was archived,
   whether or not anyone heard) is `lost` and stops the attempt without
   closing its run; one whose standing cannot be read is `unavailable` and
   does nothing. `fail` retires the run and needs only its hold. The

@@ -6,12 +6,12 @@ defmodule Arca.CredentialBindings do
   The rows a derived credential is held to, read under lock.
 
   A tincture access or asset token is a narrowed derivative of one stored
-  session or API key: it names the person, the estate, the membership
+  session or API key: it names the person, the athanor, the membership
   that authorized the focus and the credential it was minted from, with
   the standing generations read when it was minted. Whether it still
   opens anything is decided on those rows as they are now. `check/3`
   locks and rereads them in the order every standing transition takes
-  (`Arca.SecurityTransitions`) — the person, the estate, the membership,
+  (`Arca.SecurityTransitions`) — the person, the athanor, the membership,
   then the session or the key — reads the database's own time after every
   lock was won, and hands the caller's policy plain maps of what it found
   (nil where there is no row). Nothing is written.
@@ -25,7 +25,7 @@ defmodule Arca.CredentialBindings do
   alias Arca.SecurityTransitions.Issuance
 
   @typedoc """
-  The rows a derived credential names: the person, the estate it works
+  The rows a derived credential names: the person, the athanor it works
   in, the membership its focus rests on (nil for a key, whose focus is
   itself) and the source credential, `{:session, token_hash}` or
   `{:api_key, id}`.

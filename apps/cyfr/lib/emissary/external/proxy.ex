@@ -393,8 +393,8 @@ defmodule Emissary.External.Proxy do
   #
   # The row runs under its caller's grant: the stamp its parent's current
   # attempt stores, inherited unchanged and checked again as it is admitted
-  # and as it completes. A call whose caller's estate was archived is not
-  # admitted; one whose estate was archived while the call was in flight
+  # and as it completes. A call whose caller's athanor was archived is not
+  # admitted; one whose athanor was archived while the call was in flight
   # is never recorded as a success — its attempt closes `uncertain` and
   # the answer is not handed back.
   defp attempted(ctx, server, server_name, remote_tool, args, opts, call) do
@@ -588,7 +588,7 @@ defmodule Emissary.External.Proxy do
     )
   end
 
-  # The call answered after its estate was archived: what it did may have
+  # The call answered after its athanor was archived: what it did may have
   # happened, so its attempt closes `uncertain`, never `ok`, and the
   # answer is not handed back.
   defp retired(ctx, id, {attempt, grant}, started_at) do

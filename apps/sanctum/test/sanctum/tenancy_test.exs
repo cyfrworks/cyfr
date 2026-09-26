@@ -111,7 +111,7 @@ defmodule Sanctum.TenancyTest do
     end
 
     test "a platform admin with no athanor membership has no athanor to work in" do
-      # No estate is shared server-wide, so the operator bit alone seats
+      # No athanor is shared server-wide, so the operator bit alone seats
       # nobody. What guarantees an operator an athanor is the one minted for
       # them at admission, past the server caps.
       uid = "u-plat-only-#{System.unique_integer([:positive])}"

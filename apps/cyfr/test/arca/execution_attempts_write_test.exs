@@ -438,7 +438,7 @@ defmodule Arca.ExecutionAttemptsWriteTest do
       assert {:ok, 1} = ExecutionAttempts.delete_intents_before(cutoff, opts)
       assert states(test) == [{"pending", nil}]
 
-      # And nothing of another estate's is counted or taken.
+      # And nothing of another athanor's is counted or taken.
       assert {:ok, 0} = ExecutionAttempts.count_intents_before(cutoff, athanor_id: "ath_gamma")
 
       # Stopped before the sandbox connection is given back. An assertion
@@ -487,7 +487,7 @@ defmodule Arca.ExecutionAttemptsWriteTest do
     end
   end
 
-  test "an intent is another estate's to neither read nor settle", test do
+  test "an intent is another athanor's to neither read nor settle", test do
     assert {:ok, {:confirmed, :ok}} = write(test, put(test))
 
     assert [] = ExecutionAttempts.write_intents(Prima.Actor.in_athanor("ath_gamma"), test.attempt)

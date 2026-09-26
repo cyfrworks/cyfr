@@ -97,7 +97,7 @@ defmodule Aqua.Loop.Clone do
   The authority a clone of `role` runs under, from the soul's `parent`
   authority: the release digest the soul's consent names for the role
   (`activation[role_ref]`) must equal the one `snapshot` projects under
-  `roster` (the estate's enabled agent names), then the soul → role edge
+  `roster` (the athanor's enabled agent names), then the soul → role edge
   is stepped as a synchronous call — the soul's profile, consent and
   budget with the role's cursor and edge resources. `{:error, refusal}`
   when the soul names no edge to the role, the role's shape moved since

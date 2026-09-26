@@ -3,12 +3,12 @@
 
 defmodule Sanctum.ExecutionStandingTest do
   @moduledoc """
-  An admitted execution's grant is its estate at the generation its root
-  read: it stands while the estate is active at exactly that generation,
+  An admitted execution's grant is its athanor at the generation its root
+  read: it stands while the athanor is active at exactly that generation,
   and an archive retires it for good — a reopen raises the generation
   again, so the old grant never stands and only a fresh capture does. The
   check runs only inside an execution write's locking transaction. A
-  retirement's check asks nothing of the estate. The retired scan pages
+  retirement's check asks nothing of the athanor. The retired scan pages
   through every open attempt whose stamp no longer stands, by attempt id,
   for the server's own actor alone.
   """
@@ -22,7 +22,7 @@ defmodule Sanctum.ExecutionStandingTest do
     :ok = Ecto.Adapters.SQL.Sandbox.checkout(Arca.Repo)
     Ecto.Adapters.SQL.Sandbox.mode(Arca.Repo, {:shared, self()})
 
-    {:ok, estate} =
+    {:ok, athanor} =
       Athanors.create(%{
         kind: "group",
         name: "Standing",
@@ -30,7 +30,7 @@ defmodule Sanctum.ExecutionStandingTest do
         created_by: "system"
       })
 
-    {:ok, estate: estate}
+    {:ok, athanor: athanor}
   end
 
   defp ctx(athanor_id),
@@ -60,74 +60,74 @@ defmodule Sanctum.ExecutionStandingTest do
     {execution.id, attempt.attempt}
   end
 
-  test "a capture is the estate's active standing now", %{estate: estate} do
+  test "a capture is the athanor's active standing now", %{athanor: athanor} do
     assert {:ok, %Prima.ExecutionGrant{athanor_id: id, generation: generation}} =
-             ExecutionStanding.capture(ctx(estate.id))
+             ExecutionStanding.capture(ctx(athanor.id))
 
-    assert id == estate.id
-    assert generation == estate.security_generation
+    assert id == athanor.id
+    assert generation == athanor.security_generation
   end
 
-  test "no estate, an unknown one and an archived one capture nothing", %{estate: estate} do
+  test "no athanor, an unknown one and an archived one capture nothing", %{athanor: athanor} do
     assert {:error, :not_standing} = ExecutionStanding.capture(ctx(nil))
-    assert {:error, :not_standing} = ExecutionStanding.capture(ctx("ath_no_such_estate"))
+    assert {:error, :not_standing} = ExecutionStanding.capture(ctx("ath_no_such_athanor"))
 
-    {:ok, _} = Athanors.archive(estate)
-    assert {:error, :not_standing} = ExecutionStanding.capture(ctx(estate.id))
+    {:ok, _} = Athanors.archive(athanor)
+    assert {:error, :not_standing} = ExecutionStanding.capture(ctx(athanor.id))
   end
 
-  test "the check runs only inside a locking transaction", %{estate: estate} do
-    {:ok, grant} = ExecutionStanding.capture(ctx(estate.id))
+  test "the check runs only inside a locking transaction", %{athanor: athanor} do
+    {:ok, grant} = ExecutionStanding.capture(ctx(athanor.id))
     assert_raise ArgumentError, fn -> ExecutionStanding.verify(grant) end
   end
 
   test "an archive retires a grant for good; a reopen admits only a fresh one", %{
-    estate: estate
+    athanor: athanor
   } do
-    {:ok, grant} = ExecutionStanding.capture(ctx(estate.id))
+    {:ok, grant} = ExecutionStanding.capture(ctx(athanor.id))
     assert :ok = verify(grant)
 
-    {:ok, archived} = Athanors.archive(estate)
+    {:ok, archived} = Athanors.archive(athanor)
     assert {:error, :not_standing} = verify(grant)
 
     {:ok, _reopened} = Athanors.unarchive(archived)
     assert {:error, :not_standing} = verify(grant)
 
-    {:ok, fresh} = ExecutionStanding.capture(ctx(estate.id))
+    {:ok, fresh} = ExecutionStanding.capture(ctx(athanor.id))
     assert fresh.generation > grant.generation
     assert :ok = verify(fresh)
 
-    # A grant naming a generation the estate never had stands for nothing.
+    # A grant naming a generation the athanor never had stands for nothing.
     assert {:error, :not_standing} = verify(%{fresh | generation: fresh.generation + 7})
   end
 
-  test "a retirement's check asks nothing of the estate", %{estate: estate} do
-    {:ok, grant} = ExecutionStanding.capture(ctx(estate.id))
-    {:ok, _} = Athanors.archive(estate)
+  test "a retirement's check asks nothing of the athanor", %{athanor: athanor} do
+    {:ok, grant} = ExecutionStanding.capture(ctx(athanor.id))
+    {:ok, _} = Athanors.archive(athanor)
     assert :ok = ExecutionStanding.stamp_only(grant)
   end
 
   test "the retired scan pages every open attempt whose stamp no longer stands", %{
-    estate: estate
+    athanor: athanor
   } do
-    {:ok, grant} = ExecutionStanding.capture(ctx(estate.id))
-    retired = for _ <- 1..3, do: admit!(estate.id, grant)
+    {:ok, grant} = ExecutionStanding.capture(ctx(athanor.id))
+    retired = for _ <- 1..3, do: admit!(athanor.id, grant)
 
-    assert {:ok, []} = scan_of(estate.id)
+    assert {:ok, []} = scan_of(athanor.id)
 
-    {:ok, archived} = Athanors.archive(estate)
+    {:ok, archived} = Athanors.archive(athanor)
     {:ok, _reopened} = Athanors.unarchive(archived)
 
     # Work admitted after the reopen stands, and is not found.
-    {:ok, fresh} = ExecutionStanding.capture(ctx(estate.id))
-    {standing_id, _standing_attempt} = admit!(estate.id, fresh)
+    {:ok, fresh} = ExecutionStanding.capture(ctx(athanor.id))
+    {standing_id, _standing_attempt} = admit!(athanor.id, fresh)
 
-    assert {:ok, found} = scan_of(estate.id)
+    assert {:ok, found} = scan_of(athanor.id)
 
     assert Enum.sort(found) ==
              Enum.sort(
                for {execution_id, attempt} <- retired,
-                   do: {execution_id, attempt, estate.id, grant.generation}
+                   do: {execution_id, attempt, athanor.id, grant.generation}
              )
 
     refute Enum.any?(found, &(elem(&1, 0) == standing_id))
@@ -138,12 +138,12 @@ defmodule Sanctum.ExecutionStandingTest do
     assert elem(second, 1) > elem(first, 1)
   end
 
-  test "the scan is the server's own", %{estate: estate} do
+  test "the scan is the server's own", %{athanor: athanor} do
     assert {:error, :cross_tenant} =
-             ExecutionStanding.retired_attempts(Prima.Actor.in_athanor(estate.id), nil, 10)
+             ExecutionStanding.retired_attempts(Prima.Actor.in_athanor(athanor.id), nil, 10)
   end
 
-  # Every page of the scan, narrowed to one estate's rows.
+  # Every page of the scan, narrowed to one athanor's rows.
   defp scan_of(athanor_id, cursor \\ nil, acc \\ []) do
     case ExecutionStanding.retired_attempts(Prima.Actor.system(), cursor, 2) do
       {:ok, []} ->

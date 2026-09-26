@@ -58,7 +58,7 @@ defmodule Crucible.Host do
        and need the row live as well: no cancel asked of it and its
        execution running.
 
-  A grant stands while its estate is active at the generation the run was
+  A grant stands while its athanor is active at the generation the run was
   admitted under (`Sanctum.ExecutionStanding.verify/1`). An archive
   retires it for good, whether or not the archive was heard: a call under
   it is `lost`, and one whose standing cannot be read is `unavailable`,
@@ -338,7 +338,7 @@ defmodule Crucible.Host do
   # A runner renews every attempt it holds on its worker service and boot:
   # its own and the children it runs. Each renewal is one update predicated
   # on that hold and on the grant that attempt stores, so a stale runner,
-  # boot or service renews nothing, and neither does one whose estate was
+  # boot or service renews nothing, and neither does one whose athanor was
   # archived.
   defp renew(caller, attempt) do
     holder = %{service_id: caller.service, boot_id: caller.boot, runner: caller.runner}

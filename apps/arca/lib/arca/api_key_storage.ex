@@ -13,7 +13,7 @@ defmodule Arca.ApiKeyStorage do
   empty string with `{:error, :no_athanor}` before any query.
   `get_key_by_hash/1` and `revoke_all_created_by/1` name no athanor: one
   is the presented secret's own lookup and says so where it stands, the
-  other sweeps one person's keys across every estate as part of denying
+  other sweeps one person's keys across every athanor as part of denying
   them on this server.
   Writes use `insert_all`/`update_all` and trust their caller — they run no
   changeset validation, so callers must validate input first.

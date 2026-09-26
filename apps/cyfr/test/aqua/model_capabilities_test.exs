@@ -165,7 +165,7 @@ defmodule Aqua.ModelCapabilitiesTest do
     assert {:ok, _} = Models.capabilities(ctx, "catalyst:local.claude:1.3.2", "m", nil, run: run)
     assert runs.() == 4
 
-    # And another estate never reads this one's entry.
+    # And another athanor never reads this one's entry.
     other = %{ctx | athanor_id: "ath_other_#{System.unique_integer([:positive])}"}
     assert {:ok, _} = Models.capabilities(other, @ref, "m", "sha256:bound", run: run)
     assert runs.() == 5

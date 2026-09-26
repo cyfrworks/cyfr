@@ -10,13 +10,13 @@ defmodule Arca.Schemas.Athanor do
   `kind` is `"person"` (exactly one member, its owner) or `"group"`. A
   group's `roster` is `"open"` — members may invite — or `"frozen"`: it
   takes its members at birth and never gains another, which is what a DM
-  is. `pair_key` is set on a two-person frozen estate so "click Alice"
+  is. `pair_key` is set on a two-person frozen athanor so "click Alice"
   finds the one that exists instead of minting a second.
 
   `status` is `"active"` or `"archived"` — an athanor is never deleted.
   `settings` is a JSON document owned by `Sanctum.Tenancy.Athanors`.
 
-  `status`, `archived_at` and `security_generation` are the estate's
+  `status`, `archived_at` and `security_generation` are the athanor's
   standing. An archive or a reopen writes them together in one
   transaction (`Arca.SecurityTransitions`), raising `security_generation`
   on every real change; the changesets here refuse them after birth, and

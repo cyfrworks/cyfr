@@ -6,7 +6,7 @@ defmodule Emissary.External.InChainProbeTest do
   The in-chain call of a stdio server's tool (`callTool/3` on the
   `in_chain` plane, and the stored rows it reads back), run step for step
   against this application: the caller established from a session token,
-  a root execution admitted under the grant its estate stands at, a stdio
+  a root execution admitted under the grant its athanor stands at, a stdio
   server's tool called in-chain under the root's lineage, the root closed
   with the call's outcome, and the execution rows and payloads read back.
   The server process is a stub that answers as the

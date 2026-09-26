@@ -3,7 +3,7 @@
 
 defmodule Aqua.Roster do
   @moduledoc """
-  Who can be addressed on a tape: the estate's soul first, then its
+  Who can be addressed on a tape: the athanor's soul first, then its
   roles — the tree in focus and no other. A room's tape is the room's:
   `@aqua` reaches the room's soul, and a role mention (`@builder`) runs
   that role directly for one turn; a person's own assistant lives in

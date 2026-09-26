@@ -26,7 +26,7 @@ end
 
 defmodule Crucible.ArchiveFenceTest do
   @moduledoc """
-  Archiving an estate retires the grant of every execution admitted in it,
+  Archiving an athanor retires the grant of every execution admitted in it,
   whether or not anyone hears of the archive (`Sanctum.ExecutionStanding`).
 
   With the archive watch absent, an attached guest's renewal, storage
@@ -79,12 +79,12 @@ defmodule Crucible.ArchiveFenceTest do
     # nobody heard.
     refute Process.whereis(Crucible.ArchiveWatch)
 
-    estate = estate!()
-    {:ok, estate: estate, ctx: ctx(estate.id)}
+    athanor = athanor!()
+    {:ok, athanor: athanor, ctx: ctx(athanor.id)}
   end
 
-  defp estate! do
-    {:ok, estate} =
+  defp athanor! do
+    {:ok, athanor} =
       Athanors.create(%{
         kind: "group",
         name: "Fence",
@@ -92,7 +92,7 @@ defmodule Crucible.ArchiveFenceTest do
         created_by: "system"
       })
 
-    estate
+    athanor
   end
 
   defp ctx(athanor_id),
@@ -104,8 +104,8 @@ defmodule Crucible.ArchiveFenceTest do
         permissions: [:*]
       )
 
-  defp archive!(estate) do
-    {:ok, archived} = Athanors.archive(estate, force: true)
+  defp archive!(athanor) do
+    {:ok, archived} = Athanors.archive(athanor, force: true)
     assert archived.status == "archived"
     archived
   end
@@ -149,11 +149,11 @@ defmodule Crucible.ArchiveFenceTest do
 
   describe "an attached guest after an archive nobody heard" do
     test "renew, a storage write and completion each refuse, and nothing is written or completed",
-         %{estate: estate, ctx: ctx} do
+         %{athanor: athanor, ctx: ctx} do
       fixture = attached(ctx)
       assert %{"ok" => %{"written" => true}} = storage(fixture, write("data/before.txt", "kept"))
 
-      archive!(estate)
+      archive!(athanor)
 
       assert %{"ok" => %{} = renewals} = renew(fixture)
       assert renewals[fixture.attempt] == "lost"
@@ -174,7 +174,7 @@ defmodule Crucible.ArchiveFenceTest do
     end
 
     test "every other discrete effect refuses lost and leaves nothing", %{
-      estate: estate,
+      athanor: athanor,
       ctx: ctx
     } do
       read = attached(ctx)
@@ -190,7 +190,7 @@ defmodule Crucible.ArchiveFenceTest do
         admit_child: attached(ctx, component_type: :formula)
       }
 
-      archive!(estate)
+      archive!(athanor)
 
       calls = %{
         read: fn f -> storage(f, %{"action" => "read", "path" => "data/r.txt"}) end,
@@ -234,7 +234,7 @@ defmodule Crucible.ArchiveFenceTest do
     end
 
     test "a failure still retires the run, and the text it held is not published", %{
-      estate: estate,
+      athanor: athanor,
       ctx: ctx
     } do
       # A person's own context: the vault is theirs to write.
@@ -269,7 +269,7 @@ defmodule Crucible.ArchiveFenceTest do
                })
 
       assert Enum.any?(events(), &match?(%{type: "emit", data: %{"text" => "hello "}}, &1))
-      archive!(estate)
+      archive!(athanor)
 
       assert %{"ok" => _failure} =
                AttemptFixtures.call(fixture, "fail", %{
@@ -283,10 +283,10 @@ defmodule Crucible.ArchiveFenceTest do
   end
 
   describe "a reopen" do
-    test "admits only fresh roots: the old grant still refuses", %{estate: estate, ctx: ctx} do
+    test "admits only fresh roots: the old grant still refuses", %{athanor: athanor, ctx: ctx} do
       old = attached(ctx)
 
-      estate |> archive!() |> Athanors.unarchive()
+      athanor |> archive!() |> Athanors.unarchive()
 
       assert %{"ok" => %{} = renewals} = renew(old)
       assert renewals[old.attempt] == "lost"
@@ -330,7 +330,7 @@ defmodule Crucible.ArchiveFenceTest do
 
   describe "an effect in flight when the archive lands" do
     test "a storage write is uncertain, never confirmed, and never replayed", %{
-      estate: estate,
+      athanor: athanor,
       ctx: ctx
     } do
       fixture = attached(ctx)
@@ -341,7 +341,7 @@ defmodule Crucible.ArchiveFenceTest do
       assert_receive {:gated, putter}, 5_000
       assert [%{state: "pending"}] = intents(fixture)
 
-      archive!(estate)
+      archive!(athanor)
       send(putter, :release)
       Process.unregister(:archive_fence_put_gate)
 
@@ -354,11 +354,11 @@ defmodule Crucible.ArchiveFenceTest do
     end
 
     test "a completion recorded after the archive is neither a success nor output", %{
-      estate: estate,
+      athanor: athanor,
       ctx: ctx
     } do
       fixture = attached(ctx)
-      archive!(estate)
+      archive!(athanor)
 
       completed = Record.complete(fixture.record, %{"answer" => 42})
       assert {:error, :not_standing} = Record.write_completed(completed)
@@ -395,7 +395,7 @@ defmodule Crucible.ArchiveFenceTest do
     } do
       lineage = AttemptFixtures.lineage!(ctx)
       other = AttemptFixtures.lineage!(ctx)
-      elsewhere = AttemptFixtures.lineage!(ctx(estate!().id))
+      elsewhere = AttemptFixtures.lineage!(ctx(athanor!().id))
 
       for bad <- [
             nil,
@@ -424,14 +424,14 @@ defmodule Crucible.ArchiveFenceTest do
                Grimoire.call_in_chain("system", guest, forged, authority)
     end
 
-    test "refuses once the calling execution's estate was archived", %{
-      estate: estate,
+    test "refuses once the calling execution's athanor was archived", %{
+      athanor: athanor,
       ctx: ctx,
       guest: guest,
       authority: authority
     } do
       lineage = AttemptFixtures.lineage!(ctx)
-      archive!(estate)
+      archive!(athanor)
 
       assert {:error, %Prima.Refusal{stage: :admission, reason: :archived}} =
                status(guest, authority, lineage)
@@ -440,7 +440,7 @@ defmodule Crucible.ArchiveFenceTest do
 
   describe "the sweep" do
     test "retires every retired attempt past a page, paused turns and children among them, once",
-         %{estate: estate, ctx: ctx} do
+         %{athanor: athanor, ctx: ctx} do
       page = Sweeper.bounds().retired_page
       grant = AttemptFixtures.grant(ctx.athanor_id)
       roots = for _ <- 1..(page + 2), do: root!(ctx, grant)
@@ -448,7 +448,7 @@ defmodule Crucible.ArchiveFenceTest do
       child = child!(ctx, grant, parent, parent_attempt)
       turn = paused_turn!(ctx, grant)
 
-      archive!(estate)
+      archive!(athanor)
 
       # A member that no longer holds its slot retires nothing.
       key = {Arca.ControlPlane, :standing}

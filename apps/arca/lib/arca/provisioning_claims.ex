@@ -3,7 +3,7 @@
 
 defmodule Arca.ProvisioningClaims do
   @moduledoc """
-  Who is filling an estate: the one `provisioning_claims` row an athanor
+  Who is filling an athanor: the one `provisioning_claims` row an athanor
   has (`Arca.Schemas.ProvisioningClaim`), taken, renewed and settled by
   compare-and-set. Rows only — no process holds a claim, so a claim
   outlives nothing but its lease.

@@ -57,7 +57,7 @@ defmodule Compendium.ProjectionReconciler do
   Started after `Compendium.Provisioning` with `enabled: true`, it attaches
   to the storage change notification (`Cyfr.Telemetry.Catalog.consumed_by(:projection)`),
   whose handler only sends to this process's registered name, and
-  reconciles the estate a ready change names. It recovers every estate a
+  reconciles the athanor a ready change names. It recovers every athanor a
   root is behind in once it has started (`handle_continue/2`, never
   `init/1`) and every `interval_ms` while this member holds its slot
   (`Arca.ControlPlane.held?/0`), settling first the changes whose writer
@@ -344,7 +344,7 @@ defmodule Compendium.ProjectionReconciler do
   end
 
   def handle_info({:projection_changed, athanor_id, root, true}, state) do
-    guarded("#{root} of #{athanor_id}", fn -> reconcile(estate(athanor_id), root) end)
+    guarded("#{root} of #{athanor_id}", fn -> reconcile(athanor(athanor_id), root) end)
     {:noreply, state}
   end
 
@@ -419,15 +419,15 @@ defmodule Compendium.ProjectionReconciler do
     state
   end
 
-  # Every estate a root is behind in: the writers gone are settled, then
-  # the root is reconciled. One estate's failure is logged and the walk
+  # Every athanor a root is behind in: the writers gone are settled, then
+  # the root is reconciled. One athanor's failure is logged and the walk
   # goes on.
   defp recover(state) do
-    # The one read across estates (`Cyfr.Boundaries.system_responsibilities/0`).
+    # The one read across athanors (`Cyfr.Boundaries.system_responsibilities/0`).
     case Arca.StorageProjectionChanges.pending_athanors(Prima.Actor.system()) do
       {:ok, athanors} ->
         for athanor_id <- athanors, root <- @roots do
-          ctx = estate(athanor_id)
+          ctx = athanor(athanor_id)
 
           guarded("#{root} of #{athanor_id}", fn ->
             _ =
@@ -443,7 +443,7 @@ defmodule Compendium.ProjectionReconciler do
 
       {:error, reason} ->
         Logger.warning(
-          "[Compendium.ProjectionReconciler] pending estates could not be read: #{inspect(reason)}"
+          "[Compendium.ProjectionReconciler] pending athanors could not be read: #{inspect(reason)}"
         )
     end
   end
@@ -466,8 +466,8 @@ defmodule Compendium.ProjectionReconciler do
       )
   end
 
-  # The server's own context inside one estate, reading its tree.
-  defp estate(athanor_id) do
+  # The server's own context inside one athanor, reading its tree.
+  defp athanor(athanor_id) do
     Sanctum.internal_context(
       user_id: "_projection",
       athanor_id: athanor_id,

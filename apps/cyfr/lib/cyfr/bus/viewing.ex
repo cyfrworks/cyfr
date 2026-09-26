@@ -3,8 +3,8 @@
 
 defmodule Cyfr.Bus.Viewing do
   @moduledoc """
-  The estate a page has in view, told to the bar over that page on the
-  page-local `Cyfr.Bus.page_viewing/1`. It names an estate the bar
+  The athanor a page has in view, told to the bar over that page on the
+  page-local `Cyfr.Bus.page_viewing/1`. It names an athanor the bar
   already lists and grants nothing: the bar ignores one it does not.
   """
 
@@ -18,7 +18,7 @@ defmodule Cyfr.Bus.Viewing do
   @type kind :: :viewing
   @type t :: %__MODULE__{kind: kind(), athanor_id: String.t()}
 
-  @doc "The closed union: the estate in view."
+  @doc "The closed union: the athanor in view."
   @spec kinds() :: [kind()]
   def kinds, do: @kinds
 

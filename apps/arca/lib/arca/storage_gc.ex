@@ -3,7 +3,7 @@
 
 defmodule Arca.StorageGC do
   @moduledoc """
-  Collection and repair of an estate's staging areas: the revision
+  Collection and repair of an athanor's staging areas: the revision
   prefixes `Arca.Overlay`'s write protocol stages under
   (`Arca.Storage.UnitLocator.revision_prefix/2`).
 
@@ -76,7 +76,7 @@ defmodule Arca.StorageGC do
   Every function takes the `Prima.Actor` first, refuses one with no
   athanor as `{:error, :no_athanor}` before any query or listing, and
   lists and deletes only inside that athanor's tree. The walk across
-  estates belongs to the caller that owns the roster
+  athanors belongs to the caller that owns the roster
   (`Cyfr.RetentionScheduler`).
   """
 
@@ -98,7 +98,7 @@ defmodule Arca.StorageGC do
   @type holder :: {:turn | :build, String.t()}
   @type revision_key :: {root :: String.t(), unit_key :: String.t(), revision :: String.t()}
 
-  @typedoc "The roots of one estate, as `roots/1` read them."
+  @typedoc "The roots of one athanor, as `roots/1` read them."
   @type roots :: %{
           current: MapSet.t(revision_key()),
           drafts: %{{String.t(), String.t()} => DateTime.t()},
@@ -192,7 +192,7 @@ defmodule Arca.StorageGC do
   # ---------------------------------------------------------------------------
 
   @doc """
-  One bounded sweep of the actor's estate, in the moduledoc's order.
+  One bounded sweep of the actor's athanor, in the moduledoc's order.
 
   Options: `grace_ms:` (default a day), `limit:` — how many prefixes one
   sweep collects or repairs, oldest first (default #{@default_limit}) —
@@ -254,7 +254,7 @@ defmodule Arca.StorageGC do
   end
 
   @doc """
-  The roots of the actor's estate, read now: the committed pointers, the
+  The roots of the actor's athanor, read now: the committed pointers, the
   units whose draft is held (with when it was registered), and the
   revisions a live holder pins.
 
@@ -357,7 +357,7 @@ defmodule Arca.StorageGC do
   # ---------------------------------------------------------------------------
 
   @doc """
-  Audit every committed unit of the actor's estate against its journal
+  Audit every committed unit of the actor's athanor against its journal
   and its objects, and finish the moves that did not finish.
 
   Answers, by unit path: `repaired` — the staged revision the row names
@@ -728,7 +728,7 @@ defmodule Arca.StorageGC do
     end
   end
 
-  # Every key under the estate's staging areas, sorted into revision
+  # Every key under the athanor's staging areas, sorted into revision
   # prefixes, pins and the rest. One listing per overlaid root, inside the
   # actor's athanor.
   defp listing(actor) do
@@ -977,7 +977,7 @@ defmodule Arca.StorageGC do
   # attribution only. The server's own actor NARROWED to this athanor:
   # `system: true` is what lets the sweep write the pin and date files
   # under a reserved root, and `scope: :athanor` is what keeps its
-  # listings inside the one estate. A bare `Prima.Actor.system/0` here
+  # listings inside the one athanor. A bare `Prima.Actor.system/0` here
   # would widen every sweep to platform scope with nothing to fail.
   defp internal_actor(%Prima.Actor{athanor_id: athanor}) do
     %{Prima.Actor.system() | athanor_id: athanor, scope: :athanor, user_id: "_storage_gc"}

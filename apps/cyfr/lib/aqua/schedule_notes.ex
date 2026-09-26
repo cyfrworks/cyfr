@@ -5,7 +5,7 @@ defmodule Aqua.ScheduleNotes do
   @moduledoc """
   A schedule that asked to keep what it did. `keep_outcome: true` in a
   schedule's metadata (`Crucible.Schedules.Provider`) files every completed run's
-  output as a note in the schedule's estate (`Aqua.Notes`) — named by the
+  output as a note in the schedule's athanor (`Aqua.Notes`) — named by the
   metadata's `note_name`, else by the schedule's id — with the schedule and
   the execution as provenance, capped so one run cannot fill a ledger. Each
   run replaces the note before it.
@@ -21,7 +21,7 @@ defmodule Aqua.ScheduleNotes do
 
   The write runs under the server's own context, able to read and write
   storage and nothing more, refocused on the schedule's athanor — the
-  estate the run itself ran in — and an archived athanor's schedule writes
+  athanor the run itself ran in — and an archived athanor's schedule writes
   nothing. Keeping a note is best effort: one that cannot be kept is
   logged, and the run stands. No takeover and no guaranteed delivery is
   promised.

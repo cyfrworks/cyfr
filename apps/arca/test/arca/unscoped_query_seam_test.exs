@@ -178,7 +178,7 @@ defmodule Arca.UnscopedQuerySeamTest do
     "Arca.Schemas.ServerAllowlistEntry" => "the door: who may sign in at all, before any tenant",
     "Arca.Schemas.CellLease" =>
       "a member slot of the cell, keyed by the node holding it — the deployment's shape, " <>
-        "and a cell has no estate",
+        "and a cell has no athanor",
     "Arca.Schemas.JobClaim" =>
       "a mutual-exclusion token for one of the cell's singleton jobs, keyed by (kind, key); " <>
         "several kinds have no athanor at all, and a key naming one grants no reach into it",

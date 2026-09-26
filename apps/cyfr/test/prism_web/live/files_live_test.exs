@@ -13,10 +13,10 @@ defmodule PrismWeb.FilesLiveTest do
   setup %{conn: conn} do
     user = test_user()
     conn = log_in_user(conn, user)
-    estate = seated_athanor()
-    ctx = %{Sanctum.TestContext.local() | user_id: user.user_id, athanor_id: estate.id}
+    athanor = seated_athanor()
+    ctx = %{Sanctum.TestContext.local() | user_id: user.user_id, athanor_id: athanor.id}
     :ok = Arca.ensure_roots(Sanctum.Context.actor(ctx))
-    {:ok, conn: conn, ctx: ctx, route: Sanctum.Tenancy.Athanors.route_slug(estate)}
+    {:ok, conn: conn, ctx: ctx, route: Sanctum.Tenancy.Athanors.route_slug(athanor)}
   end
 
   test "the root lists the folders in their tiers and nothing of the server's", %{conn: conn} do

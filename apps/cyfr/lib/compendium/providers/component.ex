@@ -603,9 +603,9 @@ defmodule Compendium.Providers.Component do
 
   # List action - list all installed components (local-only, no remote search)
   def handle(%Context{} = ctx, %{"action" => "list"} = args) do
-    # First need, like the agent roster: an estate nobody has opened starts
+    # First need, like the agent roster: an athanor nobody has opened starts
     # filling from here. The listing does not wait for it and answers the
-    # rows that exist, so a bare estate lists nothing until the scan that
+    # rows that exist, so a bare athanor lists nothing until the scan that
     # registers its bundle lands.
     Sanctum.Provisioning.start_provisioning(ctx)
 
@@ -1461,12 +1461,12 @@ defmodule Compendium.Providers.Component do
       "#{reference} is not a version the server ships — a local component is " <>
         "registered from your tree (`cyfr register`); only shipped versions are pulled from the seed"
 
-  # The estate is being filled by a background attempt, a sign-in retry or a
+  # The athanor is being filled by a background attempt, a sign-in retry or a
   # boot sync. The copy mints consent, so it waits for none of them — and a
   # person can simply ask again.
   defp shipped_pull_error(reference, :provisioning_busy),
     do:
-      "#{reference} was not copied: this estate is being prepared right now. " <>
+      "#{reference} was not copied: this athanor is being prepared right now. " <>
         "Try again in a moment."
 
   defp shipped_pull_error(reference, reason) do

@@ -10,7 +10,7 @@ defmodule Opus.ModelContractTest do
   The catalyst is the chat fixture (`test_wasm/chat_fixture/`), which plays
   the script the person's message carries, run by the Opus service over
   the wire as the soul's model. Every case is a turn a person sends
-  (`Aqua.Runner.send_message/4`) on an estate filled from a seed
+  (`Aqua.Runner.send_message/4`) on an athanor filled from a seed
   (`Sanctum.Provisioning.provision/2`), and is read where a person or
   another node could read it: the thread's topic, the executions topic and
   each execution's event stream (`Cyfr.Test.ChatFixture.observe!/2`), the
@@ -63,7 +63,7 @@ defmodule Opus.ModelContractTest do
     # The turns' work stops before the paths it runs under are restored.
     Cyfr.Test.Sandbox.stop_work_on_exit()
 
-    ctx = Fixture.estate!()
+    ctx = Fixture.athanor!()
     on_exit(fn -> Prima.Slots.forgive_unreaped(Crucible.Slots, ctx.athanor_id) end)
     :ok = Fixture.bind_key!(ctx, @canary)
     {:ok, ctx: ctx}
@@ -81,7 +81,7 @@ defmodule Opus.ModelContractTest do
     end
   end
 
-  test "V1: a person's hello on a provisioned estate completes, and the key shows nowhere",
+  test "V1: a person's hello on a provisioned athanor completes, and the key shows nowhere",
        %{ctx: ctx} do
     played = play(ctx, "@aqua hello")
 
@@ -1062,7 +1062,7 @@ defmodule Opus.ModelContractTest do
     at + plus
   end
 
-  # Every retained payload of the estate's executions, read as a person's
+  # Every retained payload of the athanor's executions, read as a person's
   # read of an execution reads them.
   defp payloads(ctx) do
     import Ecto.Query, only: [from: 2]

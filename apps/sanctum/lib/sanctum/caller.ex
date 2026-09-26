@@ -245,7 +245,7 @@ defmodule Sanctum.Caller do
   authoritative check behind every tincture access and asset token, at
   mint and at every use. Never answered from the establish memo.
 
-  `claims` name the person, the estate and their generations as read at
+  `claims` name the person, the athanor and their generations as read at
   mint, the source credential (`:session` with its base64url token hash,
   or `:api_key` with its row id) and the focus basis (the membership row
   id, or `:key`). The rows are locked and reread in the standing order
@@ -254,14 +254,14 @@ defmodule Sanctum.Caller do
 
     * the person exists, is active, at the generation read — a person
       denied and allowed again is a new generation;
-    * the estate exists, is active, at the generation read — an estate
+    * the athanor exists, is active, at the generation read — an athanor
       archived and reopened is a new generation;
     * a session source still exists for this person and has not
-      expired; a key source is unrevoked, the estate's, the person's,
+      expired; a key source is unrevoked, the athanor's, the person's,
       and its allowlist admits `client_ip:`;
     * the membership a session's focus rested on is still that active
       seat (a rejoin is a new row); a key's focus is the key, so its
-      creator leaving the estate does not end it.
+      creator leaving the athanor does not end it.
 
   `{:ok, %{now: now, source_expires_at: expiry | nil}}`, or a refusal:
   `:not_standing`, `:not_member` (the focus membership is gone),
@@ -299,7 +299,7 @@ defmodule Sanctum.Caller do
 
   defp derived_policy(rows, claims, client_ip) do
     with :ok <- derived_person(rows.user, claims),
-         :ok <- derived_estate(rows.athanor, claims),
+         :ok <- derived_athanor(rows.athanor, claims),
          :ok <- derived_focus(rows.membership, claims),
          {:ok, expires_at} <- derived_source(rows.source, rows.now, claims, client_ip) do
       {:ok, %{now: rows.now, source_expires_at: expires_at}}
@@ -313,12 +313,12 @@ defmodule Sanctum.Caller do
 
   defp derived_person(_user, _claims), do: {:error, :not_standing}
 
-  defp derived_estate(%{status: "active", security_generation: generation}, %{
+  defp derived_athanor(%{status: "active", security_generation: generation}, %{
          athanor_generation: generation
        }),
        do: :ok
 
-  defp derived_estate(_athanor, _claims), do: {:error, :not_standing}
+  defp derived_athanor(_athanor, _claims), do: {:error, :not_standing}
 
   defp derived_focus(nil, %{focus_basis: :key, source_kind: :api_key}), do: :ok
 
@@ -435,7 +435,7 @@ defmodule Sanctum.Caller do
   (`Arca.CredentialBindings.check/3`, never the establish memo), the
   session row the context's hash names — it must exist, be unexpired and
   belong to the same person — and the person's standing, and the focused
-  estate's; then rebuilds the context from the stored session and the
+  athanor's; then rebuilds the context from the stored session and the
   person's current memberships (`Sanctum.Session.load_by_hash/2`) and
   focuses it again on the athanor the caller had in focus
   (`Sanctum.Context.focus/2`). The result carries the caller's request
@@ -453,12 +453,12 @@ defmodule Sanctum.Caller do
     * `:unavailable` — the store could not answer; never a verdict.
 
   An API-key context is held to its key the same way: the key row, its
-  creator and its estate are reread under the same lock — the key
-  unrevoked, still the estate's and the creator's, its allowlist admitting
-  the caller's address, the estate active and the creator not denied (the
+  creator and its athanor are reread under the same lock — the key
+  unrevoked, still the athanor's and the creator's, its allowlist admitting
+  the caller's address, the athanor active and the creator not denied (the
   rules the key was established under) — and the context comes back with
   a new `validated_at`, or `:unauthenticated` for a key that no longer
-  admits the caller and `:not_standing` for an estate or creator that no
+  admits the caller and `:not_standing` for an athanor or creator that no
   longer stands.
 
   Any other context — one an auth provider synthesized, a tincture token,
@@ -565,7 +565,7 @@ defmodule Sanctum.Caller do
     end
   end
 
-  # The session, the person and the focused estate, locked and reread in
+  # The session, the person and the focused athanor, locked and reread in
   # the standing order with the database's own time read after the locks.
   defp stored_standing(ctx, hash) do
     binding = %{
@@ -592,7 +592,7 @@ defmodule Sanctum.Caller do
   defp session_standing(rows, ctx) do
     with :ok <- stored_session(rows.source, rows.now, ctx.user_id),
          :ok <- standing_person(rows.user) do
-      standing_estate(rows.athanor, ctx.athanor_id)
+      standing_athanor(rows.athanor, ctx.athanor_id)
     end
   end
 
@@ -609,11 +609,11 @@ defmodule Sanctum.Caller do
   defp standing_person(%{status: "active"}), do: :ok
   defp standing_person(_user), do: {:error, :not_standing}
 
-  defp standing_estate(_athanor, nil), do: :ok
-  defp standing_estate(%{status: "active"}, _athanor_id), do: :ok
-  defp standing_estate(_athanor, _athanor_id), do: {:error, :not_member}
+  defp standing_athanor(_athanor, nil), do: :ok
+  defp standing_athanor(%{status: "active"}, _athanor_id), do: :ok
+  defp standing_athanor(_athanor, _athanor_id), do: {:error, :not_member}
 
-  # The key row, its creator and its estate, locked and reread in the
+  # The key row, its creator and its athanor, locked and reread in the
   # standing order; nothing is rebuilt, since everything a key's context
   # carries is the key row's.
   defp revalidate_key(ctx, id) do
@@ -636,7 +636,7 @@ defmodule Sanctum.Caller do
   defp key_standing(rows, ctx) do
     with :ok <- stored_key(rows.source, ctx),
          :ok <- key_creator(rows.user, ctx.user_id) do
-      key_estate(rows.athanor)
+      key_athanor(rows.athanor)
     end
   end
 
@@ -678,8 +678,8 @@ defmodule Sanctum.Caller do
 
   defp key_creator(nil, _user_id), do: :ok
 
-  defp key_estate(%{status: "active"}), do: :ok
-  defp key_estate(_athanor), do: {:error, :not_standing}
+  defp key_athanor(%{status: "active"}), do: :ok
+  defp key_athanor(_athanor), do: {:error, :not_standing}
 
   defp reload(hash, surface) do
     case Session.load_by_hash(hash, surface: surface) do
@@ -698,7 +698,7 @@ defmodule Sanctum.Caller do
   defp same_person(_rebuilt, _ctx), do: {:error, :unauthenticated}
 
   # The caller's focus, authorized again as any focus is; a refusal is the
-  # caller's focus lost, never a move to the session's default estate.
+  # caller's focus lost, never a move to the session's default athanor.
   defp refocus(rebuilt, nil), do: {:ok, rebuilt}
 
   defp refocus(rebuilt, athanor_id) do

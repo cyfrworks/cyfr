@@ -12,7 +12,7 @@ defmodule Compendium.AquaPath do
   `Arca.Storage.UnitLocator`):
 
       aqua/
-      ├── aqua.md                 # the soul — the one assistant an estate has
+      ├── aqua.md                 # the soul — the one assistant an athanor has
       ├── roles/<name>.md         # one frontmatter-markdown file per role
       └── skills/<name>/SKILL.md  # one Agent Skills package per scroll
 

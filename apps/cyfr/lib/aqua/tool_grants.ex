@@ -18,12 +18,12 @@ defmodule Aqua.ToolGrants do
   `resolve/2` is the composition, and it is the only thing that should
   ever be handed to a turn as its policy.
 
-  ## An agent's answers live in its estate
+  ## An agent's answers live in its athanor
 
-  An agent belongs to the estate whose `aqua/` tree holds it, and a tape
-  runs its own estate's agents alone, so every row is keyed by the estate
+  An agent belongs to the athanor whose `aqua/` tree holds it, and a tape
+  runs its own athanor's agents alone, so every row is keyed by the athanor
   in focus: a thread-scope answer by the thread, an agent-scope one
-  by the estate and the agent's name.
+  by the athanor and the agent's name.
 
   ## Destructive and external actions take no standing allow
 
@@ -187,7 +187,7 @@ defmodule Aqua.ToolGrants do
 
   @doc """
   The standing decisions bearing on one thread and one agent: this
-  thread's own, and the agent-scope ones of the estate.
+  thread's own, and the agent-scope ones of the athanor.
 
   A store that cannot be read is `{:error, {:unavailable, _}}`, never an
   empty list: "no rows" would drop every deny and leave an authored

@@ -188,7 +188,7 @@ defmodule Arca.Providers.RecordsTest do
 
   describe "record.payload" do
     # A completed execution's result is a payload a member reads by the
-    # execution's id; another estate reads nothing.
+    # execution's id; another athanor reads nothing.
     test "record.payload answers a retained result to a member of the athanor", %{ctx: ctx} do
       exec = "exec_payload_#{System.unique_integer([:positive])}"
       now = DateTime.utc_now()

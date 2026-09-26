@@ -44,7 +44,7 @@ defmodule Arca.StorageAuthorizePathTest do
 
     # The server's own actor narrowed to one athanor: `system: true` is
     # what opens the seed and global roots, `scope: :athanor` is what
-    # keeps its tenant reads inside this estate.
+    # keeps its tenant reads inside this athanor.
     seed = %{Actor.system() | user_id: "_seed", athanor_id: "ath_a", scope: :athanor}
 
     {:ok, a: a, b: b, seed: seed}

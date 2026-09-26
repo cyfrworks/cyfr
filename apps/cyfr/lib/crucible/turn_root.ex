@@ -150,7 +150,7 @@ defmodule Crucible.TurnRoot do
   Resume a paused turn root from the process that will hold it: the slot
   first (a refusal leaves everything paused), then the rows, under the
   grant the root's attempt stores (`Arca.TurnStorage.resume/3`: a root
-  whose estate was archived since stays paused), then a keeper. `opts`: `:turn_id`, `:fence`, `:timeout_ms`, `:tick_ms`.
+  whose athanor was archived since stays paused), then a keeper. `opts`: `:turn_id`, `:fence`, `:timeout_ms`, `:tick_ms`.
   Answers the claim the loop keeps.
   """
   @spec resume(Context.t(), String.t(), keyword()) :: {:ok, map()} | {:error, term()}

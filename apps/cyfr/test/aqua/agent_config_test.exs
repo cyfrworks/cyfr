@@ -76,7 +76,7 @@ defmodule Aqua.AgentConfigTest do
           <<0x07, 0x07, 0x01, 0x03, "run", 0x00, 0x00>> <>
           <<0x0A, 0x04, 0x01, 0x02, 0x00, 0x0B>>
 
-  test "a catalyst the estate holds resolves to its newest installed release", %{ctx: ctx} do
+  test "a catalyst the athanor holds resolves to its newest installed release", %{ctx: ctx} do
     for version <- ["9.0.0", "10.0.0"] do
       {:ok, _} =
         Compendium.Registry.publish_bytes(ctx, @wasm, %{

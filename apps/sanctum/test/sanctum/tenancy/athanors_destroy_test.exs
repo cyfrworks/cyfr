@@ -166,7 +166,7 @@ defmodule Sanctum.Tenancy.AthanorsDestroyTest do
     assert {:ok, %{status: "archived"}} = Athanors.get(group.id)
   end
 
-  test "the estate's decisions go with it, and the host's decisions stay", %{group: group, ctx: ctx} do
+  test "the athanor's decisions go with it, and the host's decisions stay", %{group: group, ctx: ctx} do
     decision = fn admission ->
       Prima.Decision.new(
         call_id: "call_destroy_#{uniq()}",
@@ -177,9 +177,9 @@ defmodule Sanctum.Tenancy.AthanorsDestroyTest do
       )
     end
 
-    estate = decision.(:admitted)
+    athanor = decision.(:admitted)
     host = decision.(:refused)
-    :ok = Arca.DecisionLog.append(Sanctum.Context.actor(ctx), estate)
+    :ok = Arca.DecisionLog.append(Sanctum.Context.actor(ctx), athanor)
     :ok = Arca.DecisionLog.append(nil, host)
     assert count("decision_logs", group.id) == 1
 
@@ -189,7 +189,7 @@ defmodule Sanctum.Tenancy.AthanorsDestroyTest do
     assert count("decision_logs", group.id) == 0
 
     admin = %{Prima.Actor.system() | platform_admin: true}
-    assert {:error, :not_found} = Arca.DecisionLog.get_global(admin, estate.call_id)
+    assert {:error, :not_found} = Arca.DecisionLog.get_global(admin, athanor.call_id)
     assert {:ok, %{athanor_id: nil}} = Arca.DecisionLog.get_global(admin, host.call_id)
   end
 

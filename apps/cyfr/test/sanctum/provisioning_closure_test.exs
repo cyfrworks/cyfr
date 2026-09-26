@@ -75,11 +75,11 @@ defmodule Sanctum.ProvisioningClosureTest do
       {:ok, group} = Athanors.get(group.id)
 
       assert %DateTime{} = group.provisioned_at,
-             "the estate did not provision: #{inspect(Athanors.settings(group))}"
+             "the athanor did not provision: #{inspect(Athanors.settings(group))}"
 
       refute Athanors.provisioning_failure(group)
 
-      # Every model catalyst is a row of the estate: shipped, never pulled.
+      # Every model catalyst is a row of the athanor: shipped, never pulled.
       for unit <- SeedBundle.model_chat_units() do
         assert {:ok, %{publisher: "local"}} =
                  Compendium.Registry.get_latest(in_group, unit.name, "local", "catalyst"),

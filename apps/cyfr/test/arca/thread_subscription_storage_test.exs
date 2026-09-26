@@ -50,7 +50,7 @@ defmodule Arca.ThreadSubscriptionStorageTest do
 
     refute MapSet.member?(Subs.followed(bob, bob.user_id), thread.id)
 
-    # Access is membership in the estate, and Bob's context has it. An
+    # Access is membership in the athanor, and Bob's context has it. An
     # unfollowed thread renders collapsed and opens on a click; making this
     # a permission would be a second, weaker gate beside membership.
     assert {:ok, ^thread} = Threads.get(bob, thread.id)
@@ -79,14 +79,14 @@ defmodule Arca.ThreadSubscriptionStorageTest do
     assert MapSet.member?(followed, b.id)
   end
 
-  test "another estate's follows are not this one's", %{alice: alice} do
+  test "another athanor's follows are not this one's", %{alice: alice} do
     {:ok, thread} = Threads.create(alice, %{title: "Here"})
     elsewhere = %{alice | athanor_id: "ath_elsewhere"}
 
     refute MapSet.member?(Subs.followed(elsewhere, alice.user_id), thread.id)
   end
 
-  test "unfollow_all/2 drops one person's follows in one estate and nothing else", %{
+  test "unfollow_all/2 drops one person's follows in one athanor and nothing else", %{
     alice: alice,
     bob: bob
   } do
@@ -94,8 +94,8 @@ defmodule Arca.ThreadSubscriptionStorageTest do
     {:ok, b} = Threads.create(alice, %{title: "B"})
     :ok = Subs.follow(bob, a.id, bob.user_id)
 
-    # Bob's follow of the same thread id in another estate is that
-    # estate's row, not this one's.
+    # Bob's follow of the same thread id in another athanor is that
+    # athanor's row, not this one's.
     elsewhere = %{bob | athanor_id: "ath_other"}
     :ok = Subs.follow(elsewhere, a.id <> "-other", bob.user_id)
 

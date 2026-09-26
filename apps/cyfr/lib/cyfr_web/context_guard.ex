@@ -13,7 +13,7 @@ defmodule CyfrWeb.ContextGuard do
   is used as it is, and any other is revalidated from the store
   (`Sanctum.Caller.revalidate_session/1`) before the work runs. A standing
   announcement — sessions revoked, this session invalidated, a membership
-  changed, the focused estate archived — revalidates at once, whatever
+  changed, the focused athanor archived — revalidates at once, whatever
   the context's age. Announcements are the prompt path; the bound is the
   backstop for one that never arrives.
 
@@ -29,7 +29,7 @@ defmodule CyfrWeb.ContextGuard do
       view hook sees.
     * `check/1` — a bare context: the catalog adapter, a task, a
       per-request read.
-    * `refocus/2` — a view that moves its focus to another estate.
+    * `refocus/2` — a view that moves its focus to another athanor.
     * `capture/1` and `deliver/3` — a task's result, delivered only to the
       tenant and focus it was computed for.
     * `watch/2`, `standing/2` and `unwatch/1` — a long-lived stream.
@@ -62,7 +62,7 @@ defmodule CyfrWeb.ContextGuard do
   @stream_recheck_ms :timer.seconds(30)
 
   @unavailable "Your session could not be checked just now. Try again shortly."
-  @focus_lost "That estate is no longer open to you."
+  @focus_lost "That athanor is no longer open to you."
 
   @typedoc "Why a retained context was refused."
   @type refusal :: Caller.revalidation_refusal()
@@ -100,7 +100,7 @@ defmodule CyfrWeb.ContextGuard do
   @doc """
   `on_mount` for every protected LiveView, routed or nested.
 
-  A nested view names the page's estate in its session as `"athanor_id"`
+  A nested view names the page's athanor in its session as `"athanor_id"`
   and is established focused on it. The connected mount subscribes to the
   standing announcements before it revalidates, and the context it
   assigns is the revalidated one.
@@ -219,11 +219,11 @@ defmodule CyfrWeb.ContextGuard do
   defp refuse(socket, reason), do: LiveView.redirect(socket, to: refusal_path(reason))
 
   @doc """
-  Put a context the page narrowed to another estate on the socket.
+  Put a context the page narrowed to another athanor on the socket.
 
   `focused` has already passed the focus authorization
   (`Sanctum.Context.focus/2`). On a connected socket a move to another
-  estate is revalidated before it is assigned, since the context it was
+  athanor is revalidated before it is assigned, since the context it was
   derived from may be older than the bound.
   """
   @spec refocus(Socket.t(), Context.t()) :: {:ok, Socket.t()} | {:error, refusal()}
@@ -439,7 +439,7 @@ defmodule CyfrWeb.ContextGuard do
 
   # Every announcement that can end a context's standing
   # (`Cyfr.Bus.subscribe_standing/1`). The archive and invalidation topics
-  # are server-wide, so a move to another estate needs no new
+  # are server-wide, so a move to another athanor needs no new
   # subscription; each holder filters for its own caller.
   defp subscribe(%Context{user_id: user_id}), do: Cyfr.Bus.subscribe_standing(user_id)
 

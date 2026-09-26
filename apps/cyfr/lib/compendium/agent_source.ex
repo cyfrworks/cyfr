@@ -61,7 +61,7 @@ defmodule Compendium.AgentSource do
   defdelegate agent_ref?(ref), to: Prima.AgentRef
 
   @doc """
-  The row of every enabled agent in the estate's tree, the soul first.
+  The row of every enabled agent in the athanor's tree, the soul first.
   A file that fails to parse has no row.
   """
   @spec rows(Context.t()) :: {:ok, [map()]} | {:error, term()}
@@ -73,7 +73,7 @@ defmodule Compendium.AgentSource do
     end
   end
 
-  @doc "The names of the estate's enabled agents — the roster that decides clone edges."
+  @doc "The names of the athanor's enabled agents — the roster that decides clone edges."
   @spec enabled_roster(Context.t()) :: {:ok, MapSet.t(String.t())} | {:error, term()}
   def enabled_roster(%Context{} = ctx) do
     with {:ok, agents, _errors} <- AquaAgent.list(ctx) do
@@ -93,7 +93,7 @@ defmodule Compendium.AgentSource do
   end
 
   @doc """
-  The consent manifest of an agent, given the names of the estate's
+  The consent manifest of an agent, given the names of the athanor's
   enabled agents (which decide which policy globs are clone edges).
   """
   @spec manifest(AquaAgent.t(), MapSet.t(String.t())) :: map()
@@ -156,7 +156,7 @@ defmodule Compendium.AgentSource do
     }
   end
 
-  @doc "Whether `name` is the estate's soul."
+  @doc "Whether `name` is the athanor's soul."
   @spec soul?(String.t()) :: boolean()
   defdelegate soul?(name), to: Prima.AgentRef
 
@@ -166,13 +166,13 @@ defmodule Compendium.AgentSource do
 
   @doc """
   The consent row of an agent file — the soul or a role — under `roster`,
-  the names of the estate's enabled agents (which decide clone edges).
+  the names of the athanor's enabled agents (which decide clone edges).
   """
   @spec row(AquaAgent.t(), MapSet.t(String.t())) :: map()
   def row(%{name: _} = agent, %MapSet{} = roster), do: do_row(agent, roster)
 
   @doc """
-  The consent row the seed file would project under the estate's enabled
+  The consent row the seed file would project under the athanor's enabled
   roster. A prose-only edit of the athanor's copy does not change this
   row; a policy, model or catalyst edit of the seed file does. A
   disabled seed agent has no row.

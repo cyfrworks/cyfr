@@ -287,7 +287,7 @@ jobs:
           key: ${{ runner.os }}-mix-cluster-${{ steps.beam.outputs.elixir-version }}-${{ steps.beam.outputs.otp-version }}-${{ hashFiles('mix.lock') }}
           restore-keys: ${{ runner.os }}-mix-cluster-${{ steps.beam.outputs.elixir-version }}-${{ steps.beam.outputs.otp-version }}-
       # CYFR_CLUSTER=1 refuses local storage: two members would each hold
-      # half of every estate. The same image and credentials the s3-minio
+      # half of every athanor. The same image and credentials the s3-minio
       # job uses, pinned by digest like every other image here.
       - name: Start MinIO
         run: |
@@ -1073,9 +1073,11 @@ jobs:
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
       # The tenancy unit is the athanor and a conversation is a thread. This
-      # asserts the old vocabularies — org/project, conversation/topic
-      # subscription, the prism: PubSub prefix — cannot creep back into code,
-      # config, or operator-facing docs.
+      # asserts the old vocabularies — org/project, the athanor's retired
+      # second name, conversation/topic subscription, the prism: PubSub
+      # prefix — cannot creep back into code, config, or operator-facing docs.
+      # The retired name is matched as a word or inside an identifier, never
+      # inside an English word that merely contains its letters.
       # Free-word "org"/"project" is deliberately not gated (OCI annotations,
       # Mix.Project, Go module paths, "project directory" prose are legitimate).
       - name: Tier A/B fossil patterns must be absent
@@ -1145,6 +1147,7 @@ jobs:
             'CYFR_EXECUTION_EVENTS_' \
             'CYFR_MAX_CONCURRENT_EXECUTIONS' \
             'CYFR_WORKER_WATCH_' \
+            '(^|[^A-Za-z])([Ee]states?([^a-z]|$)|ESTATES?([^A-Z]|$))|[a-z]Estate' \
             ; do
             hits="$(git grep -InE "$p" -- $paths $excl || true)"
             if [ -n "$hits" ]; then

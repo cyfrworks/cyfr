@@ -5,7 +5,7 @@ defmodule Sanctum.CallerFreshnessTest do
   @moduledoc """
   A retained context is revalidated from the store, never from the memo:
   `Sanctum.Caller.revalidate_session/1` rereads the session, the person
-  and the focused estate under lock, rebuilds the context from the stored
+  and the focused athanor under lock, rebuilds the context from the stored
   session and refocuses it, and `fresh?/1` bounds how long a validated
   context may be acted on — from the validation, never from its reuse.
 
@@ -55,27 +55,27 @@ defmodule Sanctum.CallerFreshnessTest do
         verified: true
       })
 
-    {:ok, estate} = Athanors.create_group(user.id, "Fresh #{n}")
-    {:ok, _} = Members.ensure(user.id, scope: "athanor", athanor_id: estate.id)
+    {:ok, athanor} = Athanors.create_group(user.id, "Fresh #{n}")
+    {:ok, _} = Members.ensure(user.id, scope: "athanor", athanor_id: athanor.id)
 
     ctx =
       Context.build(
         user_id: user.id,
         email: user.email,
         provider: "github",
-        athanor_id: estate.id,
+        athanor_id: athanor.id,
         permissions: [:*],
         auth_method: :oidc,
         authenticated: true
       )
 
     {:ok, session} = Sanctum.TestContext.create_session(ctx)
-    {:ok, established} = Caller.establish(session.token, focus: estate.id)
-    %{user: user, estate: estate, session: session, ctx: established}
+    {:ok, established} = Caller.establish(session.token, focus: athanor.id)
+    %{user: user, athanor: athanor, session: session, ctx: established}
   end
 
-  # A second estate the same person is seated in.
-  defp second_estate!(%{user: user}) do
+  # A second athanor the same person is seated in.
+  defp second_athanor!(%{user: user}) do
     {:ok, other} = Athanors.create_group(user.id, "Other #{System.unique_integer([:positive])}")
     {:ok, _} = Members.ensure(user.id, scope: "athanor", athanor_id: other.id)
     other
@@ -125,11 +125,11 @@ defmodule Sanctum.CallerFreshnessTest do
 
     test "a memo hit answers the instant of the validation it memoized, not of its reuse" do
       Application.put_env(:sanctum, :caller_memo_ttl_ms, 60_000)
-      %{session: session, estate: estate} = person!()
+      %{session: session, athanor: athanor} = person!()
 
-      {:ok, first} = Caller.establish(session.token, focus: estate.id)
+      {:ok, first} = Caller.establish(session.token, focus: athanor.id)
       Process.sleep(20)
-      {:ok, again} = Caller.establish(session.token, focus: estate.id)
+      {:ok, again} = Caller.establish(session.token, focus: athanor.id)
 
       assert again.validated_at == first.validated_at
     end
@@ -137,13 +137,13 @@ defmodule Sanctum.CallerFreshnessTest do
 
   describe "revalidate_session/1" do
     test "a standing session is rebuilt from the store, focus and correlation kept" do
-      %{ctx: ctx, estate: estate, user: user} = person!()
+      %{ctx: ctx, athanor: athanor, user: user} = person!()
       held = %{ctx | request_id: "req_held", client_ip: "203.0.113.9"}
       Process.sleep(5)
 
       assert {:ok, %Context{} = fresh} = Caller.revalidate_session(held)
       assert fresh.user_id == user.id
-      assert fresh.athanor_id == estate.id
+      assert fresh.athanor_id == athanor.id
       assert fresh.session_token_hash == ctx.session_token_hash
       assert %{source_kind: :session, focus_basis: basis} = fresh.credential_binding
       assert is_binary(basis)
@@ -154,13 +154,13 @@ defmodule Sanctum.CallerFreshnessTest do
 
     test "reads the rows, never the memo: a session deleted behind a warm memo refuses" do
       Application.put_env(:sanctum, :caller_memo_ttl_ms, 60_000)
-      %{session: session, estate: estate, ctx: ctx} = person!()
-      {:ok, _} = Caller.establish(session.token, focus: estate.id)
+      %{session: session, athanor: athanor, ctx: ctx} = person!()
+      {:ok, _} = Caller.establish(session.token, focus: athanor.id)
 
       delete_session!(ctx.session_token_hash)
 
       # The memo still answers establish — the exposure the bound covers…
-      assert {:ok, _} = Caller.establish(session.token, focus: estate.id)
+      assert {:ok, _} = Caller.establish(session.token, focus: athanor.id)
       # …and revalidation, which reads the rows, refuses.
       assert {:error, :unauthenticated} = Caller.revalidate_session(ctx)
     end
@@ -177,24 +177,24 @@ defmodule Sanctum.CallerFreshnessTest do
       assert {:error, :not_standing} = Caller.revalidate_session(ctx)
     end
 
-    test "a lost seat refuses the focus and never falls back to another estate" do
-      %{ctx: ctx, user: user, estate: estate} = fixture = person!()
-      _other = second_estate!(fixture)
+    test "a lost seat refuses the focus and never falls back to another athanor" do
+      %{ctx: ctx, user: user, athanor: athanor} = fixture = person!()
+      _other = second_athanor!(fixture)
 
-      drop_seat!(user.id, estate.id)
+      drop_seat!(user.id, athanor.id)
 
       assert {:error, :not_member} = Caller.revalidate_session(ctx)
     end
 
     test "an archived focus refuses the focus" do
-      %{ctx: ctx, estate: estate} = person!()
-      archive_row!(estate.id)
+      %{ctx: ctx, athanor: athanor} = person!()
+      archive_row!(athanor.id)
       assert {:error, :not_member} = Caller.revalidate_session(ctx)
     end
 
     test "a focus moved to another seat of the same person is revalidated there" do
       %{ctx: ctx} = fixture = person!()
-      other = second_estate!(fixture)
+      other = second_athanor!(fixture)
       {:ok, moved} = Context.focus(ctx, other.id)
 
       assert {:ok, %Context{athanor_id: athanor_id}} = Caller.revalidate_session(moved)
@@ -293,7 +293,7 @@ defmodule Sanctum.CallerFreshnessTest do
       assert {:error, :unauthenticated} = Caller.revalidate_session(key_ctx)
     end
 
-    test "a denied creator and an archived estate no longer stand" do
+    test "a denied creator and an archived athanor no longer stand" do
       %{key_ctx: key_ctx, user: user} = key!()
 
       Arca.Repo.update_all(from(u in Arca.Schemas.User, where: u.id == ^user.id),
@@ -302,8 +302,8 @@ defmodule Sanctum.CallerFreshnessTest do
 
       assert {:error, :not_standing} = Caller.revalidate_session(key_ctx)
 
-      %{key_ctx: key_ctx, estate: estate} = key!()
-      archive_row!(estate.id)
+      %{key_ctx: key_ctx, athanor: athanor} = key!()
+      archive_row!(athanor.id)
       assert {:error, :not_standing} = Caller.revalidate_session(key_ctx)
     end
 
@@ -335,16 +335,16 @@ defmodule Sanctum.CallerFreshnessTest do
   describe "fresh?/1" do
     test "the bound runs from the validation; reusing the context never extends it" do
       Application.put_env(:sanctum, :caller_memo_ttl_ms, 300)
-      %{session: session, estate: estate} = person!()
+      %{session: session, athanor: athanor} = person!()
 
-      {:ok, ctx} = Caller.establish(session.token, focus: estate.id)
+      {:ok, ctx} = Caller.establish(session.token, focus: athanor.id)
       assert Caller.fresh?(ctx)
 
       # Reused through the memo within the bound, as a busy socket would:
       # the same validation every time.
       for _ <- 1..3 do
         Process.sleep(60)
-        {:ok, reused} = Caller.establish(session.token, focus: estate.id)
+        {:ok, reused} = Caller.establish(session.token, focus: athanor.id)
         assert reused.validated_at == ctx.validated_at
         assert Caller.fresh?(reused)
       end
@@ -355,7 +355,7 @@ defmodule Sanctum.CallerFreshnessTest do
       Process.sleep(160)
       refute Caller.fresh?(ctx)
 
-      {:ok, again} = Caller.establish(session.token, focus: estate.id)
+      {:ok, again} = Caller.establish(session.token, focus: athanor.id)
       assert DateTime.compare(again.validated_at, ctx.validated_at) == :gt
       assert Caller.fresh?(again)
 

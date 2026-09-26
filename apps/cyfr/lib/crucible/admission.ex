@@ -225,7 +225,7 @@ defmodule Crucible.Admission do
   `opts[:authority]`.
 
   In order: this boot must own the control plane; the run's grant is read
-  — a root's estate standing now, a child's its parent's stored stamp —
+  — a root's athanor standing now, a child's its parent's stored stamp —
   and one that does not stand refuses with no row
   (`{:error, :not_standing}`); a version-less reference is resolved to
   the pinned one; the registry row must type the
@@ -337,9 +337,9 @@ defmodule Crucible.Admission do
   end
 
   # The standing the run is admitted under, before anything is resolved: a
-  # root's estate as it stands now, a child's parent's stored stamp
+  # root's athanor as it stands now, a child's parent's stored stamp
   # (`Crucible.Record.grant/1`). The admission transaction checks
-  # it again under the estate's lock.
+  # it again under the athanor's lock.
   defp grant(ctx, opts) do
     case opts[:parent_execution_id] do
       nil -> Sanctum.ExecutionStanding.capture(ctx)

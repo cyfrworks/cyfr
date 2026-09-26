@@ -70,7 +70,7 @@ defmodule Sanctum.Providers.Athanor do
             Arg.new("user", :string,
               required: true,
               description:
-                "pair: the other person's user id — someone you already share an active estate with"
+                "pair: the other person's user id — someone you already share an active athanor with"
             )
           ],
           kind: :write,
@@ -175,7 +175,7 @@ defmodule Sanctum.Providers.Athanor do
         )
       ],
       description:
-        "The athanors you belong to — your own and your groups. Create a group (you are its first member), rename it, archive it, patch its settings — or pair: open a DM with someone you already share an estate with, a frozen two-person athanor that ends when either of you leaves. A person's own athanor is minted at sign-in; a group is archived, never deleted.",
+        "The athanors you belong to — your own and your groups. Create a group (you are its first member), rename it, archive it, patch its settings — or pair: open a DM with someone you already share an athanor with, a frozen two-person athanor that ends when either of you leaves. A person's own athanor is minted at sign-in; a group is archived, never deleted.",
       title: "Athanors"
     )
   end
@@ -199,7 +199,7 @@ defmodule Sanctum.Providers.Athanor do
 
   def handle(%Context{} = ctx, %{"action" => "create", "name" => name} = args)
       when is_binary(name) do
-    # The row and the creator's seat only — the estate is filled at first
+    # The row and the creator's seat only — the athanor is filled at first
     # need (`Sanctum.Provisioning.start_provisioning/1`), so creating a
     # group never waits on a registry round trip.
     case Athanors.create_group(ctx.user_id, name, slug: Map.get(args, "slug")) do
@@ -228,21 +228,21 @@ defmodule Sanctum.Providers.Athanor do
     do: {:error, {:invalid_argument, "Missing required argument: name"}}
 
   # The DM verb: find-or-mint the frozen pair of the caller and `user`.
-  # Reachability is "we already share an active estate" — checked here, not
+  # Reachability is "we already share an active athanor" — checked here, not
   # only drawn in the UI, so the wire cannot be a directory: a user id you
   # cannot see on any members list answers exactly like one that does not
   # exist. The row is minted lazily (no provisioning) and the caller opens
-  # its chat by focusing it, like any estate.
+  # its chat by focusing it, like any athanor.
   def handle(%Context{} = ctx, %{"action" => "pair", "user" => other} = _args)
       when is_binary(other) and other != "" do
     cond do
       other == ctx.user_id ->
         {:error, {:invalid_argument, "A pair is two people — you are already with yourself"}}
 
-      not Members.shared_estate?(ctx.user_id, other) ->
+      not Members.shared_athanor?(ctx.user_id, other) ->
         {:error,
          {:invalid_argument,
-          "You can only open a DM with someone you already share an estate with"}}
+          "You can only open a DM with someone you already share an athanor with"}}
 
       true ->
         case Athanors.create_pair(ctx.user_id, other) do
@@ -399,7 +399,7 @@ defmodule Sanctum.Providers.Athanor do
   # answers at once. The outcome is on the row either way. An attempt
   # already running — a background fill, a seed sync, another member's
   # retry — is reported as in progress, the same typed answer a turn gives
-  # while the estate is unfilled, never as a failure.
+  # while the athanor is unfilled, never as a failure.
   def handle(%Context{} = ctx, %{"action" => "provision"} = args) do
     with {:ok, athanor, focused} <- resolve(ctx, args) do
       case Sanctum.Provisioning.provision(athanor, focused) do

@@ -189,7 +189,7 @@ defmodule CyfrWeb.ContextGuardTest do
       assert_redirect(view, "/login", 2_000)
     end
 
-    test "a lost seat nobody announced ends the focus, and the page is not moved to another estate",
+    test "a lost seat nobody announced ends the focus, and the page is not moved to another athanor",
          %{conn: conn} do
       user = test_user()
       {conn, _token, _hash} = signed_in(conn, user)

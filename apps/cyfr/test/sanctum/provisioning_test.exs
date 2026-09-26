@@ -14,7 +14,7 @@ defmodule Sanctum.ProvisioningTest do
   alias Sanctum.Provisioning
   alias Sanctum.Tenancy.{Athanors, Members, Users}
 
-  # Another attempt — another boot's — holding the estate's claim.
+  # Another attempt — another boot's — holding the athanor's claim.
   defp held_elsewhere!(athanor_id, entry_kind \\ "first_need") do
     actor = %Prima.Actor{athanor_id: athanor_id}
     {:ok, claim} = Claims.claim(actor, "boot_elsewhere/own_held", entry_kind, 60_000)
@@ -319,7 +319,7 @@ defmodule Sanctum.ProvisioningTest do
 
     held = held_elsewhere!(group.id, "seed_sync")
 
-    # A boot's sync waits 30s for a held estate. This must answer well inside it.
+    # A boot's sync waits 30s for a held athanor. This must answer well inside it.
     {elapsed_us, result} =
       :timer.tc(fn -> Filler.install_shipped(in_group, "catalyst:local.foo") end)
 
@@ -369,7 +369,7 @@ defmodule Sanctum.ProvisioningTest do
     assert profile.kind == "owner"
   end
 
-  test "with a registry that does not answer, an OPTIONAL dependency is left out and the estate still provisions",
+  test "with a registry that does not answer, an OPTIONAL dependency is left out and the athanor still provisions",
        %{bundle_dir: bundle_dir} do
     # The suite's registry host is a closed port: configured, unreachable.
     assert Compendium.RegistryHost.configured?()
@@ -431,7 +431,7 @@ defmodule Sanctum.ProvisioningTest do
     assert {:error, {:provisioning_failed, :closure, _}} = Provisioning.provision(group, in_group)
   end
 
-  test "a first need never waits on the caller already filling the estate" do
+  test "a first need never waits on the caller already filling the athanor" do
     # The suite runs provisioning inline so its assertions can read rows
     # straight after the call; this one is about the real path, where the
     # fill is a task and the caller does not await it.
@@ -443,7 +443,7 @@ defmodule Sanctum.ProvisioningTest do
     {:ok, group} = Athanors.create_group(ctx.user_id, "Held #{n}")
     in_group = %{ctx | athanor_id: group.id}
 
-    # Another caller is already filling this estate — the shape of two
+    # Another caller is already filling this athanor — the shape of two
     # people opening a fresh one at once. A reader that finds the claim
     # held starts nothing, so no fill this test never awaits reaches the
     # database without the connection the test owns.
@@ -453,7 +453,7 @@ defmodule Sanctum.ProvisioningTest do
     assert :ok = Provisioning.start_provisioning(in_group)
 
     # Nothing waits: the fill is started, never awaited, so a page's mount
-    # cannot be held open by whoever else is filling the estate. Generous
+    # cannot be held open by whoever else is filling the athanor. Generous
     # for a loaded box, and still far below the lock's own 30 s.
     assert System.monotonic_time(:millisecond) - started < 5_000
 
@@ -479,7 +479,7 @@ defmodule Sanctum.ProvisioningTest do
 
   describe "an attempt whose claim a later attempt took" do
     # An attempt that lost its lease mid-fill, and its successor: the first
-    # claim's lease runs out, the second takes the estate at the next fence.
+    # claim's lease runs out, the second takes the athanor at the next fence.
     defp overtaken!(athanor_id) do
       actor = %Prima.Actor{athanor_id: athanor_id}
       {:ok, stale} = Claims.claim(actor, "boot_elsewhere/own_stale", "first_need", 1)
@@ -489,7 +489,7 @@ defmodule Sanctum.ProvisioningTest do
       {actor, stale, successor}
     end
 
-    # The four writes an attempt makes on the estate's behalf — readiness,
+    # The four writes an attempt makes on the athanor's behalf — readiness,
     # failure, consent, agent index — each get a case of their own, because
     # each carries the claim's `(owner, fence)` by its own means and a
     # fence lost from one of them is not lost from the others.
@@ -507,7 +507,7 @@ defmodule Sanctum.ProvisioningTest do
 
       # And the whole fill would succeed — the same bundle fills a group in
       # the first test of this module. Run under the claim it lost, it is
-      # told the estate is another attempt's, in progress.
+      # told the athanor is another attempt's, in progress.
       assert {:error, :provisioning_busy} = Filler.fill(stale, group, in_group)
 
       {:ok, row} = Athanors.get(group.id)
@@ -563,7 +563,7 @@ defmodule Sanctum.ProvisioningTest do
       in_group = %{ctx | athanor_id: group.id}
       {_actor, stale, successor} = overtaken!(group.id)
 
-      # The index rewrites the estate's rows wholesale, so it is asked for
+      # The index rewrites the athanor's rows wholesale, so it is asked for
       # the fence last thing before it runs.
       assert {:error, :claim_lost} = Provisioning.holding(group.id, stale)
       assert {:error, :provisioning_busy} = Filler.fill(stale, group, in_group)
@@ -601,7 +601,7 @@ defmodule Sanctum.ProvisioningTest do
     end
   end
 
-  test "a boot's seed sync waits for a held estate, then heals it once the holder settles",
+  test "a boot's seed sync waits for a held athanor, then heals it once the holder settles",
        %{bundle_dir: bundle_dir} do
     write_bundle!(bundle_dir)
     n = System.unique_integer([:positive])
@@ -611,21 +611,21 @@ defmodule Sanctum.ProvisioningTest do
     :ok = Provisioning.start_provisioning(in_group)
     assert {:ok, %{provisioned_at: %DateTime{}}} = Athanors.get(group.id)
 
-    # Something for the sync to heal, and another attempt holding the estate.
+    # Something for the sync to heal, and another attempt holding the athanor.
     :ok = Arca.delete_tree(Sanctum.Context.actor(in_group), ["notes"])
     actor = %Prima.Actor{athanor_id: group.id}
     held = held_elsewhere!(group.id, "install_shipped")
 
     sync = Task.async(fn -> Filler.sync_seeds() end)
 
-    # It waits rather than refusing or walking the estate beside the holder.
+    # It waits rather than refusing or walking the athanor beside the holder.
     assert Task.yield(sync, 750) == nil
     assert {:ok, entries} = Arca.list_typed(Sanctum.Context.actor(in_group), [])
     refute {"notes", :dir} in entries
     assert {:ok, %{owner: owner, outcome: nil}} = Claims.current(actor)
     assert owner == held.owner
 
-    # The holder settles; the sync takes the estate and proceeds.
+    # The holder settles; the sync takes the athanor and proceeds.
     :ok = Claims.release(actor, held.owner, held.fence)
     assert :ok = Task.await(sync, 30_000)
 
@@ -647,7 +647,7 @@ defmodule Sanctum.ProvisioningTest do
     in_group = %{ctx | athanor_id: group.id}
     actor = %Prima.Actor{athanor_id: group.id}
 
-    # A claim that reads `ready` on an estate the row does not mark filled
+    # A claim that reads `ready` on an athanor the row does not mark filled
     # makes nothing ready.
     {:ok, claim} = Claims.claim(actor, "boot_elsewhere/own_said_so", "provision", 60_000)
     :ok = Claims.settle(actor, claim.owner, claim.fence, "ready", nil)
@@ -661,7 +661,7 @@ defmodule Sanctum.ProvisioningTest do
     assert Provisioning.status(in_group) == :ready
 
     # What follows on the claim — an install released, a sync released, a
-    # claim settled failed — moves neither the mark nor the estate's standing.
+    # claim settled failed — moves neither the mark nor the athanor's standing.
     assert {:ok, _} = Filler.install_shipped(in_group, "catalyst:local.foo")
     assert :ok = Filler.sync_seeds()
     {:ok, later} = Claims.claim(actor, "boot_elsewhere/own_later", "provision", 60_000)
@@ -672,10 +672,10 @@ defmodule Sanctum.ProvisioningTest do
     assert Provisioning.status(in_group) == :ready
   end
 
-  test "the estate's half of provisioning names nothing above Sanctum" do
+  test "the athanor's half of provisioning names nothing above Sanctum" do
     # The split is the point: identity keeps the claim, the readiness and
     # failure writes, the consent bootstrap and the tenancy writes, and
-    # announces that an estate needs filling; the component domain reacts
+    # announces that an athanor needs filling; the component domain reacts
     # and calls down. Sanctum declares neither the host nor the component
     # domain as a dependency, so a name reaching up here is an undefined
     # module in the standalone Sanctum suite — and the seam between the

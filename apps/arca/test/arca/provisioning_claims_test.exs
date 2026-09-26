@@ -3,7 +3,7 @@
 
 defmodule Arca.ProvisioningClaimsTest do
   @moduledoc """
-  The estate's one claim row: taken at a new fence, held against another
+  The athanor's one claim row: taken at a new fence, held against another
   owner while its lease stands, re-entered by its own owner, taken over
   once the lease ran out or the outcome settled — and written only by
   the owner and fence it still reads.
@@ -121,13 +121,13 @@ defmodule Arca.ProvisioningClaimsTest do
     assert again.entry_kind == "first_need"
   end
 
-  test "one estate's claim is nothing to another's", %{actor: actor} do
+  test "one athanor's claim is nothing to another's", %{actor: actor} do
     other = %Prima.Actor{athanor_id: "ath_claims_other_#{System.unique_integer([:positive])}"}
 
     {:ok, _} = Claims.claim(actor, "boot_1/a", "first_need", @lease_ms)
     assert {:ok, %{fence: 1}} = Claims.claim(other, "boot_1/b", "first_need", @lease_ms)
 
-    # And an owner's writes land only on the estate its actor names.
+    # And an owner's writes land only on the athanor its actor names.
     assert :stale = Claims.settle(other, "boot_1/a", 1, "ready", nil)
     assert {:ok, %{outcome: nil}} = Claims.current(actor)
   end

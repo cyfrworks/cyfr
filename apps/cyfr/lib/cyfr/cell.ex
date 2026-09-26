@@ -203,7 +203,7 @@ defmodule Cyfr.Cell do
     """
     CYFR_CLUSTER=1 needs shared object storage, and this member's storage \
     adapter is #{inspect(adapter)}. Local storage is one member's \
-    filesystem: two members would each hold half of every estate. Set \
+    filesystem: two members would each hold half of every athanor. Set \
     CYFR_STORAGE=s3 with the bucket and credentials every member shares, or \
     unset CYFR_CLUSTER.\
     """

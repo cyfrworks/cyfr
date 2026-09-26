@@ -171,7 +171,7 @@ defmodule Cyfr.RetentionSchedulerTest do
       admin = %{Prima.Actor.system() | platform_admin: true}
       assert {:error, :not_found} = Arca.DecisionLog.get_global(admin, old_host.call_id)
       assert {:ok, _} = Arca.DecisionLog.get_global(admin, recent_host.call_id)
-      # An estate's decisions are its own policy's (90 days by default), never the host's.
+      # An athanor's decisions are its own policy's (90 days by default), never the host's.
       assert {:ok, _} = Arca.DecisionLog.get(actor, old_tenant.call_id)
     end
 
@@ -312,8 +312,8 @@ defmodule Cyfr.RetentionSchedulerTest do
     end
   end
 
-  describe "the estates it walks" do
-    test "an estate archived after the list was read is passed over, and its rows freeze", %{
+  describe "the athanors it walks" do
+    test "an athanor archived after the list was read is passed over, and its rows freeze", %{
       key: key
     } do
       # Ids minted in one millisecond are not ordered, so the walk's order
@@ -324,8 +324,8 @@ defmodule Cyfr.RetentionSchedulerTest do
         over_limit!(athanor.id)
       end
 
-      # Archived while the walk is on an earlier estate: after the list of
-      # active estates was read, before the walk reaches this one.
+      # Archived while the walk is on an earlier athanor: after the list of
+      # active athanors was read, before the walk reaches this one.
       on_first_athanor(fn ->
         {:ok, _} = Sanctum.Tenancy.Athanors.archive(archived)
       end)
@@ -338,7 +338,7 @@ defmodule Cyfr.RetentionSchedulerTest do
       assert executions(first.id) == 1
     end
 
-    test "an estate whose settings are corrupt is logged against it, and the walk goes on", %{
+    test "an athanor whose settings are corrupt is logged against it, and the walk goes on", %{
       key: key
     } do
       [corrupt, next] = Enum.sort_by([group!("corrupt"), group!("next")], & &1.id)
@@ -378,7 +378,7 @@ defmodule Cyfr.RetentionSchedulerTest do
     athanor
   end
 
-  # Three finished executions in an estate whose settings keep one.
+  # Three finished executions in an athanor whose settings keep one.
   defp over_limit!(athanor_id) do
     actor = %Prima.Actor{athanor_id: athanor_id, user_id: "usr_retention"}
 

@@ -12,7 +12,7 @@ defmodule Arca.JobClaims do
   holder reads and writes through the same tenant-scoped facades under the
   same actor as any other caller, so a `key` naming an athanor's
   credential is a name and not a reach. That is also why the table carries
-  no `athanor_id`: several kinds have no estate at all.
+  no `athanor_id`: several kinds have no athanor at all.
 
   Where a job *should* run is not decided here. The cell proposes an owner
   — rendezvous over the live member roster, so the common case is

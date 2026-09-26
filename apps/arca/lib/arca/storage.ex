@@ -241,7 +241,7 @@ defmodule Arca.Storage do
     {"notes", :tenant, nil, nil, :read},
     # An execution's retained input and result bytes, referenced by an
     # `execution_payloads` row. Host-only: what a component was given and
-    # what it answered is the estate's record, never a path a guest
+    # what it answered is the athanor's record, never a path a guest
     # writes — and reserved, so only the payload store's own writes
     # (`Arca.ExecutionPayloads`, under the internal-write scope) change
     # bytes a row names by digest.
@@ -302,7 +302,7 @@ defmodule Arca.Storage do
 
   # What a narrow storage key reads through the `arca://files/` resource:
   # the roots an agent or a thread could have filled. A person reads every
-  # tenant root; the estate's components, its assistant tree, its notes
+  # tenant root; the athanor's components, its assistant tree, its notes
   # and its payloads stay out of a key's reach.
   @key_read_roots ["threads", "data"]
 

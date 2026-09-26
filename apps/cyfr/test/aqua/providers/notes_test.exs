@@ -4,7 +4,7 @@
 defmodule Aqua.Providers.NotesTest do
   # Notes are not the transcript. These pin the difference, and the rule
   # that makes "whose notes" a fact about where you are rather than an
-  # argument: a note lands in the estate in focus.
+  # argument: a note lands in the athanor in focus.
   use ExUnit.Case, async: false
 
   alias Aqua.Providers.Notes, as: Tool
@@ -49,11 +49,11 @@ defmodule Aqua.Providers.NotesTest do
     # `ensure_personal_athanor/1`, and `Context.focus/2` (the "mine" read)
     # checks it.
     {:ok, _} = Sanctum.Tenancy.Members.create(%{user_id: user, athanor_id: mine.id})
-    {:ok, estate} = Sanctum.Tenancy.Athanors.create_group(user, "Trip #{n}")
+    {:ok, athanor} = Sanctum.Tenancy.Athanors.create_group(user, "Trip #{n}")
 
-    ctx = %{Sanctum.TestContext.local() | user_id: user, athanor_id: estate.id}
+    ctx = %{Sanctum.TestContext.local() | user_id: user, athanor_id: athanor.id}
     {:ok, home} = Sanctum.Context.focus(ctx, mine.id)
-    {:ok, ctx: ctx, home: home, mine: mine, estate: estate}
+    {:ok, ctx: ctx, home: home, mine: mine, athanor: athanor}
   end
 
   defp call(ctx, args), do: Tool.handle("notes", ctx, args)
@@ -111,14 +111,14 @@ defmodule Aqua.Providers.NotesTest do
   defp caller!(ctx),
     do: ctx |> Cyfr.Test.AttemptFixtures.lineage!() |> Map.take([:parent_execution_id, :attempt])
 
-  test "a note lands in the estate you are working in, and nowhere else", %{
+  test "a note lands in the athanor you are working in, and nowhere else", %{
     ctx: ctx,
     home: home,
     mine: mine,
-    estate: estate
+    athanor: athanor
   } do
     {:ok, kept} = call(ctx, %{"action" => "keep", "name" => "decided", "content" => "Lisbon"})
-    assert kept.athanor_id == estate.id
+    assert kept.athanor_id == athanor.id
 
     {:ok, at_home} = call(home, %{"action" => "keep", "name" => "flight", "content" => "BA117"})
     assert at_home.athanor_id == mine.id
@@ -127,10 +127,10 @@ defmodule Aqua.Providers.NotesTest do
     assert {:ok, %{notes: [%{name: "decided", athanor_id: id}]}} =
              call(ctx, %{"action" => "list"})
 
-    assert id == estate.id
+    assert id == athanor.id
 
     assert {:ok, %{notes: [%{name: "flight"}]}} = call(home, %{"action" => "list"})
-    refute estate.id == mine.id
+    refute athanor.id == mine.id
   end
 
   test "keeping under a name that exists replaces it, and says so", %{ctx: ctx} do
@@ -144,10 +144,10 @@ defmodule Aqua.Providers.NotesTest do
     assert {:ok, %{notes: [_]}} = call(ctx, %{"action" => "list"})
   end
 
-  test "a write names no estate", %{ctx: ctx} do
+  test "a write names no athanor", %{ctx: ctx} do
     for args <- [
           %{"action" => "keep", "name" => "x", "content" => "y", "scope" => "mine"},
-          %{"action" => "pin", "name" => "about-us", "content" => "y", "scope" => "estate"},
+          %{"action" => "pin", "name" => "about-us", "content" => "y", "scope" => "athanor"},
           %{"action" => "forget", "name" => "x", "scope" => "mine"}
         ] do
       assert {:error, {:invalid_argument, msg}} = call(ctx, args)
@@ -172,7 +172,7 @@ defmodule Aqua.Providers.NotesTest do
     assert {:ok, %{content: "BA117", athanor_id: ^id}} =
              call(ctx, %{"action" => "read", "name" => "flight", "scope" => "mine"})
 
-    # The estate's own pile does not hold it.
+    # The athanor's own pile does not hold it.
     assert {:ok, %{notes: []}} = call(ctx, %{"action" => "list"})
 
     assert {:error, {:not_found, "note", "flight"}} =
@@ -187,7 +187,7 @@ defmodule Aqua.Providers.NotesTest do
     {:ok, _} =
       Sanctum.Tenancy.Members.create(%{user_id: other.user_id, athanor_id: ctx.athanor_id})
 
-    # No private notes in a shared estate — the invariant is a fact here,
+    # No private notes in a shared athanor — the invariant is a fact here,
     # not a sentence in a docstring.
     assert {:ok, %{notes: [%{name: "decided"}]}} = call(other, %{"action" => "list"})
     assert {:ok, %{content: "Lisbon"}} = call(other, %{"action" => "read", "name" => "decided"})
@@ -265,11 +265,11 @@ defmodule Aqua.Providers.NotesTest do
     assert is_nil(note.execution)
   end
 
-  test "search finds a note by content or name, across every estate you belong to", %{
+  test "search finds a note by content or name, across every athanor you belong to", %{
     ctx: ctx,
     home: home,
     mine: mine,
-    estate: estate
+    athanor: athanor
   } do
     {:ok, _} =
       call(ctx, %{"action" => "keep", "name" => "decided", "content" => "We go to Lisbon in May."})
@@ -289,9 +289,10 @@ defmodule Aqua.Providers.NotesTest do
     {:ok, %{matches: everywhere}} =
       call(ctx, %{"action" => "search", "query" => "o", "scope" => "everywhere"})
 
-    assert Enum.map(everywhere, & &1.athanor_id) |> Enum.sort() == Enum.sort([estate.id, mine.id])
+    assert Enum.map(everywhere, & &1.athanor_id) |> Enum.sort() ==
+             Enum.sort([athanor.id, mine.id])
 
-    # Read is not a place to guess which estate held a hit.
+    # Read is not a place to guess which athanor held a hit.
     assert {:error, {:invalid_argument, msg}} =
              call(ctx, %{"action" => "read", "name" => "decided", "scope" => "everywhere"})
 
@@ -313,7 +314,7 @@ defmodule Aqua.Providers.NotesTest do
   end
 
   test "an approved call keeps a note from inside the chain, and only an OIDC session's chain may",
-       %{ctx: ctx, estate: estate} do
+       %{ctx: ctx, athanor: athanor} do
     auth = granting([{"notes", "keep"}, {"notes", "read"}])
 
     # What the model wrote as provenance — ignored in a chain: the host
@@ -335,7 +336,7 @@ defmodule Aqua.Providers.NotesTest do
     # The person's own session, now guest-planed by the approved run: the
     # plane is not asked again, the surface is.
     assert {:ok, %{kept: "decided", athanor_id: id}} = in_chain(ctx, args, auth, lineage)
-    assert id == estate.id
+    assert id == athanor.id
 
     assert {:ok, %{thread: "thread_1", execution: "exec_1", kept_by: kept_by}} =
              in_chain(ctx, %{"action" => "read", "name" => "decided"}, auth)
@@ -401,7 +402,7 @@ defmodule Aqua.Providers.NotesTest do
             }} = in_chain(ctx, args, granting([{"notes", "read"}]))
   end
 
-  test "list and search answer pages, one budget across every estate", %{ctx: ctx, home: home} do
+  test "list and search answer pages, one budget across every athanor", %{ctx: ctx, home: home} do
     for n <- 1..3,
         do:
           {:ok, _} =
@@ -412,7 +413,7 @@ defmodule Aqua.Providers.NotesTest do
           {:ok, _} =
             call(home, %{"action" => "keep", "name" => "m#{n}", "content" => "lisbon #{n}"})
 
-    # The focus first, then the person's other estates, names sorted; a
+    # The focus first, then the person's other athanors, names sorted; a
     # page of two, then the next page from its cursor, and so on — no
     # overlap, nothing skipped.
     {:ok, %{notes: page1, more: true, next: cursor1}} =
@@ -457,10 +458,10 @@ defmodule Aqua.Providers.NotesTest do
     assert msg =~ "cursor"
   end
 
-  test "a search's estate is a locator a read may follow — under the reader's own seat", %{
+  test "a search's athanor is a locator a read may follow — under the reader's own seat", %{
     ctx: ctx,
     home: home,
-    estate: estate
+    athanor: athanor
   } do
     {:ok, _} =
       call(ctx, %{"action" => "keep", "name" => "porto-hotel", "content" => "the Yeatman"})
@@ -468,14 +469,14 @@ defmodule Aqua.Providers.NotesTest do
     {:ok, %{matches: [%{name: "porto-hotel", athanor_id: id}]}} =
       call(home, %{"action" => "search", "query" => "yeatman", "scope" => "everywhere"})
 
-    assert id == estate.id
+    assert id == athanor.id
 
     assert {:ok, %{content: "the Yeatman", athanor_id: ^id}} =
              call(home, %{"action" => "read", "name" => "porto-hotel", "athanor_id" => id})
 
-    # An estate the reader holds no seat in reads as no such note — the
-    # locator is not a way to learn which estates exist.
-    assert {:error, {:not_found, "estate", "ath_nobody"}} =
+    # An athanor the reader holds no seat in reads as no such note — the
+    # locator is not a way to learn which athanors exist.
+    assert {:error, {:not_found, "athanor", "ath_nobody"}} =
              call(home, %{
                "action" => "read",
                "name" => "porto-hotel",
@@ -510,7 +511,7 @@ defmodule Aqua.Providers.NotesTest do
              call(ctx, %{"action" => "list", "scope" => "mine"})
   end
 
-  test "an estate has one pinned page", %{ctx: ctx, home: home} do
+  test "an athanor has one pinned page", %{ctx: ctx, home: home} do
     assert {:error, {:invalid_argument, msg}} =
              call(ctx, %{"action" => "pin", "name" => "about-you", "content" => "me"})
 
@@ -586,8 +587,8 @@ defmodule Aqua.Providers.NotesTest do
 
   test "a standing credential cannot keep, read or forget notes", %{ctx: ctx} do
     # The host-only root stops the guest; this stops the credential. A key
-    # scoped to an estate must not reach the creator's personal tree
-    # through "mine" — or the estate's notes through anything.
+    # scoped to an athanor must not reach the creator's personal tree
+    # through "mine" — or the athanor's notes through anything.
     star = %{ctx | auth_method: :api_key, api_key_type: :admin, permissions: MapSet.new([:*])}
 
     assert {:error,

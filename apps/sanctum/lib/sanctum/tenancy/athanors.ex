@@ -52,7 +52,7 @@ defmodule Sanctum.Tenancy.Athanors do
   from the server caps.
 
   `CYFR_MINT_PER_HOUR` bounds how fast strangers arrive and
-  `CYFR_MAX_ATHANORS` how many estates the server holds; an operator named
+  `CYFR_MAX_ATHANORS` how many athanors the server holds; an operator named
   in `CYFR_PLATFORM_ADMIN_EMAILS` is neither a stranger nor optional — a
   server at capacity must still admit the person who can act on it. Every
   other mint goes through `create/1` and is capped.
@@ -126,11 +126,11 @@ defmodule Sanctum.Tenancy.Athanors do
   @doc """
   The pair of `user_a` and `user_b` — found if it exists, minted if not.
 
-  A DM is a **frozen** group estate: it takes both members at birth and
+  A DM is a **frozen** group athanor: it takes both members at birth and
   `Sanctum.Tenancy.Members.add/3` refuses it another forever. That is what
   lets two people talk without a second tenancy primitive beside the
   athanor — they get a vault, storage, schedules and an audit trail like
-  any other estate, and the door is simply closed.
+  any other athanor, and the door is simply closed.
 
   Find-or-create runs in a transaction keyed on `pair_key`, and a losing
   racer reads the winner rather than reporting a conflict. Two people
@@ -168,8 +168,8 @@ defmodule Sanctum.Tenancy.Athanors do
 
   @doc """
   The canonical key for a pair of people: order-independent, so
-  `{alice, bob}` and `{bob, alice}` name the same estate. Exactly two ids
-  — a pair is what a frozen estate holds, and a key over any other number
+  `{alice, bob}` and `{bob, alice}` name the same athanor. Exactly two ids
+  — a pair is what a frozen athanor holds, and a key over any other number
   would name nothing `create_pair/2` can find.
 
   Hashes the JSON encoding of sorted member ids, preserving unambiguous boundaries.
@@ -186,14 +186,14 @@ defmodule Sanctum.Tenancy.Athanors do
     |> Base.url_encode64(padding: false)
   end
 
-  @doc "The active frozen estate with this canonical key, if there is one."
+  @doc "The active frozen athanor with this canonical key, if there is one."
   @spec get_by_pair_key(String.t()) :: {:ok, athanor()} | {:error, :not_found | :database_error}
   def get_by_pair_key(key) when is_binary(key),
     do: Arca.Athanors.get_by_pair_key(server(), key)
 
   # A pair is minted for two, so the cap is asked for both, inside the mint
   # with both people's rows held (in one order, so two mints cannot
-  # deadlock). Without it one member of a large room could mint an estate
+  # deadlock). Without it one member of a large room could mint an athanor
   # per co-member from the wire — a DM asks nobody else's consent — and
   # spend `CYFR_MAX_ATHANORS` for everyone.
   defp mint_pair(key, user_a, user_b) do
@@ -261,7 +261,7 @@ defmodule Sanctum.Tenancy.Athanors do
     )
   end
 
-  # Both display names, so the estate reads as the two people in it. The
+  # Both display names, so the athanor reads as the two people in it. The
   # slug's own collision fallback handles two pairs of same-named people.
   defp pair_name(user_a, user_b) do
     [user_a, user_b]
@@ -272,9 +272,9 @@ defmodule Sanctum.Tenancy.Athanors do
   end
 
   @doc """
-  How an estate is named to one of its members: a frozen pair by the
+  How an athanor is named to one of its members: a frozen pair by the
   OTHER person — to `user_id`, a DM is whoever they are talking to, never
-  the stored "A & B" — and any other estate by its own name. The stored
+  the stored "A & B" — and any other athanor by its own name. The stored
   name stands in when the other seat cannot be read (an ended pair holds
   one member).
   """
@@ -384,15 +384,15 @@ defmodule Sanctum.Tenancy.Athanors do
   end
 
   @doc """
-  Announce estates a committed transition archived, from the data it
+  Announce athanors a committed transition archived, from the data it
   returned: each member's established-context memo is dropped, before
   this returns — the memo caches an AUTHORIZATION decision, so an archive
   that only flipped the status would leave every member working inside
   the shut furnace until their memo aged out — and the archival is
   announced, which is what stops in-flight work
-  (`Crucible.ArchiveWatch`) and the processes serving the estate
+  (`Crucible.ArchiveWatch`) and the processes serving the athanor
   from outside any tenant topic; the status gates already refuse new work
-  either way. Estates the transition actually moved tell their members'
+  either way. Athanors the transition actually moved tell their members'
   open views.
   """
   @spec announce_archived([String.t()], map()) :: :ok
@@ -519,16 +519,16 @@ defmodule Sanctum.Tenancy.Athanors do
 
   # The server's own actor narrowed to this athanor: `system: true` is
   # what lets the purge reach the whole tree, `scope: :athanor` is what
-  # keeps it inside this one estate.
+  # keeps it inside this one athanor.
   defp internal_actor(%{id: id}),
     do: %{Prima.Actor.system() | athanor_id: id, scope: :athanor}
 
   @doc """
   Reopen an archived athanor, if the server still has room for it
   (`Arca.SecurityTransitions.unarchive_athanor/3`). Its revoked keys stay
-  revoked; the reopen raises the estate's generation, so a context read
+  revoked; the reopen raises the athanor's generation, so a context read
   before the archive cannot issue a credential in it afterwards. An ended
-  DM never reopens: a frozen estate is archived the moment either person
+  DM never reopens: a frozen athanor is archived the moment either person
   leaves, so its husk holds one member, and reopening it would seat that
   person alone in a second You. Clicking the name again mints a new pair
   instead.
@@ -544,7 +544,7 @@ defmodule Sanctum.Tenancy.Athanors do
   # An archived athanor freed its place against the server cap when it
   # closed; taking the place back has to ask for it, or archiving and
   # reopening would be the way past `CYFR_MAX_ATHANORS`. The count runs
-  # inside the transition, with the estate locked.
+  # inside the transition, with the athanor locked.
   defp reopenable(%{athanor: %{roster: "frozen"}}), do: {:error, :frozen_is_final}
 
   defp reopenable(%{athanor: %{status: "archived"}}),
@@ -814,7 +814,7 @@ defmodule Sanctum.Tenancy.Athanors do
   # on a hyphen often enough, and `"...-" <> "-2"` is a double hyphen —
   # which the slug grammar (single hyphens only) then rejects, so the mint
   # fails with a format error rather than taking the next free name. Long
-  # names hit this: a pair estate named from two email-derived display
+  # names hit this: a pair athanor named from two email-derived display
   # names is over the limit before it starts.
   defp suffixable(base), do: base |> String.slice(0, 36) |> String.trim_trailing("-")
 
