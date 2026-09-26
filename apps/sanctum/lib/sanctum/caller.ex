@@ -22,14 +22,6 @@ defmodule Sanctum.Caller do
       allowlist). The athanor is the key row's, never the creator's
       current membership; the key stands while the athanor is open and
       its creator is not denied.
-    * `{:tincture_token, token}` — the short-lived `?_t=` token one
-      tincture is opened with (`tincture: {publisher, name}` names the
-      one the request is for; `{nil, nil}` on a route that names none;
-      `client_ip:` for a key's allowlist). A narrowed derivative of the
-      session or key it was minted from, held to that credential's rows as
-      they are now (`derived_standing/2`): a retired source, a denial or
-      an archive since, or the membership its focus rested on gone,
-      refuses it for good.
     * `{:frame_credential, bearer}` — the per-open credential of one
       frame the shell created (`Sanctum.TinctureAuth.verify_frame_credential/2`,
       `client_ip:` for a key's allowlist). Its row and its source's rows
@@ -65,7 +57,6 @@ defmodule Sanctum.Caller do
     * `{:denied, ctx}` — a session whose person the door no longer
       admits. The context rides along for surfaces that forward it to the
       anonymous surface rather than halting.
-    * `:wrong_tincture` — a tincture token presented to another tincture.
     * `:suspended` — a frame credential whose frame the shell suspended.
     * `:no_athanor` — authenticated, but no athanor resolved.
     * `:not_member` / `:archived` / `:not_found` — the requested focus
@@ -87,7 +78,6 @@ defmodule Sanctum.Caller do
           | :revoked
           | :ip_not_allowed
           | {:denied, Context.t()}
-          | :wrong_tincture
           | :suspended
           | :no_athanor
           | :not_member
@@ -98,7 +88,6 @@ defmodule Sanctum.Caller do
   @type credential ::
           {:session, String.t() | nil}
           | {:api_key, String.t()}
-          | {:tincture_token, String.t()}
           | {:frame_credential, String.t()}
           | {:webhook, %{required(:slug) => String.t(), optional(atom()) => term()}}
 
@@ -167,29 +156,6 @@ defmodule Sanctum.Caller do
 
       {:error, reason} ->
         {:error, api_key_refusal(reason)}
-    end
-  end
-
-  def establish({:tincture_token, token}, opts) when is_binary(token) do
-    with {:ok, claims} <- Sanctum.TinctureAuth.verify_access_token(token),
-         :ok <- names_tincture(claims, Keyword.get(opts, :tincture)),
-         {:ok, _standing} <- token_standing(claims, Keyword.get(opts, :client_ip)) do
-      # The namespace is display, reread from the person's row; the token
-      # carries no authority beyond what the checked rows still grant.
-      ctx =
-        Context.build(
-          user_id: claims.user_id,
-          namespace: Sanctum.Namespace.lookup(claims.user_id),
-          athanor_id: claims.athanor_id,
-          permissions: [:execute],
-          scope: :athanor,
-          auth_method: :tincture,
-          credential_binding: Sanctum.TinctureAuth.claims_binding(claims),
-          credential_deadline: claims.expires_at,
-          authenticated: true
-        )
-
-      with :ok <- tenant_ok(ctx), do: {:ok, validated(ctx)}
     end
   end
 
@@ -292,28 +258,9 @@ defmodule Sanctum.Caller do
 
   defp frame_refusal(_retired), do: :unauthenticated
 
-  # The token opens the tincture it was minted for and no other. A route
-  # that names none (the access-token mint) has nothing to compare.
-  defp names_tincture(_claims, nil), do: :ok
-  defp names_tincture(_claims, {nil, nil}), do: :ok
-  defp names_tincture(%{publisher: publisher, tincture_name: name}, {publisher, name}), do: :ok
-  defp names_tincture(_claims, _tincture), do: {:error, :wrong_tincture}
-
-  # An access token opens nothing its source no longer would: the refusals
-  # a request is answered with. A retired source is a presented credential
-  # that opens nothing.
-  defp token_standing(claims, client_ip) do
-    case derived_standing(claims, client_ip: client_ip) do
-      {:ok, standing} -> {:ok, standing}
-      {:error, :unavailable} -> {:error, :unavailable}
-      {:error, :ip_not_allowed} -> {:error, :ip_not_allowed}
-      {:error, _retired} -> {:error, :unauthenticated}
-    end
-  end
-
   @doc """
-  Whether the credential a derived token names still stands: the one
-  authoritative check behind every tincture access and asset token, at
+  Whether the source a derived credential names still stands: the one
+  authoritative check behind every tincture asset and frame credential, at
   mint and at every use. Never answered from the establish memo.
 
   `claims` name the person, the athanor and their generations as read at
@@ -532,8 +479,8 @@ defmodule Sanctum.Caller do
   admits the caller and `:not_standing` for an athanor or creator that no
   longer stands.
 
-  Any other context — one an auth provider synthesized, a tincture token,
-  a webhook, the system's own — keeps its establishment contract and is
+  Any other context — one an auth provider synthesized, a frame's, a
+  webhook, the system's own — keeps its establishment contract and is
   answered `{:ok, ctx}` unchanged.
   """
   @spec revalidate_session(Context.t()) ::
@@ -572,7 +519,7 @@ defmodule Sanctum.Caller do
   defp memo_ttl_ms, do: Application.get_env(:sanctum, :caller_memo_ttl_ms, 2_000)
 
   # Which credential the context holds, as far as revalidation goes. A
-  # tincture token is a derived credential held to its own rows at every
+  # frame credential is a derived credential held to its own rows at every
   # use (`derived_standing/2`), whatever its source was; a context that
   # names a session — by binding or by row key — is revalidated from that
   # session and nothing else, so a binding without its key refuses rather

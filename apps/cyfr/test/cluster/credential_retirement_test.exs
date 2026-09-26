@@ -6,8 +6,8 @@ Code.require_file("support/support.exs", __DIR__)
 defmodule Cyfr.Cluster.CredentialRetirementTest do
   @moduledoc """
   A denial on one member against the other, with the control channel up
-  and with it cut, for the sessions it retires and the tincture tokens
-  derived from them.
+  and with it cut, for the sessions it retires and the tincture asset
+  credentials derived from them.
 
   The denial retires the person's sessions and keys in one transaction on
   the member that ran it. What the other member learns by announcement is
@@ -48,21 +48,21 @@ defmodule Cyfr.Cluster.CredentialRetirementTest do
       assert reason in [:stale_generation, :unauthenticated]
     end
 
-    test "a derived token minted on the peer is refused there after the denial and the allow" do
+    test "a derived credential minted on the peer is refused there after the denial and the allow" do
       person = Cell.call(:a, Fixtures, :person!, [])
       assert {:ok, before} = Cell.call(:b, Fixtures, :context, [person.token])
-      assert {:ok, token} = Cell.call(:b, Fixtures, :mint_access, [before])
-      assert {:ok, athanor} = Cell.call(:b, Fixtures, :open_access, [token])
+      assert {:ok, credential} = Cell.call(:b, Fixtures, :mint_asset, [before])
+      assert {:ok, athanor} = Cell.call(:b, Fixtures, :open_asset, [credential])
       assert athanor == person.athanor_id
 
       assert Cell.call(:a, Fixtures, :deny!, [person.user_id]) == "denied"
-      assert {:error, :unauthenticated} = Cell.call(:b, Fixtures, :open_access, [token])
+      assert {:error, :not_standing} = Cell.call(:b, Fixtures, :open_asset, [credential])
 
       assert Cell.call(:a, Fixtures, :allow!, [person.user_id]) == "active"
-      assert {:error, :unauthenticated} = Cell.call(:b, Fixtures, :open_access, [token])
+      assert {:error, :not_standing} = Cell.call(:b, Fixtures, :open_asset, [credential])
 
       # Nor can the context the peer read before the denial mint a new one.
-      assert {:error, :not_standing} = Cell.call(:b, Fixtures, :mint_access, [before])
+      assert {:error, :not_standing} = Cell.call(:b, Fixtures, :mint_asset, [before])
     end
 
     test "a lost announcement leaves a memo on the peer and no authority behind it" do
@@ -85,9 +85,9 @@ defmodule Cyfr.Cluster.CredentialRetirementTest do
       assert {:error, reason} = Cell.call(:b, Fixtures, :issue_key, [before])
       assert reason in [:stale_generation, :unauthenticated]
 
-      # A derived token needs no announcement either: its every use rereads
-      # the rows.
-      assert {:error, _} = Cell.call(:b, Fixtures, :mint_access, [before])
+      # A derived credential needs no announcement either: its every mint
+      # and use rereads the rows.
+      assert {:error, _} = Cell.call(:b, Fixtures, :mint_asset, [before])
 
       # Once the memo runs out, the rows answer the session too.
       assert Cell.call(:b, Sanctum.Caller, :drop_memo, [person.hash]) == :ok

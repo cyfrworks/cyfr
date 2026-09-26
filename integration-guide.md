@@ -27,7 +27,7 @@ POST /mcp  ──────────────────>  Authenticate
 
 Every CLI command (`cyfr run`, `cyfr profile grant`, etc.) uses this same endpoint. AI agents, frontends, backend services, and CI/CD pipelines all use the same interface.
 
-The server has one HTTP endpoint (`:4000`), and three sets of routes share it: `/mcp`, the MCP interface this guide describes; the ingress routes — sign-in and sign-out under `/auth`, tinctures under `/t`, the health checks under `/api/health`, an execution's event stream (`/api/executions/:id/events`) and inbound webhooks (`/hooks`); and the Prism console at `/`. Each operation, whichever route reaches it, is admitted or refused by one gate against one table of operations, and an operation the table does not declare is refused.
+The server has one HTTP endpoint (`:4000`), and three sets of routes share it: `/mcp`, the MCP interface this guide describes; the ingress routes — sign-in and sign-out under `/auth`, tinctures under `/t`, `/_s` and `/_f`, the health checks under `/api/health`, an execution's event stream (`/api/executions/:id/events`) and inbound webhooks (`/hooks`); and the Prism console at `/`. Each operation, whichever route reaches it, is admitted or refused by one gate against one table of operations, and an operation the table does not declare is refused.
 
 ---
 
@@ -1024,43 +1024,15 @@ A webhook (`webhook` tool, or the console's Webhooks page) is a `POST /hooks/:sl
 
 ## Tincture Routes
 
-Tinctures are frontend components served by CYFR at dedicated routes. Unlike WASM components (which are called via the `/mcp` endpoint), tinctures are accessed directly via browser URLs.
+Tinctures are browser frontends the Prism shell opens in a sandboxed frame; the [Tincture Guide](tincture-guide.md) is their full reference. Their routes on the one endpoint:
 
-### Private (Authenticated)
+| Route | Serves |
+|-------|--------|
+| `GET /t/:athanor/:publisher/:tincture_name` and `…/*path` | A public tincture's entry page and files, to anyone. A tincture is public when it has an active public consent profile: publish one with `profile.publish`, revoke it with `profile.revoke`, and read the current answer with `tincture_visibility.get` |
+| `GET /_s/:credential/:publisher/:name/:version/*file` | A private tincture version's files, under the asset credential the shell mints for a person; the credential is verified on every request and opens that version's files alone |
+| `POST /_f/v1/invoke`, `/_f/v1/action`, `/_f/v1/stream` | A frame's data requests, made by the SDK with the frame's per-open credential as a bearer, or by a public tincture's page naming itself; each is admitted against the tincture's declaration and recorded like any other call |
 
-Served inside the Prism shell at `/t/:athanor/:publisher/:tincture_name`. Requires Prism session authentication (same as the dashboard).
-
-```
-GET /t/@alice/local/stock-dashboard           → index.html
-GET /t/@alice/local/stock-dashboard/app.js    → static asset
-GET /t/@alice/local/stock-dashboard/style.css → static asset
-```
-
-### Public (Unauthenticated)
-
-Public tinctures use the same `/t/` path — no authentication needed. A tincture is public when it has an active public consent profile: publish one with `profile.publish`, revoke it with `profile.revoke`, and read the current answer with `tincture_visibility.get`.
-
-```
-GET /t/@alice/local/stock-dashboard              → index.html (no auth needed if public)
-GET /t/@alice/local/stock-dashboard/app.js       → static asset
-```
-
-### Invoke
-
-`POST /t/:athanor/:publisher/:tincture_name/invoke` with `{"reference": …, "input": {…}}` runs one of the tincture's declared dependencies — under its public profile when it has an active one, otherwise under its owner profile for an authenticated caller. It is the `tincture.invoke_public` operation, with the path's athanor segment as its `athanor` address, or `tincture.invoke_protected` in the caller's own athanor — the same operations `/mcp` serves and the console shell's `cyfr.invoke()` bridge calls (always the protected one) — so a refusal answers `{"code": <class>, "message": <sentence>}` at the class's status. The route keeps its own per-address rate limit.
-
-### Security Headers
-
-| Route | CSP Notable Differences |
-|-------|------------------------|
-| `/t/:athanor/:pub/:name` (index) | `script-src 'self' 'nonce-...'` (per-request nonce for auto-injected SDK), `connect-src 'self'` (extended from manifest `tincture.connect`), `object-src 'none'`, `base-uri 'self'`, `frame-ancestors 'self'` |
-| `/t/:athanor/:pub/:name/*path` (assets) | `Access-Control-Allow-Origin: *` (CORS for sandboxed iframe module scripts) |
-
-Both surfaces set `X-Content-Type-Options: nosniff`. Static assets include `Cache-Control: public, max-age=3600`. The Cyfr SDK is injected inline into `<head>` with a nonce — no separate `/sdk/` endpoint.
-
-`frame-ancestors 'self'`: tinctures are framed by the Prism shell on the same origin (one endpoint serves both), so nothing else may frame them. The iframe is sandboxed (`allow-scripts` only, no `allow-same-origin`) with a per-request nonce, and private tinctures require a credential a third-party framer cannot obtain.
-
-Sensitive files are never served: `data.db`, `cyfr-manifest.json`, `schema.sql`, dotfiles.
+A path under `/_s/` carries a credential: no proxy in front of CYFR may log `/_s/` paths (the shipped `Caddyfile` keeps no access log). Every tincture response carries `Referrer-Policy: no-referrer`; each HTML page carries the Content Security Policy derived from the tincture's declaration. The guide lists the headers, the frame's policy and the wire's shapes.
 
 ---
 
@@ -1069,14 +1041,14 @@ Sensitive files are never served: `data.db`, `cyfr-manifest.json`, `schema.sql`,
 Tinctures don't have their own database. They get data two ways:
 
 - **Live data** — call your backend components from the browser with `cyfr.invoke()` (see the SDK in the [Tincture Guide](tincture-guide.md)). The component fetches from your real data source server-side and returns the result; credentials and consent are enforced for you.
-- **Static seed data** — ship a `data.db` (or any file) as a static asset in the tincture and read it client-side. It's just another shipped file; CYFR serves it like any other asset.
+- **Static seed data** — ship a JSON file (or any served type) as a static asset in the tincture and read it client-side. It's just another shipped file; CYFR serves it like any other asset.
 
 A typical live-data pipeline:
 
 ```
 1. Catalyst (yfinance)        → fetches stock data from a market API
 2. Formula  (stock-feed)      → calls the catalyst, aggregates results
-3. Tincture (stock-dashboard) → cyfr.invoke("f:local.stock-feed", {symbol: "AAPL"})
+3. Tincture (stock-dashboard) → cyfr.invoke("f:local.stock-feed", "quote", {symbol: "AAPL"})
                                  receives data, renders the chart in the browser
 ```
 
@@ -1419,7 +1391,7 @@ React:    cyfr new tincture <name> --template react   → edit src/App.tsx → c
 
 - `cyfr new tincture <name>` scaffolds vanilla HTML/JS/CSS (SDK is auto-injected at serve time)
 - `cyfr new tincture <name> --template react` scaffolds a React + TypeScript + Vite project (requires `cyfr build compile` before registering)
-- React builds run `npm install && vite build` via Locus — output is static HTML/JS/CSS, no runtime dependency
+- Built tinctures run `npm ci && vite build` via Locus, installing exactly what `package-lock.json` pins — output is static HTML/JS/CSS, no runtime dependency
 - Tinctures invoke backend components via `cyfr.invoke()` — declare dependencies in manifest `dependencies.static`
 - View at `localhost:4000` (Prism → Tinctures tab) or `/t/:athanor/:publisher/:name` if public
 

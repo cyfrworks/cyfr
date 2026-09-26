@@ -929,7 +929,7 @@ jobs:
   # The experiment records what each browser allowed and fails only when it
   # could not observe an attempt.
   browser:
-    name: Browser harness (frame facts on Chromium, Firefox and WebKit)
+    name: Browser harness (frame facts, the SDK and the tincture proof on Chromium, Firefox and WebKit)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
@@ -950,6 +950,14 @@ jobs:
         run: mix deps.get
       - name: The frame-facts experiment
         run: tests/browser/run.sh
+      - name: The SDK's JavaScript tests
+        run: apps/cyfr/assets/test/run.sh
+      - name: Build the Locus builds image for the tincture proof
+        run: docker build -f Dockerfile.locus -t cyfr-locus:tincture-proof .
+      - name: The tincture proof
+        env:
+          RELEASE_BOOT_SKIP_BUILD: '1'
+        run: tests/tincture-proof/run.sh cyfr-locus:tincture-proof
 
   seed-guards:
     name: Seed media (clean, immutable versions)

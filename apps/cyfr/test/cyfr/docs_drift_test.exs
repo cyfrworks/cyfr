@@ -1429,4 +1429,154 @@ defmodule Cyfr.DocsDriftTest do
              "component-guide.md heads #{interface} with #{function}, which it does not declare"
     end
   end
+
+  # ==========================================================================
+  # The tincture lists: tincture-guide.md and the Artisan role, from the
+  # frame's rules and the wire
+  #
+  # Each list is a block between `<!-- tincture:NAME -->` and
+  # `<!-- /tincture:NAME -->`, written as `tincture_list/1` renders it from
+  # `Compendium`'s tincture rules and `Prima.TinctureWire`. A block that
+  # differs fails with the rendering to paste, so a list the rules grow
+  # reaches the guide and the role before any reader meets a stale one.
+  # ==========================================================================
+
+  @tincture_list_files ["tincture-guide.md", "seed/aqua/roles/artisan.md"]
+  @tincture_lists ~w(served-types frame-capabilities templates declaration wire-routes sdk)
+
+  # The SDK's call for each request kind, and the arguments of each shell
+  # verb: the JavaScript names of what the wire names.
+  @sdk_requests %{
+    invoke: {"invoke", "ref, operation, args"},
+    action: {"action", "name, args"},
+    stream_open: {"stream", "name, subject, onEvent"}
+  }
+  @sdk_verb_args %{open: "ref", title: "title"}
+
+  defp tincture_list("served-types") do
+    rows =
+      for {extension, type} <- Enum.sort(Compendium.tincture_served_types()),
+          do: "| `#{extension}` | `#{type}` |"
+
+    ["| Extension | Served as |", "|---|---|" | rows]
+  end
+
+  defp tincture_list("frame-capabilities") do
+    rows =
+      for capability <- Compendium.tincture_frame_capabilities() do
+        {:ok, ["allow-scripts" | sandbox]} = Compendium.tincture_sandbox_tokens([capability])
+        {:ok, allow} = Compendium.tincture_allow_attribute([capability])
+
+        "| `#{capability}` | #{code_or_none(Enum.join(sandbox, " "))} | #{code_or_none(allow)} |"
+      end
+
+    ["| Capability | `sandbox` adds | `allow` adds |", "|---|---|---|" | rows]
+  end
+
+  defp tincture_list("templates") do
+    rows =
+      for %{name: name, build: build, entry: entry} <- Compendium.tincture_templates(),
+          do: "| `#{name}` | #{code_or_none(build || "")} | `#{entry}` |"
+
+    ["| Template | Build | Entry |", "|---|---|---|" | rows]
+  end
+
+  defp tincture_list("declaration") do
+    keys = fn struct -> struct |> Map.from_struct() |> Map.keys() |> Enum.sort() end
+    list = fn names -> Enum.map_join(names, ", ", &"`#{&1}`") end
+
+    [
+      "| Block | Keys |",
+      "|---|---|",
+      "| `frame` | #{list.(keys.(%Prima.Manifest.Tincture.Frame{}))} |",
+      "| `frame.placement` | one of #{list.(Compendium.tincture_placements())} |",
+      "| `cards[]` | #{list.(keys.(%Prima.Manifest.Tincture.Card{name: "", title: ""}))} |",
+      "| `cards[].buttons[]` | #{list.(keys.(%Prima.Manifest.Tincture.Button{label: "", action: ""}))} |",
+      "| `streams[]` | #{list.(keys.(%Prima.Manifest.Tincture.Stream{name: ""}))} |",
+      "| `actions[]` | an operation name, `tool.action` |"
+    ]
+  end
+
+  defp tincture_list("wire-routes") do
+    rows =
+      for kind <- Prima.TinctureWire.kinds(),
+          do: "| `#{kind}` | `POST #{Prima.TinctureWire.route(kind)}` |"
+
+    ["| Request | Route |", "|---|---|" | rows]
+  end
+
+  defp tincture_list("sdk") do
+    requests =
+      for kind <- Prima.TinctureWire.kinds() do
+        {name, args} = Map.fetch!(@sdk_requests, kind)
+        "| `cyfr.#{name}(#{args})` | `POST #{Prima.TinctureWire.route(kind)}` |"
+      end
+
+    verbs =
+      for verb <- Prima.TinctureWire.verbs(),
+          do:
+            "| `cyfr.#{verb}(#{Map.get(@sdk_verb_args, verb, "")})` | the shell's port, `#{verb}` |"
+
+    ["| Call | Carried by |", "|---|---|" | requests ++ verbs]
+  end
+
+  defp code_or_none(""), do: "—"
+  defp code_or_none(value), do: "`#{value}`"
+
+  defp tincture_block(text, name) do
+    case Regex.run(~r/<!-- tincture:#{name} -->\n(.*?)\n<!-- \/tincture:#{name} -->/s, text,
+           capture: :all_but_first
+         ) do
+      [block] -> block
+      nil -> nil
+    end
+  end
+
+  test "the tincture guide's and the Artisan role's lists are the rules' and the wire's" do
+    for file <- @tincture_list_files, name <- @tincture_lists do
+      text = File.read!(Path.join(@repo_root, file))
+      expected = Enum.join(tincture_list(name), "\n")
+
+      assert tincture_block(text, name) == expected,
+             """
+             #{file}'s #{name} list is not the rules' (or it has no block). It reads:
+
+             <!-- tincture:#{name} -->
+             #{expected}
+             <!-- /tincture:#{name} -->
+             """
+    end
+  end
+
+  test "the SDK's calls are the wire's request kinds and shell verbs" do
+    client = File.read!(Path.join(@repo_root, "apps/cyfr/assets/js/sdk/client.js"))
+    [_, api] = Regex.run(~r/const api = \{(.*?)\n  \}\n/s, client)
+
+    methods =
+      ~r/^    ([a-z]+)\(/m
+      |> Regex.scan(api, capture: :all_but_first)
+      |> List.flatten()
+      |> Enum.sort()
+
+    wire =
+      Enum.map(Prima.TinctureWire.kinds(), &elem(Map.fetch!(@sdk_requests, &1), 0)) ++
+        Enum.map(Prima.TinctureWire.verbs(), &Atom.to_string/1)
+
+    assert methods == Enum.sort(wire),
+           "the SDK's calls #{inspect(methods)} are not the wire's #{inspect(Enum.sort(wire))}"
+  end
+
+  test "the tincture guide states the lockfile, the invoke input, the referrer policy and the log rule" do
+    guide = File.read!(Path.join(@repo_root, "tincture-guide.md"))
+
+    assert guide =~ "`#{Compendium.Tincture.Rules.lockfile()}`"
+    assert guide =~ ~s({"operation": …, "params": …})
+    assert guide =~ "Referrer-Policy: no-referrer"
+    assert guide =~ ~r/no proxy may log `\/_s\/` paths/i
+
+    for guide <- ["tincture-guide.md", "integration-guide.md"] do
+      refute File.read!(Path.join(@repo_root, guide)) =~ ~r/POST \/t\//,
+             "#{guide} documents the retired /t/ invoke route"
+    end
+  end
 end

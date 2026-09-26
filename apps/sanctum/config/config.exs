@@ -59,8 +59,8 @@ if config_env() == :test do
 
   # No host runs here to claim a control-plane slot, as none claims one in
   # the umbrella's suite (`config/test.exs`): the member counts as holding
-  # the plane unless a case records otherwise, so a tincture token can be
-  # minted (`Sanctum.TinctureAuth`).
+  # the plane unless a case records otherwise, so a tincture credential can
+  # be minted (`Sanctum.TinctureAuth`).
   config :arca, control_plane_claim_enabled: false
 
   # The caller bound is off: the establish memo keeps nothing, so tests

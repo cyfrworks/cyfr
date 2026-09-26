@@ -73,10 +73,6 @@ defmodule Sanctum.MixProject do
       {:telemetry, "~> 1.0"},
       # Notifications are broadcast on the server the host names.
       {:phoenix_pubsub, "~> 2.1"},
-      # `Phoenix.Token` signs the two tincture tokens
-      # (`Sanctum.TinctureAuth`). A signing primitive, not a web surface:
-      # this app serves no route and mounts no endpoint.
-      {:phoenix, "~> 1.8.6"},
       {:stream_data, "~> 1.1", only: [:test, :dev]}
     ]
   end

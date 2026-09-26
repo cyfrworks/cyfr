@@ -41,7 +41,7 @@ Pixi.js or Phaser, with a game loop, physics and input).
 
 - Read before editing. Line numbers change between reads.
 - Re-read edited lines to confirm the change landed.
-- Compile after every change (React only). On failure: read the error, fix one thing, recompile.
+- Compile after every change to a built tincture. On failure: read the error, fix one thing, recompile.
 - Source files must be valid UTF-8 — never write raw bytes.
 - `source(action: "write")` for new files or full rewrites; `source(action: "edit")` for surgical changes. `source` works inside `components/{type}s/local/{name}/{version}/` — the compiled artifact is written by a build, not by hand, and `cyfr-manifest.json` is read here but changed by the person on the Files page. Use `files` for `data/`.
 
@@ -49,44 +49,39 @@ Pixi.js or Phaser, with a game loop, physics and input).
 
 - Tincture apps: dashboards, data viewers, analysis tools, admin panels
 - Content readers: markdown renderers, document viewers, log displays
-- Interactive tools: config editors, search interfaces, form-based utilities
-- Any tincture that invokes backend components via `cyfr.invoke()`
+- Interactive tools: config editors, search interfaces, utilities
+- Games and 3D scenes, with WebAssembly physics in a worker, GPU particles and audio
+- Any tincture that reaches the server through `window.cyfr`
 
 ## Stack Decision
 
-**Vanilla** (no build step) when:
-- Single-file display with no npm dependencies
-- Static content, basic tables, minimal interactivity
-- Result: small bundle (~5-20KB)
+Pick one of the templates:
 
-**React + Vite** when:
-- npm libraries needed (marked, D3, Chart.js, Recharts, etc.)
-- Complex UI state (multiple views, filters, sorting, modals)
-- TypeScript type safety is valuable
-- Result: larger bundle (~55KB+ gzipped) but the full npm ecosystem
+<!-- tincture:templates -->
+| Template | Build | Entry |
+|---|---|---|
+| `vanilla` | — | `index.html` |
+| `vite` | `vite` | `dist/index.html` |
+| `react` | `vite` | `dist/index.html` |
+<!-- /tincture:templates -->
 
-CSP blocks all CDN scripts (`script-src 'self' 'nonce-...'`). Libraries MUST
-be bundled locally — npm + Vite for React, or files saved beside `index.html` for vanilla.
+- **vanilla** — a single page with no npm dependency; served as written.
+- **vite** — npm libraries (Three.js, Rapier, Pixi.js, marked, D3) bundled by Vite, plain JavaScript.
+- **react** — complex UI state (views, filters, modals) with TypeScript.
 
-## Workflow — Vanilla Tincture
+A built template ships `package.json` with its `package-lock.json`, and the
+build installs exactly what the lockfile pins: after adding or changing a
+dependency, regenerate the lockfile beside it or the build is refused.
+Every library is bundled; nothing is imported from a remote URL.
 
-1. Scaffold: `component(action: "create", name: "my-viewer", type: "tincture")`
+## Workflow — New Tincture
+
+1. Scaffold: `component(action: "create", name: "my-viewer", type: "tincture", template: "vite")` (or `vanilla`, `react`)
 2. Look: `source(action: "tree", path: "components/tinctures/local/my-viewer/")`
-3. Write app logic to `app.js` with `source(action: "write", path: "...", content: "...")` — NOT inline in `index.html`; inline scripts are silently blocked by CSP
-4. In `index.html`: `<script src="app.js"></script>` and CSS in `<style>` (inline styles are allowed)
-5. In `app.js`: call `cyfr.ready()` first, then the backend via `cyfr.invoke(ref, input)`
-6. No compile step — vanilla tinctures are served as-is
-7. Ask the person to add the backend formulas to `dependencies.static` in `cyfr-manifest.json` on the Files page — `source` reads the manifest but does not change it
-8. Verify (below)
-
-## Workflow — React Tincture
-
-1. Scaffold: `component(action: "create", name: "my-dashboard", type: "tincture", template: "react")`
-2. Look: `source(action: "tree", path: "components/tinctures/local/my-dashboard/")`
-3. Edit `src/App.tsx` with `source(action: "edit", path: "...", edits: [{action: "replace", start: 10, end: 12, content: "..."}])` — edit actions are `replace`, `insert`, `delete`
-4. Add npm dependencies to `package.json`
-5. Compile: `build(action: "compile", reference: "tincture:local.my-dashboard:0.1.0")` — runs `npm install` + Vite build
-6. Ask the person to add the backend formulas to `dependencies.static` in `cyfr-manifest.json` on the Files page — `source` reads the manifest but does not change it
+3. Write the app in files — `src/main.js` (vite), `src/App.tsx` (react) or `app.js` (vanilla); an inline `<script>` in `index.html` is blocked without an error
+4. Call `cyfr.ready()` first, then reach the server only through `window.cyfr` (below)
+5. Built templates: `build(action: "compile", reference: "tincture:local.my-viewer:0.1.0")`
+6. Ask the person to add to `cyfr-manifest.json` on the Files page what the tincture uses — the components in `dependencies.static`, and the `frame` capabilities, `actions` and `streams` of its declaration — `source` reads the manifest but does not change it
 7. Verify (below)
 
 ## Fixing / Improving
@@ -94,85 +89,158 @@ be bundled locally — npm + Vite for React, or files saved beside `index.html` 
 1. `component(action: "inspect", reference: "...")`
 2. `source(action: "read", path: "...")` on the relevant files; `source(action: "grep", pattern: "cyfr.invoke", path: "...")` to find things
 3. Targeted `source(action: "edit", path: "...", edits: [...])`
-4. `build(action: "compile", reference: "...")` after each change (React only)
+4. `build(action: "compile", reference: "...")` after each change to a built tincture
 5. Verify (below)
 
-**Verify.** A tincture is not done until it loads and its invokes succeed:
+**Verify.** A tincture is not done until it loads and its requests succeed:
 - `component(action: "setup_plan", reference: "tincture:local.my-viewer")` — `ready: true`; for anything not ready, `request_setup(component_ref: "...")` and wait for the form
-- `execution(action: "run", reference: "f:local.my-api", input: {...})` — the backend formula answers what the tincture will ask
-- Ask the person to open the tincture and say what they see; fix from there
+- `execution(action: "run", reference: "f:local.my-api", input: {"operation": "...", "params": {...}})` — the backend formula answers what the tincture will ask
+- Ask the person to open the tincture in the shell and say what they see; fix from there
 
 **If scaffold fails**, tell the person what it said and stop: the manifest that makes a directory a tincture comes from `component(action: "create")`, never from `source`.
 
-## CSP / Sandbox Constraints
+## The Cyfr SDK
 
-```
-script-src 'self' 'nonce-{per-request}'   — NO CDN scripts, NO eval()
-style-src 'self' 'unsafe-inline'          — inline styles OK
-connect-src 'self' [+ tincture.connect]   — external domains declared in manifest
-img-src 'self' data:                      — local images + data URIs
-```
+`window.cyfr` is injected into the entry page before its scripts run. No `<script>` tag is needed.
 
-**CRITICAL — No inline `<script>` blocks.** The CSP nonce applies only to the
-auto-injected SDK. Any `<script>` block you write in `index.html` is **silently
-blocked** — no error, no console warning, the page just does not work. Put JS
-in external files and load with `<script src="app.js"></script>`.
-Inline `<style>` blocks ARE allowed.
+<!-- tincture:sdk -->
+| Call | Carried by |
+|---|---|
+| `cyfr.action(name, args)` | `POST /_f/v1/action` |
+| `cyfr.invoke(ref, operation, args)` | `POST /_f/v1/invoke` |
+| `cyfr.stream(name, subject, onEvent)` | `POST /_f/v1/stream` |
+| `cyfr.open(ref)` | the shell's port, `open` |
+| `cyfr.close()` | the shell's port, `close` |
+| `cyfr.title(title)` | the shell's port, `title` |
+| `cyfr.ready()` | the shell's port, `ready` |
+| `cyfr.focus()` | the shell's port, `focus` |
+<!-- /tincture:sdk -->
 
-**Other constraints:**
-- iframe sandbox: `allow-scripts` only (no `allow-same-origin`)
-- No `localStorage` / `sessionStorage` (opaque origin)
-- No `eval()` or `new Function()`
-- All libraries bundled locally (npm for React, saved files for vanilla)
-- Backend access via `cyfr.invoke(ref, input)` — only declared dependencies
-- External services via `tincture.connect` in the manifest (e.g. `["*.supabase.co"]`)
-- Allowed asset extensions: `.html .js .css .json .svg .png .jpg .jpeg .gif .ico .woff .woff2 .ttf .eot .map`
-- `cyfr-manifest.json` and dotfiles are never served (404)
+- `cyfr.invoke(ref, operation, args)` runs a component declared in `dependencies.static` with the input `{"operation": operation, "params": args}` and resolves with `{status, output, execution_id, duration_ms}`.
+- `cyfr.action(name, args)` runs a system action the declaration's `actions` lists.
+- `cyfr.stream(name, subject, onEvent)` opens a declared stream and resolves with a handle (`close()`, `closed`); `onEvent` gets `{id, event, data}`.
+- A refusal rejects with a `CyfrError` whose `code` is its class (`forbidden`, `rate_limited`, `consent_required`, `unauthenticated`, …).
+- A public tincture's page at its address calls the same SDK with no credential, under its public profile.
 
-**Invoke limits:**
-- Rate limit: 30 invoke/min (shell), 10 invoke/min (public)
-- Execution timeouts: 60s (reagent), 180s (catalyst), 300s (formula)
+The SDK talks only to these routes, with the frame's credential as a bearer:
 
-## Cyfr SDK
+<!-- tincture:wire-routes -->
+| Request | Route |
+|---|---|
+| `action` | `POST /_f/v1/action` |
+| `invoke` | `POST /_f/v1/invoke` |
+| `stream_open` | `POST /_f/v1/stream` |
+<!-- /tincture:wire-routes -->
 
-`window.cyfr` is auto-injected at serve time. No `<script>` tag needed.
+## The Declaration
 
-```typescript
-cyfr.ready()                              // Call on init — signals the shell that the tincture loaded
-cyfr.invoke(reference, input?)            // Invoke a backend component — returns {status, output, execution_id, duration_ms}
-cyfr.setTitle(title)                      // Update window title
-cyfr.close()                              // Close the tincture window
-cyfr.getContext()                         // Get { tincture_id, window_id }
-cyfr.on(event, callback)                  // Listen for shell events
-cyfr.off(event, callback)                 // Unsubscribe
-cyfr.mode                                 // "shell" or "public"
-```
+The declaration is the tincture's grant: anything the frame asks for
+outside it is refused.
+
+<!-- tincture:declaration -->
+| Block | Keys |
+|---|---|
+| `frame` | `background`, `capabilities`, `placement` |
+| `frame.placement` | one of `float`, `desktop` |
+| `cards[]` | `buttons`, `image`, `list`, `name`, `number`, `stream`, `title` |
+| `cards[].buttons[]` | `action`, `args`, `label` |
+| `streams[]` | `name`, `subject` |
+| `actions[]` | an operation name, `tool.action` |
+<!-- /tincture:declaration -->
+
+A frame gets scripts and nothing else unless it declares a capability:
+
+<!-- tincture:frame-capabilities -->
+| Capability | `sandbox` adds | `allow` adds |
+|---|---|---|
+| `pointer_lock` | `allow-pointer-lock` | — |
+| `fullscreen` | — | `fullscreen` |
+| `gamepad` | — | `gamepad` |
+| `audio_autoplay` | — | `autoplay` |
+<!-- /tincture:frame-capabilities -->
+
+## The Frame
+
+- The frame's origin is `null`: no cookies, no `localStorage`/`sessionStorage`, no `window.top` or `window.opener`, no popups, no forms, no top-level navigation.
+- Scripts and module scripts load from the tincture's own files; WebAssembly compiles; workers run from its files or from `blob:` URLs.
+- `fetch` reaches only the tincture's files, the endpoint and the `https://` domains in `tincture.connect`.
+- No `eval()` or `new Function()`; no inline `<script>`; inline styles are allowed.
+- `cyfr-manifest.json` and dotfiles are never served.
+
+A version serves only these file types; publishing one that serves another is refused:
+
+<!-- tincture:served-types -->
+| Extension | Served as |
+|---|---|
+| `.bin` | `application/octet-stream` |
+| `.css` | `text/css` |
+| `.data` | `application/octet-stream` |
+| `.eot` | `application/vnd.ms-fontobject` |
+| `.flac` | `audio/flac` |
+| `.gif` | `image/gif` |
+| `.glb` | `model/gltf-binary` |
+| `.gltf` | `model/gltf+json` |
+| `.html` | `text/html` |
+| `.ico` | `image/x-icon` |
+| `.jpeg` | `image/jpeg` |
+| `.jpg` | `image/jpeg` |
+| `.js` | `text/javascript` |
+| `.json` | `application/json` |
+| `.ktx2` | `image/ktx2` |
+| `.m4a` | `audio/mp4` |
+| `.map` | `application/json` |
+| `.mjs` | `text/javascript` |
+| `.mp3` | `audio/mpeg` |
+| `.oga` | `audio/ogg` |
+| `.ogg` | `audio/ogg` |
+| `.opus` | `audio/ogg` |
+| `.otf` | `font/otf` |
+| `.pck` | `application/octet-stream` |
+| `.png` | `image/png` |
+| `.svg` | `image/svg+xml` |
+| `.ttf` | `font/ttf` |
+| `.wasm` | `application/wasm` |
+| `.wav` | `audio/wav` |
+| `.woff` | `font/woff` |
+| `.woff2` | `font/woff2` |
+<!-- /tincture:served-types -->
+
+## Games
+
+- A fixed timestep; objects pooled, never allocated in the frame loop.
+- Particles on the GPU (a shader driven by time), a fixed set of lights.
+- Physics off the main thread: a WebAssembly engine (Rapier, Box2D) stepping in a worker, an inline `blob:` worker included.
+- Textures compressed (KTX2) and models as glTF/GLB; audio decoded once into buffers.
+- Declare `pointer_lock`, `fullscreen`, `gamepad` and `audio_autoplay` only as the game uses them; request fullscreen and pointer lock from a gesture inside the frame.
+- Refused: `eval`, remote imports, secrets in the frame, persistence outside components (save through a declared component), an invocation per frame — invoke on events such as a save.
 
 ## Data Flow
 
 1. Declare backend **formulas** in `dependencies.static` in the manifest
-2. The tincture calls `cyfr.invoke("f:local.my-formula", { params })`
+2. The tincture calls `cyfr.invoke("f:local.my-formula", "operation", { params })`
 3. The formula validates input, enforces business logic, then dispatches to catalysts
 4. JavaScript receives `{status, output, execution_id, duration_ms}` and renders
 
-**Security rule**: tinctures invoke **formulas**, never raw catalysts. The
-invoke endpoint is a trust boundary — any client can bypass the tincture UI and
-call anything in `dependencies.static` directly. The formula is the backend
-gateway with input validation and tool access control.
+**Security rule**: tinctures invoke **formulas**, never raw catalysts. Anyone
+holding the frame can call anything in `dependencies.static` directly,
+bypassing the tincture's interface. The formula is the backend gateway with
+input validation and tool access control.
 
 ## Manifest Essentials
 
 ```json
 {
-  "name": "my-dashboard",
+  "name": "my-game",
   "type": "tincture",
   "version": "0.1.0",
   "publisher": "local",
   "description": "...",
   "tincture": {
-    "entry": "index.html",
-    "icon": "chart_with_upwards_trend",
-    "window": { "width": 1200, "height": 800, "resizable": true }
+    "entry": "dist/index.html",
+    "build": { "tool": "vite" },
+    "icon": "🎮",
+    "window": { "width": 1280, "height": 720, "resizable": true },
+    "frame": { "capabilities": ["pointer_lock", "fullscreen", "audio_autoplay"] }
   },
   "dependencies": {
     "static": [
@@ -182,18 +250,12 @@ gateway with input validation and tool access control.
 }
 ```
 
-- Omit `tincture.build` for vanilla tinctures (no build step)
-- With `"build": {"tool": "vite"}`, the build writes `dist/` and `entry` is `"dist/index.html"`
-- Add `"connect": ["*.supabase.co"]` inside `tincture` for external service access
-- `dependencies.static` is the invoke allowlist
-
-## Interactions
-
-- Touch-friendly: large hit targets, drag support
-- Relative paths for Vite (`base: './'` in `vite.config.ts`)
+- Omit `tincture.build` for a vanilla tincture; with `"build": {"tool": "vite"}` the build writes `dist/` and `entry` is `"dist/index.html"`
+- `vite.config.js` keeps `base: "./"`
+- Add bare domains in `tincture.connect` for external services (`["api.example.com"]`)
 - Icon and preview images in `public/media/` for auto-discovery
 
 ## Reference
 
 Before writing tincture code: `aqua(action: "get", name: "tincture-guide")`.
-It holds the SDK reference, manifest schema, sandbox constraints, limits and examples.
+It holds the SDK, the declaration, the frame's rules, limits and examples.

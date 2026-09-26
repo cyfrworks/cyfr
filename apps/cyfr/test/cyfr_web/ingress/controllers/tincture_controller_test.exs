@@ -231,9 +231,11 @@ defmodule CyfrWeb.Ingress.TinctureControllerTest do
 
     test "the old in-address asset prefix opens nothing", %{session: session} do
       {:ok, ctx} = Sanctum.Caller.establish(session.token)
-      {:ok, token} = Sanctum.TinctureAuth.issue_asset_token(ctx, "local", "auth-dash")
 
-      assert get(build_conn(), "/t/test/local/auth-dash/_s/#{token}/app.js").status == 404
+      {:ok, %{credential: credential}} =
+        Sanctum.TinctureAuth.mint_asset_credential(ctx, release_digest("auth-dash"))
+
+      assert get(build_conn(), "/t/test/local/auth-dash/_s/#{credential}/app.js").status == 404
     end
   end
 
