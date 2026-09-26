@@ -463,8 +463,9 @@ defmodule Cyfr.Boundaries do
       into: "Sanctum",
       allow: ~w(
         Sanctum.ApiKey Sanctum.Auth Sanctum.BearerToken Sanctum.Caller Sanctum.ClientIp
-        Sanctum.Consent Sanctum.Context Sanctum.Door Sanctum.Session Sanctum.SignIn
-        Sanctum.Tenancy Sanctum.TinctureAuth Sanctum.Unauthorized Sanctum.Webhook
+        Sanctum.Consent Sanctum.Context Sanctum.Door Sanctum.Pairing Sanctum.Session
+        Sanctum.SignIn Sanctum.Tenancy Sanctum.TinctureAuth Sanctum.Unauthorized
+        Sanctum.Webhook
       ),
       reason:
         "the console, its context guard (`CyfrWeb.ContextGuard`, which names " <>
@@ -473,6 +474,9 @@ defmodule Cyfr.Boundaries do
           "ingress — a wide roster is the front door doing its job. " <>
           "`Sanctum.Consent` is the shell's read of whether a tincture has an active " <>
           "public profile (`Sanctum.Consent.profiles/2`). " <>
+          "`Sanctum.Pairing` is the system layer's reading of the class a prompt " <>
+          "needs and the class this client holds, which it presents and never decides " <>
+          "by: the operation a confirmation dispatches decides. " <>
           "In the console, `Sanctum.ClientIp` is `PrismWeb.AuthHelpers.socket_client_ip/1` " <>
           "alone: the `/live` socket is handled by the endpoint BEFORE the router, so " <>
           "it passes no rate-limit plug, which makes the console the only per-address " <>
@@ -1297,6 +1301,7 @@ defmodule Cyfr.Boundaries do
     "Sanctum.Namespace" => [lookup_status: 1],
     "Sanctum.Network" => [pin: 2, validate_redirect_url: 2],
     "Sanctum.Notify" => [broadcast: 3],
+    "Sanctum.Pairing" => [actions: 0, class_of: 1, required_class: 1],
     "Sanctum.Policy.Enforcement" => [record: 1],
     "Sanctum.Provisioning" => [
       athanor: 1,

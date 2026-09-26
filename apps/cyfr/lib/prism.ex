@@ -11,6 +11,7 @@ defmodule Prism do
   - `Prism.Frames` — the shell's tincture frames and their credentials.
   - `Prism.Labels` / `Prism.Tray` — mode vocabulary and the notification
     tray's badge state.
+  - `Prism.SafeMode` — what the system layer offers when a desktop fails.
 
   `Aqua` owns agent orchestration; Prism renders its state.
   """
@@ -20,6 +21,7 @@ defmodule Prism do
     exports: [
       Frames,
       Labels,
+      SafeMode,
       TinctureRegistry,
       Tray
     ],
