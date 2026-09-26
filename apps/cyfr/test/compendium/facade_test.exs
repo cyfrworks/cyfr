@@ -120,6 +120,7 @@ defmodule Compendium.FacadeTest do
     tincture_declaration: 1,
     tincture_entry: 1,
     tincture_frame_capabilities: 0,
+    tincture_invokes?: 2,
     tincture_lockfile_required?: 1,
     tincture_media: 2,
     tincture_placements: 0,

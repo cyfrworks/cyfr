@@ -277,26 +277,73 @@ defmodule Compendium.Tincture.Rules do
   shapes (`Prima.Manifest.Tincture`) and to these rules: every capability
   is one of `frame_capabilities/0`, a placement is one of `placements/0`,
   card names are distinct, a card's image is a served image, each button
-  names an action the declaration lists, and a card's stream is one it
-  declares. A manifest that declares none of the blocks answers the empty
-  declaration. Which streams exist is `check_streams/2`'s.
+  names an action the declaration lists, a card's stream is one it
+  declares, a card's source names a component the tincture may invoke
+  (`invokes?/2`), and a card that shows a number or a list has a source
+  (one without is static). A desktop (placement `desktop`) reaches
+  nothing of its own: it declares no `tincture.connect` origin, no
+  `caps.egress` and no component dependency, static or dynamic; the cards
+  it draws are other tinctures'. A manifest that declares none of the
+  blocks answers the empty declaration. Which streams exist is
+  `check_streams/2`'s.
   """
   @spec validate_declaration(term()) :: {:ok, Tincture.t()} | {:error, refusal()}
   def validate_declaration(manifest) do
     with {:ok, %Tincture{} = declaration} <- Tincture.from_manifest(manifest),
          :ok <- known(declaration.frame.capabilities),
          :ok <- placement(declaration.frame.placement),
+         :ok <- desktop(declaration.frame.placement, manifest),
          :ok <- distinct_cards(declaration.cards),
-         :ok <- cards(declaration) do
+         :ok <- cards(declaration, manifest) do
       {:ok, declaration}
     end
   end
 
   @doc """
+  Whether the tincture `manifest` may invoke the component `ref`: one
+  among its `dependencies.static`, by type, publisher and name, and by
+  version where both name one. The one rule a frame's invoke is admitted
+  by and a card's source is held to.
+  """
+  @spec invokes?(term(), term()) :: boolean()
+  def invokes?(manifest, ref) when is_binary(ref) do
+    case Prima.ComponentRef.normalize_flexible(ref) do
+      {:ok, wanted} ->
+        manifest |> static_dependencies() |> Enum.any?(&same_component?(&1, wanted))
+
+      {:error, _} ->
+        false
+    end
+  end
+
+  def invokes?(_manifest, _ref), do: false
+
+  defp static_dependencies(%{"dependencies" => %{"static" => static}}) when is_list(static) do
+    for entry <- static,
+        ref = dependency_ref(entry),
+        is_binary(ref),
+        {:ok, parsed} <- [Prima.ComponentRef.normalize_flexible(ref)],
+        do: parsed
+  end
+
+  defp static_dependencies(_manifest), do: []
+
+  defp dependency_ref(ref) when is_binary(ref), do: ref
+  defp dependency_ref(%{"ref" => ref}), do: ref
+  defp dependency_ref(_entry), do: nil
+
+  defp same_component?(declared, wanted) do
+    {declared.type, declared.namespace, declared.name} ==
+      {wanted.type, wanted.namespace, wanted.name} and
+      (is_nil(declared.version) or is_nil(wanted.version) or declared.version == wanted.version)
+  end
+
+  @doc """
   Whether every stream the declaration opens is one a provider declares
   (`streams`, every provider's `Prima.Provider.streams/1`), with a subject
-  that stream takes: none for a stream without a subject grammar; `"*"` or
-  a literal its grammar admits for one with.
+  that stream takes: none for a stream without a subject grammar or one
+  bound to its holder (`bind: :holder`), whose subject the gate supplies;
+  `"*"` or a literal its grammar admits for any other.
   """
   @spec check_streams(Tincture.t(), [Prima.Provider.Stream.t()]) :: :ok | {:error, refusal()}
   def check_streams(%Tincture{streams: declared}, streams) when is_list(streams) do
@@ -314,6 +361,7 @@ defmodule Compendium.Tincture.Rules do
     end)
   end
 
+  defp subject_taken?(%Prima.Provider.Stream{bind: :holder}, subject), do: is_nil(subject)
   defp subject_taken?(%Prima.Provider.Stream{subject: nil}, subject), do: is_nil(subject)
   defp subject_taken?(%Prima.Provider.Stream{}, nil), do: false
 
@@ -347,19 +395,61 @@ defmodule Compendium.Tincture.Rules do
       else: refuse("tincture.cards names a card twice")
   end
 
-  defp cards(%Tincture{cards: cards, actions: actions, streams: streams}) do
+  # A desktop draws other tinctures' cards and reaches nothing of its own.
+  defp desktop("desktop", manifest) do
+    tincture = if is_map(manifest), do: Map.get(manifest, "tincture"), else: nil
+    caps = if is_map(manifest), do: Map.get(manifest, "caps"), else: nil
+    dependencies = if is_map(manifest), do: Map.get(manifest, "dependencies"), else: nil
+
+    cond do
+      present?(is_map(tincture) && Map.get(tincture, "connect")) ->
+        refuse("tincture.frame.placement desktop: a desktop declares no tincture.connect origin")
+
+      is_map(caps) and Map.has_key?(caps, "egress") ->
+        refuse("tincture.frame.placement desktop: a desktop declares no caps.egress")
+
+      is_map(dependencies) and
+          (present?(Map.get(dependencies, "static")) or
+             not is_nil(Map.get(dependencies, "dynamic"))) ->
+        refuse(
+          "tincture.frame.placement desktop: a desktop declares no component dependency; " <>
+            "the cards it draws are other tinctures'"
+        )
+
+      true ->
+        :ok
+    end
+  end
+
+  defp desktop(_placement, _manifest), do: :ok
+
+  defp present?(value) when value in [nil, false, [], ""], do: false
+  defp present?(_value), do: true
+
+  defp cards(%Tincture{cards: cards, actions: actions, streams: streams}, manifest) do
     stream_names = MapSet.new(streams, & &1.name)
 
     Enum.reduce_while(cards, :ok, fn card, :ok ->
-      case card_rules(card, actions, stream_names) do
+      case card_rules(card, actions, stream_names, manifest) do
         :ok -> {:cont, :ok}
         refusal -> {:halt, refusal}
       end
     end)
   end
 
-  defp card_rules(card, actions, stream_names) do
+  defp card_rules(card, actions, stream_names, manifest) do
     cond do
+      card.source && not invokes?(manifest, card.source.component) ->
+        refuse(
+          "tincture.cards #{card.name}: its source #{card.source.component} is not a component " <>
+            "dependencies.static declares"
+        )
+
+      is_nil(card.source) and (card.number || card.list) ->
+        refuse(
+          "tincture.cards #{card.name}: a card that shows a number or a list has a source to refresh it from"
+        )
+
       undeclared = Enum.find(card.buttons, &(&1.action not in actions)) ->
         refuse(
           "tincture.cards #{card.name}: a button names #{undeclared.action}, which tincture.actions does not declare"

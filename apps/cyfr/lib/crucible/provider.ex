@@ -19,6 +19,12 @@ defmodule Crucible.Provider do
   come from the execution records (`Crucible.Record`). Its service
   name is `"crucible"` and its resources are `crucible://executions/…`.
 
+  Beside it, the `card` tool: `refresh` runs a placed card's declared
+  source and `press` fires one of its declared buttons, each naming the
+  card by its slot in the caller's layout (`Crucible.Cards`). Its one
+  stream, `cards.refreshed`, delivers a person's refreshed cards to that
+  person's own grant: the gate binds its subject to the holder.
+
   Implements the ToolProvider protocol (tools/0 and handle/3)
   which the operation table validates at boot.
 
@@ -434,7 +440,76 @@ defmodule Crucible.Provider do
         ],
         description: "Execute WASM components and manage execution instances",
         title: "Execution"
+      ),
+      card_tool()
+    ]
+  end
+
+  # The desktop names a placed card by its slot and nothing else: what a
+  # refresh runs and what a button fires are the card tincture's
+  # declaration's (`Crucible.Cards`).
+  defp card_tool do
+    alias Prima.{Arg, Operation}
+
+    slot =
+      Arg.new("slot", :string,
+        required: true,
+        description: "The id of a card-size slot in your layout"
       )
+
+    posture =
+      Arg.new("posture", :string,
+        required: true,
+        description: "The posture whose arrangement holds the slot",
+        enum: Prima.Layout.postures()
+      )
+
+    Operation.tool(
+      [
+        Operation.new(
+          "card",
+          "refresh",
+          "Refresh a placed card",
+          [slot, posture],
+          kind: :write,
+          planes: [:external, :in_chain]
+        ),
+        Operation.new(
+          "card",
+          "press",
+          "Press a placed card's button",
+          [
+            slot,
+            posture,
+            Arg.new("button", :integer,
+              required: true,
+              min: 0,
+              description: "The index of the button among the card's declared buttons"
+            )
+          ],
+          kind: :write,
+          planes: [:external, :in_chain]
+        )
+      ],
+      description:
+        "The cards placed on your desktop: refresh one from its tincture's declared source, " <>
+          "or press one of its declared buttons. The slot is all you name.",
+      title: "Card"
+    )
+  end
+
+  # The one stream cards ride: a refresh placed by a person, on that
+  # person's own topic, the subject the gate binds to the grant holder.
+  def streams do
+    [
+      %Prima.Provider.Stream{
+        name: "cards.refreshed",
+        topic: :cards,
+        projection: ["tincture", "card", "slot", "data"],
+        subject: ~S"\Ausr_[A-Za-z0-9_-]{1,128}\z",
+        bind: :holder,
+        deadline_bound: 86_400
+      }
     ]
   end
 
@@ -619,6 +694,23 @@ defmodule Crucible.Provider do
   def handle("execution", _ctx, _args) do
     {:error, {:invalid_argument, "Missing required argument: action"}}
   end
+
+  def handle(
+        "card",
+        %Context{} = ctx,
+        %{"action" => "refresh", "slot" => slot, "posture" => posture}
+      ),
+      do: Crucible.Cards.refresh(ctx, slot, posture)
+
+  def handle(
+        "card",
+        %Context{} = ctx,
+        %{"action" => "press", "slot" => slot, "posture" => posture, "button" => button}
+      ),
+      do: Crucible.Cards.press(ctx, slot, posture, button)
+
+  def handle("card", _ctx, _args),
+    do: {:error, {:invalid_argument, Prima.Provider.invalid_action("card", ["refresh", "press"])}}
 
   def handle(tool, _ctx, _args) do
     {:error, "Unknown tool: #{tool}"}

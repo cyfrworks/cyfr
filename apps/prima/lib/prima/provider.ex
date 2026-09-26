@@ -46,37 +46,52 @@ defmodule Prima.Provider do
       * `subject` — the grammar a subject must match, as the source of an
         anchored regular expression, or `nil` for a stream that takes no
         subject.
+      * `bind` — `nil`, or `:holder` for a stream whose subject is the
+        grant holder's own user id: the gate supplies it and refuses any
+        other, so what rides one person's topic reaches no other person's
+        grant. A holder-bound stream has a subject grammar, which the
+        holder's id must also match.
       * `deadline_bound` — the longest a grant on it lives, in seconds; a
         grant's own deadline is never later.
     """
+
+    @type bind :: :holder | nil
 
     @type t :: %__MODULE__{
             name: String.t(),
             topic: atom(),
             projection: [String.t()],
             subject: String.t() | nil,
+            bind: bind(),
             deadline_bound: pos_integer()
           }
 
     @enforce_keys [:name, :topic, :projection, :deadline_bound]
-    defstruct [:name, :topic, :projection, :deadline_bound, subject: nil]
+    defstruct [:name, :topic, :projection, :deadline_bound, subject: nil, bind: nil]
 
     @field ~r/\A[a-z][a-z0-9_]{0,62}\z/
 
     @doc """
     Whether `stream` is a well-formed declaration: a stream name, an atom
     topic, a non-empty list of distinct field names, a subject grammar that
-    compiles and is anchored at both ends (or none), and a positive bound.
+    compiles and is anchored at both ends (or none), a binding of `nil` or
+    `:holder` (a holder-bound stream with a grammar), and a positive bound.
     """
     @spec valid?(term()) :: boolean()
     def valid?(%__MODULE__{} = stream) do
       Prima.Manifest.Tincture.stream_name?(stream.name) and is_atom(stream.topic) and
         stream.topic not in [nil, true, false] and
         projection?(stream.projection) and subject_grammar?(stream.subject) and
+        bind?(stream.bind, stream.subject) and
         is_integer(stream.deadline_bound) and stream.deadline_bound > 0
     end
 
     def valid?(_other), do: false
+
+    @doc "Whether the stream's subject is its grant holder's own user id (`bind: :holder`)."
+    @spec holder_bound?(t()) :: boolean()
+    def holder_bound?(%__MODULE__{bind: :holder}), do: true
+    def holder_bound?(%__MODULE__{}), do: false
 
     @doc """
     Whether the stream admits `subject`: `nil` for a stream that takes none,
@@ -93,6 +108,10 @@ defmodule Prima.Provider do
     end
 
     def admits?(%__MODULE__{}, _subject), do: false
+
+    defp bind?(nil, _subject), do: true
+    defp bind?(:holder, subject), do: is_binary(subject)
+    defp bind?(_bind, _subject), do: false
 
     defp projection?(fields) when is_list(fields) and fields != [],
       do:

@@ -23,6 +23,7 @@ defmodule Cyfr do
       Bus.AthanorArchived,
       Bus.Build,
       Bus.CallerInvalidated,
+      Bus.CardRefreshed,
       Bus.Components,
       Bus.Execution,
       Bus.ExecutionEvent,

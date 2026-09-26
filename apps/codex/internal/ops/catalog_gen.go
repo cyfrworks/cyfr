@@ -16,6 +16,7 @@ const (
 	Aqua               = "aqua"
 	Athanor            = "athanor"
 	Build              = "build"
+	Card               = "card"
 	Component          = "component"
 	Decision           = "decision"
 	Door               = "door"
@@ -79,6 +80,8 @@ const (
 	BuildStatus             = "status"
 	BuildToolchains         = "toolchains"
 	BuildValidate           = "validate"
+	CardPress               = "press"
+	CardRefresh             = "refresh"
 	ComponentCategories     = "categories"
 	ComponentCreate         = "create"
 	ComponentDelete         = "delete"
@@ -255,6 +258,7 @@ var Actions = map[string][]string{
 	"aqua":                {"create", "delete", "get", "list", "reset", "skill_create", "skill_delete", "skill_get", "skill_list", "skill_reset", "skill_update", "status", "update"},
 	"athanor":             {"archive", "create", "destroy", "get", "list", "pair", "provision", "purge", "rename", "settings", "unarchive"},
 	"build":               {"compile", "status", "toolchains", "validate"},
+	"card":                {"press", "refresh"},
 	"component":           {"categories", "create", "delete", "deprecate", "discover", "fork", "get_blob", "inspect", "list", "pull", "push", "read_resource", "register", "reset", "search", "setup_plan", "status", "yank"},
 	"decision":            {"correlate", "get", "get_global", "list", "list_global"},
 	"door":                {"allow", "deny", "list", "remove", "requests", "resolve"},
@@ -786,6 +790,42 @@ func (args BuildValidateArgs) MarshalJSON() ([]byte, error) {
 		Action string `json:"action"`
 		fields
 	}{Action: BuildValidate, fields: fields(args)})
+}
+
+// CardPressArgs carries arguments for card.press.
+type CardPressArgs struct {
+	// The id of a card-size slot in your layout
+	Slot string `json:"slot"`
+	// The posture whose arrangement holds the slot
+	Posture string `json:"posture"`
+	// The index of the button among the card's declared buttons
+	Button int `json:"button"`
+}
+
+// MarshalJSON supplies the operation's fixed action discriminator.
+func (args CardPressArgs) MarshalJSON() ([]byte, error) {
+	type fields CardPressArgs
+	return json.Marshal(struct {
+		Action string `json:"action"`
+		fields
+	}{Action: CardPress, fields: fields(args)})
+}
+
+// CardRefreshArgs carries arguments for card.refresh.
+type CardRefreshArgs struct {
+	// The id of a card-size slot in your layout
+	Slot string `json:"slot"`
+	// The posture whose arrangement holds the slot
+	Posture string `json:"posture"`
+}
+
+// MarshalJSON supplies the operation's fixed action discriminator.
+func (args CardRefreshArgs) MarshalJSON() ([]byte, error) {
+	type fields CardRefreshArgs
+	return json.Marshal(struct {
+		Action string `json:"action"`
+		fields
+	}{Action: CardRefresh, fields: fields(args)})
 }
 
 // ComponentCategoriesArgs carries arguments for component.categories.

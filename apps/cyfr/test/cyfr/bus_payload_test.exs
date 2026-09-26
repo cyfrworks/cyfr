@@ -17,6 +17,7 @@ defmodule Cyfr.BusPayloadTest do
     AthanorArchived,
     Build,
     CallerInvalidated,
+    CardRefreshed,
     Components,
     Execution,
     ExecutionEvent,
@@ -70,6 +71,13 @@ defmodule Cyfr.BusPayloadTest do
         node: "reagent:local.x"
       }),
       ThreadEvent.new(@actor, "thr", :message, %{id: "m", kind: "text", content: "hi"}),
+      CardRefreshed.new(@actor, %{
+        tincture: "tincture:local.status",
+        card: "runs",
+        slot: "s0",
+        user_id: "usr_1",
+        data: %{"name" => "runs", "title" => "Runs", "number" => 3, "list" => []}
+      }),
       Session.new(:revoked, "u"),
       SettingsChanged.new(:changed, setting: "log_level", revision: 3, op: :put, value: "debug"),
       Membership.new(:changed, "u", "ath_payload", :joined),
@@ -170,11 +178,23 @@ defmodule Cyfr.BusPayloadTest do
   end
 
   describe "the tree agrees with the roster" do
+    test "a consumer that is a stream is a declared stream riding the topic" do
+      for row <- Bus.topics(), "stream:" <> name <- row.consumers do
+        assert {:ok, stream} = Prima.Provider.fetch_stream(Grimoire.streams(), name),
+               "#{row.key} names the stream #{name}, which no provider declares"
+
+        assert stream.topic == row.key, "#{name} rides #{inspect(stream.topic)}, not #{row.key}"
+      end
+    end
+
     test "every consumer names the topic's struct, and every producer builds it" do
       found =
         for row <- Bus.topics(),
             {role, names} <- [consumers: row.consumers, producers: row.producers],
             name <- names,
+            # A stream's grant holder hears the topic through the stream
+            # delivery, which matches the roster's struct for the topic.
+            not String.starts_with?(name, "stream:"),
             source = source_of(name),
             not names?(source, row.struct, role),
             do:
@@ -325,6 +345,7 @@ defmodule Cyfr.BusPayloadTest do
             :progress -> Bus.progress(other, {:pull, "p"})
             :execution_events -> Bus.execution_events(other, "e")
             :thread -> Bus.thread(other, "thr")
+            :cards -> Bus.cards(other, "usr_1")
             _ -> apply(Bus, key, [other])
           end
 
