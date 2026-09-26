@@ -156,7 +156,7 @@ defmodule Grimoire.ErrorAdoptionTest do
     # The installed port module.
     "apps/prima/lib/prima/caps.ex" => 1,
     # The provider module whose declaration is malformed.
-    "apps/prima/lib/prima/provider.ex" => 1,
+    "apps/prima/lib/prima/provider.ex" => 3,
     # The installed port module.
     "apps/sanctum/lib/sanctum/consent/components.ex" => 1,
     # The installed port module.
