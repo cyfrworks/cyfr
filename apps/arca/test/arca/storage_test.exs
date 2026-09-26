@@ -401,6 +401,15 @@ defmodule Arca.StorageTest do
     # The refusals fire before any adapter dispatch: the athanor root and
     # the scope roots are directories, never objects — a put there would
     # wedge the tree (a regular file where the tree root belongs).
+    #
+    # A mutation that passes the path gate reaches the storage cap, which
+    # the settings accessor reads from the store since B2, so the tests
+    # that exercise a deeper path need a sandbox owner.
+    setup tags do
+      Arca.Test.Sandbox.setup!(tags)
+      :ok
+    end
+
     test "put/append/delete below depth 2 answer {:error, :invalid_path}" do
       actor = Arca.Test.Actor.local()
 
