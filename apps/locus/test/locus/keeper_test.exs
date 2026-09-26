@@ -12,15 +12,26 @@ defmodule Locus.KeeperTest do
   arrives after the release report still delivers its output; a refused
   spawn and a lost channel answer at once; a spawn ended at its bound is
   the wire's `memory` refusal and a bound that cannot be enforced its
-  `unavailable`, naming the option the deployment lacks. The shared
-  vectors are `Locus.KeeperVectorsTest`'s. Whether a real spawn is
-  isolated is the builder image tests' to prove.
+  `unavailable`, naming the option the deployment lacks. A long-lived
+  spawn (`Locus.Launcher`) answers its handle, and its owner hears the
+  relay attached, its stdout and stderr apart and its exit, then its
+  release, the last; stdin goes as frames of the codec's bound; `signal`,
+  `release` with a grace and `pool` are the vectors' requests, byte for
+  byte but for their own ids; an owner that dies has its spawn released
+  with no grace; a request the keeper would refuse is refused before it
+  is sent. The build spawn's vectors are `Locus.KeeperVectorsTest`'s.
+  Whether a real spawn is isolated is the builder image tests' to prove.
   """
 
   use ExUnit.Case, async: false
 
   alias Locus.Keeper
   alias Locus.Test.FakeKeeper
+  alias Prima.KeeperProtocol
+
+  @vectors Path.expand("../../../../tests/fixtures/keeper_protocol.json", __DIR__)
+           |> File.read!()
+           |> Jason.decode!()
 
   defp run(name, script, opts \\ []) do
     lines = Agent.start_link(fn -> [] end) |> elem(1)
@@ -73,6 +84,14 @@ defmodule Locus.KeeperTest do
       fake
       |> FakeKeeper.requests()
       |> Enum.filter(&(&1["type"] == "release" and &1["grace_ms"] == grace))
+    end
+
+    # The releases the fake has recorded once the first reaches it: a run
+    # may answer before its release is read, when the command ended on
+    # its own first.
+    defp awaited_releases(fake, grace) do
+      wait_until(fn -> releases(fake, grace) != [] end)
+      releases(fake, grace)
     end
 
     test "a run delivers stdin and answers stdout, the log by line and the exit status", %{
@@ -161,7 +180,7 @@ defmodule Locus.KeeperTest do
       :ok = Locus.Executor.cancel(runner)
 
       assert_receive {:answer, {{:error, :cancelled}, _lines}}, 10_000
-      assert [_] = releases(fake, 0)
+      assert [_] = awaited_releases(fake, 0)
     end
 
     test "a run past its deadline releases the spawn with no grace", %{name: name, fake: fake} do
@@ -171,14 +190,14 @@ defmodule Locus.KeeperTest do
 
       assert result == {:error, :timeout}
       assert System.monotonic_time(:millisecond) - started < 10_000
-      assert [_] = releases(fake, 0)
+      assert [_] = awaited_releases(fake, 0)
     end
 
     test "stdout past its bound releases the spawn", %{name: name, fake: fake} do
       {result, _lines} = run(name, "head -c 5000 /dev/zero", max_stdout_bytes: 1_000)
 
       assert result == {:error, {:output_too_large, 1_000}}
-      assert [_] = releases(fake, 0)
+      assert [_] = awaited_releases(fake, 0)
     end
 
     test "a caller that dies has its spawn released", %{name: name, fake: fake} do
@@ -253,6 +272,229 @@ defmodule Locus.KeeperTest do
 
       System.put_env("KEEPER_CHANNEL", "socket:[1]")
       refute Keeper.channel_inherited?()
+    end
+  end
+
+  describe "a long-lived spawn against the fake keeper" do
+    setup do
+      {fake, channel} = FakeKeeper.start()
+      attach_dir = FakeKeeper.short_tmp_dir()
+      name = :"keeper_#{System.unique_integer([:positive])}"
+      {:ok, client} = Keeper.start_link(channel: channel, attach_dir: attach_dir, name: name)
+      Process.unlink(client)
+      :ok = :socket.setopt(channel, {:otp, :controlling_process}, client)
+
+      on_exit(fn ->
+        Process.exit(client, :kill)
+        Process.exit(fake, :kill)
+        File.rm_rf!(attach_dir)
+      end)
+
+      {:ok, fake: fake, name: name, client: client}
+    end
+
+    defp spawn_live(name, script, env \\ %{}) do
+      Keeper.spawn(name, %{
+        argv: ["/bin/sh", "-c", script],
+        env: env,
+        pool: "backends",
+        memory_bytes: 268_435_456
+      })
+    end
+
+    # The events of `handle` until its release, the last, in order, with
+    # stdout and stderr each joined where they arrived in pieces.
+    defp events_until_released(%{ref: ref}, acc \\ []) do
+      receive do
+        {Keeper, ^ref, :released} -> joined(Enum.reverse([:released | acc]))
+        {Keeper, ^ref, event} -> events_until_released(%{ref: ref}, [event | acc])
+      after
+        10_000 -> flunk("no release; heard #{length(acc)} events")
+      end
+    end
+
+    defp joined(events) do
+      events
+      |> Enum.chunk_by(&(is_tuple(&1) and elem(&1, 0) in [:stdout, :stderr] and elem(&1, 0)))
+      |> Enum.flat_map(fn
+        [{stream, _} | _] = chunk when stream in [:stdout, :stderr] ->
+          [{stream, chunk |> Enum.map(&elem(&1, 1)) |> IO.iodata_to_binary()}]
+
+        chunk ->
+          chunk
+      end)
+    end
+
+    defp requests(fake, type),
+      do: fake |> FakeKeeper.requests() |> Enum.filter(&(&1["type"] == type))
+
+    # The requests of `type` the fake has recorded, once one has reached it.
+    defp recorded(fake, type) do
+      wait_until(fn -> requests(fake, type) != [] end)
+      requests(fake, type)
+    end
+
+    test "a spawn answers its handle and its owner hears it attached, its streams apart, its exit and its release",
+         %{name: name, fake: fake} do
+      assert {:ok, handle} =
+               spawn_live(name, ~s(echo out; echo "$GREETING" >&2; exit 4), %{
+                 "GREETING" => "hello"
+               })
+
+      assert handle.spawn_id =~ ~r/^[0-9a-f]{32}$/
+      assert handle.uid == 30_001 and is_integer(handle.pid)
+
+      events = events_until_released(handle)
+      assert hd(events) == :attached
+      assert {:stdout, "out\n"} in events
+      assert {:stderr, "hello\n"} in events
+      assert Enum.take(events, -2) == [{:exited, 4, nil}, :released]
+
+      [spawn] = recorded(fake, "spawn")
+      assert spawn["pool"] == "backends"
+      assert spawn["memory_bytes"] == 268_435_456
+      assert spawn["env"] == %{"GREETING" => "hello"}
+
+      # Nothing is heard of a spawn after its release.
+      refute_receive {Keeper, _ref, _event}, 200
+    end
+
+    test "a spawn's memory bound is its spec's, and a spec may name none", %{
+      name: name,
+      fake: fake
+    } do
+      assert {:ok, handle} =
+               Keeper.spawn(name, %{argv: ["true"], env: %{}, pool: "backends"})
+
+      events_until_released(handle)
+      [spawn] = recorded(fake, "spawn")
+      refute Map.has_key?(spawn, "memory_bytes")
+    end
+
+    test "stdin is written as frames of the codec's bound, held until the relay attaches", %{
+      name: name
+    } do
+      assert {:ok, handle} = spawn_live(name, "exec head -c 150000")
+      data = :binary.copy("0123456789", 15_000)
+      assert length(KeeperProtocol.frames(:stdin, data)) == 3
+      assert :ok = Keeper.send(handle, data)
+
+      events = events_until_released(handle)
+      assert {:stdout, ^data} = Enum.find(events, &match?({:stdout, _}, &1))
+      assert {:exited, 0, nil} in events
+    end
+
+    test "signal signals the spawn and is the vectors' request", %{name: name, fake: fake} do
+      assert {:ok, handle} = spawn_live(name, "echo ready; exec sleep 30")
+      assert_receive {Keeper, _ref, {:stdout, "ready\n"}}, 10_000
+
+      assert {:error, :unencodable} = Keeper.signal(handle, "SIGSTOP")
+      assert :ok = Keeper.signal(handle, "SIGTERM")
+
+      assert Enum.take(events_until_released(handle), -2) == [
+               {:exited, nil, "SIGTERM"},
+               :released
+             ]
+
+      [signal] = recorded(fake, "signal")
+      vector = Enum.find(@vectors["valid_requests"], &(&1["type"] == "signal"))
+      assert signal == %{vector | "spawn_id" => handle.spawn_id}
+
+      assert {:error, :unknown_spawn} = Keeper.signal(handle, "SIGTERM")
+    end
+
+    test "release with a grace lets the spawn end on its own, and is the vectors' request", %{
+      name: name,
+      fake: fake
+    } do
+      script = ~s(trap 'echo term; exit 0' TERM; echo ready; while :; do sleep 0.1; done)
+      assert {:ok, handle} = spawn_live(name, script)
+      assert_receive {Keeper, _ref, {:stdout, "ready\n"}}, 10_000
+
+      assert :ok = Keeper.release(name, handle, 2_000)
+      events = events_until_released(handle)
+      assert {:stdout, "term\n"} in events
+      assert {:exited, 0, nil} in events
+
+      [release] = recorded(fake, "release")
+      vector = Enum.find(@vectors["valid_requests"], &(&1["type"] == "release"))
+      assert release == %{vector | "spawn_id" => handle.spawn_id}
+    end
+
+    test "release with no grace kills the spawn", %{name: name, fake: fake} do
+      assert {:ok, handle} = spawn_live(name, "echo ready; exec sleep 30")
+      assert_receive {Keeper, _ref, {:stdout, "ready\n"}}, 10_000
+
+      :ok = Keeper.release(name, handle, 0)
+
+      assert Enum.take(events_until_released(handle), -2) == [
+               {:exited, nil, "SIGKILL"},
+               :released
+             ]
+
+      assert [%{"grace_ms" => 0}] = recorded(fake, "release")
+    end
+
+    test "pool_stats reads a pool with the vectors' request, and a refusal is the keeper's code",
+         %{name: name, fake: fake} do
+      assert {:ok, %{size: 4, free: 3, quarantined: 0}} = Keeper.pool_stats(name, "backends")
+
+      [pool] = recorded(fake, "pool")
+      vector = Enum.find(@vectors["valid_requests"], &(&1["type"] == "pool"))
+      assert pool == %{vector | "id" => pool["id"]}
+
+      :ok = FakeKeeper.mode(fake, :pool_refused)
+      assert {:error, {:refused, "unknown_pool"}} = Keeper.pool_stats(name, "backends")
+      assert {:error, :unencodable} = Keeper.pool_stats(name, "Not A Pool")
+    end
+
+    test "an owner that dies has its spawn released with no grace", %{name: name, fake: fake} do
+      test = self()
+
+      owner =
+        spawn(fn ->
+          {:ok, handle} = spawn_live(name, "exec sleep 30")
+          send(test, {:spawned, handle})
+          Process.sleep(:infinity)
+        end)
+
+      assert_receive {:spawned, handle}, 10_000
+      Process.exit(owner, :kill)
+
+      wait_until(fn -> Enum.any?(requests(fake, "release"), &(&1["grace_ms"] == 0)) end)
+      [release] = requests(fake, "release")
+      assert release["spawn_id"] == handle.spawn_id
+    end
+
+    test "a spawn the keeper would refuse is refused before it is sent, and a keeper refusal is its code",
+         %{name: name, fake: fake} do
+      assert {:error, {:spawn_failed, :unencodable_command}} =
+               spawn_live(name, "true", %{"PATH" => "/tmp"})
+
+      assert requests(fake, "spawn") == []
+
+      :ok = FakeKeeper.mode(fake, :capacity)
+      assert {:error, {:refused, "capacity"}} = spawn_live(name, "true")
+    end
+
+    test "a keeper that is gone answers as unavailable" do
+      assert {:error, {:launcher_unavailable, :noproc}} =
+               Keeper.spawn(:no_such_keeper, %{argv: ["true"], env: %{}, pool: "backends"})
+
+      assert {:error, {:launcher_unavailable, :noproc}} =
+               Keeper.pool_stats(:no_such_keeper, "backends")
+    end
+
+    test "losing the channel reports every long-lived spawn released", %{
+      name: name,
+      fake: fake
+    } do
+      assert {:ok, handle} = spawn_live(name, "exec sleep 30")
+      assert_receive {Keeper, _ref, :attached}, 10_000
+      ref = handle.ref
+
+      :ok = FakeKeeper.close(fake)
+      assert_receive {Keeper, ^ref, :released}, 5_000
     end
   end
 end

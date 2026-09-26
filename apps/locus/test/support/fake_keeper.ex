@@ -20,6 +20,14 @@ defmodule Locus.Test.FakeKeeper do
     line and the leader is reported ended as `exited` says (`:code`,
     `:signal`, `:memory_exceeded`), killed at its memory bound among them
   - `:report_first` — `exited` and `released` are sent before the relay dials
+  - `:pool_refused` — every `pool` request is refused with `unknown_pool`
+
+  A spawn in any pool but `build` is long-lived: its relay carries stdin
+  frames to the command as they arrive and its stdout and stderr, apart,
+  as the command writes them, until the command exits. A `signal` request
+  signals its process group; a `release` with a grace sends it a term
+  signal and the kill once the grace passes. A `pool` request is answered
+  with a pool of four uids, three free and none quarantined.
   """
 
   use GenServer
@@ -46,12 +54,23 @@ defmodule Locus.Test.FakeKeeper do
     {fake, client}
   end
 
-  @doc "A private directory short enough for a unix socket path."
+  @doc """
+  A private directory short enough for a unix socket path, new to this
+  call: its name carries this VM's OS pid, so another partition's is
+  never the same one, and a directory an earlier run left behind under a
+  reused pid is passed over.
+  """
   def short_tmp_dir do
-    dir = Path.join("/tmp", "lsp-#{System.unique_integer([:positive])}")
-    File.mkdir_p!(dir)
-    File.chmod!(dir, 0o700)
-    dir
+    dir = Path.join("/tmp", "lsp-#{System.pid()}-#{System.unique_integer([:positive])}")
+
+    case File.mkdir(dir) do
+      :ok ->
+        File.chmod!(dir, 0o700)
+        dir
+
+      {:error, :eexist} ->
+        short_tmp_dir()
+    end
   end
 
   def mode(fake, mode), do: GenServer.call(fake, {:mode, mode})
@@ -112,11 +131,45 @@ defmodule Locus.Test.FakeKeeper do
   def handle_info({:running, spawn_id, os_pid}, state),
     do: {:noreply, put_in(state.spawns[spawn_id], os_pid)}
 
+  def handle_info({:kill_after, spawn_id}, state) do
+    signal_group(state.spawns[spawn_id], "KILL")
+    {:noreply, state}
+  end
+
   def handle_info(_message, state), do: {:noreply, state}
 
   defp handle_request(%{"type" => "spawn", "id" => id}, %{mode: mode} = state)
        when mode in [:capacity, :memory_unavailable] do
     send(self(), {:send, %{type: "error", id: id, code: Atom.to_string(mode)}})
+    state
+  end
+
+  defp handle_request(%{"type" => "pool", "id" => id}, %{mode: :pool_refused} = state) do
+    send(self(), {:send, %{type: "error", id: id, code: "unknown_pool"}})
+    state
+  end
+
+  defp handle_request(%{"type" => "pool", "id" => id, "pool" => pool}, state) do
+    send(
+      self(),
+      {:send, %{type: "pool", id: id, pool: pool, size: 4, free: 3, quarantined: 0}}
+    )
+
+    state
+  end
+
+  defp handle_request(%{"type" => "signal", "spawn_id" => spawn_id, "sig" => "SIG" <> sig}, state) do
+    signal_group(state.spawns[spawn_id], sig)
+    state
+  end
+
+  defp handle_request(
+         %{"type" => "release", "spawn_id" => spawn_id, "grace_ms" => grace_ms},
+         state
+       )
+       when grace_ms > 0 do
+    signal_group(state.spawns[spawn_id], "TERM")
+    Process.send_after(self(), {:kill_after, spawn_id}, grace_ms)
     state
   end
 
@@ -135,22 +188,23 @@ defmodule Locus.Test.FakeKeeper do
   end
 
   defp handle_request(%{"type" => "release", "spawn_id" => spawn_id}, state) do
-    case state.spawns do
-      # The command leads its own process group; the direct kill covers
-      # one that does not. The group's negative id follows `--`, which a
-      # Linux host's procps `kill` needs to read it as a group.
-      %{^spawn_id => os_pid} when is_integer(os_pid) ->
-        for target <- [["--", "-#{os_pid}"], ["#{os_pid}"]],
-            do: System.cmd("kill", ["-9" | target], stderr_to_stdout: true)
-
-      _ ->
-        :ok
-    end
-
+    signal_group(state.spawns[spawn_id], "KILL")
     state
   end
 
   defp handle_request(_request, state), do: state
+
+  # The command leads its own process group; the direct signal covers one
+  # that does not. The group's negative id follows `--`, which a Linux
+  # host's procps `kill` needs to read it as a group.
+  defp signal_group(os_pid, sig) when is_integer(os_pid) do
+    for target <- [["--", "-#{os_pid}"], ["#{os_pid}"]],
+        do: System.cmd("kill", ["-#{sig}" | target], stderr_to_stdout: true)
+
+    :ok
+  end
+
+  defp signal_group(_os_pid, _sig), do: :ok
 
   defp relay(fake, spawn_id, request, mode) do
     dir = short_tmp_dir()
@@ -165,6 +219,13 @@ defmodule Locus.Test.FakeKeeper do
       ])
 
     :ok = :gen_tcp.send(conn, frame(@stream_attach, request["attach"]["token"]))
+
+    if request["pool"] == "build",
+      do: run_build(fake, spawn_id, request, mode, conn, {dir, input, output}),
+      else: live(fake, spawn_id, request, conn, dir)
+  end
+
+  defp run_build(fake, spawn_id, request, mode, conn, {dir, input, output}) do
     File.write!(input, read_stdin(conn, []))
 
     case mode do
@@ -235,6 +296,114 @@ defmodule Locus.Test.FakeKeeper do
     unless mode == :report_first do
       send(fake, {:send, exited})
       send(fake, {:send, %{type: "released", spawn_id: spawn_id}})
+    end
+  end
+
+  # A long-lived spawn: stdin frames reach the command as they arrive, its
+  # stdout and its stderr (through a fifo `cat` relays) go back apart as
+  # it writes them, and its exit ends the relay.
+  defp live(fake, spawn_id, request, conn, dir) do
+    log = Path.join(dir, "stderr")
+    {_, 0} = System.cmd("mkfifo", ["-m", "600", log])
+    env = Enum.map(request["env"], fn {k, v} -> "#{k}=#{v}" end)
+
+    port =
+      Port.open({:spawn_executable, "/usr/bin/env"}, [
+        :binary,
+        :stream,
+        :exit_status,
+        :use_stdio,
+        cd: dir,
+        args:
+          ["-i", "HOME=#{dir}", "PATH=#{System.get_env("PATH")}" | env] ++
+            ["/bin/sh", "-c", ~s(exec "$@" 2>"$0"), log] ++ request["argv"]
+      ])
+
+    relay = Port.open({:spawn_executable, "/bin/cat"}, [:binary, :stream, :eof, args: [log]])
+
+    # A command that has already exited has closed its port, which then
+    # names no pid.
+    os_pid =
+      case Port.info(port, :os_pid) do
+        {:os_pid, os_pid} -> os_pid
+        nil -> nil
+      end
+
+    send(fake, {:running, spawn_id, os_pid})
+
+    pump = self()
+    reader = spawn_link(fn -> read_frames(conn, pump) end)
+    status = pump_live(port, relay, conn)
+    Process.unlink(reader)
+    Process.exit(reader, :kill)
+
+    # What is left of the group goes, and the stderr relay drains.
+    signal_group(os_pid, "KILL")
+    System.cmd("/bin/sh", ["-c", ~s(exec 3<>"$0"), log])
+    drain_relay(relay, conn)
+
+    :gen_tcp.send(conn, [frame(@stream_stdout, ""), frame(@stream_stderr, "")])
+    :gen_tcp.close(conn)
+    File.rm_rf!(dir)
+
+    exited =
+      if status > 128,
+        do: %{code: nil, signal: signal_name(status - 128)},
+        else: %{code: status, signal: nil}
+
+    send(
+      fake,
+      {:send, Map.merge(%{type: "exited", spawn_id: spawn_id, memory_exceeded: false}, exited)}
+    )
+
+    send(fake, {:send, %{type: "released", spawn_id: spawn_id}})
+  end
+
+  defp signal_name(9), do: "SIGKILL"
+  defp signal_name(15), do: "SIGTERM"
+  defp signal_name(2), do: "SIGINT"
+  defp signal_name(n), do: "SIG#{n}"
+
+  defp read_frames(conn, pump) do
+    with {:ok, <<stream, length::32>>} <- :gen_tcp.recv(conn, 5),
+         {:ok, payload} <- if(length == 0, do: {:ok, ""}, else: :gen_tcp.recv(conn, length)) do
+      send(pump, {:frame, stream, payload})
+      read_frames(conn, pump)
+    end
+  end
+
+  defp pump_live(port, relay, conn) do
+    receive do
+      {:frame, @stream_stdin, ""} ->
+        pump_live(port, relay, conn)
+
+      {:frame, @stream_stdin, payload} ->
+        Port.command(port, payload)
+        pump_live(port, relay, conn)
+
+      {^port, {:data, data}} ->
+        :gen_tcp.send(conn, frames(@stream_stdout, data))
+        pump_live(port, relay, conn)
+
+      {^relay, {:data, data}} ->
+        :gen_tcp.send(conn, frames(@stream_stderr, data))
+        pump_live(port, relay, conn)
+
+      {^port, {:exit_status, status}} ->
+        status
+    end
+  end
+
+  defp drain_relay(relay, conn) do
+    receive do
+      {^relay, {:data, data}} ->
+        :gen_tcp.send(conn, frames(@stream_stderr, data))
+        drain_relay(relay, conn)
+
+      {^relay, :eof} ->
+        :ok
+    after
+      1_000 -> :ok
     end
   end
 

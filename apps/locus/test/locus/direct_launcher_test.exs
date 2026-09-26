@@ -8,7 +8,11 @@ defmodule Locus.DirectLauncherTest do
   command's process group before it answers, and when its caller dies a
   janitor that outlives the caller kills the group and removes the run's
   directory. It gives the command an environment built from nothing, and
-  no memory bound.
+  no memory bound. As the test environment's launcher it holds a
+  long-lived process for its owner: stdin as it is sent, stdout and
+  stderr apart, a signal, a release with a grace, the exit and the
+  release, the last; an owner that dies has the process group killed and
+  its home removed.
   """
 
   use ExUnit.Case, async: true
@@ -145,5 +149,123 @@ defmodule Locus.DirectLauncherTest do
     for os_pid <- os_pids, do: wait_until(fn -> not alive?(os_pid) end)
     wait_until(fn -> not File.exists?(home) end)
     wait_until(fn -> not File.exists?(Path.dirname(home)) end)
+  end
+
+  describe "a long-lived process" do
+    test "is this launcher's under the test environment, by the executor's rule" do
+      refute Locus.Keeper.running?()
+      assert Locus.Executor.launcher() == {:ok, DirectLauncher}
+      assert Locus.Executor.launcher() == Locus.Executor.executor()
+    end
+
+    defp spawn_live(script, env \\ %{}) do
+      DirectLauncher.spawn([], %{
+        argv: ["/bin/sh", "-c", script],
+        env: env,
+        pool: "backends",
+        memory_bytes: 268_435_456
+      })
+    end
+
+    defp events_until_released(%{ref: ref}, acc \\ []) do
+      receive do
+        {DirectLauncher, ^ref, :released} -> Enum.reverse([:released | acc])
+        {DirectLauncher, ^ref, event} -> events_until_released(%{ref: ref}, [event | acc])
+      after
+        10_000 -> flunk("no release; heard #{length(acc)} events")
+      end
+    end
+
+    defp stream(events, name),
+      do: for({^name, bytes} <- events, into: "", do: bytes)
+
+    test "its owner hears it attached, its stdout and stderr apart, its exit and its release" do
+      assert {:ok, handle} =
+               spawn_live(~s(echo out; echo "$GREETING" >&2; printf '%s' "$HOME" >&2; exit 4), %{
+                 "GREETING" => "hello"
+               })
+
+      assert is_integer(handle.pid) and handle.uid == nil
+      events = events_until_released(handle)
+
+      assert hd(events) == :attached
+      assert stream(events, :stdout) == "out\n"
+      assert "hello\n" <> home = stream(events, :stderr)
+      assert Enum.take(events, -2) == [{:exited, 4, nil}, :released]
+      refute File.exists?(home)
+
+      assert {:ok, %{size: 1, free: 1, quarantined: 0}} =
+               DirectLauncher.pool_stats([], "backends")
+    end
+
+    test "send writes its stdin" do
+      assert {:ok, handle} = spawn_live("exec head -c 150000")
+      data = :binary.copy("0123456789", 15_000)
+      assert :ok = DirectLauncher.send(handle, data)
+
+      events = events_until_released(handle)
+      assert stream(events, :stdout) == data
+      assert {:exited, 0, nil} in events
+      assert {:error, :unknown_spawn} = DirectLauncher.send(handle, "late")
+    end
+
+    test "signal signals its process group" do
+      assert {:ok, handle} = spawn_live("echo ready; exec sleep 30")
+      assert_receive {DirectLauncher, _ref, {:stdout, "ready\n"}}, 10_000
+
+      assert {:error, :unencodable} = DirectLauncher.signal(handle, "SIGSTOP")
+      assert :ok = DirectLauncher.signal(handle, "SIGTERM")
+
+      assert Enum.take(events_until_released(handle), -2) == [
+               {:exited, nil, "SIGTERM"},
+               :released
+             ]
+    end
+
+    test "release with a grace lets it end on its own, and kills it once the grace passes" do
+      script = ~s(trap 'echo term; exit 0' TERM; echo ready; while :; do sleep 0.1; done)
+      assert {:ok, handle} = spawn_live(script)
+      assert_receive {DirectLauncher, _ref, {:stdout, "ready\n"}}, 10_000
+
+      :ok = DirectLauncher.release([], handle, 2_000)
+      events = events_until_released(handle)
+      assert stream(events, :stdout) =~ "term\n"
+      assert {:exited, 0, nil} in events
+
+      assert {:ok, stubborn} =
+               spawn_live(~s(trap '' TERM; echo ready; while :; do sleep 0.1; done))
+
+      assert_receive {DirectLauncher, _ref, {:stdout, "ready\n"}}, 10_000
+      started = System.monotonic_time(:millisecond)
+      :ok = DirectLauncher.release([], stubborn, 300)
+
+      assert Enum.take(events_until_released(stubborn), -2) == [
+               {:exited, nil, "SIGKILL"},
+               :released
+             ]
+
+      assert System.monotonic_time(:millisecond) - started >= 300
+    end
+
+    test "an owner that dies has its process group killed and its home removed" do
+      {script, file} = lingering()
+      test = self()
+
+      owner =
+        spawn(fn ->
+          {:ok, handle} = spawn_live(script)
+          send(test, {:spawned, handle})
+          Process.sleep(:infinity)
+        end)
+
+      assert_receive {:spawned, _handle}, 10_000
+      {os_pids, home} = left_in(file)
+      assert Enum.all?(os_pids, &alive?/1)
+
+      Process.exit(owner, :kill)
+
+      for os_pid <- os_pids, do: wait_until(fn -> not alive?(os_pid) end)
+      wait_until(fn -> not File.exists?(home) end)
+    end
   end
 end

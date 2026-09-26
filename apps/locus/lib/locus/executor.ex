@@ -87,6 +87,15 @@ defmodule Locus.Executor do
   end
 
   @doc """
+  The `Locus.Launcher` a long-lived process is launched with, by the rule
+  `executor/0` follows: the keeper's client when it runs, the direct
+  launcher otherwise where this build knows it, and `{:error, :no_keeper}`
+  everywhere else.
+  """
+  @spec launcher() :: {:ok, module()} | {:error, :no_keeper}
+  def launcher, do: executor()
+
+  @doc """
   End the run `pid` is in the middle of, or starts next: everything the
   command started is killed, and `run/2` answers `{:error, :cancelled}`
   once it is gone.
