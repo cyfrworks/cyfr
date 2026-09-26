@@ -24,7 +24,7 @@ defmodule Opus.FormulaHandlerRunnerTest do
 
   alias Prima.WorkerAuth
   alias Opus.FormulaHandler
-  alias Opus.Test.ScriptedHost
+  alias Opus.Test.{ScriptedHost, ScriptedKeeper}
 
   @moduletag :capture_log
 
@@ -64,14 +64,19 @@ defmodule Opus.FormulaHandlerRunnerTest do
       runner_id: @runner,
       service_id: ScriptedHost.service(),
       boot: @boot,
-      host_url: host.url,
       control_fd: fd,
+      relay: {:fd, 4},
       watchdog_grace_ms: 500
     }
+
+    # The runner's relay, whose service end the test binds to the root it
+    # assigns, as the worker service does.
+    %{endpoint: endpoint, relay: relay} = ScriptedKeeper.relay!(@runner)
 
     start_supervised!(
       {Opus.Runner,
        settings: settings,
+       relay: endpoint,
        supervisor: supervisor,
        name: Opus.Runner,
        halt: fn reason -> send(test, {:halted, reason}) end,
@@ -83,6 +88,9 @@ defmodule Opus.FormulaHandlerRunnerTest do
     Opus.Cache.invalidate({:compiled_component, Prima.Digest.sha256(@echo)})
     hold_artifacts!(host)
     root = attempt!(host, component_type: :reagent, digest: Prima.Digest.sha256(@echo))
+
+    :ok =
+      Opus.Relay.bind(relay, %{assignment: root.assignment, keys: root.keys, host_url: host.url})
 
     :ok =
       :socket.send(

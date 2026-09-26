@@ -14,7 +14,7 @@ defmodule Opus.HttpStreamHandlerBoundaryTest do
   use ExUnit.Case, async: true
 
   alias Opus.HttpStreamHandler
-  alias Opus.Test.ScriptedHost
+  alias Opus.Test.{ScriptedHost, ScriptedKeeper}
 
   defp imports do
     attempt =
@@ -66,8 +66,16 @@ defmodule Opus.HttpStreamHandlerBoundaryTest do
 
     host = ScriptedHost.start!()
     ref = "catalyst:local.streamer:0.1.0"
-    client = ScriptedHost.attempt!(host, component_ref: ref).client
     edge = Opus.Test.EdgeFixtures.edge(domains: ["stream.test"], methods: ["GET"])
+    authority = ScriptedKeeper.authority(edge, Prima.Limits.defaults(:catalyst))
+
+    # Routed as a runner's is: the relay's service end keeps each pin
+    # CYFR grants the attempt and connects each stream with its own.
+    client =
+      host
+      |> ScriptedHost.attempt!(component_ref: ref, authority: authority)
+      |> ScriptedKeeper.relayed!()
+      |> Map.fetch!(:client)
 
     {imports, exec_ref} =
       HttpStreamHandler.build_stream_imports(edge, Prima.Limits.defaults(:catalyst), client, ref)

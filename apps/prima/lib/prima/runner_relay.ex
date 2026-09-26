@@ -27,8 +27,14 @@ defmodule Prima.RunnerRelay do
 
     * `host_call` — `op` (a `Prima.HostAPI` callback a runner makes),
       `header` (the call's signed header, `Prima.WorkerWire.auth_header/0`'s
-      value) and `body` (the sealed call). The service posts it to the
-      member the attempt's assignment names and answers it once.
+      value: printable ASCII, spaces included, at most
+      `Prima.WorkerAuth.max_host_call_header_bytes/0`) and `body` (the
+      sealed call). The runner signs and seals it under the attempt's keys;
+      the service, holding the same keys, verifies the header names the
+      frame's attempt, its runner, its boot and its member
+      (`Prima.WorkerAuth.verify_host_call_header_under/3`), posts it
+      unchanged to the member the attempt's assignment names and answers
+      it once.
     * `fetch` — `pin` (the id of a pin, `Prima.PinnedTarget`), `method`,
       `path` (the path and query, from `/`), `headers` and `body`. The
       service connects to the pin's address itself, and refuses a pin it
@@ -118,7 +124,7 @@ defmodule Prima.RunnerRelay do
   @max_header_name_bytes 256
   @max_header_value_bytes 8192
   @max_path_bytes 8192
-  @max_signed_header_bytes 16_384
+  @max_signed_header_bytes Prima.WorkerAuth.max_host_call_header_bytes()
 
   # 2^53 − 1: the largest integer every JSON reader holds exactly.
   @max_integer 9_007_199_254_740_991
@@ -128,7 +134,7 @@ defmodule Prima.RunnerRelay do
   @methods ~w(GET HEAD POST PUT PATCH DELETE OPTIONS)
 
   @id ~r/\A[\x21-\x7E]{1,256}\z/
-  @signed_header ~r/\A[\x21-\x7E]+\z/
+  @signed_header ~r/\A[\x20-\x7E]+\z/
   @path ~r/\A\/[\x21-\x7E]*\z/
   @code ~r/\A[a-z][a-z0-9_]{0,63}\z/
   @header_name ~r/\A[!#$%&'*+\-.^_`|~0-9A-Za-z]+\z/

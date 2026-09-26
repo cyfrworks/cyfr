@@ -17,7 +17,7 @@ defmodule Prima.RunnerRelayTest do
 
   use ExUnit.Case, async: true
 
-  alias Prima.{HostAPI, RunnerRelay}
+  alias Prima.{HostAPI, PinnedTarget, RunnerRelay, WorkerAuth, WorkerWire}
 
   @vectors Path.expand("../../../../tests/fixtures/runner_relay.json", __DIR__)
            |> File.read!()
@@ -105,6 +105,48 @@ defmodule Prima.RunnerRelayTest do
       end)
 
     assert Enum.sort(Enum.uniq(kinds)) == Enum.sort(RunnerRelay.kinds())
+  end
+
+  test "the exchange's host call is a real one: its header verifies and its bodies open" do
+    auth =
+      Path.expand("../../../../tests/fixtures/worker_auth.json", __DIR__)
+      |> File.read!()
+      |> Jason.decode!()
+
+    [call, answer, fetch | _rest] = Enum.map(@vectors["exchange"], &frame(json(&1)))
+    call_key = Base.decode16!(auth["keys"]["attempt_call_hex"], case: :lower)
+    seal_key = Base.decode16!(auth["keys"]["attempt_seal_hex"], case: :lower)
+    now = auth["call"]["ts"]
+
+    assert byte_size(call.header) <= WorkerAuth.max_host_call_header_bytes()
+    assert call.header =~ " "
+
+    assert {:ok, fields, hash} =
+             WorkerAuth.verify_host_call_header_under(call_key, call.header, now)
+
+    assert fields.attempt == @attempt and fields.runner == auth["call"]["runner"]
+    assert WorkerAuth.verify_body(hash, call.body) == :ok
+    assert {:ok, json} = WorkerAuth.open_call(seal_key, :body, fields, call.body)
+    assert {:ok, :egress_pin, _args} = WorkerWire.read_request_body(HostAPI, Jason.decode!(json))
+
+    assert {:ok, pin} = WorkerAuth.open_call(seal_key, :answer, fields, answer.body)
+    assert {:ok, wire} = pin |> Jason.decode!() |> WorkerWire.read_answer()
+    assert {:ok, %PinnedTarget{id: id}} = PinnedTarget.read(wire)
+    assert id == fetch.pin
+  end
+
+  test "a host call's header is printable ASCII up to the header's own bound" do
+    runner = RunnerRelay.new(:runner, @attempt)
+    call = %{kind: :host_call, attempt: @attempt, op: :renew, body: ""}
+    longest = String.duplicate("a", WorkerAuth.max_host_call_header_bytes())
+
+    assert {:ok, _bytes, _runner} = RunnerRelay.encode(runner, Map.put(call, :header, longest))
+
+    for header <- [longest <> "a", "v1\tkind=call", "v1\nkind", "é"] do
+      assert_raise ArgumentError, fn ->
+        RunnerRelay.encode(runner, Map.put(call, :header, header))
+      end
+    end
   end
 
   test "the exchange encodes to its bytes and decodes to the frames sent" do
@@ -311,7 +353,7 @@ defmodule Prima.RunnerRelayTest do
 
       for bad <- [
             %{call | op: :runner_exited},
-            %{call | header: "has space"},
+            %{call | header: "has\ttab"},
             %{call | body: String.duplicate("a", RunnerRelay.max_body_bytes() + 1)},
             Map.delete(call, :op),
             Map.put(call, :seq, 0),

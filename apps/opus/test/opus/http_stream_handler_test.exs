@@ -6,19 +6,31 @@ defmodule Opus.HttpStreamHandlerTest do
 
   alias Opus.HttpStreamHandler
   alias Opus.Test.EdgeFixtures
-  alias Opus.Test.ScriptedHost
+  alias Opus.Test.{ScriptedHost, ScriptedKeeper}
 
   @pins %{"localhost" => "127.0.0.1", "api.openai.com" => "127.0.0.1"}
 
   # The host client of an attempt on a scripted host for `component_ref`,
-  # which takes every request from the rate, pins every address from
-  # `pins` and records every refusal. The default pins the loopback names
-  # these tests reach, so a request that is refused a connection fails
-  # fast and on this machine.
-  defp attached_host(component_ref, _limits, pins \\ @pins) do
+  # routed as a runner's is through a relay joined in this VM, whose
+  # service end takes every request from the rate and connects to the pin;
+  # the host pins every address from `pins` and records every refusal. The
+  # attempt's authority is `limits` under an edge reaching the loopback
+  # names these tests use, so the handler's own edge decides each refusal;
+  # a request that is refused a connection fails fast and on this machine.
+  defp attached_host(component_ref, limits, pins \\ @pins) do
     host = ScriptedHost.start!()
     ScriptedHost.pins(host, pins)
-    ScriptedHost.attempt!(host, component_ref: component_ref).client
+
+    relay_edge =
+      EdgeFixtures.edge(domains: ["localhost", "api.openai.com"], methods: ["GET", "POST"])
+
+    host
+    |> ScriptedHost.attempt!(
+      component_ref: component_ref,
+      authority: ScriptedKeeper.authority(relay_edge, limits)
+    )
+    |> ScriptedKeeper.relayed!()
+    |> Map.fetch!(:client)
   end
 
   # ============================================================================
@@ -532,6 +544,60 @@ defmodule Opus.HttpStreamHandlerTest do
       assert decoded["data"] == ""
       assert decoded["done"] == false
       assert micros >= 90_000
+
+      HttpStreamHandler.cleanup_registry(exec_ref)
+      Process.exit(server, :kill)
+      :gen_tcp.close(listen)
+    end
+  end
+
+  describe "a body past one credit window" do
+    test "streams whole: the relay sends on as the guest's reads grant credit" do
+      # Past the initial credit (`Prima.RunnerRelay.initial_credit/0`): the
+      # relay's service end holds the rest until the reads grant it back.
+      size = Prima.RunnerRelay.initial_credit() + 1_500_000
+      body = :binary.copy("0123456789abcdef", div(size, 16))
+      {:ok, listen} = :gen_tcp.listen(0, [:binary, active: false, reuseaddr: true])
+      {:ok, port} = :inet.port(listen)
+
+      server =
+        spawn(fn ->
+          {:ok, sock} = :gen_tcp.accept(listen, 5_000)
+          _ = :gen_tcp.recv(sock, 0, 1_000)
+
+          :ok =
+            :gen_tcp.send(
+              sock,
+              "HTTP/1.1 200 OK\r\ncontent-length: #{byte_size(body)}\r\n" <>
+                "connection: close\r\n\r\n" <> body
+            )
+
+          Process.sleep(2_000)
+          :gen_tcp.close(sock)
+        end)
+
+      edge = EdgeFixtures.edge(domains: ["localhost"], methods: ["GET"])
+      limits = EdgeFixtures.limits(max_response_size: 16 * 1_048_576)
+
+      {imports, exec_ref} =
+        HttpStreamHandler.build_stream_imports(
+          edge,
+          limits,
+          attached_host("catalyst:local.test-window:1.0.0", limits),
+          "catalyst:local.test-window:1.0.0"
+        )
+
+      %{"request" => {:fn, request_fn}, "read" => {:fn, read_fn}} =
+        imports["cyfr:http/streaming@0.1.0"]
+
+      request =
+        Jason.encode!(%{"method" => "GET", "url" => "http://localhost:#{port}/big", "body" => ""})
+
+      assert %{"handle" => handle} = request_fn.(request) |> Jason.decode!()
+
+      reads = read_until_done(read_fn, handle, 2_000)
+      assert List.last(reads)["status"] == 200
+      assert Enum.map_join(reads, & &1["data"]) == body
 
       HttpStreamHandler.cleanup_registry(exec_ref)
       Process.exit(server, :kill)

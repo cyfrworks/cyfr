@@ -19,8 +19,7 @@ defmodule Opus.SettingsTest do
   @runner_env %{
     "OPUS_RUNNER_ID" => "runner_1",
     "OPUS_SERVICE_ID" => "wrk_local",
-    "OPUS_BOOT_ID" => "nonode@nohost#boot_1",
-    "OPUS_HOST_URL" => "http://127.0.0.1:4300"
+    "OPUS_BOOT_ID" => "nonode@nohost#boot_1"
   }
 
   describe "pool/2" do
@@ -212,16 +211,30 @@ defmodule Opus.SettingsTest do
   end
 
   describe "runner/1" do
-    test "reads the runner's settings from its environment, with the control descriptor and grace defaulted" do
+    test "reads the runner's settings from its environment, with the descriptors and grace defaulted" do
       assert {:ok,
               %{
                 runner_id: "runner_1",
                 service_id: "wrk_local",
                 boot: "nonode@nohost#boot_1",
-                host_url: "http://127.0.0.1:4300",
                 control_fd: 3,
+                relay: {:fd, 4},
                 watchdog_grace_ms: 5_000
-              }} = Settings.runner(@runner_env)
+              } = settings} = Settings.runner(@runner_env)
+
+      # A runner knows no address of CYFR's: it reaches CYFR through its relay.
+      refute Map.has_key?(settings, :host_url)
+
+      assert {:ok, %{relay: {:fd, 5}}} =
+               Settings.runner(Map.put(@runner_env, "OPUS_RELAY_FD", "5"))
+
+      assert {:ok, %{relay: {:socket, "/tmp/runner/relay.sock"}}} =
+               Settings.runner(
+                 Map.merge(@runner_env, %{
+                   "OPUS_RELAY_FD" => "4",
+                   "OPUS_RELAY_SOCKET" => "/tmp/runner/relay.sock"
+                 })
+               )
 
       assert {:ok, %{control_fd: 0, watchdog_grace_ms: 250}} =
                Settings.runner(
@@ -255,8 +268,14 @@ defmodule Opus.SettingsTest do
       assert {:error, {:malformed, "OPUS_RUNNER_ID"}} =
                Settings.runner(%{@runner_env | "OPUS_RUNNER_ID" => "has space"})
 
-      assert {:error, {:malformed, "OPUS_HOST_URL"}} =
-               Settings.runner(%{@runner_env | "OPUS_HOST_URL" => "not a url"})
+      assert {:error, {:malformed, "OPUS_RELAY_FD"}} =
+               Settings.runner(Map.put(@runner_env, "OPUS_RELAY_FD", "2"))
+
+      assert {:error, {:malformed, "OPUS_RELAY_SOCKET"}} =
+               Settings.runner(Map.put(@runner_env, "OPUS_RELAY_SOCKET", "relay.sock"))
+
+      assert {:error, {:malformed, "OPUS_RELAY_SOCKET"}} =
+               Settings.runner(Map.put(@runner_env, "OPUS_RELAY_SOCKET", "/tmp/../relay.sock"))
 
       assert {:error, {:malformed, "OPUS_CONTROL_FD"}} =
                Settings.runner(Map.put(@runner_env, "OPUS_CONTROL_FD", "-1"))
@@ -275,12 +294,13 @@ defmodule Opus.SettingsTest do
           watchdog_grace_ms: 5_000
         })
 
+      # No address of CYFR's, whatever the service holds: the runner's host
+      # calls leave through its relay.
       assert env == %{
                "OPUS_ROLE" => "runner",
                "OPUS_RUNNER_ID" => "runner_1",
                "OPUS_SERVICE_ID" => "wrk_local",
                "OPUS_BOOT_ID" => "boot_1",
-               "OPUS_HOST_URL" => "http://127.0.0.1:4300",
                "OPUS_WATCHDOG_GRACE_MS" => "5000"
              }
 

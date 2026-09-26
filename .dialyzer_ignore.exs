@@ -33,8 +33,6 @@
   {"lib/mix/tasks/cyfr.bench.step.ex", :unknown_function},
   {"lib/opus/component_cache.ex", :unknown_type},
   {"lib/opus/formula_handler.ex", :missing_range},
-  {"lib/opus/http_handler.ex", :pattern_match},
-  {"lib/opus/http_handler.ex", :pattern_match_cov},
   {"lib/opus/runtime.ex", :call},
   {"lib/opus/runtime.ex", :extra_range},
   {"lib/opus/runtime.ex", :pattern_match},

@@ -23,6 +23,17 @@ defmodule Opus.RunnerProcess do
   attaches. `release/2` asks the keeper to end the runner; when this
   process itself is stopped, the runner is released with no grace.
 
+  When the runner attaches, this process starts the service's end of its
+  relay (`Opus.Relay`), linked, and hands it every relay byte the keeper
+  carries; the relay writes back through the keeper itself. `assign/5`
+  binds the relay to the attempt it assigns, from the assignment and the
+  opened keys, before the `assign` is written (or, before the runner
+  attaches, once the relay starts), so the runner's first host call finds
+  it bound. A relay that stops because it closed the channel, or failed,
+  is `{:error, {:relay, reason}}`: the pool retires the runner, as for any
+  failure. One whose runner's end of the stream ended is heard as the
+  runner's own end.
+
   Guest data never crosses here: control bytes are frames, and the
   runner's own log lines, which the keeper relays, are logged under the
   runner's id. An `assign` carries the attempt's opened keys, so its
@@ -47,11 +58,29 @@ defmodule Opus.RunnerProcess do
   @doc "Start a handle. Options: `:id`, `:keeper`, `:spec` (`t:Opus.Keeper.spec/0`), `:owner`."
   def start_link(opts), do: GenServer.start_link(__MODULE__, opts)
 
-  @doc "Send `message` (an `assign` or `cancel_child`) to the runner; raises for a message that is not one."
+  @doc "Send `message`, a `cancel_child`, to the runner; an `assign` is `assign/5`'s."
   @spec send_message(pid(), RunnerControl.message()) :: :ok | {:error, term()}
-  def send_message(pid, %{type: type} = message) when type in [:assign, :cancel_child] do
+  def send_message(pid, %{type: :cancel_child} = message) do
     line = message |> RunnerControl.encode() |> IO.iodata_to_binary()
     GenServer.call(pid, {:send, line})
+  end
+
+  @doc """
+  Assign the runner the attempt `token` names: bind its relay to the
+  attempt (`Opus.Relay.bind/2`, `host_url` being where its calls go when
+  the assignment names no address), then send the `assign` with `input`
+  and the opened `keys`. Raises for an `assign` the protocol refuses.
+  """
+  @spec assign(pid(), String.t(), String.t(), Prima.WorkerAuth.attempt_keys(), String.t()) ::
+          :ok | {:error, term()}
+  def assign(pid, token, input, keys, host_url)
+      when is_binary(token) and is_binary(input) and is_binary(host_url) do
+    line =
+      %{type: :assign, assignment: token, input: input, keys: keys}
+      |> RunnerControl.encode()
+      |> IO.iodata_to_binary()
+
+    GenServer.call(pid, {:assign, line, %{assignment: token, keys: keys, host_url: host_url}})
   end
 
   @doc "End the runner: a term signal, `grace_ms` to report, then the kill."
@@ -74,6 +103,8 @@ defmodule Opus.RunnerProcess do
        spec: Keyword.fetch!(opts, :spec),
        owner: Keyword.fetch!(opts, :owner),
        channel: nil,
+       relay: nil,
+       binding: nil,
        os_pid: nil,
        attached: false,
        pending: [],
@@ -102,12 +133,39 @@ defmodule Opus.RunnerProcess do
   def handle_call({:send, line}, _from, state),
     do: {:reply, :ok, %{state | pending: [state.pending, line]}}
 
+  def handle_call({:assign, line, binding}, _from, %{relay: nil, attached: false} = state),
+    do: {:reply, :ok, %{state | binding: binding, pending: [state.pending, line]}}
+
+  def handle_call({:assign, _line, _binding}, _from, %{relay: nil} = state),
+    do: {:reply, {:error, {:relay, :closed}}, state}
+
+  def handle_call({:assign, line, binding}, _from, state) do
+    case Opus.Relay.bind(state.relay, binding) do
+      :ok -> {:reply, state.keeper.send(state.channel, line), state}
+      {:error, reason} -> {:reply, {:error, {:relay, reason}}, state}
+    end
+  end
+
   def handle_call(:info, _from, state), do: {:reply, %{id: state.id, os_pid: state.os_pid}, state}
 
   @impl true
   def handle_cast({:release, grace_ms}, state), do: {:noreply, release_runner(state, grace_ms)}
 
+  # The relay stopped. One that closed the channel, or failed, retires a
+  # runner still running. One whose runner's end of the stream ended is the
+  # runner's own exit, heard as its channel's close and its process's end:
+  # a runner that closed its relay and runs on reaches nothing, and fails
+  # what it holds.
   @impl true
+  def handle_info({:EXIT, relay, {:shutdown, :relay_ended}}, %{relay: relay} = state),
+    do: {:noreply, %{state | relay: nil}}
+
+  def handle_info({:EXIT, relay, reason}, %{relay: relay} = state) do
+    state = %{state | relay: nil}
+    unless state.closed or state.released, do: notify(state, {:error, {:relay, reason}})
+    {:noreply, state}
+  end
+
   def handle_info({:EXIT, _pid, _reason}, state), do: {:noreply, state}
 
   def handle_info(msg, %{channel: channel} = state) when channel != nil do
@@ -140,10 +198,18 @@ defmodule Opus.RunnerProcess do
   def format_status(status) do
     Map.new(status, fn
       {:state, %{pending: pending} = state} ->
-        {:state, %{state | pending: {:redacted, IO.iodata_length(pending)}}}
+        {:state,
+         %{
+           state
+           | pending: {:redacted, IO.iodata_length(pending)},
+             binding: if(state.binding, do: :redacted)
+         }}
 
       {:message, {:send, line}} ->
         {:message, {:send, {:redacted, byte_size(line)}}}
+
+      {:message, {:assign, line, _binding}} ->
+        {:message, {:assign, {:redacted, byte_size(line)}, :redacted}}
 
       {:log, _log} ->
         {:log, []}
@@ -156,6 +222,7 @@ defmodule Opus.RunnerProcess do
   defp on_event({:spawned, os_pid}, state), do: %{state | os_pid: os_pid}
 
   defp on_event(:attached, state) do
+    state = start_relay(state)
     pending = IO.iodata_to_binary(state.pending)
 
     if pending != "" do
@@ -170,6 +237,20 @@ defmodule Opus.RunnerProcess do
   end
 
   defp on_event({:control, data}, state), do: lines(%{state | buffer: state.buffer <> data})
+
+  defp on_event({:relay, data}, %{relay: relay} = state) when relay != nil do
+    Opus.Relay.deliver(relay, data)
+    state
+  end
+
+  defp on_event({:relay, _data}, state), do: state
+
+  defp on_event(:relay_closed, %{relay: relay} = state) when relay != nil do
+    Opus.Relay.ended(relay)
+    state
+  end
+
+  defp on_event(:relay_closed, state), do: state
 
   defp on_event({:log, data}, state) do
     Logger.info("[Opus.RunnerProcess] runner #{state.id}: #{String.trim_trailing(data)}")
@@ -229,6 +310,27 @@ defmodule Opus.RunnerProcess do
       [_partial] ->
         state
     end
+  end
+
+  # The relay's writes go through the keeper from the relay's own process,
+  # on the handle the runner attached with. An assignment made before the
+  # runner attached binds it now, before the held `assign` is written.
+  defp start_relay(state) do
+    {keeper, channel} = {state.keeper, state.channel}
+
+    {:ok, relay} =
+      Opus.Relay.start_link(
+        runner: state.id,
+        write: fn data -> keeper.send_relay(channel, data) end,
+        close: fn -> keeper.close_relay(channel) end
+      )
+
+    case state.binding && Opus.Relay.bind(relay, state.binding) do
+      {:error, reason} -> notify(state, {:error, {:relay, reason}})
+      _bound -> :ok
+    end
+
+    %{state | relay: relay, binding: nil}
   end
 
   defp release_runner(%{channel: nil} = state, _grace_ms), do: state

@@ -10,10 +10,9 @@ defmodule Opus.HttpRequestValidationTest do
   alias Opus.Test.EdgeFixtures
   alias Opus.Test.ScriptedHost
 
-  # A scripted host, the client of an attempt on it — which takes each
-  # request from the attempt's rate through a `take_rate` host call and asks
-  # for each request's address through an `egress_pin` one, pinned from the
-  # host's table — and the component reference its bucket keys on.
+  # A scripted host, the client of an attempt on it — which asks for each
+  # request's address through an `egress_pin` host call, pinned from the
+  # host's table — and the component reference.
   defp attached_host(pins \\ %{"localhost" => "127.0.0.1"}) do
     host = ScriptedHost.start!()
     ScriptedHost.pins(host, pins)
@@ -22,7 +21,7 @@ defmodule Opus.HttpRequestValidationTest do
   end
 
   # Every call goes through the full production entry with the host client a
-  # real caller supplies; the scripted host admits every request to the rate.
+  # real caller supplies.
   defp validate(json, edge, limits, opts \\ []) do
     {_host, client, ref} = attached_host()
     HttpRequestValidation.validate(json, edge, limits, client, ref, opts)
@@ -55,8 +54,7 @@ defmodule Opus.HttpRequestValidationTest do
                )
 
       assert request.ip == "127.0.0.1"
-      assert request.pin_req_opts[:url] == "http://127.0.0.1/x"
-      assert request.pin_req_opts[:connect_options][:hostname] == "localhost"
+      refute Map.has_key?(request, :pin_req_opts)
       assert request.pinned.target.host == "localhost"
       assert request.method_atom == :get
       assert request.method == "GET"
@@ -98,7 +96,7 @@ defmodule Opus.HttpRequestValidationTest do
                )
 
       assert request.ip == "10.0.0.5"
-      assert request.pin_req_opts[:url] == "http://10.0.0.5/x"
+      assert request.pinned.target.ip == "10.0.0.5"
     end
 
     test "rejects invalid JSON" do
@@ -365,58 +363,23 @@ defmodule Opus.HttpRequestValidationTest do
   end
 
   describe "egress rate limiting" do
-    test "the rate is taken from CYFR, per component, before the pin, and its refusal denies the request" do
-      {host, client, ref} = attached_host()
-      limits = EdgeFixtures.limits()
-
-      ScriptedHost.script(host, "take_rate", [
-        {:ok, true},
-        {:error, {:guest_error, "rate_limited", "Rate limit exceeded for http:" <> ref}}
-      ])
-
-      assert {:ok, _} =
-               HttpRequestValidation.validate(encode(%{}), localhost_edge(), limits, client, ref)
-
-      assert {:error, :rate_limited, message} =
-               HttpRequestValidation.validate(encode(%{}), localhost_edge(), limits, client, ref)
-
-      assert message =~ "Rate limit"
-
-      assert [%{args: %{"bucket" => bucket}}, %{args: %{"bucket" => bucket}}] =
-               ScriptedHost.requests(host, "take_rate")
-
-      assert bucket == "http:" <> ref
-
-      # The refused request asked for no address: only the admitted one did.
-      assert length(ScriptedHost.requests(host, "egress_pin")) == 1
-    end
-
-    test "the rate is the attempt's: the limits the runner passes grant nothing" do
+    # The rate is the relay's service end's to take (`Opus.Relay`), before
+    # it connects: a runner's own `take_rate` is refused there.
+    test "the runner takes no rate itself: it pins, and the relay takes the rate" do
       {host, client, ref} = attached_host()
       ScriptedHost.script(host, "take_rate", {:error, {:guest_error, "rate_limited", "denied"}})
-      wide = EdgeFixtures.limits(rate_limit: %{requests: 1000, window: "1m"})
 
-      assert {:error, :rate_limited, "denied"} =
-               HttpRequestValidation.validate(encode(%{}), localhost_edge(), wide, client, ref)
-    end
+      assert {:ok, _request} =
+               HttpRequestValidation.validate(
+                 encode(%{}),
+                 localhost_edge(),
+                 EdgeFixtures.limits(),
+                 client,
+                 ref
+               )
 
-    test "a request is refused once its attempt is no longer current, or the answer is lost" do
-      {host, client, ref} = attached_host()
-      ScriptedHost.script(host, "take_rate", [{:error, :lost}, {:error, :unavailable}, :drop])
-      limits = EdgeFixtures.limits()
-
-      assert {:error, :rate_limited, message} =
-               HttpRequestValidation.validate(encode(%{}), localhost_edge(), limits, client, ref)
-
-      assert message =~ "not current"
-
-      assert {:error, :rate_limited, "HTTP egress refused: rate limiter unavailable"} =
-               HttpRequestValidation.validate(encode(%{}), localhost_edge(), limits, client, ref)
-
-      assert {:error, :rate_limited, message} =
-               HttpRequestValidation.validate(encode(%{}), localhost_edge(), limits, client, ref)
-
-      assert message =~ "lost"
+      assert ScriptedHost.requests(host, "take_rate") == []
+      assert length(ScriptedHost.requests(host, "egress_pin")) == 1
     end
   end
 end

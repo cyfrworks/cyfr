@@ -119,6 +119,13 @@ defmodule Prima.WorkerAuth do
   worker service the report names, derived from the root, and
   `verify_request/4` with the dispatch key a worker service holds.
 
+  A worker service holds the opened keys of every attempt it started, and
+  verifies a host call its runner hands it before it posts the call
+  (`verify_host_call_header_under/3`): the first four refusals, under the
+  call key it holds rather than one derived from the root. The fields it
+  answers are the service's to compare with the attempt, the runner, the
+  boot and the member it holds; the member's standing is CYFR's.
+
   ## Refusing before the body
 
   A listener refuses what the header alone decides before it reads the
@@ -188,6 +195,18 @@ defmodule Prima.WorkerAuth do
         ],
     body_hash_in_header: true
   }
+
+  # A header's longest spelling: its version and kind, then each field as
+  # ` name=value` at the value's longest (a string of 256 bytes, an integer
+  # up to 2^53 − 1 in 16 digits), the 64-digit body hash and the 43
+  # characters of an unpadded base64url HMAC-SHA256.
+  @max_call_header_bytes byte_size("v1 kind=call") +
+                           Enum.sum(
+                             Enum.map(@call.fields, fn
+                               {name, :string} -> byte_size(" #{name}=") + 256
+                               {name, :integer} -> byte_size(" #{name}=") + 16
+                             end)
+                           ) + byte_size(" body=") + 64 + byte_size(" mac=") + 43
 
   @dispatch_fields [service: :string, boot: :string, ts: :integer, nonce: :string]
   @request %MacEnvelope{
@@ -464,6 +483,33 @@ defmodule Prima.WorkerAuth do
       {:ok, fields(call), call.body_hash}
     end
   end
+
+  @doc """
+  A host call's fields and the body hash its header names, verified under
+  `call_key`, the attempt's call key as its holder has it, before the body
+  is read: `:unknown_version`, `:malformed`, `:outside_window` and
+  `:bad_mac`, in `verify_host_call_header/4`'s order. The generation and
+  the member are not checked here: they are the verifying member's
+  standing, which only CYFR holds. `verify_body/2` completes it.
+  """
+  @spec verify_host_call_header_under(binary(), term(), integer()) ::
+          {:ok, host_call(), body_hash()} | {:error, dispatch_refusal()}
+  def verify_host_call_header_under(call_key, header, now)
+      when byte_size(call_key) == 32 and is_integer(now) do
+    with {:ok, call, mac} <- MacEnvelope.parse(@call, header),
+         :ok <- within_window(call.ts, now),
+         :ok <- authentic_header(@call, call_key, call, mac) do
+      {:ok, fields(call), call.body_hash}
+    end
+  end
+
+  @doc """
+  The most bytes a host call's header spans: `v1 kind=call`, every field
+  at its longest (a string field's 256 bytes, an integer field's 16
+  decimal digits), the body hash and the MAC.
+  """
+  @spec max_host_call_header_bytes() :: pos_integer()
+  def max_host_call_header_bytes, do: @max_call_header_bytes
 
   @doc """
   Whether `body` is the one a verified header named by `body_hash`. A

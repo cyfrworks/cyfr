@@ -51,10 +51,14 @@ defmodule Opus.Settings do
   explicit environment, and a runner holds no configuration of its own.
   `OPUS_RUNNER_ID` is the id it presents in its host calls, `OPUS_SERVICE_ID`
   and `OPUS_BOOT_ID` the worker service and boot it presents from,
-  `OPUS_HOST_URL` the base URL of CYFR's host API, `OPUS_CONTROL_FD` the
-  file descriptor its control channel is on (3 by default; 0 means the
-  channel is its standard input and output), and `OPUS_WATCHDOG_GRACE_MS`
-  the grace above. A runner that can see `OPUS_SERVICE_KEY` was given the
+  `OPUS_CONTROL_FD` the file descriptor its control channel is on (3 by
+  default; 0 means the channel is its standard input and output),
+  `OPUS_RELAY_FD` the file descriptor its relay to the service is on (4 by
+  default, `Opus.Relay.Runner`), or `OPUS_RELAY_SOCKET` the unix socket the
+  test build's direct keeper gives it in its place, and
+  `OPUS_WATCHDOG_GRACE_MS` the grace above. A runner is given no address of
+  CYFR's: it has no network, and every host call it makes leaves through
+  its relay, whose service end posts it. A runner that can see `OPUS_SERVICE_KEY` was given the
   service's own key, which no runner holds, and refuses to start.
   """
 
@@ -71,7 +75,7 @@ defmodule Opus.Settings do
   @variables ~w(OPUS_ROLE OPUS_SERVICE_ID OPUS_SERVICE_KEY OPUS_HOST_URL OPUS_BIND OPUS_PORT
                 OPUS_POOL_SIZE OPUS_IDLE_TTL_MS OPUS_WATCHDOG_GRACE_MS OPUS_RELEASE_GRACE_MS
                 OPUS_RUNNER_MEMORY_BYTES OPUS_ATTACH_DIR OPUS_RUNNER_ID OPUS_BOOT_ID
-                OPUS_CONTROL_FD)
+                OPUS_CONTROL_FD OPUS_RELAY_FD OPUS_RELAY_SOCKET)
 
   # The opus container's limits, which docker-compose.yml interpolates from
   # the project .env and no release reads. A development boot sources that
@@ -107,8 +111,8 @@ defmodule Opus.Settings do
           runner_id: String.t(),
           service_id: String.t(),
           boot: String.t(),
-          host_url: String.t(),
           control_fd: non_neg_integer(),
+          relay: {:fd, pos_integer()} | {:socket, String.t()},
           watchdog_grace_ms: pos_integer()
         }
 
@@ -261,16 +265,16 @@ defmodule Opus.Settings do
          {:ok, runner_id} <- id(env, "OPUS_RUNNER_ID"),
          {:ok, service_id} <- service_id(env),
          {:ok, boot} <- id(env, "OPUS_BOOT_ID"),
-         {:ok, host_url} <- host_url(env),
          {:ok, control_fd} <- control_fd(env),
+         {:ok, relay} <- relay(env),
          {:ok, grace} <- grace(env) do
       {:ok,
        %{
          runner_id: runner_id,
          service_id: service_id,
          boot: boot,
-         host_url: host_url,
          control_fd: control_fd,
+         relay: relay,
          watchdog_grace_ms: grace
        }}
     end
@@ -298,7 +302,9 @@ defmodule Opus.Settings do
   @doc """
   The environment a service gives a runner for `settings` (`t:runner/0`
   minus what the keeper decides): every `OPUS_*` variable `runner/1`
-  reads, and nothing else. The keeper adds the control descriptor.
+  reads, and nothing else. The keeper adds the control and relay
+  descriptors. No address of CYFR's is among them: the runner reaches
+  CYFR only through its relay.
   """
   @spec runner_environment(map()) :: %{String.t() => String.t()}
   def runner_environment(%{runner_id: runner_id, service_id: service_id, boot: boot} = settings) do
@@ -307,7 +313,6 @@ defmodule Opus.Settings do
       "OPUS_RUNNER_ID" => runner_id,
       "OPUS_SERVICE_ID" => service_id,
       "OPUS_BOOT_ID" => boot,
-      "OPUS_HOST_URL" => Map.fetch!(settings, :host_url),
       "OPUS_WATCHDOG_GRACE_MS" => Integer.to_string(Map.fetch!(settings, :watchdog_grace_ms))
     }
   end
@@ -374,25 +379,32 @@ defmodule Opus.Settings do
     end
   end
 
-  defp host_url(env) do
-    case Map.get(env, "OPUS_HOST_URL") do
-      nil ->
-        {:error, {:missing, "OPUS_HOST_URL"}}
-
-      url ->
-        case Prima.WorkerWire.base_url(url) do
-          {:ok, base} -> {:ok, base}
-          :error -> {:error, {:malformed, "OPUS_HOST_URL"}}
-        end
-    end
-  end
-
   defp control_fd(env) do
     case Map.get(env, "OPUS_CONTROL_FD", "3") do
       text ->
         case Integer.parse(text) do
           {fd, ""} when fd >= 0 -> {:ok, fd}
           _ -> {:error, {:malformed, "OPUS_CONTROL_FD"}}
+        end
+    end
+  end
+
+  # The keeper's descriptor 4, or the unix socket the test build's direct
+  # keeper names in its place: an absolute path, which wins when set.
+  defp relay(env) do
+    case Map.fetch(env, "OPUS_RELAY_SOCKET") do
+      {:ok, "/" <> _ = path} ->
+        if Path.expand(path) == path,
+          do: {:ok, {:socket, path}},
+          else: {:error, {:malformed, "OPUS_RELAY_SOCKET"}}
+
+      {:ok, _other} ->
+        {:error, {:malformed, "OPUS_RELAY_SOCKET"}}
+
+      :error ->
+        case Integer.parse(Map.get(env, "OPUS_RELAY_FD", "4")) do
+          {fd, ""} when fd > 2 -> {:ok, {:fd, fd}}
+          _ -> {:error, {:malformed, "OPUS_RELAY_FD"}}
         end
     end
   end
@@ -429,5 +441,7 @@ defmodule Opus.Settings do
   def expected("OPUS_SERVICE_ID"), do: Opus.Credentials.expected(:service_id)
   def expected("OPUS_HOST_URL"), do: Opus.Credentials.expected(:host_url)
   def expected("OPUS_CONTROL_FD"), do: "a file descriptor number, 0 for standard input and output"
+  def expected("OPUS_RELAY_FD"), do: "a file descriptor number above 2"
+  def expected("OPUS_RELAY_SOCKET"), do: "an absolute path to a unix socket"
   def expected("OPUS_WATCHDOG_GRACE_MS"), do: "a positive integer of milliseconds"
 end

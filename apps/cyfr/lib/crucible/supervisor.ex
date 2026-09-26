@@ -73,8 +73,9 @@ defmodule Crucible.Supervisor do
         # `:execution_sweeper_enabled`. 5 s: its terminate releasing the
         # claims it holds.
         Supervisor.child_spec(Crucible.WorkerWatch, shutdown: 5_000),
-        # The host API: where the worker services' runners post their host
-        # calls and the services their exit reports. After the attempt tree
+        # The host API: where the worker services post their runners' host
+        # calls, which each service verifies and relays, and their exit
+        # reports. After the attempt tree
         # it serves, so a shutdown stops taking calls before the attempts
         # they reach go, and drains the calls already open for `drain_ms`.
         {Crucible.HostListener,

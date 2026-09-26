@@ -6,10 +6,13 @@ defmodule Opus.HttpHandlerTest do
 
   # Every address a request here connects to is the one the scripted host
   # pins it at, from the table each test sets: the engine resolves no name.
+  # Every client is routed as a runner's is, through a relay joined in this
+  # VM (`Opus.Test.ScriptedKeeper.relayed!/2`): the handler connects
+  # nowhere, and the relay's service end connects to the pinned address.
 
   alias Opus.HttpHandler
   alias Opus.Test.EdgeFixtures
-  alias Opus.Test.ScriptedHost
+  alias Opus.Test.{ScriptedHost, ScriptedKeeper}
 
   defmodule Upstream do
     @moduledoc false
@@ -42,17 +45,18 @@ defmodule Opus.HttpHandlerTest do
   end
 
   # The host client of an attempt on a scripted host for `component_ref`,
-  # which takes every request from the rate, pins every address from
-  # `pins` and records every refusal.
+  # through the attempt's relay, which takes every request from the rate;
+  # the host pins every address from `pins` and records every refusal.
   defp attached_host(component_ref, _limits, pins \\ %{}) do
     host = ScriptedHost.start!()
     ScriptedHost.pins(host, pins)
-    ScriptedHost.attempt!(host, component_ref: component_ref).client
+    ScriptedKeeper.relayed!(ScriptedHost.attempt!(host, component_ref: component_ref)).client
   end
 
-  # A scripted host pinning from `pins`, the client of an attempt on it,
-  # and a loopback upstream with the requests it saw.
-  defp upstream_and_host(pins) do
+  # A scripted host pinning from `pins`, the client of an attempt on it
+  # whose authority is `edge` under the default limits, and a loopback
+  # upstream with the requests it saw.
+  defp upstream_and_host(pins, edge) do
     agent = start_supervised!({Agent, fn -> [] end})
 
     server =
@@ -72,7 +76,14 @@ defmodule Opus.HttpHandlerTest do
       answer
     end)
 
-    attempt = ScriptedHost.attempt!(host, component_ref: "catalyst:local.redirects:1.0.0")
+    attempt =
+      ScriptedKeeper.relayed!(
+        ScriptedHost.attempt!(host,
+          component_ref: "catalyst:local.redirects:1.0.0",
+          authority: ScriptedKeeper.authority(edge, EdgeFixtures.limits())
+        )
+      )
+
     %{host: host, client: attempt.client, port: port, seen: fn -> Agent.get(agent, & &1) end}
   end
 
@@ -245,7 +256,7 @@ defmodule Opus.HttpHandlerTest do
       edge = EdgeFixtures.edge(domains: ["localhost"], methods: ["GET", "POST"])
       scripted = ScriptedHost.start!()
       ScriptedHost.pins(scripted, %{"localhost" => :denied})
-      host = ScriptedHost.attempt!(scripted, component_ref: ref).client
+      host = ScriptedKeeper.relayed!(ScriptedHost.attempt!(scripted, component_ref: ref)).client
 
       request =
         Jason.encode!(%{
@@ -662,7 +673,7 @@ defmodule Opus.HttpHandlerTest do
     } do
       scripted = ScriptedHost.start!()
       ScriptedHost.pins(scripted, %{"meta.example.com" => "169.254.169.254"})
-      host = ScriptedHost.attempt!(scripted, component_ref: ref).client
+      host = ScriptedKeeper.relayed!(ScriptedHost.attempt!(scripted, component_ref: ref)).client
 
       request = Jason.encode!(%{"method" => "GET", "url" => "http://meta.example.com/latest"})
       decoded = request |> HttpHandler.execute(edge, limits, host, ref) |> Jason.decode!()
@@ -724,8 +735,8 @@ defmodule Opus.HttpHandlerTest do
     test "is exactly the one the host pins, private or not, with the hostname kept" do
       # The private-address policy is the host's: the upstream is on the
       # loopback, which the host pins here, and the engine connects there.
-      context = upstream_and_host(%{"api.test" => "127.0.0.1"})
       edge = EdgeFixtures.edge(domains: ["api.test"], methods: ["GET"])
+      context = upstream_and_host(%{"api.test" => "127.0.0.1"}, edge)
 
       assert %{"status" => 200, "body" => "reached /hello"} =
                fetch(context, edge, "http://api.test:#{context.port}/hello")
@@ -736,10 +747,10 @@ defmodule Opus.HttpHandlerTest do
     end
 
     test "is a plain literal for a family 4 pin and a bracketed one for family 6" do
-      context =
-        upstream_and_host(%{"v4.test" => "203.0.113.10", "v6.test" => "2001:db8::30"})
-
       edge = EdgeFixtures.edge(domains: ["v4.test", "v6.test"], methods: ["GET"])
+
+      context =
+        upstream_and_host(%{"v4.test" => "203.0.113.10", "v6.test" => "2001:db8::30"}, edge)
 
       for {url, expected} <- [
             {"https://v4.test:8443/x", "https://203.0.113.10:8443/x"},
@@ -756,8 +767,12 @@ defmodule Opus.HttpHandlerTest do
                    "catalyst:local.x:1.0.0"
                  )
 
-        assert validated.pin_req_opts[:url] == expected
-        assert validated.pin_req_opts[:connect_options][:hostname] == URI.parse(url).host
+        # The relay's service end connects with these; the runner never does.
+        assert {:ok, %{req_opts: opts}} =
+                 Opus.Egress.connect_options(validated.pinned.target, validated.pinned.uri, [])
+
+        assert opts[:url] == expected
+        assert opts[:connect_options][:hostname] == URI.parse(url).host
       end
     end
   end
@@ -768,16 +783,19 @@ defmodule Opus.HttpHandlerTest do
 
   describe "a redirect the guest follows" do
     setup do
-      context =
-        upstream_and_host(%{
-          "api.test" => "127.0.0.1",
-          "other.test" => "127.0.0.1",
-          "login.other.test" => :redirect_credentials,
-          "meta.other.test" => "169.254.169.254"
-        })
-
       edge =
         EdgeFixtures.edge(domains: ["api.test", "other.test", "*.other.test"], methods: ["GET"])
+
+      context =
+        upstream_and_host(
+          %{
+            "api.test" => "127.0.0.1",
+            "other.test" => "127.0.0.1",
+            "login.other.test" => :redirect_credentials,
+            "meta.other.test" => "169.254.169.254"
+          },
+          edge
+        )
 
       credentials = %{
         "Authorization" => "Bearer sk_test",

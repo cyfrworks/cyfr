@@ -39,16 +39,30 @@ scrubbed, the container's CPU flat).
   that runner there, the sibling, the release and the container
   untouched; without the `writable-cgroups=true` security option no runner
   starts at all (memory.py, whose cases these are).
+- A runner has no route: from inside its network namespace a connect to
+  the host gateway fails as unreachable, while from the container's own
+  namespace the same dial finds a route. Every host call and every fetch
+  of a runner leaves through its relay (fd 4, the keeper's stream 5), and
+  the service verifies, posts and connects for it.
 - A guest's outbound request connects only where the control plane pinned
   it (`egress_pin`): the shipped `local.http` catalyst, under an authority
   whose egress edge admits the `.test` hosts below, fetches a URL whose
   host resolves nowhere, pinned to the host gateway, and reaches the
-  harness's own listener, the only address there is; a pin refused as
-  `denied`, `metadata` or `resolution` reaches the guest as the engine's
-  refusal and opens no connection. A stream and a redirect's next hop
-  across origin are not driven here, since no shipped guest makes either
-  to a URL a test chooses: `apps/opus/test/opus/http_handler_test.exs` and
-  the stream handler's boundary test cover them.
+  harness's own listener, the only address there is, through the relay:
+  the service took the rate for it (`take_rate`, which the runner never
+  calls itself) and opened the one connection; a pin refused as `denied`,
+  `metadata` or `resolution` reaches the guest as the engine's refusal
+  and opens no connection. A stream and a redirect's next hop across
+  origin are not driven here, since no shipped guest makes either to a
+  URL a test chooses: `apps/opus/test/opus/http_handler_test.exs` and the
+  stream handler's boundary test cover them.
+- An answer body larger than one credit window of the relay
+  (`Prima.RunnerRelay.initial_credit/0`) completes: the catalyst's `links`
+  of a page past the window, under an authority whose limits admit it,
+  finds the link at its very end. A fetch naming a pin the control plane
+  never granted is refused by the service's end of the relay; no process
+  but the runner's own VM holds a runner's relay, so no shipped guest can
+  send one, and `apps/opus/test/opus/relay_test.exs` covers it.
 
 Usage: tests/worker-image/runners.py IMAGE
 """
@@ -98,6 +112,21 @@ EGRESS_HOSTS = {"fetch": "origin.test", "denied": "private.test", "metadata": "m
 EGRESS_AUTHORITY = {
     **ZERO_AUTHORITY,
     "resources": {"egress": {"domains": sorted(EGRESS_HOSTS.values()), "methods": ["GET"], "schemes": ["http"]}},
+}
+# One credit window of the runner's relay (Prima.RunnerRelay.initial_credit/0):
+# the service sends no more of a fetch's answer than the runner granted.
+WINDOW_BYTES = 5 * 1024 * 1024
+# The authority of the window case: the egress edge above, bound at the
+# catalyst's node, whose limits admit an answer of three windows.
+WINDOW_NODE = "catalyst:local.http"
+WINDOW_AUTHORITY = {
+    **EGRESS_AUTHORITY,
+    "cursor": {"bound": WINDOW_NODE},
+    "chain": [WINDOW_NODE],
+    "policy": {"canonical": "jcs-1", "nodes": {WINDOW_NODE: {"edges": {}, "limits": {
+        "timeout": "30s", "max_memory_bytes": 134_217_728, "max_request_size": 1_048_576,
+        "max_response_size": 3 * WINDOW_BYTES, "rate_limit": {"requests": 100, "window": "1m"},
+        "max_concurrent_tasks": 1, "batch_timeout": "30s"}}}},
 }
 STUB_KEY = {"STUB_API_KEY": "sk-worker-image-test"}
 # A runner is a VM booting from nothing: its first attach takes seconds.
@@ -319,9 +348,11 @@ class Origin:
                 with origin.lock:
                     origin.requests.append({"path": self.path, "host": self.headers.get("host"),
                                             "authorization": self.headers.get("authorization")})
-                body = b"pinned"
+                # A page past one relay window, its one link at its very end.
+                body = (b"<html><body>" + b"x" * (WINDOW_BYTES + 1_500_000) + b'<a href="/end">end</a></body></html>'
+                        if self.path == "/window" else b"pinned")
                 self.send_response(200)
-                self.send_header("content-type", "text/plain")
+                self.send_header("content-type", "text/html" if self.path == "/window" else "text/plain")
                 self.send_header("content-length", str(len(body)))
                 self.end_headers()
                 self.wfile.write(body)
@@ -369,6 +400,46 @@ def test_process_model(stack):
            "a runner holds no capability", procs)
 
 
+def dial(stack, pid, target):
+    """What a connect to `target` meets from runner `pid`'s network
+    namespace, or from the container's own when `pid` is None:
+    `unreachable`, `refused`, `connected` or `timeout`, and what curl said.
+    A runner's namespace is entered from a privileged container of the
+    image sharing the service container's processes: the service's own
+    seccomp profile denies setns, even to the observer."""
+    if pid:
+        ran = run("docker", "run", "--rm", "--privileged", "--pid", f"container:{stack.container}",
+                  "--entrypoint", "nsenter", stack.image, "-t", str(pid), "-n",
+                  "curl", "-sv", "--max-time", "3", f"http://{target}/", check=False)
+    else:
+        ran = stack.observe(f"curl -sv --max-time 3 http://{target}/ 2>&1")
+    out = ran.stdout + ran.stderr
+    if "Network is unreachable" in out or "No route to host" in out:
+        return "unreachable", out
+    if "Connection refused" in out:
+        return "refused", out
+    if "Connected to" in out:
+        return "connected", out
+    return "timeout", out
+
+
+def test_runner_has_no_route(stack, plane):
+    """A connect from inside a runner fails: its namespace holds no route,
+    while the container's own namespace has one to the same address. The
+    control plane's own address, where the service posts every host call,
+    is unreachable from a runner too."""
+    gateway = stack.host_gateway()
+    expect(gateway is not None, f"the container reaches this machine at {gateway}", stack.exec("getent ahostsv4 host.docker.internal").stdout)
+    expect(run("docker", "exec", stack.container, "sh", "-c", "command -v nsenter", check=False).returncode == 0,
+           "prerequisite: the image has nsenter, to enter a runner's namespace")
+    own, said = dial(stack, None, f"{gateway}:9")
+    expect(own != "unreachable", f"from the container's own namespace {gateway} has a route ({own})", said)
+    for runner in stack.runner_processes():
+        for target in (f"{gateway}:9", "127.0.0.1:9", f"{gateway}:{plane.port}"):
+            met, said = dial(stack, runner["pid"], target)
+            expect(met == "unreachable", f"from runner uid {runner['uid']}'s namespace a connect to {target} fails: no route ({met})", said)
+
+
 def test_pinned_egress(stack, plane):
     """A guest's outbound request goes where the control plane pinned it and
     nowhere else, and a refused pin opens no connection."""
@@ -412,11 +483,41 @@ def test_pinned_egress(stack, plane):
         expect(len(requests) == 1 and requests[0]["path"] == "/fetch" and requests[0]["host"] == f"{EGRESS_HOSTS['fetch']}:{origin.port}",
                f"fetch: the listener answered one request, for {EGRESS_HOSTS['fetch']} as its Host header names it", requests)
         expect(len(connections) == 1,
-               "the runner opened one connection in all, to the pinned address: no refused pin reached the network", connections)
+               "the service opened one connection in all, to the pinned address: no refused pin reached the network", connections)
+        fetch_attempt = [r for r in plane.seen("egress_pin") if r["args"]["url"].endswith("/fetch")][0]["execution_id"]
+        rates = plane.seen("take_rate", fetch_attempt)
+        expect(len(rates) == 1 and rates[0]["args"]["bucket"] == "http:" + REFS["web"],
+               "fetch: the service took the request from the attempt's rate before it connected, once", rates)
+        expect(all(not plane.seen("take_rate", r["execution_id"]) for r in plane.seen("egress_pin") if r["answered"] != "ok"),
+               "a refused pin was never charged: no rate was taken for it", plane.seen("take_rate"))
         for case, sentence in refusals.items():
             output = outputs[case]
             message = (output.get("error") or {}).get("message", "") if isinstance(output, dict) else ""
             expect(sentence in message, f"{case}: the guest was refused ({message})", output)
+    finally:
+        origin.stop()
+
+
+def test_relay_window(stack, plane):
+    """An answer past one credit window of the relay reaches the guest whole."""
+    gateway = stack.host_gateway()
+    origin = Origin()
+    plane.egress(EGRESS_HOSTS["fetch"], gateway)
+    try:
+        url = f"http://{EGRESS_HOSTS['fetch']}:{origin.port}/window"
+        attempt = plane.mint(stack.boot, "catalyst", REFS["web"], WASM["web"], {"operation": "links", "params": {"url": url}},
+                             "ath_window", 30_000, authority=WINDOW_AUTHORITY)
+        expect(stack.start(attempt)[1] == {"v": 1, "ok": True}, f"a guest reading the links of {url} starts")
+        closes = plane.wait_for(
+            lambda: [r for r in plane.seen(None, attempt["execution_id"]) if r["op"] in ("complete", "fail") and "answered" in r],
+            BOOT_S, "the window attempt to close")
+        expect(closes[0]["op"] == "complete", "window: the attempt closed completed", closes[0])
+        output = closes[0]["args"]["outcome"]["output"]
+        links = (output.get("data") or {}).get("links", []) if isinstance(output, dict) else []
+        expect(output.get("status") == 200 and len(links) == 1 and str(links[0]).find("/end") >= 0,
+               f"window: the guest read all {WINDOW_BYTES + 1_500_000} bytes past one window of {WINDOW_BYTES}, to the link at the end", output)
+        _connections, requests = origin.seen()
+        expect([r["path"] for r in requests] == ["/window"], "window: the page was fetched once", requests)
     finally:
         origin.stop()
 
@@ -741,7 +842,9 @@ def main(image):
         stack.up()
         print(f"the service runs boot {stack.boot} with a pool of {stack.pool_size}, watchdog grace {stack.watchdog_grace_ms} ms, release grace {stack.release_grace_ms} ms", flush=True)
         test_process_model(stack)
+        test_runner_has_no_route(stack, plane)
         test_pinned_egress(stack, plane)
+        test_relay_window(stack, plane)
         test_spinning_guest_killed_at_bound(stack, plane)
         test_sibling_survives(stack, plane)
         test_tainted_never_reassigned(stack, plane)
