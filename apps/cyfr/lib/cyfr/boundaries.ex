@@ -11,12 +11,21 @@ defmodule Cyfr.Boundaries do
   module: its dependencies are the boundaries its rows name, and nothing
   depends on it.
 
-  Eight roster tests used to hold these, each scanning the tree its own
-  way and each carrying its own copy of what a layer is. The rows are
-  here now, and `Cyfr.BoundariesTest` is the one reader: it plants a
-  violation of each kind and shows it reported, and it refuses a scan
-  that read nothing, because a roster that stops reading passes every
-  assertion it makes.
+  The Boundary declarations make an edge between two boundaries of one
+  application a compile error, and a surface row the compiler holds whole
+  is not here: its plant in `Cyfr.BoundariesTest.CompilerPlants` is its
+  proof. The catalog holds what that compiler cannot see: the edges out of
+  Prima and the islands, which run no Boundary compiler, and out of a
+  foundation, whose build does not see the boundaries above it; a roster
+  narrower than its target's exports, since Boundary's exports are global,
+  the security stores among them; a name in a route provider's or the
+  shared tier's quote, which Boundary traces only in the composition router
+  it expands in; functions rather than modules; and module names, keys,
+  routes, sites and calls that are data, configuration or runtime terms
+  rather than references. `Cyfr.BoundariesTest` is the one reader: it
+  plants a violation of each kind and shows it reported, and it refuses a
+  scan that read nothing, because a roster that stops reading passes
+  every assertion it makes.
 
   Five kinds of row, and three registers beside them:
 
@@ -150,7 +159,10 @@ defmodule Cyfr.Boundaries do
 
   The dependency rule falls out of the list: an application may name a
   module of its own layer, of the layers its declared dependencies are,
-  and of nothing else product-side.
+  and of nothing else product-side. Boundary cannot hold it: a build does
+  not see the boundaries of an application it does not depend on, whose
+  call is an undefined-module warning naming no boundary and whose bare
+  name compiles, and Prima and the islands run no Boundary compiler.
   """
   @spec applications() :: [map()]
   def applications, do: @applications
@@ -191,7 +203,8 @@ defmodule Cyfr.Boundaries do
   end
 
   # The product namespaces, so a scan can tell a module of this repository
-  # from one of Elixir, OTP or a fetched dependency.
+  # from one of Elixir, OTP or a fetched dependency. Boundary knows each
+  # boundary's modules, not which names are this repository's.
   @product_roots ~w(
     Arca Sanctum Aqua Compendium Crucible Emissary Grimoire
     Prism PrismWeb Cyfr CyfrWeb Opus Locus Codex Prima
@@ -308,7 +321,9 @@ defmodule Cyfr.Boundaries do
           "authority in it. `Sanctum.ExecutionStanding` is `Aqua.Tape`'s check over " <>
           "the grant a turn's root attempt stores, handed to the turn's writes. " <>
           "`Sanctum.Consent` is `Aqua.ConsentStatus`'s read of what a source " <>
-          "declares, through consent's own derivation; the row below narrows it."
+          "declares, through consent's own derivation; the row below narrows it. " <>
+          "Boundary's exports are global, and `Sanctum` exports more than this roster to " <>
+          "every boundary that lists it, so no declaration can say it."
     },
     %{
       from: ["apps/cyfr/lib/aqua/**/*.ex", "apps/cyfr/lib/aqua.ex"],
@@ -319,7 +334,9 @@ defmodule Cyfr.Boundaries do
         "the assistant reports whether a consent still covers its source and grants " <>
           "nothing: it reads what a source declares through " <>
           "`Sanctum.Consent.ShapeDerivation` and what was consented from the authority " <>
-          "a turn would pin, and names nothing of the plane that writes a consent."
+          "a turn would pin, and names nothing of the plane that writes a consent. " <>
+          "`Sanctum.Consent` is no boundary of its own, and `Sanctum`'s exports, which are " <>
+          "global, name more of it than this roster, so no declaration can say it."
     },
     %{
       from: ["apps/cyfr/lib/compendium/**/*.ex", "apps/cyfr/lib/compendium.ex"],
@@ -339,7 +356,9 @@ defmodule Cyfr.Boundaries do
           "removing a component's last version revokes its profiles " <>
           "(`Sanctum.Consent.revoke_source/2`) and disables its webhooks " <>
           "(`Sanctum.Webhook.disable_for_component/2`). `Compendium` never names " <>
-          "`Sanctum.Tenancy`."
+          "`Sanctum.Tenancy`. " <>
+          "Boundary's exports are global, and `Sanctum` exports more than this roster to " <>
+          "every boundary that lists it, so no declaration can say it."
     },
     %{
       from: [
@@ -376,7 +395,9 @@ defmodule Cyfr.Boundaries do
           "`Sanctum.Network` is `Crucible.Host.Egress`'s one resolution of a guest's " <>
           "outbound host, which it pins under the attempt's authority. " <>
           "`Sanctum.TinctureAccess` is that invocation's reread of the tincture it " <>
-          "roots at: its public-profile and private-access policy."
+          "roots at: its public-profile and private-access policy. " <>
+          "Boundary's exports are global, and `Sanctum` exports more than this roster to " <>
+          "every boundary that lists it, so no declaration can say it."
     },
     %{
       from: ["apps/cyfr/lib/emissary/**/*.ex", "apps/cyfr/lib/emissary.ex"],
@@ -392,7 +413,9 @@ defmodule Cyfr.Boundaries do
           "An outbound call's row runs under its caller's grant, checked through " <>
           "Sanctum.ExecutionStanding as it is admitted and closed, and the MCP " <>
           "controller answers a `Sanctum.UnauthorizedError` raised in the request " <>
-          "process as a JSON-RPC refusal"
+          "process as a JSON-RPC refusal. " <>
+          "Boundary's exports are global, and `Sanctum` exports more than this roster to " <>
+          "every boundary that lists it, so no declaration can say it."
     },
     %{
       from: ["apps/cyfr/lib/prism/**/*.ex", "apps/cyfr/lib/prism.ex"],
@@ -401,7 +424,9 @@ defmodule Cyfr.Boundaries do
       reason:
         "console domain code: the tenancy carrier. The tray's messages arrive on " <>
           "`Cyfr.Bus` as its own structs, so the console names none of the identity " <>
-          "domain's announcement vocabulary"
+          "domain's announcement vocabulary. " <>
+          "Boundary's exports are global, and `Sanctum` exports more than this roster to " <>
+          "every boundary that lists it, so no declaration can say it."
     },
     %{
       from: [
@@ -416,7 +441,10 @@ defmodule Cyfr.Boundaries do
         Sanctum.SignIn Sanctum.Tenancy Sanctum.Tenancy.Users Sanctum.TinctureAccess
         Sanctum.TinctureAuth Sanctum.Vault.OAuthGrant Sanctum.Webhook
       ),
-      reason: "the auth fabric's own ingress — a wide roster is the front door doing its job"
+      reason:
+        "the auth fabric's own ingress — a wide roster is the front door doing its job. " <>
+          "Boundary's exports are global, and `Sanctum` exports more than this roster to " <>
+          "every boundary that lists it, so no declaration can say it."
     },
     %{
       from: [
@@ -442,7 +470,9 @@ defmodule Cyfr.Boundaries do
           "In the console, `Sanctum.ClientIp` is `PrismWeb.AuthHelpers.socket_client_ip/1` " <>
           "alone: the `/live` socket is handled by the endpoint BEFORE the router, so " <>
           "it passes no rate-limit plug, which makes the console the only per-address " <>
-          "bound on the anonymous device flows it starts."
+          "bound on the anonymous device flows it starts. " <>
+          "Boundary's exports are global, and `Sanctum` exports more than this roster to " <>
+          "every boundary that lists it, so no declaration can say it."
     },
     %{
       from: ["apps/cyfr/lib/compendium/**/*.ex", "apps/cyfr/lib/compendium.ex"],
@@ -455,7 +485,9 @@ defmodule Cyfr.Boundaries do
           "`Sanctum.Consent.Bootstrap`. `Sanctum.Consent.Components` is the " <>
           "component-facts port — naming a behaviour one implements is the opposite " <>
           "of reaching into the write plane. `Sanctum.Consent` itself is the read " <>
-          "and revoke entries the setup plan and the removal cascade call."
+          "and revoke entries the setup plan and the removal cascade call. " <>
+          "`Sanctum.Consent` is no boundary of its own, and `Sanctum`'s exports, which are " <>
+          "global, name more of it than this roster, so no declaration can say it."
     },
     %{
       from: [
@@ -471,7 +503,9 @@ defmodule Cyfr.Boundaries do
         "the console reads consent through `Sanctum.Consent`'s own entries (the " <>
           "shell's `profiles/2`) and names nothing of the plane behind them: the " <>
           "plan, preview and commit walk, its proofs and its loader are reached " <>
-          "through the operation table like every other surface's."
+          "through the operation table like every other surface's. " <>
+          "`Sanctum.Consent` is no boundary of its own, and `Sanctum`'s exports, which are " <>
+          "global, name more of it than this roster, so no declaration can say it."
     },
 
     # --- what the layers below name of the layers above ---
@@ -482,7 +516,9 @@ defmodule Cyfr.Boundaries do
       reason:
         "a foundation below the host emits `:telemetry` and never broadcasts: the host's " <>
           "bridge (`Cyfr.TelemetryBridge`) is the one place an announcement becomes a " <>
-          "bus message, after the fact it announces committed."
+          "bus message, after the fact it announces committed. " <>
+          "No boundary declares `Phoenix.PubSub`, neither foundation's `check: apps` lists " <>
+          "its application, and Sanctum's build carries it, so no compiler refuses the reach."
     },
     %{
       from: ["apps/sanctum/lib/**/*.ex", "apps/arca/lib/**/*.ex"],
@@ -490,7 +526,9 @@ defmodule Cyfr.Boundaries do
       allow: [],
       reason:
         "the PubSub server's name is the host's: only `Cyfr.Application` starts it and " <>
-          "only `Cyfr.Bus` publishes on it."
+          "only `Cyfr.Bus` publishes on it. " <>
+          "`Cyfr.PubSub` is a process name, not a module, and a foundation's build does not " <>
+          "see the host's boundaries, so no compiler sees the reach."
     },
     %{
       from: ["apps/sanctum/lib/**/*.ex", "apps/arca/lib/**/*.ex"],
@@ -498,7 +536,10 @@ defmodule Cyfr.Boundaries do
       allow: [],
       reason:
         "the topics, their payloads and their tenant checks are the host's bus; a " <>
-          "foundation below it names none of them and keeps no topic vocabulary."
+          "foundation below it names none of them and keeps no topic vocabulary. " <>
+          "A foundation's build does not see the host's boundaries: its pruned code path " <>
+          "makes a call an undefined-module warning that names no boundary, and a bare name " <>
+          "compiles."
     },
     %{
       from: ["apps/arca/lib/**/*.ex"],
@@ -507,29 +548,10 @@ defmodule Cyfr.Boundaries do
       reason:
         "the overlay's locators were wired through `Arca.Storage.UnitLocator` so the " <>
           "storage layer would not compile against the component domain; the closed " <>
-          "`source` roster it enforces on write is `Prima.ComponentSource` now."
-    },
-    %{
-      from: ["apps/cyfr/lib/compendium/**/*.ex", "apps/cyfr/lib/compendium.ex"],
-      into: "Aqua",
-      allow: [],
-      reason:
-        "the assistant reads the component domain, never the reverse: the model " <>
-          "catalysts, the agent sources and the local formulas are component facts " <>
-          "Compendium answers and the assistant composes, so Compendium names " <>
-          "nothing of the assistant. The catalyst a tool family runs on is " <>
-          "`Prima.VirtualTools`'s, and the authored-policy check is " <>
-          "`Compendium.AquaAgent.validate_tool_policy/2`, beside the agent file it " <>
-          "validates."
-    },
-    %{
-      from: ["apps/cyfr/lib/compendium/**/*.ex", "apps/cyfr/lib/compendium.ex"],
-      into: "Crucible",
-      allow: [],
-      reason:
-        "the component domain answers facts about components and runs none: a " <>
-          "catalyst runs through the gate under its caller's plane, and a model " <>
-          "listing reads `Compendium.model_catalysts/1` and runs each catalyst there."
+          "`source` roster it enforces on write is `Prima.ComponentSource` now. " <>
+          "A foundation's build does not see the host's boundaries: its pruned code path " <>
+          "makes a call an undefined-module warning that names no boundary, and a bare name " <>
+          "compiles."
     },
     %{
       from: ["apps/cyfr/lib/aqua/**/*.ex", "apps/cyfr/lib/aqua.ex"],
@@ -539,7 +561,10 @@ defmodule Cyfr.Boundaries do
         "the assistant runs what it runs through the execution domain's root facade " <>
           "alone: a turn claims, pauses, resumes and releases its root there, and a " <>
           "model listing or a consent status derives an authority there; nothing of " <>
-          "admission, dispatch or the attempt's rows is the assistant's to name."
+          "admission, dispatch or the attempt's rows is the assistant's to name. " <>
+          "Boundary's exports are global, and `Crucible` exports `Host.Children`, `Keys`, " <>
+          "`Schedules.Scheduler` and `Supervisor` beside its root to every boundary that " <>
+          "lists it, so no declaration can say it."
     },
     %{
       from: ["apps/cyfr/lib/aqua/**/*.ex", "apps/cyfr/lib/aqua.ex"],
@@ -548,16 +573,10 @@ defmodule Cyfr.Boundaries do
       reason:
         "the assistant reads its agents, their snapshots and consent rows, its skills " <>
           "and its model catalysts through the component domain's root facade alone, " <>
-          "and the agent-reference and version vocabularies it reads are Prima's."
-    },
-    %{
-      from: ["apps/cyfr/lib/crucible/**/*.ex", "apps/cyfr/lib/crucible.ex"],
-      into: "Aqua",
-      allow: [],
-      reason:
-        "execution runs components and turn roots for whoever asks and knows nothing " <>
-          "of the assistant: the assistant calls down into `Crucible`, never the " <>
-          "reverse."
+          "and the agent-reference and version vocabularies it reads are Prima's. " <>
+          "Boundary's exports are global, and `Compendium` exports its two paths, " <>
+          "`ConsentFacts`, `Providers.Component` and `Supervisor` beside its root to every " <>
+          "boundary that lists it, so no declaration can say it."
     },
     %{
       from: ["apps/cyfr/lib/crucible/**/*.ex", "apps/cyfr/lib/crucible.ex"],
@@ -567,7 +586,10 @@ defmodule Cyfr.Boundaries do
         "execution resolves, inspects and activates what it runs through the component " <>
           "domain's root facade alone: the reference, the manifest, the activation graph " <>
           "and an artifact's bytes are component facts Compendium answers, and the " <>
-          "source and agent-reference vocabularies it reads are Prima's."
+          "source and agent-reference vocabularies it reads are Prima's. " <>
+          "Boundary's exports are global, and `Compendium` exports its two paths, " <>
+          "`ConsentFacts`, `Providers.Component` and `Supervisor` beside its root to every " <>
+          "boundary that lists it, so no declaration can say it."
     },
     %{
       from: [
@@ -578,7 +600,10 @@ defmodule Cyfr.Boundaries do
       allow: [],
       reason:
         "the MCP surface reaches the assistant only as operations through the gate " <>
-          "(the `aqua` and thread tools); it names no function of the domain."
+          "(the `aqua` and thread tools); it names no function of the domain. " <>
+          "Boundary traces a quote only where it expands, and `Emissary.Router.routes/0` " <>
+          "expands in the composition router, whose deps admit `Aqua`: only this row reads " <>
+          "the quoted names."
     },
     %{
       from: [
@@ -589,7 +614,10 @@ defmodule Cyfr.Boundaries do
       allow: ~w(Crucible),
       reason:
         "the MCP surface follows executions, serves webhooks, keeps an outbound call's " <>
-          "lease and reports health through the execution domain's root facade."
+          "lease and reports health through the execution domain's root facade. " <>
+          "Boundary's exports are global, and `Crucible` exports `Host.Children`, `Keys`, " <>
+          "`Schedules.Scheduler` and `Supervisor` beside its root to every boundary that " <>
+          "lists it, so no declaration can say it."
     },
     %{
       from: [
@@ -603,7 +631,10 @@ defmodule Cyfr.Boundaries do
       reason:
         "the console reads executions, invokes tinctures and checks the executor " <>
           "through the execution domain's root facade under the caller's context, and " <>
-          "names none of its internals."
+          "names none of its internals. " <>
+          "Boundary's exports are global, and `Crucible` exports `Host.Children`, `Keys`, " <>
+          "`Schedules.Scheduler` and `Supervisor` beside its root to every boundary that " <>
+          "lists it, so no declaration can say it."
     },
     %{
       from: [
@@ -614,7 +645,10 @@ defmodule Cyfr.Boundaries do
       allow: [],
       reason:
         "the MCP surface names nothing of the component domain: every component " <>
-          "operation it serves is a gate operation, reached through the operation table."
+          "operation it serves is a gate operation, reached through the operation table. " <>
+          "Boundary traces a quote only where it expands, and `Emissary.Router.routes/0` " <>
+          "expands in the composition router, whose deps admit `Compendium`: only this row " <>
+          "reads the quoted names."
     },
     %{
       from: [
@@ -628,7 +662,9 @@ defmodule Cyfr.Boundaries do
       reason:
         "the console reads threads, approvals, attachments, notes, the virtual-tool " <>
           "catalogue and the reply stream through the assistant's root facade, and " <>
-          "follows a thread on `Cyfr.Bus`."
+          "follows a thread on `Cyfr.Bus`. " <>
+          "Boundary's exports are global, and `Aqua` exports `Supervisor` and `Text` beside " <>
+          "its root to every boundary that lists it, so no declaration can say it."
     },
     %{
       from: [
@@ -643,7 +679,10 @@ defmodule Cyfr.Boundaries do
         "the console reads components, agents, path grammars, the projection epoch " <>
           "and the registry's claim and legal pages through the component domain's " <>
           "root facade, and a registry refusal reaches it as a `%Prima.Refusal{}`; " <>
-          "the publisher and version vocabularies it reads are Prima's."
+          "the publisher and version vocabularies it reads are Prima's. " <>
+          "Boundary's exports are global, and `Compendium` exports its two paths, " <>
+          "`ConsentFacts`, `Providers.Component` and `Supervisor` beside its root to every " <>
+          "boundary that lists it, so no declaration can say it."
     },
     %{
       from: [
@@ -658,7 +697,10 @@ defmodule Cyfr.Boundaries do
         "the host names no domain: the bus, telemetry, runtime configuration and the " <>
           "web tier's glue sit below the domains, which reach them downward. The " <>
           "composition root (`Cyfr.Application`) names what it starts, and is " <>
-          "excepted."
+          "excepted. " <>
+          "The composition router and the endpoint this row reads are boundaries whose deps " <>
+          "admit `Aqua`, and the shared tier's router macros expand in the first, so the " <>
+          "compiler admits what this row refuses."
     },
     %{
       from: [
@@ -676,7 +718,10 @@ defmodule Cyfr.Boundaries do
           "`Compendium.tincture_asset_rules/0`), the sign-in probe " <>
           "(`CyfrWeb.Ingress.AuthController`, `Compendium.complete_sign_in/4`) and the " <>
           "tincture controller's reads of a tincture's entry and connect domains. The " <>
-          "composition root is excepted."
+          "composition root is excepted. " <>
+          "Boundary's exports are global, and `Compendium` exports its two paths, " <>
+          "`ConsentFacts`, `Providers.Component` and `Supervisor` beside its root to every " <>
+          "boundary that lists it, so no declaration can say it."
     },
     %{
       from: [
@@ -691,7 +736,10 @@ defmodule Cyfr.Boundaries do
         "the host names nothing of execution's internals: the member slot, the bus " <>
           "and the web tier's glue sit below it, and the HTTP ingress follows, invokes " <>
           "and probes executions through the root facade alone. The composition root " <>
-          "(`Cyfr.Application`) starts execution's trees, and is excepted."
+          "(`Cyfr.Application`) starts execution's trees, and is excepted. " <>
+          "Boundary's exports are global, and `Crucible` exports `Host.Children`, `Keys`, " <>
+          "`Schedules.Scheduler` and `Supervisor` beside its root to every boundary that " <>
+          "lists it, so no declaration can say it."
     },
     %{
       from: [
@@ -713,7 +761,11 @@ defmodule Cyfr.Boundaries do
           "The composition router (`CyfrWeb.Router`, which invokes `Emissary.Router`) " <>
           "and the endpoint (`CyfrWeb.Endpoint`, whose parser wrapper answers `/mcp` " <>
           "in `Emissary.Web.MCPError`) are composition boundaries beside it, and are " <>
-          "excepted too."
+          "excepted too. " <>
+          "Boundary traces a quote only where it expands, and `use CyfrWeb, :router`, " <>
+          "`CyfrWeb.Pipelines.browser/2` and `CyfrWeb.Ingress.Router.routes/0` expand in the " <>
+          "composition router, whose deps admit `Emissary`: only this row reads the quoted " <>
+          "names."
     },
     %{
       from: ["apps/sanctum/lib/**/*.ex"],
@@ -722,7 +774,10 @@ defmodule Cyfr.Boundaries do
       reason:
         "everything consent reads about a component comes through the " <>
           "`Sanctum.Consent.Components` port, and the sign-in probe moved the other " <>
-          "way: `Compendium.SignInSync` holds it and calls down."
+          "way: `Compendium.SignInSync` holds it and calls down. " <>
+          "A foundation's build does not see the host's boundaries: its pruned code path " <>
+          "makes a call an undefined-module warning that names no boundary, and a bare name " <>
+          "compiles."
     },
 
     # --- the console and the web layer ---
@@ -746,7 +801,9 @@ defmodule Cyfr.Boundaries do
           "public URL reads a global fact off the endpoint, `PrismWeb.verified_routes/0` " <>
           "names the endpoint and the router beside `CyfrWeb.static_paths/0`, because " <>
           "that is the triple `use Phoenix.VerifiedRoutes` takes, and `Prism.Router` " <>
-          "declares its pipelines from the shared browser definition and plugs."
+          "declares its pipelines from the shared browser definition and plugs. " <>
+          "Boundary's exports are global, and `CyfrWeb` exports more of the shared tier than " <>
+          "this roster to every surface that lists it, so no declaration can say it."
     },
     %{
       from: [
@@ -759,7 +816,10 @@ defmodule Cyfr.Boundaries do
       allow: [],
       reason:
         "an adapter names no other surface: the console and the MCP adapter meet " <>
-          "only below them, in the host's shared web tier and the domains."
+          "only below them, in the host's shared web tier and the domains. " <>
+          "Boundary traces a quote only where it expands, and `Prism.Router.routes/0` expands " <>
+          "in the composition router, whose deps admit `Emissary`: only this row reads the " <>
+          "quoted names."
     },
     %{
       from: [
@@ -772,7 +832,10 @@ defmodule Cyfr.Boundaries do
       allow: [],
       reason:
         "an adapter names no other surface: the console and the host's HTTP ingress " <>
-          "meet only below them, in the shared web tier and the domains."
+          "meet only below them, in the shared web tier and the domains. " <>
+          "Boundary traces a quote only where it expands, and `Prism.Router.routes/0` expands " <>
+          "in the composition router, whose deps admit `CyfrWeb.Ingress`: only this row reads " <>
+          "the quoted names."
     },
     %{
       from: [
@@ -791,7 +854,10 @@ defmodule Cyfr.Boundaries do
       reason:
         "an engine does not depend on a user interface. A shared primitive both the " <>
           "engine and the console need lives in Prima, as `Prima.UUID7` does, or in " <>
-          "the host's glue, as `Cyfr.Bus` does."
+          "the host's glue, as `Cyfr.Bus` does. " <>
+          "Prima and the islands run no Boundary compiler, and a foundation's build does not " <>
+          "see the host's boundaries: a call is an undefined-module warning that names none, " <>
+          "and a bare name compiles."
     },
     %{
       from: [
@@ -809,7 +875,10 @@ defmodule Cyfr.Boundaries do
       allow: [],
       reason:
         "the console is two namespaces and an engine may name neither: `Prism` is " <>
-          "its domain and `PrismWeb` its LiveViews, layouts and hooks."
+          "its domain and `PrismWeb` its LiveViews, layouts and hooks. " <>
+          "Prima and the islands run no Boundary compiler, and a foundation's build does not " <>
+          "see the host's boundaries: a call is an undefined-module warning that names none, " <>
+          "and a bare name compiles."
     },
     %{
       from: [
@@ -829,7 +898,10 @@ defmodule Cyfr.Boundaries do
         "`CyfrWeb` is the web tier's own: the context guard and the ingress adapters " <>
           "that turn a domain's answer into an HTTP response. A domain hands a " <>
           "surface plain data and a typed refusal and never names the adapter " <>
-          "that renders it."
+          "that renders it. " <>
+          "Prima and the islands run no Boundary compiler, and a foundation's build does not " <>
+          "see the host's boundaries: a call is an undefined-module warning that names none, " <>
+          "and a bare name compiles."
     },
     %{
       from: ["apps/cyfr/lib/emissary/**/*.ex", "apps/cyfr/lib/emissary.ex"],
@@ -837,7 +909,10 @@ defmodule Cyfr.Boundaries do
       allow: [],
       reason:
         "an adapter names no other surface: the MCP adapter and the console meet " <>
-          "only below them, in the host's shared web tier and the domains."
+          "only below them, in the host's shared web tier and the domains. " <>
+          "Boundary traces a quote only where it expands, and `Emissary.Router.routes/0` " <>
+          "expands in the composition router, whose deps admit `PrismWeb`: only this row " <>
+          "reads the quoted names."
     },
     %{
       from: ["apps/cyfr/lib/emissary/**/*.ex", "apps/cyfr/lib/emissary.ex"],
@@ -845,7 +920,10 @@ defmodule Cyfr.Boundaries do
       allow: [],
       reason:
         "an adapter names no other surface: the MCP adapter and the host's HTTP " <>
-          "ingress meet only below them, in the shared web tier and the domains."
+          "ingress meet only below them, in the shared web tier and the domains. " <>
+          "Boundary traces a quote only where it expands, and `Emissary.Router.routes/0` " <>
+          "expands in the composition router, whose deps admit `CyfrWeb.Ingress`: only this " <>
+          "row reads the quoted names."
     },
     %{
       from: ["apps/cyfr/lib/cyfr_web/ingress/**/*.ex", "apps/cyfr/lib/cyfr_web/ingress.ex"],
@@ -853,7 +931,10 @@ defmodule Cyfr.Boundaries do
       allow: [],
       reason:
         "an adapter names no other surface: the host's HTTP ingress renders its own " <>
-          "no-session pages (`CyfrWeb.MinimalPage`) and names nothing of the console."
+          "no-session pages (`CyfrWeb.MinimalPage`) and names nothing of the console. " <>
+          "Boundary traces a quote only where it expands, and " <>
+          "`CyfrWeb.Ingress.Router.routes/0` expands in the composition router, whose deps " <>
+          "admit `PrismWeb`: only this row reads the quoted names."
     },
     %{
       from: ["apps/cyfr/lib/cyfr_web/ingress/**/*.ex", "apps/cyfr/lib/cyfr_web/ingress.ex"],
@@ -861,7 +942,10 @@ defmodule Cyfr.Boundaries do
       allow: [],
       reason:
         "an adapter names no other surface: an inbound webhook's delivery runs on the " <>
-          "ingress's own task supervisor, never the MCP adapter's."
+          "ingress's own task supervisor, never the MCP adapter's. " <>
+          "Boundary traces a quote only where it expands, and " <>
+          "`CyfrWeb.Ingress.Router.routes/0` expands in the composition router, whose deps " <>
+          "admit `Emissary`: only this row reads the quoted names."
     },
     %{
       from: ["apps/cyfr/lib/emissary/**/*.ex", "apps/cyfr/lib/emissary.ex"],
@@ -874,7 +958,9 @@ defmodule Cyfr.Boundaries do
       ),
       reason:
         "the MCP adapter reads the host's shared web tier and never its root router, " <>
-          "its endpoint or another adapter."
+          "its endpoint or another adapter. " <>
+          "Boundary's exports are global, and `CyfrWeb` exports more of the shared tier than " <>
+          "this roster to every surface that lists it, so no declaration can say it."
     },
 
     # --- the security rows: Sanctum is their only reader ---
@@ -891,7 +977,9 @@ defmodule Cyfr.Boundaries do
           "are security rows. A domain or a surface learns about them only " <>
           "through Sanctum's entries, which scope by the caller's context and keep an " <>
           "outage, a damaged row and an absent one apart. Arca holds the rows and " <>
-          "Sanctum reads them; no other tree names the stores."
+          "Sanctum reads them; no other tree names the stores. " <>
+          "Boundary's exports are global and its membership is by name, so no declaration " <>
+          "exports these stores to Sanctum alone."
     },
 
     # --- the host names neither island ---
@@ -901,7 +989,9 @@ defmodule Cyfr.Boundaries do
       allow: [],
       reason:
         "`apps/cyfr/mix.exs` declares no dependency on `opus`: `Crucible` is " <>
-          "the seam, and a run reaches a worker over `Prima.WorkerWire`."
+          "the seam, and a run reaches a worker over `Prima.WorkerWire`. " <>
+          "`Opus` is no boundary and `cyfr` does not depend on it: the pruned code path makes " <>
+          "a call an undefined-module warning, and a bare name compiles."
     },
     %{
       from: ["apps/cyfr/lib/**/*.ex"],
@@ -909,7 +999,9 @@ defmodule Cyfr.Boundaries do
       allow: [],
       reason:
         "`apps/cyfr/mix.exs` declares no dependency on `locus`: `Prima.BuilderProtocol` " <>
-          "is the seam, and CYFR reaches the builder over the build wire."
+          "is the seam, and CYFR reaches the builder over the build wire. " <>
+          "`Locus` is no boundary and `cyfr` does not depend on it: the pruned code path " <>
+          "makes a call an undefined-module warning, and a bare name compiles."
     }
   ]
 
@@ -923,7 +1015,9 @@ defmodule Cyfr.Boundaries do
   has one, narrows it to those namespaces under `into`: every other reach
   into `into` is some other row's business. A row's `except`, when it has
   one, lists globs of files under `from` the row does not read — a file
-  the composition root owns, whose reaches another row decides.
+  the composition root owns, whose reaches another row decides. Every row
+  is one the Boundary compiler cannot hold, and its reason ends saying
+  why.
   """
   @spec surfaces() :: [map()]
   def surfaces, do: @surfaces
@@ -989,7 +1083,8 @@ defmodule Cyfr.Boundaries do
       "a domain answers plain data and a typed refusal; the connection, the " <>
         "response and its headers are the surface adapter's. The tincture rules " <>
         "are Compendium's and the public tenancy Sanctum's, and neither takes a " <>
-        "request or sends one."
+        "request or sends one. The compiler sees neither a `conn` binding nor a call " <>
+        "into `Plug`, whose application no domain's `check: apps` lists."
   }
 
   @doc """
@@ -1020,7 +1115,9 @@ defmodule Cyfr.Boundaries do
       "`Cyfr.Bus` owns every topic and payload and checks every publish against the " <>
         "actor it is handed; naming the identity domain, a domain or a surface would " <>
         "make the one shared carrier depend on its own publishers and subscribers. " <>
-        "The roster names them as text (`Cyfr.Bus.topics/0`), which is not a reach."
+        "The roster names them as text (`Cyfr.Bus.topics/0`), which is not a reach. " <>
+        "Boundary cannot hold this: the bus sits in the host's boundary, whose deps " <>
+        "admit `Sanctum` and `Grimoire` for the rest of the host."
   }
 
   @doc """
@@ -1058,7 +1155,9 @@ defmodule Cyfr.Boundaries do
     reason:
       "the operation table dispatches for every domain and surface; naming one " <>
         "would make the gate depend on what it gates. Proxied tools reach it " <>
-        "through `Grimoire.Proxy`, which `Cyfr.Application` installs."
+        "through `Grimoire.Proxy`, which `Cyfr.Application` installs. The gate's " <>
+        "boundary refuses each of these edges; this roster also reads an alias " <>
+        "directive and a quoted name, which Boundary does not trace."
   }
 
   @doc """
@@ -1097,7 +1196,7 @@ defmodule Cyfr.Boundaries do
   # all, so the domain's export set is a reviewed list rather than whatever
   # is public. The compiled beams are its reader: a call the host starts
   # making without a row here fails, and a row nothing calls any longer is
-  # reported stale.
+  # reported stale. Boundary checks modules, never functions.
   @sanctum_exports %{
     "Sanctum" => [
       auth_configured?: 0,
@@ -1401,7 +1500,8 @@ defmodule Cyfr.Boundaries do
   single-use token or pending sign-in the server itself issued, which
   authenticates the step and nothing else; and `:nothing`, a route
   reachable by anyone, whose routes are rostered one by one in
-  `public_routes/0`.
+  `public_routes/0`. A posture is route metadata, a term no compiler
+  checks.
   """
   @spec route_postures() :: %{atom() => %{admits: atom(), why: String.t()}}
   def route_postures, do: @route_postures
@@ -1414,7 +1514,8 @@ defmodule Cyfr.Boundaries do
   Every route anyone can reach, as `{verb, path}`.
 
   A new one fails `Cyfr.BoundariesTest` until it is named here: a route
-  must not become reachable by anyone through inheriting a pipeline.
+  must not become reachable by anyone through inheriting a pipeline. A
+  route's reach is data in the route table, which no compiler reads.
   """
   @spec public_routes() :: [{atom(), String.t()}]
   def public_routes, do: @public_routes
@@ -1545,7 +1646,7 @@ defmodule Cyfr.Boundaries do
   test hook deliberately not published in `runtime.exs`; and
   `:missing_lever`, a knob that reads like an operator's and has no
   variable to set it with — the honest record of the gap, not an
-  endorsement.
+  endorsement. A key is an atom read at runtime, which no compiler sees.
   """
   @spec config_key_classes() :: %{atom() => atom()}
   def config_key_classes, do: @config_key_classes
@@ -1727,7 +1828,9 @@ defmodule Cyfr.Boundaries do
 
   @doc """
   The five ports of `AGENTS.md`, and only these. A sixth is an
-  architecture change.
+  architecture change. A port's implementation is written at boot and read
+  from `:persistent_term`, so Boundary sees no edge from the declaring
+  module to it.
   """
   @spec ports() :: [map()]
   def ports, do: @ports
@@ -1737,7 +1840,8 @@ defmodule Cyfr.Boundaries do
   # the deciding module, the function (a plug's `call/2`, a controller
   # action, a gate head, a server's message handler) and the plane its
   # refusals are recorded on. `CyfrWeb.Plugs.CallIdentity` is not a
-  # row: it mints the identity and decides nothing.
+  # row: it mints the identity and decides nothing. Which function decides
+  # is behaviour, not a reference, so no compiler sees it.
   @admission_entries [
     # The gate's heads: refusals made before its own checks and identity.
     %{module: Grimoire, site: :call_external, plane: :external},
@@ -1966,7 +2070,9 @@ defmodule Cyfr.Boundaries do
   Every write the server makes on work whose standing it does not
   require, and every read it makes before any caller is known, with the
   modules that make it, the check they pass in place of the standing one,
-  and why. A new one is argued for here before it appears.
+  and why. A new one is argued for here before it appears. Boundary admits
+  a system-scope call like any other: what it may do is the check, not the
+  edge.
   """
   @spec system_responsibilities() :: [map()]
   def system_responsibilities, do: @system_responsibilities
@@ -2033,7 +2139,8 @@ defmodule Cyfr.Boundaries do
         "groups `Arca.Storage` documents and names it: the marker on the call's line " <>
         "or within the window above it, or once for a module whose every call is " <>
         "sandbox or compile-time work. The adapters and the behaviour itself are the " <>
-        "seam, not callers of it."
+        "seam, not callers of it. A filesystem call is a call into Elixir and OTP, " <>
+        "which no boundary declares or refuses."
   }
 
   @typedoc """

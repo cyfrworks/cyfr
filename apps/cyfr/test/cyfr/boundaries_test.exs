@@ -1227,39 +1227,6 @@ defmodule Cyfr.BoundariesTest do
       assert Boundaries.surface_violations(row, entries_only) == []
     end
 
-    test "a component-domain reach into the assistant or into execution is reported" do
-      into_aqua =
-        Enum.find(
-          Boundaries.surfaces(),
-          &(&1.into == "Aqua" and "apps/cyfr/lib/compendium/**/*.ex" in &1.from)
-        ) || flunk("no surface row fences the component domain out of the assistant")
-
-      into_execution =
-        Enum.find(
-          Boundaries.surfaces(),
-          &(&1.into == "Crucible" and "apps/cyfr/lib/compendium/**/*.ex" in &1.from)
-        ) || flunk("no surface row fences the component domain out of execution")
-
-      assert into_aqua.allow == []
-
-      planted = [
-        {"apps/cyfr/lib/compendium/planted.ex",
-         CodeLines.aliases(~S'''
-         defmodule Compendium.Planted do
-           def models(ctx), do: Aqua.Models.catalogue(ctx)
-           def status(ctx), do: Aqua.model_status(ctx, [])
-           def hand(tool), do: Aqua.Hands.catalyst_for(tool)
-           def run(ctx, ref), do: Crucible.authority_for(ctx, :default, ref)
-         end
-         ''')}
-      ]
-
-      assert Boundaries.surface_violations(into_aqua, planted) ==
-               ["Aqua", "Aqua.Hands", "Aqua.Models"]
-
-      assert Boundaries.surface_violations(into_execution, planted) == ["Crucible"]
-    end
-
     test "execution naming a component-domain internal is reported" do
       row =
         Enum.find(
@@ -1313,43 +1280,28 @@ defmodule Cyfr.BoundariesTest do
                ["Compendium.AgentIndex", "Compendium.AgentSource", "Compendium.AquaSkills"]
     end
 
-    test "execution or the MCP surface naming the assistant is reported" do
-      from_execution =
-        Enum.find(
-          Boundaries.surfaces(),
-          &(&1.into == "Aqua" and "apps/cyfr/lib/crucible/**/*.ex" in &1.from)
-        ) || flunk("no surface row fences execution out of the assistant")
-
-      from_mcp =
+    test "the MCP surface naming the assistant is reported" do
+      row =
         Enum.find(
           Boundaries.surfaces(),
           &(&1.into == "Aqua" and "apps/cyfr/lib/emissary/**/*.ex" in &1.from)
         ) || flunk("no surface row fences the MCP surface out of the assistant")
 
-      assert from_execution.allow == [] and from_mcp.allow == []
+      assert row.allow == []
 
       planted = [
-        {"apps/cyfr/lib/crucible/planted.ex",
-         CodeLines.aliases(~S'''
-         defmodule Crucible.Planted do
-           def kind(tool, action), do: Aqua.tool_kind(tool, action)
-           def turn(ctx, id), do: Aqua.Runner.state(id, ctx.athanor_id)
-         end
-         ''')},
         {"apps/cyfr/lib/emissary/web/planted_controller.ex",
          CodeLines.aliases(~S'''
          defmodule Emissary.Web.PlantedController do
            alias Aqua.Notes
+           def kind(tool, action), do: Aqua.tool_kind(tool, action)
+           def turn(ctx, id), do: Aqua.Runner.state(id, ctx.athanor_id)
            def pinned(ctx), do: Notes.pinned_page(ctx)
          end
          ''')}
       ]
 
-      assert Boundaries.surface_violations(from_execution, planted) ==
-               ["Aqua", "Aqua.Notes", "Aqua.Runner"]
-
-      assert Boundaries.surface_violations(from_mcp, planted) ==
-               ["Aqua", "Aqua.Notes", "Aqua.Runner"]
+      assert Boundaries.surface_violations(row, planted) == ["Aqua", "Aqua.Notes", "Aqua.Runner"]
     end
 
     test "the console and the host name only the component domain's root; MCP names none" do
@@ -2357,6 +2309,12 @@ defmodule Cyfr.BoundariesTest.CompilerPlants do
   in is compiled forced with warnings as errors in the dev environment,
   the failure must name the boundary it crosses, and the plant is removed.
 
+  A case named `into <- from` is a surface row of `Cyfr.Boundaries` the
+  compiler holds whole, which the catalog no longer carries: the plant is
+  a call from a file the row read into the root of the namespace it
+  forbade, so the refusal is the dependency's and not an unexported
+  module's.
+
   Each case is a forced compile, so the module is tagged `:boundary_plant`
   and runs only when asked for (`--include boundary_plant`). The copy is
   the checkout's tracked and unignored files with `deps` linked in; its
@@ -2504,6 +2462,59 @@ defmodule Cyfr.BoundariesTest.CompilerPlants do
       [
         "forbidden reference to Aqua.Runner",
         "references from Cyfr to Aqua are not allowed"
+      ]
+    )
+  end
+
+  test "Aqua <- apps/cyfr/lib/compendium/**/*.ex, apps/cyfr/lib/compendium.ex", %{copy: copy} do
+    assert_refused(
+      copy,
+      "cyfr",
+      "compendium/boundary_plant.ex",
+      """
+      defmodule Compendium.BoundaryPlant do
+        def plant(ctx), do: Aqua.models(ctx)
+      end
+      """,
+      [
+        "forbidden reference to Aqua",
+        "references from Compendium to Aqua are not allowed"
+      ]
+    )
+  end
+
+  test "Crucible <- apps/cyfr/lib/compendium/**/*.ex, apps/cyfr/lib/compendium.ex", %{
+    copy: copy
+  } do
+    assert_refused(
+      copy,
+      "cyfr",
+      "compendium/boundary_plant.ex",
+      """
+      defmodule Compendium.BoundaryPlant do
+        def plant(ctx, ref), do: Crucible.authority_for(ctx, :default, ref)
+      end
+      """,
+      [
+        "forbidden reference to Crucible",
+        "references from Compendium to Crucible are not allowed"
+      ]
+    )
+  end
+
+  test "Aqua <- apps/cyfr/lib/crucible/**/*.ex, apps/cyfr/lib/crucible.ex", %{copy: copy} do
+    assert_refused(
+      copy,
+      "cyfr",
+      "crucible/boundary_plant.ex",
+      """
+      defmodule Crucible.BoundaryPlant do
+        def plant(tool, action), do: Aqua.tool_kind(tool, action)
+      end
+      """,
+      [
+        "forbidden reference to Aqua",
+        "references from Crucible to Aqua are not allowed"
       ]
     )
   end
