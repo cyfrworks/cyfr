@@ -609,9 +609,9 @@ defmodule Cyfr.PlatformSettingsRosterTest do
     end
 
     test "a CYFR_* name nothing declares stops the boot naming it" do
-      with_env(%{"CYFR_MAX_CONCURRENT_EXECUTIONS" => "64"}, fn ->
+      with_env(%{"CYFR_NO_SUCH_SETTING" => "64"}, fn ->
         message = refusal!()
-        assert message =~ "[Cyfr] FATAL: CYFR_MAX_CONCURRENT_EXECUTIONS is not a variable"
+        assert message =~ "[Cyfr] FATAL: CYFR_NO_SUCH_SETTING is not a variable"
       end)
 
       # Another program's name in the shell is not the server's to refuse.
