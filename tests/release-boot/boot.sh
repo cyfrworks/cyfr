@@ -206,7 +206,7 @@ cat >"$TINCTURE_DIR/cyfr-manifest.json" <<'JSON'
  "tincture": {"entry": "index.html"}}
 JSON
 echo '<!doctype html><html><head></head><body>the backup proof tincture</body></html>' >"$TINCTURE_DIR/index.html"
-tincture="$(server_fixture "$ORIGIN" tincture "$user_id" "$TINCTURE_DIR" backup-proof private)"
+tincture="$(server_fixture "$ORIGIN" tincture "$user_id" "$TINCTURE_DIR" backup-proof public)"
 tincture_path="$(field "$tincture" path)"
 thread_id="$(field "$(server_fixture "$ORIGIN" thread "$user_id" "the backup proof thread")" thread_id)"
 echo "the cell holds $tincture_path and $thread_id"
