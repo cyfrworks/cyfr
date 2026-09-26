@@ -249,7 +249,7 @@ defmodule Cyfr.StackShapeTest do
 
     # The shipped entrypoints serve exactly those ranges.
     assert read!("Dockerfile.locus") =~ ~s("--pool", "build:30001-30016")
-    assert read!("Dockerfile.opus") =~ ~s("--pool", "runner:30101-30108")
+    assert read!("Dockerfile.opus") =~ ~s("--pool", "runner:30101-30108:netns")
 
     # Spelled split so the retired names are not themselves found here.
     refute read!("Dockerfile.locus") =~
