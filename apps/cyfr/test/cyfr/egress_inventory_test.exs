@@ -17,6 +17,12 @@ defmodule Cyfr.EgressInventoryTest do
   pinned options. Sanctum and Opus own their DNS resolution; Sanctum.Egress
   sends control-plane requests, and Opus owns the guest HTTP handlers.
 
+  Resolving an outbound name is inventoried beside sending to it: every
+  site that resolves a host (`getaddr`) or pins a URL through the control
+  plane's resolver (`Sanctum.Network.pin/2`) is classified. A guest's
+  outbound target is pinned by the control plane (`Crucible.Host.Egress`,
+  the `egress_pin` host call), under the attempt's admitted authority.
+
   The Locus backends service (`Locus.Backends.Service`) is its own egress
   arm: it runs stdio MCP backends (`Locus.Backends.Backend`) under the
   keeper, which reach the network as their commands do, and speaks to them
@@ -67,25 +73,46 @@ defmodule Cyfr.EgressInventoryTest do
     ":httpc."
   ]
 
+  # Every site that resolves an outbound host name.
+  @resolvers %{
+    # The control plane's one resolver: IPv4 first, IPv6 only when no IPv4
+    # address resolves, the address pinned for the connection.
+    "apps/sanctum/lib/sanctum/network.ex" => :control_plane_resolver,
+    # The control plane's pinned transport, resolving through the above.
+    "apps/sanctum/lib/sanctum/egress.ex" => :pinned_owner,
+    # A guest's outbound target, pinned by the control plane under the
+    # attempt's admitted authority (`egress_pin`), through the above.
+    "apps/cyfr/lib/crucible/host/egress.ex" => :guest_pin,
+    # The engine's own resolution of a guest's host, until the engine pins
+    # through `egress_pin` instead.
+    "apps/opus/lib/opus/egress.ex" => :engine_resolver
+  }
+
+  @resolver_patterns ["getaddr(", "Sanctum.Network.pin("]
+
   defp root, do: Path.expand("../../../..", __DIR__)
 
+  # The lib files whose code (docs and comment lines aside) names any of
+  # `patterns`, relative to the root.
+  defp sites(patterns) do
+    Prima.Test.SourceTree.files!(Path.join(root(), "apps/*/lib/**/*.ex"))
+    |> Enum.filter(fn path ->
+      source =
+        path
+        |> Prima.Test.SourceTree.read()
+        |> String.replace(~r/"""[\s\S]*?"""/, "")
+        |> String.split("\n")
+        |> Enum.reject(&String.match?(&1, ~r/^\s*#/))
+        |> Enum.join("\n")
+
+      Enum.any?(patterns, &String.contains?(source, &1))
+    end)
+    |> Enum.map(&Path.relative_to(&1, root()))
+    |> Enum.sort()
+  end
+
   test "every outbound HTTP site is classified" do
-    found =
-      Prima.Test.SourceTree.files!(Path.join(root(), "apps/*/lib/**/*.ex"))
-      |> Enum.filter(fn path ->
-        source =
-          path
-          |> Prima.Test.SourceTree.read()
-          |> String.replace(~r/"""[\s\S]*?"""/, "")
-          |> String.split("\n")
-          |> Enum.reject(&String.match?(&1, ~r/^\s*#/))
-          |> Enum.join("\n")
-
-        Enum.any?(@patterns, &String.contains?(source, &1))
-      end)
-      |> Enum.map(&Path.relative_to(&1, root()))
-      |> Enum.sort()
-
+    found = sites(@patterns)
     allowed = @allowed |> Map.keys() |> Enum.sort()
 
     assert found == allowed,
@@ -97,6 +124,23 @@ defmodule Cyfr.EgressInventoryTest do
              #{inspect(found -- allowed)}
 
            stale rows (the site no longer speaks HTTP):
+             #{inspect(allowed -- found)}
+           """
+  end
+
+  test "every site that resolves an outbound host is classified" do
+    found = sites(@resolver_patterns)
+    allowed = @resolvers |> Map.keys() |> Enum.sort()
+
+    assert found == allowed,
+           """
+           the outbound name-resolution inventory changed.
+
+           unclassified sites (add a row to @resolvers with what they are,
+           or resolve through a site above):
+             #{inspect(found -- allowed)}
+
+           stale rows (the site no longer resolves a host):
              #{inspect(allowed -- found)}
            """
   end

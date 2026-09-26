@@ -331,7 +331,7 @@ defmodule Cyfr.Boundaries do
       allow: ~w(
         Sanctum Sanctum.Atoms Sanctum.Auth Sanctum.Authority Sanctum.Caller
         Sanctum.Cipher Sanctum.Consent Sanctum.Context Sanctum.Door Sanctum.Egress
-        Sanctum.ExecutionStanding Sanctum.Grimoire
+        Sanctum.ExecutionStanding Sanctum.Grimoire Sanctum.Network
         Sanctum.Policy Sanctum.Session
         Sanctum.Tenancy Sanctum.TinctureAccess Sanctum.ToolServerDigest Sanctum.Unauthorized
         Sanctum.UnauthorizedError Sanctum.VaultReader
@@ -352,6 +352,8 @@ defmodule Cyfr.Boundaries do
           "decides whether an admitted execution's grant still stands: admission, " <>
           "every host effect, the in-chain gate and the sweep ask it. `Sanctum.Egress` " <>
           "is `Grimoire.Provider`'s registry probe and `system.notify` webhook. " <>
+          "`Sanctum.Network` is `Crucible.Host.Egress`'s one resolution of a guest's " <>
+          "outbound host, which it pins under the attempt's authority. " <>
           "`Sanctum.TinctureAccess` is that invocation's reread of the tincture it " <>
           "roots at: its public-profile and private-access policy."
     },
@@ -1140,7 +1142,7 @@ defmodule Cyfr.Boundaries do
     "Sanctum.ExecutionStanding" => [capture: 1, retired_attempts: 3, stamp_only: 1, verify: 1],
     "Sanctum.Grimoire" => [install!: 1],
     "Sanctum.Namespace" => [lookup_status: 1],
-    "Sanctum.Network" => [validate_redirect_url: 2],
+    "Sanctum.Network" => [pin: 2, validate_redirect_url: 2],
     "Sanctum.Notify" => [broadcast: 3],
     "Sanctum.Policy.Enforcement" => [record: 1],
     "Sanctum.Provisioning" => [

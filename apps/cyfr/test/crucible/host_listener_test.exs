@@ -13,6 +13,11 @@ defmodule Crucible.HostListenerTest do
   seal key, as the call the header names; a body that does not open so is
   refused. Nothing refused leaves a claim, an event or a terminal row, and
   the answer of a call that passes is the JSON `Host` produces.
+
+  Every `pre_body_refusals` vector of `tests/fixtures/host_api.json` is
+  answered at its status, in the documented order, on a connection the
+  listener closes without reading the body; every `body_refusals` vector
+  is refused, once opened, with the error it names.
   """
 
   use ExUnit.Case, async: false
@@ -25,6 +30,10 @@ defmodule Crucible.HostListenerTest do
 
   @service "wrk_listener_test"
   @auth WorkerWire.auth_header()
+
+  @vectors_path Path.expand("../../../../tests/fixtures/host_api.json", __DIR__)
+  @external_resource @vectors_path
+  @vectors @vectors_path |> File.read!() |> Jason.decode!()
 
   setup do
     :ok = Ecto.Adapters.SQL.Sandbox.checkout(Arca.Repo)
@@ -536,6 +545,264 @@ defmodule Crucible.HostListenerTest do
 
       assert drain(listener) == 5_000
       assert drain(drained) == 1_234
+    end
+  end
+
+  describe "the vectors of tests/fixtures/host_api.json" do
+    @tag :capture_log
+    test "every pre-body refusal is answered at its status, closed, with the body unread", %{
+      listener: listener,
+      url: url
+    } do
+      fixture = AttemptFixtures.attached!(service_id: @service)
+      port = HostListener.port(listener)
+      vectors = @vectors["pre_body_refusals"]
+
+      assert Enum.map(vectors, & &1["name"]) ==
+               ~w(unknown_version malformed outside_window bad_mac other_generation
+                  other_member reused_nonce)
+
+      for vector <- vectors do
+        headers = pre_body_header(vector, fixture, url)
+
+        log =
+          capture_log(fn ->
+            {status, response_headers, answer} =
+              unread_post(port, WorkerWire.host_route(pre_body_route(vector)), headers)
+
+            assert status == vector["status"], vector["name"]
+            assert response_headers["connection"] == "close", vector["name"]
+
+            # A peer at another version is told so; every other header is
+            # refused as lost, its reason logged.
+            name = if vector["error"] == "unknown_version", do: "unknown_version", else: "lost"
+            assert answer == %{"v" => 1, "error" => name}, vector["name"]
+          end)
+
+        assert log =~ vector["error"], vector["name"]
+      end
+
+      assert claimed_by(fixture) == fixture.runner
+      assert Process.alive?(fixture.pid)
+    end
+
+    @tag :capture_log
+    test "a header failing two checks is refused by the earlier, before the body", %{
+      listener: listener,
+      url: url
+    } do
+      fixture = AttemptFixtures.attached!(service_id: @service)
+      port = HostListener.port(listener)
+      renew = WorkerWire.host_route(:renew)
+
+      {:ok, stale} =
+        Keys.attempt_keys(%{fixture.keys.attempt | generation: fixture.generation + 1})
+
+      bad_key = :crypto.strong_rand_bytes(32)
+
+      refused = fn path, headers, reason ->
+        log = capture_log(fn -> send(self(), {:answer, unread_post(port, path, headers)}) end)
+        assert_received {:answer, {_status, %{"connection" => "close"}, answer}}
+        assert log =~ reason, reason
+        answer
+      end
+
+      # The route before the plane, the plane before the header count.
+      on_exit(fn -> Arca.ControlPlane.record(:unclaimed) end)
+      Arca.ControlPlane.record(:lost)
+
+      assert %{"error" => "not_found"} = refused.("/host/v1/nope", [], "")
+      assert %{"error" => "lost"} = refused.(renew, [], "does not hold the control plane")
+      Arca.ControlPlane.record(:unclaimed)
+
+      # The header count before its version, its version before its shape.
+      assert %{"error" => "lost"} = refused.(renew, ["v2 x", "v2 x"], "2 x-cyfr-auth headers")
+
+      assert %{"error" => "unknown_version"} =
+               refused.(renew, ["v2 kind=call"], "unknown_version")
+
+      # The window before the MAC, the MAC before the generation, the
+      # generation before the member.
+      assert %{"error" => "lost"} =
+               refused.(
+                 renew,
+                 [live_header(fixture, ts: now() - 60_000, call_key: bad_key)],
+                 "outside_window"
+               )
+
+      assert %{"error" => "lost"} =
+               refused.(
+                 renew,
+                 [live_header(fixture, generation: fixture.generation + 1, call_key: bad_key)],
+                 "bad_mac"
+               )
+
+      assert %{"error" => "lost"} =
+               refused.(
+                 renew,
+                 [
+                   live_header(fixture,
+                     generation: fixture.generation + 1,
+                     call_key: stale.call,
+                     member: "cyfr@elsewhere#boot_other"
+                   )
+                 ],
+                 "generation_mismatch"
+               )
+
+      # The member before the nonce: a call presented with a nonce already
+      # seen, to another member, is refused as misrouted.
+      storage = WorkerWire.host_route(:storage)
+      {header, body} = storage_call(fixture, nonce: "n_order")
+      assert {200, _sealed} = post(url, storage, [header], body, raw: true)
+
+      {misrouted, _body} =
+        storage_call(fixture, nonce: "n_order", member: "cyfr@elsewhere#boot_other")
+
+      assert %{"error" => "lost"} = refused.(storage, [misrouted], "member_mismatch")
+
+      # The nonce before the body.
+      assert %{"error" => "lost"} = refused.(storage, [header], "replayed")
+    end
+
+    @tag :capture_log
+    test "every body refusal is answered once the body is opened, before its op is read", %{
+      url: url
+    } do
+      fixture = AttemptFixtures.attached!(service_id: @service)
+      vectors = @vectors["body_refusals"]
+
+      assert Enum.map(vectors, & &1["error"]) ==
+               ~w(unknown_version unknown_version unknown_version malformed malformed malformed
+                  malformed)
+
+      for %{"name" => name, "body" => json, "error" => error} <- vectors do
+        fields = fields(fixture, [])
+        {:ok, sealed} = WorkerAuth.seal_call(fixture.keys.seal, :body, fields, json)
+        {:ok, header} = WorkerAuth.host_call_header(fixture.call_key, fields, sealed)
+
+        assert {400, %{"v" => 1, "error" => ^error}} =
+                 post(url, WorkerWire.host_route(:renew), [header], sealed),
+               name
+      end
+
+      assert %{state: "running"} =
+               Arca.ExecutionAttempts.get(
+                 Prima.Actor.in_athanor(fixture.athanor_id),
+                 fixture.attempt
+               )
+
+      assert Process.alive?(fixture.pid)
+    end
+
+    test "a call's answer and a report's carry the wire's version first", %{url: url} do
+      fixture = AttemptFixtures.attached!(service_id: @service)
+      fields = fields(fixture, [])
+
+      json =
+        WorkerWire.request_body(:renew, %{"attempts" => [fixture.attempt]}) |> Jason.encode!()
+
+      {:ok, sealed} = WorkerAuth.seal_call(fixture.keys.seal, :body, fields, json)
+      {:ok, header} = WorkerAuth.host_call_header(fixture.call_key, fields, sealed)
+
+      assert {200, raw} = post(url, WorkerWire.host_route(:renew), [header], sealed, raw: true)
+      assert {:ok, answer} = WorkerAuth.open_call(fixture.keys.seal, :answer, fields, raw)
+      assert String.starts_with?(answer, ~s({"v":1,"ok":))
+
+      assert {200, %{"v" => 1, "ok" => true}} = report(url, fixture)
+    end
+  end
+
+  # The live header carrying the defect a pre-body vector names. A vector
+  # whose header decides its refusal on its own (a version token, a shape,
+  # a timestamp long past) is posted as it is; the rest are made against
+  # the live attempt, whose keys and standing the vector's cannot be.
+  defp pre_body_header(%{"error" => error, "header" => header}, _fixture, _url)
+       when error in ~w(unknown_version malformed outside_window),
+       do: [header]
+
+  defp pre_body_header(%{"error" => "bad_mac"}, fixture, _url),
+    do: [live_header(fixture, call_key: :crypto.strong_rand_bytes(32))]
+
+  defp pre_body_header(%{"error" => "generation_mismatch"}, fixture, _url) do
+    {:ok, keys} = Keys.attempt_keys(%{fixture.keys.attempt | generation: fixture.generation + 1})
+    [live_header(fixture, generation: fixture.generation + 1, call_key: keys.call)]
+  end
+
+  defp pre_body_header(%{"error" => "member_mismatch"}, fixture, _url),
+    do: [live_header(fixture, member: "cyfr@10.0.0.2#boot_01a09fee-6e8f-7091-a2b3-c4d5e6f70819")]
+
+  # A storage call is never retried: its nonce, once presented, is replayed.
+  defp pre_body_header(%{"error" => "replayed"}, fixture, url) do
+    {header, body} = storage_call(fixture, [])
+    assert {200, _sealed} = post(url, WorkerWire.host_route(:storage), [header], body, raw: true)
+    [header]
+  end
+
+  defp pre_body_route(%{"error" => "replayed"}), do: :storage
+  defp pre_body_route(_vector), do: :renew
+
+  # A renew header for `fixture`, over a body never sent.
+  defp live_header(fixture, opts) do
+    {:ok, header} =
+      WorkerAuth.host_call_header(
+        Keyword.get(opts, :call_key, fixture.call_key),
+        fields(fixture, opts),
+        "a body never sent"
+      )
+
+    header
+  end
+
+  defp storage_call(fixture, opts) do
+    fields = fields(fixture, opts)
+
+    json =
+      WorkerWire.request_body(:storage, %{"action" => "exists", "path" => "notes/a.txt"})
+      |> Jason.encode!()
+
+    {:ok, sealed} = WorkerAuth.seal_call(fixture.keys.seal, :body, fields, json)
+    {:ok, header} = WorkerAuth.host_call_header(fixture.call_key, fields, sealed)
+    {header, sealed}
+  end
+
+  # A request whose headers declare a body that is never sent: an answer
+  # that arrives is one given without reading it. Answers the status, the
+  # response headers and the decoded answer, once the listener has closed
+  # the connection; a listener that kept it open to read the body fails
+  # the read's deadline.
+  defp unread_post(port, path, auth_headers) do
+    {:ok, socket} = :gen_tcp.connect({127, 0, 0, 1}, port, [:binary, active: false], 5_000)
+
+    request = [
+      "POST ",
+      path,
+      " HTTP/1.1\r\nhost: 127.0.0.1\r\ncontent-type: application/json\r\n",
+      "content-length: 1024\r\n",
+      Enum.map(auth_headers, &[@auth, ": ", &1, "\r\n"]),
+      "\r\n"
+    ]
+
+    :ok = :gen_tcp.send(socket, request)
+    {:ok, response} = read_until_closed(socket, "")
+    [head, body] = String.split(response, "\r\n\r\n", parts: 2)
+    ["HTTP/1.1 " <> status_line | header_lines] = String.split(head, "\r\n")
+    {status, _reason} = Integer.parse(status_line)
+
+    headers =
+      Map.new(header_lines, fn line ->
+        [name, value] = String.split(line, ":", parts: 2)
+        {String.downcase(name), String.trim(value)}
+      end)
+
+    {status, headers, Jason.decode!(body)}
+  end
+
+  defp read_until_closed(socket, read) do
+    case :gen_tcp.recv(socket, 0, 5_000) do
+      {:ok, more} -> read_until_closed(socket, read <> more)
+      {:error, :closed} -> {:ok, read}
+      {:error, :timeout} -> {:still_open, read}
     end
   end
 

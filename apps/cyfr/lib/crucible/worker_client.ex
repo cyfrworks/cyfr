@@ -21,21 +21,25 @@ defmodule Crucible.WorkerClient do
       service may have acted.
 
   A request is a `POST` to the callback's route (`Prima.WorkerWire.worker_route/1`)
-  whose body is the JSON `{"op", "args"}` and whose `x-cyfr-auth` header
+  whose body is the JSON `{"v", "op", "args"}` (`Prima.WorkerWire.request_body/2`)
+  and whose `x-cyfr-auth` header
   is `Prima.WorkerAuth.request_header/3` over that body, signed with the
   worker service's dispatch key (`Crucible.Keys.opus_key/1`),
   naming the service the request is addressed to and this boot
   (`Prima.Boot.id/0`) as the incarnation presenting it, under a fresh nonce.
-  An answer is a `200` read up to `Prima.HostAPI.max_answer_bytes/0`:
-  `{"ok": value}` is the callback's success and `{"error": name}` its
-  refusal; any other status, or anything else in an answer's place, is a
-  lost answer. A lost answer is retried once, with a fresh nonce, when
+  An answer is a `200` read up to `Prima.HostAPI.max_answer_bytes/0` and
+  read at this wire's version (`Prima.WorkerWire.read_answer/1`):
+  `{"v": 1, "ok": value}` is the callback's success and
+  `{"v": 1, "error": name}` its refusal; any other status, an answer
+  without `v` or at another version, a refusal of `unknown_version` (a
+  worker service at another version of the wire is not this cell's), or
+  anything else in an answer's place, is a lost answer. A lost answer is retried once, with a fresh nonce, when
   `Prima.WorkerAPI.retry/1` allows it (`kill` and `status`), never for
   `start`: its assignment's claim window bounds the worker service, and
   dispatch reconciles against the attempt.
 
   One listener refusal is an answer: a `start` refused `503`
-  `{"error": "unavailable", "message": sentence}`, the worker service's
+  `{"v": 1, "error": "unavailable", "message": sentence}`, the worker service's
   account of why no runner can take it (its keeper refuses runners,
   `t:Prima.WorkerAPI.refusal/0`), is `{:error, {:unavailable, sentence}}`,
   since the service answers it only once it has decided to start nothing.
@@ -51,14 +55,16 @@ defmodule Crucible.WorkerClient do
   @connect_timeout_ms 5_000
 
   # The refusals a worker service answers by name (`Prima.WorkerWire`);
-  # anything else in an answer's place is a lost answer.
+  # anything else in an answer's place is a lost answer. A worker service
+  # that names `unknown_version` speaks another version of the wire, so
+  # its answer is lost too, under the callback's retry class.
   @refusals %{
     "lost" => :lost,
     "unavailable" => :unavailable,
     "replayed" => :replayed,
     "malformed" => :malformed,
     "bad_mac" => :bad_mac,
-    "unknown_version" => :unknown_version,
+    "unknown_version" => :lost,
     "claim_expired" => :claim_expired,
     "not_found" => :not_found
   }
@@ -202,10 +208,18 @@ defmodule Crucible.WorkerClient do
   end
 
   defp answer(raw) do
-    case Jason.decode(raw) do
-      {:ok, %{"ok" => value}} -> {:ok, value}
-      {:ok, %{"error" => name}} when is_map_key(@refusals, name) -> {:error, @refusals[name]}
+    case read(raw) do
+      {:ok, value} -> {:ok, value}
+      {:error, name, _fields} when is_map_key(@refusals, name) -> {:error, @refusals[name]}
       _unreadable -> {:error, :lost}
+    end
+  end
+
+  # An answer at this wire's version, or `:lost`.
+  defp read(raw) do
+    case Jason.decode(raw) do
+      {:ok, decoded} -> WorkerWire.read_answer(decoded)
+      {:error, _not_json} -> :lost
     end
   end
 
@@ -213,7 +227,7 @@ defmodule Crucible.WorkerClient do
   # any other 503 is no answer of the service's.
   defp refused_start(resp, max_bytes) do
     with {:ok, raw} <- Prima.BoundedBody.read(resp, max_bytes),
-         {:ok, %{"error" => "unavailable", "message" => sentence}} <- Jason.decode(raw),
+         {:error, "unavailable", %{"message" => sentence}} <- read(raw),
          true <- WorkerAPI.valid_refusal_message?(sentence) do
       {:error, {:unavailable, sentence}}
     else

@@ -5,13 +5,15 @@ defmodule Crucible.Host do
   @moduledoc """
   Where a runner's host calls reach CYFR: `attach`, `renew`, `complete`,
   `fail`, `push_deltas`, `oauth_token`, `take_rate`, `storage`,
-  `fetch_artifact`, `record_denial`, `admit_child` and `tool_call`, as
-  `Prima.HostAPI` describes them.
+  `fetch_artifact`, `record_denial`, `admit_child`, `tool_call`,
+  `release_child` and `egress_pin`, as `Prima.HostAPI` describes them.
 
   `call/2` is the one entry point. It takes a host call's header
   (`Prima.WorkerAuth.host_call_header/3`) and its JSON body,
-  `{"op": name, "args": {...}}`, and answers JSON. The operation is named
-  inside the body, so the header's MAC covers it. The tenant, execution,
+  `{"v": 1, "op": name, "args": {...}}` (`Prima.WorkerWire.request_body/2`),
+  and answers JSON. The operation is named inside the body, so the
+  header's MAC covers it; the body's version is read before its operation
+  (`Prima.WorkerWire.read_request_body/2`). The tenant, execution,
   attempt and runner a call acts for come from the verified header, never
   from the body. Over HTTP, `Crucible.HostListener` carries the
   header and body here and the answer back; `call/2` verifies the whole
@@ -27,10 +29,11 @@ defmodule Crucible.Host do
        call key of the attempt it names, derived from the worker root, and
        names this member's standing (`Crucible.Keys.standing/0`: its
        current generation, which the control plane must be able to answer,
-       and its own boot), and the body is a known operation with
-       well-formed arguments. A call addressed to another member is `lost`
-       here, whether or not this member could have answered it from the
-       rows: the attempt's process is the member's that issued it.
+       and its own boot), and the body is at this wire's version and is a
+       known operation with well-formed arguments. A call addressed to
+       another member is `lost` here, whether or not this member could
+       have answered it from the rows: the attempt's process is the
+       member's that issued it.
     2. `attach`: the assignment verifies (`Prima.Assignment.verify/3`), it
        names the header's athanor, execution, attempt, fence, generation
        and member, it is addressed to the header's worker service and
@@ -50,9 +53,10 @@ defmodule Crucible.Host do
        the attempt before, and the attempt row is held by the header's
        runner under a grant that stands, before the attempt runs it
        (`Crucible.Attempt.call/3`); `fail` needs the hold alone.
-       `admit_child` and `tool_call` act under what the attempt holds
-       (`Crucible.Host.Children`), and need the row live as well: no
-       cancel asked of it and its execution running.
+       `admit_child`, `tool_call` and `egress_pin` act under what the
+       attempt holds (`Crucible.Host.Children`, `Crucible.Host.Egress`),
+       and need the row live as well: no cancel asked of it and its
+       execution running.
 
   A grant stands while its estate is active at the generation the run was
   admitted under (`Sanctum.ExecutionStanding.verify/1`). An archive
@@ -62,13 +66,16 @@ defmodule Crucible.Host do
 
   ## Answers
 
-  `{"ok": value}` on success. A refusal is `{"error": name}`:
+  Every answer carries the wire's version first
+  (`Prima.WorkerWire.ok/1` and `error/2`): `{"v": 1, "ok": value}` on
+  success, and a refusal is `{"v": 1, "error": name}`:
 
     * `lost` — this boot does not hold the control plane, the header does
       not verify, the header names another member, the body is not an
       operation, the nonce was presented before, or the attempt is not
       open, current, running, at the header's fence and claimed by its
       runner;
+    * `unknown_version` — the body has no `v`, or another one;
     * `unavailable` — the store could not answer;
     * at attach, `malformed`, `bad_mac`, `unknown_version` or
       `claim_expired` for an assignment that does not verify, `replayed`
@@ -76,6 +83,10 @@ defmodule Crucible.Host do
       `payload` when the run's vault edge cannot be unsealed;
     * `failed` with its `message`, when `complete` closed the run failed;
     * `not_found`, when `fetch_artifact` names no artifact of the attempt's;
+    * for `egress_pin`, `malformed` for args that do not read
+      (`Prima.PinnedTarget.read_request/1`), and `denied`, `metadata`,
+      `resolution` or `redirect_credentials` for a pin CYFR does not grant
+      (`Crucible.Host.Egress`);
     * `guest_error` with its `type` and `message`, and a `remediation` for
       a `setup_required` one, a refusal the runner hands its guest.
 
@@ -93,6 +104,7 @@ defmodule Crucible.Host do
   | `record_denial` | `type`, `message` | `true` |
   | `admit_child` | `reference`, optional `need`, `input` (object), `guest_fn` (`call` or `spawn`), `child_key` | `assignment`, `attempt_keys` (sealed), `input` (JSON text), `secrets` |
   | `tool_call` | `name`, `args` (object), `guest_fn` (`call` or `spawn`) | the tool's result |
+  | `egress_pin` | `url`, `purpose` (`fetch`, `stream` or `redirect`), `from` for a redirect | the pin (`Prima.PinnedTarget`) |
 
   An outcome names its `execution_id`, `attempt` and `fence`. `storage`,
   `fetch_artifact` and `record_denial` are `Crucible.Host.Storage`'s;
@@ -103,8 +115,8 @@ defmodule Crucible.Host do
   ## A worker service's report
 
   `runner_exited/2` takes a report's header (`Prima.WorkerAuth.report_header/3`)
-  and its JSON body, `{"op": "runner_exited", "args": {"member": boot,
-  "runner": id, "attempts": [ids]}}`, and answers JSON. The header must
+  and its JSON body, `{"v": 1, "op": "runner_exited", "args": {"member":
+  boot, "runner": id, "attempts": [ids]}}`, and answers JSON. The header must
   verify under the dispatch key of the worker service it names
   (`Prima.WorkerAuth.verify_report/4`), which only that worker service
   holds, and its `member` must be this member's boot, since every attempt
@@ -117,18 +129,19 @@ defmodule Crucible.Host do
   open for each is stopped without closing its run
   (`Crucible.Attempt.stop_unclosed/2`). A report from another boot
   of the same service lapses nothing.
-  It answers `{"ok": true}`, `{"error": "lost"}` for a report that does not
-  verify or names another member, and `{"error": "unavailable"}` when this
-  boot does not hold the control plane (nothing is lapsed) or the store
-  cannot list the attempts.
+  It answers `{"v": 1, "ok": true}`, `{"v": 1, "error": "lost"}` for a
+  report that does not verify, is not a report at this version or names
+  another member, and `{"v": 1, "error": "unavailable"}` when this boot
+  does not hold the control plane (nothing is lapsed) or the store cannot
+  list the attempts.
   """
 
   require Logger
 
-  alias Prima.{Assignment, Delta, WorkerAuth}
+  alias Prima.{Assignment, Delta, HostAPI, PinnedTarget, WorkerAuth, WorkerWire}
   alias Crucible.{Attempt, Keys, Lapse}
   alias Prima.Outcome
-  alias Crucible.Host.Children
+  alias Crucible.Host.{Children, Egress}
 
   @assignment_fields [:athanor_id, :execution_id, :attempt, :fence, :generation, :member]
   @refusals [
@@ -139,7 +152,11 @@ defmodule Crucible.Host do
     :bad_mac,
     :unknown_version,
     :claim_expired,
-    :not_found
+    :not_found,
+    :denied,
+    :metadata,
+    :resolution,
+    :redirect_credentials
   ]
 
   @doc "Answer one host call: `header` and the JSON `body` it signs, answered as JSON."
@@ -212,7 +229,8 @@ defmodule Crucible.Host do
   end
 
   defp reported_attempts(body) do
-    with {:ok, %{"op" => "runner_exited", "args" => args}} <- Jason.decode(body),
+    with {:ok, decoded} <- Jason.decode(body),
+         {:ok, :runner_exited, args} <- WorkerWire.read_request_body(HostAPI, decoded),
          %{"member" => member, "runner" => runner, "attempts" => attempts} <- args,
          true <- is_binary(member) and member != "",
          true <- is_binary(runner) and runner != "" and is_list(attempts),
@@ -272,6 +290,8 @@ defmodule Crucible.Host do
   end
 
   defp dispatch(caller, {Children, op}, _now), do: Children.call(caller, op)
+
+  defp dispatch(caller, {:egress_pin, request}, now), do: Egress.pin(caller, request, now: now)
 
   defp dispatch(caller, op, _now), do: Attempt.call(caller.execution_id, caller, op)
 
@@ -340,10 +360,15 @@ defmodule Crucible.Host do
   # Wire
   # ---------------------------------------------------------------------------
 
+  # The version is read before the operation: a body at another version
+  # is told so, and one that is no operation at this version is lost.
   defp decode(body) do
-    case Jason.decode(body) do
-      {:ok, %{"op" => op, "args" => %{} = args}} -> operation(op, args)
-      _ -> {:error, :lost}
+    with {:ok, decoded} <- Jason.decode(body),
+         {:ok, callback, args} <- WorkerWire.read_request_body(HostAPI, decoded) do
+      operation(Atom.to_string(callback), args)
+    else
+      {:error, :unknown_version} -> {:error, :unknown_version}
+      _not_an_operation -> {:error, :lost}
     end
   end
 
@@ -389,6 +414,13 @@ defmodule Crucible.Host do
     with {:ok, call} <- Children.operation(op, args), do: {:ok, {Children, call}}
   end
 
+  defp operation("egress_pin", args) do
+    case PinnedTarget.read_request(args) do
+      {:ok, request} -> {:ok, {:egress_pin, request}}
+      {:error, :malformed} -> {:error, :malformed}
+    end
+  end
+
   defp operation(_op, _args), do: {:error, :lost}
 
   defp outcome(%{"execution_id" => id, "attempt" => attempt, "fence" => fence} = wire, status)
@@ -424,29 +456,27 @@ defmodule Crucible.Host do
   defp renewal_wire({:ok, until}), do: %{"lease_until" => until}
   defp renewal_wire(:lost), do: "lost"
 
-  defp encode(:ok), do: Jason.encode!(%{"ok" => true})
-  defp encode({:ok, value}), do: Jason.encode!(%{"ok" => value})
+  defp encode(answer), do: answer |> wire() |> Jason.encode!()
 
-  defp encode({:error, {:setup_required, payload}}),
-    do: Jason.encode!(%{"error" => "setup_required", "payload" => payload})
+  defp wire(:ok), do: WorkerWire.ok(true)
+  defp wire({:ok, %PinnedTarget{} = pin}), do: WorkerWire.ok(PinnedTarget.to_wire(pin))
+  defp wire({:ok, value}), do: WorkerWire.ok(value)
 
-  defp encode({:error, {:guest_error, type, message}}),
-    do: Jason.encode!(%{"error" => "guest_error", "type" => type, "message" => message})
+  defp wire({:error, {:setup_required, payload}}),
+    do: WorkerWire.error(:setup_required, %{"payload" => payload})
 
-  defp encode({:error, {:guest_error, type, message, remediation}}) do
-    Jason.encode!(%{
-      "error" => "guest_error",
+  defp wire({:error, {:guest_error, type, message}}),
+    do: WorkerWire.error(:guest_error, %{"type" => type, "message" => message})
+
+  defp wire({:error, {:guest_error, type, message, remediation}}) do
+    WorkerWire.error(:guest_error, %{
       "type" => type,
       "message" => message,
       "remediation" => remediation
     })
   end
 
-  defp encode({:error, {:failed, message}}),
-    do: Jason.encode!(%{"error" => "failed", "message" => message})
-
-  defp encode({:error, reason}) when reason in @refusals,
-    do: Jason.encode!(%{"error" => Atom.to_string(reason)})
-
-  defp encode(_other), do: Jason.encode!(%{"error" => "lost"})
+  defp wire({:error, {:failed, message}}), do: WorkerWire.error(:failed, %{"message" => message})
+  defp wire({:error, reason}) when reason in @refusals, do: WorkerWire.error(reason)
+  defp wire(_other), do: WorkerWire.error(:lost)
 end

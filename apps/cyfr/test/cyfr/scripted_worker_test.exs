@@ -14,10 +14,19 @@ defmodule Cyfr.Test.ScriptedWorkerTest do
   worker service's own key, a start whose answer was lost after the runner
   attached is left to that runner, and the listener refuses what its
   service's key did not sign before it reads a body.
+
+  The runners reach CYFR as Opus's do, over HTTP through a real host
+  listener (`Crucible.HostListener`), sealed and signed with their
+  attempt's keys, so every scripted run crosses that listener's checks.
+  The listener refuses a header at another version before it reads the
+  body, a body at another version once it is opened, and a call addressed
+  to another member at the same generation; a runner exit report naming
+  another member lapses nothing.
   """
 
   use ExUnit.Case, async: false
 
+  import ExUnit.CaptureLog
   import Prima.Test.Wait
 
   alias Prima.Authority
@@ -544,7 +553,7 @@ defmodule Cyfr.Test.ScriptedWorkerTest do
                post(route, signed(dispatch_key(), body), body)
     end
 
-    test "refuses a body that is not the one the header named, and one that is not its route's" do
+    test "refuses a body that is not the one the header named, at another version, or not its route's" do
       body = Jason.encode!(WorkerWire.request_body(:status, %{}))
       headers = signed(dispatch_key(), body)
 
@@ -559,6 +568,16 @@ defmodule Cyfr.Test.ScriptedWorkerTest do
       assert {400, %{"error" => "malformed"}} =
                post(WorkerWire.worker_route(:kill), signed(dispatch_key(), kill), kill)
 
+      # The body's version is read before its op.
+      for unversioned <- [~s({"op":"status","args":{}}), ~s({"v":2,"op":"status","args":{}})] do
+        assert {400, %{"v" => 1, "error" => "unknown_version"}} =
+                 post(
+                   WorkerWire.worker_route(:status),
+                   signed(dispatch_key(), unversioned),
+                   unversioned
+                 )
+      end
+
       assert {404, %{"error" => "not_found"}} = post("/worker/v1/other", headers, body)
     end
 
@@ -569,6 +588,196 @@ defmodule Cyfr.Test.ScriptedWorkerTest do
                post(WorkerWire.worker_route(:kill), signed(dispatch_key(), body), body)
 
       assert ScriptedWorker.kills() == []
+    end
+  end
+
+  describe "the host listener its runners reach" do
+    setup do
+      start_supervised!({ScriptedWorker, ref: @scripted, script: []})
+      fixture = AttemptFixtures.attached!(service_id: ScriptedWorker.service())
+      {:ok, fixture: fixture, url: ScriptedWorker.host_url()}
+    end
+
+    test "is a real host listener, bound on a port of its own", %{url: url} do
+      assert "http://127.0.0.1:" <> port = url
+      refute url == Cyfr.Test.OpusService.host_url()
+      assert String.to_integer(port) > 0
+    end
+
+    @tag :capture_log
+    test "refuses a header at another version before it reads the body", %{url: url} do
+      header =
+        "v2 kind=call athanor_id=ath_x execution_id=exec_x attempt=att_x fence=1 generation=1 " <>
+          "service=wrk_scripted boot=b runner=r member=m ts=1 nonce=n body=00 mac=AA"
+
+      assert {401, %{"connection" => "close"}, %{"v" => 1, "error" => "unknown_version"}} =
+               unread_post(url, WorkerWire.host_route(:renew), header)
+    end
+
+    @tag :capture_log
+    test "refuses a body at another version once it is opened", %{fixture: fixture, url: url} do
+      body = ~s({"v":2,"op":"renew","args":{"attempts":["#{fixture.attempt}"]}})
+
+      assert {400, %{"v" => 1, "error" => "unknown_version"}} =
+               host_call(url, fixture, :renew, body)
+
+      assert %{state: "running", lease_until: lease} = attempt_row(fixture)
+
+      # The same call at this version is answered.
+      body = Jason.encode!(WorkerWire.request_body(:renew, %{"attempts" => [fixture.attempt]}))
+      assert {200, %{"v" => 1, "ok" => %{} = renewals}} = host_call(url, fixture, :renew, body)
+      assert %{"lease_until" => _} = renewals[fixture.attempt]
+      assert DateTime.compare(attempt_row(fixture).lease_until, lease) in [:gt, :eq]
+    end
+
+    test "refuses a call addressed to another member at the same generation", %{
+      fixture: fixture,
+      url: url
+    } do
+      body = Jason.encode!(WorkerWire.request_body(:renew, %{"attempts" => [fixture.attempt]}))
+      other = "cyfr@elsewhere#boot_" <> Prima.UUID7.generate_id("peer")
+
+      log =
+        capture_log(fn ->
+          assert {401, %{"v" => 1, "error" => "lost"}} =
+                   host_call(url, fixture, :renew, body, member: other)
+        end)
+
+      assert log =~ "member_mismatch"
+      refute log =~ "generation_mismatch"
+
+      assert {200, %{"ok" => %{}}} = host_call(url, fixture, :renew, body)
+    end
+
+    @tag :capture_log
+    test "lapses nothing on an exit report naming another member", %{fixture: fixture, url: url} do
+      other = "cyfr@elsewhere#boot_" <> Prima.UUID7.generate_id("peer")
+
+      assert {200, %{"v" => 1, "error" => "lost"}} = exit_report(url, fixture, other)
+      assert %{state: "running"} = attempt_row(fixture)
+      assert Process.alive?(fixture.pid)
+
+      # The report naming this member lapses the attempt its runner held.
+      assert {200, %{"v" => 1, "ok" => true}} = exit_report(url, fixture, fixture.member)
+
+      assert {:error, "Execution terminated: runner stopped without cleanup"} =
+               Dispatch.await(fixture.pid, fixture.close)
+
+      assert %{state: "lapsed"} = attempt_row(fixture)
+    end
+  end
+
+  defp attempt_row(fixture),
+    do: Arca.ExecutionAttempts.get(Prima.Actor.in_athanor(fixture.athanor_id), fixture.attempt)
+
+  # One host call of `fixture`'s attempt with the JSON `body`, sealed and
+  # signed as a runner makes it, the header naming `:member` when given.
+  # Answers the status and the answer, opened when sealed.
+  defp host_call(url, fixture, callback, body, opts \\ []) do
+    fields =
+      Map.merge(fixture.keys.attempt, %{
+        boot: fixture.boot,
+        runner: fixture.runner,
+        member: Keyword.get(opts, :member, fixture.member),
+        ts: System.system_time(:millisecond),
+        nonce: Base.url_encode64(:crypto.strong_rand_bytes(12), padding: false)
+      })
+
+    {:ok, sealed} = WorkerAuth.seal_call(fixture.keys.seal, :body, fields, body)
+    {:ok, header} = WorkerAuth.host_call_header(fixture.call_key, fields, sealed)
+
+    {:ok, response} =
+      Req.request(
+        method: :post,
+        url: url <> WorkerWire.host_route(callback),
+        headers: [{WorkerWire.auth_header(), header}],
+        body: sealed,
+        retry: false,
+        decode_body: false
+      )
+
+    answer =
+      case WorkerAuth.open_call(fixture.keys.seal, :answer, fields, response.body) do
+        {:ok, json} -> json
+        {:error, :unsealable} -> response.body
+      end
+
+    {response.status, Jason.decode!(answer)}
+  end
+
+  # A report of the exit of `fixture`'s runner, naming `member`, signed with
+  # the scripted worker service's dispatch key as it reports one.
+  defp exit_report(url, fixture, member) do
+    body =
+      :runner_exited
+      |> WorkerWire.request_body(%{
+        "member" => member,
+        "runner" => fixture.runner,
+        "attempts" => [fixture.attempt]
+      })
+      |> Jason.encode!()
+
+    fields = %{
+      service: ScriptedWorker.service(),
+      boot: fixture.boot,
+      ts: System.system_time(:millisecond),
+      nonce: Base.url_encode64(:crypto.strong_rand_bytes(12), padding: false)
+    }
+
+    {:ok, header} = WorkerAuth.report_header(dispatch_key(), fields, body)
+
+    {:ok, response} =
+      Req.request(
+        method: :post,
+        url: url <> WorkerWire.host_route(:runner_exited),
+        headers: [{WorkerWire.auth_header(), header}],
+        body: body,
+        retry: false,
+        decode_body: false
+      )
+
+    {response.status, Jason.decode!(response.body)}
+  end
+
+  # A request declaring a body it never sends: an answer that arrives was
+  # given without reading it, and the listener closes the connection
+  # rather than read the rest to reuse it.
+  defp unread_post(url, path, header) do
+    "http://127.0.0.1:" <> port = url
+
+    {:ok, socket} =
+      :gen_tcp.connect({127, 0, 0, 1}, String.to_integer(port), [:binary, active: false])
+
+    :ok =
+      :gen_tcp.send(socket, [
+        "POST ",
+        path,
+        " HTTP/1.1\r\nhost: 127.0.0.1\r\ncontent-length: 1024\r\n",
+        WorkerWire.auth_header(),
+        ": ",
+        header,
+        "\r\n\r\n"
+      ])
+
+    {:ok, response} = read_until_closed(socket, "")
+    [head, body] = String.split(response, "\r\n\r\n", parts: 2)
+    ["HTTP/1.1 " <> status_line | lines] = String.split(head, "\r\n")
+    {status, _reason} = Integer.parse(status_line)
+
+    headers =
+      Map.new(lines, fn line ->
+        [name, value] = String.split(line, ":", parts: 2)
+        {String.downcase(name), String.trim(value)}
+      end)
+
+    {status, headers, Jason.decode!(body)}
+  end
+
+  defp read_until_closed(socket, read) do
+    case :gen_tcp.recv(socket, 0, 5_000) do
+      {:ok, more} -> read_until_closed(socket, read <> more)
+      {:error, :closed} -> {:ok, read}
+      {:error, :timeout} -> {:still_open, read}
     end
   end
 end

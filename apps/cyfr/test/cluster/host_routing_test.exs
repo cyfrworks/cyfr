@@ -89,7 +89,7 @@ defmodule Cyfr.Cluster.HostRoutingTest do
         # made to the address it names.
         assert {:ok, %Assignment{}} = Assignment.read(redirected)
 
-        assert {200, %{"error" => "bad_mac"}} =
+        assert {200, %{"v" => 1, "error" => "bad_mac"}} =
                  post(call(held, "attach", %{"assignment" => redirected}), address(held))
       end
 
@@ -144,7 +144,8 @@ defmodule Cyfr.Cluster.HostRoutingTest do
       # The same call, made once, delivered to the peer. Nothing about it
       # differs; only which member is asked to answer it. The peer refuses
       # it on the header alone, before it reads the body.
-      assert {401, %{"error" => "lost"}} = refused_by_peer!(completion(held), context.generation)
+      assert {401, %{"v" => 1, "error" => "lost"}} =
+               refused_by_peer!(completion(held), context.generation)
 
       # A completion an attempt's process never saw is a completion that
       # did not happen: the execution is still running, and the guest's
@@ -167,7 +168,7 @@ defmodule Cyfr.Cluster.HostRoutingTest do
       held = attempt(:a, :unattached, attach: false)
       attach = call(held, "attach", %{"assignment" => held.assignment})
 
-      assert {401, %{"error" => "lost"}} = refused_by_peer!(attach, context.generation)
+      assert {401, %{"v" => 1, "error" => "lost"}} = refused_by_peer!(attach, context.generation)
 
       # The attempt is still unclaimed, so nothing about the peer's refusal
       # left it half-held, and the member it names still claims it.
@@ -182,7 +183,7 @@ defmodule Cyfr.Cluster.HostRoutingTest do
       before = Observer.attempt(held.attempt)["lease_until"]
       renew = call(held, "renew", %{"attempts" => [held.attempt]})
 
-      assert {401, %{"error" => "lost"}} = refused_by_peer!(renew, context.generation),
+      assert {401, %{"v" => 1, "error" => "lost"}} = refused_by_peer!(renew, context.generation),
              "the peer renewed the lease of an attempt it holds none of the work for"
 
       assert Observer.attempt(held.attempt)["lease_until"] == before
@@ -205,12 +206,12 @@ defmodule Cyfr.Cluster.HostRoutingTest do
       # which name no member — so the peer reads it and refuses it, rather
       # than refusing it unread. Its header carries no generation either,
       # so the member is the only thing that can refuse it.
-      assert {200, %{"error" => "lost"}} = refused_by_peer!(report, context.generation)
+      assert {200, %{"v" => 1, "error" => "lost"}} = refused_by_peer!(report, context.generation)
       assert Observer.attempt(held.attempt)["state"] == "running"
       assert Observer.attempt(held.attempt)["lease_until"] == before
 
       # The member that issued the attempts the runner held lapses them.
-      assert {200, %{"ok" => true}} = post(report, address(held))
+      assert {200, %{"v" => 1, "ok" => true}} = post(report, address(held))
 
       Wait.until!(
         fn -> Observer.attempt(held.attempt)["state"] == "lapsed" end,
@@ -226,7 +227,7 @@ defmodule Cyfr.Cluster.HostRoutingTest do
 
       # A refusal is an answer: the peer is reached, verifies the call and
       # says `lost`. The worker knows CYFR heard it and said no.
-      assert {401, %{"error" => "lost"}} =
+      assert {401, %{"v" => 1, "error" => "lost"}} =
                refused_by_peer!(call(held, "renew", %{"attempts" => [held.attempt]}), generation)
 
       Cell.kill(:a)
@@ -334,7 +335,7 @@ defmodule Cyfr.Cluster.HostRoutingTest do
       |> Map.merge(%{ts: System.system_time(:millisecond), nonce: nonce()})
 
     {:ok, keys} = WorkerAuth.attempt_keys(root(), fields)
-    json = Jason.encode!(%{"v" => 1, "op" => op, "args" => args})
+    json = op |> String.to_existing_atom() |> WorkerWire.request_body(args) |> Jason.encode!()
     {:ok, sealed} = WorkerAuth.seal_call(keys.seal, :body, fields, json)
     {:ok, header} = WorkerAuth.host_call_header(keys.call, fields, sealed)
 
@@ -365,15 +366,13 @@ defmodule Cyfr.Cluster.HostRoutingTest do
   # whose attempts the runner held.
   defp exit_report(held) do
     body =
-      Jason.encode!(%{
-        "v" => 1,
-        "op" => "runner_exited",
-        "args" => %{
-          "member" => held.member,
-          "runner" => held.runner,
-          "attempts" => [held.attempt]
-        }
+      :runner_exited
+      |> WorkerWire.request_body(%{
+        "member" => held.member,
+        "runner" => held.runner,
+        "attempts" => [held.attempt]
       })
+      |> Jason.encode!()
 
     {:ok, worker_key} = WorkerAuth.worker_key(root(), held.service)
 
