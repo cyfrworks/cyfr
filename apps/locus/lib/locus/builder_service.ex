@@ -54,7 +54,8 @@ defmodule Locus.BuilderService do
   opens as a `200` stream of lines: each progress line as the build makes
   it, then one terminal line, the result or the refusal the build ended
   with (`timeout`, `memory`, `failed`, `unavailable`, `capacity`), carrying
-  the lines streamed as its diagnostics (`Locus.Diagnostics`).
+  the lines streamed as its diagnostics, in the encoded form each was
+  charged to the log's budget as (`Locus.Diagnostics`).
 
   ## How a build ends, and what is given back
 
@@ -294,8 +295,8 @@ defmodule Locus.BuilderService do
     budget = Diagnostics.budget()
 
     on_progress = fn stage, message ->
-      for {stage, message} <- Diagnostics.admit(budget, stage, message),
-          do: send(service, {ref, :progress, stage, message})
+      for {progress, diagnostic} <- Diagnostics.admit(budget, stage, message),
+          do: send(service, {ref, :progress, progress, diagnostic})
 
       :ok
     end
@@ -313,11 +314,9 @@ defmodule Locus.BuilderService do
 
   defp follow(conn, %{ref: ref, monitor: monitor} = s) do
     receive do
-      {^ref, :progress, stage, message} ->
-        {:ok, line} = BuilderProtocol.encode_progress(stage, message)
-
-        case chunk(conn, [line, ?\n]) do
-          {:ok, conn} -> follow(conn, %{s | lines: [Diagnostics.line(stage, message) | s.lines]})
+      {^ref, :progress, progress, diagnostic} ->
+        case chunk(conn, [progress, ?\n]) do
+          {:ok, conn} -> follow(conn, %{s | lines: [diagnostic | s.lines]})
           {:error, _closed} -> abandon(conn, s)
         end
 
@@ -344,15 +343,19 @@ defmodule Locus.BuilderService do
   defp finish(conn, _s, {:error, :cancelled}), do: conn
 
   # The builder held its outputs to the wire's bounds and the lines were
-  # admitted within the log's, so the result encodes.
+  # admitted within the log's, so the result encodes. The lines go out as
+  # they were charged, already encoded.
   defp finish(conn, s, {:ok, built}) do
     {:ok, line} =
-      BuilderProtocol.encode_result(Map.put(built, :diagnostics, Enum.reverse(s.lines)))
+      BuilderProtocol.encode_result(
+        Map.put(built, :diagnostics, {:encoded, Enum.reverse(s.lines)})
+      )
 
     terminal(conn, line)
   end
 
-  defp finish(conn, s, {:error, refusal}), do: refusal_line(conn, refusal, Enum.reverse(s.lines))
+  defp finish(conn, s, {:error, refusal}),
+    do: refusal_line(conn, refusal, {:encoded, Enum.reverse(s.lines)})
 
   defp refusal_line(conn, refusal, diagnostics) do
     Logger.warning("[Locus.BuilderService] a build ended refused: #{elem(refusal, 0)}")

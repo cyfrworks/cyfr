@@ -26,7 +26,8 @@
     "max_request_bytes": 2000000,
     "max_output_bytes": 67108864,
     "max_output_files": 500,
-    "max_response_bytes": 100000000,
+    "max_output_path_bytes": 1024,
+    "max_answer_bytes": 94558097,
     "max_line_bytes": 65536,
     "max_log_bytes": 2000000
   },
@@ -430,6 +431,16 @@
       "name": "result_unsafe_path",
       "body": "{\"diagnostics\":[],\"language\":\"javascript\",\"outputs\":[{\"base64\":\"Y29uc29sZS5sb2coInZlY3RvciIpOwo=\",\"digest\":\"sha256:8ccc5c58c884830f5dd13ea08c1de3885548832145af86dd5d9cd2ccc260bb78\",\"path\":\"a/../b\"}],\"target_type\":\"tincture\",\"type\":\"result\",\"version\":1}",
       "error": "unsafe_path"
+    },
+    {
+      "name": "result_oversize_path",
+      "body": "{\"diagnostics\":[],\"language\":\"javascript\",\"outputs\":[{\"base64\":\"Y29uc29sZS5sb2coInZlY3RvciIpOwo=\",\"digest\":\"sha256:8ccc5c58c884830f5dd13ea08c1de3885548832145af86dd5d9cd2ccc260bb78\",\"path\":\"assets/////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////app.js\"},{\"base64\":\"PCFkb2N0eXBlIGh0bWw+PHRpdGxlPnZlY3RvcjwvdGl0bGU+Cg==\",\"digest\":\"sha256:fc5d43f7bd0e9ce3eaa5435e45fdbc5c9fb9c21111130b285e457f98e6d0bbf2\",\"path\":\"index.html\"}],\"target_type\":\"tincture\",\"type\":\"result\",\"version\":1}",
+      "error": "invalid_field"
+    },
+    {
+      "name": "result_control_character_path",
+      "body": "{\"diagnostics\":[],\"language\":\"javascript\",\"outputs\":[{\"base64\":\"Y29uc29sZS5sb2coInZlY3RvciIpOwo=\",\"digest\":\"sha256:8ccc5c58c884830f5dd13ea08c1de3885548832145af86dd5d9cd2ccc260bb78\",\"path\":\"assets/\\u0001app.js\"},{\"base64\":\"PCFkb2N0eXBlIGh0bWw+PHRpdGxlPnZlY3RvcjwvdGl0bGU+Cg==\",\"digest\":\"sha256:fc5d43f7bd0e9ce3eaa5435e45fdbc5c9fb9c21111130b285e457f98e6d0bbf2\",\"path\":\"index.html\"}],\"target_type\":\"tincture\",\"type\":\"result\",\"version\":1}",
+      "error": "invalid_field"
     },
     {
       "name": "result_diagnostics_not_lines",

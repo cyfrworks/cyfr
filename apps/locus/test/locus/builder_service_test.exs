@@ -430,9 +430,17 @@ defmodule Locus.BuilderServiceTest do
       assert {200, lines} = Wire.build(port, Wire.request(script))
       assert {:refusal, {:failed, {:status, _}}, diagnostics} = List.last(lines)
 
-      kept = Enum.reduce(diagnostics, 0, &(byte_size(&1) + 1 + &2))
+      # The log is charged as the progress lines streamed, each encoded with
+      # its newline, and the diagnostics are those lines again.
+      kept =
+        Enum.reduce(Enum.drop(lines, -1), 0, fn {:progress, stage, message}, bytes ->
+          {:ok, line} = BuilderProtocol.encode_progress(stage, message)
+          bytes + byte_size(line) + 1
+        end)
+
       assert kept <= BuilderProtocol.max_log_bytes()
       assert kept > BuilderProtocol.max_log_bytes() - 100_000
+      assert Enum.reduce(diagnostics, 0, &(byte_size(&1) + 1 + &2)) < kept
       assert Enum.any?(diagnostics, &(&1 =~ "the rest of it is not kept"))
 
       # What was streamed is what was kept.

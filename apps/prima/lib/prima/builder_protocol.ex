@@ -26,7 +26,11 @@ defmodule Prima.BuilderProtocol do
 
   A build's answer is a stream of newline-delimited JSON lines
   (`encode_progress/2`, `read_line/1`): zero or more progress lines as the
-  build runs, then exactly one terminal line, a result or a refusal. A
+  build runs, then exactly one terminal line, a result or a refusal. The
+  whole answer, every line with its newline, is at most
+  `max_answer_bytes/0`: the builder charges its progress lines, as encoded,
+  to `max_log_bytes/0`, and the terminal line carries those lines again as
+  its diagnostics beside outputs held to their own bounds. A
   refusal the builder can make before the build starts — malformed,
   unauthorized, protocol mismatch, capacity, unavailable — is answered at
   its class's HTTP status (`status/1`) as the one line of the body; a
@@ -56,9 +60,10 @@ defmodule Prima.BuilderProtocol do
   `{version, type: "result", language, target_type, outputs, diagnostics}`.
   `outputs` is a list of `{path, base64, digest}`, each file's digest the
   `Prima.Digest.sha256/1` of its bytes, at most `max_output_files/0` files
-  and `max_output_bytes/0` bytes in all. A component build's outputs are
-  `component_wasm/0` and, when the build left one, `component_lockfile/0`;
-  a tincture's are its files. `diagnostics` are the build's log lines,
+  and `max_output_bytes/0` bytes in all, each path at most
+  `max_output_path_bytes/0` bytes with no control character. A component
+  build's outputs are `component_wasm/0` and, when the build left one,
+  `component_lockfile/0`; a tincture's are its files. `diagnostics` are the build's log lines,
   bounded as `max_line_bytes/0` and `max_log_bytes/0` say. The builder is
   another trust domain: the reader checks every digest against the bytes
   it decoded and every path, and the client still validates a component's
@@ -123,10 +128,12 @@ defmodule Prima.BuilderProtocol do
   @max_request_bytes 2_000_000
   @max_output_bytes 64 * 1_048_576
   @max_output_files 500
-  @max_response_bytes 100_000_000
+  @max_output_path_bytes 1024
   @max_line_bytes 65_536
   @max_log_bytes 2_000_000
   @max_text_bytes 256
+  # A path's control characters: C0 and DEL, each six bytes once escaped.
+  @control_bytes Enum.map(Enum.concat(0x00..0x1F, [0x7F]), &<<&1>>)
 
   @component_wasm "component.wasm"
   @component_lockfile "Cargo.lock"
@@ -176,6 +183,34 @@ defmodule Prima.BuilderProtocol do
   @output_fields ~w(path base64 digest)
   @toolchain_fields ~w(available command description)
 
+  # The largest legal answer, derived from the bounds and the encoder
+  # itself (see `max_answer_bytes/0`). The terminal line with no output and
+  # no diagnostic, at its longest language and type, with its newline:
+  @terminal_bytes @languages_by_type
+                  |> Enum.map(fn {type, language} ->
+                    %{
+                      "version" => @version,
+                      "type" => "result",
+                      "language" => Atom.to_string(language),
+                      "target_type" => Atom.to_string(type),
+                      "outputs" => [],
+                      "diagnostics" => []
+                    }
+                    |> Jason.encode!()
+                    |> byte_size()
+                    |> Kernel.+(1)
+                  end)
+                  |> Enum.max()
+  # One output entry with an empty path and no bytes, and the comma after it:
+  @output_entry_bytes %{"path" => "", "base64" => "", "digest" => Prima.Digest.sha256("")}
+                      |> Jason.encode!()
+                      |> byte_size()
+                      |> Kernel.+(1)
+  @base64_output_bytes 4 * div(@max_output_bytes + 2, 3)
+  @envelope_allowance @terminal_bytes +
+                        @max_output_files * (@output_entry_bytes + 2 * @max_output_path_bytes + 4)
+  @max_answer_bytes @base64_output_bytes + 2 * @max_log_bytes + @envelope_allowance
+
   @request %MacEnvelope{
     prefix: @label,
     kind: "request",
@@ -204,6 +239,21 @@ defmodule Prima.BuilderProtocol do
           target_type: target_type(),
           outputs: %{String.t() => binary()},
           diagnostics: [String.t()]
+        }
+
+  @typedoc """
+  A terminal line's diagnostics as a writer hands them over: the log's
+  lines, or `{:encoded, lines}`, each line already the JSON string
+  `encode_diagnostic/1` made of it, carried onto the wire as it is.
+  """
+  @type diagnostics :: [String.t()] | {:encoded, [String.t()]}
+
+  @typedoc "A finished build as a writer hands it to `encode_result/1`."
+  @type outgoing_result :: %{
+          language: language(),
+          target_type: target_type(),
+          outputs: %{String.t() => binary()},
+          diagnostics: diagnostics()
         }
 
   @typedoc "What one toolchain reports on a health answer."
@@ -352,9 +402,36 @@ defmodule Prima.BuilderProtocol do
   @spec max_output_files() :: pos_integer()
   def max_output_files, do: @max_output_files
 
-  @doc "The bytes a build's whole answer stream may be, as the client collects it."
-  @spec max_response_bytes() :: pos_integer()
-  def max_response_bytes, do: @max_response_bytes
+  @doc "The bytes one output's path may be, counted before it is split into segments."
+  @spec max_output_path_bytes() :: pos_integer()
+  def max_output_path_bytes, do: @max_output_path_bytes
+
+  @doc """
+  The bytes a build's whole answer may be, every line with its newline, as
+  the client collects it: the largest answer the bounds allow, derived
+  term by term.
+
+  - `4 * div(max_output_bytes + 2, 3)`: the outputs' bytes in base64, as
+    one file would spell them.
+  - `max_log_bytes`: the progress lines, each charged as its encoded line
+    with its newline.
+  - `max_log_bytes`: the terminal line's `diagnostics`, the same lines
+    again, each shorter as a JSON string with its comma than as the
+    progress line it was charged as.
+  - the terminal line with no output and no diagnostic, at its longest
+    language and type, brackets and newline included.
+  - per `max_output_files` entry: its keys, quotes, braces, the digest's
+    `sha256:` and 64 hex digits and a comma; `2 * max_output_path_bytes`
+    for its path, escaped, since a path holds no control character and
+    `"` or `\\` is the most any byte of it grows; and 4 bytes, the one
+    base64 quantum a file's padding can add past the single-file spelling.
+
+  A refusal line carries no outputs: its sentence, escaped, is at most six
+  times `max_line_bytes/0`, far below the outputs' term, so the result
+  line bounds every terminal line.
+  """
+  @spec max_answer_bytes() :: pos_integer()
+  def max_answer_bytes, do: @max_answer_bytes
 
   @doc "The bytes one progress message, diagnostic line or refusal sentence may be."
   @spec max_line_bytes() :: pos_integer()
@@ -536,8 +613,19 @@ defmodule Prima.BuilderProtocol do
     })
   end
 
+  @doc """
+  One log line as a terminal line's `diagnostics` carry it: its JSON
+  string, checked against the line bound. A writer that keeps these hands
+  them to `encode_result/1` or `encode_refusal/2` as `{:encoded, lines}`.
+  """
+  @spec encode_diagnostic(String.t()) :: {:ok, String.t()} | {:error, read_error()}
+  def encode_diagnostic(line) when is_binary(line) do
+    with {:ok, line} <- line_field(%{"diagnostics" => line}, "diagnostics"),
+         do: {:ok, Jason.encode!(line)}
+  end
+
   @doc "The terminal line of a finished build, checked as `read_line/1` will check it."
-  @spec encode_result(result()) :: {:ok, binary()} | {:error, read_error()}
+  @spec encode_result(outgoing_result()) :: {:ok, binary()} | {:error, read_error()}
   def encode_result(%{
         language: language,
         target_type: target_type,
@@ -545,26 +633,31 @@ defmodule Prima.BuilderProtocol do
         diagnostics: diagnostics
       })
       when is_atom(language) and is_atom(target_type) and is_map(outputs) do
-    encode_line(%{
-      "version" => @version,
-      "type" => "result",
-      "language" => Atom.to_string(language),
-      "target_type" => Atom.to_string(target_type),
-      "outputs" => files(outputs, true),
-      "diagnostics" => diagnostics
-    })
+    encode_terminal(
+      %{
+        "version" => @version,
+        "type" => "result",
+        "language" => Atom.to_string(language),
+        "target_type" => Atom.to_string(target_type),
+        "outputs" => files(outputs, true)
+      },
+      diagnostics
+    )
   end
 
   @doc "The one line of a refusal, with the build's log lines so far."
-  @spec encode_refusal(refusal(), [String.t()]) :: {:ok, binary()} | {:error, read_error()}
-  def encode_refusal(refusal, diagnostics) when is_tuple(refusal) and is_list(diagnostics) do
-    encode_line(%{
-      "version" => @version,
-      "type" => "refusal",
-      "class" => Atom.to_string(elem(refusal, 0)),
-      "reason" => reason_wire(refusal),
-      "diagnostics" => diagnostics
-    })
+  @spec encode_refusal(refusal(), diagnostics()) :: {:ok, binary()} | {:error, read_error()}
+  def encode_refusal(refusal, diagnostics)
+      when is_tuple(refusal) and (is_list(diagnostics) or is_tuple(diagnostics)) do
+    encode_terminal(
+      %{
+        "version" => @version,
+        "type" => "refusal",
+        "class" => Atom.to_string(elem(refusal, 0)),
+        "reason" => reason_wire(refusal)
+      },
+      diagnostics
+    )
   end
 
   @doc "The one line of a health answer."
@@ -594,6 +687,38 @@ defmodule Prima.BuilderProtocol do
 
   defp encode_line(wire) do
     with {:ok, _line} <- read_line_wire(wire), do: {:ok, Jason.encode!(wire)}
+  end
+
+  defp encode_terminal(wire, lines) when is_list(lines),
+    do: encode_line(Map.put(wire, "diagnostics", lines))
+
+  # Encoded lines are checked as their decoded text, then carried as they
+  # are, so the line's diagnostics are exactly the bytes the writer charged.
+  defp encode_terminal(wire, {:encoded, encoded}) when is_list(encoded) do
+    with {:ok, lines} <- decoded_lines(encoded),
+         {:ok, _line} <- read_line_wire(Map.put(wire, "diagnostics", lines)) do
+      fragment = Jason.Fragment.new([?[, Enum.intersperse(encoded, ?,), ?]])
+      {:ok, Jason.encode!(Map.put(wire, "diagnostics", fragment))}
+    end
+  end
+
+  defp encode_terminal(_wire, _diagnostics), do: {:error, {:invalid_field, "diagnostics"}}
+
+  defp decoded_lines(encoded) do
+    Enum.reduce_while(encoded, {:ok, []}, fn
+      text, {:ok, lines} when is_binary(text) ->
+        case Jason.decode(text) do
+          {:ok, line} when is_binary(line) -> {:cont, {:ok, [line | lines]}}
+          _ -> {:halt, {:error, {:invalid_field, "diagnostics"}}}
+        end
+
+      _text, {:ok, _lines} ->
+        {:halt, {:error, {:invalid_field, "diagnostics"}}}
+    end)
+    |> case do
+      {:ok, lines} -> {:ok, Enum.reverse(lines)}
+      {:error, _} = error -> error
+    end
   end
 
   defp read_line_wire(wire) do
@@ -969,6 +1094,7 @@ defmodule Prima.BuilderProtocol do
 
       with true <- is_map(file) || {:error, {:invalid_field, "#{name}[#{index}]"}},
            :ok <- exact(file, fields, at),
+           :ok <- output_path(file["path"], at, digests?),
            {:ok, path} <- safe_path(file["path"], at),
            false <- MapSet.member?(seen, path) && {:error, {:duplicate_path, path}},
            true <- is_binary(file["base64"]) || {:error, {:invalid_field, at <> "base64"}},
@@ -983,6 +1109,17 @@ defmodule Prima.BuilderProtocol do
       {:error, _} = error -> error
     end
   end
+
+  # An output's path is bounded on its own bytes, before PathSafety splits
+  # it, and holds no control character: the answer's bound counts each of
+  # its bytes as at most two once escaped.
+  defp output_path(path, at, true) when is_binary(path) do
+    if byte_size(path) > @max_output_path_bytes or String.contains?(path, @control_bytes),
+      do: {:error, {:invalid_field, at <> "path"}},
+      else: :ok
+  end
+
+  defp output_path(_path, _at, _digests?), do: :ok
 
   defp safe_path(path, _at) when is_binary(path) and path != "" do
     case Prima.PathSafety.validate_relative_path(path) do
