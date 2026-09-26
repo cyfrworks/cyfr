@@ -1084,7 +1084,7 @@ jobs:
         run: |
           set -uo pipefail
           paths='apps config wit scripts tests Caddyfile docker-compose.yml Dockerfile Dockerfile.locus Dockerfile.opus docker-entrypoint.sh .env.example .env.locus.example .env.opus.example .gitignore .dockerignore README.md CONTRIBUTING.md component-guide.md integration-guide.md tincture-guide.md'
-          excl=':(exclude)docs/** :(exclude)**/node_modules/** :(exclude)**/package-lock.json :(exclude)**/priv/static/**'
+          excl=':(exclude)**/node_modules/** :(exclude)**/package-lock.json :(exclude)**/priv/static/**'
           fail=0
           for p in \
             '\borg_id\b' \
