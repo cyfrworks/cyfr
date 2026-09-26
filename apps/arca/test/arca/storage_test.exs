@@ -236,7 +236,7 @@ defmodule Arca.StorageTest do
   describe "classify/1 and tenant_roots/0" do
     test "the tenant roster is closed, and every scope classifies" do
       assert Storage.tenant_roots() ==
-               ~w(aqua components threads notes payloads data)
+               ~w(aqua components threads notes payloads staging data)
 
       for root <- Storage.tenant_roots() do
         assert Storage.classify([root, "x"]) == :tenant
@@ -270,12 +270,12 @@ defmodule Arca.StorageTest do
       # Every roster is derived from @layout; these pin the derived values
       # so an edited row cannot silently reshape a roster.
       assert Enum.sort(Storage.tenant_roots()) ==
-               ~w(aqua components data notes payloads threads)
+               ~w(aqua components data notes payloads staging threads)
 
       assert Enum.sort(Storage.global_prefixes()) == ~w(cache system)
       assert Enum.sort(Storage.seed_roots()) == ~w(aqua components)
       assert Enum.sort(Storage.overlay_roots()) == ~w(aqua components)
-      assert Storage.reserved_roots() == ~w(payloads)
+      assert Storage.reserved_roots() == ~w(payloads staging)
       assert Storage.guest_scopes() == %{"data" => "data", "components" => "components"}
 
       # The console tier: what a person sees of the tree, system absent.
@@ -296,6 +296,7 @@ defmodule Arca.StorageTest do
              }
 
       assert Storage.tier("payloads") == :system
+      assert Storage.tier("staging") == :system
       assert Storage.tier("cache") == :system
       assert Storage.tier("data") == :open
       assert Storage.tier("guest") == nil

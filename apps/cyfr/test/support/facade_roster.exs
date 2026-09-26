@@ -7,7 +7,12 @@
 # from the tree at `a9dddcfb`; a change to a facade's exports is made here
 # in the same change.
 %{
-  "Arca" => ["Arca.Files", "Arca.Retention"],
+  "Arca" => [
+    "Arca.FencedPublication",
+    "Arca.FencedPublication.Change",
+    "Arca.Files",
+    "Arca.Retention"
+  ],
   "Sanctum" => [
     "Sanctum.Consent",
     "Sanctum.RegistryCredentials",

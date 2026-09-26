@@ -143,6 +143,8 @@ defmodule Arca do
       ExecutionEvents,
       ExecutionPayloads,
       ExecutionStanding,
+      FencedPublication,
+      FencedPublication.Change,
       Files,
       Health,
       JobClaims,

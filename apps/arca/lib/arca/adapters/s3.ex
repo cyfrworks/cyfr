@@ -107,6 +107,14 @@ defmodule Arca.Adapters.S3 do
   listing: every key under `prefix/` as full segments, `[prefix]` for a
   prefix that is one object, `[]` for nothing.
 
+  ## Staged content
+
+  `Arca.Storage.stage/3` writes an attempt's bytes once, at a key of their
+  own under `staging/`, and they never move: what publishes them is a
+  database reference (`Arca.FencedPublication`), as on a filesystem. The
+  staging sweep dates bytes no row names by `last_modified/2`, the
+  object's `Last-Modified`.
+
   ## Tree replacement
 
   This adapter does not export `c:Arca.Storage.replace_tree/3`. An object
@@ -403,6 +411,53 @@ defmodule Arca.Adapters.S3 do
   def list_prefix(%Prima.Actor{} = actor, prefix) do
     with {:ok, []} <- list_recursive(actor, prefix) do
       if exists?(actor, prefix), do: {:ok, [prefix]}, else: {:ok, []}
+    end
+  end
+
+  @doc """
+  The object's `Last-Modified` (`c:Arca.Storage.last_modified/2`): the
+  store's own clock, read with a `HEAD`. A header the store sent in no
+  HTTP-date form answers `{:error, :unreadable_last_modified}`, so a
+  caller dating bytes by it keeps them.
+  """
+  @impl true
+  def last_modified(%Prima.Actor{} = actor, segments) do
+    case request(:head, build_key(actor, segments)) do
+      {:ok, %{status: 200} = response} ->
+        with [value | _] <- Req.Response.get_header(response, "last-modified"),
+             {:ok, at} <- http_date(value) do
+          {:ok, at}
+        else
+          _ -> {:error, :unreadable_last_modified}
+        end
+
+      {:ok, %{status: 404}} ->
+        {:error, :not_found}
+
+      {:ok, %{status: status, body: body}} ->
+        log_and_error("last_modified", status, body)
+
+      {:error, reason} ->
+        log_and_error("last_modified", reason)
+    end
+  end
+
+  @months ~w(Jan Feb Mar Apr May Jun Jul Aug Sep Oct Nov Dec)
+
+  # An IMF-fixdate (RFC 9110 §5.6.7), the form S3 sends:
+  # `Wed, 21 Oct 2015 07:28:00 GMT`.
+  defp http_date(value) do
+    with [_, day, month, year, time] <-
+           Regex.run(
+             ~r/^[A-Z][a-z]{2}, (\d{2}) ([A-Z][a-z]{2}) (\d{4}) (\d{2}:\d{2}:\d{2}) GMT$/,
+             value
+           ),
+         index when is_integer(index) <- Enum.find_index(@months, &(&1 == month)),
+         {:ok, date} <- Date.new(String.to_integer(year), index + 1, String.to_integer(day)),
+         {:ok, time} <- Time.from_iso8601(time) do
+      DateTime.new(date, time, "Etc/UTC")
+    else
+      _ -> :error
     end
   end
 

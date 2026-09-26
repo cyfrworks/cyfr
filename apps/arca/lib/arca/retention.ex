@@ -60,6 +60,7 @@ defmodule Arca.Retention do
     Arca.Retention.Threads,
     Arca.Retention.StagedRevisions,
     Arca.Retention.WriteIntents,
+    Arca.Retention.FencedStaging,
     Arca.Retention.ProjectionTombstones
   ]
 

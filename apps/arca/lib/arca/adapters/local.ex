@@ -53,6 +53,14 @@ defmodule Arca.Adapters.Local do
   as full segments, `[prefix]` for a prefix that is one file, and `[]` for
   nothing.
 
+  ## Staged content
+
+  `Arca.Storage.stage/3` writes an attempt's bytes once, at a key of their
+  own under `staging/`, and they never move: what publishes them is a
+  database reference (`Arca.FencedPublication`), never a rename, on this
+  adapter as on an object store. The staging sweep dates bytes no row
+  names by `last_modified/2`, the file's modification time.
+
   ## Structured Logs (database only)
 
   MCP request logs, execution records, and policy consultation logs are stored
@@ -309,6 +317,24 @@ defmodule Arca.Adapters.Local do
       :directory -> {:ok, leaves_as_segments(full_path, prefix)}
       :regular -> {:ok, [prefix]}
       _ -> {:ok, []}
+    end
+  end
+
+  @doc """
+  The file's modification time (`c:Arca.Storage.last_modified/2`), read
+  with `lstat` so a symlink is refused as every read refuses one. A
+  directory is not an object and answers `:not_found`, as `get/2` does.
+  """
+  @impl true
+  def last_modified(%Prima.Actor{} = actor, path) do
+    full_path = build_path(actor, path)
+
+    case File.lstat(full_path, time: :posix) do
+      {:ok, %File.Stat{type: :regular, mtime: mtime}} -> {:ok, DateTime.from_unix!(mtime)}
+      {:ok, %File.Stat{type: :symlink}} -> {:error, :symlink_denied}
+      {:ok, %File.Stat{}} -> {:error, :not_found}
+      {:error, :enoent} -> {:error, :not_found}
+      {:error, _} = error -> error
     end
   end
 

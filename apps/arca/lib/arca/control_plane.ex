@@ -71,9 +71,9 @@ defmodule Arca.ControlPlane do
   The cell's claimant, and nothing else. This module keeps no timer and no
   process: `take/3`, `renew/1` and `release/0` are called from the
   claimant's own process and leave the cached standing behind them.
-  `verify_held/1` writes nothing a reader could see: it is how a security
-  transaction proves, under a row lock, that the slot it runs for is
-  still this member's.
+  `verify_held/1` writes nothing: it is how a security transaction or a
+  fenced publication (`Arca.FencedPublication`) proves, under a shared
+  row lock, that the slot it runs for is still this member's.
   """
 
   import Ecto.Query, only: [from: 2]
@@ -288,14 +288,20 @@ defmodule Arca.ControlPlane do
   node, owner and generation as `take/3` won them — still names the row,
   under a lease that stands on the database's clock.
 
-  The statement is a conditional update that changes nothing
-  (`fence` raised by zero), so it takes the row's lock without moving the
-  fence the claimant's renew names: the claimant keeps renewing, and a
-  successor's take waits until the caller commits. The lease is read back
-  and compared with the database's clock read AFTER that lock was won, so
-  a wait behind a release or a takeover cannot pass on an instant taken
-  before it. Never touches the cached standing: `renew/1` writes that,
-  and it is not called here.
+  The row is read under a shared lock held until the caller commits
+  (`Arca.QueryHelpers.for_share/1`). On PostgreSQL any number of this
+  member's transactions hold it at once, so they do not serialize on
+  their own row, while a write to it — the claimant's renew, a
+  successor's take, a release — waits until each of them commits. On
+  SQLite the read is plain and the locking transaction's write lock
+  serializes the same writers. Nothing is written, so the fence the
+  claimant's renew names does not move.
+
+  The lease is compared with the database's clock read AFTER the lock was
+  won, so a wait behind a release or a takeover cannot pass on an instant
+  taken before it, and a lease that ran out with no successor refuses
+  exactly as a takeover does. Never touches the cached standing:
+  `renew/1` writes that, and it is not called here.
 
   Raises outside a transaction and on a store that cannot answer, so the
   caller's transaction rolls back.
@@ -308,20 +314,21 @@ defmodule Arca.ControlPlane do
       raise ArgumentError, "Arca.ControlPlane.verify_held/1 runs inside a locking transaction"
     end
 
-    locked =
+    held =
       from(l in CellLease,
         where: l.node == ^node and l.owner == ^owner and l.generation == ^generation,
         select: l.lease_until
       )
+      |> Arca.QueryHelpers.for_share()
 
-    case Arca.Repo.update_all(locked, inc: [fence: 0]) do
-      {1, [lease_until]} ->
+    case Arca.Repo.one(held) do
+      nil ->
+        :lost
+
+      lease_until ->
         if DateTime.compare(lease_until, Arca.ServerMetaStorage.now!()) == :gt,
           do: :ok,
           else: :lost
-
-      {0, _} ->
-        :lost
     end
   end
 
