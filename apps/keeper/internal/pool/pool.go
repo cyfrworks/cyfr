@@ -17,6 +17,11 @@
 // descriptor 3, is asked for per spawn (`control` in package protocol), so
 // a runner pool is whichever pool such spawns are drawn from.
 //
+// A pool declared isolated (`<name>:<first>-<last>:netns`) starts every
+// spawn in a user and network namespace of its own; the keeper refuses a
+// spawn of it that does not ask for that, and a spawn of any other pool
+// that does (`isolation` in package protocol).
+//
 // A Pool is not safe for concurrent use; its owner serializes access.
 package pool
 
@@ -32,19 +37,29 @@ const MaxSize = 4096
 
 var namePattern = regexp.MustCompile(`^[a-z][a-z0-9-]{0,31}$`)
 
-// Spec names a pool and its inclusive uid range.
+// Isolation is the suffix declaring a pool isolated.
+const Isolation = "netns"
+
+// Spec names a pool, its inclusive uid range and whether its spawns run in
+// a user and network namespace of their own.
 type Spec struct {
-	Name  string
-	First int
-	Last  int
+	Name     string
+	First    int
+	Last     int
+	Isolated bool
 }
 
-// ParseSpec parses `<name>:<first>-<last>`. The range must not include uid 0
-// and holds at most MaxSize uids.
+// ParseSpec parses `<name>:<first>-<last>`, or `<name>:<first>-<last>:netns`
+// for an isolated pool. The range must not include uid 0 and holds at most
+// MaxSize uids.
 func ParseSpec(s string) (Spec, error) {
 	name, rng, ok := strings.Cut(s, ":")
 	if !ok {
-		return Spec{}, fmt.Errorf("pool %q: want <name>:<first>-<last>", s)
+		return Spec{}, fmt.Errorf("pool %q: want <name>:<first>-<last>[:%s]", s, Isolation)
+	}
+	rng, isolation, isolated := strings.Cut(rng, ":")
+	if isolated && isolation != Isolation {
+		return Spec{}, fmt.Errorf("pool %q: the only isolation is %s", s, Isolation)
 	}
 	if !namePattern.MatchString(name) {
 		return Spec{}, fmt.Errorf("pool %q: name must match %s", s, namePattern)
@@ -67,7 +82,7 @@ func ParseSpec(s string) (Spec, error) {
 	if last-first+1 > MaxSize {
 		return Spec{}, fmt.Errorf("pool %q: more than %d uids", s, MaxSize)
 	}
-	return Spec{Name: name, First: first, Last: last}, nil
+	return Spec{Name: name, First: first, Last: last, Isolated: isolated}, nil
 }
 
 func parseUID(s string) (int, error) {

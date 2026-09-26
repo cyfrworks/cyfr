@@ -33,6 +33,15 @@ func TestParseArgs(t *testing.T) {
 	if err != nil || len(two.Pools) != 2 || !reflect.DeepEqual(two.ClientArgv, []string{"run", "--flag"}) {
 		t.Fatalf("two pools: %+v %v", two, err)
 	}
+
+	// Dockerfile.opus's command line: the runner pool is isolated.
+	opus, err := ParseArgs(strings.Fields("--pool runner:30101-30108:netns --home-root /var/lib/opus/homes --client-user opus -- /app/bin/opus start"))
+	if err != nil || !reflect.DeepEqual(opus.Pools, []pool.Spec{{Name: "runner", First: 30101, Last: 30108, Isolated: true}}) {
+		t.Fatalf("an isolated pool: %+v %v", opus, err)
+	}
+	if !opus.Isolating() || cfg.Isolating() {
+		t.Fatal("Isolating does not say whether some pool is isolated")
+	}
 }
 
 func TestParseArgsRefusals(t *testing.T) {

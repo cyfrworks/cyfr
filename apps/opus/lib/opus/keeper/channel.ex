@@ -347,6 +347,7 @@ defmodule Opus.Keeper.Channel do
       env: env,
       memory_bytes: state.memory_bytes,
       control: true,
+      isolation: "netns",
       attach: %{path: state.attach_path, token: token}
     }
 

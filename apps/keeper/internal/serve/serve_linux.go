@@ -10,6 +10,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"os"
 	"os/signal"
@@ -127,6 +128,18 @@ func Main(args []string) int {
 		log.Error("refusing to start: %v", err)
 		return ExitConfig
 	}
+	if cfg.Isolating() {
+		// An isolated stage keeps the keeper's supplementary groups, since
+		// its namespace denies setgroups: they are cleared here first.
+		if err := syscall.Setgroups([]int{}); err != nil {
+			log.Error("refusing to start: clearing the supplementary groups: %v", err)
+			return ExitConfig
+		}
+		if err := probeIsolation(self, cfg, accounts); err != nil {
+			log.Error("refusing to start: %v", err)
+			return ExitConfig
+		}
+	}
 
 	s := &server{
 		cfg:      cfg,
@@ -144,6 +157,137 @@ func Main(args []string) int {
 	}
 	s.memory = delegateMemory(log)
 	return s.run()
+}
+
+// isolatedAttr is how the keeper starts the stage of an isolated spawn: in a
+// session of its own, killed if this keeper dies, cloned into a new user and
+// network namespace, which takes no capability of the keeper's own
+// namespace, and holding as ambient capabilities, inside that namespace
+// only, what the stage needs there to become the pooled ids and drop every
+// set. It keeps the keeper's ids until the keeper has mapped them.
+func isolatedAttr() *syscall.SysProcAttr {
+	return &syscall.SysProcAttr{
+		Setsid:      true,
+		Pdeathsig:   syscall.SIGKILL,
+		Cloneflags:  unix.CLONE_NEWUSER | unix.CLONE_NEWNET,
+		AmbientCaps: []uintptr{unix.CAP_SETUID, unix.CAP_SETGID, unix.CAP_SETPCAP},
+	}
+}
+
+// mapIDs maps a cloned stage's uid and gid to themselves from the parent
+// side, the one side that may map an id the child could not: setgroups is
+// denied first, as a gid map written from outside requires, then gid_map,
+// then uid_map. The keeper holds SETUID and SETGID in its own namespace,
+// which is what these writes take.
+func mapIDs(pid, uid, gid int) error {
+	proc := filepath.Join("/proc", strconv.Itoa(pid))
+	for _, w := range []struct{ file, content string }{
+		{"setgroups", "deny"},
+		{"gid_map", strconv.Itoa(gid) + " " + strconv.Itoa(gid) + " 1\n"},
+		{"uid_map", strconv.Itoa(uid) + " " + strconv.Itoa(uid) + " 1\n"},
+	} {
+		// Each map is written whole by one write at offset 0, as the kernel
+		// takes it.
+		f, err := os.OpenFile(filepath.Join(proc, w.file), os.O_WRONLY, 0)
+		if err == nil {
+			_, err = f.Write([]byte(w.content))
+			if cerr := f.Close(); err == nil {
+				err = cerr
+			}
+		}
+		if err != nil {
+			return fmt.Errorf("writing %s: %w", w.file, err)
+		}
+	}
+	return nil
+}
+
+// probeIsolation proves, before the keeper serves an isolated pool, that
+// this host lets it isolate a spawn: it clones a stage as it clones every
+// isolated spawn's, maps the first uid of the first isolated pool, and
+// waits for the stage to become it, drop every capability set and pass the
+// check a spawn's stage makes before it executes anything. A host that
+// refuses any step refuses the keeper, naming what to check.
+func probeIsolation(self string, cfg Config, accounts map[int]Account) error {
+	var acct Account
+	var name string
+	for _, spec := range cfg.Pools {
+		if spec.Isolated {
+			acct, name = accounts[spec.First], spec.Name
+			break
+		}
+	}
+	refuse := func(err error) error {
+		return fmt.Errorf("pool %s is isolated, and this host does not let cyfr-keeper give a spawn a user and network namespace of its own: %w; "+
+			"the host must allow unprivileged user namespaces (check user.max_user_namespaces, above 0, and, where AppArmor restricts them, "+
+			"kernel.apparmor_restrict_unprivileged_userns) and the container must run under the seccomp profile apps/keeper/seccomp/keeper.json "+
+			"(/etc/cyfr/keeper.json in the image), which lets clone make them", name, err)
+	}
+	devnull, err := os.Open(os.DevNull)
+	if err != nil {
+		return err
+	}
+	defer devnull.Close()
+	specR, specW, err := os.Pipe()
+	if err != nil {
+		return err
+	}
+	defer specW.Close()
+	statusR, statusW, err := os.Pipe()
+	if err != nil {
+		specR.Close()
+		return err
+	}
+	defer statusR.Close()
+	pid, err := syscall.ForkExec(self, []string{"cyfr-keeper", "stage", stage.ProbeArg}, &syscall.ProcAttr{
+		Dir:   "/",
+		Env:   []string{},
+		Files: []uintptr{devnull.Fd(), devnull.Fd(), devnull.Fd(), specR.Fd(), statusW.Fd()},
+		Sys:   isolatedAttr(),
+	})
+	specR.Close()
+	statusW.Close()
+	if err != nil {
+		return refuse(fmt.Errorf("cloning: %w", err))
+	}
+	reap := func() unix.WaitStatus {
+		var ws unix.WaitStatus
+		for {
+			if _, err := unix.Wait4(pid, &ws, 0, nil); !errors.Is(err, unix.EINTR) {
+				return ws
+			}
+		}
+	}
+	if err := mapIDs(pid, acct.UID, acct.GID); err != nil {
+		_ = unix.Kill(pid, unix.SIGKILL)
+		reap()
+		return refuse(err)
+	}
+	probe, err := json.Marshal(stage.Probe{UID: acct.UID, GID: acct.GID})
+	if err == nil {
+		_, err = specW.Write(probe)
+	}
+	_ = specW.Close()
+	_ = statusR.SetReadDeadline(time.Now().Add(stageTimeout))
+	// The status pipe closes when the stage exits; a stage that neither
+	// answers nor exits within the bound is killed, so the reap below ends.
+	reason, rerr := io.ReadAll(io.LimitReader(statusR, 4096))
+	if err == nil {
+		err = rerr
+	}
+	if err != nil || len(reason) > 0 {
+		_ = unix.Kill(pid, unix.SIGKILL)
+	}
+	ws := reap()
+	switch {
+	case err != nil:
+		return refuse(err)
+	case len(reason) > 0:
+		return refuse(errors.New("the cloned stage: " + string(reason)))
+	case !ws.Exited() || ws.ExitStatus() != 0:
+		return refuse(fmt.Errorf("the cloned stage ended %v", ws))
+	}
+	return nil
 }
 
 // delegateMemory prepares the keeper's cgroup for memory-bounded spawns, or
@@ -350,16 +494,16 @@ func (s *server) reap() {
 // start forks and executes a process in a session of its own as uid and
 // gid with no supplementary groups, killed if this keeper dies.
 func (s *server) start(argv0 string, argv, env []string, files []uintptr, uid, gid int, dir string) (*child, error) {
-	attr := &syscall.ProcAttr{
-		Dir:   dir,
-		Env:   env,
-		Files: files,
-		Sys: &syscall.SysProcAttr{
-			Setsid:     true,
-			Credential: &syscall.Credential{Uid: uint32(uid), Gid: uint32(gid), Groups: []uint32{}},
-			Pdeathsig:  syscall.SIGKILL,
-		},
-	}
+	return s.startWith(argv0, argv, env, files, dir, &syscall.SysProcAttr{
+		Setsid:     true,
+		Credential: &syscall.Credential{Uid: uint32(uid), Gid: uint32(gid), Groups: []uint32{}},
+		Pdeathsig:  syscall.SIGKILL,
+	})
+}
+
+// startWith forks and executes a process as sys says.
+func (s *server) startWith(argv0 string, argv, env []string, files []uintptr, dir string, sys *syscall.SysProcAttr) (*child, error) {
+	attr := &syscall.ProcAttr{Dir: dir, Env: env, Files: files, Sys: sys}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	pid, err := syscall.ForkExec(argv0, argv, attr)
@@ -486,8 +630,30 @@ var signalNumbers = map[string]syscall.Signal{
 	"SIGUSR2": unix.SIGUSR2,
 }
 
+// poolSpec is the declared spec of the pool name, which never changes.
+func (s *server) poolSpec(name string) (pool.Spec, bool) {
+	for _, spec := range s.cfg.Pools {
+		if spec.Name == name {
+			return spec, true
+		}
+	}
+	return pool.Spec{}, false
+}
+
 func (s *server) handleSpawn(req *protocol.Request) {
 	if s.closing.Load() {
+		return
+	}
+	// A spawn is isolated exactly when its pool is: a client never takes a
+	// command for isolated that is not, nor starts one unisolated from a
+	// pool that isolates every spawn.
+	if spec, ok := s.poolSpec(req.Pool); ok && spec.Isolated != (req.Isolation == protocol.IsolationNetns) {
+		if spec.Isolated {
+			s.log.Warn("spawn %s refused: pool %s is isolated and the spawn does not ask for isolation %s", req.ID, req.Pool, protocol.IsolationNetns)
+		} else {
+			s.log.Warn("spawn %s refused: it asks for isolation, which pool %s does not give", req.ID, req.Pool)
+		}
+		s.send(protocol.NewError(req.ID, "", protocol.CodeBadRequest))
 		return
 	}
 	if req.MemoryBytes != nil && s.memory == nil {
@@ -553,8 +719,11 @@ func (s *server) handleSpawn(req *protocol.Request) {
 // the command, and starts the relay as the client user holding the other
 // ends of the command's pipes and, when the request asks for a control
 // channel, the relay's end of its socketpair; the command's end goes to
-// the stage, which makes it the command's fd 3. It returns the error code
-// to reply with.
+// the stage, which makes it the command's fd 3. An isolated spawn's stage
+// is cloned into a user and network namespace of its own instead, and
+// waits for its spec while the keeper maps its ids and places it in its
+// cgroup, in that order, before the spec releases it. It returns the error
+// code to reply with.
 func (s *server) launch(sp *spawn, req *protocol.Request) (string, error) {
 	var opened []*os.File
 	closeAll := func() {
@@ -591,18 +760,32 @@ func (s *server) launch(sp *spawn, req *protocol.Request) (string, error) {
 	if err != nil {
 		return protocol.CodeInternal, err
 	}
-	// The control channel is one socketpair: commandCtl becomes the
-	// command's fd 3 (stage.ControlFD to the stage), relayCtl the relay's
-	// relay.ControlFD. The keeper keeps neither end.
-	var commandCtl, relayCtl *os.File
-	if req.Control {
+	socketpair := func(name string) (*os.File, *os.File, error) {
 		fds, err := unix.Socketpair(unix.AF_UNIX, unix.SOCK_STREAM|unix.SOCK_CLOEXEC, 0)
 		if err != nil {
+			return nil, nil, err
+		}
+		command, helper := os.NewFile(uintptr(fds[0]), name+"-command"), os.NewFile(uintptr(fds[1]), name+"-relay")
+		opened = append(opened, command, helper)
+		return command, helper, nil
+	}
+	// The control channel is one socketpair: commandCtl becomes the
+	// command's fd 3 (stage.ControlFD to the stage), relayCtl the relay's
+	// relay.ControlFD. An isolated spawn's relay is another: commandRelay
+	// becomes the command's fd 4 (stage.RelayFD), helperRelay the relay's
+	// relay.RelayFD, so control lines and relay frames never share a
+	// socket. The keeper keeps no end of either.
+	isolated := req.Isolation == protocol.IsolationNetns
+	var commandCtl, relayCtl, commandRelay, helperRelay *os.File
+	if req.Control {
+		if commandCtl, relayCtl, err = socketpair("control"); err != nil {
 			return protocol.CodeInternal, err
 		}
-		commandCtl = os.NewFile(uintptr(fds[0]), "control-command")
-		relayCtl = os.NewFile(uintptr(fds[1]), "control-relay")
-		opened = append(opened, commandCtl, relayCtl)
+	}
+	if isolated {
+		if commandRelay, helperRelay, err = socketpair("relay"); err != nil {
+			return protocol.CodeInternal, err
+		}
 	}
 
 	// A bounded spawn's group exists before its stage does, and the stage
@@ -635,18 +818,41 @@ func (s *server) launch(sp *spawn, req *protocol.Request) (string, error) {
 	}
 	stageFiles := []uintptr{stdinR.Fd(), stdoutW.Fd(), stderrW.Fd(), specR.Fd(), statusW.Fd()}
 	stageOwned := []*os.File{stdinR, stdoutW, stderrW, specR, statusW}
-	if commandCtl != nil {
+	// A descriptor of ^0 is closed in the child: an isolated spawn without
+	// a control channel has no stage.ControlFD before its stage.RelayFD.
+	switch {
+	case commandCtl != nil:
 		stageFiles = append(stageFiles, commandCtl.Fd())
 		stageOwned = append(stageOwned, commandCtl)
+	case isolated:
+		stageFiles = append(stageFiles, ^uintptr(0))
 	}
-	leader, err := s.start(s.self, []string{"cyfr-keeper", "stage"}, nil, stageFiles,
-		sp.account.UID, sp.account.GID, "/")
+	if isolated {
+		stageFiles = append(stageFiles, commandRelay.Fd())
+		stageOwned = append(stageOwned, commandRelay)
+	}
+	stageArgv := []string{"cyfr-keeper", "stage"}
+	var leader *child
+	if isolated {
+		leader, err = s.startWith(s.self, stageArgv, nil, stageFiles, "/", isolatedAttr())
+	} else {
+		leader, err = s.start(s.self, stageArgv, nil, stageFiles, sp.account.UID, sp.account.GID, "/")
+	}
 	if err != nil {
 		return protocol.CodeInternal, err
 	}
 	sp.leader = leader
 	for _, f := range stageOwned {
 		_ = f.Close()
+	}
+	// An isolated stage waits for its spec still holding the keeper's ids,
+	// which retirement under the pooled uid cannot end: it is killed here
+	// if the keeper cannot map it.
+	if isolated {
+		if err := mapIDs(leader.pid, sp.account.UID, sp.account.GID); err != nil {
+			s.signalChild(leader, unix.SIGKILL)
+			return protocol.CodeInternal, err
+		}
 	}
 	if sp.group != nil {
 		if err := sp.group.Add(leader.pid); err != nil {
@@ -677,13 +883,19 @@ func (s *server) launch(sp *spawn, req *protocol.Request) (string, error) {
 		return protocol.CodeInternal, err
 	}
 	opened = append(opened, devnull)
-	relaySpec, err := json.Marshal(relay.Spec{Path: req.Attach.Path, Token: req.Attach.Token, Control: req.Control})
+	relaySpec, err := json.Marshal(relay.Spec{Path: req.Attach.Path, Token: req.Attach.Token, Control: req.Control, Relay: isolated})
 	if err != nil {
 		return protocol.CodeInternal, err
 	}
 	relayFiles := []uintptr{devnull.Fd(), devnull.Fd(), 2, relaySpecR.Fd(), stdinW.Fd(), stdoutR.Fd(), stderrR.Fd()}
-	if relayCtl != nil {
+	switch {
+	case relayCtl != nil:
 		relayFiles = append(relayFiles, relayCtl.Fd())
+	case isolated:
+		relayFiles = append(relayFiles, ^uintptr(0))
+	}
+	if isolated {
+		relayFiles = append(relayFiles, helperRelay.Fd())
 	}
 	relayProc, err := s.start(s.self, []string{"cyfr-keeper", "relay"}, helperEnviron(), relayFiles,
 		s.client.UID, s.client.GID, "/")

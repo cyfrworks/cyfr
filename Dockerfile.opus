@@ -23,6 +23,20 @@
 # It adds no capability. Without it cyfr-keeper cannot bound a runner and
 # starts none: the service logs, naming the option, that it cannot, no
 # component runs, and none runs unbounded.
+#
+# The runner pool is isolated (`runner:…:netns`): cyfr-keeper clones every
+# runner into a user and network namespace of its own, mapping only the
+# runner's pooled uid and gid, whose loopback stays down, so a runner holds
+# no capability and reaches nothing but the descriptors it inherited. The
+# clone takes no capability of the container's, but two things of the host
+# and the engine: the host allows unprivileged user namespaces
+# (user.max_user_namespaces above 0, and where AppArmor restricts them,
+# kernel.apparmor_restrict_unprivileged_userns), and the container runs
+# under the seccomp profile /etc/cyfr/keeper.json carries, Docker's default
+# with clone allowed to make a user and network namespace and unshare and
+# setns denied (`security_opt: seccomp=apps/keeper/seccomp/keeper.json`),
+# since Docker's own profile denies such a clone. Without either,
+# cyfr-keeper refuses to start, naming both.
 
 # ---- cyfr-keeper, the process helper: a static Go binary, pinned to the Go
 # release apps/keeper/go.mod names ----
@@ -102,6 +116,7 @@ ENV ELIXIR_ERL_OPTIONS="+fnu"
 WORKDIR /app
 
 COPY --from=keeper /out/cyfr-keeper /usr/local/bin/cyfr-keeper
+COPY apps/keeper/seccomp/keeper.json /etc/cyfr/keeper.json
 COPY --from=relbuilder /app/_build/prod/rel/opus ./
 COPY LICENSE FAIR_SOURCE.md /app/
 COPY LICENSES/ /app/LICENSES/
@@ -122,6 +137,7 @@ HEALTHCHECK --interval=10s --timeout=3s --start-period=20s --retries=3 \
     CMD [ "$(curl -s -o /dev/null -w '%{http_code}' -X POST http://localhost:${OPUS_PORT:-4200}/worker/v1/status)" = "401" ] || exit 1
 
 # Run with `cap_drop: [ALL]`, `cap_add: [SETUID, SETGID, KILL]`,
-# `no-new-privileges`, a read-only root, `ipc: none` and the homes and
-# /run/opus tmpfs mounts (docker-compose.yml's opus service).
-ENTRYPOINT ["cyfr-keeper", "serve", "--pool", "runner:30101-30108", "--home-root", "/var/lib/opus/homes", "--client-user", "opus", "--", "/app/bin/opus", "start"]
+# `no-new-privileges`, the seccomp profile above, a read-only root,
+# `ipc: none` and the homes and /run/opus tmpfs mounts (docker-compose.yml's
+# opus service).
+ENTRYPOINT ["cyfr-keeper", "serve", "--pool", "runner:30101-30108:netns", "--home-root", "/var/lib/opus/homes", "--client-user", "opus", "--", "/app/bin/opus", "start"]

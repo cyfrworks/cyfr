@@ -28,6 +28,7 @@ type vectors struct {
 	ReservedEnvPrefixes []string          `json:"reserved_env_prefixes"`
 	Frames              []frameVector     `json:"frames"`
 	ControlFrames       []frameVector     `json:"control_frames"`
+	RelayFrames         []frameVector     `json:"relay_frames"`
 	ValidRequests       []json.RawMessage `json:"valid_requests"`
 	InvalidRequests     []struct {
 		Why     string          `json:"why"`
@@ -63,7 +64,15 @@ func TestSharedFrameVectors(t *testing.T) {
 			t.Fatalf("control frame vector on stream %d, want %d", f.Stream, frame.StreamControl)
 		}
 	}
-	for _, f := range append(v.Frames, v.ControlFrames...) {
+	if len(v.RelayFrames) == 0 {
+		t.Fatal("no relay frame vectors")
+	}
+	for _, f := range v.RelayFrames {
+		if f.Stream != frame.StreamRelay {
+			t.Fatalf("relay frame vector on stream %d, want %d", f.Stream, frame.StreamRelay)
+		}
+	}
+	for _, f := range append(append(v.Frames, v.ControlFrames...), v.RelayFrames...) {
 		payload, _ := hex.DecodeString(f.PayloadHex)
 		encoded, err := frame.Append(nil, f.Stream, payload)
 		if err != nil {
@@ -335,5 +344,31 @@ func TestLineReaderSplitsAndDiscardsOversizeLines(t *testing.T) {
 	}
 	if _, _, err := lr.Next(); !errors.Is(err, io.EOF) {
 		t.Fatalf("end: %v", err)
+	}
+}
+
+// Every runner spawn of the vectors asks for its namespace and no spawn of
+// another pool does; the keeper reads the one value there is.
+func TestSharedRunnerSpawnsAskForIsolation(t *testing.T) {
+	runners := 0
+	for _, raw := range loadVectors(t).ValidRequests {
+		req, err := ParseRequest(raw)
+		if err != nil {
+			t.Fatalf("%s: refused: %v", raw, err)
+		}
+		if req.Type != TypeSpawn {
+			continue
+		}
+		switch {
+		case req.Pool == "runner" && req.Isolation != IsolationNetns:
+			t.Errorf("runner spawn %s does not ask for %s", req.ID, IsolationNetns)
+		case req.Pool != "runner" && req.Isolation != "":
+			t.Errorf("spawn %s of pool %s asks for isolation", req.ID, req.Pool)
+		case req.Pool == "runner":
+			runners++
+		}
+	}
+	if runners == 0 {
+		t.Fatal("no runner spawn among the vectors")
 	}
 }

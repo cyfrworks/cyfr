@@ -132,20 +132,59 @@ func (s Status) HasUID(uid int) bool {
 // Zombie reports whether the process has exited and awaits reaping.
 func (s Status) Zombie() bool { return s.State == 'Z' || s.State == 'X' }
 
-// CheckKeeperCaps refuses a capability state other than the keeper's:
-// the effective, permitted and bounding sets must each hold nothing outside
-// KeeperCaps, and the effective set must hold all of it.
+type capSet struct {
+	name string
+	mask uint64
+}
+
+// sets are the five capability sets in the order /proc names them.
+func (s Status) sets() []capSet {
+	return []capSet{{"CapInh", s.CapInh}, {"CapPrm", s.CapPrm}, {"CapEff", s.CapEff}, {"CapBnd", s.CapBnd}, {"CapAmb", s.CapAmb}}
+}
+
+// CheckKeeperCaps refuses a capability state other than the keeper's: the
+// permitted, effective and bounding sets hold exactly KeeperCaps, and the
+// inheritable and ambient sets hold nothing, so no process the keeper
+// executes inherits a capability through them. The error names the first
+// set at fault.
 func CheckKeeperCaps(s Status) error {
-	for _, set := range []struct {
-		name string
-		mask uint64
-	}{{"CapEff", s.CapEff}, {"CapPrm", s.CapPrm}, {"CapBnd", s.CapBnd}} {
-		if extra := set.mask &^ KeeperCaps; extra != 0 {
-			return fmt.Errorf("%s %016x holds capabilities outside SETUID, SETGID and KILL (%016x); run with every other capability dropped", set.name, set.mask, extra)
+	for _, set := range s.sets() {
+		want := KeeperCaps
+		if set.name == "CapInh" || set.name == "CapAmb" {
+			want = 0
+		}
+		if set.mask != want {
+			return fmt.Errorf("%s is %016x, not %016x: the keeper runs with exactly SETUID, SETGID and KILL permitted, effective and bounding, and with no inheritable or ambient capability", set.name, set.mask, want)
 		}
 	}
-	if missing := KeeperCaps &^ s.CapEff; missing != 0 {
-		return fmt.Errorf("CapEff %016x lacks %016x; the keeper needs SETUID, SETGID and KILL", s.CapEff, missing)
+	return nil
+}
+
+// AnyBounding lets CheckNoCaps accept whatever bounding set a process holds.
+const AnyBounding = ^uint64(0)
+
+// CheckNoCaps refuses a process about to execute a spawned command while
+// it holds a capability: its inheritable, permitted, effective and ambient
+// sets must be empty, no_new_privs must be set, and its bounding set must
+// hold nothing outside bounding. A stage in a namespace of its own is
+// checked with bounding zero, every set empty. One sharing the keeper's
+// namespace cannot drop a bounding capability without CAP_SETPCAP and is
+// checked with AnyBounding: its bounding set is the keeper's, which the
+// keeper's own start check holds to KeeperCaps, and no_new_privs keeps
+// anything it executes from raising it. The error names the first set at
+// fault.
+func CheckNoCaps(s Status, bounding uint64) error {
+	for _, set := range s.sets() {
+		allowed := uint64(0)
+		if set.name == "CapBnd" {
+			allowed = bounding
+		}
+		if extra := set.mask &^ allowed; extra != 0 {
+			return fmt.Errorf("%s is %016x: capabilities %016x remain", set.name, set.mask, extra)
+		}
+	}
+	if !s.NoNewPrivs {
+		return errors.New("no_new_privs is unset")
 	}
 	return nil
 }

@@ -128,23 +128,59 @@ func Delegate(root string, self []byte) (*Manager, error) {
 // boundFiles are the control files Create writes.
 var boundFiles = []string{"memory.max", "memory.swap.max", "memory.oom.group"}
 
-// drain moves every process of root into leaf.
+// drain moves every process of root into leaf. A process that exited
+// between the read and the write cannot be moved and need not be; one that
+// is still listed after every pass is named in the error with what the
+// last write to move it answered and what /proc says it is, so a leftover
+// process, an unreaped zombie and a write the cgroup driver refuses read
+// apart.
 func drain(root, leaf string) error {
+	var pids []string
+	failed := map[string]error{}
 	for attempt := 0; attempt < drainAttempts; attempt++ {
 		raw, err := os.ReadFile(filepath.Join(root, "cgroup.procs"))
 		if err != nil {
 			return err
 		}
-		pids := strings.Fields(string(raw))
+		pids = strings.Fields(string(raw))
 		if len(pids) == 0 {
 			return nil
 		}
+		clear(failed)
 		for _, pid := range pids {
-			// A process that exited meanwhile cannot be moved and need not be.
-			_ = os.WriteFile(filepath.Join(leaf, "cgroup.procs"), []byte(pid), 0o644)
+			if err := os.WriteFile(filepath.Join(leaf, "cgroup.procs"), []byte(pid), 0o644); err != nil {
+				failed[pid] = err
+			}
 		}
 	}
-	return fmt.Errorf("processes remain in %s", root)
+	remaining := make([]string, 0, len(pids))
+	for _, pid := range pids {
+		moved := "the write succeeded yet it is still listed"
+		if err, ok := failed[pid]; ok {
+			moved = "moving it: " + err.Error()
+		}
+		remaining = append(remaining, fmt.Sprintf("pid %s (%s; %s)", pid, describe(pid), moved))
+	}
+	return fmt.Errorf("processes remain in %s: %s", root, strings.Join(remaining, ", "))
+}
+
+// describe is what /proc says of a process: its command and its state, a
+// zombie among them, or why it cannot say.
+func describe(pid string) string {
+	comm, err := os.ReadFile(filepath.Join("/proc", pid, "comm"))
+	if err != nil {
+		return "no /proc entry: " + err.Error()
+	}
+	state := "state unknown"
+	if status, err := os.ReadFile(filepath.Join("/proc", pid, "status")); err == nil {
+		for _, line := range strings.Split(string(status), "\n") {
+			if value, ok := strings.CutPrefix(line, "State:"); ok {
+				state = "state " + strings.TrimSpace(value)
+				break
+			}
+		}
+	}
+	return strings.TrimSpace(string(comm)) + ", " + state
 }
 
 // Own returns the cgroup v2 path in a /proc/<pid>/cgroup file. A file naming

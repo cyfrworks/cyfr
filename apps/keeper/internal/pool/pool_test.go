@@ -17,7 +17,19 @@ func TestParseSpec(t *testing.T) {
 		t.Fatalf("spec = %+v size %d", spec, spec.Size())
 	}
 
+	isolated, err := ParseSpec("runner:30101-30108:netns")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if isolated != (Spec{Name: "runner", First: 30101, Last: 30108, Isolated: true}) {
+		t.Fatalf("isolated spec = %+v", isolated)
+	}
+
 	for _, bad := range []string{
+		"runner:30101-30108:",
+		"runner:30101-30108:net",
+		"runner:30101-30108:netns:netns",
+		"runner:30101:netns",
 		"",
 		"backends",
 		"backends:20001",

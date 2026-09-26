@@ -6,7 +6,7 @@
 // Command cyfr-keeper starts processes under uids of their own on behalf of
 // an unprivileged client.
 //
-//	cyfr-keeper serve --pool <name>:<first>-<last> --home-root <dir> --client-user <user> -- <command> [args…]
+//	cyfr-keeper serve --pool <name>:<first>-<last>[:netns] --home-root <dir> --client-user <user> -- <command> [args…]
 //
 // `serve` is the only subcommand an operator runs. It needs exactly the
 // capabilities SETUID, SETGID and KILL and refuses to start with any other.

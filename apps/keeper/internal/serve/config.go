@@ -45,7 +45,7 @@ func (p *poolFlags) Set(value string) error {
 }
 
 // Usage is the command line `serve` accepts.
-const Usage = "cyfr-keeper serve --pool <name>:<first>-<last> [--pool …] --home-root <dir> --client-user <user> -- <command> [args…]"
+const Usage = "cyfr-keeper serve --pool <name>:<first>-<last>[:netns] [--pool …] --home-root <dir> --client-user <user> -- <command> [args…]"
 
 // ParseArgs parses the arguments after `serve`. Pools may repeat but must
 // have distinct names and disjoint ranges.
@@ -54,7 +54,7 @@ func ParseArgs(args []string) (Config, error) {
 	fs.SetOutput(io.Discard)
 	var cfg Config
 	var pools poolFlags
-	fs.Var(&pools, "pool", "a uid pool, <name>:<first>-<last>")
+	fs.Var(&pools, "pool", "a uid pool, <name>:<first>-<last>, isolated with :netns")
 	fs.StringVar(&cfg.HomeRoot, "home-root", "", "directory holding the spawned processes' homes")
 	fs.StringVar(&cfg.ClientUser, "client-user", "", "user the client command runs as")
 	if err := fs.Parse(args); err != nil {
@@ -89,6 +89,17 @@ func ParseArgs(args []string) (Config, error) {
 		return Config{}, errors.New("a client command is required after --")
 	}
 	return cfg, nil
+}
+
+// Isolating reports whether some pool is isolated, so the keeper must be
+// able to clone a user and network namespace before it serves.
+func (c Config) Isolating() bool {
+	for _, spec := range c.Pools {
+		if spec.Isolated {
+			return true
+		}
+	}
+	return false
 }
 
 // Account is a resolved user.

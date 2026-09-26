@@ -27,7 +27,7 @@ defmodule Prima.KeeperProtocolTest do
            |> File.read!()
            |> Jason.decode!()
 
-  @categories ~w(reserved_env_prefixes frames control_frames valid_requests invalid_requests replies)
+  @categories ~w(reserved_env_prefixes frames control_frames relay_frames relay_streams valid_requests invalid_requests replies)
 
   @request_types %{"spawn" => :spawn, "signal" => :signal, "release" => :release, "pool" => :pool}
 
@@ -63,7 +63,10 @@ defmodule Prima.KeeperProtocolTest do
     "fractional memory bound" => "memory_bytes",
     "memory bound that is not a number" => "memory_bytes",
     "memory bound inside rlimits" => "rlimits.memory_bytes",
-    "memory bound on a request that is not a spawn" => "memory_bytes"
+    "memory bound on a request that is not a spawn" => "memory_bytes",
+    "isolation other than netns" => "isolation",
+    "isolation that is not a string" => "isolation",
+    "isolation on a request that is not a spawn" => "isolation"
   }
 
   @token "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
@@ -127,7 +130,7 @@ defmodule Prima.KeeperProtocolTest do
     end
 
     test "every frame encodes to its bytes and parses back" do
-      for frame <- @vectors["frames"] ++ @vectors["control_frames"] do
+      for frame <- @vectors["frames"] ++ @vectors["control_frames"] ++ @vectors["relay_frames"] do
         stream = stream(frame["stream"])
         payload = hex(frame, "payload_hex")
         encoded = hex(frame, "encoded_hex")
@@ -141,7 +144,7 @@ defmodule Prima.KeeperProtocolTest do
       end
 
       # Every stream the vectors name, back to back, and one cut short.
-      all = @vectors["frames"] ++ @vectors["control_frames"]
+      all = @vectors["frames"] ++ @vectors["control_frames"] ++ @vectors["relay_frames"]
       bytes = Enum.map_join(all, &hex(&1, "encoded_hex"))
       expected = Enum.map(all, &{stream(&1["stream"]), hex(&1, "payload_hex")})
       assert KeeperProtocol.parse_frames(bytes) == {:ok, expected, ""}
@@ -166,6 +169,42 @@ defmodule Prima.KeeperProtocolTest do
       [line_frame, end_frame] = @vectors["control_frames"]
       assert {:ok, %{type: :cancel_child}} = RunnerControl.decode(hex(line_frame, "payload_hex"))
       assert hex(end_frame, "payload_hex") == ""
+    end
+
+    test "a relay frame carries runner relay frames verbatim, and an unopened relay is silent" do
+      [open, carried, close] = @vectors["relay_frames"]
+      assert hex(open, "payload_hex") == "" and hex(close, "payload_hex") == ""
+      assert Enum.all?(@vectors["relay_frames"], &(stream(&1["stream"]) == :relay))
+
+      # The carried payload is a whole Prima.RunnerRelay frame a runner's
+      # channel reads from its service.
+      runner = Prima.RunnerRelay.new(:runner, "att_01a09fee-0a31-7a2b-8f0c-3d1e5b7c9a42")
+
+      {:ok, _bytes, runner} =
+        Prima.RunnerRelay.encode(runner, %{
+          kind: :host_call,
+          attempt: "att_01a09fee-0a31-7a2b-8f0c-3d1e5b7c9a42",
+          op: :egress_pin,
+          header: "v1.eyJhdHRlbXB0IjoiYXR0XzAxYTA5ZmVlIn0.3q2-7wCZ0mVjbGxhYmVs",
+          body:
+            Base.decode16!("00112233445566778899aabbccddeeff0f1e2d3c4b5a69788796a5b4c3d2e1f0",
+              case: :lower
+            )
+        })
+
+      assert {:ok, [%{kind: :host_answer}], "", _runner} =
+               Prima.RunnerRelay.decode(runner, hex(carried, "payload_hex"))
+
+      %{"unused" => unused, "opened" => opened} = @vectors["relay_streams"]
+      relay = Keyword.fetch!(KeeperProtocol.streams(), :relay)
+      refute relay in unused["ended_streams"] or unused["client_opens"]
+      assert unused["relay_payload_hex"] == ""
+      assert relay in opened["ended_streams"] and opened["client_opens"]
+      assert opened["relay_payload_hex"] == opened["backend_writes_hex"]
+      service = Prima.RunnerRelay.new(:service, "att_01a09fee-0a31-7a2b-8f0c-3d1e5b7c9a42")
+
+      assert {:ok, [%{kind: :host_call}], "", _service} =
+               Prima.RunnerRelay.decode(service, hex(opened, "backend_writes_hex"))
     end
 
     test "every valid request encodes to its line, name order and all" do
@@ -234,7 +273,7 @@ defmodule Prima.KeeperProtocolTest do
     test "a header over the bound or on an unknown stream is refused as soon as it is in" do
       max = KeeperProtocol.max_frame_bytes()
       assert KeeperProtocol.parse_frames(<<1, max + 1::32>>) == {:error, :oversized}
-      assert KeeperProtocol.parse_frames(<<5, 0::32>>) == {:error, :unknown_stream}
+      assert KeeperProtocol.parse_frames(<<6, 0::32>>) == {:error, :unknown_stream}
 
       assert KeeperProtocol.parse_frames(<<1, 1::32, "x", 255, 0::32>>) ==
                {:error, :unknown_stream}
@@ -269,8 +308,15 @@ defmodule Prima.KeeperProtocolTest do
       assert_raise ArgumentError, fn -> KeeperProtocol.end_frame(:video) end
     end
 
-    test "the streams are the five bytes the relay carries" do
-      assert KeeperProtocol.streams() == [stdin: 0, stdout: 1, stderr: 2, attach: 3, control: 4]
+    test "the streams are the six bytes the relay carries" do
+      assert KeeperProtocol.streams() == [
+               stdin: 0,
+               stdout: 1,
+               stderr: 2,
+               attach: 3,
+               control: 4,
+               relay: 5
+             ]
     end
   end
 
@@ -373,6 +419,20 @@ defmodule Prima.KeeperProtocolTest do
                ~s({"argv":["true"],"attach":{"path":"/run/a.sock","token":"#{@token}"},) <>
                  ~s("control":true,"env":{"ALPHA":"a","ZED":"z"},"id":"1",) <>
                  ~s("memory_bytes":16777216,"pool":"build","type":"spawn","v":1}\n)
+
+      assert line(spawn_request(%{pool: "runner", control: true, isolation: "netns"})) ==
+               ~s({"argv":["true"],"attach":{"path":"/run/a.sock","token":"#{@token}"},) <>
+                 ~s("control":true,"id":"1","isolation":"netns","pool":"runner","type":"spawn","v":1}\n)
+
+      assert KeeperProtocol.isolations() == ["netns"]
+
+      runner_spawns = Enum.filter(@vectors["valid_requests"], &(&1["pool"] == "runner"))
+      assert runner_spawns != [] and Enum.all?(runner_spawns, &(&1["isolation"] == "netns"))
+
+      assert Enum.all?(
+               @vectors["valid_requests"],
+               &(&1["pool"] == "runner" or not Map.has_key?(&1, "isolation"))
+             )
 
       assert line(%{type: :pool, id: "pool-1", pool: "runner"}) ==
                ~s({"id":"pool-1","pool":"runner","type":"pool","v":1}\n)
