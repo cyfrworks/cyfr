@@ -120,7 +120,18 @@ defmodule Arca.TenantTables do
   # athanor, and several job kinds have no athanor at all; a claim naming an
   # athanor's credential in its `key` is a mutual-exclusion token and grants
   # no reach into that athanor, so it is not the athanor's row to delete.
-  @not_athanor_scoped ["registry_tokens", "server_meta", "cell_leases", "job_claims"]
+  #
+  # `platform_settings` and `settings_pins` are the cell's settings and
+  # each member's environment pins of them: node facts every member reads
+  # alike, which no athanor owns and no erasure of one may touch.
+  @not_athanor_scoped [
+    "registry_tokens",
+    "server_meta",
+    "cell_leases",
+    "job_claims",
+    "platform_settings",
+    "settings_pins"
+  ]
 
   @doc "The closed roster, children first."
   @spec roster() :: [String.t()]

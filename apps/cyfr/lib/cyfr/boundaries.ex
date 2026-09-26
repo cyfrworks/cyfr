@@ -1647,9 +1647,30 @@ defmodule Cyfr.Boundaries do
   `:missing_lever`, a knob that reads like an operator's and has no
   variable to set it with — the honest record of the gap, not an
   endorsement. A key is an atom read at runtime, which no compiler sees.
+  A fifth class, `:setting`, is the platform settings' and is computed
+  from their roster (`config_key_classes/1`).
   """
   @spec config_key_classes() :: %{atom() => atom()}
   def config_key_classes, do: @config_key_classes
+
+  @doc """
+  `config_key_classes/0` with the platform settings' keys classed
+  `:setting`: the head of each configuration path in `settings`, the
+  `{application, key}` pairs `Cyfr.Platform.Settings.Roster.config_keys/0`
+  answers, under the schema's applications.
+
+  The caller reads the roster and hands it in: this catalog is a boundary
+  of its own beside the host's and names none of the host's modules, so
+  the class is computed where the roster can be read, and held equal to it
+  there, rather than copied here as a second list.
+  """
+  @spec config_key_classes([{atom(), atom()}]) :: %{atom() => atom()}
+  def config_key_classes(settings) when is_list(settings) do
+    for {app, key} <- settings,
+        app in config_applications(),
+        into: @config_key_classes,
+        do: {key, Map.get(@config_key_classes, key, :setting)}
+  end
 
   @doc "The same, for keys only `config/test.exs` declares."
   @spec test_only_config_key_classes() :: %{atom() => atom()}
@@ -2102,6 +2123,10 @@ defmodule Cyfr.Boundaries do
     "apps/cyfr/test/cyfr/runtime_env_reading_test.exs" =>
       "pins the shape of the reads in `config/runtime.exs`, and that file configures " <>
         "the `opus` release too: what it names, this case quotes.",
+    "apps/cyfr/test/cyfr/platform_settings_roster_test.exs" =>
+      "holds the inventory of every name a boot reads, and the `opus` release declares " <>
+        "its own prefix (`Opus.Settings.variables/0`): an opus boot's refusal of a stray " <>
+        "name is `Opus.Settings.unknown/1`'s, and this case quotes it.",
     "apps/cyfr/test/cyfr/wit_abi_drift_test.exs" =>
       "names `Opus.Runtime` in the sentence its failure prints, so a reader is told " <>
         "which side of the ABI to look at."

@@ -64,6 +64,54 @@ defmodule Opus.SettingsTest do
       assert Settings.retired("OPUS_KEEPER") =~ "cyfr-keeper"
     end
 
+    # The release carries no host module, so the prefix is declared here:
+    # an `OPUS_*` name it does not read refuses by name, whether the process
+    # or an .env file a development boot sourced sets it.
+    test "an OPUS_* name the release does not read refuses, naming it" do
+      assert {:error, {:unknown, ["OPUS_POOL_SIZ"]}} =
+               Settings.pool([], %{"OPUS_POOL_SIZ" => "4", "PATH" => "/bin"})
+
+      assert {:error, {:unknown, ["OPUS_A", "OPUS_B"]}} =
+               Settings.pool([], %{"OPUS_B" => "", "OPUS_A" => "1"})
+
+      assert Settings.unknown(["OPUS_POOL_SIZ"]) =~
+               "OPUS_POOL_SIZ is not a variable the opus release reads"
+
+      # What it reads, what compose interpolates, and other prefixes pass.
+      system =
+        Map.new(
+          Settings.variables() ++ Settings.compose_only() ++ ["KEEPER_CHANNEL", "CYFR_HOST"],
+          &{&1, "set"}
+        )
+
+      assert Settings.unknown_names(system) == []
+
+      # The retired name keeps its own refusal, and comes first.
+      assert {:error, {:retired, "OPUS_KEEPER"}} =
+               Settings.pool([], %{"OPUS_KEEPER" => "direct", "OPUS_BOGUS" => "1"})
+    end
+
+    test "pool!/0 refuses a stray OPUS_* name in the process environment" do
+      System.put_env("OPUS_STRAY_FOR_TEST", "1")
+      on_exit(fn -> System.delete_env("OPUS_STRAY_FOR_TEST") end)
+
+      assert_raise ArgumentError, ~r/OPUS_STRAY_FOR_TEST is not a variable/, &Settings.pool!/0
+    end
+
+    test "the declared names are every OPUS_* name a runner is handed" do
+      env =
+        Settings.runner_environment(%{
+          runner_id: "r",
+          service_id: "wrk_local",
+          boot: "b",
+          host_url: "http://127.0.0.1:4300",
+          watchdog_grace_ms: 5_000
+        })
+
+      assert Map.keys(env) -- Settings.variables() == []
+      assert "OPUS_CONTROL_FD" in Settings.variables()
+    end
+
     # A subtree runs in a runner's VM of its own in every build, the test
     # build included: there is no keeper that runs one in the service's.
     # The direct keeper is the test build's: without it, the channel alone.

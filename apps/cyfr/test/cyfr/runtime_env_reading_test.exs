@@ -172,9 +172,9 @@ defmodule Cyfr.RuntimeEnvReadingTest do
     refute src =~ ~S|env_str.("CYFR_LOCUS_BUILDS|
   end
 
-  # The pool's bounds and the worker watch's are read through the strict
-  # readers, so a set value that does not parse refuses the boot by name.
-  test "the Opus pool bounds and the worker watch bounds are read strictly" do
+  # The pool's bounds are read through the strict readers, so a set value
+  # that does not parse refuses the boot by name.
+  test "the Opus pool bounds are read strictly" do
     src = source()
 
     for name <- ~w(OPUS_POOL_SIZE OPUS_IDLE_TTL_MS OPUS_WATCHDOG_GRACE_MS OPUS_RELEASE_GRACE_MS) do
@@ -193,41 +193,33 @@ defmodule Cyfr.RuntimeEnvReadingTest do
     # keeper variable is refused from an .env file as from the process.
     assert src =~ ~S|Opus.Settings.pool(opus_pool, sourced)|
     assert src =~ ~S|{:error, {:retired, name}} ->|
-    assert src =~ ~S|Cyfr.RuntimeConfig.resolve_opus_watch(getenv)|
+    assert src =~ ~S|{:error, {:unknown, names}} ->|
 
     # The keeper is the channel: nothing here reads a choice of another.
     refute src =~ ~S|"OPUS_KEEPER"|
     refute src =~ ~S|keeper:|
   end
 
-  # Every rate-limit maximum and window, concurrency ceiling, subscription
-  # and event limit, and the trusted proxy count, is read by the strict
-  # bound reader from its floor: a set value below it, or not a whole
-  # number, refuses the boot by name.
-  test "the admission floors and the trusted proxy count are read strictly from their floors" do
+  # Every platform setting is read through its roster entry
+  # (`Cyfr.Platform.Settings.Roster.read/2`), whose validator is the one
+  # definition of its floor and range: the file spells none of their
+  # variables itself, so no second, hand-written bound can disagree with
+  # the roster's. The trusted proxy count, a deployment variable, is read
+  # by the strict bound reader from its floor.
+  test "the platform settings are read through the roster, and the proxy count strictly" do
     src = source()
 
-    for {name, first} <- [
-          {"CYFR_CRUCIBLE_MAX_CONCURRENT", "32"},
-          {"CYFR_CRUCIBLE_MAX_CONCURRENT_PER_TENANT", "1"},
-          {"CYFR_MCP_RATE_LIMIT_MAX", "1"},
-          {"CYFR_MCP_RATE_LIMIT_WINDOW_MS", "1"},
-          {"CYFR_WEBHOOK_PER_IP_RATE_LIMIT_MAX", "1"},
-          {"CYFR_API_RATE_LIMIT_MAX", "1"},
-          {"CYFR_API_RATE_LIMIT_WINDOW_MS", "1"},
-          {"CYFR_MCP_SUBSCRIPTION_MAX_CONCURRENT", "1"},
-          {"CYFR_MCP_SUBSCRIPTION_MAX_MS", "1"},
-          {"CYFR_CRUCIBLE_EVENTS_MAX_CONCURRENT", "1"},
-          {"CYFR_CRUCIBLE_EVENTS_MAX_MS", "1"},
-          {"CYFR_TRUSTED_PROXY_HOPS", "0"}
-        ] do
-      assert src =~ ~s|env_bound.("#{name}", #{first}..|,
-             "#{name} must go through the strict bound reader from #{first}"
+    assert src =~ ~S|roster.read(entry, getenv)|
+    assert src =~ ~S|roster.unknown(file_names, Map.keys(System.get_env()))|
 
-      refute src =~ ~s|env_int.("#{name}"|, "#{name} must not be read with env_int"
+    # CYFR_LOG_LEVEL is the one exception: the `opus` release reads it too,
+    # and carries no roster to read it through.
+    for name <- Cyfr.Platform.Settings.Roster.variables() -- ["CYFR_LOG_LEVEL"] do
+      refute src =~ ~s|"#{name}"|, "config/runtime.exs spells the rostered #{name} itself"
     end
 
     assert src =~ ~S|env_bound.("CYFR_TRUSTED_PROXY_HOPS", 0..16, "proxy hops")|
+    refute src =~ ~S|env_int.("CYFR_TRUSTED_PROXY_HOPS"|
   end
 
   # Dotenvy is a dependency; these are the behaviours the helpers above

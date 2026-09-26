@@ -21,9 +21,9 @@ defmodule Arca.Repo.Migrations.Baseline do
   assignment has no athanor), `sessions` (a session exists before its
   athanor is resolved) and `decision_logs` (a call refused before any
   tenant was resolved is the host's record, not a tenant's). `server_meta`, `registry_tokens`,
-  `external_identities`, `cell_leases` and `job_claims` are not
-  athanor-scoped: the first three are the server's own facts and the last
-  two the cell's, and a cell has no athanor.
+  `external_identities`, `cell_leases`, `job_claims`, `platform_settings`
+  and `settings_pins` are not athanor-scoped: the first three are the
+  server's own facts and the rest the cell's, and a cell has no athanor.
 
   This file is the schema's single source: a change edits it, and
   `Arca.SchemaFingerprint` refuses a database built from a different
@@ -39,6 +39,7 @@ defmodule Arca.Repo.Migrations.Baseline do
     identity()
     server()
     cell()
+    platform_settings()
     components()
     storage_units()
     storage_projections()
@@ -1694,6 +1695,47 @@ defmodule Arca.Repo.Migrations.Baseline do
     create index(:approvals, [:athanor_id, :turn_id])
     create index(:approvals, [:athanor_id, :thread_id, :status])
     create index(:approvals, [:athanor_id, :status, :expires_at])
+  end
+
+  # ==========================================================================
+  # Platform settings
+  # ==========================================================================
+
+  # The cell's platform settings (`Arca.PlatformSettings`): one row per
+  # setting someone set, its value as JSON text, and one reserved row whose
+  # `revision` is the store revision every write raises by compare-and-set.
+  # A setting's row records the store revision that wrote it; a key with no
+  # row is its default.
+  defp platform_settings do
+    create table(:platform_settings, primary_key: false) do
+      add :key, :string, primary_key: true
+      add :value, :text, null: false
+      add :revision, :bigint, null: false
+      # Who set it, as the host names them; nil on the reserved row.
+      add :set_by, :string
+      add :set_at, :utc_datetime_usec, null: false
+    end
+
+    # Each member's environment pins, under its slot's generation, retired
+    # by whoever next takes or expires the slot.
+    create table(:settings_pins, primary_key: false) do
+      add :key, :string, primary_key: true
+      add :member, :string, primary_key: true
+      add :generation, :bigint, null: false
+      add :value, :text, null: false
+    end
+
+    flush()
+
+    repo().insert_all(Arca.PlatformSettings.Row, [
+      %{
+        key: Arca.PlatformSettings.revision_key(),
+        value: "null",
+        revision: 0,
+        set_by: nil,
+        set_at: DateTime.utc_now()
+      }
+    ])
   end
 
   # The schema this database was built from, recorded by the migration that

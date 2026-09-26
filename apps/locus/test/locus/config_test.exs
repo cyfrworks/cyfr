@@ -227,6 +227,20 @@ defmodule Locus.ConfigTest do
     end
   end
 
+  # The release carries no host module, so the prefix is declared here.
+  test "a LOCUS_* name the node does not read refuses the boot, naming it" do
+    names = Map.keys(full()) ++ ["LOCUS_BUILDS_MAX_CONCURENT", "PATH"]
+
+    assert {:error, message} = Config.from_env(env(full()), names)
+    assert message =~ "LOCUS_BUILDS_MAX_CONCURENT is not a variable the locus release reads"
+
+    assert Config.unknown_names(["LOCUS_B", "LOCUS_A", "LOCUS_A", "KEEPER_CHANNEL"]) ==
+             ["LOCUS_A", "LOCUS_B"]
+
+    assert Config.unknown_names(Config.variables()) == []
+    assert {:ok, _settings} = Config.from_env(env(full()), Map.keys(full()))
+  end
+
   test "a control-plane variable in the environment refuses the boot before anything else is read" do
     for variable <-
           ~w(CYFR_DATABASE_URL CYFR_CRYPTO_KEYRING CYFR_OPUS_KEY CYFR_LOCUS_BACKENDS_KEY) do

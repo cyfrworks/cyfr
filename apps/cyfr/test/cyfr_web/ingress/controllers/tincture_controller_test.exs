@@ -805,6 +805,13 @@ defmodule CyfrWeb.Ingress.TinctureControllerTest do
     end
 
     test "OPTIONS preflight returns 204 with CORS headers", %{conn: conn} do
+      # The configured allowlist is empty (no cross-origin caller); a
+      # deployment that serves a frontend elsewhere names it, and the
+      # wildcard is the widest such answer.
+      original = Application.get_env(:cyfr, :cors_allowed_origins)
+      Application.put_env(:cyfr, :cors_allowed_origins, ["*"])
+      on_exit(fn -> Application.put_env(:cyfr, :cors_allowed_origins, original) end)
+
       conn =
         conn
         |> put_req_header("origin", "null")

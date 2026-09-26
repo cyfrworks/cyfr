@@ -184,6 +184,9 @@ defmodule Arca.UnscopedQuerySeamTest do
         "several kinds have no athanor at all, and a key naming one grants no reach into it",
     "Arca.Schemas.ServerMeta" =>
       "the server's own facts (the schema and keyring fingerprints) — one row per key, no tenant",
+    "Arca.PlatformSettings" =>
+      "the cell's platform settings and each member's pins of them, keyed by setting and " <>
+        "member — node facts every member reads alike, no tenant",
     "Arca.Schemas.WebhookDelivery" =>
       "an idempotency claim keyed by a webhooks FK (on_delete: :delete_all), so it is " <>
         "reachable only through its tenant-owned parent and cascade-deleted with it; the " <>

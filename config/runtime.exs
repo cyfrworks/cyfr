@@ -9,13 +9,18 @@ if config_env() != :test do
   # For releases, look for .env at RELEASE_ROOT; otherwise use project root
   env_dir = System.get_env("RELEASE_ROOT") || File.cwd!()
 
-  sourced =
-    source!([
-      Path.join(env_dir, ".env"),
-      Path.join(env_dir, ".env.#{config_env()}"),
-      Path.join(env_dir, ".env.local"),
-      System.get_env()
-    ])
+  env_files = [
+    Path.join(env_dir, ".env"),
+    Path.join(env_dir, ".env.#{config_env()}"),
+    Path.join(env_dir, ".env.local")
+  ]
+
+  # The names the .env files alone assign, read without the side effect
+  # the merged read below keeps: the unknown-name refusal holds a file to
+  # a stricter roster than the process environment a shell exports.
+  file_names = env_files |> source!(side_effect: false) |> Map.keys()
+
+  sourced = source!(env_files ++ [System.get_env()])
 
   # Runtime configuration for CYFR
   # This file is executed at runtime, not compile time
@@ -71,28 +76,6 @@ if config_env() != :test do
   # boot. The `locus` release never reads it (`config/locus_runtime.exs`).
   release_name = env_str.("RELEASE_NAME", nil)
 
-  # Default to info logging in production and debug in development; invalid levels use the default.
-  log_level =
-    case env_str.("CYFR_LOG_LEVEL", if(config_env() == :prod, do: "info", else: "debug")) do
-      level when level in ~w(emergency alert critical error warning notice info debug) ->
-        String.to_existing_atom(level)
-
-      other ->
-        IO.warn("CYFR_LOG_LEVEL=#{inspect(other)} is not a Logger level — using :info")
-        :info
-    end
-
-  config :logger, level: log_level
-
-  # JSON log format for structured logging (Datadog, Splunk, ELK, Loki).
-  # The formatter is CYFR's; the `opus` release logs plain text.
-  if env_str.("CYFR_LOG_FORMAT", nil) == "json" and release_name != "opus" do
-    # Only the format changes. `Config` deep-merges keyword values, so the
-    # `metadata:` roster set in config.exs carries through — repeating it
-    # here is a second copy that would go stale the first time one moved.
-    config :logger, :default_formatter, format: {Prima.JsonFormatter, :format}
-  end
-
   # Which side of the worker wire this boot is: the `cyfr` release and a
   # `mix` boot from the umbrella root run CYFR; the `opus` release and that
   # same `mix` boot run the Opus worker service. The `opus` release never
@@ -106,6 +89,32 @@ if config_env() != :test do
   # `locus` release, the builder, is configured by `config/locus_runtime.exs`
   # alone and never evaluates this file.
   cyfr_boot? = release_name != "opus"
+
+  # The `opus` release's log level. It carries no host module, so the
+  # platform settings roster that reads CYFR_LOG_LEVEL for a `cyfr` boot
+  # (below) is not read for it; an unrecognised level logs at info.
+  unless cyfr_boot? do
+    log_level =
+      case env_str.("CYFR_LOG_LEVEL", "info") do
+        level when level in ~w(emergency alert critical error warning notice info debug) ->
+          String.to_existing_atom(level)
+
+        other ->
+          IO.warn("CYFR_LOG_LEVEL=#{inspect(other)} is not a Logger level — using :info")
+          :info
+      end
+
+    config :logger, level: log_level
+  end
+
+  # JSON log format for structured logging (Datadog, Splunk, ELK, Loki).
+  # The formatter is CYFR's; the `opus` release logs plain text.
+  if env_str.("CYFR_LOG_FORMAT", nil) == "json" and release_name != "opus" do
+    # Only the format changes. `Config` deep-merges keyword values, so the
+    # `metadata:` roster set in config.exs carries through — repeating it
+    # here is a second copy that would go stale the first time one moved.
+    config :logger, :default_formatter, format: {Prima.JsonFormatter, :format}
+  end
 
   opus_role =
     if release_name in [nil, "opus"],
@@ -256,10 +265,66 @@ if config_env() != :test do
 
       {:error, {:retired, name}} ->
         raise "[Cyfr] FATAL: " <> Opus.Settings.retired(name)
+
+      {:error, {:unknown, names}} ->
+        raise "[Cyfr] FATAL: " <> Opus.Settings.unknown(names)
     end
   end
 
   if cyfr_boot? do
+    # Every name this boot reads is declared once (`Cyfr.Platform.Settings.Roster`):
+    # a platform setting, a deployment variable, or a name compose reads and
+    # no release does. A `CYFR_*` name the .env files assign that none of
+    # them declares refuses the boot naming it, and so does one in the
+    # process environment unless another program owns it (the CLI, the
+    # installer, the test harness). A retired name is refused this way.
+    roster = Cyfr.Platform.Settings.Roster
+
+    case roster.unknown(file_names, Map.keys(System.get_env())) do
+      [] -> :ok
+      names -> raise "[Cyfr] FATAL: " <> roster.refusal(names)
+    end
+
+    # Every platform setting whose variable is set: read by the strict
+    # reader, validated by the roster's validator (a set value that does
+    # not pass refuses the boot naming it), and recorded as this member's
+    # environment pin. An unset variable pins nothing: the stored row or the
+    # default stands.
+    settings =
+      for entry <- roster.entries() do
+        case roster.read(entry, getenv) do
+          {:ok, value} -> {entry, value}
+          {:error, message} -> raise "[Cyfr] FATAL: #{message}"
+        end
+      end
+
+    config :cyfr,
+           :deployment_pinned,
+           Enum.sort(for({entry, value} <- settings, value != nil, do: {entry.key, value}))
+
+    # While a setting's reader still takes it from the application
+    # environment, the value is written there too. A top-level key is
+    # written only when set, so the reader's own default stands. An entry
+    # of a keyword the reader takes whole (the caps under `:sanctum`, the
+    # worker watch's bounds) is written every time, with its default when
+    # unset, and each such write merges into that keyword: it never
+    # replaces the entries written before it.
+    for {%{config: path, app: app} = entry, value} <- settings, path != nil, app != :logger do
+      case path do
+        [key] ->
+          if value != nil, do: config(app, key, value)
+
+        [key, subkey] ->
+          config(app, key, [{subkey, if(value == nil, do: entry.default, else: value)}])
+      end
+    end
+
+    # The log level: the set value, else info in production and debug in
+    # development. The development default is this file's, not the
+    # roster's, and pins nothing.
+    {_entry, log_level} = Enum.find(settings, fn {entry, _value} -> entry.key == "log_level" end)
+    config :logger, level: log_level || if(config_env() == :prod, do: :info, else: :debug)
+
     # Load the explicit JSON keyring; unset derives a key from CYFR_SECRET_KEY_BASE.
     config :cyfr, :crypto_keyring_json, env_str.("CYFR_CRYPTO_KEYRING", nil)
 
@@ -334,45 +399,6 @@ if config_env() != :test do
     config :cyfr, :host_api_port, host_api.port
     config :cyfr, :host_api_url, host_api.url
 
-    # How the worker watch (`Crucible.WorkerWatch`) hears from each
-    # worker service: CYFR_OPUS_WATCH_POLL_MS, the interval between its
-    # status polls (1000 to 60000, default 5000), and
-    # CYFR_OPUS_WATCH_MISSES, the misses in a row after which the boot
-    # last heard from has its running attempts lapsed (1 to 100, default
-    # 3). Only the set bounds are configured; a set value outside its range
-    # refuses the boot naming it.
-    case Cyfr.RuntimeConfig.resolve_opus_watch(getenv) do
-      {:ok, opus_watch} -> config :cyfr, :opus_watch, opus_watch
-      {:error, message} -> raise "[Cyfr] FATAL: #{message}"
-    end
-
-    # How long the backends service runs a stdio server's backends without
-    # hearing from this server, in milliseconds: 1000 to 60000, default
-    # 30000. Every sync and renewal asks for this lease and renewals go out
-    # every third of it, so backends whose server crashed, lost the control
-    # plane or cannot reach the service are retired within one lease.
-    # Anything but a whole number in the range refuses the boot.
-    locus_backends_ms = fn key, range ->
-      locus_backends_setting.(Prima.EnvValue.milliseconds(getenv, key, range))
-    end
-
-    if lease_ms = locus_backends_ms.("CYFR_LOCUS_BACKENDS_LEASE_MS", 1_000..60_000) do
-      config :cyfr, :locus_backends_lease_ms, lease_ms
-    end
-
-    # How long the backends service keeps a stdio backend running with no
-    # tool call to it, in milliseconds: 1000 to 86400000, default 900000 (15
-    # minutes). An idle backend's processes are retired and its pool slot
-    # freed; its tools stay listed, and the next call to it starts it again,
-    # which for an `npx -y` package means downloading it again. Anything but
-    # a whole number in the range refuses the boot.
-    if idle_ms = locus_backends_ms.("CYFR_LOCUS_BACKENDS_IDLE_MS", 1_000..86_400_000) do
-      config :cyfr, :locus_backends_idle_ms, idle_ms
-    end
-
-    # Device label attached to registry credentials (unset = hostname).
-    config :cyfr, :device_label, env_str.("CYFR_DEVICE_LABEL", nil)
-
     # Whether the server migrates the database on boot (default: true). Several
     # nodes on one Postgres, or an operator who runs the schema step by hand
     # (`bin/cyfr eval "Cyfr.Release.migrate()"`), turn it off.
@@ -405,120 +431,6 @@ if config_env() != :test do
     # Codex signs in through the session tool on /mcp, so it does not notice.
     headless? = env_bool.("CYFR_HEADLESS", false)
     config :cyfr, :headless, headless?
-
-    # The admission floors: every rate-limit maximum and window, concurrency
-    # ceiling, subscription and event limit below is a whole number from 1
-    # up, since zero or less would admit nothing or read as no limit at all.
-    # A set value outside its range, or not a whole number, refuses the boot
-    # naming it; unset, the code's default stands.
-    #
-    # Maximum concurrent WASM executions (default: 128)
-    # Prevents dirty scheduler exhaustion from too many simultaneous WASM executions.
-    # A quarter of the slots is reserved for chain children (a formula's hops);
-    # that reserve must hold a chain of the full authority depth (8), so the
-    # floor is 32 — below it a deep chain could wait on itself.
-    if max_exec = env_bound.("CYFR_CRUCIBLE_MAX_CONCURRENT", 32..1_000_000, "executions") do
-      config :cyfr, :crucible_max_concurrent, max_exec
-    end
-
-    # Maximum concurrent WASM executions per tenant (default: 16)
-    # Bounds the blast radius of one athanor queueing many long-running executions
-    if max_tenant_exec =
-         env_bound.("CYFR_CRUCIBLE_MAX_CONCURRENT_PER_TENANT", 1..1_000_000, "executions") do
-      config :cyfr, :crucible_max_concurrent_per_tenant, max_tenant_exec
-    end
-
-    # MCP transport rate limit, per client IP (default: 120 requests / 60s window).
-    # Counts requests and SSE connection opens, not stream duration.
-    if mcp_rl_max = env_bound.("CYFR_MCP_RATE_LIMIT_MAX", 1..1_000_000_000, "requests") do
-      config :cyfr, :mcp_rate_limit_max, mcp_rl_max
-    end
-
-    if mcp_rl_window = env_bound.("CYFR_MCP_RATE_LIMIT_WINDOW_MS", 1..86_400_000, "milliseconds") do
-      config :cyfr, :mcp_rate_limit_window_ms, mcp_rl_window
-    end
-
-    # Inbound webhooks, per client IP, across every slug (default: 6000/60s).
-    # Checked BEFORE the per-slug bucket, so it clamps any `rate_limit` set
-    # on a webhooks row above it — raise it when one real sender, egressing
-    # from one address, legitimately needs more than this in a minute.
-    if hook_ip_max =
-         env_bound.("CYFR_WEBHOOK_PER_IP_RATE_LIMIT_MAX", 1..1_000_000_000, "requests") do
-      config :cyfr, :webhook_per_ip_rate_limit_max, hook_ip_max
-    end
-
-    # The :api bucket's own budget (GET /api/executions/:id/events — SSE
-    # reconnects). Unset, it shares the MCP values above; the counters were
-    # always separate, the budgets silently were not.
-    if v = env_bound.("CYFR_API_RATE_LIMIT_MAX", 1..1_000_000_000, "requests") do
-      config :cyfr, :api_rate_limit_max, v
-    end
-
-    if v = env_bound.("CYFR_API_RATE_LIMIT_WINDOW_MS", 1..86_400_000, "milliseconds") do
-      config :cyfr, :api_rate_limit_window_ms, v
-    end
-
-    # Per-caller SSE limits: concurrent streams and lifetime. Defaults are 8 streams and 30 minutes.
-    if v = env_bound.("CYFR_MCP_SUBSCRIPTION_MAX_CONCURRENT", 1..1_000_000, "streams") do
-      config :cyfr, :mcp_subscription_max_concurrent, v
-    end
-
-    if v = env_bound.("CYFR_MCP_SUBSCRIPTION_MAX_MS", 1..86_400_000, "milliseconds") do
-      config :cyfr, :mcp_subscription_max_ms, v
-    end
-
-    if v = env_bound.("CYFR_CRUCIBLE_EVENTS_MAX_CONCURRENT", 1..1_000_000, "streams") do
-      config :cyfr, :crucible_events_max_concurrent, v
-    end
-
-    if v = env_bound.("CYFR_CRUCIBLE_EVENTS_MAX_MS", 1..86_400_000, "milliseconds") do
-      config :cyfr, :crucible_events_max_ms, v
-    end
-
-    # Webhook replay window (default 300s). A delivery whose `timestamp_header`
-    # is further than this from now is refused. Senders differ in how well they
-    # keep a clock; the value was a constant nothing could set, so operators
-    # facing a drifting sender had no answer short of turning the header off.
-    if skew = env_int.("CYFR_WEBHOOK_MAX_SKEW_SECONDS", nil) do
-      if skew <= 0, do: raise("CYFR_WEBHOOK_MAX_SKEW_SECONDS must be > 0")
-      config :sanctum, :webhook_max_skew_seconds, skew
-    end
-
-    # How long delivered webhook idempotency keys are kept (default 86_400s).
-    # This is the window a retried delivery is recognised as a duplicate in, so
-    # it trades table size against how late a sender may retry.
-    if ttl = env_int.("CYFR_WEBHOOK_IDEMPOTENCY_TTL_SECONDS", nil) do
-      if ttl <= 0, do: raise("CYFR_WEBHOOK_IDEMPOTENCY_TTL_SECONDS must be > 0")
-      config :cyfr, :webhook_idempotency_ttl_seconds, ttl
-    end
-
-    # How long the host keeps the admission decisions made before any tenant
-    # was resolved (days, default 365): the `decision_logs` rows without an
-    # athanor, which no athanor's retention reaches and
-    # `Cyfr.RetentionScheduler` purges under its held claim.
-    if days = env_int.("CYFR_DECISION_RETENTION_DAYS", nil) do
-      if days <= 0, do: raise("CYFR_DECISION_RETENTION_DAYS must be > 0")
-      config :cyfr, :decision_retention_days, days
-    end
-
-    # How long `/health/ready` reuses its last probe (default 5000ms). On an
-    # object store the write probe is a billable PUT per uncached hit, so a
-    # frequent prober is a line item; the code documented this as settable
-    # while nothing could set it.
-    if ready_ms = env_int.("CYFR_HEALTH_READY_CACHE_MS", nil) do
-      if ready_ms < 0, do: raise("CYFR_HEALTH_READY_CACHE_MS must be >= 0")
-      config :cyfr, :health_ready_cache_ms, ready_ms
-    end
-
-    # Session idle timeout in hours (default 720 / 30 days, 0 = infinite / never expires, minimum 1).
-    # Sessions slide forward on activity, so this is an idle timeout rather than a hard cap.
-    if ttl_hours = env_int.("CYFR_SESSION_TTL_HOURS", nil) do
-      if ttl_hours < 0 do
-        raise "CYFR_SESSION_TTL_HOURS must be >= 0 (0 = infinite, minimum non-zero is 1)"
-      end
-
-      config :sanctum, :session_ttl_hours, ttl_hours
-    end
 
     # CYFR_SECRET_KEY_BASE overrides the configured key. Required and nonblank
     # in production; dev/test may use the key from their config files.
@@ -735,15 +647,14 @@ if config_env() != :test do
         end
     end
 
-    # Browser CORS allowlist. Authenticated releases require an explicit
-    # value: assigned, it is the allowlist it spells, and assigned empty it
-    # is the empty allowlist — no cross-origin caller at all, which is what
-    # a same-origin deployment sets and what `.env.example` promises.
-    # Unassigned, `config/config.exs`'s wildcard stands, which
-    # `Cyfr.Application.cors_enforcement/3` refuses for a release that has
-    # authentication configured. So the read is the assignment, not the
-    # value: `env_str` would read an empty allowlist as no answer and leave
-    # the wildcard standing, which is the boot a `cyfr init` project had.
+    # Browser CORS allowlist: assigned, it is the allowlist it spells, and
+    # assigned empty it is the empty allowlist — no cross-origin caller at
+    # all, which is what a same-origin deployment sets and what
+    # `.env.example` promises. Unassigned, `config/config.exs`'s empty
+    # allowlist stands. The read is the assignment, not the value: an
+    # assigned empty value is a decision, and `env_str` would read it as no
+    # answer. A wildcard is refused for a release that has authentication
+    # configured (`Cyfr.Application.cors_enforcement/3`).
     if env_assigned.("CYFR_CORS_ALLOWED_ORIGINS") do
       config :cyfr, :cors_allowed_origins, env_list.("CYFR_CORS_ALLOWED_ORIGINS")
     end
@@ -818,17 +729,6 @@ if config_env() != :test do
       "CYFR_PLATFORM_ADMIN_EMAILS" |> env_list.() |> Enum.map(&String.downcase/1)
 
     config :sanctum, :platform_admin_emails, platform_admins
-
-    # Account caps: unset disables limits except groups (50 per person),
-    # pairs (200) and threads (1000); 0 disables those defaults.
-    config :sanctum, :caps,
-      max_athanors: env_int.("CYFR_MAX_ATHANORS", nil),
-      max_groups_per_person: env_int.("CYFR_MAX_GROUPS_PER_PERSON", 50),
-      max_pairs_per_person: env_int.("CYFR_MAX_PAIRS_PER_PERSON", 200),
-      max_members_per_group: env_int.("CYFR_MAX_MEMBERS_PER_GROUP", nil),
-      max_threads_per_athanor: env_int.("CYFR_MAX_THREADS_PER_ATHANOR", 1000),
-      mint_per_hour: env_int.("CYFR_MINT_PER_HOUR", nil),
-      athanor_storage_bytes: env_int.("CYFR_ATHANOR_STORAGE_BYTES", nil)
 
     # Select the auth provider from explicit configuration, then OAuth
     # credentials. Reject unsatisfied explicit settings. Without a provider,

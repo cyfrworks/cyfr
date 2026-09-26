@@ -10,6 +10,8 @@ defmodule Cyfr.DocsDriftTest do
   """
   use ExUnit.Case, async: true
 
+  alias Cyfr.Platform.Settings.Roster
+
   @repo_root Path.expand("../../../..", __DIR__)
   @readme Path.join(@repo_root, "README.md")
 
@@ -33,12 +35,21 @@ defmodule Cyfr.DocsDriftTest do
 
   # The files that read the releases' environment: the control plane's
   # configuration (the `CYFR_*` variables `config/runtime.exs` reads into
-  # the operator keys of `Cyfr.Boundaries.config_key_classes/0`, and the
-  # resolvers it calls), the Opus release's `OPUS_*` rows in the same
-  # file, the Locus release's `Locus.Config`, the Opus settings, and the
-  # keeper's own sources (`keeper_sources/0`).
+  # the operator keys of `Cyfr.Boundaries.config_key_classes/0`, the
+  # resolvers it calls, and the platform settings roster whose variables it
+  # reads), the Opus release's `OPUS_*` rows in the same file, the Locus
+  # release's `Locus.Config`, the Opus settings, and the keeper's own
+  # sources (`keeper_sources/0`).
   @env_readers ~w(config/runtime.exs apps/cyfr/lib/cyfr/runtime_config.ex
+                  apps/cyfr/lib/cyfr/platform/settings/roster.ex
                   apps/locus/lib/locus/config.ex apps/opus/lib/opus/settings.ex)
+
+  # The names the roster spells that no release reads: those other
+  # programs own (`Roster.foreign/0`), which their owners document, and
+  # those compose reads alone (`Roster.compose_only/0`).
+  defp spelled_not_read do
+    MapSet.new(Enum.map(Roster.foreign(), &elem(&1, 0)) ++ Roster.compose_only())
+  end
 
   # The keeper's Go sources other than its tests, relative to the root.
   defp keeper_sources do
@@ -99,6 +110,8 @@ defmodule Cyfr.DocsDriftTest do
   end
 
   defp read_variables do
+    not_read = spelled_not_read()
+
     for file <- @env_readers ++ keeper_sources(),
         [name] <-
           Regex.scan(
@@ -106,6 +119,7 @@ defmodule Cyfr.DocsDriftTest do
             File.read!(Path.join(@repo_root, file)),
             capture: :all_but_first
           ),
+        not MapSet.member?(not_read, name),
         uniq: true,
         do: name
   end
@@ -488,7 +502,9 @@ defmodule Cyfr.DocsDriftTest do
   # cyfr reads.
   test "every worker variable of cyfr's that the runtime configuration reads is documented in .env.example" do
     read =
-      for file <- ~w(config/runtime.exs apps/cyfr/lib/cyfr/runtime_config.ex),
+      for file <-
+            ~w(config/runtime.exs apps/cyfr/lib/cyfr/runtime_config.ex
+               apps/cyfr/lib/cyfr/platform/settings/roster.ex),
           [name] <-
             Regex.scan(
               ~r/"(CYFR_OPUS_WORKERS|CYFR_OPUS_[A-Z0-9_]+|CYFR_HOST_API_[A-Z0-9_]+)"/,
@@ -848,12 +864,12 @@ defmodule Cyfr.DocsDriftTest do
   end
 
   # The backends service is four variables of the control plane's, read by
-  # `config/runtime.exs`, documented where an operator sets them.
+  # `config/runtime.exs` (its two periods through the platform settings
+  # roster), documented where an operator sets them.
   test "the backends service's variables are documented in .env.example and the integration guide" do
     read =
-      @repo_root
-      |> Path.join("config/runtime.exs")
-      |> File.read!()
+      ~w(config/runtime.exs apps/cyfr/lib/cyfr/platform/settings/roster.ex)
+      |> Enum.map_join("\n", &File.read!(Path.join(@repo_root, &1)))
       |> then(&Regex.scan(~r/"(CYFR_LOCUS_BACKENDS_[A-Z0-9_]+)"/, &1, capture: :all_but_first))
       |> List.flatten()
       |> Enum.uniq()
@@ -992,11 +1008,14 @@ defmodule Cyfr.DocsDriftTest do
   # Every quoted upper-case name the releases' readers spell: what a
   # documented name must be read as, whatever its prefix.
   defp spelled_by_readers do
+    not_read = spelled_not_read()
+
     for file <- @env_readers ++ keeper_sources(),
         [name] <-
           Regex.scan(~r/"([A-Z][A-Z0-9_]*[A-Z0-9])"/, File.read!(Path.join(@repo_root, file)),
             capture: :all_but_first
           ),
+        not MapSet.member?(not_read, name),
         into: MapSet.new(),
         do: name
   end
@@ -1033,13 +1052,15 @@ defmodule Cyfr.DocsDriftTest do
     end
   end
 
+  # The compose-only class and the deployment list are the roster's
+  # (`Cyfr.Platform.Settings.Roster`), which derives the first from
+  # docker-compose.yml and holds it there; this reads them from their owner.
   test "every name a shipped example documents is read by a release or by compose" do
-    compose = File.read!(Path.join(@repo_root, "docker-compose.yml"))
-
-    interpolated =
-      ~r/\$\{([A-Z][A-Z0-9_]*)/ |> Regex.scan(compose, capture: :all_but_first) |> List.flatten()
-
-    read = MapSet.union(spelled_by_readers(), MapSet.new(interpolated))
+    read =
+      MapSet.union(
+        spelled_by_readers(),
+        MapSet.new(Roster.compose_only() ++ Roster.deployment() ++ Roster.variables())
+      )
 
     unread =
       for example <- ~w(.env.example .env.opus.example .env.locus.example),
