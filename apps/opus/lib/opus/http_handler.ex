@@ -11,14 +11,20 @@ defmodule Opus.HttpHandler do
 
   ## Security Properties
 
-  - **SSRF Prevention**: DNS resolves once, IP validated against private ranges,
-    then the connection is pinned to that validated IP — the original hostname
-    is preserved for TLS SNI / certificate verification / the `Host` header, so
-    there is no DNS-rebinding TOCTOU gap and no second resolution to rebind
+  - **SSRF Prevention**: the engine resolves no name. CYFR pins the address
+    each request connects to under the attempt's authority, applying its
+    private-address policy (`Opus.HostClient.egress_pin/3`), and the
+    connection goes to exactly that address, with the original hostname kept
+    for TLS SNI / certificate verification / the `Host` header, so there is
+    no DNS-rebinding gap and no second resolution to rebind. A metadata
+    address is refused even when CYFR answers one (`Opus.Egress`)
   - **Full Request Visibility**: Unlike a CONNECT tunnel, the host sees method,
     URL, headers, and body for both HTTP and HTTPS
   - **Size Enforcement**: Request and response bodies validated against node limits
-  - **Redirect Prevention**: `redirect: false` prevents redirect-based SSRF
+  - **Redirects**: `redirect: false`; a guest that follows a redirect makes
+    its next hop as a request of its own, pinned from the pin the redirect
+    came from, and a hop to another origin goes without the guest's
+    `Authorization` and `Cookie` headers
 
   ## Architecture
 
@@ -26,8 +32,7 @@ defmodule Opus.HttpHandler do
   The host function is registered as a Wasmex import that the WASM component
   calls synchronously. All edge checks happen before any network I/O via
   `Opus.HttpRequestValidation` — the single validation path shared with
-  `Opus.HttpStreamHandler`. The private/reserved-IP range policy lives in
-  `Prima.Cidr.private_ip?/1`.
+  `Opus.HttpStreamHandler`.
 
   ## Usage
 
@@ -82,9 +87,11 @@ defmodule Opus.HttpHandler do
   @doc """
   Execute an HTTP request with full edge enforcement.
 
-  Parses the JSON request, validates against the consent edge and node
-  limits, resolves DNS with private IP blocking, and executes via Req with
-  IP pinning.
+  Parses the JSON request, validates it against the consent edge and node
+  limits, pins its address through CYFR and executes it via Req connected
+  to that address. A redirecting answer (`3xx` with a `Location`) is
+  answered to the guest as it is, and a request the guest then makes to
+  where it points is the redirect's next hop (`Opus.Egress.redirected/4`).
 
   ## Request Format (JSON)
 
@@ -163,6 +170,10 @@ defmodule Opus.HttpHandler do
       {:error, type, message} ->
         record_refusal(host, type, message)
         encode_error(type, message)
+
+      # CYFR refused the pin, and has already recorded the denial.
+      {:refused, type, message} ->
+        encode_error(type, message)
     end
   end
 
@@ -176,25 +187,6 @@ defmodule Opus.HttpHandler do
     _ = HostClient.record_denial(host, Atom.to_string(type), message)
     :ok
   end
-
-  @doc """
-  Resolve hostname to IP and validate it is not a private address.
-
-  Delegates to `Opus.HttpRequestValidation.resolve_and_validate_ip/2` — the
-  shared pre-flight path for both HTTP host functions.
-  """
-  @spec resolve_and_validate_ip(String.t(), Edge.t() | nil) ::
-          {:ok, String.t()} | {:error, atom(), String.t()}
-  defdelegate resolve_and_validate_ip(hostname, edge \\ nil), to: HttpRequestValidation
-
-  @doc """
-  Check if an IP tuple is in a private/reserved range.
-
-  Delegates to `Prima.Cidr.private_ip?/1` — the single source of truth for
-  the private/reserved-range egress policy. No range table lives in Opus.
-  """
-  @spec private_ip?(:inet.ip4_address() | :inet.ip6_address()) :: boolean()
-  defdelegate private_ip?(ip_tuple), to: Prima.Cidr
 
   # ============================================================================
   # Private: HTTP Execution
@@ -225,6 +217,7 @@ defmodule Opus.HttpHandler do
             case EdgeGuard.check_response_size(limits, response_body) do
               :ok ->
                 emit_telemetry(component_ref, request, response.status, duration_ms)
+                note_redirect(host, request, response)
 
                 if request.response_encoding == "base64" do
                   encode_response_base64(response.status, response.headers, response_body)
@@ -271,12 +264,24 @@ defmodule Opus.HttpHandler do
     end
   end
 
+  # A redirecting answer is the guest's to follow: where it points is the
+  # attempt's next hop from this request's pin.
+  defp note_redirect(host, request, %Req.Response{status: status} = response)
+       when status in [301, 302, 303, 307, 308] do
+    case Req.Response.get_header(response, "location") do
+      [location | _] -> Opus.Egress.redirected(host, request.pinned, request.url, location)
+      [] -> :ok
+    end
+  end
+
+  defp note_redirect(_host, _request, _response), do: :ok
+
   defp request_timeout(limits) do
     HttpRequestValidation.timeout_ms(limits, @request_timeout)
   end
 
   defp build_req_opts(request, limits) do
-    # Preserve the pinned URL and transport options from Opus.Egress.pin/2,
+    # Preserve the pinned URL and transport options from Opus.Egress.pin/3,
     # including disabled automatic retries and response decoding.
     base_opts =
       request.pin_req_opts

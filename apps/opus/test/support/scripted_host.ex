@@ -20,15 +20,18 @@ defmodule Opus.Test.ScriptedHost do
   every request the host saw, verified or refused, oldest first.
 
   An answer is `{:ok, value}`, `{:error, name}`, a guest error, a
-  `setup_required` or `failed` refusal as `Opus.HostClient` reads them, or
-  `:drop`, which answers nothing readable — a lost answer.
+  `setup_required` or `failed` refusal as `Opus.HostClient` reads them,
+  `{:answer, json}`, those exact bytes sealed as the answer, or `:drop`,
+  which answers nothing readable — a lost answer. `pins/3` answers
+  `egress_pin` from a table of addresses the test sets, as CYFR pins a
+  guest's URL; with no table, every pin is refused `resolution`.
 
   The default root is the one `test_helper.exs` derives the running worker
   service's key from, so a host started with it verifies that service's
   reports; a host started with another root is a stranger to it.
   """
 
-  alias Prima.{Assignment, WorkerAuth, WorkerWire}
+  alias Prima.{Assignment, PinnedTarget, WorkerAuth, WorkerWire}
 
   @root :crypto.hash(:sha256, "opus-test-root")
   @service "wrk_local"
@@ -139,6 +142,50 @@ defmodule Opus.Test.ScriptedHost do
   @spec script(t(), String.t(), term()) :: :ok
   def script(%{agent: agent}, op, answers) when is_binary(op) do
     Agent.update(agent, &put_in(&1, [:script, op], answers))
+  end
+
+  @doc """
+  Answer `egress_pin` from `table`: a URL's host, lowercase and an IPv6
+  literal without its brackets, to the address this host pins it at (IP
+  text), or to the refusal it answers (an atom of
+  `Prima.PinnedTarget.refusals/0`). A host the table does not name is
+  refused `resolution`. Each pin names the URL's own scheme, port and
+  host, a fresh id, and an `expires_at` `:expires_in` ms (default 30 000,
+  negative for a pin already past it) after it is answered.
+  """
+  @spec pins(t(), %{String.t() => String.t() | atom()}, keyword()) :: :ok
+  def pins(host, table, opts \\ []) when is_map(table) do
+    expires_in = Keyword.get(opts, :expires_in, 30_000)
+    script(host, "egress_pin", fn args, _caller -> pin(table, args, expires_in) end)
+  end
+
+  @doc false
+  # The answer `pins/3`'s table gives for an `egress_pin` request's args.
+  def pin(table, %{"url" => url}, expires_in) do
+    uri = URI.parse(url)
+
+    case Map.get(table, String.downcase(uri.host)) do
+      nil ->
+        {:error, :resolution}
+
+      refusal when is_atom(refusal) ->
+        {:error, refusal}
+
+      ip when is_binary(ip) ->
+        {:ok, address} = :inet.parse_strict_address(String.to_charlist(ip))
+
+        pin = %PinnedTarget{
+          id: "pin_" <> Integer.to_string(System.unique_integer([:positive])),
+          ip: ip,
+          family: if(tuple_size(address) == 4, do: 4, else: 6),
+          scheme: uri.scheme,
+          port: uri.port,
+          host: if(String.contains?(uri.host, ":"), do: "[#{uri.host}]", else: uri.host),
+          expires_at: System.system_time(:millisecond) + expires_in
+        }
+
+        {:ok, PinnedTarget.to_wire(pin)}
+    end
   end
 
   @doc "Every request the host saw, oldest first: `%{op, args, caller, header, body}` (the body opened) or `{:refused, op, reason}`."
@@ -268,6 +315,7 @@ defmodule Opus.Test.ScriptedHost do
   def default("release_child", _args, _caller), do: {:ok, true}
   def default("runner_exited", _args, _caller), do: {:ok, true}
   def default("fetch_artifact", _args, _caller), do: {:error, :not_found}
+  def default("egress_pin", _args, _caller), do: {:error, :resolution}
 
   def default(_op, _args, _caller),
     do:
@@ -386,6 +434,9 @@ defmodule Opus.Test.ScriptedHost do
         :drop ->
           send_resp(conn, 500, "")
 
+        {:answer, bytes} when is_binary(bytes) ->
+          send_json(conn, 200, bytes, seal)
+
         {:raw, status, body} ->
           send_resp(conn, status, body)
 
@@ -394,9 +445,10 @@ defmodule Opus.Test.ScriptedHost do
       end
     end
 
-    defp json(conn, status, answer, seal) do
-      encoded = Jason.encode!(answer)
+    defp json(conn, status, answer, seal),
+      do: send_json(conn, status, Jason.encode!(answer), seal)
 
+    defp send_json(conn, status, encoded, seal) do
       body =
         case seal do
           {key, caller} ->

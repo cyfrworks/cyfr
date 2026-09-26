@@ -5,9 +5,11 @@ defmodule Opus.EdgeGuardTest do
   @moduledoc """
   `Opus.EdgeGuard` is the runner's one place a concrete egress request is
   matched against the consent edge an execution runs under. Every HTTP host
-  handler asks it before touching a domain, a scheme, a method, an IP or a
-  byte budget — so a bug here is not a bug in one import, it is the guest
-  reaching past its consent in all of them.
+  handler asks it before touching a domain, a scheme, a method or a byte
+  budget — so a bug here is not a bug in one import, it is the guest
+  reaching past its consent in all of them. The address a request may
+  reach, and so the edge's private-address grant, is CYFR's to decide when
+  it pins the request.
 
   Its own moduledoc makes two promises this file holds it to.
 
@@ -62,7 +64,6 @@ defmodule Opus.EdgeGuardTest do
       assert {:error, _} = EdgeGuard.check_domain(nil, "example.com")
       assert {:error, _} = EdgeGuard.check_scheme(nil, "https")
       assert {:error, _} = EdgeGuard.check_method(nil, "GET")
-      refute EdgeGuard.allows_private_ip?(nil, {10, 0, 0, 1})
     end
 
     test "a nil resource group denies as hard as a nil edge" do
@@ -87,7 +88,6 @@ defmodule Opus.EdgeGuardTest do
 
       assert {:error, _} = EdgeGuard.check_scheme(empty, "https")
       assert {:error, _} = EdgeGuard.check_method(empty, "GET")
-      refute EdgeGuard.allows_private_ip?(empty, {10, 0, 0, 1})
     end
   end
 
@@ -174,69 +174,6 @@ defmodule Opus.EdgeGuardTest do
                {:error,
                 "Error: Policy violation - method \"DELETE\" not in allowed_methods\n" <>
                   "Allowed: get, POST"}
-    end
-  end
-
-  # ==========================================================================
-  # Private IPs
-  # ==========================================================================
-
-  describe "allows_private_ip?/2" do
-    test "an exact entry matches that address only" do
-      e =
-        egress_edge(%{
-          domains: [],
-          methods: [],
-          schemes: [],
-          private_ips: ["192.168.1.100"]
-        })
-
-      assert EdgeGuard.allows_private_ip?(e, {192, 168, 1, 100})
-      refute EdgeGuard.allows_private_ip?(e, {192, 168, 1, 101})
-    end
-
-    test "a CIDR entry matches its range" do
-      e = egress_edge(%{domains: [], methods: [], schemes: [], private_ips: ["10.0.0.0/8"]})
-
-      assert EdgeGuard.allows_private_ip?(e, {10, 0, 0, 1})
-      assert EdgeGuard.allows_private_ip?(e, {10, 255, 255, 254})
-      refute EdgeGuard.allows_private_ip?(e, {11, 0, 0, 1})
-      refute EdgeGuard.allows_private_ip?(e, {192, 168, 1, 1})
-    end
-
-    test "cloud metadata is denied however wide the allowlist is" do
-      # The address every cloud provider serves instance credentials from.
-      # An allowlist that names it, or a `0.0.0.0/0` that swallows it, must
-      # not reach it — this is the check that keeps a consented egress to a
-      # private range from becoming a credential read.
-      for entry <- ["169.254.169.254", "169.254.0.0/16", "0.0.0.0/0"] do
-        e = egress_edge(%{domains: [], methods: [], schemes: [], private_ips: [entry]})
-
-        refute EdgeGuard.allows_private_ip?(e, {169, 254, 169, 254}),
-               "#{entry} reached cloud metadata"
-      end
-
-      wide = egress_edge(%{domains: [], methods: [], schemes: [], private_ips: ["::/0"]})
-      refute EdgeGuard.allows_private_ip?(wide, {0xFE80, 0, 0, 0, 0, 0, 0, 1})
-
-      # The metadata address behind NAT64, local-use NAT64 and 6to4.
-      for embedded <- [
-            {0x64, 0xFF9B, 0, 0, 0, 0, 0xA9FE, 0xA9FE},
-            {0x64, 0xFF9B, 1, 0, 0, 0, 0xA9FE, 0xA9FE},
-            {0x2002, 0xA9FE, 0xA9FE, 0, 0, 0, 0, 1}
-          ] do
-        refute EdgeGuard.allows_private_ip?(wide, embedded), inspect(embedded)
-      end
-
-      refute EdgeGuard.allows_private_ip?(wide, {0xFD00, 0x0EC2, 0, 0, 0, 0, 0, 0x0254})
-
-      everything =
-        egress_edge(%{domains: [], methods: [], schemes: [], private_ips: ["0.0.0.0/0"]})
-
-      refute EdgeGuard.allows_private_ip?(everything, {100, 100, 100, 200})
-      refute EdgeGuard.allows_private_ip?(everything, {192, 0, 0, 192})
-
-      assert EdgeGuard.allows_private_ip?(wide, {0x64, 0xFF9B, 0, 0, 0, 0, 0x0A00, 0x0001})
     end
   end
 

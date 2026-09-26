@@ -4,256 +4,83 @@
 defmodule Opus.HttpHandlerTest do
   use ExUnit.Case, async: true
 
-  # A test tagged :public_dns asks the machine's resolver for a public name
-  # and is excluded by default (`test_helper.exs`); `mix test --include
-  # public_dns` runs it. Every other name here resolves without the
-  # network: an address literal, or `localhost` from the hosts file.
+  # Every address a request here connects to is the one the scripted host
+  # pins it at, from the table each test sets: the engine resolves no name.
 
   alias Opus.HttpHandler
   alias Opus.Test.EdgeFixtures
   alias Opus.Test.ScriptedHost
 
+  defmodule Upstream do
+    @moduledoc false
+    # A loopback upstream that records each request it is sent and
+    # redirects `/redirect?to=<location>` to its `to`.
+    @behaviour Plug
+
+    import Plug.Conn
+
+    @impl true
+    def init(agent), do: agent
+
+    @impl true
+    def call(conn, agent) do
+      conn = fetch_query_params(conn)
+
+      Agent.update(
+        agent,
+        &(&1 ++ [%{path: conn.request_path, host: conn.host, headers: conn.req_headers}])
+      )
+
+      case conn.request_path do
+        "/redirect" ->
+          conn |> put_resp_header("location", conn.query_params["to"]) |> send_resp(302, "")
+
+        _ ->
+          send_resp(conn, 200, "reached " <> conn.request_path)
+      end
+    end
+  end
+
   # The host client of an attempt on a scripted host for `component_ref`,
-  # which takes every request from the rate and records every refusal.
-  defp attached_host(component_ref, _limits) do
-    ScriptedHost.attempt!(ScriptedHost.start!(), component_ref: component_ref).client
+  # which takes every request from the rate, pins every address from
+  # `pins` and records every refusal.
+  defp attached_host(component_ref, _limits, pins \\ %{}) do
+    host = ScriptedHost.start!()
+    ScriptedHost.pins(host, pins)
+    ScriptedHost.attempt!(host, component_ref: component_ref).client
   end
 
-  # ============================================================================
-  # private_ip?/1
-  # ============================================================================
+  # A scripted host pinning from `pins`, the client of an attempt on it,
+  # and a loopback upstream with the requests it saw.
+  defp upstream_and_host(pins) do
+    agent = start_supervised!({Agent, fn -> [] end})
 
-  describe "private_ip?/1" do
-    test "blocks loopback 127.0.0.1" do
-      assert HttpHandler.private_ip?({127, 0, 0, 1})
-    end
+    server =
+      start_supervised!(
+        {Bandit, plug: {Upstream, agent}, ip: {127, 0, 0, 1}, port: 0, startup_log: false}
+      )
 
-    test "blocks loopback range 127.x.x.x" do
-      assert HttpHandler.private_ip?({127, 255, 255, 255})
-      assert HttpHandler.private_ip?({127, 0, 0, 2})
-    end
+    {:ok, {_ip, port}} = ThousandIsland.listener_info(server)
+    host = ScriptedHost.start!()
+    test = self()
 
-    test "blocks 10.0.0.0/8 private range" do
-      assert HttpHandler.private_ip?({10, 0, 0, 1})
-      assert HttpHandler.private_ip?({10, 255, 255, 255})
-      assert HttpHandler.private_ip?({10, 10, 10, 10})
-    end
+    # Each pin the host answers is reported to the test, so a hop can be
+    # matched to the pin its redirect came from.
+    ScriptedHost.script(host, "egress_pin", fn args, _caller ->
+      answer = ScriptedHost.pin(pins, args, 30_000)
+      send(test, {:pinned, args, answer})
+      answer
+    end)
 
-    test "blocks 172.16.0.0/12 private range" do
-      assert HttpHandler.private_ip?({172, 16, 0, 1})
-      assert HttpHandler.private_ip?({172, 31, 255, 255})
-      assert HttpHandler.private_ip?({172, 20, 5, 3})
-    end
-
-    test "allows 172.15.x.x (outside /12 range)" do
-      refute HttpHandler.private_ip?({172, 15, 255, 255})
-    end
-
-    test "allows 172.32.x.x (outside /12 range)" do
-      refute HttpHandler.private_ip?({172, 32, 0, 1})
-    end
-
-    test "blocks 192.168.0.0/16 private range" do
-      assert HttpHandler.private_ip?({192, 168, 0, 1})
-      assert HttpHandler.private_ip?({192, 168, 255, 255})
-      assert HttpHandler.private_ip?({192, 168, 1, 100})
-    end
-
-    test "blocks 169.254.0.0/16 link-local / AWS metadata" do
-      assert HttpHandler.private_ip?({169, 254, 169, 254})
-      assert HttpHandler.private_ip?({169, 254, 0, 1})
-    end
-
-    test "blocks 0.0.0.0/8" do
-      assert HttpHandler.private_ip?({0, 0, 0, 0})
-      assert HttpHandler.private_ip?({0, 0, 0, 1})
-    end
-
-    test "allows public IP 8.8.8.8" do
-      refute HttpHandler.private_ip?({8, 8, 8, 8})
-    end
-
-    test "allows public IP 1.1.1.1" do
-      refute HttpHandler.private_ip?({1, 1, 1, 1})
-    end
-
-    test "allows public IP 93.184.216.34" do
-      refute HttpHandler.private_ip?({93, 184, 216, 34})
-    end
-
-    test "allows public IP 203.0.113.1" do
-      refute HttpHandler.private_ip?({203, 0, 113, 1})
-    end
+    attempt = ScriptedHost.attempt!(host, component_ref: "catalyst:local.redirects:1.0.0")
+    %{host: host, client: attempt.client, port: port, seen: fn -> Agent.get(agent, & &1) end}
   end
 
-  # ============================================================================
-  # private_ip?/1 - IPv6
-  # ============================================================================
-
-  describe "private_ip?/1 IPv6" do
-    test "blocks IPv6 loopback ::1" do
-      assert HttpHandler.private_ip?({0, 0, 0, 0, 0, 0, 0, 1})
-    end
-
-    test "blocks IPv6 unspecified ::" do
-      assert HttpHandler.private_ip?({0, 0, 0, 0, 0, 0, 0, 0})
-    end
-
-    test "blocks IPv6 unique local fc00::/7" do
-      assert HttpHandler.private_ip?({0xFC00, 0, 0, 0, 0, 0, 0, 1})
-      assert HttpHandler.private_ip?({0xFD00, 0, 0, 0, 0, 0, 0, 1})
-
-      assert HttpHandler.private_ip?(
-               {0xFDFF, 0xFFFF, 0xFFFF, 0xFFFF, 0xFFFF, 0xFFFF, 0xFFFF, 0xFFFF}
-             )
-    end
-
-    test "blocks IPv6 link-local fe80::/10" do
-      assert HttpHandler.private_ip?({0xFE80, 0, 0, 0, 0, 0, 0, 1})
-
-      assert HttpHandler.private_ip?(
-               {0xFEBF, 0xFFFF, 0xFFFF, 0xFFFF, 0xFFFF, 0xFFFF, 0xFFFF, 0xFFFF}
-             )
-    end
-
-    test "blocks IPv4-mapped IPv6 with private IPv4 (::ffff:127.0.0.1)" do
-      # ::ffff:127.0.0.1 = {0, 0, 0, 0, 0, 0xFFFF, 0x7F00, 0x0001}
-      assert HttpHandler.private_ip?({0, 0, 0, 0, 0, 0xFFFF, 0x7F00, 0x0001})
-    end
-
-    test "blocks IPv4-mapped IPv6 with private 10.x (::ffff:10.0.0.1)" do
-      # ::ffff:10.0.0.1 = {0, 0, 0, 0, 0, 0xFFFF, 0x0A00, 0x0001}
-      assert HttpHandler.private_ip?({0, 0, 0, 0, 0, 0xFFFF, 0x0A00, 0x0001})
-    end
-
-    test "allows IPv4-mapped IPv6 with public IPv4 (::ffff:8.8.8.8)" do
-      # ::ffff:8.8.8.8 = {0, 0, 0, 0, 0, 0xFFFF, 0x0808, 0x0808}
-      refute HttpHandler.private_ip?({0, 0, 0, 0, 0, 0xFFFF, 0x0808, 0x0808})
-    end
-
-    test "allows public IPv6 (2001:db8::1)" do
-      refute HttpHandler.private_ip?({0x2001, 0x0DB8, 0, 0, 0, 0, 0, 1})
-    end
-
-    test "allows public IPv6 (2606:4700::1)" do
-      refute HttpHandler.private_ip?({0x2606, 0x4700, 0, 0, 0, 0, 0, 1})
-    end
-
-    test "does not block fe00:: (outside fe80::/10)" do
-      refute HttpHandler.private_ip?({0xFE00, 0, 0, 0, 0, 0, 0, 1})
-    end
-
-    test "does not block fec0:: (outside fe80::/10)" do
-      refute HttpHandler.private_ip?({0xFEC0, 0, 0, 0, 0, 0, 0, 1})
-    end
-  end
-
-  # ============================================================================
-  # private_ip?/1 delegation — the range policy lives in Prima.Cidr
-  # ============================================================================
-
-  describe "private_ip?/1 delegates to Prima.Cidr.private_ip?/1" do
-    test "RFC1918 denial passes through Prima.Cidr" do
-      assert Prima.Cidr.private_ip?({10, 0, 0, 1})
-      assert HttpHandler.private_ip?({10, 0, 0, 1}) == Prima.Cidr.private_ip?({10, 0, 0, 1})
-    end
-
-    test "loopback denial passes through Prima.Cidr" do
-      assert Prima.Cidr.private_ip?({127, 0, 0, 1})
-      assert HttpHandler.private_ip?({127, 0, 0, 1}) == Prima.Cidr.private_ip?({127, 0, 0, 1})
-    end
-
-    test "link-local / metadata denial passes through Prima.Cidr" do
-      assert Prima.Cidr.private_ip?({169, 254, 169, 254})
-
-      assert HttpHandler.private_ip?({169, 254, 169, 254}) ==
-               Prima.Cidr.private_ip?({169, 254, 169, 254})
-    end
-
-    test "IPv4-mapped IPv6 denial passes through Prima.Cidr" do
-      # ::ffff:10.0.0.1
-      mapped = {0, 0, 0, 0, 0, 0xFFFF, 0x0A00, 0x0001}
-      assert Prima.Cidr.private_ip?(mapped)
-      assert HttpHandler.private_ip?(mapped) == Prima.Cidr.private_ip?(mapped)
-    end
-  end
-
-  # ============================================================================
-  # resolve_and_validate_ip/1
-  # ============================================================================
-
-  describe "resolve_and_validate_ip/1" do
-    test "admits a public address" do
-      assert {:ok, "203.0.113.1"} = HttpHandler.resolve_and_validate_ip("203.0.113.1")
-    end
-
-    test "blocks localhost resolution" do
-      assert {:error, :private_ip_blocked, msg} =
-               HttpHandler.resolve_and_validate_ip("localhost")
-
-      assert msg =~ "private IP"
-      assert msg =~ "127.0.0.1"
-    end
-
-    # This entry takes no resolver of its own, so the name that does not
-    # exist is the public resolver's answer.
-    @tag :public_dns
-    test "returns dns_error for non-existent domain" do
-      assert {:error, :dns_error, msg} =
-               HttpHandler.resolve_and_validate_ip("this-domain-does-not-exist-cyfr-test.invalid")
-
-      assert msg =~ "DNS resolution failed"
-    end
-  end
-
-  # ============================================================================
-  # resolve_and_validate_ip/2 with edge private_ips
-  # ============================================================================
-
-  describe "resolve_and_validate_ip/2 with allowed_private_ips" do
-    test "allows private IP when listed on the edge" do
-      edge = EdgeFixtures.edge(private_ips: ["127.0.0.1"])
-
-      assert {:ok, "127.0.0.1"} = HttpHandler.resolve_and_validate_ip("localhost", edge)
-    end
-
-    test "blocks private IP not in the edge allowlist" do
-      edge = EdgeFixtures.edge(private_ips: ["10.0.0.1"])
-
-      assert {:error, :private_ip_blocked, _msg} =
-               HttpHandler.resolve_and_validate_ip("localhost", edge)
-    end
-
-    test "allows private IP matching CIDR range on the edge" do
-      edge = EdgeFixtures.edge(private_ips: ["127.0.0.0/8"])
-
-      assert {:ok, "127.0.0.1"} = HttpHandler.resolve_and_validate_ip("localhost", edge)
-    end
-
-    test "always blocks 169.254.x.x even when explicitly allowed" do
-      edge = EdgeFixtures.edge(private_ips: ["169.254.0.0/16", "169.254.169.254"])
-
-      assert {:error, :private_ip_blocked, _msg} =
-               HttpHandler.resolve_and_validate_ip("169.254.169.254", edge)
-    end
-
-    test "empty allowed_private_ips preserves default blocking" do
-      edge = EdgeFixtures.edge(private_ips: [])
-
-      assert {:error, :private_ip_blocked, _msg} =
-               HttpHandler.resolve_and_validate_ip("localhost", edge)
-    end
-
-    test "nil edge preserves default blocking" do
-      assert {:error, :private_ip_blocked, _msg} =
-               HttpHandler.resolve_and_validate_ip("localhost", nil)
-    end
-
-    test "public IPs are unaffected by the allowlist" do
-      edge = EdgeFixtures.edge(private_ips: [])
-
-      assert {:ok, "203.0.113.1"} = HttpHandler.resolve_and_validate_ip("203.0.113.1", edge)
-    end
+  defp fetch(context, edge, url, headers \\ %{}) do
+    %{"method" => "GET", "url" => url, "headers" => headers, "body" => ""}
+    |> Jason.encode!()
+    |> HttpHandler.execute(edge, EdgeFixtures.limits(), context.client, "catalyst:local.x:1.0.0")
+    |> Jason.decode!()
   end
 
   # ============================================================================
@@ -409,13 +236,16 @@ defmodule Opus.HttpHandlerTest do
       assert decoded["error"]["message"] =~ "missing hostname"
     end
 
-    test "blocks request to private IP (localhost)", %{
+    test "a private address the host refuses to pin is refused", %{
       limits: limits,
-      host: host,
       component_ref: ref
     } do
-      # Use localhost in allowed domains so we get past the domain check
+      # Use localhost in allowed domains so we get past the domain check;
+      # the private-address policy is the host's, which refuses it here.
       edge = EdgeFixtures.edge(domains: ["localhost"], methods: ["GET", "POST"])
+      scripted = ScriptedHost.start!()
+      ScriptedHost.pins(scripted, %{"localhost" => :denied})
+      host = ScriptedHost.attempt!(scripted, component_ref: ref).client
 
       request =
         Jason.encode!(%{
@@ -429,7 +259,10 @@ defmodule Opus.HttpHandlerTest do
       decoded = Jason.decode!(result)
 
       assert decoded["error"]["type"] == "private_ip_blocked"
-      assert decoded["error"]["message"] =~ "127.0.0.1"
+      assert decoded["error"]["message"] =~ "localhost"
+
+      # The host recorded its own refusal; the engine records none of it.
+      assert ScriptedHost.requests(scripted, "record_denial") == []
     end
   end
 
@@ -734,121 +567,30 @@ defmodule Opus.HttpHandlerTest do
   end
 
   # ============================================================================
-  # SSRF Edge Cases — IPv4-mapped IPv6 and boundary conditions
-  # ============================================================================
-
-  describe "private_ip?/1 SSRF edge cases" do
-    # IPv4-mapped IPv6 addresses (::ffff:x.x.x.x)
-    # These are a common SSRF bypass vector where an attacker uses
-    # IPv6 notation to represent a private IPv4 address.
-
-    test "blocks IPv4-mapped IPv6 loopback ::ffff:127.0.0.1" do
-      assert HttpHandler.private_ip?({0, 0, 0, 0, 0, 0xFFFF, 0x7F00, 0x0001})
-    end
-
-    test "blocks IPv4-mapped IPv6 metadata endpoint ::ffff:169.254.169.254" do
-      # AWS metadata endpoint: 169.254.169.254 = {0xA9FE, 0xA9FE}
-      assert HttpHandler.private_ip?({0, 0, 0, 0, 0, 0xFFFF, 0xA9FE, 0xA9FE})
-    end
-
-    test "blocks IPv4-mapped IPv6 private 192.168.1.1" do
-      # 192.168.1.1 => high = (192 << 8) | 168 = 0xC0A8, low = (1 << 8) | 1 = 0x0101
-      assert HttpHandler.private_ip?({0, 0, 0, 0, 0, 0xFFFF, 0xC0A8, 0x0101})
-    end
-
-    test "blocks IPv4-mapped IPv6 private 172.16.0.1" do
-      # 172.16.0.1 => high = (172 << 8) | 16 = 0xAC10, low = (0 << 8) | 1 = 0x0001
-      assert HttpHandler.private_ip?({0, 0, 0, 0, 0, 0xFFFF, 0xAC10, 0x0001})
-    end
-
-    test "allows IPv4-mapped IPv6 with public IP ::ffff:1.1.1.1" do
-      # 1.1.1.1 => high = (1 << 8) | 1 = 0x0101, low = (1 << 8) | 1 = 0x0101
-      refute HttpHandler.private_ip?({0, 0, 0, 0, 0, 0xFFFF, 0x0101, 0x0101})
-    end
-
-    test "allows IPv4-mapped IPv6 with public IP ::ffff:93.184.216.34" do
-      # 93.184.216.34 => high = (93 << 8) | 184 = 0x5DB8, low = (216 << 8) | 34 = 0xD822
-      refute HttpHandler.private_ip?({0, 0, 0, 0, 0, 0xFFFF, 0x5DB8, 0xD822})
-    end
-
-    # Boundary conditions for private ranges
-
-    test "blocks 172.16.0.0 (start of /12 range)" do
-      assert HttpHandler.private_ip?({172, 16, 0, 0})
-    end
-
-    test "blocks 172.31.255.255 (end of /12 range)" do
-      assert HttpHandler.private_ip?({172, 31, 255, 255})
-    end
-
-    test "allows 172.32.0.0 (just outside /12 range)" do
-      refute HttpHandler.private_ip?({172, 32, 0, 0})
-    end
-
-    test "blocks 0.0.0.0 (current network)" do
-      assert HttpHandler.private_ip?({0, 0, 0, 0})
-    end
-
-    test "blocks 0.255.255.255 (end of 0.0.0.0/8)" do
-      assert HttpHandler.private_ip?({0, 255, 255, 255})
-    end
-
-    test "allows 1.0.0.0 (just outside 0.0.0.0/8)" do
-      refute HttpHandler.private_ip?({1, 0, 0, 0})
-    end
-
-    # IPv6 boundary edge cases
-
-    test "blocks fc00::1 (start of unique local)" do
-      assert HttpHandler.private_ip?({0xFC00, 0, 0, 0, 0, 0, 0, 1})
-    end
-
-    test "blocks fdff:ffff:... (end of unique local)" do
-      assert HttpHandler.private_ip?(
-               {0xFDFF, 0xFFFF, 0xFFFF, 0xFFFF, 0xFFFF, 0xFFFF, 0xFFFF, 0xFFFF}
-             )
-    end
-
-    test "allows fbff::1 (just before unique local range)" do
-      refute HttpHandler.private_ip?({0xFBFF, 0, 0, 0, 0, 0, 0, 1})
-    end
-
-    test "allows fe00::1 (between unique-local and link-local)" do
-      refute HttpHandler.private_ip?({0xFE00, 0, 0, 0, 0, 0, 0, 1})
-    end
-
-    test "blocks fe80::1 (start of link-local)" do
-      assert HttpHandler.private_ip?({0xFE80, 0, 0, 0, 0, 0, 0, 1})
-    end
-
-    test "blocks febf:ffff:... (end of link-local)" do
-      assert HttpHandler.private_ip?(
-               {0xFEBF, 0xFFFF, 0xFFFF, 0xFFFF, 0xFFFF, 0xFFFF, 0xFFFF, 0xFFFF}
-             )
-    end
-
-    test "allows fec0::1 (just after link-local range)" do
-      refute HttpHandler.private_ip?({0xFEC0, 0, 0, 0, 0, 0, 0, 1})
-    end
-  end
-
-  # ============================================================================
   # SSRF via URL parsing edge cases
   # ============================================================================
 
   describe "execute/5 SSRF URL edge cases" do
     setup do
-      # Edge that allows all domains (so we test IP-level blocking)
+      # Edge that allows all domains (so we test address-level blocking,
+      # which is the host's: it refuses each of these to the pin)
       edge = EdgeFixtures.edge(domains: ["*"], methods: ["GET"])
 
       limits = EdgeFixtures.limits(max_request_size: 1024, max_response_size: 4096)
 
       component_ref = "catalyst:local.ssrf-test:1.0.0"
 
+      pins = %{
+        "127.0.0.1" => :denied,
+        "0.0.0.0" => :denied,
+        "::1" => :denied,
+        "169.254.169.254" => :metadata
+      }
+
       {:ok,
        edge: edge,
        limits: limits,
-       host: attached_host(component_ref, limits),
+       host: attached_host(component_ref, limits, pins),
        component_ref: component_ref}
     end
 
@@ -910,6 +652,27 @@ defmodule Opus.HttpHandlerTest do
       decoded = Jason.decode!(result)
 
       assert decoded["error"]["type"] == "private_ip_blocked"
+      assert decoded["error"]["message"] =~ "metadata IP"
+    end
+
+    test "a metadata address the host pins is refused by the engine before any request", %{
+      edge: edge,
+      limits: limits,
+      component_ref: ref
+    } do
+      scripted = ScriptedHost.start!()
+      ScriptedHost.pins(scripted, %{"meta.example.com" => "169.254.169.254"})
+      host = ScriptedHost.attempt!(scripted, component_ref: ref).client
+
+      request = Jason.encode!(%{"method" => "GET", "url" => "http://meta.example.com/latest"})
+      decoded = request |> HttpHandler.execute(edge, limits, host, ref) |> Jason.decode!()
+
+      assert decoded["error"]["type"] == "private_ip_blocked"
+      assert decoded["error"]["message"] =~ "metadata IP 169.254.169.254 blocked"
+
+      # The engine's own refusal: the engine records it.
+      assert [%{args: %{"type" => "private_ip_blocked"}}] =
+               ScriptedHost.requests(scripted, "record_denial")
     end
 
     test "blocks [::1] IPv6 loopback", %{
@@ -950,6 +713,177 @@ defmodule Opus.HttpHandlerTest do
       decoded = Jason.decode!(result)
 
       assert decoded["error"]["type"] == "invalid_request"
+    end
+  end
+
+  # ============================================================================
+  # The address a request connects to
+  # ============================================================================
+
+  describe "the address a request connects to" do
+    test "is exactly the one the host pins, private or not, with the hostname kept" do
+      # The private-address policy is the host's: the upstream is on the
+      # loopback, which the host pins here, and the engine connects there.
+      context = upstream_and_host(%{"api.test" => "127.0.0.1"})
+      edge = EdgeFixtures.edge(domains: ["api.test"], methods: ["GET"])
+
+      assert %{"status" => 200, "body" => "reached /hello"} =
+               fetch(context, edge, "http://api.test:#{context.port}/hello")
+
+      assert [%{path: "/hello", host: "api.test", headers: headers}] = context.seen.()
+      assert {"host", "api.test:#{context.port}"} in headers
+      assert_received {:pinned, %{"purpose" => "fetch"}, {:ok, %{"ip" => "127.0.0.1"}}}
+    end
+
+    test "is a plain literal for a family 4 pin and a bracketed one for family 6" do
+      context =
+        upstream_and_host(%{"v4.test" => "203.0.113.10", "v6.test" => "2001:db8::30"})
+
+      edge = EdgeFixtures.edge(domains: ["v4.test", "v6.test"], methods: ["GET"])
+
+      for {url, expected} <- [
+            {"https://v4.test:8443/x", "https://203.0.113.10:8443/x"},
+            {"https://v6.test:8443/x", "https://[2001:db8::30]:8443/x"}
+          ] do
+        request = Jason.encode!(%{"method" => "GET", "url" => url})
+
+        assert {:ok, validated} =
+                 Opus.HttpRequestValidation.validate(
+                   request,
+                   edge,
+                   EdgeFixtures.limits(),
+                   context.client,
+                   "catalyst:local.x:1.0.0"
+                 )
+
+        assert validated.pin_req_opts[:url] == expected
+        assert validated.pin_req_opts[:connect_options][:hostname] == URI.parse(url).host
+      end
+    end
+  end
+
+  # ============================================================================
+  # A redirect the guest follows
+  # ============================================================================
+
+  describe "a redirect the guest follows" do
+    setup do
+      context =
+        upstream_and_host(%{
+          "api.test" => "127.0.0.1",
+          "other.test" => "127.0.0.1",
+          "login.other.test" => :redirect_credentials,
+          "meta.other.test" => "169.254.169.254"
+        })
+
+      edge =
+        EdgeFixtures.edge(domains: ["api.test", "other.test", "*.other.test"], methods: ["GET"])
+
+      credentials = %{
+        "Authorization" => "Bearer sk_test",
+        "Cookie" => "session=1",
+        "x-trace" => "t"
+      }
+
+      {:ok, context: context, edge: edge, credentials: credentials}
+    end
+
+    # The guest's first request, answered with a redirect to `to`, and the
+    # pin it was made under.
+    defp redirected(context, edge, credentials, to) do
+      origin = "http://api.test:#{context.port}"
+
+      assert %{"status" => 302, "headers" => %{"location" => ^to}} =
+               fetch(
+                 context,
+                 edge,
+                 origin <> "/redirect?to=" <> URI.encode_www_form(to),
+                 credentials
+               )
+
+      assert_received {:pinned, %{"purpose" => "fetch"}, {:ok, %{"id" => pin}}}
+      pin
+    end
+
+    test "a same-origin hop is pinned from the pin it came from and keeps the credentials", %{
+      context: context,
+      edge: edge,
+      credentials: credentials
+    } do
+      pin = redirected(context, edge, credentials, "/landing")
+      url = "http://api.test:#{context.port}/landing"
+
+      assert %{"status" => 200} = fetch(context, edge, url, credentials)
+
+      assert_received {:pinned, %{"purpose" => "redirect", "from" => ^pin, "url" => ^url},
+                       {:ok, _}}
+
+      assert [_redirect, %{path: "/landing", headers: headers}] = context.seen.()
+      assert {"authorization", "Bearer sk_test"} in headers
+      assert {"cookie", "session=1"} in headers
+      assert {"x-trace", "t"} in headers
+    end
+
+    test "a cross-origin hop goes without the guest's Authorization and Cookie", %{
+      context: context,
+      edge: edge,
+      credentials: credentials
+    } do
+      url = "http://other.test:#{context.port}/elsewhere"
+      pin = redirected(context, edge, credentials, url)
+
+      assert %{"status" => 200} = fetch(context, edge, url, credentials)
+      assert_received {:pinned, %{"purpose" => "redirect", "from" => ^pin}, {:ok, _}}
+
+      assert [_redirect, %{path: "/elsewhere", host: "other.test", headers: headers}] =
+               context.seen.()
+
+      refute List.keymember?(headers, "authorization", 0)
+      refute List.keymember?(headers, "cookie", 0)
+      assert {"x-trace", "t"} in headers
+
+      # The hop was the redirect's alone: the next request there is the
+      # guest's own, and carries what the guest sends.
+      assert %{"status" => 200} = fetch(context, edge, url, credentials)
+      assert %{headers: again} = List.last(context.seen.())
+      assert {"authorization", "Bearer sk_test"} in again
+    end
+
+    test "the host's refusal of a hop is the guest's typed error, and nothing is sent", %{
+      context: context,
+      edge: edge,
+      credentials: credentials
+    } do
+      url = "http://login.other.test:#{context.port}/session"
+      pin = redirected(context, edge, credentials, url)
+
+      assert %{"error" => %{"type" => "redirect_credentials", "message" => message}} =
+               fetch(context, edge, url, credentials)
+
+      assert message =~ "login.other.test"
+
+      assert_received {:pinned, %{"purpose" => "redirect", "from" => ^pin},
+                       {:error, :redirect_credentials}}
+
+      assert [%{path: "/redirect"}] = context.seen.()
+      # The host recorded its refusal; the engine records none of it.
+      assert ScriptedHost.requests(context.host, "record_denial") == []
+    end
+
+    test "a metadata target on a hop is refused before any request", %{
+      context: context,
+      edge: edge,
+      credentials: credentials
+    } do
+      url = "http://meta.other.test:#{context.port}/latest"
+      pin = redirected(context, edge, credentials, url)
+
+      assert %{"error" => %{"type" => "private_ip_blocked", "message" => message}} =
+               fetch(context, edge, url, credentials)
+
+      assert message =~ "metadata IP"
+      assert_received {:pinned, %{"purpose" => "redirect", "from" => ^pin}, {:ok, _}}
+      assert [%{path: "/redirect"}] = context.seen.()
     end
   end
 end

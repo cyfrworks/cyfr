@@ -82,10 +82,7 @@ defmodule Cyfr.EgressInventoryTest do
     "apps/sanctum/lib/sanctum/egress.ex" => :pinned_owner,
     # A guest's outbound target, pinned by the control plane under the
     # attempt's admitted authority (`egress_pin`), through the above.
-    "apps/cyfr/lib/crucible/host/egress.ex" => :guest_pin,
-    # The engine's own resolution of a guest's host, until the engine pins
-    # through `egress_pin` instead.
-    "apps/opus/lib/opus/egress.ex" => :engine_resolver
+    "apps/cyfr/lib/crucible/host/egress.ex" => :guest_pin
   }
 
   @resolver_patterns ["getaddr(", "Sanctum.Network.pin("]
