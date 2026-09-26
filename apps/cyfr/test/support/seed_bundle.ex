@@ -78,8 +78,8 @@ defmodule Cyfr.Test.SeedBundle do
   end
 
   @doc """
-  The newest shipped local unit of `kind`/`name` (`catalysts` or
-  `formulas`). Raises when that name is absent.
+  The newest shipped local unit of `kind`/`name` (`catalysts`,
+  `formulas` or `tinctures`). Raises when that name is absent.
   """
   @spec local_unit!(String.t(), String.t(), String.t()) :: unit()
   def local_unit!(seed \\ @repo_seed, kind, name)

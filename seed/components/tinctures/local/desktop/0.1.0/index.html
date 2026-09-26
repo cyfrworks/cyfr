@@ -1,0 +1,26 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Desktop</title>
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <main class="desktop">
+    <h1 class="visually-hidden">Desktop</h1>
+    <ol id="strip" class="strip" aria-label="Your apps"></ol>
+
+    <section class="add" aria-labelledby="add-heading">
+      <h2 id="add-heading" class="visually-hidden">Add an app</h2>
+      <label for="add-select">Add an app</label>
+      <select id="add-select"></select>
+      <button id="add-button" type="button">Add</button>
+    </section>
+
+    <p id="status" class="status" role="status" aria-live="polite"></p>
+  </main>
+
+  <script type="module" src="desktop.js"></script>
+</body>
+</html>

@@ -13,9 +13,31 @@ defmodule Aqua.Intents do
   adapter's decision (`PrismWeb.Nav.page?/1`): the engine names a page, it
   does not read the router. Resource-focus intents compute their target
   paths.
+
+  The vocabulary (`kinds/0`) moves the browser and nothing else: no
+  intent writes a person's state. Arranging the desktop is the `layout`
+  tool's `edit`, called through the gate like any tool.
   """
 
+  @kinds ~w(
+    ui.navigate
+    ui.overlay.open
+    ui.overlay.close
+    ui.overlay.focus_input
+    ui.copy_clipboard
+    ui.activity.focus
+    ui.execution.focus
+    ui.schedule.focus
+    ui.component.focus
+    ui.tincture.focus
+    ui.mcp_server.focus
+  )
+
   @allowed_overlay_states ~w(half full)
+
+  @doc "Every intent kind `validate/1` reads; any other is refused as unknown."
+  @spec kinds() :: [String.t()]
+  def kinds, do: @kinds
 
   # One optional colon: an external MCP server's tool is proposed as
 

@@ -142,7 +142,7 @@ outside it is refused.
 |---|---|
 | `frame` | `background`, `capabilities`, `placement` |
 | `frame.placement` | one of `float`, `desktop` |
-| `cards[]` | `buttons`, `image`, `list`, `name`, `number`, `stream`, `title` |
+| `cards[]` | `buttons`, `image`, `list`, `name`, `number`, `source`, `stream`, `title` |
 | `cards[].buttons[]` | `action`, `args`, `label` |
 | `streams[]` | `name`, `subject` |
 | `actions[]` | an operation name, `tool.action` |

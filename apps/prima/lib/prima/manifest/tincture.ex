@@ -14,26 +14,31 @@ defmodule Prima.Manifest.Tincture do
     * `cards` — each a `name`, a `title`, the projection fields its
       `number` and short `list` show, an `image` (a path inside the
       version), its `buttons` (a `label`, the system `action` it invokes
-      and fixed `args`) and the `stream` that refreshes it.
+      and fixed `args`), the `stream` that refreshes it and its `source`:
+      the invoke a refresh runs, a `component`, an `operation` and `args`
+      fixed at publish (at most 4096 bytes of canonical JSON), or none for
+      a static card.
     * `streams` — the streams the tincture may open, each a provider
       stream `name` and a `subject`: a literal, `"*"` for any subject the
       provider's grammar admits (`Prima.Provider.Stream`), or absent for a
-      stream that takes none.
+      stream that takes none or binds its subject to its holder.
     * `actions` — the system actions the tincture may invoke, by operation
       name (`tool.action`).
 
   `from_manifest/1` reads the blocks' shapes, the part every manifest
   write holds them to (`Prima.Manifest.validate/2`). The rules over them —
   which capability and placement names exist, that a card's button names a
-  declared action and its stream a declared stream — are the component
+  declared action, its stream a declared stream and its source a component
+  the tincture may invoke — are the component
   domain's (`Compendium.Tincture.Rules.validate_declaration/1`), which
   answers this struct.
 
   `digest/1` is taken over the canonical JSON of the four blocks
   (`Prima.JCS`): sets sorted and deduplicated, absent fields omitted,
-  cards in their declared order. The consent shape carries it as
-  `tincture_digest` (`Sanctum.Consent.ShapeDerivation`), and a stream
-  grant binds to it, so a version that declares more asks again.
+  cards in their declared order, each with its source. The consent shape
+  carries it as `tincture_digest` (`Sanctum.Consent.ShapeDerivation`), and
+  a stream grant binds to it, so a version that declares more, or a card
+  that runs something else, asks again.
   """
 
   defmodule Frame do
@@ -53,10 +58,22 @@ defmodule Prima.Manifest.Tincture do
     defstruct [:label, :action, args: %{}]
   end
 
+  defmodule Source do
+    @moduledoc """
+    What a card's refresh runs: an invoke of a component the tincture
+    declares, the shape `cyfr.invoke(ref, operation, args)` sends
+    (`Prima.TinctureWire`), with its arguments fixed at publish.
+    """
+    @type t :: %__MODULE__{component: String.t(), operation: String.t(), args: map()}
+    @enforce_keys [:component, :operation]
+    defstruct [:component, :operation, args: %{}]
+  end
+
   defmodule Card do
     @moduledoc """
     One card: its name and title, the projection fields its number and
-    short list show, its image, its buttons and the stream that refreshes it.
+    short list show, its image, its buttons, the stream that refreshes it
+    and the source a refresh runs (none for a static card).
     """
     @type t :: %__MODULE__{
             name: String.t(),
@@ -65,10 +82,20 @@ defmodule Prima.Manifest.Tincture do
             list: String.t() | nil,
             image: String.t() | nil,
             buttons: [Prima.Manifest.Tincture.Button.t()],
-            stream: String.t() | nil
+            stream: String.t() | nil,
+            source: Prima.Manifest.Tincture.Source.t() | nil
           }
     @enforce_keys [:name, :title]
-    defstruct [:name, :title, number: nil, list: nil, image: nil, buttons: [], stream: nil]
+    defstruct [
+      :name,
+      :title,
+      number: nil,
+      list: nil,
+      image: nil,
+      buttons: [],
+      stream: nil,
+      source: nil
+    ]
   end
 
   defmodule Stream do
@@ -94,7 +121,8 @@ defmodule Prima.Manifest.Tincture do
 
   @blocks ~w(frame cards streams actions)
   @frame_keys ~w(capabilities placement background)
-  @card_keys ~w(name title number list image buttons stream)
+  @card_keys ~w(name title number list image buttons stream source)
+  @source_keys ~w(component operation args)
   @button_keys ~w(label action args)
   @stream_keys ~w(name subject)
 
@@ -107,6 +135,7 @@ defmodule Prima.Manifest.Tincture do
   @max_capabilities 16
   @max_title 80
   @max_label 40
+  @max_source_args 4096
 
   @identifier ~r/\A[a-z][a-z0-9_]{0,62}\z/
   @operation ~r/\A[a-z][a-z0-9_-]{0,62}\.[a-z][a-z0-9_-]{0,62}\z/
@@ -201,7 +230,13 @@ defmodule Prima.Manifest.Tincture do
     |> put_present("list", card.list)
     |> put_present("image", card.image)
     |> put_present("stream", card.stream)
+    |> put_present("source", canonical_source(card.source))
   end
+
+  defp canonical_source(nil), do: nil
+
+  defp canonical_source(%Source{} = source),
+    do: %{"component" => source.component, "operation" => source.operation, "args" => source.args}
 
   defp put_present(map, _key, nil), do: map
   defp put_present(map, key, value), do: Map.put(map, key, value)
@@ -314,7 +349,8 @@ defmodule Prima.Manifest.Tincture do
          :ok <- optional_field(name, "list", Map.get(card, "list")),
          :ok <- card_image(name, Map.get(card, "image")),
          :ok <- card_stream(name, Map.get(card, "stream")),
-         {:ok, buttons} <- buttons(name, Map.get(card, "buttons")) do
+         {:ok, buttons} <- buttons(name, Map.get(card, "buttons")),
+         {:ok, source} <- source(name, Map.get(card, "source")) do
       {:ok,
        %Card{
          name: name,
@@ -323,7 +359,8 @@ defmodule Prima.Manifest.Tincture do
          list: Map.get(card, "list"),
          image: Map.get(card, "image"),
          buttons: buttons,
-         stream: Map.get(card, "stream")
+         stream: Map.get(card, "stream"),
+         source: source
        }}
     end
   end
@@ -380,6 +417,73 @@ defmodule Prima.Manifest.Tincture do
       do: :ok,
       else:
         refuse("tincture.cards #{name}: the stream must be a stream name, got #{show(stream)}")
+  end
+
+  # A source is an invoke as the wire reads one (`Prima.TinctureWire`), so
+  # a card runs nothing a frame's invoke could not ask for; its arguments
+  # are bounded by their canonical JSON.
+  defp source(_name, nil), do: {:ok, nil}
+
+  defp source(name, %{} = source) do
+    args = Map.get(source, "args", %{})
+
+    invoke =
+      Prima.TinctureWire.request(:invoke, %{
+        ref: Map.get(source, "component"),
+        operation: Map.get(source, "operation"),
+        args: args
+      })
+
+    with :ok <- source_keys(name, source),
+         {:ok, %{ref: component, operation: operation, args: args}} <- source_invoke(name, invoke),
+         :ok <- source_args(name, args) do
+      {:ok, %Source{component: component, operation: operation, args: args}}
+    end
+  end
+
+  defp source(name, _other),
+    do:
+      refuse(
+        "tincture.cards #{name}: the source must be an object of component, operation and args"
+      )
+
+  defp source_keys(name, source) do
+    case extra_keys(source, @source_keys) do
+      [] ->
+        :ok
+
+      extra ->
+        refuse(
+          "tincture.cards #{name}: the source declares unknown key(s): #{Enum.join(extra, ", ")}"
+        )
+    end
+  end
+
+  defp source_invoke(name, invoke) do
+    case Prima.TinctureWire.decode_request(:invoke, invoke) do
+      {:ok, decoded} ->
+        {:ok, decoded}
+
+      {:error, sentence} ->
+        refuse(
+          "tincture.cards #{name}: the source's #{String.replace_prefix(sentence, "ref ", "component ")}"
+        )
+    end
+  end
+
+  defp source_args(name, args) do
+    case Prima.JCS.encode(args) do
+      {:ok, bytes} when byte_size(bytes) <= @max_source_args ->
+        :ok
+
+      {:ok, _bytes} ->
+        refuse(
+          "tincture.cards #{name}: the source's args are at most #{@max_source_args} bytes of canonical JSON"
+        )
+
+      {:error, _} ->
+        refuse("tincture.cards #{name}: the source's args must be JSON")
+    end
   end
 
   defp buttons(_name, nil), do: {:ok, []}

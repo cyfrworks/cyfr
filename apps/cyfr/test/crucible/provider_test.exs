@@ -94,12 +94,12 @@ defmodule Crucible.ProviderTest do
                })
     end
 
-    test "returns 1 action-based tool" do
+    test "returns the execution and card tools, each action-based" do
       tools = Provider.tools()
-      assert length(tools) == 1
+      assert tools |> Enum.map(& &1.name) |> Enum.sort() == ["card", "execution"]
 
-      tool_names = Enum.map(tools, & &1.name)
-      assert "execution" in tool_names
+      card = Enum.find(tools, &(&1.name == "card"))
+      assert Enum.sort(card.input_schema["properties"]["action"]["enum"]) == ["press", "refresh"]
     end
 
     test "each tool has required schema fields" do

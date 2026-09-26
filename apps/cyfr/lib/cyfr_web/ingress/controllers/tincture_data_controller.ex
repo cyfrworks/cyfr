@@ -33,9 +33,11 @@ defmodule CyfrWeb.Ingress.TinctureDataController do
   ## What it may reach
 
   The tincture's declaration is the grant: an invoke names a component
-  among its `dependencies.static`, an action one of its `actions`, a
-  stream one of its `streams` with a subject that declaration takes.
-  Anything else is refused before dispatch. An admitted invoke runs
+  among its `dependencies.static` (`Compendium.tincture_invokes?/2`), an
+  action one of its `actions`, a stream one of its `streams` with a
+  subject that declaration takes — and none for a stream bound to its
+  holder, whose subject the gate supplies. Anything else is refused before
+  dispatch. An admitted invoke runs
   through the gate's `tincture` operation (`invoke_protected` for a frame,
   `invoke_public` for a public page) with the input
   `{"operation": …, "params": …}`; an action through the gate under the
@@ -355,7 +357,7 @@ defmodule CyfrWeb.Ingress.TinctureDataController do
   # ---------------------------------------------------------------------------
 
   defp granted(:invoke, %{ref: ref}, %{manifest: manifest}) do
-    if declared_component?(manifest, ref),
+    if Compendium.tincture_invokes?(manifest, ref),
       do: :ok,
       else: {:error, undeclared(:component)}
   end
@@ -365,9 +367,10 @@ defmodule CyfrWeb.Ingress.TinctureDataController do
   end
 
   defp granted(:stream_open, %{stream: name, subject: subject}, %{declaration: declaration}) do
-    if Enum.any?(declaration.streams, &(&1.name == name and takes?(&1.subject, subject))),
-      do: :ok,
-      else: {:error, undeclared(:stream)}
+    if Enum.any?(declaration.streams, &(&1.name == name and takes?(&1.subject, subject))) and
+         not (is_binary(subject) and holder_bound?(name)),
+       do: :ok,
+       else: {:error, undeclared(:stream)}
   end
 
   # A declared subject is a literal, `*` for any literal the provider's
@@ -378,36 +381,13 @@ defmodule CyfrWeb.Ingress.TinctureDataController do
   defp takes?(declared, subject),
     do: declared == Prima.Manifest.Tincture.any_subject() or declared == subject
 
-  # A component among the manifest's `dependencies.static`, by type,
-  # publisher and name, and by version where both name one.
-  defp declared_component?(manifest, ref) do
-    case Prima.ComponentRef.normalize_flexible(ref) do
-      {:ok, wanted} ->
-        manifest |> static_dependencies() |> Enum.any?(&same_component?(&1, wanted))
-
-      {:error, _} ->
-        false
+  # A stream bound to its holder takes no subject from the frame: the
+  # gate supplies the holder's own.
+  defp holder_bound?(name) do
+    case Prima.Provider.fetch_stream(Grimoire.streams(), name) do
+      {:ok, stream} -> Prima.Provider.Stream.holder_bound?(stream)
+      {:error, :undeclared_stream} -> false
     end
-  end
-
-  defp static_dependencies(%{"dependencies" => %{"static" => static}}) when is_list(static) do
-    for entry <- static,
-        ref = dependency_ref(entry),
-        is_binary(ref),
-        {:ok, parsed} <- [Prima.ComponentRef.normalize_flexible(ref)],
-        do: parsed
-  end
-
-  defp static_dependencies(_manifest), do: []
-
-  defp dependency_ref(ref) when is_binary(ref), do: ref
-  defp dependency_ref(%{"ref" => ref}), do: ref
-  defp dependency_ref(_entry), do: nil
-
-  defp same_component?(declared, wanted) do
-    {declared.type, declared.namespace, declared.name} ==
-      {wanted.type, wanted.namespace, wanted.name} and
-      (is_nil(declared.version) or is_nil(wanted.version) or declared.version == wanted.version)
   end
 
   # ---------------------------------------------------------------------------

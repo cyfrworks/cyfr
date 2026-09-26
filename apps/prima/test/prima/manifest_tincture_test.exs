@@ -13,7 +13,7 @@ defmodule Prima.ManifestTinctureTest do
 
   alias Prima.Manifest
   alias Prima.Manifest.Tincture
-  alias Prima.Manifest.Tincture.{Button, Card, Frame}
+  alias Prima.Manifest.Tincture.{Button, Card, Frame, Source}
 
   @declared %{
     "frame" => %{"capabilities" => ["pointer_lock", "fullscreen"], "placement" => "desktop"},
@@ -27,7 +27,12 @@ defmodule Prima.ManifestTinctureTest do
         "list" => "recent",
         "image" => "public/media/icon.svg",
         "buttons" => [%{"label" => "Refresh", "action" => "execution.list"}],
-        "stream" => "executions.deltas"
+        "stream" => "executions.deltas",
+        "source" => %{
+          "component" => "reagent:local.status",
+          "operation" => "summary",
+          "args" => %{"window" => "day"}
+        }
       }
     ]
   }
@@ -62,7 +67,12 @@ defmodule Prima.ManifestTinctureTest do
                number: "count",
                list: "recent",
                stream: "executions.deltas",
-               buttons: [%Button{label: "Refresh", action: "execution.list", args: %{}}]
+               buttons: [%Button{label: "Refresh", action: "execution.list", args: %{}}],
+               source: %Source{
+                 component: "reagent:local.status",
+                 operation: "summary",
+                 args: %{"window" => "day"}
+               }
              }
            ] = decl.cards
 
@@ -109,6 +119,47 @@ defmodule Prima.ManifestTinctureTest do
     assert sentence =~ "at most 80"
   end
 
+  describe "a card's source" do
+    defp with_source(source),
+      do: %{"cards" => [%{"name" => "s", "title" => "S", "source" => source}]}
+
+    test "is an invoke's shape, its args absent read as none" do
+      assert {:ok, %Tincture{cards: [%Card{source: source}]}} =
+               Tincture.from_manifest(
+                 manifest(with_source(%{"component" => "c:local.a", "operation" => "run"}))
+               )
+
+      assert source == %Source{component: "c:local.a", operation: "run", args: %{}}
+
+      assert {:ok, %Tincture{cards: [%Card{source: nil}]}} =
+               Tincture.from_manifest(manifest(%{"cards" => [%{"name" => "s", "title" => "S"}]}))
+    end
+
+    test "is refused when it is not an invoke, with a sentence naming the card" do
+      for source <- [
+            "c:local.a",
+            %{"operation" => "run"},
+            %{"component" => "not a ref", "operation" => "run"},
+            %{"component" => "c:local.a", "operation" => "Run It"},
+            %{"component" => "c:local.a", "operation" => "run", "args" => ["x"]},
+            %{"component" => "c:local.a", "operation" => "run", "params" => %{}}
+          ] do
+        assert refused(with_source(source)) =~ "tincture.cards s: "
+      end
+    end
+
+    test "holds its args to 4096 bytes of canonical JSON" do
+      fits = %{"k" => String.duplicate("a", 4096 - byte_size(~s({"k":""})))}
+      over = %{"k" => String.duplicate("a", 4097 - byte_size(~s({"k":""})))}
+      source = %{"component" => "c:local.a", "operation" => "run"}
+
+      assert {:ok, _} =
+               Tincture.from_manifest(manifest(with_source(Map.put(source, "args", fits))))
+
+      assert refused(with_source(Map.put(source, "args", over))) =~ "at most 4096 bytes"
+    end
+  end
+
   test "the digest is the same for declarations that mean the same thing" do
     {:ok, one} = Tincture.from_manifest(manifest(@declared))
 
@@ -139,7 +190,14 @@ defmodule Prima.ManifestTinctureTest do
           put_in(@declared, ["frame", "background"], true),
           Map.update!(@declared, "actions", &["records.delete" | &1]),
           Map.update!(@declared, "streams", &[%{"name" => "builds.progress"} | &1]),
-          put_in(@declared, ["streams"], [%{"name" => "executions.deltas", "subject" => "exec_1"}])
+          put_in(@declared, ["streams"], [%{"name" => "executions.deltas", "subject" => "exec_1"}]),
+          update_in(@declared, ["cards"], fn [card] ->
+            [put_in(card, ["source", "args", "window"], "week")]
+          end),
+          update_in(@declared, ["cards"], fn [card] ->
+            [put_in(card, ["source", "component"], "reagent:local.other")]
+          end),
+          update_in(@declared, ["cards"], fn [card] -> [Map.delete(card, "source")] end)
         ] do
       {:ok, wider} = Tincture.from_manifest(manifest(more))
       refute Tincture.digest(wider) == digest

@@ -93,6 +93,20 @@ defmodule CyfrWeb.Ingress.TinctureDataControllerTest do
 
   defp frame_id, do: "frm_data_#{System.unique_integer([:positive])}"
 
+  # Another signed-in person of the same athanor.
+  defp person!(namespace) do
+    issuer =
+      Sanctum.TestContext.issuer!(%{
+        Sanctum.TestContext.local()
+        | user_id: "local|local|#{namespace}",
+          namespace: namespace
+      })
+
+    {:ok, session} = Sanctum.TestContext.create_session(issuer)
+    {:ok, ctx} = Sanctum.Caller.establish(session.token)
+    ctx
+  end
+
   # The frame the shell would open for `name`: its credential and row id.
   defp frame!(source, name, digest, revision \\ 0) do
     reference = %{publisher: "local", name: name, version: @version}
@@ -547,6 +561,64 @@ defmodule CyfrWeb.Ingress.TinctureDataControllerTest do
                  where: d.tool == "stream:mcp_servers.changes" and d.admission == "admitted"
                )
              )
+    end
+
+    test "bound to its holder is each person's own, and a named subject is refused",
+         %{source: source} do
+      digest =
+        tincture!(source, "cards-dash", %{"streams" => [%{"name" => "cards.refreshed"}]}, [])
+
+      other = person!("bystander")
+      mine = frame!(source, "cards-dash", digest)
+      theirs = frame!(other, "cards-dash", digest)
+
+      # A subject from the frame is never taken, the holder's own included.
+      for subject <- [other.user_id, source.user_id] do
+        body = TinctureWire.request(:stream_open, %{stream: "cards.refreshed", subject: subject})
+        conn = data(:stream_open, body, bearer: mine.bearer)
+        assert conn.status == 403
+        assert %{message: message} = refused(conn, :stream_open)
+        assert message =~ "does not declare that stream"
+      end
+
+      body = TinctureWire.request(:stream_open, %{stream: "cards.refreshed", subject: nil})
+      my_stream = Task.async(fn -> data(:stream_open, body, bearer: mine.bearer) end)
+      their_stream = Task.async(fn -> data(:stream_open, body, bearer: theirs.bearer) end)
+
+      actor = Sanctum.Context.actor(source)
+      my_topic = Cyfr.Bus.cards(actor, source.user_id)
+      their_topic = Cyfr.Bus.cards(actor, other.user_id)
+      wait_until(fn -> Registry.lookup(Cyfr.PubSub, my_topic) != [] end)
+      wait_until(fn -> Registry.lookup(Cyfr.PubSub, their_topic) != [] end)
+
+      refreshed =
+        Cyfr.Bus.CardRefreshed.new(actor, %{
+          tincture: "tincture:local.status",
+          card: "runs",
+          slot: "s0",
+          user_id: source.user_id,
+          data: %{"name" => "runs", "title" => "Runs", "number" => 3}
+        })
+
+      :ok = Cyfr.Bus.broadcast(actor, my_topic, refreshed)
+
+      for {frame, ctx} <- [{mine, source}, {theirs, other}],
+          do: {:ok, _} = TinctureAuth.revoke_frame(ctx, frame.id)
+
+      mine_body = Task.await(my_stream, 10_000).resp_body
+      theirs_body = Task.await(their_stream, 10_000).resp_body
+
+      assert [
+               %{
+                 event: "cards.refreshed",
+                 data: %{"slot" => "s0", "card" => "runs", "data" => %{"number" => 3}} = event
+               }
+               | _closing
+             ] = TinctureWire.decode_stream(mine_body)
+
+      # The projection carries no person.
+      refute Map.has_key?(event, "user_id")
+      refute Enum.any?(TinctureWire.decode_stream(theirs_body), &(&1.event == "cards.refreshed"))
     end
 
     test "holds one of its frame's open-stream slots, released when it closes",

@@ -13,7 +13,10 @@ defmodule Grimoire.Streams do
   action with the default declaration is (`Grimoire.Catalog.authorize_stream/2`):
   not a guest plane, a member that holds its control plane, a signed-in
   caller, an athanor to scope the grant to, a subject the stream's
-  anchored grammar admits, and a credential that has not ended.
+  anchored grammar admits, and a credential that has not ended. A
+  holder-bound stream (`bind: :holder`) takes the holder's own user id as
+  its subject: supplied when the open names none, and any other refused as
+  a subject the stream does not take.
 
   Every open is one decision (`Grimoire.Decisions`) named
   `stream:<name>`, whose request-log row's method is `streams/open`,
@@ -76,13 +79,15 @@ defmodule Grimoire.Streams do
 
   # The checks, in order: the plane and the member's slot before anything
   # is read, the declaration, the caller, the tenant the grant is scoped
-  # to, the subject, and the credential's remaining life.
+  # to, the holder a holder-bound stream binds its subject to, the
+  # subject, and the credential's remaining life.
   defp admit(ctx, name, tool, subject, now) do
     with :ok <- external_plane(ctx, tool),
          :ok <- control_plane(),
          {:ok, {_provider, stream}} <- declared(name),
          :ok <- Catalog.authorize_stream(tool, ctx),
          :ok <- tenant(ctx),
+         {:ok, subject} <- bound_subject(stream, ctx, subject),
          :ok <- subject(stream, subject),
          {:ok, deadline} <- deadline(stream, ctx, now) do
       {:ok,
@@ -120,11 +125,37 @@ defmodule Grimoire.Streams do
 
   defp tenant(%Context{}), do: {:error, :no_athanor}
 
+  # A holder-bound stream's subject is the holder's own user id: supplied
+  # when the open names none, and refused when it names anyone else's, so
+  # one person's topic is never granted to another.
+  defp bound_subject(%Prima.Provider.Stream{bind: :holder} = stream, ctx, subject) do
+    case {ctx.user_id, subject} do
+      {holder, _subject} when not is_binary(holder) or holder == "" ->
+        {:error,
+         {:invalid_argument,
+          "The stream #{stream.name} is delivered to its holder, and this caller names no person"}}
+
+      {holder, nil} ->
+        {:ok, holder}
+
+      {holder, holder} ->
+        {:ok, holder}
+
+      {_holder, _another} ->
+        {:error, subject_refusal(stream)}
+    end
+  end
+
+  defp bound_subject(%Prima.Provider.Stream{}, _ctx, subject), do: {:ok, subject}
+
   defp subject(stream, subject) do
     if Prima.Provider.Stream.admits?(stream, subject),
       do: :ok,
-      else: {:error, {:invalid_argument, "The stream #{stream.name} does not take that subject"}}
+      else: {:error, subject_refusal(stream)}
   end
+
+  defp subject_refusal(stream),
+    do: {:invalid_argument, "The stream #{stream.name} does not take that subject"}
 
   # Never later than the stream's bound, nor the credential the open was
   # made under; a credential already ended opens nothing.

@@ -130,6 +130,13 @@ defmodule Compendium do
   defdelegate tincture_declaration(manifest), to: Rules, as: :validate_declaration
 
   @doc """
+  Whether a tincture's manifest may invoke a component, the rule a frame's
+  invoke and a card's source share (`Compendium.Tincture.Rules.invokes?/2`).
+  """
+  @spec tincture_invokes?(term(), term()) :: boolean()
+  defdelegate tincture_invokes?(manifest, ref), to: Rules, as: :invokes?
+
+  @doc """
   Whether every stream a declaration opens is one a provider declares, with
   a subject it takes (`Compendium.Tincture.Rules.check_streams/2`).
   """

@@ -98,6 +98,19 @@ defmodule Prima.ProviderTest do
     refute ProviderStream.valid?(%{name: "executions.deltas"})
   end
 
+  test "a stream binds its subject to its holder, or to nothing, and only with a grammar" do
+    refute ProviderStream.holder_bound?(@deltas)
+    held = %{@deltas | bind: :holder}
+    assert ProviderStream.valid?(held)
+    assert ProviderStream.holder_bound?(held)
+
+    # A holder's topic is one of many, so a holder-bound stream has a
+    # subject grammar; any other binding is refused.
+    refute ProviderStream.valid?(%{held | subject: nil})
+    refute ProviderStream.valid?(%{@deltas | bind: :anyone})
+    refute ProviderStream.valid?(%{@deltas | bind: "holder"})
+  end
+
   test "a stream no provider declares is refused by name" do
     declared = Provider.streams(Streaming) ++ Provider.streams(Silent)
 

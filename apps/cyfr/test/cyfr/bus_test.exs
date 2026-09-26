@@ -31,7 +31,12 @@ defmodule Cyfr.BusTest do
     :notify
   ]
 
-  @tenant_2 [execution_events: "exec_1", thread: "thr_1", progress: {:build, "b1"}]
+  @tenant_2 [
+    execution_events: "exec_1",
+    thread: "thr_1",
+    progress: {:build, "b1"},
+    cards: "usr_1"
+  ]
 
   describe "the tenant prefix" do
     test "is tenant:<athanor_id>:, taken from the actor" do
@@ -334,6 +339,14 @@ defmodule Cyfr.BusTest do
 
       assert Bus.granted_topic(actor("ath_1"), grant(:execution_events, "exec_1")) ==
                Bus.execution_events(actor("ath_1"), "exec_1")
+    end
+
+    test "for a person's cards is that person's own topic, and no other person's" do
+      mine = Bus.granted_topic(actor("ath_1"), grant(:cards, "usr_a"))
+      assert mine == Bus.cards(actor("ath_1"), "usr_a")
+      refute mine == Bus.cards(actor("ath_1"), "usr_b")
+      assert Bus.grantable?(:cards, true)
+      refute Bus.grantable?(:cards, false)
     end
 
     test "is the holder's own, so the bus's tenant check admits it and no other's" do

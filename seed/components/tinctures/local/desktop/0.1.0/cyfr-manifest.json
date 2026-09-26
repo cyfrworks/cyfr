@@ -1,0 +1,27 @@
+{
+  "name": "desktop",
+  "type": "tincture",
+  "version": "0.1.0",
+  "publisher": "local",
+  "description": "Your desktop: the apps you placed, as icons and cards, arranged as you like.",
+  "tags": ["desktop", "system"],
+  "category": "utility",
+  "tincture": {
+    "entry": "index.html",
+    "icon": "desktop",
+    "tagline": "Your apps as icons and cards",
+    "frame": {
+      "placement": "desktop"
+    },
+    "actions": [
+      "layout.get",
+      "layout.edit",
+      "card.refresh",
+      "card.press",
+      "component.list"
+    ],
+    "streams": [
+      {"name": "cards.refreshed"}
+    ]
+  }
+}

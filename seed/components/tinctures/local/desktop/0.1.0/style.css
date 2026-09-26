@@ -1,0 +1,209 @@
+/* The shipped desktop: a wallpaper and a strip of slots. */
+
+*, *::before, *::after {
+  box-sizing: border-box;
+}
+
+:root {
+  --wall-1: #1b2440;
+  --wall-2: #2d4a6b;
+  --surface: rgba(255, 255, 255, 0.1);
+  --surface-strong: rgba(255, 255, 255, 0.18);
+  --border: rgba(255, 255, 255, 0.22);
+  --text: #f4f6fb;
+  --text-muted: rgba(244, 246, 251, 0.72);
+  --focus: #ffd166;
+}
+
+html, body {
+  margin: 0;
+  min-height: 100%;
+}
+
+body {
+  font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
+  color: var(--text);
+  background: linear-gradient(160deg, var(--wall-1), var(--wall-2));
+  background-attachment: fixed;
+}
+
+.desktop {
+  min-height: 100vh;
+  padding: 24px;
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+}
+
+.visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+}
+
+.strip {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 16px;
+  align-items: flex-start;
+}
+
+.slot {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  border-radius: 14px;
+}
+
+.slot-icon {
+  width: 104px;
+}
+
+.slot-card {
+  width: 240px;
+}
+
+.icon {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  padding: 10px 4px;
+  border: 1px solid transparent;
+  border-radius: 14px;
+  background: none;
+  color: var(--text);
+  cursor: pointer;
+  font: inherit;
+}
+
+.icon:hover {
+  background: var(--surface);
+}
+
+.icon-glyph {
+  display: grid;
+  place-items: center;
+  width: 56px;
+  height: 56px;
+  border-radius: 16px;
+  background: var(--surface-strong);
+  font-size: 24px;
+  font-weight: 600;
+}
+
+.icon-label {
+  font-size: 13px;
+  text-align: center;
+  overflow-wrap: anywhere;
+}
+
+.card, .placeholder {
+  padding: 14px;
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  background: var(--surface);
+}
+
+.card-title {
+  margin: 0 0 8px;
+  font-size: 15px;
+}
+
+.card-number {
+  margin: 0 0 8px;
+  font-size: 28px;
+  font-weight: 700;
+}
+
+.card-list {
+  margin: 0 0 8px;
+  padding-left: 18px;
+  font-size: 13px;
+  color: var(--text-muted);
+}
+
+.card-image {
+  display: grid;
+  place-items: center;
+  width: 40px;
+  height: 40px;
+  margin-bottom: 8px;
+  border-radius: 10px;
+  background: var(--surface-strong);
+}
+
+.card-note {
+  margin: 0 0 8px;
+  font-size: 13px;
+  color: var(--text-muted);
+}
+
+.card-buttons, .controls {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.placeholder {
+  opacity: 0.7;
+}
+
+.placeholder-title {
+  margin: 0;
+  font-size: 13px;
+  overflow-wrap: anywhere;
+}
+
+.placeholder-note {
+  margin: 4px 0 0;
+  font-size: 12px;
+  color: var(--text-muted);
+}
+
+.control, .add button, .add select {
+  padding: 4px 10px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface);
+  color: var(--text);
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.control:disabled, .add button:disabled, .add select:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+
+.add {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+  font-size: 13px;
+}
+
+.add select option {
+  color: #111;
+}
+
+.status {
+  min-height: 1.2em;
+  margin: 0;
+  font-size: 13px;
+  color: var(--text-muted);
+}
+
+:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: 2px;
+}
