@@ -16,13 +16,14 @@ defmodule Prima.MacEnvelope do
       values in the envelope's order, then the hex SHA-256 of the raw body,
       one per line.
     * **A header** (`header/4`) carries the signature as
-      `v1 kind=<kind> name=value … mac=<mac>`. `parse/2` reads it back and
-      `verify/5` checks its MAC in constant time. An envelope with
-      `body_hash_in_header` also names the body's hex SHA-256 in the header
-      (`body=<hex>`, before `mac=`), so a receiver can verify the MAC before
-      it reads the body (`verify_header/4`) and then check the body against
-      that hash (`verify_body/3`); `parse/2` answers it as the message's
-      `:body_hash`.
+      `v1 kind=<kind> name=value … mac=<mac>`. `parse/2` reads it back,
+      refusing another version token (`v2`) as `unknown_version` before
+      anything else, and `verify/5` checks its MAC in constant time. An
+      envelope with `body_hash_in_header` also names the body's hex SHA-256
+      in the header (`body=<hex>`, before `mac=`), so a receiver can verify
+      the MAC before it reads the body (`verify_header/4`) and then check
+      the body against that hash (`verify_body/3`); `parse/2` answers it as
+      the message's `:body_hash`.
     * **A sealed value** (`seal/6`) is `base64url(iv ‖ tag ‖ ciphertext)`,
       unpadded, under AES-256-GCM, its additional data a label followed by
       field values one per line; `open/5` opens it under the same label and
@@ -60,6 +61,8 @@ defmodule Prima.MacEnvelope do
   @type invalid_field :: {:invalid_field, atom()}
 
   @version "v1"
+  # What a version token of any release spells: `v` and a decimal number.
+  @version_token ~r/\Av(0|[1-9][0-9]*)\z/
   @text ~r/\A[\x21-\x7E]{1,256}\z/
   @decimal ~r/\A(0|[1-9][0-9]*)\z/
   # 2^53 − 1: every integer up to it is exact in an IEEE 754 double.
@@ -137,12 +140,32 @@ defmodule Prima.MacEnvelope do
   `body_hash_in_header`, and `mac`, in any order and nothing else. A name is
   everything before a token's first `=`; a field value and the MAC are valid
   field text, an integer field's value is its decimal spelling, and `body`
-  is 64 lowercase hexadecimal digits. Anything else is
-  `{:error, :malformed}`. Integer fields come back as integers, and the body
-  hash as the message's `:body_hash`.
+  is 64 lowercase hexadecimal digits. Integer fields come back as integers,
+  and the body hash as the message's `:body_hash`.
+
+  The version is read first: a header whose first token (the text before
+  its first space) is a version token other than `v1` — `v` and a decimal
+  number without leading zeros, such as `v2` — is
+  `{:error, :unknown_version}`, so a peer at another version is told so
+  rather than that it spoke nonsense. Anything else that is not a `v1`
+  header, a first token that spells no version (`V1`, `Bearer`, nothing)
+  included, is `{:error, :malformed}`.
   """
-  @spec parse(t(), term()) :: {:ok, message(), String.t()} | {:error, :malformed}
+  @spec parse(t(), term()) ::
+          {:ok, message(), String.t()} | {:error, :unknown_version | :malformed}
   def parse(%__MODULE__{} = envelope, header) when is_binary(header) do
+    [token | _rest] = String.split(header, " ", parts: 2)
+
+    cond do
+      token == @version -> parse_v1(envelope, header)
+      Regex.match?(@version_token, token) -> {:error, :unknown_version}
+      true -> {:error, :malformed}
+    end
+  end
+
+  def parse(%__MODULE__{}, _header), do: {:error, :malformed}
+
+  defp parse_v1(envelope, header) do
     with [@version | tokens] <- String.split(header, " "),
          {:ok, pairs} <- pairs(tokens),
          true <- Enum.sort(Map.keys(pairs)) == expected_names(envelope),
@@ -154,8 +177,6 @@ defmodule Prima.MacEnvelope do
       _ -> {:error, :malformed}
     end
   end
-
-  def parse(%__MODULE__{}, _header), do: {:error, :malformed}
 
   @doc """
   Whether `mac` is the signature of `message` and `body` with `key`,

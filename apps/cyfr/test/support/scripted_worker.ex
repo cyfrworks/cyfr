@@ -419,6 +419,7 @@ defmodule Cyfr.Test.ScriptedWorker do
 
       body =
         Jason.encode!(%{
+          "v" => 1,
           "op" => "runner_exited",
           "args" => %{
             "member" => runner.member,
@@ -623,7 +624,7 @@ defmodule Cyfr.Test.ScriptedWorker do
   end
 
   defp host(runner, op, args) do
-    body = Jason.encode!(%{"op" => op, "args" => args})
+    body = Jason.encode!(%{"v" => 1, "op" => op, "args" => args})
     runner |> header(body) |> Host.call(body) |> Jason.decode!()
   end
 

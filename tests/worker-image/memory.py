@@ -374,7 +374,7 @@ def test_runner_bound(stack, plane):
     # children take their memory, then let complete.
     sibling = plane.mint(stack.boot, "reagent", ECHO_REF, wasm(ECHO), {"sibling": "alive"}, "ath_mem_sibling", 30_000)
     release_sibling = held(plane, "attach", sibling["execution_id"])
-    expect(stack.start(sibling)[1] == {"ok": True}, "a sibling subtree starts and is held at its attach")
+    expect(stack.start(sibling)[1] == {"v": 1, "ok": True}, "a sibling subtree starts and is held at its attach")
     sibling_runner = attached_runner(stack, plane, sibling)
 
     # The formula spawns its children, each admitted for its runner, and
@@ -398,7 +398,7 @@ def bound_case(stack, plane, bound, sibling, release_sibling, sibling_runner, fo
     # emit for seconds, not for a runner's boot.
     release_formula = held(plane, "fetch_artifact", formula["execution_id"])
     try:
-        expect(stack.start(formula)[1] == {"ok": True}, f"a formula that spawns {CHILDREN} children and awaits them all starts")
+        expect(stack.start(formula)[1] == {"v": 1, "ok": True}, f"a formula that spawns {CHILDREN} children and awaits them all starts")
         runner = attached_runner(stack, plane, formula)
         plane.wait_seen("fetch_artifact", formula["execution_id"], 30)
         expect(runner["uid"] != sibling_runner["uid"], "the formula and the sibling run under different uids",
@@ -573,7 +573,7 @@ def reuse_uid(stack, plane, hostile, tries=12):
             if process["uid"] == hostile["uid"]:
                 return {**process, "group": wait_until(lambda: read_group(stack, process["uid"]), 10, "the new runner's group")}
         attempt = plane.mint(stack.boot, "reagent", ECHO_REF, wasm(ECHO), {"cycle": n}, f"ath_mem_cycle_{n}", 30_000)
-        expect(stack.start(attempt)[1] == {"ok": True}, f"a subtree of another athanor starts ({n + 1})")
+        expect(stack.start(attempt)[1] == {"v": 1, "ok": True}, f"a subtree of another athanor starts ({n + 1})")
         terminal(plane, attempt["execution_id"], BOOT_S)
         time.sleep(stack.idle_ttl_ms / 1000 + 0.5)
     sys.exit(f"FAIL: uid {hostile['uid']} was not given to a runner again within {tries} subtrees")
@@ -729,7 +729,7 @@ def run_workload(stack, plane, label, component, input_, children, athanor):
     if children:
         admit_children(plane, stack, attempt, children)
     code, answer = stack.start(attempt)
-    expect(code == 200 and answer == {"ok": True}, f"{label}: starts", answer)
+    expect(code == 200 and answer == {"v": 1, "ok": True}, f"{label}: starts", answer)
     runner = attached_runner(stack, plane, attempt)
     closed = terminal(plane, attempt["execution_id"], 180)
     measured = read_group(stack, runner["uid"])

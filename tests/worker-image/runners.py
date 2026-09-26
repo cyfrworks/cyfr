@@ -183,7 +183,7 @@ def test_spinning_guest_killed_at_bound(stack, plane):
     timeout_ms = 2_000
     attempt = plane.mint(stack.boot, "reagent", REFS["spin"], WASM["spin"], {"spin": True}, "ath_spin", timeout_ms)
     code, answer = stack.start(attempt)
-    expect(code == 200 and answer == {"ok": True}, "a spinning guest with a 2 s deadline starts", answer)
+    expect(code == 200 and answer == {"v": 1, "ok": True}, "a spinning guest with a 2 s deadline starts", answer)
     runner = attached_runner(stack, plane, attempt)
     share = stack.cpu_share(1.0)
     expect(share >= 0.5, f"the guest spins: the container uses {share:.2f} of a CPU over 1 s", share)
@@ -225,7 +225,7 @@ def test_spinning_guest_killed_at_bound(stack, plane):
 def test_sibling_survives(stack, plane):
     spinner = plane.mint(stack.boot, "reagent", REFS["spin"], WASM["spin"], {"spin": True}, "ath_sib_spin", 2_000)
     sibling = plane.mint(stack.boot, "reagent", REFS["echo"], WASM["echo"], {"sibling": "alive"}, "ath_sib_echo", 10_000)
-    expect(stack.start(spinner)[1] == {"ok": True} and stack.start(sibling)[1] == {"ok": True},
+    expect(stack.start(spinner)[1] == {"v": 1, "ok": True} and stack.start(sibling)[1] == {"v": 1, "ok": True},
            "a spinning guest and a sibling echo start in two runners")
     spin_runner = attached_runner(stack, plane, spinner)
     echo_runner = attached_runner(stack, plane, sibling)
@@ -245,7 +245,7 @@ def test_sibling_survives(stack, plane):
 
 def test_service_death(stack, plane):
     attempt = plane.mint(stack.boot, "reagent", REFS["spin"], WASM["spin"], {"spin": True}, "ath_death", 30_000)
-    expect(stack.start(attempt)[1] == {"ok": True}, "a guest with a long deadline starts")
+    expect(stack.start(attempt)[1] == {"v": 1, "ok": True}, "a guest with a long deadline starts")
     runner = attached_runner(stack, plane, attempt)
     others = [r for r in stack.runner_processes() if r["runner"] != runner["runner"]]
     old_boot, old_homes = stack.boot, stack.homes()
@@ -268,7 +268,7 @@ def test_service_death(stack, plane):
     stack.wait_pool()
     expect(stack.attempts() == [], "settlement: the new boot holds no attempt", stack.attempts())
     code, answer = stack.kill(attempt["execution_id"])
-    expect(answer == {"error": "not_found"}, "settlement: the new boot never ran the old attempt (its kill is not found)", answer)
+    expect(answer == {"v": 1, "error": "not_found"}, "settlement: the new boot never ran the old attempt (its kill is not found)", answer)
     time.sleep(2)
     expect(since(stack, plane, attempt["execution_id"], t_cut) == []
            and [r for r in plane.seen("runner_exited") if r["t"] > t_cut] == [],
@@ -283,7 +283,7 @@ def test_service_death(stack, plane):
 def test_control_plane_cut(stack, plane):
     timeout_ms = 6_000
     attempt = plane.mint(stack.boot, "reagent", REFS["spin"], WASM["spin"], {"spin": True}, "ath_cut", timeout_ms)
-    expect(stack.start(attempt)[1] == {"ok": True}, "a guest with a 6 s deadline starts")
+    expect(stack.start(attempt)[1] == {"v": 1, "ok": True}, "a guest with a 6 s deadline starts")
     runner = attached_runner(stack, plane, attempt)
     plane.stop()
     t_cut = plane.elapsed()
@@ -335,13 +335,13 @@ def test_late_child_refused(stack, plane):
         return answer_child(args, caller, entry)
 
     plane.script("admit_child", held, parent["execution_id"])
-    expect(stack.start(parent)[1] == {"ok": True}, "a formula that asks for one child starts")
+    expect(stack.start(parent)[1] == {"v": 1, "ok": True}, "a formula that asks for one child starts")
     runner = attached_runner(stack, plane, parent)
     admit = plane.wait_seen("admit_child", parent["execution_id"], BOOT_S)[0]
     expect(admit["args"]["reference"] == REFS["echo"], "the formula asked the control plane to admit its child", admit)
 
     code, answer = stack.kill(parent["execution_id"])
-    expect(answer == {"ok": True}, "the parent is killed while its admission is pending", answer)
+    expect(answer == {"v": 1, "ok": True}, "the parent is killed while its admission is pending", answer)
     exited = exit_reports(plane, parent, 15)
     gone = wait_gone(stack, runner, stack.release_grace_ms / 1000 + 10, "the parent's runner process to be gone")
     expect(exited and exited[0]["report"]["service"] == SERVICE and exited[0]["args"]["runner"] == runner["runner"],
@@ -353,7 +353,7 @@ def test_late_child_refused(stack, plane):
     expect(plane.seen(None, child["execution_id"]) == [],
            f"settlement: the child admitted late (answer {admit.get('answered')}) made no host call", plane.seen(None, child["execution_id"]))
     code, answer = stack.kill(child["execution_id"])
-    expect(answer == {"error": "not_found"}, "settlement: the service never ran the child", answer)
+    expect(answer == {"v": 1, "error": "not_found"}, "settlement: the service never ran the child", answer)
     expect(stack.attempts() == [], "settlement: the service holds no attempt", stack.attempts())
     os_cleanup(stack, runner, "cleanup")
 
@@ -362,7 +362,7 @@ def test_abandoned_stream(stack, plane):
     attempt = plane.mint(stack.boot, "catalyst", REFS["stub"], WASM["stub"], {"operation": "chat", "params": {}}, "ath_stream", 30_000, secrets=STUB_KEY)
     plane.script("push_deltas", DROP, attempt["execution_id"])
     sampler = StatusSampler(stack).start()
-    expect(stack.start(attempt)[1] == {"ok": True}, "a streaming catalyst starts, its stream answered nothing")
+    expect(stack.start(attempt)[1] == {"v": 1, "ok": True}, "a streaming catalyst starts, its stream answered nothing")
     runner = attached_runner(stack, plane, attempt)
     complete = plane.wait_seen("complete", attempt["execution_id"], BOOT_S)[0]
     gone = wait_gone(stack, runner, stack.release_grace_ms / 1000 + 10, "the tainted runner's process to be gone")
@@ -387,7 +387,7 @@ def test_abandoned_stream(stack, plane):
 
     plane.unscript("push_deltas", attempt["execution_id"])
     again = plane.mint(stack.boot, "catalyst", REFS["stub"], WASM["stub"], {"operation": "chat", "params": {}}, "ath_stream", 30_000, secrets=STUB_KEY)
-    expect(stack.start(again)[1] == {"ok": True}, "the athanor's next streaming catalyst starts")
+    expect(stack.start(again)[1] == {"v": 1, "ok": True}, "the athanor's next streaming catalyst starts")
     fresh = attached_runner(stack, plane, again)
     complete = plane.wait_seen("complete", again["execution_id"], BOOT_S)[0]
     pushes = plane.wait_seen("push_deltas", again["execution_id"], 5)
@@ -408,12 +408,12 @@ def test_tainted_never_reassigned(stack, plane, tries=3):
 
 def tainted_runner_case(stack, plane, athanor, last):
     attempt = plane.mint(stack.boot, "reagent", REFS["spin"], WASM["spin"], {"spin": True}, athanor, 30_000)
-    expect(stack.start(attempt)[1] == {"ok": True}, "a guest starts for an athanor")
+    expect(stack.start(attempt)[1] == {"v": 1, "ok": True}, "a guest starts for an athanor")
     runner = attached_runner(stack, plane, attempt)
     sampler = StatusSampler(stack).start()
     t_kill = time.time()
     code, answer = stack.kill(attempt["execution_id"])
-    expect(answer == {"ok": True}, "its root is killed", answer)
+    expect(answer == {"v": 1, "ok": True}, "its root is killed", answer)
     exited = exit_reports(plane, attempt, 15)
     gone = wait_gone(stack, runner, stack.release_grace_ms / 1000 + 10, "the killed runner's process to be gone")
     wait_until(lambda: stack.runners()["tainted"] == 0 and stack.runners()["busy"] == 0, 10, "the tainted runner to leave the pool")
@@ -429,11 +429,11 @@ def tainted_runner_case(stack, plane, athanor, last):
         print(f"note: the tainted count fell between {len(samples)} status samples; killing another runner", flush=True)
     expect(len(exited) == 1 and exited[0]["args"]["runner"] == runner["runner"] and exited[0]["answered"] == "ok",
            "settlement: the service reported the runner's exit once, holding the attempt", plane.seen("runner_exited"))
-    expect(stack.kill(attempt["execution_id"])[1] == {"ok": True} and plane.seen("complete", attempt["execution_id"]) == [],
+    expect(stack.kill(attempt["execution_id"])[1] == {"v": 1, "ok": True} and plane.seen("complete", attempt["execution_id"]) == [],
            "settlement: a second kill is ok again, and the attempt never closed", plane.seen(None, attempt["execution_id"]))
 
     next_attempt = plane.mint(stack.boot, "reagent", REFS["echo"], WASM["echo"], {"after": "taint"}, athanor, 10_000)
-    expect(stack.start(next_attempt)[1] == {"ok": True}, "the athanor's next subtree starts")
+    expect(stack.start(next_attempt)[1] == {"v": 1, "ok": True}, "the athanor's next subtree starts")
     fresh = attached_runner(stack, plane, next_attempt)
     plane.wait_seen("complete", next_attempt["execution_id"], BOOT_S)
     expect(fresh["runner"] != runner["runner"] and fresh["uid"] != runner["uid"] or fresh["pid"] != runner["pid"],
@@ -469,7 +469,7 @@ def measure_acquisition(stack, plane, count=12):
         wait_until(lambda: fresh_runners_booted(stack, first_seen), BOOT_S, "the pool's fresh runners to have booted", interval=0.25)
         attempt = plane.mint(stack.boot, "reagent", REFS["echo"], WASM["echo"], {"n": i}, f"ath_queue_{i}", 10_000)
         t_send = time.time()
-        expect(stack.start(attempt)[1] == {"ok": True}, f"queued start {i + 1}")
+        expect(stack.start(attempt)[1] == {"v": 1, "ok": True}, f"queued start {i + 1}")
         attach = plane.wait_seen("attach", attempt["execution_id"], BOOT_S)[0]
         fresh_ages.append((attach["at"] - t_send) * 1000)
         plane.wait_seen("complete", attempt["execution_id"], BOOT_S)
@@ -478,7 +478,7 @@ def measure_acquisition(stack, plane, count=12):
         if i:
             wait_until(lambda: stack.runners()["idle"] >= 1, 5, "the athanor's runner to be idle", interval=0.01)
         t_send = time.time()
-        expect(stack.start(attempt)[1] == {"ok": True}, f"warm start {i + 1}")
+        expect(stack.start(attempt)[1] == {"v": 1, "ok": True}, f"warm start {i + 1}")
         attach = plane.wait_seen("attach", attempt["execution_id"], BOOT_S)[0]
         warm_ages.append((attach["at"] - t_send) * 1000)
         plane.wait_seen("complete", attempt["execution_id"], BOOT_S)

@@ -392,8 +392,11 @@ defmodule Cyfr.Test.ScriptedWorkerTest do
     assert {:error, _cancelled} = Task.await(task)
 
     assert id in ScriptedWorker.kills()
-    assert_received {:unreaped_kill, ^id, 1}
-    assert Prima.Slots.status(Crucible.Slots).unreaped[athanor_id] == 1
+    # The count is the athanor's within the decay window, which a late note
+    # of an earlier test's run can raise on the shared athanor; this run's
+    # note is what is asserted.
+    assert_received {:unreaped_kill, ^id, count} when count >= 1
+    assert Prima.Slots.status(Crucible.Slots).unreaped[athanor_id] >= 1
   end
 
   # Every unreaped kill noted from here on, forwarded to this process.

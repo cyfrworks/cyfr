@@ -88,6 +88,7 @@ defmodule Prima.HostAPI do
     :tool_call,
     :record_denial,
     :release_child,
+    :egress_pin,
     :runner_exited
   ]
 
@@ -105,6 +106,7 @@ defmodule Prima.HostAPI do
     tool_call: :never,
     record_denial: :never,
     release_child: :idempotent,
+    egress_pin: :idempotent,
     runner_exited: :idempotent
   }
 
@@ -345,6 +347,27 @@ defmodule Prima.HostAPI do
   """
   @callback release_child(caller(), child_execution_id :: String.t()) ::
               :ok | {:error, refusal()}
+
+  @doc """
+  Pin the address the caller's guest may reach `url` at, for one request
+  of the `purpose` `opts` names (`:fetch`, `:stream` or `:redirect`, and
+  for a redirect `from`, the id of the pin the redirecting answer came
+  from). CYFR resolves the URL's host itself, refuses a metadata address
+  before any policy, applies the private-address policy of the authority
+  it holds for the caller's attempt, and answers the validated address
+  with the URL's scheme, port and host and an expiry (`Prima.PinnedTarget`).
+  The engine connects to exactly that address (`Prima.Network.pin/3`) and
+  resolves nothing itself. A pin is only an address: the request it
+  enables is still the guest's, charged and checked as the engine charges
+  and checks it. Refused as `Prima.PinnedTarget.refusals/0` names, each a
+  denial CYFR records for the attempt.
+  """
+  @callback egress_pin(
+              caller(),
+              url :: String.t(),
+              opts :: [purpose: Prima.PinnedTarget.purpose(), from: String.t()]
+            ) ::
+              {:ok, Prima.PinnedTarget.t()} | {:error, refusal() | Prima.PinnedTarget.refusal()}
 
   @doc """
   Report that the runner `runner` of the reporting worker service exited,

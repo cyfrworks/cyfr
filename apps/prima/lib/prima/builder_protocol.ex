@@ -77,7 +77,7 @@ defmodule Prima.BuilderProtocol do
   | Class | Reason | When |
   |---|---|---|
   | `malformed` | a sentence | the body does not read (`describe/1`) |
-  | `unauthorized` | `malformed`, `outside_window`, `bad_mac` or `replayed` | the header does not verify, or its nonce was seen |
+  | `unauthorized` | `unknown_version`, `malformed`, `outside_window`, `bad_mac` or `replayed` | the header does not verify, or its nonce was seen |
   | `capacity` | `{max}` | every slot of the cap is taken |
   | `timeout` | `{budget_ms}` | the build passed its budget |
   | `memory` | `{limit_bytes}` | the build reached its memory bound and was ended there |
@@ -105,9 +105,9 @@ defmodule Prima.BuilderProtocol do
   header of another service (`backends`) verifies a build request. A
   listener verifies the header before it reads the body
   (`verify_request_header/3`, then `verify_body/2`), bounded by
-  `max_request_bytes/0`, and refuses, in order, `:malformed`,
-  `:outside_window` (`ts` further than `window_ms/0` from its clock) and
-  `:bad_mac`. Replay is the listener's, against state this module does not
+  `max_request_bytes/0`, and refuses, in order, `:unknown_version` (a
+  version token other than `v1`, such as `v2`), `:malformed`, `:outside_window` (`ts`
+  further than `window_ms/0` from its clock) and `:bad_mac`. Replay is the listener's, against state this module does not
   hold: a nonce seen within the window is refused as `replayed`. Answers
   are not signed: they travel on the connection the verified request
   opened, and the client believes nothing in them it can check itself.
@@ -152,7 +152,7 @@ defmodule Prima.BuilderProtocol do
     :failed,
     :protocol_mismatch
   ]
-  @unauthorized_reasons [:malformed, :outside_window, :bad_mac, :replayed]
+  @unauthorized_reasons [:unknown_version, :malformed, :outside_window, :bad_mac, :replayed]
   @line_types [:progress, :result, :refusal, :health]
 
   @statuses %{
@@ -265,7 +265,8 @@ defmodule Prima.BuilderProtocol do
   @typedoc "A refusal by class, each with its typed reason."
   @type refusal ::
           {:malformed, String.t()}
-          | {:unauthorized, :malformed | :outside_window | :bad_mac | :replayed}
+          | {:unauthorized,
+             :unknown_version | :malformed | :outside_window | :bad_mac | :replayed}
           | {:capacity, pos_integer()}
           | {:timeout, non_neg_integer()}
           | {:memory, pos_integer()}
@@ -304,7 +305,7 @@ defmodule Prima.BuilderProtocol do
   @typedoc "A request header's fields: the timestamp in Unix milliseconds and a nonce."
   @type auth :: %{ts: non_neg_integer(), nonce: String.t()}
 
-  @type auth_refusal :: :malformed | :outside_window | :bad_mac
+  @type auth_refusal :: :unknown_version | :malformed | :outside_window | :bad_mac
 
   @typedoc "The hex SHA-256 a verified header names as its body's."
   @type body_hash :: String.t()
@@ -465,7 +466,7 @@ defmodule Prima.BuilderProtocol do
 
   @doc """
   A request's authenticated fields under the request key, or the first
-  refusal: `:malformed`, `:outside_window`, `:bad_mac`. `now` is in Unix
+  refusal: `:unknown_version`, `:malformed`, `:outside_window`, `:bad_mac`. `now` is in Unix
   milliseconds.
   """
   @spec verify_request(binary(), term(), binary(), integer()) ::

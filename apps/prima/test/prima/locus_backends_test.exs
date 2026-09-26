@@ -240,6 +240,24 @@ defmodule Prima.LocusBackendsTest do
       end
     end
 
+    test "every header at another version is refused as unknown_version before it is read" do
+      assert @vectors["header_parse"]["unknown_version"] != []
+
+      for %{"kind" => kind, "header" => header} <- @vectors["header_parse"]["unknown_version"] do
+        assert {:error, :unknown_version} =
+                 LocusBackends.parse_header(String.to_existing_atom(kind), header),
+               header
+
+        assert {:error, :unknown_version} =
+                 LocusBackends.verify_header(
+                   String.to_existing_atom(kind),
+                   :binary.copy(<<7>>, 32),
+                   header,
+                   0
+                 )
+      end
+    end
+
     test "every valid field is accepted and every invalid field is refused" do
       invoke = Map.merge(owner(), %{boot: "bb", ts: 1, nonce: "n"})
 

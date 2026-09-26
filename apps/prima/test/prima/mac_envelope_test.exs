@@ -91,7 +91,11 @@ defmodule Prima.MacEnvelopeTest do
       mac = mac_of(valid)
 
       refused = [
-        String.replace(valid, "v1 ", "v2 "),
+        " " <> valid,
+        String.replace_prefix(valid, "v1 ", "V1 "),
+        String.replace_prefix(valid, "v1 ", "v01 "),
+        String.replace_prefix(valid, "v1 ", "Bearer "),
+        "Bearer token",
         String.replace(valid, "kind=ping", "kind=pong"),
         String.replace(valid, " g=3", ""),
         String.replace(valid, " mac=#{mac}", ""),
@@ -120,6 +124,19 @@ defmodule Prima.MacEnvelopeTest do
       end
 
       assert {:error, :malformed} = MacEnvelope.parse(@envelope, nil)
+    end
+
+    test "reads the version first, and refuses any other than v1 as unknown_version" do
+      valid = header!()
+
+      for token <- ["v2", "v0", "v10", "v9007199254740993"] do
+        other = String.replace_prefix(valid, "v1 ", token <> " ")
+        assert {:error, :unknown_version} = MacEnvelope.parse(@envelope, other), other
+      end
+
+      # Whatever follows another version token is not read at all.
+      assert {:error, :unknown_version} = MacEnvelope.parse(@envelope, "v2")
+      assert {:error, :unknown_version} = MacEnvelope.parse(@envelope, "v2 kind=pong")
     end
 
     test "reads a value containing = as the value" do
