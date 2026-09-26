@@ -10,6 +10,12 @@ defmodule Crucible.WorkerClientTest do
   id no key derives over, is unavailable and nothing is sent. A start the
   service refuses `503` `unavailable` with a refusal's sentence is that
   refusal, carrying the sentence; any other `503` is a lost answer.
+
+  Every request of `tests/fixtures/worker_api.json` is written as the
+  vector writes it, and every answer and refusal it lists is read as the
+  client's contract says; an answer without the wire's version, at another
+  version, or naming `unknown_version`, is a lost answer under the
+  callback's retry class.
   """
 
   use ExUnit.Case, async: false
@@ -18,6 +24,10 @@ defmodule Crucible.WorkerClientTest do
   alias Prima.{WorkerAPI, WorkerAuth, WorkerWire}
 
   @service "wrk_client_test"
+
+  @vectors_path Path.expand("../../../../tests/fixtures/worker_api.json", __DIR__)
+  @external_resource @vectors_path
+  @vectors @vectors_path |> File.read!() |> Jason.decode!()
 
   # A worker service's listener that verifies each request with the
   # service's dispatch key, tells the test what it saw, and answers what
@@ -40,11 +50,20 @@ defmodule Crucible.WorkerClientTest do
       key = WorkerAuth.dispatch_key(worker_key)
       verified = WorkerAuth.verify_request(key, header, body, System.system_time(:millisecond))
       send(opts.test, {:request, conn.request_path, verified, Jason.decode!(body)})
+      send(opts.test, {:body, conn.request_path, body})
 
       case Map.fetch!(opts.answers, conn.request_path) do
-        :lost -> send_resp(conn, 200, "")
-        {status, answer} -> json(conn, status, answer)
-        answer -> json(conn, 200, answer)
+        :lost ->
+          send_resp(conn, 200, "")
+
+        {:raw, status, bytes} ->
+          conn |> put_resp_content_type("application/json") |> send_resp(status, bytes)
+
+        {status, answer} ->
+          json(conn, status, answer)
+
+        answer ->
+          json(conn, 200, answer)
       end
     end
 
@@ -296,6 +315,125 @@ defmodule Crucible.WorkerClientTest do
              inspect(answer)
     end
   end
+
+  describe "the vectors of tests/fixtures/worker_api.json" do
+    test "every request is written as the vector writes it, and its answer read as it says" do
+      requests = @vectors["requests"]
+      assert Enum.map(requests, & &1["callback"]) == ~w(start kill status)
+
+      for vector <- requests do
+        callback = String.to_existing_atom(vector["callback"])
+        route = WorkerWire.worker_route(callback)
+        %{"v" => 1, "op" => op, "args" => args} = Jason.decode!(vector["body"])
+        assert op == vector["callback"]
+
+        answers =
+          [{200, vector["answer"]}] ++
+            for %{"status" => status, "answer" => answer} <- vector["refusals"],
+                do: {status, answer}
+
+        for {status, answer} <- answers do
+          endpoint = serve!(%{route => {:raw, status, answer}})
+          read = request(endpoint, callback, args)
+
+          # The body the client wrote is the vector's, byte for byte.
+          assert_receive {:body, ^route, body}
+          assert body == vector["body"], vector["callback"]
+
+          assert read == expected(callback, status, answer, vector),
+                 "#{vector["callback"]} at #{status}: #{answer}"
+
+          # A lost answer is asked again once where the callback's class
+          # allows it, and never for a start.
+          if read == {:error, :lost} and WorkerAPI.retry(callback) == :idempotent do
+            assert_receive {:body, ^route, _again}
+          end
+
+          refute_receive {:body, ^route, _more}, 50
+        end
+      end
+    end
+
+    test "an answer without the wire's version, at another, or naming unknown_version is lost" do
+      sentence = "writable-cgroups=true is missing"
+
+      for answer <- [
+            ~s({"ok":true}),
+            ~s({"v":2,"ok":true}),
+            ~s({"v":"1","ok":true}),
+            ~s({"v":1,"ok":true,"extra":1}),
+            ~s({"error":"not_found"}),
+            ~s({"v":2,"error":"not_found"}),
+            ~s({"v":1,"error":"unknown_version"})
+          ] do
+        endpoint = serve!(routes({:raw, 200, answer}))
+
+        assert {:error, :lost} = WorkerClient.kill(endpoint, "exec_1"), answer
+        assert_receive {:body, "/worker/v1/kill", _}
+        assert_receive {:body, "/worker/v1/kill", _}
+
+        assert {:error, :lost} = WorkerClient.status(endpoint), answer
+        assert_receive {:body, "/worker/v1/status", _}
+        assert_receive {:body, "/worker/v1/status", _}
+
+        assert {:error, :lost} = WorkerClient.start(endpoint, "token", "{}", "sealed"), answer
+        assert_receive {:body, "/worker/v1/start", _}
+        refute_receive {:body, "/worker/v1/start", _}, 50
+      end
+
+      # A start's refusal is one only at this version.
+      for answer <- [
+            Jason.encode!(%{"error" => "unavailable", "message" => sentence}),
+            Jason.encode!(%{"v" => 2, "error" => "unavailable", "message" => sentence})
+          ] do
+        endpoint = serve!(%{WorkerWire.worker_route(:start) => {:raw, 503, answer}})
+        assert {:error, :lost} = WorkerClient.start(endpoint, "token", "{}", "sealed"), answer
+      end
+    end
+  end
+
+  # The request of `callback` the vector's args make, as the client's own
+  # function makes it.
+  defp request(endpoint, :start, args),
+    do: WorkerClient.start(endpoint, args["assignment"], args["input"], args["sealed_keys"])
+
+  defp request(endpoint, :kill, %{"execution_id" => id}), do: WorkerClient.kill(endpoint, id)
+  defp request(endpoint, :status, %{}), do: WorkerClient.status(endpoint)
+
+  # What the client answers for `answer` at `status`, as its contract reads
+  # it: a `200` is the callback's answer or its refusal by name (a worker
+  # service at another version, `unknown_version`, is lost); a start's `503`
+  # naming a refusal's sentence is that refusal; anything else is lost.
+  defp expected(callback, 200, answer, vector) do
+    case WorkerWire.read_answer(Jason.decode!(answer)) do
+      {:ok, true} when callback in [:start, :kill] ->
+        :ok
+
+      {:ok, status} when callback == :status ->
+        assert answer == vector["answer"]
+        WorkerAPI.read_status(status)
+
+      {:error, "unknown_version", _fields} ->
+        {:error, :lost}
+
+      {:error, name, _fields} ->
+        {:error, String.to_existing_atom(name)}
+    end
+  end
+
+  defp expected(:start, 503, answer, _vector) do
+    case WorkerWire.read_answer(Jason.decode!(answer)) do
+      {:error, "unavailable", %{"message" => sentence}} ->
+        if WorkerAPI.valid_refusal_message?(sentence),
+          do: {:error, {:unavailable, sentence}},
+          else: {:error, :lost}
+
+      _other ->
+        {:error, :lost}
+    end
+  end
+
+  defp expected(_callback, _status, _answer, _vector), do: {:error, :lost}
 
   test "a worker service that cannot be reached is unavailable" do
     endpoint = %{id: @service, url: "http://127.0.0.1:19", components: nil}

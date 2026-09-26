@@ -11,33 +11,44 @@ defmodule Crucible.HostListener do
 
   Every request is refused as early as its evidence allows, before any
   authorized action and, for anything the header alone decides, before
-  the body is read:
+  the body is read, in the order `Prima.WorkerAuth` documents and
+  `tests/fixtures/host_api.json`'s `pre_body_refusals` pin:
 
     1. the route is a host route and the method is `POST`, else `404`;
     2. this boot holds the control plane (`Arca.ControlPlane.held?/0`),
        else `503`, answered as `Crucible.Host` would refuse it;
-    3. the `x-cyfr-auth` header is present once and verifies over its
-       fields and the body hash it names — a host call under the call key
-       of the attempt it names, at this member's standing
-       (`Crucible.Keys.standing/0`: its generation and its own boot,
-       so a call addressed to a peer is refused here,
+    3. the `x-cyfr-auth` header is present exactly once, else `401`;
+    4. the header verifies over its fields and the body hash it names — a
+       host call under the call key of the attempt it names, at this
+       member's standing (`Crucible.Keys.standing/0`: its generation and
+       its own boot, so a call addressed to a peer is refused here,
        `Prima.WorkerAuth.verify_host_call_header/4`), a report under the
        dispatch key of the worker service it names
-       (`Prima.WorkerAuth.verify_report_header/3`) — within the timestamp
-       window, else `401`;
-    4. for a callback that is not idempotent (`Prima.HostAPI.retry/1`), the
+       (`Prima.WorkerAuth.verify_report_header/3`) — refused `401`, in
+       the verifier's order: a version token other than `v1`, then a
+       header that does not parse, a timestamp outside the window, a MAC
+       that is not the key's, another generation and another member;
+    5. for a callback that is not idempotent (`Prima.HostAPI.retry/1`), the
        header's nonce has not been presented for its attempt within the
-       window before, else `401`;
-    5. the body is at most `Prima.HostAPI.max_body_bytes/0`, else `413`,
-       and is the one the header named (`Prima.WorkerAuth.verify_body/2`),
-       else `401`;
-    6. a host call's body opens as the `:body` of the call the header
+       window before, else `401`.
+
+  Each of those is answered on a connection the listener closes, and the
+  body is never read. Then:
+
+    6. the body is at most `Prima.HostAPI.max_body_bytes/0`, else `413`
+       (on a closed connection, since the rest is left unread), and is
+       the one the header named (`Prima.WorkerAuth.verify_body/2`), else
+       `401`;
+    7. a host call's body opens as the `:body` of the call the header
        names, under the attempt's seal key derived from the root
        (`Prima.WorkerAuth.open_call/4`), else `401`;
-    7. the body's `op` is the route's callback, else `400`.
+    8. the body is at this wire's version, else `400` `unknown_version`,
+       read before its `op`, and its `op` is the route's callback with
+       arguments that are an object, else `400` `malformed`
+       (`Prima.WorkerWire.read_request_body/2`).
 
   A host call crosses sealed: its HTTP body is
-  `Prima.WorkerAuth.seal_call/5` of the `{"op", "args"}` JSON in the
+  `Prima.WorkerAuth.seal_call/5` of the `{"v", "op", "args"}` JSON in the
   `:body` direction, the header is computed over those sealed bytes, and
   the answer is the JSON `Crucible.Host.call/2` produces sealed in
   the `:answer` direction under the same call. `Host.call/2` reads the
@@ -48,13 +59,16 @@ defmodule Crucible.HostListener do
   the whole call again itself. A report (`runner_exited`) crosses as
   plain JSON under its report header, and its answer is plain.
 
-  Every listener refusal is `{"error": "lost"}` (`Prima.WorkerWire.error/2`)
-  but the unknown route's `not_found`, the mismatched body's `malformed`
-  and an unowned report's `unavailable`; the reason is logged, the header
-  and body never. An answer, sealed or plain, is sent as `200` whatever
-  it says: a refusal `Host` answers is an answer, not a transport
-  failure. This listener's checks are defence in depth, and keep an
-  unauthenticated caller from making CYFR read what it sent.
+  Every listener refusal is written by `Prima.WorkerWire.error/2`, so it
+  carries the wire's version, and is `{"v": 1, "error": "lost"}` but the
+  unknown route's `not_found`, an unowned report's `unavailable`, a
+  header or body at another version's `unknown_version` (a peer at
+  another version of the wire is told so) and a body that is not the
+  route's call's `malformed`; the reason is logged, the header and body
+  never. An answer, sealed or plain, is sent as `200` whatever it says: a
+  refusal `Host` answers is an answer, not a transport failure. This
+  listener's checks are defence in depth, and keep an unauthenticated
+  caller from making CYFR read what it sent.
 
   Nothing here is configured from the application environment: the
   supervisor that starts it names the bind, the port and the drain
@@ -82,8 +96,9 @@ defmodule Crucible.HostListener do
           | {:drain_ms, non_neg_integer()}
 
   @doc """
-  The listener's child spec: a supervisor of the nonce memory and the
-  Bandit server, bound to `:bind` (default loopback) on `:port` (required).
+  The listener's child spec: a supervisor of the nonce memory, the node's
+  pin table (`Crucible.Host.Egress`) and the Bandit server, bound to
+  `:bind` (default loopback) on `:port` (required).
   On shutdown the server stops accepting and lets the connections already
   open finish for `:drain_ms` (default 5 000) before it closes them.
   """
@@ -101,7 +116,7 @@ defmodule Crucible.HostListener do
          {:ok, callback} <- WorkerWire.host_callback(conn.request_path) do
       serve(conn, callback)
     else
-      _ -> refuse(conn, 404, :not_found)
+      _ -> refuse(close(conn), 404, :not_found)
     end
   end
 
@@ -117,16 +132,19 @@ defmodule Crucible.HostListener do
          {:ok, fields, body_hash} <- verify_header(callback, header, now),
          :ok <- fresh_nonce(conn, callback, fields, now),
          {:ok, body, read} <- bounded_body(conn),
-         :ok <- verify_body(body_hash, body),
-         {:ok, call} <- open(callback, fields, header, body),
-         :ok <- names_route(callback, call.json) do
+         :ok <- verify_body(read, body_hash, body),
+         {:ok, call} <- open(read, callback, fields, header, body),
+         :ok <- names_route(read, callback, call.json) do
       read
       |> put_resp_content_type("application/json")
       |> send_resp(200, answer(callback, fields, call))
     else
-      # A refusal after the body was read answers on the conn that read it.
+      # A refusal after the body was read answers on the conn that read it;
+      # one before it, or with the body read only in part, closes the
+      # connection, so nothing more of the body is read to reuse it.
       {:refused, read, status, name} -> refuse(read, status, name)
-      {:refused, status, name} -> refuse(conn, status, name)
+      {:refused, status, name} -> refuse(close(conn), status, name)
+      {:refused_unread, read, status, name} -> refuse(close(read), status, name)
     end
   end
 
@@ -161,6 +179,18 @@ defmodule Crucible.HostListener do
     end
   end
 
+  # A peer at another version of the wire is told so; every other header
+  # refusal is `lost`, its reason logged.
+  defp header_refused(callback, :unknown_version) do
+    Logger.warning("[Crucible.HostListener] #{callback} refused: unknown_version")
+    {:refused, 401, :unknown_version}
+  end
+
+  defp header_refused(callback, reason) do
+    Logger.warning("[Crucible.HostListener] #{callback} refused: #{reason}")
+    {:refused, 401, :lost}
+  end
+
   # A report verifies under the dispatch key of the service it names; a
   # host call under the call key of the attempt it names, at this
   # member's standing. A generation the control plane cannot answer
@@ -192,11 +222,6 @@ defmodule Crucible.HostListener do
     end
   end
 
-  defp header_refused(callback, reason) do
-    Logger.warning("[Crucible.HostListener] #{callback} refused: #{reason}")
-    {:refused, 401, :lost}
-  end
-
   # A nonce is remembered per attempt for as long as a header carrying it
   # still verifies. An idempotent callback (and a report, which is one)
   # may be repeated as it is.
@@ -206,7 +231,8 @@ defmodule Crucible.HostListener do
       :ok
     else
       Logger.warning(
-        "[Crucible.HostListener] #{callback} refused: the nonce was presented before"
+        "[Crucible.HostListener] #{callback} refused: replayed, the nonce was presented " <>
+          "before"
       )
 
       {:refused, 401, :lost}
@@ -225,7 +251,7 @@ defmodule Crucible.HostListener do
     else
       {:more, _partial, conn} ->
         Logger.warning("[Crucible.HostListener] refused: the body exceeds #{max} bytes")
-        {:refused, conn, 413, :lost}
+        {:refused_unread, conn, 413, :lost}
 
       {:error, _reason} ->
         Logger.warning("[Crucible.HostListener] refused: the body could not be read")
@@ -249,7 +275,7 @@ defmodule Crucible.HostListener do
     end
   end
 
-  defp verify_body(body_hash, body) do
+  defp verify_body(read, body_hash, body) do
     case WorkerAuth.verify_body(body_hash, body) do
       :ok ->
         :ok
@@ -257,7 +283,7 @@ defmodule Crucible.HostListener do
       {:error, reason} ->
         Logger.warning("[Crucible.HostListener] refused: the body is not the header's: #{reason}")
 
-        {:refused, 401, :lost}
+        {:refused, read, 401, :lost}
     end
   end
 
@@ -266,9 +292,10 @@ defmodule Crucible.HostListener do
   # handed to `Host` under the same verified fields, signed over it with
   # the attempt's call key, since `Host` verifies the header over the body
   # it reads. Both keys derive from the root and the verified fields.
-  defp open(:runner_exited, _fields, header, body), do: {:ok, %{header: header, json: body}}
+  defp open(_read, :runner_exited, _fields, header, body),
+    do: {:ok, %{header: header, json: body}}
 
-  defp open(callback, fields, _header, body) do
+  defp open(read, callback, fields, _header, body) do
     {:ok, seal_key} = WorkerAuth.attempt_seal_key(Keys.root(), fields)
 
     case WorkerAuth.open_call(seal_key, :body, fields, body) do
@@ -283,7 +310,7 @@ defmodule Crucible.HostListener do
             "header's call"
         )
 
-        {:refused, 401, :lost}
+        {:refused, read, 401, :lost}
     end
   end
 
@@ -296,22 +323,35 @@ defmodule Crucible.HostListener do
     sealed
   end
 
-  # The route and the body name the same callback, so a body cannot be
-  # posted at another route.
-  defp names_route(callback, body) do
-    named =
-      with {:ok, decoded} <- Jason.decode(body),
-           {:ok, named, _args} <- WorkerWire.read_request_body(HostAPI, decoded),
-           do: named
+  # The opened body is read at this wire's version before its `op`, and the
+  # route and the body name the same callback, so a body cannot be posted
+  # at another route.
+  defp names_route(read, callback, body) do
+    read_body =
+      case Jason.decode(body) do
+        {:ok, decoded} -> WorkerWire.read_request_body(HostAPI, decoded)
+        {:error, _not_json} -> {:error, :malformed}
+      end
 
-    if named == callback do
-      :ok
-    else
-      Logger.warning("[Crucible.HostListener] #{callback} refused: the body does not name it")
+    case read_body do
+      {:ok, ^callback, _args} ->
+        :ok
 
-      {:refused, 400, :malformed}
+      {:error, :unknown_version} ->
+        Logger.warning(
+          "[Crucible.HostListener] #{callback} refused: the body is at another version"
+        )
+
+        {:refused, read, 400, :unknown_version}
+
+      _other ->
+        Logger.warning("[Crucible.HostListener] #{callback} refused: the body does not name it")
+
+        {:refused, read, 400, :malformed}
     end
   end
+
+  defp close(conn), do: put_resp_header(conn, "connection", "close")
 
   defp refuse(conn, status, name) do
     conn
@@ -322,8 +362,9 @@ defmodule Crucible.HostListener do
   defmodule Supervisor do
     @moduledoc false
     # One listener: the nonce table, owned here so a request that crashes
-    # forgets nothing, its sweeper, and the Bandit server the table is
-    # handed to.
+    # forgets nothing, its sweeper, the node's pin table (the first
+    # listener's; a later one starts none) and the Bandit server the nonce
+    # table is handed to.
 
     use Elixir.Supervisor
 
@@ -349,6 +390,7 @@ defmodule Crucible.HostListener do
 
       children = [
         {Crucible.HostListener.Nonces, nonces},
+        Crucible.Host.Egress.Pins,
         Elixir.Supervisor.child_spec(
           {Bandit,
            plug: {Crucible.HostListener, %{nonces: nonces}},

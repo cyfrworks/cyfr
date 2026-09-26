@@ -20,8 +20,10 @@ defmodule Cyfr.Test.ScriptedWorkerListener do
   read (`Prima.WorkerAuth.verify_request_header/3`, `401` with the
   refusal), the body is read up to `Prima.HostAPI.max_body_bytes/0` (`413`
   past it) and checked against the hash the header named (`400`
-  `bad_mac`), and a body whose `op` is not the route's callback, or whose
-  `args` are not the callback's, is `400` `malformed`. What the module
+  `bad_mac`), a body without the wire's version, or at another, is `400`
+  `unknown_version` before its `op` is read, and a body whose `op` is not
+  the route's callback, or whose `args` are not the callback's, is `400`
+  `malformed`. What the module
   answers crosses as `Prima.WorkerWire.ok/1` or `error/2` with status
   `200`; a route that is no worker route is `404`.
   """
@@ -125,11 +127,9 @@ defmodule Cyfr.Test.ScriptedWorkerListener do
   end
 
   defp decode(body) do
-    with {:ok, decoded} <- Jason.decode(body),
-         {:ok, callback, args} <- WorkerWire.read_request_body(WorkerAPI, decoded) do
-      {:ok, callback, args}
-    else
-      _ -> {:error, :malformed}
+    case Jason.decode(body) do
+      {:ok, decoded} -> WorkerWire.read_request_body(WorkerAPI, decoded)
+      {:error, _not_json} -> {:error, :malformed}
     end
   end
 

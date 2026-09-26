@@ -17,14 +17,22 @@ defmodule Cyfr.Test.ScriptedWorker do
   dispatched here; `start/3` checks the assignment is addressed to this
   worker service and this boot, its input matches its digest and its
   sealed keys open as its attempt, then starts a runner. The runner
-  reaches its attempt through `Crucible.Host`, in this BEAM, signing
-  each call with the attempt's call key: it attaches with the signed
-  assignment (the claim, and the unseal of the run's vault edge), records
-  the call with the authority its assignment carries, pushes the script's
-  events (`push_deltas`, masked by the attempt) and closes the run
-  (`complete` or `fail`). A runner that exits leaving its attempt open is
-  reported (`Crucible.Host.runner_exited/2`), signed with this
-  worker service's dispatch key.
+  reaches its attempt over HTTP, through a real `Crucible.HostListener`,
+  as Opus's runners do: at the address its assignment names, or, for an
+  assignment naming none, at the listener this worker service starts on a
+  loopback port of its own (`host_url/0`). Each call's body is the
+  versioned request (`Prima.WorkerWire.request_body/2`) sealed under the
+  attempt's seal key, its header is signed with the attempt's call key
+  over the sealed bytes, and its answer is opened and read at this wire's
+  version (`Prima.WorkerWire.read_answer/1`), so every scripted run
+  crosses the listener's checks before the body, the seal and the
+  versioned bodies. The runner attaches with the signed assignment (the
+  claim, and the unseal of the run's vault edge), records the call with
+  the authority its assignment carries, pushes the script's events
+  (`push_deltas`, masked by the attempt) and closes the run (`complete` or
+  `fail`). A runner that exits leaving its attempt open is reported
+  (`runner_exited`), plain, signed with this worker service's dispatch
+  key and posted to the same listener.
 
   Its status counts its runners as every worker service does: `busy` while
   a run's process is alive, and `tainted` from a kill until the killed
@@ -84,8 +92,8 @@ defmodule Cyfr.Test.ScriptedWorker do
 
   require Logger
 
-  alias Prima.{Assignment, WorkerAuth}
-  alias Crucible.{Host, Keys}
+  alias Prima.{Assignment, HostAPI, WorkerAuth, WorkerWire}
+  alias Crucible.{HostListener, Keys}
   alias Cyfr.Test.ScriptedWorkerListener
 
   @attempt_fields [:athanor_id, :execution_id, :attempt, :fence, :generation]
@@ -116,6 +124,14 @@ defmodule Cyfr.Test.ScriptedWorker do
       pid -> GenServer.call(pid, :url)
     end
   end
+
+  @doc """
+  The base URL of the host listener this worker service started, where a
+  runner of an assignment naming no address posts its calls. Only while
+  it runs.
+  """
+  @spec host_url() :: String.t()
+  def host_url, do: GenServer.call(__MODULE__, :host_url)
 
   @doc """
   This worker service's endpoint (`t:Prima.WorkerAPI.endpoint/0`), running
@@ -228,6 +244,11 @@ defmodule Cyfr.Test.ScriptedWorker do
     {:ok, listener} = ScriptedWorkerListener.start_link(worker: __MODULE__, service: @service)
     url = ScriptedWorkerListener.url(listener)
 
+    # The host listener its runners reach CYFR at: the real one, on a port
+    # of its own. Its drain is short, since the runners go first.
+    %{start: {module, function, args}} = HostListener.child_spec(port: 0, drain_ms: 1_000)
+    {:ok, host_listener} = apply(module, function, args)
+
     # Route the scripted references here and everything else to the worker
     # services configured before; `terminate/2` takes the entry out again.
     Application.put_env(
@@ -241,6 +262,8 @@ defmodule Cyfr.Test.ScriptedWorker do
        boot: "#{node()}#" <> Prima.UUID7.generate_id("boot"),
        listener: listener,
        url: url,
+       host_listener: host_listener,
+       host_url: "http://127.0.0.1:#{HostListener.port(host_listener)}",
        refs: refs,
        script: Keyword.get(opts, :script, []),
        window: Keyword.get(opts, :window, 200_000),
@@ -276,8 +299,8 @@ defmodule Cyfr.Test.ScriptedWorker do
         keys: keys,
         boot: state.boot,
         runner: Prima.UUID7.generate_id("runner"),
-        waiter: waiter,
-        callers: List.wrap(waiter)
+        host_url: assignment.host_url || state.host_url,
+        waiter: waiter
       }
 
       pid = spawn_link(fn -> run(runner) end)
@@ -289,7 +312,7 @@ defmodule Cyfr.Test.ScriptedWorker do
           boot: state.boot,
           member: assignment.member,
           runner: runner.runner,
-          callers: runner.callers
+          host_url: runner.host_url
         })
 
       answer =
@@ -343,6 +366,7 @@ defmodule Cyfr.Test.ScriptedWorker do
   end
 
   def handle_call(:url, _from, state), do: {:reply, state.url, state}
+  def handle_call(:host_url, _from, state), do: {:reply, state.host_url, state}
   def handle_call({:script, items}, _from, state), do: {:reply, :ok, %{state | script: items}}
   def handle_call(:calls, _from, state), do: {:reply, Enum.reverse(state.calls), state}
   def handle_call(:kills, _from, state), do: {:reply, Enum.reverse(state.kills), state}
@@ -361,6 +385,9 @@ defmodule Cyfr.Test.ScriptedWorker do
   @impl true
   def handle_info({:EXIT, listener, reason}, %{listener: listener} = state),
     do: {:stop, {:listener_exited, reason}, state}
+
+  def handle_info({:EXIT, listener, reason}, %{host_listener: listener} = state),
+    do: {:stop, {:host_listener_exited, reason}, state}
 
   def handle_info({:EXIT, pid, reason}, state) do
     case Map.pop(state.runners, pid) do
@@ -389,10 +416,20 @@ defmodule Cyfr.Test.ScriptedWorker do
   def terminate(_reason, state) do
     for {pid, _runner} <- state.runners, do: Process.exit(pid, :kill)
 
-    # The listener, linked, goes with this process.
+    # The host listener is stopped here rather than left to the link, so
+    # no call a runner had in flight is still reaching the store once this
+    # worker service is gone. The worker listener, linked, goes with this
+    # process.
+    stop_host_listener(state.host_listener)
     configured = Application.get_env(:cyfr, :opus_workers, [])
     Application.put_env(:cyfr, :opus_workers, Enum.reject(configured, &(&1[:id] == @service)))
     :ok
+  end
+
+  defp stop_host_listener(listener) do
+    Supervisor.stop(listener)
+  catch
+    :exit, _gone -> :ok
   end
 
   defp scripted?(state, reference) do
@@ -411,22 +448,19 @@ defmodule Cyfr.Test.ScriptedWorker do
     end
   end
 
-  # A runner's exit is reported from a process of its own, as the process
-  # that waited on the run, so its writes run under that process's sandbox.
+  # A runner's exit is reported from a process of its own, over HTTP to
+  # the host listener the runner reached, plain and signed with this worker
+  # service's dispatch key, as Opus's worker service reports one.
   defp report(runner) do
     spawn(fn ->
-      Process.put(:"$callers", runner.callers)
-
       body =
-        Jason.encode!(%{
-          "v" => 1,
-          "op" => "runner_exited",
-          "args" => %{
-            "member" => runner.member,
-            "runner" => runner.runner,
-            "attempts" => [runner.attempt]
-          }
+        :runner_exited
+        |> WorkerWire.request_body(%{
+          "member" => runner.member,
+          "runner" => runner.runner,
+          "attempts" => [runner.attempt]
         })
+        |> Jason.encode!()
 
       fields = %{
         service: @service,
@@ -438,13 +472,14 @@ defmodule Cyfr.Test.ScriptedWorker do
       with {:ok, worker_key} <- Keys.opus_key(@service),
            {:ok, header} <-
              WorkerAuth.report_header(WorkerAuth.dispatch_key(worker_key), fields, body),
-           %{"ok" => true} <- header |> Host.runner_exited(body) |> Jason.decode!() do
+           {:ok, 200, raw} <- post(runner.host_url, :runner_exited, header, body),
+           {:ok, true} <- read_answer(raw) do
         :ok
       else
         refused ->
           Logger.error(
             "[Cyfr.Test.ScriptedWorker] the exit of #{runner.execution_id}'s runner was not " <>
-              "reported: #{inspect(refused)}"
+              "reported: #{Prima.LoggerContext.shape(refused)}"
           )
       end
     end)
@@ -457,7 +492,6 @@ defmodule Cyfr.Test.ScriptedWorker do
   # ---------------------------------------------------------------------------
 
   defp run(runner) do
-    Process.put(:"$callers", runner.callers)
     Prima.LoggerContext.set_execution_id(runner.assignment.execution_id)
 
     case attached(runner) do
@@ -467,7 +501,7 @@ defmodule Cyfr.Test.ScriptedWorker do
   end
 
   defp attached(runner) do
-    case host(runner, "attach", %{"assignment" => runner.token}) do
+    case host(runner, :attach, %{"assignment" => runner.token}) do
       %{"ok" => %{}} ->
         case Prima.Authority.from_wire(runner.assignment.authority) do
           {:ok, authority} ->
@@ -513,7 +547,7 @@ defmodule Cyfr.Test.ScriptedWorker do
         fail(runner, "script exhausted")
 
       {:emit, events} ->
-        _ = host(runner, "push_deltas", %{"deltas" => Enum.map(events, &delta(runner, &1))})
+        _ = host(runner, :push_deltas, %{"deltas" => Enum.map(events, &delta(runner, &1))})
         next(runner, crash_after?)
 
       {:sleep, ms} ->
@@ -587,7 +621,7 @@ defmodule Cyfr.Test.ScriptedWorker do
   end
 
   defp complete(runner, output) do
-    case host(runner, "complete", %{
+    case host(runner, :complete, %{
            "outcome" => outcome(runner, "completed", %{"output" => output})
          }) do
       %{"ok" => _recorded} -> :normal
@@ -599,7 +633,7 @@ defmodule Cyfr.Test.ScriptedWorker do
   defp fail(runner, message) do
     fields = %{"error" => to_string(message), "abandoned" => false}
 
-    case host(runner, "fail", %{"outcome" => outcome(runner, "failed", fields)}) do
+    case host(runner, :fail, %{"outcome" => outcome(runner, "failed", fields)}) do
       %{"ok" => message} when is_binary(message) -> :normal
       _refused -> {:shutdown, :attempt_open}
     end
@@ -623,12 +657,12 @@ defmodule Cyfr.Test.ScriptedWorker do
     }
   end
 
+  # One host call of the runner's attempt, as Opus's host client makes it:
+  # the versioned body sealed for the call, the header signed over the
+  # sealed bytes, and the answer opened as the call's. A listener's own
+  # refusal crosses plain. Answers the decoded answer, or a `lost` one for
+  # anything that is no answer at this wire's version.
   defp host(runner, op, args) do
-    body = Jason.encode!(%{"v" => 1, "op" => op, "args" => args})
-    runner |> header(body) |> Host.call(body) |> Jason.decode!()
-  end
-
-  defp header(runner, body) do
     fields =
       Map.merge(runner.keys.attempt, %{
         boot: runner.boot,
@@ -638,8 +672,47 @@ defmodule Cyfr.Test.ScriptedWorker do
         nonce: nonce()
       })
 
-    {:ok, header} = WorkerAuth.host_call_header(runner.keys.call, fields, body)
-    header
+    json = op |> WorkerWire.request_body(args) |> Jason.encode!()
+    {:ok, sealed} = WorkerAuth.seal_call(runner.keys.seal, :body, fields, json)
+    {:ok, header} = WorkerAuth.host_call_header(runner.keys.call, fields, sealed)
+
+    answer =
+      case post(runner.host_url, op, header, sealed) do
+        {:ok, 200, raw} -> WorkerAuth.open_call(runner.keys.seal, :answer, fields, raw)
+        {:ok, _refused, raw} -> {:ok, raw}
+        :error -> :error
+      end
+
+    with {:ok, raw} <- answer,
+         {:ok, decoded} <- Jason.decode(raw),
+         read when read != :lost <- WorkerWire.read_answer(decoded) do
+      decoded
+    else
+      _lost -> %{"error" => "lost"}
+    end
+  end
+
+  defp post(host_url, op, header, body) do
+    case Req.request(
+           method: :post,
+           url: host_url <> WorkerWire.host_route(op),
+           headers: [{WorkerWire.auth_header(), header}, {"content-type", "application/json"}],
+           body: body,
+           receive_timeout: HostAPI.request_timeout_ms(op),
+           retry: false,
+           redirect: false,
+           decode_body: false
+         ) do
+      {:ok, %Req.Response{status: status, body: raw}} when is_binary(raw) -> {:ok, status, raw}
+      _failed -> :error
+    end
+  end
+
+  defp read_answer(raw) do
+    case Jason.decode(raw) do
+      {:ok, decoded} -> WorkerWire.read_answer(decoded)
+      {:error, _not_json} -> :lost
+    end
   end
 
   defp nonce, do: Base.url_encode64(:crypto.strong_rand_bytes(18), padding: false)

@@ -17,6 +17,11 @@ defmodule Crucible.HostTest do
   plane answers every call `lost`: it unseals nothing, its open attempts
   stop without closing their runs, and neither they, their waiters nor a
   runner exit report writes a row.
+
+  Every call of `tests/fixtures/host_api.json` is sent with its body read
+  as the vector writes it, bound to a live attempt, and its answer is
+  written as the vector writes answers: the wire's version first, and the
+  vector's answer or one of the refusals it lists.
   """
 
   use ExUnit.Case, async: false
@@ -24,11 +29,15 @@ defmodule Crucible.HostTest do
   import Prima.Test.Wait
   import ExUnit.CaptureLog
 
-  alias Prima.Assignment
+  alias Prima.{Assignment, PinnedTarget, WorkerWire}
   alias Crucible.{Close, Dispatch, Keys}
   alias Cyfr.Test.AttemptFixtures
 
   @service "wrk_host_test"
+
+  @vectors_path Path.expand("../../../../tests/fixtures/host_api.json", __DIR__)
+  @external_resource @vectors_path
+  @vectors @vectors_path |> File.read!() |> Jason.decode!()
 
   setup do
     :ok = Ecto.Adapters.SQL.Sandbox.checkout(Arca.Repo)
@@ -261,12 +270,36 @@ defmodule Crucible.HostTest do
       assert Process.alive?(fixture.pid)
     end
 
-    test "a body that is not an operation is lost" do
+    test "a body that is not an operation is lost; one at another version is told so" do
       fixture = AttemptFixtures.attached!()
 
-      for body <- ["not json", ~s({"op":"storage","args":{}}), ~s({"op":"renew"})] do
-        assert %{"error" => "lost"} = AttemptFixtures.call(fixture, "ignored", %{}, body: body)
+      for body <- [
+            "not json",
+            ~s({"v":1,"op":"storage","args":{}}),
+            ~s({"v":1,"op":"renew"}),
+            ~s({"v":1,"op":"runner_exited","args":{}}),
+            ~s({"v":1,"op":"renew","args":{"attempts":[]},"extra":true}),
+            ~s(["renew"])
+          ] do
+        assert %{"v" => 1, "error" => "lost"} =
+                 AttemptFixtures.call(fixture, "ignored", %{}, body: body),
+               body
       end
+
+      # The version is read before the operation.
+      for body <- [
+            ~s({"op":"renew","args":{"attempts":[]}}),
+            ~s({"v":2,"op":"renew","args":{"attempts":[]}}),
+            ~s({"v":"1","op":"renew","args":{"attempts":[]}}),
+            ~s({"v":2,"op":"nothing"})
+          ] do
+        assert %{"v" => 1, "error" => "unknown_version"} =
+                 AttemptFixtures.call(fixture, "ignored", %{}, body: body),
+               body
+      end
+
+      assert Process.alive?(fixture.pid)
+      assert %{"ok" => _} = renew(fixture)
     end
   end
 
@@ -706,6 +739,176 @@ defmodule Crucible.HostTest do
       assert %{"ok" => true} = report(fixture)
       assert row(fixture).status == "completed"
     end
+  end
+
+  describe "the vectors of tests/fixtures/host_api.json" do
+    @tag :capture_log
+    test "every call's body reads, and its answer is written as the vector writes it" do
+      calls = @vectors["calls"]
+
+      assert Enum.map(calls, & &1["callback"]) ==
+               Prima.HostAPI.callbacks()
+               |> List.delete(:runner_exited)
+               |> Enum.map(&Atom.to_string/1)
+
+      for vector <- calls do
+        op = vector["callback"]
+        fixture = vector_fixture(op)
+        %{"v" => 1, "op" => ^op, "args" => args} = Jason.decode!(vector["body"])
+
+        body =
+          op
+          |> String.to_existing_atom()
+          |> WorkerWire.request_body(rebound(op, args, fixture))
+          |> Jason.encode!()
+
+        before = now()
+        raw = fixture |> AttemptFixtures.header(body) |> Crucible.Host.call(body)
+        answer = Jason.decode!(raw)
+
+        # The version is the answer's first member, as the vector writes it.
+        assert String.starts_with?(raw, ~s({"v":1,)), op
+        assert String.starts_with?(vector["answer"], ~s({"v":1,)), op
+
+        listed = for %{"answer" => refused} <- vector["refusals"], do: Jason.decode!(refused)
+
+        case WorkerWire.read_answer(answer) do
+          {:ok, _value} -> answered(op, answer, Jason.decode!(vector["answer"]), fixture, before)
+          {:error, name, _fields} -> assert name in Enum.map(listed, & &1["error"]), op
+        end
+
+        assert expected(op) == answer_name(answer), op
+      end
+    end
+
+    @tag :capture_log
+    test "a report names its member, and one naming another member lapses nothing" do
+      report = @vectors["report"]
+      fixture = AttemptFixtures.attached!(service_id: @service)
+
+      assert %{"v" => 1, "op" => "runner_exited", "args" => args} = Jason.decode!(report["body"])
+      args = %{args | "runner" => fixture.runner, "attempts" => [fixture.attempt]}
+
+      cross = report["cross_member"]
+      %{"args" => %{"member" => other}} = Jason.decode!(cross["body"])
+      refute other == fixture.member
+
+      # The report the vector's peer sends: another member than this one.
+      assert Jason.decode!(~s({"v":1,"error":"#{cross["error"]}"})) ==
+               report_of(fixture, %{args | "member" => other})
+
+      assert row(fixture).status == "running"
+      assert Process.alive?(fixture.pid)
+
+      assert Jason.decode!(report["answer"]) ==
+               report_of(fixture, %{args | "member" => fixture.member})
+
+      assert {:error, "Execution terminated: runner stopped without cleanup"} =
+               Dispatch.await(fixture.pid, fixture.close)
+    end
+  end
+
+  # A live attempt for the vector of `op`: attached, and holding what the
+  # vector's answer needs where that is cheap to hold (its vault field, a
+  # rate of one request).
+  defp vector_fixture("attach") do
+    AttemptFixtures.attached!(
+      attach: false,
+      vault: %{kind: "api_key", fields: %{"API_KEY" => "vector-secret-value"}}
+    )
+  end
+
+  defp vector_fixture("take_rate") do
+    limits = %{Prima.Limits.defaults(:catalyst) | rate_limit: %{requests: 1, window: "1m"}}
+    AttemptFixtures.attached!(limits: limits)
+  end
+
+  defp vector_fixture(_op), do: AttemptFixtures.attached!()
+
+  # The vector's args, with the attempt and the execution they name bound to
+  # the live attempt's.
+  defp rebound("attach", _args, fixture), do: %{"assignment" => fixture.assignment}
+  defp rebound("renew", _args, fixture), do: %{"attempts" => [fixture.attempt, "att_other"]}
+
+  defp rebound(op, %{"outcome" => outcome}, fixture) when op in ["complete", "fail"],
+    do: %{"outcome" => Map.merge(outcome, names_of(fixture))}
+
+  defp rebound("push_deltas", %{"deltas" => deltas}, fixture),
+    do: %{"deltas" => Enum.map(deltas, &Map.merge(&1, names_of(fixture)))}
+
+  defp rebound("take_rate", _args, fixture), do: %{"bucket" => "http:" <> fixture.component_ref}
+
+  # The address the vector's host resolves to, as a literal, so the pin
+  # resolves nothing on the network (`Crucible.Host.EgressTest` resolves
+  # the vectors' names through a scripted resolver).
+  defp rebound("egress_pin", %{"url" => url} = args, _fixture) do
+    %{"ok" => %{"ip" => ip}} = egress_answer()
+    %{args | "url" => URI.to_string(%{URI.parse(url) | host: ip})}
+  end
+
+  defp rebound(_op, args, _fixture), do: args
+
+  defp names_of(fixture) do
+    %{
+      "execution_id" => fixture.execution_id,
+      "attempt" => fixture.attempt,
+      "fence" => fixture.fence
+    }
+  end
+
+  # What a live attempt holding nothing more answers each call: the
+  # vector's success where the attempt can give it, and otherwise the
+  # refusal of a resource it does not hold, which the vector lists.
+  defp expected(op)
+       when op in ~w(attach renew complete fail push_deltas take_rate record_denial egress_pin),
+       do: "ok"
+
+  defp expected("fetch_artifact"), do: "not_found"
+  defp expected("release_child"), do: "lost"
+  defp expected(op) when op in ~w(oauth_token storage admit_child tool_call), do: "guest_error"
+
+  defp answer_name(%{"ok" => _value}), do: "ok"
+  defp answer_name(%{"error" => name}), do: name
+
+  defp answered(op, answer, vector, _fixture, _before)
+       when op in ~w(attach complete take_rate record_denial),
+       do: assert(answer == vector, op)
+
+  defp answered("renew", %{"ok" => renewals}, %{"ok" => wire}, fixture, _before) do
+    assert [%{"lease_until" => _}, "lost"] = wire |> Map.values() |> Enum.sort_by(&is_binary/1)
+    assert %{"lease_until" => until} = renewals[fixture.attempt]
+    assert is_integer(until) and renewals["att_other"] == "lost"
+  end
+
+  defp answered("fail", %{"ok" => message}, %{"ok" => wire}, _fixture, _before),
+    do: assert(message == wire)
+
+  defp answered("push_deltas", %{"ok" => [reply]}, %{"ok" => [wire]}, _fixture, _before) do
+    assert %{"ok" => true, "sequence" => _} = Jason.decode!(reply)
+    assert Map.keys(Jason.decode!(reply)) == Map.keys(Jason.decode!(wire))
+  end
+
+  defp answered("egress_pin", %{"ok" => pin}, %{"ok" => wire}, _fixture, before) do
+    assert {:ok, %PinnedTarget{} = read} = PinnedTarget.read(pin)
+    assert pin["host"] == wire["ip"]
+
+    assert Map.drop(pin, ["id", "expires_at", "host"]) ==
+             Map.drop(wire, ["id", "expires_at", "host"])
+
+    window = Prima.WorkerAuth.window_ms()
+    assert read.expires_at >= before + window and read.expires_at <= now() + window
+  end
+
+  defp egress_answer do
+    [vector] = Enum.filter(@vectors["calls"], &(&1["callback"] == "egress_pin"))
+    Jason.decode!(vector["answer"])
+  end
+
+  defp report_of(fixture, args) do
+    body = :runner_exited |> WorkerWire.request_body(args) |> Jason.encode!()
+    fields = %{service: fixture.service, boot: fixture.boot, ts: now(), nonce: "n_report"}
+    {:ok, header} = Prima.WorkerAuth.report_header(dispatch_key(fixture.service), fields, body)
+    header |> Crucible.Host.runner_exited(body) |> Jason.decode!()
   end
 
   defp terminal_events(fixture) do
