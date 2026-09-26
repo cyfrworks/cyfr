@@ -38,10 +38,11 @@ defmodule Cyfr.Test.ScriptedWorkerTest do
   @scripted "reagent:local.ta"
   @math_wasm_path Path.expand("../support/test_wasm/math.wasm", __DIR__)
 
-  setup do
+  setup tags do
     Arca.Cache.init()
-    :ok = Ecto.Adapters.SQL.Sandbox.checkout(Arca.Repo)
-    Ecto.Adapters.SQL.Sandbox.mode(Arca.Repo, {:shared, self()})
+    # An owner of its own, so what a run leaves behind is ended before the
+    # connection goes (`Cyfr.Test.Sandbox`).
+    Cyfr.Test.Sandbox.setup!(tags)
 
     test_path =
       Path.join(System.tmp_dir!(), "scripted_worker_#{System.unique_integer([:positive])}")
@@ -56,13 +57,19 @@ defmodule Cyfr.Test.ScriptedWorkerTest do
       ScriptedWorker.workers(@scripted, previous[{:cyfr, :opus_workers}])
     )
 
-    ctx = Sanctum.TestContext.local()
+    # An athanor of this test's own: the unreaped kills, rate windows and
+    # slots its runs are counted under are keyed by athanor and node-global.
+    ctx = ScriptedWorker.athanor!(Sanctum.TestContext.local())
 
     on_exit(fn ->
       Prima.Slots.forgive_unreaped(Crucible.Slots, ctx.athanor_id)
       File.rm_rf!(test_path)
       for {{app, key}, value} <- previous, do: Application.put_env(app, key, value)
     end)
+
+    # The runs stop before the worker routing and the base path they read
+    # are put back.
+    Cyfr.Test.Sandbox.stop_work_on_exit()
 
     {:ok, _} =
       Compendium.Registry.publish_bytes(ctx, File.read!(@math_wasm_path), %{
@@ -333,14 +340,6 @@ defmodule Cyfr.Test.ScriptedWorkerTest do
     athanor_id = ctx.athanor_id
     watch_unreaped!()
 
-    # `Prima.Slots`'s unreaped map is node-global and keyed by athanor, and
-    # this suite runs under the well-known `ath_test` that thirty test files
-    # share. Asking whether the key is absent asks whether any test anywhere
-    # in the run has noted an unreaped kill for it, which is a fact about
-    # the suite's order and not about this run. What this case means is that
-    # *this* run added nothing, so it reads the count before and after.
-    unreaped_before = unreaped_count(athanor_id)
-
     task =
       Task.async(fn ->
         Dispatch.run(ctx, "#{@scripted}:1.0.0", %{},
@@ -368,7 +367,7 @@ defmodule Cyfr.Test.ScriptedWorkerTest do
     # The athanor carries no note for it, and nothing was killed, because
     # nothing was left to kill.
     refute_received {:unreaped_kill, ^id, _count}
-    assert unreaped_count(athanor_id) == unreaped_before
+    assert unreaped_count(athanor_id) == 0
     refute id in ScriptedWorker.kills()
 
     # And the worker service answers a kill of that run as the contract
@@ -401,11 +400,9 @@ defmodule Cyfr.Test.ScriptedWorkerTest do
     assert {:error, _cancelled} = Task.await(task)
 
     assert id in ScriptedWorker.kills()
-    # The count is the athanor's within the decay window, which a late note
-    # of an earlier test's run can raise on the shared athanor; this run's
-    # note is what is asserted.
-    assert_received {:unreaped_kill, ^id, count} when count >= 1
-    assert Prima.Slots.status(Crucible.Slots).unreaped[athanor_id] >= 1
+    # The athanor is this test's alone, so its count is this run's kill.
+    assert_received {:unreaped_kill, ^id, 1}
+    assert unreaped_count(athanor_id) == 1
   end
 
   # Every unreaped kill noted from here on, forwarded to this process.
@@ -459,7 +456,7 @@ defmodule Cyfr.Test.ScriptedWorkerTest do
     assert %{status: "completed"} = Arca.Repo.get(Arca.Schemas.Execution, id)
   end
 
-  test "dispatch reaches the worker service at the endpoint its listener answers on" do
+  test "dispatch reaches the worker service at the endpoint its listener answers on", %{ctx: ctx} do
     start_supervised!({ScriptedWorker, ref: @scripted, script: []})
 
     assert [%{id: "wrk_scripted", url: url, components: [@scripted]} | _rest] =
@@ -477,7 +474,7 @@ defmodule Cyfr.Test.ScriptedWorkerTest do
 
     # A kill of a run no runner runs finds nothing, and is no failure.
     assert {:error, :not_found} = WorkerClient.kill(ScriptedWorker.endpoint(), "exec_none")
-    assert :ok = Dispatch.stop("exec_none", "ath_test")
+    assert :ok = Dispatch.stop("exec_none", ctx.athanor_id)
     assert ScriptedWorker.kills() == ["exec_none"]
   end
 

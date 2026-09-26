@@ -541,12 +541,15 @@ jobs:
       # CI fixtures mirrored in s3_minio_test.exs.
       - name: Start MinIO
         run: |
-          # docker.io/minio/minio refuses anonymous pulls; quay.io is the
-          # project's own registry. Pinned by digest (RELEASE.2025-09-07T16-13-09Z)
-          # like every other image and action in these workflows.
+          # MinIO Inc. stopped publishing images in October 2025 and archived
+          # the server in February 2026; pgsty/minio is the maintained
+          # community build of the same server, with the same variables and
+          # health route. Pinned by digest (RELEASE.2026-08-04T00-00-00Z,
+          # the multi-arch index) like every other image and action in these
+          # workflows.
           docker run -d --name minio -p 9000:9000 \
             -e MINIO_ROOT_USER=cyfrtest -e MINIO_ROOT_PASSWORD=cyfrtest123 \
-            quay.io/minio/minio@sha256:14cea493d9a34af32f524e538b8346cf79f3321eff8e708c1e2960462bd8936e \
+            pgsty/minio@sha256:b6bfe7239bfc83fb90d31612d9704d86039dd714f7904b3f1ad68f211e602372 \
             server /data
       - name: Install dependencies
         run: mix deps.get
@@ -888,6 +891,37 @@ jobs:
         run: mix deps.get
       - name: Boot the release against a fresh ${{ matrix.db }} database
         run: tests/release-boot/boot.sh ${{ matrix.db }}
+
+  # The browser harness (tests/browser/README.md): the `cyfr` release started
+  # as release-boot starts one, on SQLite, serving two public tinctures, and
+  # the frame-facts experiment run against it in every browser the official
+  # Playwright image ships. The image is pinned by digest in
+  # tests/browser/run.sh, so no browser binary is fetched here; Playwright's
+  # library comes from tests/browser/package-lock.json, JavaScript only.
+  # The experiment records what each browser allowed and fails only when it
+  # could not observe an attempt.
+  browser:
+    name: Browser harness (frame facts on Chromium, Firefox and WebKit)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - uses: erlef/setup-beam@54075bcc5e249e4758d363f27d099f55d843f124 # v1
+        id: beam
+        with:
+          otp-version: '29'
+          elixir-version: '1.20.3'
+      - name: Cache deps and the prod build
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        with:
+          path: |
+            deps
+            _build
+          key: ${{ runner.os }}-mix-browser-${{ steps.beam.outputs.elixir-version }}-${{ steps.beam.outputs.otp-version }}-${{ hashFiles('mix.lock') }}
+          restore-keys: ${{ runner.os }}-mix-browser-${{ steps.beam.outputs.elixir-version }}-${{ steps.beam.outputs.otp-version }}-
+      - name: Install dependencies
+        run: mix deps.get
+      - name: The frame-facts experiment
+        run: tests/browser/run.sh
 
   seed-guards:
     name: Seed media (clean, immutable versions)

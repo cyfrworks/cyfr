@@ -1,0 +1,10 @@
+{
+  "name": "frame-probe",
+  "type": "tincture",
+  "version": "1.0.0",
+  "publisher": "local",
+  "description": "The frame-facts experiment: nine attempts made from inside a sandboxed frame.",
+  "tincture": {
+    "entry": "index.html"
+  }
+}
