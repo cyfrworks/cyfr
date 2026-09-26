@@ -24,8 +24,20 @@ defmodule Opus.HttpHandlerEnforcementTest do
   end
 
   # A real attached attempt for `component_ref` and its host client.
+  # The control plane's own domain check runs before any resolution, so the
+  # attempt's authority must allow every host these requests name for the
+  # engine's edge, the resolver and the method check to be what decides.
   defp attached(component_ref) do
-    attempt = AttemptFixtures.attached!(component_ref: component_ref)
+    egress = %{domains: ["*"], methods: [], schemes: [], private_ips: []}
+
+    attempt =
+      AttemptFixtures.attached!(
+        component_ref: component_ref,
+        authority: %{
+          Prima.Authority.zero()
+          | resources: %Prima.Authority.Blob.Edge{egress: egress}
+        }
+      )
 
     {attempt,
      Opus.HostClient.new(attempt.keys, attempt.runner, attempt.boot, %{
