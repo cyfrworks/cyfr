@@ -28,6 +28,12 @@ defmodule Sanctum.Consent.ShapeDerivation do
   answers `{:error, {:corrupt, {:manifest, source_ref}}}` for it, never the
   empty ask, which would read as a component that asks for nothing.
 
+  A tincture that declares a frame, cards, streams or system actions
+  (`Prima.Manifest.Tincture`) carries that declaration's digest as
+  `tincture_digest`, so a version that declares more changes the shape and
+  asks again; one that declares none carries no digest, and its shape is
+  what it was before tinctures declared anything.
+
   A vault need names what its projection reads: every derived `api_key`
   or `bundle` need row carries a non-empty `fields` list and every
   `oauth` need row a non-empty `scopes` list, which the consent writes as
@@ -39,6 +45,7 @@ defmodule Sanctum.Consent.ShapeDerivation do
 
   alias Prima.Manifest.Caps
   alias Prima.Manifest.Needs
+  alias Prima.Manifest.Tincture
   alias Sanctum.Consent.Components
   alias Sanctum.Consent.ShapeDigest
   alias Prima.ToolPattern
@@ -93,7 +100,8 @@ defmodule Sanctum.Consent.ShapeDerivation do
     with {:ok, row, manifest} <- manifest_row(ctx, source_ref),
          {:ok, releases} <- dependency_releases(ctx, row, source_ref),
          needs = Needs.from_manifest(manifest) || [],
-         :ok <- check_vault_projections(needs, source_ref) do
+         :ok <- check_vault_projections(needs, source_ref),
+         {:ok, tincture_digest} <- tincture_digest(manifest, source_ref) do
       caps = Caps.from_manifest(manifest, &Arca.Storage.valid_guest_path?/1) || Caps.empty()
 
       {:ok,
@@ -107,7 +115,22 @@ defmodule Sanctum.Consent.ShapeDerivation do
          dependency_releases: releases
        }
        |> Prima.MapUtil.put_present(:model_target, model_target(manifest))
-       |> Prima.MapUtil.put_present(:tool_policy, tool_policy(manifest))}
+       |> Prima.MapUtil.put_present(:tool_policy, tool_policy(manifest))
+       |> Prima.MapUtil.put_present(:tincture_digest, tincture_digest)}
+    end
+  end
+
+  # The frame declaration's digest, or nil for a manifest that declares
+  # none. A stored declaration was held to its shapes when it was written,
+  # so one that does not read is a damaged row, refused as the manifest is.
+  defp tincture_digest(manifest, source_ref) do
+    if Tincture.declared?(manifest) do
+      case Tincture.from_manifest(manifest) do
+        {:ok, declaration} -> {:ok, Tincture.digest(declaration)}
+        {:error, _} -> {:error, {:corrupt, {:manifest, source_ref}}}
+      end
+    else
+      {:ok, nil}
     end
   end
 

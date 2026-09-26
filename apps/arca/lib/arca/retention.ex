@@ -61,7 +61,8 @@ defmodule Arca.Retention do
     Arca.Retention.StagedRevisions,
     Arca.Retention.WriteIntents,
     Arca.Retention.FencedStaging,
-    Arca.Retention.ProjectionTombstones
+    Arca.Retention.ProjectionTombstones,
+    Arca.Retention.FrameCredentials
   ]
 
   # The largest integer the settings row's canonical encoding carries

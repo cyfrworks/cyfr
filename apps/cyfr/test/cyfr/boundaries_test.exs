@@ -613,13 +613,14 @@ defmodule Cyfr.BoundariesTest do
       assert MapSet.member?(below, "Arca.Members")
     end
 
-    test "the security-row roster is exactly the fourteen stores, each a module" do
+    test "the security-row roster is exactly the fifteen stores, each a module" do
       assert Enum.sort(Boundaries.sanctum_only_storage()) ==
                Enum.sort(~w(
                  Arca.ConsentStorage Arca.ConsentProofStorage Arca.ProfileStorage
                  Arca.ToolGrantStorage Arca.VaultStorage Arca.SessionStorage
                  Arca.ApiKeyStorage Arca.RegistryTokenStorage Arca.ProviderCredentialStorage
-                 Arca.WebhookStorage Arca.Users Arca.Members Arca.Athanors Arca.Doors
+                 Arca.WebhookStorage Arca.FrameCredentials Arca.Users Arca.Members
+                 Arca.Athanors Arca.Doors
                ))
 
       for name <- Boundaries.sanctum_only_storage() do

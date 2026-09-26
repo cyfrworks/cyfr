@@ -174,5 +174,95 @@
     { "a": "abc", "b": "abd", "expect": "lt" },
     { "a": "abd", "b": "abc", "expect": "gt" },
     { "a": "garbage", "b": "garbage", "expect": "eq" }
-  ]
+  ],
+  "tincture_urls_comment": "The tincture URL grammar Prima.TinctureUrl writes: a tincture's public path, /t/<athanor>/<publisher>/<name>, and a private version's served file, /_s/<credential>/<path inside the version>, under an asset credential that is opaque, URL-safe (base64url segments joined by dots), 16 to 1024 characters and never leads with a dot. parse is what a served-file path reads back as: the credential and the file's segments, or null when the path is refused. Prima's test reads these cases.",
+  "tincture_urls": {
+    "public": [
+      {
+        "athanor": "@alice",
+        "publisher": "local",
+        "name": "dash",
+        "path": "/t/@alice/local/dash"
+      },
+      {
+        "athanor": "home",
+        "publisher": "moonmoon",
+        "name": "app",
+        "path": "/t/home/moonmoon/app"
+      }
+    ],
+    "served": [
+      {
+        "path": "/_s/SFMyNTY.g2wAAAAKYQFtAAAAB3Vzcl8x.x7Qv3n1Ew0rJ9cXk2lZs8QmYb4pTnVh6aDfGuKoWeRi/index.html",
+        "parse": {
+          "credential": "SFMyNTY.g2wAAAAKYQFtAAAAB3Vzcl8x.x7Qv3n1Ew0rJ9cXk2lZs8QmYb4pTnVh6aDfGuKoWeRi",
+          "path": [
+            "index.html"
+          ]
+        }
+      },
+      {
+        "path": "/_s/SFMyNTY.g2wAAAAKYQFtAAAAB3Vzcl8x.x7Qv3n1Ew0rJ9cXk2lZs8QmYb4pTnVh6aDfGuKoWeRi/dist/assets/app.js",
+        "parse": {
+          "credential": "SFMyNTY.g2wAAAAKYQFtAAAAB3Vzcl8x.x7Qv3n1Ew0rJ9cXk2lZs8QmYb4pTnVh6aDfGuKoWeRi",
+          "path": [
+            "dist",
+            "assets",
+            "app.js"
+          ]
+        }
+      },
+      {
+        "path": "/_s/SFMyNTY.g2wAAAAKYQFtAAAAB3Vzcl8x.x7Qv3n1Ew0rJ9cXk2lZs8QmYb4pTnVh6aDfGuKoWeRi/public/media/icon%20large.svg",
+        "parse": {
+          "credential": "SFMyNTY.g2wAAAAKYQFtAAAAB3Vzcl8x.x7Qv3n1Ew0rJ9cXk2lZs8QmYb4pTnVh6aDfGuKoWeRi",
+          "path": [
+            "public",
+            "media",
+            "icon large.svg"
+          ]
+        }
+      },
+      {
+        "path": "/_s/SFMyNTY.g2wAAAAKYQFtAAAAB3Vzcl8x.x7Qv3n1Ew0rJ9cXk2lZs8QmYb4pTnVh6aDfGuKoWeRi",
+        "parse": null,
+        "why": "no file"
+      },
+      {
+        "path": "/_s/SFMyNTY.g2wAAAAKYQFtAAAAB3Vzcl8x.x7Qv3n1Ew0rJ9cXk2lZs8QmYb4pTnVh6aDfGuKoWeRi/../escape.html",
+        "parse": null,
+        "why": "a dot segment"
+      },
+      {
+        "path": "/_s/SFMyNTY.g2wAAAAKYQFtAAAAB3Vzcl8x.x7Qv3n1Ew0rJ9cXk2lZs8QmYb4pTnVh6aDfGuKoWeRi/dist//app.js",
+        "parse": null,
+        "why": "an empty segment"
+      },
+      {
+        "path": "/_s/..SFMyNTY.g2wAAAAKYQFtAAAAB3Vzcl8x.x7Qv3n1Ew0rJ9cXk2lZs8QmYb4pTnVh6aDfGuKoWeRi/index.html",
+        "parse": null,
+        "why": "a credential leading with a dot"
+      },
+      {
+        "path": "/_s/short/index.html",
+        "parse": null,
+        "why": "a credential under 16 characters"
+      },
+      {
+        "path": "/_s/SFMyNTY+g2wAAAAKYQFtAAAAB3Vzcl8x.x7Qv3n1Ew0rJ9cXk2lZs8QmYb4pTnVh6aDfGuKoWeRi/index.html",
+        "parse": null,
+        "why": "a credential outside base64url and dots"
+      },
+      {
+        "path": "/_s/SFMyNTY.g2wAAAAKYQFtAAAAB3Vzcl8x.x7Qv3n1Ew0rJ9cXk2lZs8QmYb4pTnVh6aDfGuKoWeRi/a%2Fb.js",
+        "parse": null,
+        "why": "an encoded separator inside a segment"
+      },
+      {
+        "path": "/t/SFMyNTY.g2wAAAAKYQFtAAAAB3Vzcl8x.x7Qv3n1Ew0rJ9cXk2lZs8QmYb4pTnVh6aDfGuKoWeRi/index.html",
+        "parse": null,
+        "why": "another prefix"
+      }
+    ]
+  }
 }

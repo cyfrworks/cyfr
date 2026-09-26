@@ -5,7 +5,8 @@ defmodule Sanctum.Consent.ShapeDigest do
   What the operator was shown, hashed before any choice was made.
 
   The shape is the *question*: this component, at this scope, declaring
-  these needs, asking for these capabilities. The answer — which credential
+  these needs, asking for these capabilities — and, for a tincture, the
+  frame, cards, streams and system actions it declares, by their digest. The answer — which credential
   satisfies which need, what gets projected — is the commit digest's job
   (`Sanctum.Consent.CommitDigest`).
 
@@ -44,6 +45,7 @@ defmodule Sanctum.Consent.ShapeDigest do
           optional(:slots) => [String.t()],
           optional(:dependency_releases) => [String.t()],
           optional(:model_target) => String.t(),
+          optional(:tincture_digest) => String.t(),
           optional(:tool_policy) => %{
             optional(:auto) => [String.t()],
             optional(:ask) => [String.t()]
@@ -103,7 +105,7 @@ defmodule Sanctum.Consent.ShapeDigest do
            Normalize.only_keys(
              shape,
              ~w(scope source_ref release_identity needs caps tool_actions slots
-                dependency_releases model_target tool_policy)a,
+                dependency_releases model_target tool_policy tincture_digest)a,
              :invalid_shape
            ),
          {:ok, scope} <- Normalize.enum(shape, :scope, [:versionless, :pinned], :invalid_shape),
@@ -116,7 +118,8 @@ defmodule Sanctum.Consent.ShapeDigest do
          {:ok, dependency_releases} <-
            Normalize.string_set(shape, :dependency_releases, :invalid_shape),
          {:ok, model_target} <- Normalize.optional_string(shape, :model_target, :invalid_shape),
-         {:ok, tool_policy} <- Normalize.tool_policy(shape, :tool_policy, :invalid_shape) do
+         {:ok, tool_policy} <- Normalize.tool_policy(shape, :tool_policy, :invalid_shape),
+         {:ok, tincture_digest} <- tincture_digest(shape) do
       canonical =
         %{
           "scope" => Atom.to_string(scope),
@@ -130,8 +133,26 @@ defmodule Sanctum.Consent.ShapeDigest do
         |> Normalize.put_optional("release_identity", release_identity)
         |> Normalize.put_optional("model_target", model_target)
         |> Normalize.put_optional("tool_policy", tool_policy)
+        |> Normalize.put_optional("tincture_digest", tincture_digest)
 
       {:ok, canonical}
+    end
+  end
+
+  # The digest of a tincture's frame declaration
+  # (`Prima.Manifest.Tincture.digest/1`): absent when it declares none.
+  defp tincture_digest(shape) do
+    case Normalize.optional_string(shape, :tincture_digest, :invalid_shape) do
+      {:ok, nil} ->
+        {:ok, nil}
+
+      {:ok, digest} ->
+        if Regex.match?(~r/\Asha256:[0-9a-f]{64}\z/, digest),
+          do: {:ok, digest},
+          else: {:error, {:invalid_shape, :tincture_digest, "must be a sha256 digest"}}
+
+      other ->
+        other
     end
   end
 

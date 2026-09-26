@@ -86,9 +86,12 @@ defmodule Arca.RetentionTest do
       assert keys == Enum.uniq(keys)
     end
 
-    test "the projection tombstones are the last of fifteen kinds, in days, a week by default" do
-      assert length(Retention.kinds()) == 15
-      assert List.last(Retention.kinds()) == Retention.ProjectionTombstones
+    test "the frame credentials are the last of sixteen kinds, in days, a week by default" do
+      assert length(Retention.kinds()) == 16
+      assert List.last(Retention.kinds()) == Retention.FrameCredentials
+      assert Retention.FrameCredentials.key() == "frame_credential_days"
+      assert Retention.FrameCredentials.unit() == :days
+      assert Retention.FrameCredentials.default() == 7
       assert Retention.ProjectionTombstones.key() == "projection_tombstone_days"
       assert Retention.ProjectionTombstones.unit() == :days
       assert Retention.ProjectionTombstones.default() == 7

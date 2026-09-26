@@ -99,8 +99,8 @@ defmodule Cyfr.BoundaryDeclarationsTest do
   # Exports beyond the facade manifest's rows, each group with its reason.
   @export_additions %{
     Arca => [
-      {~w(ApiKeyStorage Athanors ConsentProofStorage ConsentStorage Doors Members
-          ProfileStorage ProviderCredentialStorage RegistryTokenStorage SessionStorage
+      {~w(ApiKeyStorage Athanors ConsentProofStorage ConsentStorage Doors FrameCredentials
+          Members ProfileStorage ProviderCredentialStorage RegistryTokenStorage SessionStorage
           ToolGrantStorage Users VaultStorage WebhookStorage),
        "the security rows, which Sanctum reads; that no other layer reads them is " <>
          "`Cyfr.Boundaries`' security row"},

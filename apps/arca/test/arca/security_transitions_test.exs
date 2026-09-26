@@ -142,6 +142,36 @@ defmodule Arca.SecurityTransitions.Fixtures do
   def seats(user_id), do: Arca.Repo.all(where(Membership, user_id: ^user_id))
   def membership(id), do: Arca.Repo.get(Membership, id)
 
+  # A frame credential row, written as its store writes one. Inserted
+  # directly: minting is fenced by the member's slot, which these tests do
+  # not hold, and what they measure is the transition's retirement.
+  def frame!(athanor_id, user_id, state \\ "active") do
+    now = DateTime.utc_now()
+    id = Prima.UUID7.generate_id("frc")
+
+    {1, _} =
+      Arca.Repo.insert_all(Arca.Schemas.FrameCredential, [
+        %{
+          id: id,
+          athanor_id: athanor_id,
+          user_id: user_id,
+          version_digest: "sha256:" <> String.duplicate("b", 64),
+          grant_revision: 1,
+          frame_id: "frm_#{uniq()}",
+          source_kind: "session",
+          source_id: "c3Q",
+          state: state,
+          deadline: DateTime.add(now, 3600, :second),
+          inserted_at: now,
+          updated_at: now
+        }
+      ])
+
+    id
+  end
+
+  def frame_state(id), do: Arca.Repo.get(Arca.Schemas.FrameCredential, id).state
+
   # A trigger that makes one statement fail inside the transition, spelled
   # per adapter. The sandbox rolls it back with the test.
   def fail_on!(table, event) do
@@ -350,10 +380,13 @@ defmodule Arca.SecurityTransitionsTest do
         :ok =
           Arca.ThreadSubscriptionStorage.follow(Prima.Actor.in_athanor(own.id), "thr_f", user.id)
 
+        frame = frame!(own.id, user.id)
         failure = fail_on!(unquote(table), unquote(event))
 
         assert {:error, :database_error} =
                  SecurityTransitions.deny_user(server(), user.id, verify: admit())
+
+        assert frame_state(frame) == "active"
 
         # Nothing committed: no denial with a live credential, and no
         # half-archived athanor.
@@ -495,6 +528,98 @@ defmodule Arca.SecurityTransitionsTest do
 
       assert {:error, :not_found} =
                SecurityTransitions.archive_athanor(server(), "ath_nowhere", verify: admit())
+    end
+  end
+
+  describe "frame credentials" do
+    test "a denial revokes the person's frames everywhere and every frame of what it archives" do
+      {user, own} = owner!()
+      shared = group!()
+      peer = person!()
+      seat!(shared.id, user.id)
+      seat!(shared.id, peer.id)
+
+      mine_own = frame!(own.id, user.id)
+      mine_shared = frame!(shared.id, user.id, "suspended")
+      peer_shared = frame!(shared.id, peer.id)
+      # A frame of another person in the athanor the denial archives.
+      guest_own = frame!(own.id, peer.id)
+      already = frame!(own.id, user.id, "revoked")
+
+      assert {:ok, change} = SecurityTransitions.deny_user(server(), user.id, verify: admit())
+
+      assert change.revoked_frame_credential_ids == Enum.sort([mine_own, mine_shared, guest_own])
+      for id <- [mine_own, mine_shared, guest_own, already], do: assert(frame_state(id) == "revoked")
+      assert frame_state(peer_shared) == "active"
+    end
+
+    test "an allow revokes a frame that outlived the denial and restores none" do
+      {user, own} = owner!()
+      opened = frame!(own.id, user.id)
+      {:ok, _} = SecurityTransitions.deny_user(server(), user.id, verify: admit())
+      straggler = frame!(own.id, user.id)
+
+      assert {:ok, change} = SecurityTransitions.allow_user(server(), user.id, verify: admit())
+      assert change.revoked_frame_credential_ids == [straggler]
+      assert frame_state(opened) == "revoked"
+      assert frame_state(straggler) == "revoked"
+    end
+
+    test "an archive revokes the athanor's frames, and a reopen revokes any since" do
+      group = group!()
+      member = person!()
+      seat!(group.id, member.id)
+      frame = frame!(group.id, member.id)
+      elsewhere = frame!(group!().id, member.id)
+
+      assert {:ok, archived} =
+               SecurityTransitions.archive_athanor(server(), group.id, verify: admit())
+
+      assert archived.revoked_frame_credential_ids == [frame]
+      assert frame_state(frame) == "revoked"
+      assert frame_state(elsewhere) == "active"
+
+      straggler = frame!(group.id, member.id)
+
+      assert {:ok, reopened} =
+               SecurityTransitions.unarchive_athanor(server(), group.id, verify: admit())
+
+      assert reopened.revoked_frame_credential_ids == [straggler]
+      assert frame_state(straggler) == "revoked"
+    end
+
+    test "an injected frame UPDATE failure rolls a denial back with every credential standing" do
+      {user, own} = owner!()
+      session = session!(user.id, own.id)
+      key = key!(own.id, user.id)
+      frame = frame!(own.id, user.id)
+      failure = fail_on!("frame_credentials", "UPDATE")
+
+      assert {:error, :database_error} =
+               SecurityTransitions.deny_user(server(), user.id, verify: admit())
+
+      assert user(user.id).status == "active"
+      assert athanor(own.id).status == "active"
+      assert session?(session)
+      refute revoked?(key)
+      assert frame_state(frame) == "active"
+
+      clear_failure!(failure)
+      assert {:ok, %{revoked_frame_credential_ids: [^frame]}} =
+               SecurityTransitions.deny_user(server(), user.id, verify: admit())
+    end
+
+    test "an injected frame UPDATE failure leaves the athanor open and its frames standing" do
+      group = group!()
+      frame = frame!(group.id, person!().id)
+      failure = fail_on!("frame_credentials", "UPDATE")
+
+      assert {:error, :database_error} =
+               SecurityTransitions.archive_athanor(server(), group.id, verify: admit())
+
+      assert athanor(group.id).status == "active"
+      assert frame_state(frame) == "active"
+      clear_failure!(failure)
     end
   end
 

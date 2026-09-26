@@ -21,10 +21,97 @@ defmodule Prima.Provider do
   read through the one operation that declares it in `resource_schemes`
   (`Prima.Operation`).
 
+  A provider that offers streams declares them beside its operations with
+  `c:streams/0` (`Prima.Provider.Stream`): a stream is continuous data a
+  gate-admitted grant opens (`Prima.StreamGrant`), riding one `Cyfr.Bus`
+  topic, and never an operation of its own.
+
   Handlers return `{:ok, result}` or `{:error, reason}`. List results use a
   plural resource key with optional count or pagination metadata; single
   reads return the record, and mutations return their resulting state.
   """
+
+  defmodule Stream do
+    @moduledoc """
+    One stream a provider offers (`c:Prima.Provider.streams/0`), declared
+    where its operations are.
+
+      * `name` — two or more dotted lowercase identifiers
+        (`executions.deltas`), the name a tincture declares and opens it by
+        (`Prima.Manifest.Tincture`).
+      * `topic` — the `Cyfr.Bus` roster key of the topic it rides; the host
+        checks at boot that the roster declares it.
+      * `projection` — the payload fields a grant forwards to its holder, and
+        nothing else of the topic's payload.
+      * `subject` — the grammar a subject must match, as the source of an
+        anchored regular expression, or `nil` for a stream that takes no
+        subject.
+      * `deadline_bound` — the longest a grant on it lives, in seconds; a
+        grant's own deadline is never later.
+    """
+
+    @type t :: %__MODULE__{
+            name: String.t(),
+            topic: atom(),
+            projection: [String.t()],
+            subject: String.t() | nil,
+            deadline_bound: pos_integer()
+          }
+
+    @enforce_keys [:name, :topic, :projection, :deadline_bound]
+    defstruct [:name, :topic, :projection, :deadline_bound, subject: nil]
+
+    @field ~r/\A[a-z][a-z0-9_]{0,62}\z/
+
+    @doc """
+    Whether `stream` is a well-formed declaration: a stream name, an atom
+    topic, a non-empty list of distinct field names, a subject grammar that
+    compiles and is anchored at both ends (or none), and a positive bound.
+    """
+    @spec valid?(term()) :: boolean()
+    def valid?(%__MODULE__{} = stream) do
+      Prima.Manifest.Tincture.stream_name?(stream.name) and is_atom(stream.topic) and
+        stream.topic not in [nil, true, false] and
+        projection?(stream.projection) and subject_grammar?(stream.subject) and
+        is_integer(stream.deadline_bound) and stream.deadline_bound > 0
+    end
+
+    def valid?(_other), do: false
+
+    @doc """
+    Whether the stream admits `subject`: `nil` for a stream that takes none,
+    or a string its grammar matches whole.
+    """
+    @spec admits?(t(), String.t() | nil) :: boolean()
+    def admits?(%__MODULE__{subject: nil}, subject), do: is_nil(subject)
+
+    def admits?(%__MODULE__{subject: grammar}, subject) when is_binary(subject) do
+      case Regex.compile(grammar) do
+        {:ok, regex} -> Regex.match?(regex, subject)
+        {:error, _} -> false
+      end
+    end
+
+    def admits?(%__MODULE__{}, _subject), do: false
+
+    defp projection?(fields) when is_list(fields) and fields != [],
+      do:
+        Enum.all?(fields, &(is_binary(&1) and Regex.match?(@field, &1))) and
+          Enum.uniq(fields) == fields
+
+    defp projection?(_fields), do: false
+
+    # Anchored at both ends, so a grammar cannot admit a subject by matching
+    # a part of it.
+    defp subject_grammar?(nil), do: true
+
+    defp subject_grammar?(grammar) when is_binary(grammar) do
+      String.starts_with?(grammar, "\\A") and String.ends_with?(grammar, "\\z") and
+        match?({:ok, _}, Regex.compile(grammar))
+    end
+
+    defp subject_grammar?(_grammar), do: false
+  end
 
   @type icon :: %{
           required(:src) => String.t(),
@@ -178,7 +265,14 @@ defmodule Prima.Provider do
   """
   @callback status() :: %{String.t() => String.t()}
 
-  @optional_callbacks context_kind: 0, resources: 0, resource_templates: 0, status: 0
+  @doc """
+  The streams a provider offers (`Prima.Provider.Stream`): `[]` when it
+  exports none. Each names the `Cyfr.Bus` topic it rides, which the host
+  checks exists at boot.
+  """
+  @callback streams() :: [Prima.Provider.Stream.t()]
+
+  @optional_callbacks context_kind: 0, resources: 0, resource_templates: 0, status: 0, streams: 0
 
   @doc """
   A provider's declared `c:context_kind/0`: `:context` when it exports
@@ -200,6 +294,48 @@ defmodule Prima.Provider do
       end
     else
       :context
+    end
+  end
+
+  @doc """
+  A provider's declared `c:streams/0`: `[]` when it exports none. A
+  declaration that is not a list of well-formed `Prima.Provider.Stream`s
+  with distinct names raises, so a provider that declares a stream the
+  gate cannot honour is refused at boot rather than served.
+  """
+  @spec streams(module()) :: [Prima.Provider.Stream.t()]
+  def streams(module) when is_atom(module) do
+    if Code.ensure_loaded?(module) and function_exported?(module, :streams, 0) do
+      declared = module.streams()
+
+      cond do
+        not (is_list(declared) and Enum.all?(declared, &Prima.Provider.Stream.valid?/1)) ->
+          raise ArgumentError,
+                "#{inspect(module)}.streams/0 answered #{Prima.LoggerContext.shape(declared)}; " <>
+                  "a provider's streams are a list of well-formed %Prima.Provider.Stream{}"
+
+        length(Enum.uniq_by(declared, & &1.name)) != length(declared) ->
+          raise ArgumentError, "#{inspect(module)}.streams/0 declares a stream name twice"
+
+        true ->
+          declared
+      end
+    else
+      []
+    end
+  end
+
+  @doc """
+  The stream `name` among `declared` (every provider's `streams/1`,
+  concatenated), or `{:error, :undeclared_stream}` when no provider
+  declares it.
+  """
+  @spec fetch_stream([Prima.Provider.Stream.t()], String.t()) ::
+          {:ok, Prima.Provider.Stream.t()} | {:error, :undeclared_stream}
+  def fetch_stream(declared, name) when is_list(declared) and is_binary(name) do
+    case Enum.find(declared, &match?(%Prima.Provider.Stream{name: ^name}, &1)) do
+      nil -> {:error, :undeclared_stream}
+      stream -> {:ok, stream}
     end
   end
 

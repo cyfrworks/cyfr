@@ -10,13 +10,14 @@ defmodule Prima.Manifest do
   `decode/1` and `decode_strict/1` normalize a manifest from its storage
   representations (nil, JSON string, map) into a map. `validate/2` holds a
   decoded manifest to the schema; the `needs` and `caps` blocks are
-  `Prima.Manifest.Needs` and `Prima.Manifest.Caps`. Which storage paths a
+  `Prima.Manifest.Needs` and `Prima.Manifest.Caps`, and the tincture's
+  frame, cards, streams and actions `Prima.Manifest.Tincture`. Which storage paths a
   guest may name is the storage boundary's fact, so the validator takes
   that predicate as an argument (`Arca.Storage.valid_guest_path?/1` at
   every caller) and restates nothing about the layout.
   """
 
-  alias Prima.Manifest.{Caps, Needs}
+  alias Prima.Manifest.{Caps, Needs, Tincture}
 
   # The closed top-level key roster — every field a manifest may carry,
   # which is also the roster component-guide.md documents. Identity fields
@@ -283,13 +284,14 @@ defmodule Prima.Manifest do
 
   defp overlap?(_, _), do: false
 
-  # The tincture block is presentation metadata plus one capability grant:
-  # `connect` feeds the served page's CSP connect-src. Shapes are enforced
-  # for the keys the system reads (unknown extras stay open — the block is
-  # descriptive); connect entries are held to the same domain grammar the
+  # The tincture block is presentation metadata, one capability grant —
+  # `connect` feeds the served page's CSP connect-src — and the frame
+  # declaration (`Prima.Manifest.Tincture`). Shapes are enforced for the
+  # keys the system reads (unknown extras stay open — the rest of the block
+  # is descriptive); connect entries are held to the same domain grammar the
   # CSP builder applies, so a bad entry refuses at publish instead of
   # being dropped silently at serve time.
-  defp validate_tincture_block(%{"tincture" => tincture}) when is_map(tincture) do
+  defp validate_tincture_block(%{"tincture" => tincture} = manifest) when is_map(tincture) do
     connect = tincture["connect"]
 
     cond do
@@ -314,7 +316,7 @@ defmodule Prima.Manifest do
         {:error, {:invalid_tincture, "tincture.window must be an object"}}
 
       true ->
-        :ok
+        declaration(manifest)
     end
   end
 
@@ -323,6 +325,16 @@ defmodule Prima.Manifest do
   end
 
   defp validate_tincture_block(_), do: :ok
+
+  # The frame, cards, streams and actions blocks are held to their shapes
+  # here, at every write; the rules over the names they use are the
+  # component domain's publish check.
+  defp declaration(manifest) do
+    case Tincture.from_manifest(manifest) do
+      {:ok, _declaration} -> :ok
+      {:error, _} = refusal -> refusal
+    end
+  end
 
   # Dependencies drive the activation graph and are one of the three
   # release-digest blocks — a malformed value must refuse at the one

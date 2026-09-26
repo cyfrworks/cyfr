@@ -9,7 +9,8 @@ defmodule Compendium do
   cyfr.run. Component references are parsed by `Prima.ComponentRef`.
 
   The functions below are the domain's door for callers outside it: the
-  tincture rules (`Compendium.Tincture`); component inspection,
+  tincture rules (`Compendium.Tincture` and the frame's,
+  `Compendium.Tincture.Rules`); component inspection,
   resolution, activation and blobs for the execution domain; the
   component facts the assistant reads — its model catalysts, its agents,
   skills and agent sources and the athanor's own formulas — with the path
@@ -44,6 +45,7 @@ defmodule Compendium do
   }
 
   alias Compendium.Registry.Client
+  alias Compendium.Tincture.Rules
   alias Sanctum.Context
 
   # The most rows one listing of the athanor's catalysts reads.
@@ -82,6 +84,58 @@ defmodule Compendium do
   @doc "Whether a `tincture.connect` entry is a bare domain. See `Prima.Manifest`."
   @spec valid_tincture_connect_domain?(term()) :: boolean()
   defdelegate valid_tincture_connect_domain?(domain), to: Tincture, as: :valid_connect_domain?
+
+  # ---------------------------------------------------------------------------
+  # The tincture frame's rules (`Compendium.Tincture.Rules`)
+  # ---------------------------------------------------------------------------
+
+  @doc "The served file types, extension to MIME type (`Compendium.Tincture.Rules.served_types/0`)."
+  @spec tincture_served_types() :: %{String.t() => String.t()}
+  defdelegate tincture_served_types(), to: Rules, as: :served_types
+
+  @doc "The frame capabilities a manifest may declare (`Compendium.Tincture.Rules.frame_capabilities/0`)."
+  @spec tincture_frame_capabilities() :: [String.t()]
+  defdelegate tincture_frame_capabilities(), to: Rules, as: :frame_capabilities
+
+  @doc "The placements a frame may declare (`Compendium.Tincture.Rules.placements/0`)."
+  @spec tincture_placements() :: [String.t()]
+  defdelegate tincture_placements(), to: Rules, as: :placements
+
+  @doc "A frame's `sandbox` tokens for its granted capabilities (`Compendium.Tincture.Rules.sandbox_tokens/1`)."
+  @spec tincture_sandbox_tokens([String.t()]) :: {:ok, [String.t()]} | {:error, Rules.refusal()}
+  defdelegate tincture_sandbox_tokens(granted), to: Rules, as: :sandbox_tokens
+
+  @doc "A frame's `allow` attribute for its granted capabilities (`Compendium.Tincture.Rules.allow_attribute/1`)."
+  @spec tincture_allow_attribute([String.t()]) :: {:ok, String.t()} | {:error, Rules.refusal()}
+  defdelegate tincture_allow_attribute(granted), to: Rules, as: :allow_attribute
+
+  @doc "The entry page's Content Security Policy (`Compendium.Tincture.Rules.csp/2`)."
+  @spec tincture_csp(map(), Rules.csp_opts()) :: String.t()
+  defdelegate tincture_csp(manifest, opts), to: Rules, as: :csp
+
+  @doc "The templates a tincture starts from (`Compendium.Tincture.Rules.templates/0`)."
+  @spec tincture_templates() :: [Rules.template()]
+  defdelegate tincture_templates(), to: Rules, as: :templates
+
+  @doc "Whether a tincture is built and so ships its lockfile (`Compendium.Tincture.Rules.lockfile_required?/1`)."
+  @spec tincture_lockfile_required?(term()) :: boolean()
+  defdelegate tincture_lockfile_required?(manifest), to: Rules, as: :lockfile_required?
+
+  @doc """
+  A manifest's frame, cards, streams and system actions, held to the rules
+  (`Compendium.Tincture.Rules.validate_declaration/1`).
+  """
+  @spec tincture_declaration(term()) ::
+          {:ok, Prima.Manifest.Tincture.t()} | {:error, Rules.refusal()}
+  defdelegate tincture_declaration(manifest), to: Rules, as: :validate_declaration
+
+  @doc """
+  Whether every stream a declaration opens is one a provider declares, with
+  a subject it takes (`Compendium.Tincture.Rules.check_streams/2`).
+  """
+  @spec tincture_check_streams(Prima.Manifest.Tincture.t(), [Prima.Provider.Stream.t()]) ::
+          :ok | {:error, Rules.refusal()}
+  defdelegate tincture_check_streams(declaration, streams), to: Rules, as: :check_streams
 
   @doc """
   Every installed catalyst release in the caller's athanor, each with the
