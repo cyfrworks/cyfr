@@ -37,6 +37,7 @@ defmodule Arca.Repo.Migrations.Baseline do
     tenancy()
     provisioning()
     identity()
+    frame_credentials()
     server()
     cell()
     platform_settings()
@@ -337,6 +338,61 @@ defmodule Arca.Repo.Migrations.Baseline do
 
     create unique_index(:registry_tokens, [:user_id, :registry, :namespace_slug])
     create index(:registry_tokens, [:user_id, :registry])
+  end
+
+  # ==========================================================================
+  # Tincture frames: the per-open credential
+  # ==========================================================================
+
+  defp frame_credentials do
+    sqlite? = repo().__adapter__() == Ecto.Adapters.SQLite3
+
+    # SQLite takes a check only inside CREATE TABLE and Postgres only as a
+    # table constraint, so each rule is spelled once per adapter.
+    state_known = %{
+      name: "frame_credentials_state_known",
+      expr: "state IN ('active', 'suspended', 'revoked')"
+    }
+
+    revision_counted = %{
+      name: "frame_credentials_grant_revision_counted",
+      expr: "grant_revision >= 0"
+    }
+
+    # One row per frame a shell opened: the standing of the bearer the
+    # frame holds, read by every member. `source_kind`/`source_id` name the
+    # session (its base64url token hash) or the key it was minted under,
+    # lookup identifiers and never bearer credentials. A revoked row is
+    # terminal; `Arca.Retention.FrameCredentials` removes it once aged.
+    create table(:frame_credentials, primary_key: false) do
+      add :id, :string, primary_key: true
+      add :athanor_id, :string, null: false
+      add :user_id, :string, null: false
+      add :version_digest, :string, null: false
+
+      add :grant_revision, :bigint,
+        null: false,
+        check: if(sqlite?, do: revision_counted)
+
+      add :frame_id, :string, null: false
+      add :source_kind, :string, null: false
+      add :source_id, :string, null: false
+      add :state, :string, null: false, default: "active", check: if(sqlite?, do: state_known)
+      add :deadline, :utc_datetime_usec, null: false
+
+      timestamps(type: :utc_datetime_usec)
+    end
+
+    unless sqlite? do
+      create constraint(:frame_credentials, state_known.name, check: state_known.expr)
+      create constraint(:frame_credentials, revision_counted.name, check: revision_counted.expr)
+    end
+
+    # A frame id names one open in its athanor.
+    create unique_index(:frame_credentials, [:athanor_id, :frame_id])
+    create index(:frame_credentials, [:user_id, :state])
+    create index(:frame_credentials, [:source_kind, :source_id])
+    create index(:frame_credentials, [:athanor_id, :state, :updated_at])
   end
 
   # ==========================================================================

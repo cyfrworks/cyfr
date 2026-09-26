@@ -364,6 +364,76 @@ defmodule Sanctum.Consent.ShapeDerivationTest do
     end
   end
 
+  describe "a tincture's frame declaration is part of the shape" do
+    @frame %{
+      "frame" => %{"capabilities" => ["pointer_lock"]},
+      "actions" => ["execution.list"],
+      "streams" => [%{"name" => "executions.deltas", "subject" => "*"}]
+    }
+
+    defp tincture!(ctx, name, version, tincture) do
+      manifest = %{
+        "name" => name,
+        "type" => "tincture",
+        "version" => version,
+        "publisher" => "local",
+        "tincture" => Map.put(tincture, "entry", "index.html")
+      }
+
+      {:ok, _} =
+        Arca.Test.UnitFixtures.ship_and_register!(ctx, "tincture", "local", name, version,
+          manifest: manifest,
+          files: [{"index.html", "<html></html>"}]
+        )
+
+      "tincture:local.#{name}"
+    end
+
+    test "a declaration's digest joins the shape as tincture_digest", %{ctx: ctx} do
+      ref = tincture!(ctx, "shape-frame", "1.0.0", @frame)
+      {:ok, input} = ShapeDerivation.shape_input(ctx, ref)
+
+      {:ok, declaration} =
+        Prima.Manifest.Tincture.from_manifest(%{"tincture" => @frame})
+
+      assert input.tincture_digest == Prima.Manifest.Tincture.digest(declaration)
+      assert {:ok, _} = Sanctum.Consent.ShapeDigest.compute(input)
+    end
+
+    test "a tincture that declares nothing carries no digest: its shape is unchanged", %{ctx: ctx} do
+      ref = tincture!(ctx, "shape-frameless", "1.0.0", %{})
+      {:ok, input} = ShapeDerivation.shape_input(ctx, ref)
+      refute Map.has_key?(input, :tincture_digest)
+    end
+
+    test "a version that declares more changes the shape; one that declares the same keeps it",
+         %{ctx: ctx} do
+      ref = tincture!(ctx, "shape-frame-drift", "1.0.0", @frame)
+      {:ok, before_digest} = ShapeDerivation.live_digest(ctx, ref)
+
+      reordered = put_in(@frame, ["frame", "capabilities"], ["pointer_lock", "pointer_lock"])
+      tincture!(ctx, "shape-frame-drift", "1.1.0", reordered)
+      Arca.Cache.delete_match(:_)
+      {:ok, same_digest} = ShapeDerivation.live_digest(ctx, ref)
+      assert same_digest == before_digest
+
+      wider = Map.update!(@frame, "actions", &["records.delete" | &1])
+      tincture!(ctx, "shape-frame-drift", "1.2.0", wider)
+      Arca.Cache.delete_match(:_)
+      {:ok, wider_digest} = ShapeDerivation.live_digest(ctx, ref)
+      refute wider_digest == before_digest
+    end
+
+    test "the shape digest refuses a tincture digest that is not one" do
+      assert {:error, {:invalid_shape, :tincture_digest, _}} =
+               Sanctum.Consent.ShapeDigest.compute(%{
+                 scope: :versionless,
+                 source_ref: "tincture:local.x",
+                 tincture_digest: "md5:abc"
+               })
+    end
+  end
+
   describe "a vault need names its projection" do
     defp fieldless(need_type, fields) do
       need = %{"type" => need_type, "reason" => "to call the API with your key"}

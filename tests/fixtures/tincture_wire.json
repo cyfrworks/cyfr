@@ -1,0 +1,158 @@
+{
+  "comment": "The vectors pinning Prima.TinctureWire: the requests a tincture's frame posts to the endpoint, each with the frame credential as a bearer in the authorization header and a JSON body carrying v, the wire version; the answer each is given; one refusal, the projection of a Prima.Refusal a frame may read; and one message of each shell verb the frame posts over its MessagePort. Prima's test and the SDK's JavaScript test both read this file: every body decodes and encodes back to itself, every answer reads back, and every message decodes.",
+  "version": 1,
+  "bearer_header": "authorization",
+  "routes": {
+    "action": "/_f/v1/action",
+    "invoke": "/_f/v1/invoke",
+    "stream_open": "/_f/v1/stream"
+  },
+  "requests": [
+    {
+      "kind": "invoke",
+      "headers": {
+        "authorization": "Bearer frm.v1.c2lnbmVkLWZyYW1lLWNyZWRlbnRpYWw"
+      },
+      "body": {
+        "v": 1,
+        "ref": "c:local.weather:1.0.0",
+        "operation": "run",
+        "args": {
+          "city": "Lisbon"
+        }
+      }
+    },
+    {
+      "kind": "action",
+      "headers": {
+        "authorization": "Bearer frm.v1.c2lnbmVkLWZyYW1lLWNyZWRlbnRpYWw"
+      },
+      "body": {
+        "v": 1,
+        "operation": "execution.list",
+        "args": {
+          "limit": 5
+        }
+      }
+    },
+    {
+      "kind": "stream_open",
+      "headers": {
+        "authorization": "Bearer frm.v1.c2lnbmVkLWZyYW1lLWNyZWRlbnRpYWw"
+      },
+      "body": {
+        "v": 1,
+        "stream": "executions.deltas",
+        "subject": "exec_01a09fee-2e4f-7a5b-9c6d-7e8f9a0b1c2d"
+      }
+    }
+  ],
+  "answers": [
+    {
+      "kind": "invoke",
+      "body": {
+        "v": 1,
+        "ok": true,
+        "result": {
+          "temperature": 21
+        }
+      }
+    },
+    {
+      "kind": "action",
+      "body": {
+        "v": 1,
+        "ok": true,
+        "result": {
+          "executions": []
+        }
+      }
+    },
+    {
+      "kind": "stream_open",
+      "body": {
+        "v": 1,
+        "ok": true,
+        "stream": {
+          "grant_id": "sgr_01a09fee-2e4f-7a5b-9c6d-7e8f9a0b1c2e",
+          "stream": "executions.deltas",
+          "subject": "exec_01a09fee-2e4f-7a5b-9c6d-7e8f9a0b1c2d",
+          "projection": [
+            "seq",
+            "delta"
+          ],
+          "deadline": "2026-09-26T12:00:00Z"
+        }
+      }
+    }
+  ],
+  "refusal": {
+    "kind": "action",
+    "refusal": {
+      "class": "forbidden",
+      "reason": "undeclared_action",
+      "message": "This tincture does not declare that action.",
+      "stage": "admission"
+    },
+    "body": {
+      "v": 1,
+      "ok": false,
+      "error": {
+        "class": "forbidden",
+        "message": "This tincture does not declare that action.",
+        "stage": "admission"
+      }
+    }
+  },
+  "shell": [
+    {
+      "verb": "open",
+      "message": {
+        "v": 1,
+        "verb": "open",
+        "frame": "frm_01a09fee2e4f",
+        "args": {
+          "ref": "t:local.weather-lookup"
+        }
+      }
+    },
+    {
+      "verb": "close",
+      "message": {
+        "v": 1,
+        "verb": "close",
+        "frame": "frm_01a09fee2e4f",
+        "args": {}
+      }
+    },
+    {
+      "verb": "title",
+      "message": {
+        "v": 1,
+        "verb": "title",
+        "frame": "frm_01a09fee2e4f",
+        "args": {
+          "title": "Lisbon, 21°"
+        }
+      }
+    },
+    {
+      "verb": "ready",
+      "message": {
+        "v": 1,
+        "verb": "ready",
+        "frame": "frm_01a09fee2e4f",
+        "args": {}
+      }
+    },
+    {
+      "verb": "focus",
+      "message": {
+        "v": 1,
+        "verb": "focus",
+        "frame": "frm_01a09fee2e4f",
+        "args": {}
+      }
+    }
+  ]
+}

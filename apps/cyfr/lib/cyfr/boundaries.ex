@@ -296,7 +296,7 @@ defmodule Cyfr.Boundaries do
   @sanctum_only_storage ~w(
     Arca.ConsentStorage Arca.ConsentProofStorage Arca.ProfileStorage Arca.ToolGrantStorage
     Arca.VaultStorage Arca.SessionStorage Arca.ApiKeyStorage Arca.RegistryTokenStorage
-    Arca.ProviderCredentialStorage Arca.WebhookStorage
+    Arca.ProviderCredentialStorage Arca.WebhookStorage Arca.FrameCredentials
     Arca.Users Arca.Members Arca.Athanors Arca.Doors
   )
   @security_row_readers ["apps/sanctum/lib", "apps/arca/lib"]
@@ -768,6 +768,26 @@ defmodule Cyfr.Boundaries do
           "names."
     },
     %{
+      from: ["apps/cyfr/lib/compendium/**/*.ex"],
+      except: [
+        "apps/cyfr/lib/compendium/tincture/rules.ex",
+        "apps/cyfr/lib/compendium/tincture_validator.ex"
+      ],
+      into: "Compendium.Tincture",
+      depth: 3,
+      only: ["Compendium.Tincture.Rules"],
+      allow: [],
+      reason:
+        "the tincture frame's rules — served types, capabilities, the sandbox and " <>
+          "allow map, the CSP, templates, the lockfile rule and the declaration grammar " <>
+          "— are read by the publish check (`Compendium.TinctureValidator`) and by the " <>
+          "root facade (`apps/cyfr/lib/compendium.ex`, outside this row's tree), and by " <>
+          "nothing else of the domain, so no sandbox token or CSP directive is spelled " <>
+          "twice. Every tree outside the domain is already held to the root facade by the " <>
+          "rows above. Boundary checks between boundaries, and a module inside one is " <>
+          "every other module's neighbour, so no declaration can say it."
+    },
+    %{
       from: ["apps/sanctum/lib/**/*.ex"],
       into: "Compendium",
       allow: [],
@@ -972,7 +992,8 @@ defmodule Cyfr.Boundaries do
       allow: [],
       reason:
         "profiles, consents and their proofs, standing tool grants, vault entries, " <>
-          "sessions, API keys, registry push tokens, provider credentials, webhooks, " <>
+          "sessions, API keys, tincture frame credentials, registry push tokens, " <>
+          "provider credentials, webhooks, " <>
           "and the identities, memberships, athanors and doors that decide standing " <>
           "are security rows. A domain or a surface learns about them only " <>
           "through Sanctum's entries, which scope by the caller's context and keep an " <>

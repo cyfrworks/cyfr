@@ -12,14 +12,18 @@ defmodule Arca.SecurityTransitions do
   frozen athanor they sit in and every group they leave empty, removes
   their memberships, the invitations their address still holds and their
   thread follows, deletes their sessions and revokes the keys they created
-  and the keys of every athanor it archives. An archive revokes the
-  athanor's keys with it. Each commits together or not at all: a statement
-  that fails rolls the whole transition back and the caller is answered
+  and the keys of every athanor it archives, and the frame credentials
+  (`Arca.FrameCredentials`) of the person and of every athanor it
+  archives. An archive revokes the athanor's keys and frame credentials
+  with it. Each commits together or not at all: a statement that fails
+  rolls the whole transition back and the caller is answered
   the failure, so a denial can never report success with a credential of
   the person still standing. An allow restores the person's standing and
   their own athanor and seat and nothing else; a reopen restores the
   athanor and nothing else. Neither un-revokes, re-creates or re-seats
-  anything the retirement took.
+  anything the retirement took, and each revokes again every frame
+  credential the person or the athanor still holds: a frame opened
+  under the old standing never outlives a change of it.
 
   Every real change of a standing raises the row's `security_generation`
   in the same statement. A credential is issued only against the
@@ -31,8 +35,8 @@ defmodule Arca.SecurityTransitions do
   Every transition, and every credential issuance, takes its row locks in
   one order: any global cap lock the operation needs, people sorted by id,
   athanors sorted by id, then memberships, invitations and follows, then
-  sessions, then API keys. A transition taking only a suffix of that order
-  never goes back for an earlier lock. On PostgreSQL the order is the
+  sessions, then API keys, then frame credentials. A transition taking
+  only a suffix of that order never goes back for an earlier lock. On PostgreSQL the order is the
   deadlock rule; on SQLite the write lock every transaction takes at entry is the lock
   and the order is code order (`Arca.Repo.locking_transaction/2`).
 
@@ -60,10 +64,10 @@ defmodule Arca.SecurityTransitions do
 
   `{:ok, change}` only after commit. `change` is the committed data the
   caller announces from: the session hashes each DELETE returned, the key
-  ids each UPDATE returned, the athanors archived or reopened with their
-  new generations, the memberships removed, invitations withdrawn and
-  seats restored, the members of each archived athanor and the person's
-  generation. Refusals: `:not_found`, `:dangling_personal_athanor` (a
+  and frame credential ids each UPDATE returned, the athanors archived or
+  reopened with their new generations, the memberships removed,
+  invitations withdrawn and seats restored, the members of each archived
+  athanor and the person's generation. Refusals: `:not_found`, `:dangling_personal_athanor` (a
   person's own-athanor pointer names no row), `:conflict`,
   `:postcondition_failed`, `:cross_tenant`, `:database_error`, or the
   callback's own reason.
@@ -72,7 +76,17 @@ defmodule Arca.SecurityTransitions do
   import Ecto.Query
 
   alias Arca.QueryHelpers
-  alias Arca.Schemas.{ApiKey, Athanor, Membership, Session, ThreadSubscription, User}
+  alias Arca.FrameCredentials
+
+  alias Arca.Schemas.{
+    ApiKey,
+    Athanor,
+    FrameCredential,
+    Membership,
+    Session,
+    ThreadSubscription,
+    User
+  }
   alias Arca.SecurityTransitions.Projection
 
   @attempts 3
@@ -91,6 +105,7 @@ defmodule Arca.SecurityTransitions do
           required(:reopened_athanor_ids) => [String.t()],
           required(:revoked_session_hashes) => [binary()],
           required(:revoked_api_key_ids) => [String.t()],
+          required(:revoked_frame_credential_ids) => [String.t()],
           required(:removed_membership_ids) => [String.t()],
           required(:removed_memberships) => [map()],
           required(:withdrawn_invitations) => [map()],
@@ -217,6 +232,7 @@ defmodule Arca.SecurityTransitions do
           unfollowed = delete_follows(user_id, planned)
           hashes = delete_sessions(user_id)
           key_ids = revoke_keys(user_id, retire, now)
+          frame_ids = revoke_frames(user_id, retire)
 
           with :ok <- deny_holds(user_id, retire) do
             %{
@@ -234,6 +250,7 @@ defmodule Arca.SecurityTransitions do
                 archived_athanor_ids: Enum.sort(Map.keys(archived)),
                 revoked_session_hashes: hashes,
                 revoked_api_key_ids: key_ids,
+                revoked_frame_credential_ids: frame_ids,
                 removed_membership_ids: Enum.map(removed, & &1.id),
                 removed_memberships: removed,
                 withdrawn_invitations: withdrawn,
@@ -380,6 +397,14 @@ defmodule Arca.SecurityTransitions do
     Enum.sort(ids || [])
   end
 
+  # A transition revokes a person's frames in every athanor, and every
+  # frame of an athanor it archives (`Arca.FrameCredentials.revoke_all/1`).
+  defp revoke_frames(user_id, athanor_ids) do
+    FrameCredentials.revoke_all(
+      from(f in FrameCredential, where: f.user_id == ^user_id or f.athanor_id in ^athanor_ids)
+    )
+  end
+
   # arca:unscoped-ok the postconditions of one person's denial, read across every athanor.
   defp deny_holds(user_id, athanor_ids) do
     survivors = [
@@ -388,6 +413,9 @@ defmodule Arca.SecurityTransitions do
       from(m in Membership, where: m.user_id == ^user_id),
       from(k in ApiKey,
         where: k.revoked == false and (k.created_by == ^user_id or k.athanor_id in ^athanor_ids)
+      ),
+      from(f in FrameCredential,
+        where: f.state != "revoked" and (f.user_id == ^user_id or f.athanor_id in ^athanor_ids)
       ),
       from(a in Athanor, where: a.id in ^athanor_ids and a.status != "archived")
     ]
@@ -424,6 +452,8 @@ defmodule Arca.SecurityTransitions do
         with {:ok, generation, moved?} <- allow_row(user, now),
              {:ok, reopened} <- reopen_rows(archived_ids(athanor), now),
              {:ok, seated} <- reseat(user_id, athanor, seats, now) do
+          frame_ids = revoke_frames(user_id, [])
+
           %{
             empty_change()
             | transitioned: moved?,
@@ -437,6 +467,7 @@ defmodule Arca.SecurityTransitions do
               athanor_generations: reopened,
               athanors: moved(athanors, reopened, "active", now),
               reopened_athanor_ids: Enum.sort(Map.keys(reopened)),
+              revoked_frame_credential_ids: frame_ids,
               seated_membership_ids: seated
           }
         end
@@ -513,6 +544,7 @@ defmodule Arca.SecurityTransitions do
         with {:ok, archived} <-
                archive_rows(active_ids([athanor_id], %{athanor_id => athanor}), now) do
           key_ids = revoke_athanor_keys(athanor_id, now)
+          frame_ids = revoke_athanor_frames(athanor_id)
 
           with :ok <- archive_holds(athanor_id) do
             %{
@@ -522,6 +554,7 @@ defmodule Arca.SecurityTransitions do
                 athanors: moved(%{athanor_id => athanor}, archived, "archived", now),
                 archived_athanor_ids: Map.keys(archived),
                 revoked_api_key_ids: key_ids,
+                revoked_frame_credential_ids: frame_ids,
                 member_user_ids: %{athanor_id => members}
             }
           end
@@ -547,7 +580,8 @@ defmodule Arca.SecurityTransitions do
             | transitioned: reopened != %{},
               athanor_generations: reopened,
               athanors: moved(%{athanor_id => athanor}, reopened, "active", now),
-              reopened_athanor_ids: Map.keys(reopened)
+              reopened_athanor_ids: Map.keys(reopened),
+              revoked_frame_credential_ids: revoke_athanor_frames(athanor_id)
           }
         end
       end
@@ -601,10 +635,14 @@ defmodule Arca.SecurityTransitions do
     Enum.sort(ids || [])
   end
 
+  defp revoke_athanor_frames(athanor_id),
+    do: FrameCredentials.revoke_all(from(f in FrameCredential, where: f.athanor_id == ^athanor_id))
+
   defp archive_holds(athanor_id) do
     survivors = [
       from(a in Athanor, where: a.id == ^athanor_id and a.status != "archived"),
-      from(k in ApiKey, where: k.athanor_id == ^athanor_id and k.revoked == false)
+      from(k in ApiKey, where: k.athanor_id == ^athanor_id and k.revoked == false),
+      from(f in FrameCredential, where: f.athanor_id == ^athanor_id and f.state != "revoked")
     ]
 
     if Enum.any?(survivors, &Arca.Repo.exists?/1),
@@ -729,6 +767,7 @@ defmodule Arca.SecurityTransitions do
       reopened_athanor_ids: [],
       revoked_session_hashes: [],
       revoked_api_key_ids: [],
+      revoked_frame_credential_ids: [],
       removed_membership_ids: [],
       removed_memberships: [],
       withdrawn_invitations: [],

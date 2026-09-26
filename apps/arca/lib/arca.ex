@@ -145,6 +145,7 @@ defmodule Arca do
       ExecutionStanding,
       FencedPublication,
       FencedPublication.Change,
+      FrameCredentials,
       Files,
       Health,
       JobClaims,
