@@ -32,14 +32,15 @@ your-project/
         ├── threads/ # Chat attachment files
         ├── notes/         # What was kept out of a thread — host-only, never a guest scope
         ├── payloads/      # Retained execution inputs and results — host-only, by digest
+        ├── staging/       # Content staged for a fenced publication — host-only, by digest
         └── data/          # Files WASM components store — their `data/` scope, and yours
 ```
 
 Every folder is laid when the athanor is provisioned. The Files page in the
 console, and the `file` tool behind it, show this tree by tier: `data/` is
 open, `components/` and `aqua/` are shaped, `notes/` and
-`threads/` are read-only there, and `payloads/` is the server's own and
-has no name on the page.
+`threads/` are read-only there, and `payloads/` and `staging/` are the
+server's own and have no name on the page.
 
 Each component directory (note the double `src/` — Cargo's standard layout inside the Cargo project root):
 ```

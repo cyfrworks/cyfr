@@ -63,6 +63,8 @@ defmodule Arca.TenantTables do
     "api_keys",
     "storage_projection_changes",
     "storage_projection_roots",
+    "fenced_documents",
+    "storage_staging",
     "storage_commits",
     "storage_units",
     "components",

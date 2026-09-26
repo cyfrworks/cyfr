@@ -92,6 +92,7 @@ defmodule Arca.Storage do
           ├── threads/                   # chat attachment blobs
           ├── notes/                     # host-only notes kept out of a thread
           ├── payloads/                  # retained execution bodies — tenant-reserved, system-written
+          ├── staging/                   # content staged for a fenced publication — tenant-reserved
           └── data/                      # what components store — the guest's `data/` scope
 
   Per-athanor settings are rows, never blobs — the `athanors.settings`
@@ -246,6 +247,12 @@ defmodule Arca.Storage do
     # (`Arca.ExecutionPayloads`, under the internal-write scope) change
     # bytes a row names by digest.
     {"payloads", :tenant_reserved, nil, nil, :system},
+    # Content staged for a fenced publication (`stage/3`), each attempt
+    # under a key of its own and referenced in place once published
+    # (`Arca.FencedPublication`). Host-only and reserved: only the
+    # staging store's own writes change bytes a `storage_staging` row
+    # names.
+    {"staging", :tenant_reserved, nil, nil, :system},
     {"data", :tenant, "data", nil, :open},
     {"cache", :global, nil, nil, :system},
     {"system", :global, nil, nil, :system}
@@ -320,9 +327,10 @@ defmodule Arca.Storage do
   def key_read_roots, do: @key_read_roots
 
   # Tenant roots only the server's own machinery may mutate: `payloads/`
-  # holds bytes an `execution_payloads` row names by digest, so a
-  # member-level write there could put other bytes behind a recorded
-  # digest. Reads stay ordinary tenant reads.
+  # holds bytes an `execution_payloads` row names by digest and `staging/`
+  # bytes a `storage_staging` row does, so a member-level write there
+  # could put other bytes behind a recorded digest. Reads stay ordinary
+  # tenant reads.
   @reserved_roots for {root, :tenant_reserved, _guest, _seed, _tier} <- @layout, do: root
 
   @doc """
@@ -991,7 +999,19 @@ defmodule Arca.Storage do
   """
   @callback list_prefix(Prima.Actor.t(), path()) :: {:ok, [path()]} | {:error, term()}
 
-  @optional_callbacks sweep_stale_tmp: 1, replace_tree: 3
+  @doc """
+  Optional: when the object at `path` was last written, on the store's
+  own clock — a filesystem's modification time, an object store's
+  `Last-Modified`. `{:error, :not_found}` where nothing is at `path`.
+
+  The staging sweep (`Arca.Retention.FencedStaging`) dates bytes no row
+  names by it. An adapter that does not export it has its row-less bytes
+  kept, never swept on a guess.
+  """
+  @callback last_modified(Prima.Actor.t(), path()) ::
+              {:ok, DateTime.t()} | {:error, :not_found | term()}
+
+  @optional_callbacks sweep_stale_tmp: 1, replace_tree: 3, last_modified: 2
 
   @doc """
   `c:put_if_none_match/3` on the configured adapter. A thin dispatch: the
@@ -1021,4 +1041,193 @@ defmodule Arca.Storage do
   @spec list_prefix(Prima.Actor.t(), path()) :: {:ok, [path()]} | {:error, term()}
   def list_prefix(%Prima.Actor{} = actor, prefix),
     do: configured_adapter().list_prefix(actor, prefix)
+
+  @doc """
+  `c:last_modified/2` on the configured adapter, `{:error, :unsupported}`
+  from one that does not export it. A thin dispatch, as
+  `put_if_none_match/3`.
+  """
+  @spec last_modified(Prima.Actor.t(), path()) ::
+          {:ok, DateTime.t()} | {:error, :not_found | :unsupported | term()}
+  def last_modified(%Prima.Actor{} = actor, path) do
+    adapter = configured_adapter()
+
+    if Code.ensure_loaded?(adapter) and function_exported?(adapter, :last_modified, 2),
+      do: adapter.last_modified(actor, path),
+      else: {:error, :unsupported}
+  end
+
+  # ---------------------------------------------------------------------------
+  # Staging for a fenced publication
+  # ---------------------------------------------------------------------------
+
+  @staging_root "staging"
+
+  # How long a staging attempt may take from its reservation to its
+  # publication, on the database's clock; and how old bytes no row names
+  # must be, on the store's own clock, before the sweep takes them for an
+  # orphan.
+  @reservation_ms :timer.minutes(15)
+
+  @crockford ~c"0123456789ABCDEFGHJKMNPQRSTVWXYZ"
+
+  @doc "The reserved root staged content lives under."
+  @spec staging_root() :: String.t()
+  def staging_root, do: @staging_root
+
+  @doc """
+  The reservation window: how long a `stage/3` attempt stays publishable
+  from its reservation (database time), and how old bytes under
+  `staging/` that no row names must be (the store's own time) before the
+  sweep removes them.
+  """
+  @spec reservation_ms() :: pos_integer()
+  def reservation_ms, do: @reservation_ms
+
+  @doc """
+  Stage `content` for a fenced publication (`Arca.FencedPublication`),
+  answering the staging id a publication names.
+
+  In this order, so no byte is ever stored without a row naming it:
+
+    1. a `reserved` `storage_staging` row, expiring `reservation_ms/0`
+       from now on the database's clock;
+    2. the bytes, immutable, at `staging/<id>` in the actor's athanor,
+       `<id>` a ULID minted for this attempt alone — a stream is gathered
+       after the reservation and written whole;
+    3. the bytes' digest (`Prima.Digest.sha256/1`), recorded on the row.
+
+  The bytes never move: a publication references them where they are, and
+  a database reference is the commit on every adapter.
+
+  `attempt` names the writer's purpose and is opaque here. The write is
+  checked against the athanor's storage cap. A refusal after the
+  reservation cancels it, and `{:error, :expired}` means the reservation
+  was reclaimed before the digest was recorded; either way the sweep
+  (`Arca.Retention.FencedStaging`) removes whatever reached the store.
+  """
+  @spec stage(Prima.Actor.t(), String.t(), binary() | Enumerable.t()) ::
+          {:ok, String.t()}
+          | {:error, :no_athanor | :expired | :database_error | term()}
+  def stage(%Prima.Actor{athanor_id: athanor_id} = actor, attempt, content)
+      when is_binary(athanor_id) and athanor_id != "" and is_binary(attempt) and attempt != "" do
+    if athanor_ready?(actor) do
+      id = ulid()
+      path = [@staging_root, id]
+
+      with :ok <- reserve(actor, id, attempt, path),
+           :ok <- stage_bytes(actor, id, path, content) do
+        {:ok, id}
+      end
+    else
+      {:error, :no_athanor}
+    end
+  end
+
+  def stage(%Prima.Actor{}, attempt, _content) when is_binary(attempt) and attempt != "",
+    do: {:error, :no_athanor}
+
+  @doc """
+  Cancel a `reserved` staging attempt: its reservation ends now on the
+  database's clock, so no publication can name it and the next sweep
+  reclaims its row and bytes. `{:error, :not_found}` when the actor's
+  athanor holds no reserved attempt under `id` — published, already
+  reclaimed, or never staged.
+  """
+  @spec cancel_stage(Prima.Actor.t(), String.t()) ::
+          :ok | {:error, :not_found | :no_athanor | :database_error}
+  def cancel_stage(%Prima.Actor{athanor_id: athanor_id} = actor, id)
+      when is_binary(athanor_id) and athanor_id != "" and is_binary(id) do
+    Arca.Repo.Errors.with_db_rescue("Arca.Storage.cancel_stage", fn ->
+      now = Arca.ServerMetaStorage.now!()
+
+      reserved(actor, id)
+      |> Arca.Repo.update_all(set: [expires_at: now, updated_at: now])
+      |> case do
+        {1, _} -> :ok
+        {0, _} -> {:error, :not_found}
+      end
+    end)
+  end
+
+  def cancel_stage(%Prima.Actor{}, id) when is_binary(id), do: {:error, :no_athanor}
+
+  # The row goes first, so bytes a live attempt wrote always have one.
+  defp reserve(%Prima.Actor{athanor_id: athanor_id}, id, attempt, path) do
+    Arca.Repo.Errors.with_db_rescue("Arca.Storage.stage", fn ->
+      now = Arca.ServerMetaStorage.now!()
+
+      row = %{
+        id: id,
+        athanor_id: athanor_id,
+        attempt: attempt,
+        key: Enum.join(path, "/"),
+        state: "reserved",
+        expires_at: DateTime.add(now, @reservation_ms, :millisecond),
+        inserted_at: now,
+        updated_at: now
+      }
+
+      {1, _} = Arca.Repo.insert_all(Arca.Schemas.StorageStaging, [row])
+      :ok
+    end)
+  end
+
+  defp stage_bytes(actor, id, path, content) do
+    bytes = gathered(content)
+    digest = Prima.Digest.sha256(bytes)
+
+    with :ok <- Prima.Caps.check_storage(actor, byte_size(bytes)) |> or_cancel(actor, id),
+         :ok <- write_staged(actor, path, bytes) |> or_cancel(actor, id) do
+      record_digest(actor, id, digest)
+    end
+  end
+
+  defp gathered(content) when is_binary(content), do: content
+  defp gathered(content), do: content |> Enum.to_list() |> IO.iodata_to_binary()
+
+  # The staging root is reserved: only this scope writes it. The cap was
+  # checked above, as a reserved root's writes skip the facade's check.
+  defp write_staged(actor, path, bytes),
+    do: Arca.Overlay.with_internal_writes(fn -> Arca.put(actor, path, bytes) end)
+
+  # A refused attempt ends its reservation at once rather than holding
+  # the window; the sweep takes what reached the store.
+  defp or_cancel(:ok, _actor, _id), do: :ok
+
+  defp or_cancel({:error, _} = refusal, actor, id) do
+    _ = cancel_stage(actor, id)
+    refusal
+  end
+
+  # Only while the row is still `reserved`: a row the sweep claimed is
+  # its to finish, and the bytes just written go with it or as an orphan.
+  defp record_digest(actor, id, digest) do
+    Arca.Repo.Errors.with_db_rescue("Arca.Storage.stage", fn ->
+      reserved(actor, id)
+      |> Arca.Repo.update_all(set: [digest: digest, updated_at: Arca.ServerMetaStorage.now!()])
+      |> case do
+        {1, _} -> :ok
+        {0, _} -> {:error, :expired}
+      end
+    end)
+  end
+
+  defp reserved(%Prima.Actor{athanor_id: athanor_id}, id) do
+    import Ecto.Query, only: [from: 2]
+
+    from(s in Arca.Schemas.StorageStaging,
+      where: s.athanor_id == ^athanor_id and s.id == ^id and s.state == "reserved"
+    )
+  end
+
+  # A ULID: 48 bits of milliseconds and 80 random bits, Crockford base32.
+  # Sortable by the attempt's start, and never shared by two attempts, so
+  # identical content staged twice lands under two keys.
+  defp ulid do
+    time = System.os_time(:millisecond)
+    bits = <<0::2, time::unsigned-48, :crypto.strong_rand_bytes(10)::binary>>
+
+    for <<index::5 <- bits>>, into: "", do: <<Enum.at(@crockford, index)>>
+  end
 end

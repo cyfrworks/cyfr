@@ -2984,6 +2984,8 @@ type RetentionSetArgsSettings struct {
 	// Days of records kept per athanor
 	WriteIntentDays Field[int] `json:"write_intent_days,omitzero"`
 	// Days of records kept per athanor
+	FencedStagingDays Field[int] `json:"fenced_staging_days,omitzero"`
+	// Days of records kept per athanor
 	ProjectionTombstoneDays Field[int] `json:"projection_tombstone_days,omitzero"`
 }
 

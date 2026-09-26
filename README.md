@@ -142,6 +142,7 @@ your-project/
             ├── threads/  # Chat attachment files
             ├── notes/      # What was kept out of a thread — host-only, no guest scope
             ├── payloads/   # Retained execution inputs and results — host-only, by digest
+            ├── staging/    # Content staged for a fenced publication — host-only, by digest
             └── data/       # Files WASM components store — their `data/` scope, and yours
 ```
 
@@ -150,7 +151,7 @@ your-project/
 > `data/` is yours to fill and clear, `components/` and `aqua/` hold shaped
 > units whose files you edit in place, `notes/` and `threads/` are read
 > there and managed on their own pages, and the server's own storage
-> (`payloads/`, the seed, the cache) is not a folder at all.
+> (`payloads/`, `staging/`, the seed, the cache) is not a folder at all.
 
 > The seed bundle every athanor starts from rides inside the container image
 > (under `CYFR_SEED_PATH`, mounted so `./aqua` replaces its `aqua/` root) and

@@ -42,6 +42,7 @@ defmodule Arca.Repo.Migrations.Baseline do
     components()
     storage_units()
     storage_projections()
+    fenced_publication()
     agents()
     executions()
     logs()
@@ -638,6 +639,64 @@ defmodule Arca.Repo.Migrations.Baseline do
     end
 
     create unique_index(:storage_projection_changes, [:athanor_id, :root, :unit_key])
+  end
+
+  # ==========================================================================
+  # Fenced publication
+  # ==========================================================================
+
+  # Content staged for a fenced publication, and the documents that
+  # reference it (`Arca.Storage.stage/3`, `Arca.FencedPublication`). A
+  # staging row is written before its bytes, so bytes a live attempt wrote
+  # always have a row naming them; a publication commits the document's
+  # reference and marks the row `published` in one transaction, and the
+  # bytes never move.
+  defp fenced_publication do
+    sqlite? = repo().__adapter__() == Ecto.Adapters.SQLite3
+
+    revision_counted = %{name: "fenced_documents_revision_counted", expr: "revision >= 0"}
+
+    create table(:storage_staging, primary_key: false) do
+      # A ULID minted per staging attempt; the last segment of `key`.
+      add :id, :string, primary_key: true
+      add :athanor_id, :string, null: false
+      # The writer's purpose, opaque to the store.
+      add :attempt, :string, null: false
+      # The logical storage path of the bytes under the athanor's
+      # `staging/` root, segments joined with `/`.
+      add :key, :string, null: false
+      # The digest of the bytes, recorded once they are written.
+      add :digest, :string
+      # reserved | published | deleting
+      add :state, :string, null: false
+      # Database time. A `reserved` row past it can no longer be published
+      # and is the sweep's to reclaim.
+      add :expires_at, :utc_datetime_usec, null: false
+
+      timestamps(type: :utc_datetime_usec)
+    end
+
+    create unique_index(:storage_staging, [:athanor_id, :key])
+    create index(:storage_staging, [:athanor_id, :state, :expires_at])
+
+    # The authoritative reference for a staged blob: the revision a
+    # publication compares and raises by one, and the staged bytes that
+    # revision names. A document no publication has created reads as
+    # revision 0.
+    create table(:fenced_documents, primary_key: false) do
+      add :athanor_id, :string, primary_key: true, null: false
+      add :key, :string, primary_key: true, null: false
+      add :revision, :bigint, null: false, check: if(sqlite?, do: revision_counted)
+      # The `storage_staging` key of the bytes this revision names.
+      add :blob_key, :string, null: false
+      add :digest, :string, null: false
+
+      timestamps(type: :utc_datetime_usec)
+    end
+
+    unless sqlite? do
+      create constraint(:fenced_documents, revision_counted.name, check: revision_counted.expr)
+    end
   end
 
   # ==========================================================================
