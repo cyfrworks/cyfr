@@ -37,7 +37,7 @@ defmodule CyfrWeb.ContextGuardRosterTest do
   @components ~w(
     AquaLive.AgentsComponent AquaLive.NotesComponent AquaLive.RestoreComponent
     AquaLive.ScrollsComponent ConsentSheetComponent ReportComponent
-    CommandPaletteLiveComponent AquaApprovalCard
+    CommandPaletteLiveComponent AquaApprovalCard SystemLayer
   )
 
   # The tasks started from the console, by file, and the files that take

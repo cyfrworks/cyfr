@@ -64,6 +64,7 @@ defmodule Sanctum do
       Namespace,
       Network,
       Notify,
+      Pairing,
       Policy.Enforcement,
       Provisioning,
       RegistryCredentials,

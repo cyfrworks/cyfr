@@ -62,6 +62,7 @@ defmodule Arca.TenantTables do
     "sessions",
     "api_keys",
     "frame_credentials",
+    "paired_clients",
     "storage_projection_changes",
     "storage_projection_roots",
     "fenced_documents",

@@ -175,6 +175,34 @@ defmodule Arca.SecurityTransitions.Fixtures do
 
   def frame_state(id), do: Arca.Repo.get(Arca.Schemas.FrameCredential, id).state
 
+  # A paired client row, written as its store writes one. Inserted
+  # directly for the same reason as a frame credential: recording is fenced
+  # by the member's slot, which these tests do not hold.
+  def paired!(athanor_id, user_id, standing \\ "active") do
+    now = DateTime.utc_now()
+    id = Prima.UUID7.generate_id("pcl")
+
+    {1, _} =
+      Arca.Repo.insert_all(Arca.Schemas.PairedClient, [
+        %{
+          id: id,
+          athanor_id: athanor_id,
+          user_id: user_id,
+          class: "session",
+          source_kind: "session",
+          source_id: "src_#{uniq()}",
+          standing: standing,
+          label: "a browser",
+          inserted_at: now,
+          updated_at: now
+        }
+      ])
+
+    id
+  end
+
+  def paired_standing(id), do: Arca.Repo.get(Arca.Schemas.PairedClient, id).standing
+
   # A trigger that makes one statement fail inside the transition, spelled
   # per adapter. The sandbox rolls it back with the test.
   def fail_on!(table, event) do
@@ -623,6 +651,88 @@ defmodule Arca.SecurityTransitionsTest do
       assert athanor(group.id).status == "active"
       assert frame_state(frame) == "active"
       clear_failure!(failure)
+    end
+  end
+
+  describe "paired clients" do
+    test "a denial revokes the person's clients everywhere and every client of what it archives" do
+      {user, own} = owner!()
+      shared = group!()
+      peer = person!()
+      seat!(shared.id, user.id)
+      seat!(shared.id, peer.id)
+
+      mine_own = paired!(own.id, user.id)
+      mine_shared = paired!(shared.id, user.id)
+      peer_shared = paired!(shared.id, peer.id)
+      # A client of another person in the athanor the denial archives.
+      guest_own = paired!(own.id, peer.id)
+      already = paired!(own.id, user.id, "revoked")
+
+      assert {:ok, change} = SecurityTransitions.deny_user(server(), user.id, verify: admit())
+
+      assert change.revoked_paired_client_ids == Enum.sort([mine_own, mine_shared, guest_own])
+
+      for id <- [mine_own, mine_shared, guest_own, already],
+          do: assert(paired_standing(id) == "revoked")
+
+      assert paired_standing(peer_shared) == "active"
+    end
+
+    test "an allow revokes a client that outlived the denial and restores none" do
+      {user, own} = owner!()
+      paired = paired!(own.id, user.id)
+      {:ok, _} = SecurityTransitions.deny_user(server(), user.id, verify: admit())
+      straggler = paired!(own.id, user.id)
+
+      assert {:ok, change} = SecurityTransitions.allow_user(server(), user.id, verify: admit())
+      assert change.revoked_paired_client_ids == [straggler]
+      assert paired_standing(paired) == "revoked"
+      assert paired_standing(straggler) == "revoked"
+    end
+
+    test "an archive revokes the athanor's clients, and a reopen revokes any since" do
+      group = group!()
+      member = person!()
+      seat!(group.id, member.id)
+      paired = paired!(group.id, member.id)
+      elsewhere = paired!(group!().id, member.id)
+
+      assert {:ok, archived} =
+               SecurityTransitions.archive_athanor(server(), group.id, verify: admit())
+
+      assert archived.revoked_paired_client_ids == [paired]
+      assert paired_standing(paired) == "revoked"
+      assert paired_standing(elsewhere) == "active"
+
+      straggler = paired!(group.id, member.id)
+
+      assert {:ok, reopened} =
+               SecurityTransitions.unarchive_athanor(server(), group.id, verify: admit())
+
+      assert reopened.revoked_paired_client_ids == [straggler]
+      assert paired_standing(straggler) == "revoked"
+    end
+
+    test "an injected client UPDATE failure rolls a denial back with every credential standing" do
+      {user, own} = owner!()
+      session = session!(user.id, own.id)
+      frame = frame!(own.id, user.id)
+      paired = paired!(own.id, user.id)
+      failure = fail_on!("paired_clients", "UPDATE")
+
+      assert {:error, :database_error} =
+               SecurityTransitions.deny_user(server(), user.id, verify: admit())
+
+      assert user(user.id).status == "active"
+      assert session?(session)
+      assert frame_state(frame) == "active"
+      assert paired_standing(paired) == "active"
+
+      clear_failure!(failure)
+
+      assert {:ok, %{revoked_paired_client_ids: [^paired], revoked_frame_credential_ids: [^frame]}} =
+               SecurityTransitions.deny_user(server(), user.id, verify: admit())
     end
   end
 

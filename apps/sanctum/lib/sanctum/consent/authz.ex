@@ -21,6 +21,11 @@ defmodule Sanctum.Consent.Authz do
   | A tincture token, webhook, cron, system, or unauthenticated caller | no |
   | Anything on the guest plane | no, whatever else it carries |
 
+  Whichever arm admits the caller, the client must also hold the
+  confirmation class a grant requires (`Sanctum.Pairing.confirm?/2`,
+  `:grant`): this decision is where a confirmation's class is checked, and
+  a `none` client — a guest body, a borrowed screen — confirms nothing.
+
   Overrides — granting a component more than its author declared — are
   always interactive. A key cannot mint one no matter how tightly caveated,
   because the whole point of an override is that a person looked at it.
@@ -69,6 +74,7 @@ defmodule Sanctum.Consent.Authz do
           | :capability_digest_mismatch
           | :capability_expired
           | :invalid_request
+          | :class_too_low
 
   @doc """
   Decide whether this caller may commit this consent.
@@ -90,8 +96,10 @@ defmodule Sanctum.Consent.Authz do
     # has entered a guest closure can never authorize consent, whatever
     # credentials it carries or capability it presents.
     with :ok <- check_plane(ctx),
-         :ok <- check_authenticated(ctx) do
-      by_auth_method(ctx, request, now)
+         :ok <- check_authenticated(ctx),
+         {:ok, granted_via} <- by_auth_method(ctx, request, now),
+         :ok <- Sanctum.Pairing.confirm?(ctx, :grant) do
+      {:ok, granted_via}
     end
   end
 
@@ -184,6 +192,9 @@ defmodule Sanctum.Consent.Authz do
     do: "A consent override needs an interactive sign-in"
 
   def message(:invalid_request), do: "The consent request is not valid"
+
+  def message(:class_too_low),
+    do: "This client cannot confirm a grant; confirm it from a signed-in browser or key"
 
   # This IS the vocabulary module — an unknown term here is a producer bug,
   # logged and generalized, never inspected onto the wire (the catch-all

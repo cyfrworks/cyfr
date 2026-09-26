@@ -38,6 +38,7 @@ defmodule Arca.Repo.Migrations.Baseline do
     provisioning()
     identity()
     frame_credentials()
+    paired_clients()
     server()
     cell()
     platform_settings()
@@ -398,6 +399,60 @@ defmodule Arca.Repo.Migrations.Baseline do
     create index(:frame_credentials, [:user_id, :state])
     create index(:frame_credentials, [:source_kind, :source_id])
     create index(:frame_credentials, [:athanor_id, :state, :updated_at])
+  end
+
+  # ==========================================================================
+  # Paired clients: what each client of a person may confirm
+  # ==========================================================================
+
+  defp paired_clients do
+    sqlite? = repo().__adapter__() == Ecto.Adapters.SQLite3
+
+    # SQLite takes a check only inside CREATE TABLE and Postgres only as a
+    # table constraint, so each rule is spelled once per adapter.
+    class_known = %{
+      name: "paired_clients_class_known",
+      expr: "class IN ('none', 'session', 'paired', 'strong')"
+    }
+
+    standing_known = %{
+      name: "paired_clients_standing_known",
+      expr: "standing IN ('active', 'revoked')"
+    }
+
+    # One row per client a person holds in an athanor: its confirmation
+    # class (`Prima.ConfirmationClass`), the credential it stands on
+    # (`source_kind`/`source_id`, a lookup identifier and never a bearer
+    # credential) and its standing. A revoked row is terminal; a standing
+    # transition revokes a person's rows in its own transaction
+    # (`Arca.SecurityTransitions`).
+    create table(:paired_clients, primary_key: false) do
+      add :id, :string, primary_key: true
+      add :athanor_id, :string, null: false
+      add :user_id, :string, null: false
+      add :class, :string, null: false, check: if(sqlite?, do: class_known)
+      add :source_kind, :string, null: false
+      add :source_id, :string, null: false
+
+      add :standing, :string,
+        null: false,
+        default: "active",
+        check: if(sqlite?, do: standing_known)
+
+      add :label, :string
+
+      timestamps(type: :utc_datetime_usec)
+    end
+
+    unless sqlite? do
+      create constraint(:paired_clients, class_known.name, check: class_known.expr)
+      create constraint(:paired_clients, standing_known.name, check: standing_known.expr)
+    end
+
+    # A credential is one client in its athanor.
+    create unique_index(:paired_clients, [:athanor_id, :source_kind, :source_id])
+    create index(:paired_clients, [:user_id, :standing])
+    create index(:paired_clients, [:athanor_id, :standing])
   end
 
   # ==========================================================================

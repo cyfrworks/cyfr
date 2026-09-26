@@ -11,11 +11,13 @@
     "Arca.FencedPublication",
     "Arca.FencedPublication.Change",
     "Arca.Files",
+    "Arca.Layouts",
     "Arca.PlatformSettings",
     "Arca.Retention"
   ],
   "Sanctum" => [
     "Sanctum.Consent",
+    "Sanctum.Pairing",
     "Sanctum.RegistryCredentials",
     "Sanctum.TinctureAccess",
     "Sanctum.ToolGrants",
