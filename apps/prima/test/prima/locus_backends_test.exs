@@ -10,7 +10,8 @@ defmodule Prima.LocusBackendsTest do
   read to its members and written back to its bytes, the sealed
   environment, every accepted and malformed header, every valid and invalid
   field, every invalid message refused with its error and answered with its
-  refusal, every rejected header refused at its instant, the refusal roster
+  refusal, every rejected header refused at its instant, every fence
+  vector's messages signed and its refusal of the roster, the refusal roster
   and the masking rule. Beyond the vectors: header-first verification
   refuses exactly what the one-step verifier refuses, the bounds on a
   control body and a status answer hold, and a body at another version is
@@ -308,6 +309,62 @@ defmodule Prima.LocusBackendsTest do
 
       names = Enum.map(@vectors["auth_rejected"], & &1["name"])
       assert "builds_label" in names and "builds_key" in names
+    end
+
+    test "every fence vector is a sequence of signed messages refused with a code of the roster" do
+      fences = @vectors["fence_rejected"]
+      refusals = Map.new(@vectors["refusals"], &{&1["code"], &1})
+
+      for code <- ~w(stale_boot stale_control stale_epoch epoch_ahead conflict lapsed
+                     unknown_owner replay capacity unavailable too_many_owners
+                     status_too_large nonce_cache_full) do
+        assert code in Enum.map(fences, & &1["refusal"]), code
+      end
+
+      for %{"name" => name, "sequence" => sequence, "refusal" => refusal} = vector <- fences do
+        assert vector |> Map.keys() |> Kernel.--(["given"]) |> Enum.sort() ==
+                 ~w(name refusal sequence),
+               name
+
+        # The refusal is the roster's, at its status, as its body.
+        code = String.to_existing_atom(refusal)
+        assert LocusBackends.status(code) == refusals[refusal]["status"], name
+        assert LocusBackends.encode_refusal(code) == refusals[refusal]["body"], name
+
+        messages = Enum.filter(sequence, &Map.has_key?(&1, "route"))
+        refused = Enum.find(messages, & &1["hold"]) || List.last(messages)
+        assert is_boolean(refused["read_body"]), name
+
+        for step <- sequence -- messages do
+          assert [{"advance_ms", ms}] = Map.to_list(step), name
+          assert ms > 0, name
+        end
+
+        # Each message is signed as its route's kind, at its instant, over
+        # its body.
+        for message <- messages do
+          {kind, route} =
+            case message["route"] do
+              "control" -> {:control, LocusBackends.route(:control)}
+              "mcp" -> {:invoke, LocusBackends.route(:mcp)}
+            end
+
+          assert @vectors["routes"][message["route"]] == route
+          assert {:ok, fields, _mac} = LocusBackends.parse_header(kind, message["header"]), name
+          assert fields.ts == message["now"], name
+          assert fields.body_hash == Prima.Digest.sha256_hex(message["body"]), name
+
+          # An invoke carries the MCP conformance headers beside its signature.
+          assert message
+                 |> Map.get("headers", %{})
+                 |> Map.keys()
+                 |> Kernel.--(LocusBackends.mcp_headers()) == [],
+                 name
+
+          if message != refused,
+            do: assert(message["status"] in [200, LocusBackends.status(:lapsed)], name)
+        end
+      end
     end
 
     test "every refusal is answered at its status as its body, and reads back" do
