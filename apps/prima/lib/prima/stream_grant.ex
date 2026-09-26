@@ -6,8 +6,11 @@ defmodule Prima.StreamGrant do
   What the gate answers when it admits a stream open: the one grant under
   which continuous data flows to its holder without passing the gate again.
 
-    * `topic` — the concrete `Cyfr.Bus` topic the grant admits, already
-      scoped to the holder's athanor and subject.
+    * `topic` — the `Cyfr.Bus` roster key of the topic the grant admits,
+      the stream's declared `topic` (`Prima.Provider.Stream`), never a
+      scoped topic: the gate never names the bus. The delivery owner turns
+      the key, the holder's tenant prefix and `subject` into the concrete
+      topic (`Cyfr.Bus.granted_topic/2`) and subscribes to that alone.
     * `projection` — the payload fields forwarded to the holder, the
       stream's declared projection (`Prima.Provider.Stream`); nothing else
       of a payload leaves.
@@ -21,7 +24,7 @@ defmodule Prima.StreamGrant do
   """
 
   @type t :: %__MODULE__{
-          topic: String.t(),
+          topic: atom(),
           projection: [String.t()],
           subject: String.t() | nil,
           deadline: DateTime.t(),

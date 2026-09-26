@@ -59,6 +59,7 @@ defmodule Cyfr.AdmissionEntriesSeamTest do
   @drivers %{
     {Grimoire, :call_external} => :gate_external_head,
     {Grimoire, :call_in_chain} => :gate_in_chain_head,
+    {Grimoire, :open_stream} => :gate_stream_undeclared,
     {Emissary.MCP.Router, :dispatch} => :router_unknown_tool,
     {Emissary.Web.MCPController, :handle} => :mcp_batch,
     {Emissary.Web.MCPController, :method_not_allowed} => :mcp_get,
@@ -182,6 +183,15 @@ defmodule Cyfr.AdmissionEntriesSeamTest do
              )
 
     {{:request, request_id}, refused("invalid_argument", :established)}
+  end
+
+  def gate_stream_undeclared(_conn, ctx) do
+    request_id = Prima.UUID7.request_id()
+
+    assert {:error, %Prima.Refusal{stage: :admission, class: :not_found}} =
+             Grimoire.open_stream(%{ctx | request_id: request_id}, "nobody.declares")
+
+    {{:request, request_id}, refused("not_found", :established)}
   end
 
   # ==========================================================================

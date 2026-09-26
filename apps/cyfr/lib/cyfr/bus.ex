@@ -409,6 +409,56 @@ defmodule Cyfr.Bus do
   def topics, do: Enum.map(@topics, &Map.delete(&1, :match))
 
   @doc """
+  Whether `key` — a roster key, as an atom or its string — names a topic
+  of the roster. A pure lookup: what a provider's stream declaration
+  names (`Prima.Provider.Stream`) is checked against it at boot.
+  """
+  @spec topic?(atom() | String.t()) :: boolean()
+  def topic?(key) when is_atom(key) or is_binary(key), do: match?({:ok, _row}, row_by_key(key))
+  def topic?(_key), do: false
+
+  @doc """
+  Whether a stream on the roster key `key` can be granted with a subject
+  (`subject?` true) or without one: the row is a tenant topic, so the
+  tenant prefix scopes every grant to its holder's athanor, and a
+  subject-taking stream rides a row whose topics end in a subject id
+  while a subject-less one rides a row that is one topic.
+  """
+  @spec grantable?(atom() | String.t(), boolean()) :: boolean()
+  def grantable?(key, subject?) when is_boolean(subject?) do
+    case row_by_key(key) do
+      {:ok, %{scope: :tenant, match: {:exact, _}}} -> not subject?
+      {:ok, %{scope: :tenant, match: {:prefix, _}}} -> subject?
+      _ -> false
+    end
+  end
+
+  @doc """
+  The concrete topic a stream grant (`Prima.StreamGrant`) admits for
+  `actor`: the grant's roster key under the actor's tenant prefix,
+  followed by the grant's subject for a row that takes one. A key that is
+  not a tenant row, or a subject the row's shape does not take, raises:
+  the gate admits only declared streams, and the host checks every
+  declaration against this roster at boot (`grantable?/2`).
+  """
+  @spec granted_topic(Actor.t(), Prima.StreamGrant.t()) :: String.t()
+  def granted_topic(%Actor{} = actor, %Prima.StreamGrant{topic: key, subject: subject}) do
+    case {row_by_key(key), subject} do
+      {{:ok, %{scope: :tenant, match: {:exact, base}}}, nil} ->
+        prefix(actor) <> base
+
+      {{:ok, %{scope: :tenant, match: {:prefix, base}}}, subject}
+      when is_binary(subject) and subject != "" ->
+        prefix(actor) <> base <> subject
+
+      _ ->
+        raise ArgumentError,
+              "a stream grant names a tenant topic of Cyfr.Bus and the subject its row takes, " <>
+                "got #{Prima.LoggerContext.shape(key)}"
+    end
+  end
+
+  @doc """
   The unscoped topics and why each one is unscoped, for anyone auditing
   tenancy. Every tenant topic is `tenant:`-prefixed; page topics never
   leave the node.
@@ -749,6 +799,14 @@ defmodule Cyfr.Bus do
         raise ArgumentError, "the topic is not a #{scope} topic of Cyfr.Bus"
     end
   end
+
+  defp row_by_key(key) when is_atom(key) and key not in [nil, true, false],
+    do: Enum.find_value(@topics, :error, &(&1.key == key && {:ok, &1}))
+
+  defp row_by_key(key) when is_binary(key),
+    do: Enum.find_value(@topics, :error, &(Atom.to_string(&1.key) == key && {:ok, &1}))
+
+  defp row_by_key(_key), do: :error
 
   defp find_row(scope, topic) do
     Enum.find_value(@topics, :error, fn

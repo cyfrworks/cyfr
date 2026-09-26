@@ -72,6 +72,12 @@ defmodule Cyfr.Application do
     # classify, refuses the boot here.
     Grimoire.Catalog.load!()
 
+    # Every stream the table holds rides a topic the bus declares, one a
+    # grant can scope: checked before any process that could open one
+    # exists, and a stream naming anything else refuses the boot naming
+    # its provider, the stream and the topic.
+    check_stream_topics!()
+
     # One redaction vocabulary: Phoenix's inbound request-param filter is
     # fed from its owner (config/config.exs deliberately does not spell a
     # list — config files run before this module exists).
@@ -630,6 +636,49 @@ defmodule Cyfr.Application do
           "is empty — no user can access the system. Set CYFR_PLATFORM_ADMIN_EMAILS=" <>
           "<your_email> or seed a membership row manually."
       )
+    end
+  end
+
+  @doc """
+  Refuse the boot when a declared stream (`Grimoire.Catalog.stream_entries/0`,
+  or `entries`) names a topic `Cyfr.Bus` does not roster, or one no grant
+  can scope (`stream_topic_findings/1`).
+  """
+  @spec check_stream_topics!([{module(), Prima.Provider.Stream.t()}]) :: :ok
+  def check_stream_topics!(entries \\ Grimoire.Catalog.stream_entries()) do
+    case stream_topic_findings(entries) do
+      [] ->
+        :ok
+
+      findings ->
+        raise "declared streams name topics the bus cannot carry; refusing to boot:\n" <>
+                Enum.map_join(findings, "\n", &("  - " <> &1))
+    end
+  end
+
+  @doc """
+  One sentence per declared stream whose topic is not on the `Cyfr.Bus`
+  roster (`Cyfr.Bus.topic?/1`), or is on it but cannot carry the stream's
+  grant (`Cyfr.Bus.grantable?/2`), naming the provider, the stream and the
+  topic. Empty when every stream rides a topic a grant can scope.
+  """
+  @spec stream_topic_findings([{module(), Prima.Provider.Stream.t()}]) :: [String.t()]
+  def stream_topic_findings(entries) when is_list(entries) do
+    for {provider, %Prima.Provider.Stream{} = stream} <- entries,
+        finding = stream_topic_finding(stream),
+        do: "#{inspect(provider)} declares #{stream.name} on #{inspect(stream.topic)}: #{finding}"
+  end
+
+  defp stream_topic_finding(stream) do
+    cond do
+      not Cyfr.Bus.topic?(stream.topic) ->
+        "the bus declares no such topic"
+
+      not Cyfr.Bus.grantable?(stream.topic, not is_nil(stream.subject)) ->
+        "the topic is not a tenant topic of the stream's subject shape"
+
+      true ->
+        nil
     end
   end
 
