@@ -54,7 +54,9 @@ config :cyfr,
     # miss.
     Emissary.External.Provider,
     # `grimoire`: the operation table's own `system` tool.
-    Grimoire.Provider
+    Grimoire.Provider,
+    # `cyfr`: the platform settings, for the server's operators.
+    Cyfr.Providers.Settings
   ]
 
 # Consent proofs are durable: the plan → preview → commit walk spans human

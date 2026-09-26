@@ -152,6 +152,7 @@ defmodule Arca do
       McpServerStorage,
       Members,
       Overlay,
+      PlatformSettings,
       PolicyLog,
       ProfileStorage,
       ProviderCredentialStorage,

@@ -60,6 +60,7 @@ defmodule Cyfr.Bus do
     ScheduleRun,
     Schedules,
     Session,
+    SettingsChanged,
     ThreadEvent,
     Tinctures,
     VaultEntryChanged,
@@ -342,6 +343,18 @@ defmodule Cyfr.Bus do
         "a committed completion heard on every member; only the issuing member's " <>
           "subscriber acts, so a peer's delivery writes nothing twice"
     },
+    %{
+      key: :settings_changed,
+      scope: :global,
+      struct: SettingsChanged,
+      match: {:exact, "cyfr:settings_changed"},
+      template: "cyfr:settings_changed",
+      producers: ["Cyfr.Platform.Settings"],
+      consumers: ["Cyfr.Platform.Settings", "PrismWeb.SettingsLive"],
+      reason:
+        "the platform settings are the cell's, not an athanor's: a committed write, " <>
+          "which every member's cache drops, and the revision each member has observed"
+    },
     # --- page: one page instance and the views beside it ---
     %{
       key: :page_viewing,
@@ -537,6 +550,13 @@ defmodule Cyfr.Bus do
   @doc "A committed schedule completion (`Cyfr.Bus.ScheduleCompleted`)."
   @spec schedule_completions() :: String.t()
   def schedule_completions, do: "cyfr:schedule_completions"
+
+  @doc """
+  A committed platform-settings write, or a member's observed store
+  revision (`Cyfr.Bus.SettingsChanged`).
+  """
+  @spec settings_changed() :: String.t()
+  def settings_changed, do: "cyfr:settings_changed"
 
   # ---------------------------------------------------------------------------
   # Page topics

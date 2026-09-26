@@ -15,6 +15,7 @@ defmodule PrismWeb.SettingsLive do
 
     if connected?(socket) and socket.assigns.context.platform_admin do
       Cyfr.Bus.subscribe_global(Cyfr.Bus.platform_notify())
+      Cyfr.Bus.subscribe_global(Cyfr.Bus.settings_changed())
     end
 
     socket =
@@ -27,6 +28,10 @@ defmodule PrismWeb.SettingsLive do
       |> assign(:door_requests, [])
       |> assign(:door_value, "")
       |> assign(:door_note, "")
+      |> assign(:platform_settings, [])
+      |> assign(:settings_revision, nil)
+      |> assign(:settings_members, [])
+      |> assign(:settings_ttl_ms, nil)
       |> assign(:mode, Prism.Labels.default(socket.assigns.context))
       |> assign(:loading, true)
 
@@ -64,6 +69,19 @@ defmodule PrismWeb.SettingsLive do
     door_call(socket, "door/resolve", %{"id" => id, "decision" => decision}, "Request resolved.")
   end
 
+  # A change is made against the store revision the card was listed at,
+  # so an operator who saved on another member since is not overwritten:
+  # the write is refused and the card lists again.
+  def handle_event("setting_save", %{"key" => key, "value" => value}, socket) do
+    args = %{"key" => key, "value" => value, "revision" => socket.assigns.settings_revision}
+    setting_call(socket, "settings/set", args, "#{key} saved.")
+  end
+
+  def handle_event("setting_reset", %{"key" => key}, socket) do
+    args = %{"key" => key, "revision" => socket.assigns.settings_revision}
+    setting_call(socket, "settings/reset", args, "#{key} reset to its default.")
+  end
+
   def handle_event("set_mode", %{"mode" => mode}, socket) when mode in ["lite", "dev"] do
     case Sanctum.Tenancy.Users.get(socket.assigns.context.user_id) do
       {:ok, user} ->
@@ -93,6 +111,7 @@ defmodule PrismWeb.SettingsLive do
      |> load_system_status()
      |> load_log_stats()
      |> load_door()
+     |> load_settings()
      |> load_prefs()
      |> assign(:loading, false)}
   end
@@ -105,6 +124,12 @@ defmodule PrismWeb.SettingsLive do
       when kind in [:allowlist_request, :allowlist_changed] do
     {:noreply, load_door(socket)}
   end
+
+  def handle_info(%Cyfr.Bus.SettingsChanged{kind: :changed}, socket) do
+    {:noreply, load_settings(socket)}
+  end
+
+  def handle_info(%Cyfr.Bus.SettingsChanged{kind: :observed}, socket), do: {:noreply, socket}
 
   def handle_info(msg, socket) do
     Prima.LoggerContext.unexpected(__MODULE__, msg, :debug)
@@ -167,6 +192,50 @@ defmodule PrismWeb.SettingsLive do
 
   # A socket whose capability went since it read the door drops what it read.
   defp load_door(socket), do: socket |> assign(:door_entries, []) |> assign(:door_requests, [])
+
+  defp setting_call(socket, tool, args, ok_message) do
+    args = if is_nil(args["revision"]), do: Map.delete(args, "revision"), else: args
+
+    case call_tool(socket, tool, args) do
+      {:ok, _} ->
+        {:noreply, socket |> load_settings() |> put_flash(:info, ok_message)}
+
+      {:error, reason} ->
+        {:noreply,
+         socket |> load_settings() |> put_flash(:error, "Settings: #{error_message(reason)}")}
+    end
+  end
+
+  # The platform settings are the operator's, like the door.
+  defp load_settings(%{assigns: %{context: %{platform_admin: true}}} = socket) do
+    case call_tool(socket, "settings/list", %{}) do
+      {:ok, %{settings: settings} = listing} ->
+        socket
+        |> assign(:platform_settings, settings)
+        |> assign(:settings_revision, listing.revision)
+        |> assign(:settings_members, listing.members)
+        |> assign(:settings_ttl_ms, listing.ttl_ms)
+
+      _ ->
+        assign(socket, :platform_settings, [])
+    end
+  end
+
+  defp load_settings(socket), do: assign(socket, :platform_settings, [])
+
+  defp setting_text(nil), do: "none"
+  defp setting_text(value) when is_binary(value), do: value
+  defp setting_text(value), do: to_string(value)
+
+  defp input_text(nil), do: ""
+  defp input_text(value), do: setting_text(value)
+
+  defp source_color("deployment"), do: "yellow"
+  defp source_color("operator"), do: "blue"
+  defp source_color(_default), do: "gray"
+
+  defp bound_seconds(nil), do: "-"
+  defp bound_seconds(ms), do: "#{div(ms, 1000)} s"
 
   defp load_prefs(socket) do
     ctx = socket.assigns.context
@@ -386,6 +455,64 @@ defmodule PrismWeb.SettingsLive do
               </.button>
             </div>
           </form>
+        </.card>
+        
+    <!-- The platform settings (platform admins) -->
+        <.card :if={@context.platform_admin and @platform_settings != []}>
+          <h3 class="text-sm font-medium text-gray-400 mb-1">Platform settings</h3>
+          <p class="text-xs text-gray-500 mb-1">
+            A live change reaches new and refreshed work, not work already in flight, on
+            every member within {bound_seconds(@settings_ttl_ms)}. A restart setting is
+            applied at each member's next start and is pending until then. Stream limits
+            are counted by each member on its own.
+          </p>
+          <p class="text-xs text-gray-500 mb-4" id="settings-revision">
+            Store revision {@settings_revision || "-"} · observed:
+            <span :for={m <- @settings_members} class="mr-2">
+              {m.member} ({m.revision || "unknown"})
+            </span>
+          </p>
+          <.table id="platform-settings" rows={@platform_settings}>
+            <:col :let={s} label="Setting">
+              <span class="font-mono">{s.key}</span>
+              <span :if={s.variable} class="block text-xs text-gray-500">{s.variable}</span>
+            </:col>
+            <:col :let={s} label="Value">
+              {setting_text(s.value)}
+              <.badge :if={s.pending} color="yellow">pending {setting_text(s.desired)}</.badge>
+            </:col>
+            <:col :let={s} label="Default">{setting_text(s.default)}</:col>
+            <:col :let={s} label="Source">
+              <.badge color={source_color(s.source)}>{s.source}</.badge>
+              <span :if={s.divergent} class="block text-xs text-yellow-400">
+                pinned on {Enum.map_join(s.pins, ", ", & &1.member)} only
+              </span>
+            </:col>
+            <:col :let={s} label="Change">
+              <span :if={s.source == "deployment"} class="text-xs text-gray-500">
+                set by the deployment
+              </span>
+              <form
+                :if={s.source != "deployment"}
+                id={"setting-" <> s.key}
+                phx-submit="setting_save"
+                class="flex gap-2 items-end"
+              >
+                <input type="hidden" name="key" value={s.key} />
+                <.input name="value" value={input_text(s.desired)} />
+                <.button type="submit" variant="ghost">Save</.button>
+                <.button
+                  :if={s.source == "operator"}
+                  type="button"
+                  variant="ghost"
+                  phx-click="setting_reset"
+                  phx-value-key={s.key}
+                >
+                  Reset
+                </.button>
+              </form>
+            </:col>
+          </.table>
         </.card>
         
     <!-- Preferences -->

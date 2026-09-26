@@ -35,6 +35,7 @@ const (
 	Retention          = "retention"
 	Schedule           = "schedule"
 	Session            = "session"
+	Settings           = "settings"
 	System             = "system"
 	Thread             = "thread"
 	Tincture           = "tincture"
@@ -202,6 +203,9 @@ const (
 	SessionReadResource     = "read_resource"
 	SessionUse              = "use"
 	SessionWhoami           = "whoami"
+	SettingsList            = "list"
+	SettingsReset           = "reset"
+	SettingsSet             = "set"
 	SystemNotify            = "notify"
 	SystemStatus            = "status"
 	ThreadAloud             = "aloud"
@@ -267,6 +271,7 @@ var Actions = map[string][]string{
 	"retention":           {"cleanup", "get", "set"},
 	"schedule":            {"create", "delete", "get", "list", "pause", "re_resolve", "resume", "update"},
 	"session":             {"device_init", "device_poll", "login", "logout", "read_resource", "use", "whoami"},
+	"settings":            {"list", "reset", "set"},
 	"system":              {"notify", "status"},
 	"thread":              {"aloud", "approve", "attach", "create", "decline", "delete", "events", "follow", "get", "list", "messages", "restart_for_consent", "revoke_grant", "send", "stop", "unfollow"},
 	"tincture":            {"invoke_protected", "invoke_public"},
@@ -3245,6 +3250,55 @@ func (args SessionWhoamiArgs) MarshalJSON() ([]byte, error) {
 		Action string `json:"action"`
 		fields
 	}{Action: SessionWhoami, fields: fields(args)})
+}
+
+// SettingsListArgs carries arguments for settings.list.
+type SettingsListArgs struct {
+}
+
+// MarshalJSON supplies the operation's fixed action discriminator.
+func (args SettingsListArgs) MarshalJSON() ([]byte, error) {
+	type fields SettingsListArgs
+	return json.Marshal(struct {
+		Action string `json:"action"`
+		fields
+	}{Action: SettingsList, fields: fields(args)})
+}
+
+// SettingsResetArgs carries arguments for settings.reset.
+type SettingsResetArgs struct {
+	// The setting, as list names it
+	Key string `json:"key"`
+	// The store revision the change is made against, as list answered it; a write made since refuses the change. Absent, the current revision
+	Revision Field[int] `json:"revision,omitzero"`
+}
+
+// MarshalJSON supplies the operation's fixed action discriminator.
+func (args SettingsResetArgs) MarshalJSON() ([]byte, error) {
+	type fields SettingsResetArgs
+	return json.Marshal(struct {
+		Action string `json:"action"`
+		fields
+	}{Action: SettingsReset, fields: fields(args)})
+}
+
+// SettingsSetArgs carries arguments for settings.set.
+type SettingsSetArgs struct {
+	// The setting, as list names it
+	Key string `json:"key"`
+	// The value, written as the setting's variable takes it
+	Value string `json:"value"`
+	// The store revision the change is made against, as list answered it; a write made since refuses the change. Absent, the current revision
+	Revision Field[int] `json:"revision,omitzero"`
+}
+
+// MarshalJSON supplies the operation's fixed action discriminator.
+func (args SettingsSetArgs) MarshalJSON() ([]byte, error) {
+	type fields SettingsSetArgs
+	return json.Marshal(struct {
+		Action string `json:"action"`
+		fields
+	}{Action: SettingsSet, fields: fields(args)})
 }
 
 // SystemNotifyArgs carries arguments for system.notify.

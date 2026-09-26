@@ -11,6 +11,7 @@
     "Arca.FencedPublication",
     "Arca.FencedPublication.Change",
     "Arca.Files",
+    "Arca.PlatformSettings",
     "Arca.Retention"
   ],
   "Sanctum" => [

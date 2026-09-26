@@ -62,7 +62,8 @@ defmodule Cyfr.StartupAdmissionBarrierTest do
     CyfrWeb.Telemetry,
     Phoenix.PubSub.Supervisor,
     Cyfr.StandingWatch,
-    Cyfr.TelemetryBridge
+    Cyfr.TelemetryBridge,
+    Cyfr.Platform.Settings
   ]
 
   # A supervisor the census describes is `{id, children}`, in start order.
@@ -178,6 +179,7 @@ defmodule Cyfr.StartupAdmissionBarrierTest do
     Grimoire.RunningTasks,
     CyfrWeb.SSE.Registry,
     Cyfr.RetentionScheduler,
+    Cyfr.Platform.Settings,
     Cyfr.TelemetryBridge,
     Cyfr.StandingWatch,
     Phoenix.PubSub.Supervisor,
