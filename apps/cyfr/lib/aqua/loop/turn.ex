@@ -59,7 +59,7 @@ defmodule Aqua.Loop.Turn do
   `:excerpt?` (read the room excerpt the turn's options name).
 
   Refuses an agent that names no model (`:no_model`), a catalyst the
-  estate does not hold or that does not speak `model/chat@1`, and a
+  athanor does not hold or that does not speak `model/chat@1`, and a
   model its catalyst cannot describe (`Aqua.Models.capabilities/5`; a
   typed refusal is `{:model_refused, catalyst, error}`, and a catalyst
   whose consent lacks its key `{:setup_required, catalyst}`).
@@ -231,7 +231,7 @@ defmodule Aqua.Loop.Turn do
 
   # The catalyst release a turn runs on: once its row pins one, exactly
   # that release; before, the agent's catalyst resolved against the working
-  # estate's listing, a clone falling back to the parent's. It must be
+  # athanor's listing, a clone falling back to the parent's. It must be
   # installed and speak `model/chat@1`.
   defp model(ctx, turn, agent, opts) do
     listing =
@@ -249,7 +249,7 @@ defmodule Aqua.Loop.Turn do
   defp catalyst(listing, %{catalyst_ref: pinned} = turn, agent, _opts) when is_binary(pinned) do
     if Enum.any?(listing, &(&1["component_ref"] == pinned)),
       do: {:ok, pinned, turn.model || agent["model"]},
-      else: {:error, {:catalyst_not_in_estate, pinned}}
+      else: {:error, {:catalyst_not_in_athanor, pinned}}
   end
 
   defp catalyst(listing, turn, agent, opts) do
@@ -264,7 +264,7 @@ defmodule Aqua.Loop.Turn do
         {:ok, parent, model || Keyword.get(opts, :model)}
 
       {{:error, _}, _} ->
-        {:error, {:catalyst_not_in_estate, agent["catalyst_ref"]}}
+        {:error, {:catalyst_not_in_athanor, agent["catalyst_ref"]}}
     end
   end
 
@@ -377,7 +377,7 @@ defmodule Aqua.Loop.Turn do
     case Aqua.RoomExcerpt.read(ctx, %{
            athanor_id: athanor_id,
            thread_id: thread_id,
-           estate: room["estate"],
+           athanor: room["athanor"],
            title: room["title"]
          }) do
       {:ok, text} -> text

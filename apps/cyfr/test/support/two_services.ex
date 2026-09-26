@@ -12,7 +12,7 @@ defmodule Cyfr.Test.TwoServices do
   `async: false`: the routing, the Opus service, the scripted service and
   the suite's wire are each one.
 
-  - The estate: `lay_seed!/2` lays a seed whose catalyst is the step stub
+  - The athanor: `lay_seed!/2` lays a seed whose catalyst is the step stub
     (`stub/0`), a `model/chat@1` catalyst Opus runs for real, under the
     limits its manifest asks for; `arm!/2` binds the key it needs.
     `scripted/0` names a reagent only the scripted service runs.
@@ -422,7 +422,7 @@ defmodule Cyfr.Test.TwoServices do
   end
 
   # ---------------------------------------------------------------------------
-  # The estate
+  # The athanor
   # ---------------------------------------------------------------------------
 
   @doc """

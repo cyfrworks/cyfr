@@ -122,7 +122,7 @@ defmodule PrismWeb.AquaLive.ScrollsComponent do
     end)
   end
 
-  # Same disposition as a role: the estate's own scroll is deleted, an
+  # Same disposition as a role: the athanor's own scroll is deleted, an
   # edited copy of a shipped one is restored.
   def handle_event("skill_delete", %{"name" => name}, socket) do
     CyfrWeb.ContextGuard.guard(socket, fn socket ->

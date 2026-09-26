@@ -437,7 +437,7 @@ defmodule Grimoire.Catalog do
   the host-stamped `opts[:lineage]`: its `attempt` must be an open attempt
   of its `parent_execution_id` in the caller's athanor, and the grant it
   stores must stand (`Sanctum.ExecutionStanding.verify/1`). Absent or
-  mismatched lineage, or a grant whose estate was archived, admits nothing;
+  mismatched lineage, or a grant whose athanor was archived, admits nothing;
   nothing in `args` can supply it. The discovery predicates
   (`in_chain_view/1`, `in_chain_reachable?/2`) read no lineage and admit
   no call.

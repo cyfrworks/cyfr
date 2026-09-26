@@ -9,7 +9,7 @@ defmodule Sanctum.Consent.ComponentsTest do
   for itself. It asks through `Sanctum.Consent.Components`, which the
   component domain answers (`Compendium.ConsentFacts`).
 
-  An estate whose facts cannot be read is not an estate that holds
+  An athanor whose facts cannot be read is not an athanor that holds
   nothing: a walk that mistook the two would skip every source as
   unvouched and report a clean, empty mint, and a shape derived from no
   manifest at all would grant nothing and read as a component that asks
@@ -125,7 +125,7 @@ defmodule Sanctum.Consent.ComponentsTest do
   test "unreadable facts, an absent component and a denial are three different words", %{ctx: ctx} do
     ship!(ctx, "facts-present", "reagent")
 
-    # The estate holds no component by that name: `:not_found`.
+    # The athanor holds no component by that name: `:not_found`.
     assert {:error, :not_found} = Components.get_latest(ctx, "facts-absent", "local", "reagent")
 
     # It holds this one, at this version, and not at another.
@@ -136,7 +136,7 @@ defmodule Sanctum.Consent.ComponentsTest do
 
     # The facts cannot be read at all: a third word, and not either of
     # those. A consent decision that took this for `:not_found` would
-    # report an estate that holds nothing.
+    # report an athanor that holds nothing.
     without_facts(fn ->
       assert {:error, :component_facts_unavailable} =
                Components.get_latest(ctx, "facts-present", "local", "reagent")
@@ -173,7 +173,7 @@ defmodule Sanctum.Consent.ComponentsTest do
     end)
 
     # And with the facts back, the same walk mints — so the refusal above
-    # was the port's and not an empty estate.
+    # was the port's and not an empty athanor.
     assert {:ok, %{minted: minted}} = Bootstrap.run(ctx)
     assert "reagent:local.facts-mint" in minted
   end

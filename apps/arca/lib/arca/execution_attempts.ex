@@ -39,7 +39,7 @@ defmodule Arca.ExecutionAttempts do
 
   ## The grant
 
-  Every attempt carries the estate standing it was admitted under
+  Every attempt carries the athanor standing it was admitted under
   (`athanor_generation`, `Prima.ExecutionGrant`): `open!/3` stamps it from
   the admission's grant and `takeover!/3` copies it to the successor
   unchanged. Every write that renews, claims, resumes, recovers or ends an
@@ -341,7 +341,7 @@ defmodule Arca.ExecutionAttempts do
        ) do
     fn ->
       Arca.ExecutionStanding.verify!(grant, verify)
-      # The lease reads the cell's clock after the estate's lock was won.
+      # The lease reads the cell's clock after the athanor's lock was won.
       until = lease_until()
 
       held =
@@ -662,7 +662,7 @@ defmodule Arca.ExecutionAttempts do
 
   # The grant and check a fenced write on `attempt` was handed, `:stored`
   # resolved to the stamp the row carries. A row that does not exist is
-  # `lost_as`; a grant of another estate is not this attempt's standing.
+  # `lost_as`; a grant of another athanor is not this attempt's standing.
   # arca:db-raise-ok called inside its caller's rescue.
   defp standing_inputs(athanor_id, attempt, opts, lost_as \\ {:error, :lost}) do
     stored = fn -> Arca.ExecutionStanding.stored(Prima.Actor.in_athanor(athanor_id), attempt) end
@@ -1189,7 +1189,7 @@ defmodule Arca.ExecutionAttempts do
   end
 
   # Step 1: the grant, the hold and the intent commit together, or none
-  # does. The estate's lock is taken first, then the attempt's.
+  # does. The athanor's lock is taken first, then the attempt's.
   defp record_intent(holder, write) do
     Arca.Repo.Errors.with_db_rescue("Arca.ExecutionAttempts.record_intent", fn ->
       Arca.Repo.locking_transaction(fn ->
@@ -1254,7 +1254,7 @@ defmodule Arca.ExecutionAttempts do
   end
 
   # Step 3: the intent leaves `pending` by compare-and-set, under the
-  # estate's lock and then the attempt row's. A write the store applied is
+  # athanor's lock and then the attempt row's. A write the store applied is
   # confirmed only while the grant and the hold still stand and the intent
   # is still pending: a grant retired while the store call ran settles it
   # uncertain, exactly as a hold that ended does. A refusal and an unknown

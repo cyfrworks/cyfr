@@ -21,7 +21,7 @@ defmodule Sanctum.Consent.Bootstrap do
   same operator-vouched mint as the first. A node
   is vouched for when the seed ships it at the seed's own digest, or when
   the head already names it at that digest: a release that retires the
-  version an estate holds does not turn that unchanged copy into a
+  version an athanor holds does not turn that unchanged copy into a
   person's own. An edited shipped copy is not the seed: its digest is
   not the seed's, and it is not re-minted. A member-authored source
   has no machine profile. A closure a person widened or a head a person
@@ -40,7 +40,7 @@ defmodule Sanctum.Consent.Bootstrap do
   immutable, and its caps are auditable once at build time rather than per
   athanor.
 
-  The estate's agents (`agent:local.<name>`, read through the
+  The athanor's agents (`agent:local.<name>`, read through the
   component-facts port) are sources here too, minted after the components
   they run on. A source is minted only while it is vouched for — the
   seed's own bytes, or a head that already names it unchanged. A
@@ -84,13 +84,13 @@ defmodule Sanctum.Consent.Bootstrap do
 
   `claim` is the provisioning claim the walk runs under
   (`Arca.ProvisioningClaims`): the walk starts, and each source is minted
-  or revised, only while the estate's claim still reads that owner and
+  or revised, only while the athanor's claim still reads that owner and
   fence with no outcome. A walk whose claim a later attempt took answers
   `{:error, :claim_lost}` — what it minted before the loss stands, since
-  it held the estate then, and nothing is minted after. With no claim
-  (`nil`) the walk is unfenced: an estate nothing else is filling.
+  it held the athanor then, and nothing is minted after. With no claim
+  (`nil`) the walk is unfenced: an athanor nothing else is filling.
 
-  Answers `{:error, {:component_facts, reason}}` when the estate's
+  Answers `{:error, {:component_facts, reason}}` when the athanor's
   component facts cannot be read (`Sanctum.Consent.Components`). That is
   not "nothing is vouched for": a walk that cannot see what the seed ships
   would skip every source as unvouched and report a clean, empty mint, so
@@ -111,7 +111,7 @@ defmodule Sanctum.Consent.Bootstrap do
     end
   end
 
-  # Whether the estate's claim is still the one this walk runs under.
+  # Whether the athanor's claim is still the one this walk runs under.
   defp holding(_ctx, nil), do: :ok
 
   defp holding(%Context{} = ctx, %{owner: owner, fence: fence}) do
@@ -127,7 +127,7 @@ defmodule Sanctum.Consent.Bootstrap do
          # The releases the seed itself ships, at the seed's own digest —
          # never the athanor's copy; an edited shipped unit is absent from
          # the map. With the facts unreadable the walk refuses rather than
-         # reading an unreadable estate as one the operator vouched
+         # reading an unreadable athanor as one the operator vouched
          # nothing for, which would skip every source and report a clean,
          # empty mint.
          {:ok, shipped} <- Components.shipped_nodes(ctx, components) do
@@ -165,7 +165,7 @@ defmodule Sanctum.Consent.Bootstrap do
      }}
   end
 
-  # An estate whose agent files cannot be listed bootstraps no agent and
+  # An athanor whose agent files cannot be listed bootstraps no agent and
   # goes on: the components are a separate roster and a transient tree
   # read must not hold them up. Facts that are not configured at all are
   # a different thing and refuse the walk — see `run/2`.

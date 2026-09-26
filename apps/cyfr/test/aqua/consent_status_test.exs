@@ -5,7 +5,7 @@ defmodule Aqua.ConsentStatusTest do
   @moduledoc """
   Whether a consent still covers its source is answered as a state or a
   typed refusal, never as silence: a source with nothing to judge is
-  `:absent`, a context with no estate is forbidden, and a store that
+  `:absent`, a context with no athanor is forbidden, and a store that
   cannot answer fails the whole list rather than reading as "nothing is
   stale".
   """
@@ -35,9 +35,9 @@ defmodule Aqua.ConsentStatusTest do
 
     n = System.unique_integer([:positive])
     user = "local|idp|consent-status-#{n}"
-    {:ok, estate} = Sanctum.Tenancy.Athanors.create_group(user, "Consent #{n}")
-    {:ok, _} = Sanctum.Tenancy.Athanors.mark_provisioned(estate)
-    {:ok, ctx: %{Sanctum.TestContext.local() | user_id: user, athanor_id: estate.id}}
+    {:ok, athanor} = Sanctum.Tenancy.Athanors.create_group(user, "Consent #{n}")
+    {:ok, _} = Sanctum.Tenancy.Athanors.mark_provisioned(athanor)
+    {:ok, ctx: %{Sanctum.TestContext.local() | user_id: user, athanor_id: athanor.id}}
   end
 
   test "the actions the consent lacks are named in the manifest's order" do
@@ -54,16 +54,16 @@ defmodule Aqua.ConsentStatusTest do
     assert {:ok, :absent} = ConsentStatus.state(ctx, "formula:local.nothing-here")
     assert {:ok, :absent} = Aqua.consent_state(ctx, "formula:local.nothing-here")
 
-    # The soul of an estate whose tree holds none.
+    # The soul of an athanor whose tree holds none.
     assert {:ok, :absent} = Aqua.consent_state(ctx)
   end
 
-  test "an estate with nothing drifted lists nothing, as a list", %{ctx: ctx} do
+  test "an athanor with nothing drifted lists nothing, as a list", %{ctx: ctx} do
     assert {:ok, []} = ConsentStatus.stale_refs(ctx)
     assert {:ok, []} = Aqua.stale_consent_refs(ctx)
   end
 
-  test "a context that names no estate is refused, never read as current", %{ctx: ctx} do
+  test "a context that names no athanor is refused, never read as current", %{ctx: ctx} do
     unfocused = %{ctx | athanor_id: nil}
 
     assert {:error, :forbidden} = ConsentStatus.state(unfocused, "formula:local.x")

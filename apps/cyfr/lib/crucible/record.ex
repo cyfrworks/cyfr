@@ -374,7 +374,7 @@ defmodule Crucible.Record do
 
   @doc """
   The grant `record` is admitted under: the one it carries, else a root's
-  estate standing read now (`Sanctum.ExecutionStanding.capture/1`) or the
+  athanor standing read now (`Sanctum.ExecutionStanding.capture/1`) or the
   stamp its parent's current attempt stores, which a child inherits
   unchanged. `{:error, :not_standing}` when neither stands,
   `{:error, :unavailable}` when the store cannot answer.
@@ -503,7 +503,7 @@ defmodule Crucible.Record do
   `{:ok, until}` is the new expiry the attempt now carries. `:lost` means
   the store answered and the attempt no longer owns its execution — it
   finished, was cancelled, paused, lapsed, or a successor took the row —
-  or its grant no longer stands (its estate was archived), and the runner
+  or its grant no longer stands (its athanor was archived), and the runner
   stops authorized work at once. `:unavailable` means the store could not
   answer; the runner keeps working only while the lease it last held
   still holds.
@@ -535,7 +535,7 @@ defmodule Crucible.Record do
   happened — and answers `{:error, {:result_lost, reason}}`.
 
   A completion commits only under a grant that stands
-  (`Sanctum.ExecutionStanding.verify/1`). One whose estate was archived
+  (`Sanctum.ExecutionStanding.verify/1`). One whose athanor was archived
   while the run was in flight is never recorded as a success: its attempt
   closes `uncertain` and the row failed, since what the run did may
   already have happened, and the answer is `{:error, :not_standing}`.

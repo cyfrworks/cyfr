@@ -7,9 +7,9 @@ defmodule Arca.ExecutionStanding do
   to, and the one contract every execution write that admits, renews,
   resumes, recovers or ends work runs under.
 
-  ## The estate row
+  ## The athanor row
 
-  `current/2` reads an estate's standing and `locked/2` reads it under a
+  `current/2` reads an athanor's standing and `locked/2` reads it under a
   shared row lock inside the caller's transaction, each as the plain map
   `Arca.SecurityTransitions.Projection.athanor/1` answers (nil when there
   is no row). Nothing is decided here: the identity domain alone reads
@@ -29,10 +29,10 @@ defmodule Arca.ExecutionStanding do
   match refuses the write as `:not_standing`.
 
   The lock order extends the standing transitions'
-  (`Arca.SecurityTransitions`): the estate `verify` locks, then execution
+  (`Arca.SecurityTransitions`): the athanor `verify` locks, then execution
   rows, then attempt rows by id, then the write intents of those attempts.
-  A write never holds an attempt row and then asks for its estate's. The
-  estate's lock is shared (`Arca.QueryHelpers.for_share/1`): execution
+  A write never holds an attempt row and then asks for its athanor's. The
+  athanor's lock is shared (`Arca.QueryHelpers.for_share/1`): execution
   writes and host effects never wait for one another on it, while an
   archive — which takes it exclusively — serializes against each of them:
   the write either commits first, and the archive retires what it
@@ -43,7 +43,7 @@ defmodule Arca.ExecutionStanding do
   ## The retired scan
 
   `retired_attempts/3` pages, by attempt id, through the open attempts
-  whose stored generation no longer matches their estate's active
+  whose stored generation no longer matches their athanor's active
   standing, for the sweep that cancels them (`Crucible.Sweeper`).
   It answers identifiers and stored stamps only.
   """
@@ -57,30 +57,30 @@ defmodule Arca.ExecutionStanding do
   @typedoc "The caller's check over a grant, asked inside the write's transaction."
   @type verify :: (Prima.ExecutionGrant.t() -> :ok | {:error, term()})
 
-  @typedoc "An attempt the retired scan found: execution, attempt, estate and stored generation."
+  @typedoc "An attempt the retired scan found: execution, attempt, athanor and stored generation."
   @type retired :: {String.t(), String.t(), String.t(), pos_integer()}
 
   @doc """
-  The estate `athanor_id`'s standing row, read without a lock: `{:ok, row}`
-  (nil when there is no such estate) or `{:error, :database_error}`. The
-  actor must be in that estate.
+  The athanor `athanor_id`'s standing row, read without a lock: `{:ok, row}`
+  (nil when there is no such athanor) or `{:error, :database_error}`. The
+  actor must be in that athanor.
   """
   @spec current(Prima.Actor.t(), String.t()) ::
           {:ok, map() | nil} | {:error, :database_error | :cross_tenant}
   def current(%Prima.Actor{athanor_id: athanor_id}, athanor_id)
       when is_binary(athanor_id) and athanor_id != "" do
     Arca.Repo.Errors.with_db_rescue("Arca.ExecutionStanding.current", fn ->
-      {:ok, Projection.athanor(Arca.Repo.one(estate(athanor_id)))}
+      {:ok, Projection.athanor(Arca.Repo.one(athanor(athanor_id)))}
     end)
   end
 
   def current(%Prima.Actor{}, _athanor_id), do: {:error, :cross_tenant}
 
   @doc """
-  The estate `athanor_id`'s standing row, held against a writer until the
+  The athanor `athanor_id`'s standing row, held against a writer until the
   caller's transaction ends (`Arca.QueryHelpers.for_share/1`): any number
   of these read it at once, and a transition that locks it for update
-  waits for all of them. `{:ok, row}` (nil when there is no such estate)
+  waits for all of them. `{:ok, row}` (nil when there is no such athanor)
   or `{:error, :database_error}`. Runs only inside a caller's transaction
   (`Arca.Repo.locking_transaction/2`, or `Arca.Repo.read_transaction/1`
   for a read-only effect), and raises outside one.
@@ -94,26 +94,26 @@ defmodule Arca.ExecutionStanding do
     end
 
     Arca.Repo.Errors.with_db_rescue("Arca.ExecutionStanding.locked", fn ->
-      row = athanor_id |> estate() |> QueryHelpers.for_share() |> Arca.Repo.one()
+      row = athanor_id |> athanor() |> QueryHelpers.for_share() |> Arca.Repo.one()
       {:ok, Projection.athanor(row)}
     end)
   end
 
   def locked(%Prima.Actor{}, _athanor_id), do: {:error, :cross_tenant}
 
-  defp estate(athanor_id), do: from(a in Athanor, where: a.id == ^athanor_id)
+  defp athanor(athanor_id), do: from(a in Athanor, where: a.id == ^athanor_id)
 
   @doc """
   Up to `limit` open attempts — `running` or `paused`, and their
   execution's current one — whose stored generation no longer matches
-  their estate's active standing (an estate archived, reopened since, or
+  their athanor's active standing (an athanor archived, reopened since, or
   gone), with attempt ids after `cursor` (nil for the first page), in
   attempt-id order. The server's own actor only.
   """
   @spec retired_attempts(Prima.Actor.t(), String.t() | nil, pos_integer()) ::
           {:ok, [retired()]} | {:error, :database_error | :cross_tenant}
   # arca:unscoped-ok the retired scan is a system responsibility across every
-  # estate: its caller is the sweep, and it answers identifiers and stamps only.
+  # athanor: its caller is the sweep, and it answers identifiers and stamps only.
   def retired_attempts(%Prima.Actor{scope: :platform, system: true}, cursor, limit)
       when (is_nil(cursor) or is_binary(cursor)) and is_integer(limit) and limit > 0 do
     Arca.Repo.Errors.with_db_rescue("Arca.ExecutionStanding.retired_attempts", fn ->

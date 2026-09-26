@@ -30,7 +30,7 @@ defmodule Arca.Usage do
   peers have written since the peer last walked the tree, and the athanor
   byte cap it feeds (`Prima.Caps`, the port) can admit a write it would
   have refused. The direction is over-admission, not over-refusal, and it
-  is not a stale number in a report: it is the estate growing past a cap a
+  is not a stale number in a report: it is the athanor growing past a cap a
   tenant consented to.
 
   **The bound is `ttl_ms/0` — five minutes.** An entry is never extended:
@@ -42,7 +42,7 @@ defmodule Arca.Usage do
 
   Nothing about this fails open by accident. An unresolved tenant is
   `{:error, :no_athanor}` and never `{:ok, 0}` — a zero would read an
-  unresolved tenant as an empty estate and admit the write the cap was
+  unresolved tenant as an empty athanor and admit the write the cap was
   asked about — and a walk that cannot answer is returned raw and never
   cached, which the cap maps to `:storage_unverifiable` and refuses.
 
@@ -136,7 +136,7 @@ defmodule Arca.Usage do
 
   # An actor with no resolved athanor names no tree to walk. That is a
   # refusal, not a total of zero: answering `{:ok, 0}` would read an
-  # unresolved tenant as an empty estate, and the byte cap above would
+  # unresolved tenant as an empty athanor, and the byte cap above would
   # admit the write.
   def athanor_bytes(%Prima.Actor{}), do: {:error, :no_athanor}
 
@@ -177,7 +177,7 @@ defmodule Arca.Usage do
   all its scope pairs.
 
   This is also where a cell-wide invalidation lands: a member that hears
-  that a peer wrote to this athanor's estate drops its copy, and its next
+  that a peer wrote to this athanor's tree drops its copy, and its next
   read walks the tree and counts the peer's write. Without one, `ttl_ms/0`
   is the bound (see the module doc). On one member it is maintenance and
   test hygiene; the write path keeps itself coherent through `account/4`.

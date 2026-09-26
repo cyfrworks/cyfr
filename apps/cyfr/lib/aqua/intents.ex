@@ -5,7 +5,7 @@ defmodule Aqua.Intents do
   @moduledoc """
   Navigation and UI intents — what an agent may ask the browser to do —
   and the routes they may name. The web adapter maps an intent to a
-  page; the intent itself names no estate, the athanor in focus is added
+  page; the intent itself names no athanor, the athanor in focus is added
   when it is pushed.
 
   A `ui.navigate` path is checked for shape alone — absolute, no scheme or

@@ -3,7 +3,7 @@
 
 defmodule Arca.Schemas.Agent do
   @moduledoc """
-  One of the estate's agents — the soul or a role — as a derived index row
+  One of the athanor's agents — the soul or a role — as a derived index row
   of its file in the `aqua/` tree: the digest of the bytes (revision) and
   of the security-relevant subset (capability). Owned by the athanor;
   rewritten from the tree by `Compendium.AgentIndex`.

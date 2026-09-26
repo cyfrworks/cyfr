@@ -10,7 +10,7 @@ defmodule PrismWeb.ModelCatalog do
 
   The catalogue is `Aqua.models/1`: every installed catalyst
   that speaks `model/chat@1`, asked for its models with the key the
-  estate bound on it. A pane asks for it on every mount — every thread
+  athanor bound on it. A pane asks for it on every mount — every thread
   switch — so a run's answer is kept per athanor in `Arca.Cache` for a
   short while (`ttl_ms/0`): a hit is delivered to the caller's mailbox at
   once, with no run and no deadline armed, and a key bound or dropped in
@@ -38,7 +38,7 @@ defmodule PrismWeb.ModelCatalog do
   and the caller's `:models_loaded` should be set — signalled by
   `:unavailable`. `tag` is the focus the catalogue was read for
   (`CyfrWeb.ContextGuard.capture/1`); the caller takes the result through
-  `CyfrWeb.ContextGuard.deliver/3`, so a catalogue read for one estate is
+  `CyfrWeb.ContextGuard.deliver/3`, so a catalogue read for one athanor is
   never shown under another.
   """
   @spec load(Sanctum.Context.t()) :: :ok | :unavailable

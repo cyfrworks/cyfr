@@ -6,17 +6,17 @@ defmodule Sanctum.ExecutionStanding do
   Whether admitted work still stands: the decision over an execution's
   grant (`Prima.ExecutionGrant`).
 
-  A root is admitted under a grant `capture/1` reads from its estate's
+  A root is admitted under a grant `capture/1` reads from its athanor's
   current active standing, and every attempt stores it. An archive raises
-  the estate's generation and a reopen raises it again, so the grant of
+  the athanor's generation and a reopen raises it again, so the grant of
   work admitted before an archive never stands again: `verify/1` refuses
   it for good, whether or not anyone heard of the archive. A reopened
-  estate admits fresh roots under a fresh grant; an old one is never
+  athanor admits fresh roots under a fresh grant; an old one is never
   rebuilt from the standing it has now.
 
   `verify/1` is asked inside the execution write's own transaction
   (`Arca.ExecutionStanding`), which it passes to the storage APIs as their
-  `verify:` check. It holds the estate's row shared: execution writes and
+  `verify:` check. It holds the athanor's row shared: execution writes and
   host effects never wait for one another on it, while an archive waits
   for each of them and each waits for an archive — a write that commits
   first is retired by the archive, and one that waits reads the archive's
@@ -25,7 +25,7 @@ defmodule Sanctum.ExecutionStanding do
   `stamp_only/1` is the check a retirement runs instead — a failure, a
   cancel, a lease lapse and the sweep's cancellation of retired work
   (`Cyfr.Boundaries.system_responsibilities/0`). It asks nothing of the
-  estate: the storage write still requires the attempt to carry the
+  athanor: the storage write still requires the attempt to carry the
   grant's stamp, and a retirement can end work but never report its
   success.
 
@@ -36,9 +36,9 @@ defmodule Sanctum.ExecutionStanding do
   alias Sanctum.Context
 
   @doc """
-  The grant a root admitted in `ctx` runs under: its focused estate, at
+  The grant a root admitted in `ctx` runs under: its focused athanor, at
   the generation it stands at now. `{:error, :not_standing}` for a context
-  focused on no estate, or on one that is not active;
+  focused on no athanor, or on one that is not active;
   `{:error, :unavailable}` when the store cannot answer.
   """
   @spec capture(Context.t()) ::
@@ -53,8 +53,8 @@ defmodule Sanctum.ExecutionStanding do
   def capture(%Context{}), do: {:error, :not_standing}
 
   @doc """
-  Whether `grant` stands: its estate exists, is active and is at exactly
-  the grant's generation, read under the estate row's shared lock. Only
+  Whether `grant` stands: its athanor exists, is active and is at exactly
+  the grant's generation, read under the athanor row's shared lock. Only
   inside an execution write's transaction; raises outside one. `:ok`,
   `{:error, :not_standing}`, or `{:error, :unavailable}` when the store
   cannot answer.
@@ -70,7 +70,7 @@ defmodule Sanctum.ExecutionStanding do
 
   @doc """
   The check a retirement write runs in place of `verify/1`: nothing of
-  the estate is asked, and the storage write matches the attempt's stored
+  the athanor is asked, and the storage write matches the attempt's stored
   stamp alone. Only a failure, a cancel, a lease lapse and the sweep's
   cancellation pass this; a completion, new output and a renewal pass
   `verify/1`.

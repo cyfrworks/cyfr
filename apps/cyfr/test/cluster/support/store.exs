@@ -9,7 +9,7 @@ defmodule Cyfr.Cluster.Store do
   neither is a stand-in: the database is a real Postgres, so
   `Arca.ServerMetaStorage.now!/0` is `clock_timestamp()` and every member
   reads one instant however its own clock has drifted; the object store is
-  a real S3 implementation, so an estate written by one member is read by
+  a real S3 implementation, so an athanor written by one member is read by
   the other rather than by a copy of it.
 
   | Variable | Default |
@@ -36,7 +36,7 @@ defmodule Cyfr.Cluster.Store do
   def s3_config, do: Arca.Test.S3Env.config(prefix: prefix())
 
   @doc """
-  The prefix this run's estates live under, minted once so a failed run
+  The prefix this run's athanors live under, minted once so a failed run
   leaves nothing a later one will read.
   """
   @spec prefix() :: String.t()

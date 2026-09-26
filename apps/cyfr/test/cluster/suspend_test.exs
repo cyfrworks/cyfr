@@ -26,7 +26,7 @@ defmodule Cyfr.Cluster.SuspendTest do
 
   describe "a turn suspended on one member" do
     test "gives the thread up with every row intact, and the peer carries it on" do
-      %{athanor: athanor, thread: thread} = estate(:a, "suspend")
+      %{athanor: athanor, thread: thread} = athanor(:a, "suspend")
 
       accepted = Cell.call(:a, Cyfr.Cluster.Fixtures, :accept!, [athanor, thread, "@aqua go"])
 
@@ -96,7 +96,7 @@ defmodule Cyfr.Cluster.SuspendTest do
     end
 
     test "is not recovered by a member while a live peer is running it" do
-      %{athanor: athanor, thread: thread} = estate(:a, "recover-busy")
+      %{athanor: athanor, thread: thread} = athanor(:a, "recover-busy")
 
       accepted = Cell.call(:a, Cyfr.Cluster.Fixtures, :accept!, [athanor, thread, "@aqua go"])
 
@@ -123,7 +123,7 @@ defmodule Cyfr.Cluster.SuspendTest do
     end
 
     test "ends uncertain once the cell's recovery budget is spent, on either member" do
-      %{athanor: athanor, thread: thread} = estate(:a, "cap")
+      %{athanor: athanor, thread: thread} = athanor(:a, "cap")
 
       accepted = Cell.call(:a, Cyfr.Cluster.Fixtures, :accept!, [athanor, thread, "@aqua go"])
 
@@ -160,7 +160,7 @@ defmodule Cyfr.Cluster.SuspendTest do
 
   describe "a pending approval" do
     test "is decided once, whichever member decides it" do
-      %{athanor: athanor, thread: thread} = estate(:a, "approval")
+      %{athanor: athanor, thread: thread} = athanor(:a, "approval")
       approval = Cell.call(:a, Cyfr.Cluster.Fixtures, :approval!, [athanor, thread])
 
       results =
@@ -182,7 +182,7 @@ defmodule Cyfr.Cluster.SuspendTest do
     end
   end
 
-  defp estate(id, label) do
+  defp athanor(id, label) do
     athanor = Cell.call(id, Cyfr.Cluster.Fixtures, :athanor!, [label])
     thread = Cell.call(id, Cyfr.Cluster.Fixtures, :thread!, [athanor.id, "cluster #{label}"])
     %{athanor: athanor.id, thread: thread.id}

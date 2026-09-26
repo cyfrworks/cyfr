@@ -473,7 +473,7 @@ defmodule CyfrWeb.Ingress.TinctureControllerTest do
     setup do
       # The prefix is minted from the reader's own session: a private app's
       # own assets are theirs to read while that session and their seat
-      # stand, not anyone's who has the URL. A second seat keeps the estate
+      # stand, not anyone's who has the URL. A second seat keeps the athanor
       # open when the reader leaves it.
       {:ok, _} =
         Sanctum.Tenancy.Members.ensure("usr_keeper", scope: "athanor", athanor_id: "ath_test")

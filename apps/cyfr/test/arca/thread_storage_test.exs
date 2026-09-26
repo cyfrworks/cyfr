@@ -58,7 +58,7 @@ defmodule Arca.ThreadStorageTest do
     assert {:error, :no_athanor} = Threads.list(%{ctx | athanor_id: ""})
 
     # Not an actor at all: no head matches, so a context cannot be read as
-    # an estate with no threads.
+    # an athanor with no threads.
     context = Sanctum.TestContext.local()
     assert_raise FunctionClauseError, fn -> Threads.list(context) end
   end
@@ -330,7 +330,7 @@ defmodule Arca.ThreadStorageTest do
     assert ids == Enum.sort([running.id, fresh.id])
   end
 
-  test "a create over the estate's thread cap is refused through the port, and commits nothing",
+  test "a create over the athanor's thread cap is refused through the port, and commits nothing",
        %{ctx: ctx} do
     {:ok, _first} = Threads.create(ctx, %{title: "One"})
     before = Threads.list(ctx) |> Enum.map(& &1.id) |> Enum.sort()
@@ -346,7 +346,7 @@ defmodule Arca.ThreadStorageTest do
 
     assert Threads.list(ctx) |> Enum.map(& &1.id) |> Enum.sort() == before
 
-    # Another estate's count is its own.
+    # Another athanor's count is its own.
     other = Prima.Actor.in_athanor("ath_b")
     assert {:ok, _} = Threads.create(other, %{title: "Theirs"})
   end

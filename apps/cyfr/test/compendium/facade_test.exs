@@ -6,7 +6,7 @@ defmodule Compendium.FacadeTest do
   The component domain's door for callers outside it: an exact roster, so
   an entry added without a roster change fails here; each group of
   delegating entries answers what the internal it names answers; and the
-  component facts the assistant reads — the estate's model catalysts, its
+  component facts the assistant reads — the athanor's model catalysts, its
   agent sources and its own formulas — each refused for a caller that may
   not read them and answered `:unavailable`, never empty, when the index
   or the store cannot answer.
@@ -34,12 +34,12 @@ defmodule Compendium.FacadeTest do
         else: Application.delete_env(:arca, :base_path)
     end)
 
-    # A filled estate of its own, so a listing starts no fill behind the test.
+    # A filled athanor of its own, so a listing starts no fill behind the test.
     n = System.unique_integer([:positive])
     user = "local|idp|facade-#{n}"
-    {:ok, estate} = Sanctum.Tenancy.Athanors.create_group(user, "Facade #{n}")
-    {:ok, _} = Sanctum.Tenancy.Athanors.mark_provisioned(estate)
-    ctx = %{Sanctum.TestContext.local() | user_id: user, athanor_id: estate.id}
+    {:ok, athanor} = Sanctum.Tenancy.Athanors.create_group(user, "Facade #{n}")
+    {:ok, _} = Sanctum.Tenancy.Athanors.mark_provisioned(athanor)
+    ctx = %{Sanctum.TestContext.local() | user_id: user, athanor_id: athanor.id}
 
     {:ok, ctx: ctx}
   end
@@ -358,7 +358,7 @@ defmodule Compendium.FacadeTest do
       end
     end
 
-    test "refuses a caller that is not an authenticated reader focused on an estate", %{
+    test "refuses a caller that is not an authenticated reader focused on an athanor", %{
       ctx: ctx
     } do
       assert {:error, :forbidden} = Compendium.model_catalysts(%{ctx | authenticated: false})
@@ -374,7 +374,7 @@ defmodule Compendium.FacadeTest do
       assert {:error, :forbidden} = Compendium.model_catalysts(Context.enter_guest(ctx))
     end
 
-    test "an index behind its tree is unavailable, not an empty estate", %{ctx: ctx} do
+    test "an index behind its tree is unavailable, not an empty athanor", %{ctx: ctx} do
       :ok = put_component!(ctx, "catalyst", "claude", "1.0.0", %{"contracts" => ["model/chat@1"]})
       assert {:ok, [_]} = Compendium.model_catalysts(ctx)
 
@@ -390,7 +390,7 @@ defmodule Compendium.FacadeTest do
   end
 
   describe "agent_source_refs/1" do
-    test "an estate that names no athanor is forbidden", %{ctx: ctx} do
+    test "an athanor that names no athanor is forbidden", %{ctx: ctx} do
       assert {:error, :forbidden} = Compendium.agent_source_refs(%{ctx | athanor_id: nil})
     end
 
@@ -406,7 +406,7 @@ defmodule Compendium.FacadeTest do
   end
 
   describe "local_formula_refs/1" do
-    test "the estate's own formulas as name-level refs, once each", %{ctx: ctx} do
+    test "the athanor's own formulas as name-level refs, once each", %{ctx: ctx} do
       :ok = put_component!(ctx, "formula", "report", "1.0.0", %{})
       :ok = put_component!(ctx, "formula", "report", "1.1.0", %{})
       :ok = put_component!(ctx, "catalyst", "claude", "1.0.0", %{})
@@ -414,7 +414,7 @@ defmodule Compendium.FacadeTest do
       assert {:ok, ["formula:local.report"]} = Compendium.local_formula_refs(ctx)
     end
 
-    test "an estate that names no athanor is forbidden", %{ctx: ctx} do
+    test "an athanor that names no athanor is forbidden", %{ctx: ctx} do
       assert {:error, :forbidden} = Compendium.local_formula_refs(%{ctx | athanor_id: nil})
     end
   end

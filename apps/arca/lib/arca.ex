@@ -633,7 +633,7 @@ defmodule Arca do
 
   @doc """
   Make a directory exist at a tenant path, holding nothing — every folder
-  of a fresh estate from the first day (`ensure_roots/1`). Not a write of
+  of a fresh athanor from the first day (`ensure_roots/1`). Not a write of
   bytes: nothing is capped or counted, and the reserved roots are not
   refused — a directory carries no bytes a row could name. Refused like
   any path outside the tenant roster; seed media stays read-only.

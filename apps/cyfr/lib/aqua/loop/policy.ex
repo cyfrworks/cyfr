@@ -13,7 +13,7 @@ defmodule Aqua.Loop.Policy do
   never `auto` without a standing grant. A hand or catalog call reads its
   own key; a clone reads its role's glob; the `ui` event runs at once; an
   external server's tool always asks; a launch reads `execution.run` and
-  then the launch rule: an application the estate consented to and this
+  then the launch rule: an application the athanor consented to and this
   turn has not written to may run under `auto`, anything else needs a
   card. Reads run beside each other; everything else runs alone.
 
@@ -119,8 +119,8 @@ defmodule Aqua.Loop.Policy do
 
   @doc """
   The launch rule: an `execution.run` of `reference` runs as a child of
-  the turn (`:child`) when the estate consented to it and this turn did
-  not write to it; a reference this turn wrote to, or one the estate has
+  the turn (`:child`) when the athanor consented to it and this turn did
+  not write to it; a reference this turn wrote to, or one the athanor has
   not consented to, needs a card (`:card`); a reference that is not a
   component is refused.
   """

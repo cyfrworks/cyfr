@@ -31,7 +31,7 @@ defmodule Aqua.RoomExcerpt do
           required(:athanor_id) => String.t(),
           required(:thread_id) => String.t(),
           optional(:title) => String.t() | nil,
-          optional(:estate) => String.t() | nil
+          optional(:athanor) => String.t() | nil
         }
 
   @doc "The excerpt's byte bound — half the runner's message cap."
@@ -58,7 +58,7 @@ defmodule Aqua.RoomExcerpt do
 
   defp header(room, thread) do
     where =
-      [room[:estate], room[:title] || thread.title]
+      [room[:athanor], room[:title] || thread.title]
       |> Enum.reject(&(&1 in [nil, ""]))
       |> Enum.join(" · ")
 

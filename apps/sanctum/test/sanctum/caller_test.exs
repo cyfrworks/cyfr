@@ -76,19 +76,19 @@ defmodule Sanctum.CallerTest do
     session
   end
 
-  # A group of this person's own: no estate is shared server-wide, so a
+  # A group of this person's own: no athanor is shared server-wide, so a
   # test that needs a seat mints one.
   defp member!(user) do
-    {:ok, estate} =
+    {:ok, athanor} =
       Sanctum.Tenancy.Athanors.create_group(
         user.user_id,
         "Caller #{System.unique_integer([:positive])}"
       )
 
     {:ok, _} =
-      Sanctum.Tenancy.Members.ensure(user.user_id, scope: "athanor", athanor_id: estate.id)
+      Sanctum.Tenancy.Members.ensure(user.user_id, scope: "athanor", athanor_id: athanor.id)
 
-    {user, estate}
+    {user, athanor}
   end
 
   describe "establish/2" do
@@ -116,7 +116,7 @@ defmodule Sanctum.CallerTest do
       _ = other_home
       other_session = session_for(Map.put(other, :namespace, other.slug))
 
-      # The other user holds no membership in the `home` fixture estate.
+      # The other user holds no membership in the `home` fixture athanor.
       assert {:error, reason} = Caller.establish(other_session.token, focus: home.id)
       assert reason in [:not_member, :no_athanor]
 
@@ -125,14 +125,14 @@ defmodule Sanctum.CallerTest do
     end
 
     test "a session whose person has no publisher namespace is established like any other" do
-      {user, estate} = new_user() |> known!() |> member!()
+      {user, athanor} = new_user() |> known!() |> member!()
       session = session_for(user, namespace: nil)
 
       assert {:ok, %Context{} = ctx} = Caller.establish(session.token)
       assert ctx.user_id == user.user_id
       assert ctx.authenticated
       assert ctx.namespace == nil
-      assert ctx.athanor_id == estate.id
+      assert ctx.athanor_id == athanor.id
     end
 
     test "no token, a blank token, and an unknown token are unauthenticated" do

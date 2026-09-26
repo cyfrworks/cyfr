@@ -51,9 +51,9 @@ defmodule Sanctum.WebhookTest do
     # because delivery resolves the ref again at request time. The row is
     # read through the component-facts port, which answers the exact
     # version a pinned ref names — so a target pinned to a version the
-    # estate no longer holds is refused on its own terms, not admitted on
+    # athanor no longer holds is refused on its own terms, not admitted on
     # its name.
-    test "a target the estate does not hold refuses, and not as a signature failure",
+    test "a target the athanor does not hold refuses, and not as a signature failure",
          %{ctx: ctx} do
       assert {:error, message} =
                create(ctx, %{name: "ghost", target_ref: "f:local.no-such-handler"})
@@ -67,7 +67,7 @@ defmodule Sanctum.WebhookTest do
       refute message =~ "replay"
     end
 
-    test "a target pinned to a version the estate no longer holds refuses", %{ctx: ctx} do
+    test "a target pinned to a version the athanor no longer holds refuses", %{ctx: ctx} do
       assert {:ok, _} = create(ctx, %{name: "pinned-ok", target_ref: "f:local.handler:1.0.0"})
 
       assert {:error, message} =

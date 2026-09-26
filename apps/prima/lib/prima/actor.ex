@@ -120,7 +120,7 @@ defmodule Prima.Actor do
   The actor of row work inside one athanor, for a caller the control
   plane has already established by other means than a context: a
   MAC-verified host call naming its attempt, a schedule's own occurrence
-  row, a recovery scan already narrowed to one estate.
+  row, a recovery scan already narrowed to one athanor.
 
   It carries the athanor and nothing else — `scope: :athanor`, so it
   reads only that tenant, and `system: false`, so it may not mutate a

@@ -724,7 +724,7 @@ defmodule Arca.StorageGCTest do
       refute_received {:storage, _op, _path}
     end
 
-    test "one estate's sweep lists and collects inside that estate alone", %{
+    test "one athanor's sweep lists and collects inside that athanor alone", %{
       actor: actor,
       unit: unit
     } do
@@ -733,7 +733,7 @@ defmodule Arca.StorageGCTest do
       mine = lay_prefix(actor, unit, StorageUnits.new_revision(), "mine")
       theirs = lay_prefix(other, unit, StorageUnits.new_revision(), "theirs")
 
-      # The other estate's pointer names the revision this one staged.
+      # The other athanor's pointer names the revision this one staged.
       {root, key} = UnitLocator.unit_key(unit)
       token = StorageUnits.new_writer_token()
       {:ok, draft} = StorageUnits.register_draft(other, root, key, token)

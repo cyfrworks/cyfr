@@ -3,17 +3,17 @@
 
 defmodule Prima.ExecutionGrant do
   @moduledoc """
-  The standing an admitted execution runs under: the estate it was
-  admitted in (`athanor_id`) and that estate's `security_generation` when
+  The standing an admitted execution runs under: the athanor it was
+  admitted in (`athanor_id`) and that athanor's `security_generation` when
   its root was admitted (`generation`).
 
-  A root's grant is read from the estate's current active standing at
+  A root's grant is read from the athanor's current active standing at
   admission and stored on its attempt row; a child and every successor
   attempt carry their parent's stored grant unchanged. An archive raises
-  the estate's generation, and a reopen raises it again, so a grant stamped
-  before an archive never matches the estate's standing afterwards: the
+  the athanor's generation, and a reopen raises it again, so a grant stamped
+  before an archive never matches the athanor's standing afterwards: the
   work it admitted is retired for good, and only a freshly admitted root
-  runs in the reopened estate.
+  runs in the reopened athanor.
 
   A grant carries no permissions and no credentials. It stays on the
   control plane: a worker presents its signed attempt identity, never a
@@ -27,7 +27,7 @@ defmodule Prima.ExecutionGrant do
 
   @doc """
   A grant for `athanor_id` at `generation`: `{:ok, grant}`, or
-  `{:error, :invalid_grant}` for an estate id that is not a non-empty
+  `{:error, :invalid_grant}` for an athanor id that is not a non-empty
   string or a generation that is not a positive integer.
   """
   @spec new(term(), term()) :: {:ok, t()} | {:error, :invalid_grant}

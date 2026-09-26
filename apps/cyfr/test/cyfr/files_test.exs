@@ -282,7 +282,7 @@ defmodule Arca.FilesTest do
     assert {:error, {:invalid_argument, msg}} = Files.delete(actor, "aqua/roles/scribe.md")
     assert msg =~ "ships with the server"
 
-    # The estate's own role and scroll go by the same door.
+    # The athanor's own role and scroll go by the same door.
     assert {:ok, _} = Files.write(actor, "aqua/roles/mine.md", "---\ntitle: Mine\n---\n\nmine\n")
 
     assert {:ok, _} =

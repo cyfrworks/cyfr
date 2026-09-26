@@ -38,21 +38,21 @@ defmodule Sanctum.Vault.OAuthGrantStandingTest do
         verified: true
       })
 
-    {:ok, estate} = Athanors.create_group(user.id, "Grant #{n}")
-    {:ok, _} = Members.ensure(user.id, scope: "athanor", athanor_id: estate.id)
+    {:ok, athanor} = Athanors.create_group(user.id, "Grant #{n}")
+    {:ok, _} = Members.ensure(user.id, scope: "athanor", athanor_id: athanor.id)
 
     {:ok, session} =
       Sanctum.TestContext.create_session(
         Context.build(
           user_id: user.id,
           provider: "github",
-          athanor_id: estate.id,
+          athanor_id: athanor.id,
           auth_method: :oidc,
           authenticated: true
         )
       )
 
-    {:ok, ctx} = Caller.establish(session.token, focus: estate.id)
+    {:ok, ctx} = Caller.establish(session.token, focus: athanor.id)
     ctx
   end
 
@@ -118,7 +118,7 @@ defmodule Sanctum.Vault.OAuthGrantStandingTest do
     assert entries(ctx.athanor_id) == []
   end
 
-  test "a seat lost in the grant's estate writes nothing there" do
+  test "a seat lost in the grant's athanor writes nothing there" do
     ctx = person!()
     state = for_context(ctx)
 
@@ -140,7 +140,7 @@ defmodule Sanctum.Vault.OAuthGrantStandingTest do
     assert {:error, :unavailable} = OAuthGrant.complete(state, "code", @redirect)
   end
 
-  test "an actor with no session is held to the channel rule: an archived estate writes nothing" do
+  test "an actor with no session is held to the channel rule: an archived athanor writes nothing" do
     ctx = person!()
     state = pending!(%{actor: Context.actor(ctx)})
 

@@ -134,7 +134,7 @@ defmodule Aqua.Models do
   => versionless ref}, "errors" => %{provider => message}}}`. A provider
   is the catalyst's name, prefixed by its namespace when that is not the
   local one, so two catalysts never share a row. A caller that may not
-  read the estate's components is `{:error, :forbidden}`; a component
+  read the athanor's components is `{:error, :forbidden}`; a component
   store that cannot answer is `{:error, :unavailable}`.
   """
   @spec catalogue(Context.t()) :: {:ok, map()} | {:error, :forbidden | :unavailable}

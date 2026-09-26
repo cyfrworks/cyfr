@@ -4,7 +4,7 @@
 defmodule Arca.Schemas.ToolGrant do
   @moduledoc """
   A standing decision a person made about one `tool.action` for one agent
-  of the estate the row belongs to.
+  of the athanor the row belongs to.
 
   Distinct from the agent's markdown `tool_policy`, which is **authored**
   policy — what the agent's author says it may do. A grant is what a human
@@ -13,8 +13,8 @@ defmodule Arca.Schemas.ToolGrant do
 
   `scope` says how far the answer reaches: `"thread"` — this thread
   only, surviving a runner restart — or `"agent"` — every thread
-  this agent runs in, in this estate. An agent belongs to the estate whose
-  `aqua/` tree holds it, so the row's `athanor_id` is the agent's estate
+  this agent runs in, in this athanor. An agent belongs to the athanor whose
+  `aqua/` tree holds it, so the row's `athanor_id` is the agent's athanor
   as well as the tenancy that reclaims the row.
 
   `effect` is `"allow"` or `"deny"`; deny is where the decline verb
@@ -55,7 +55,7 @@ defmodule Arca.Schemas.ToolGrant do
   @spec thread_scope() :: String.t()
   def thread_scope, do: "thread"
 
-  @doc "The scope of an answer for the agent wherever it runs in its estate."
+  @doc "The scope of an answer for the agent wherever it runs in its athanor."
   @spec agent_scope() :: String.t()
   def agent_scope, do: "agent"
 

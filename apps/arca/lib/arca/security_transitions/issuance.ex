@@ -10,12 +10,12 @@ defmodule Arca.SecurityTransitions.Issuance do
   issuance rereads its result, or waits for the credential and then
   retires it.
 
-  `targets` names the rows: the person (`:user_id`), the estate the
+  `targets` names the rows: the person (`:user_id`), the athanor the
   credential works in (`:athanor_id`, or nil), the membership that
   authorized the caller's focus (`:membership_id`, or nil) and the
   credential the caller holds (`:source`: `{:session, token_hash}`,
   `{:api_key, id}`, or nil). They are locked in the order every standing
-  transition takes (`Arca.SecurityTransitions`): person, estate,
+  transition takes (`Arca.SecurityTransitions`): person, athanor,
   membership, session, key; the credential `write` changes comes last.
 
   `verify` is handed plain maps of those rows, each nil when there is no

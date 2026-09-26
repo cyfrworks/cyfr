@@ -4,7 +4,7 @@
 defmodule Aqua.ToolGrantsTest do
   # Standing approvals as rows: declared policy composed with what a person
   # actually answered, and the rule that keeps an answer from reaching
-  # further than the estate it was given in.
+  # further than the athanor it was given in.
   use ExUnit.Case, async: false
 
   alias Aqua.ToolGrants
@@ -143,7 +143,7 @@ defmodule Aqua.ToolGrantsTest do
   end
 
   describe "scope" do
-    test "an agent-scope row carries no thread, and is keyed by the estate", %{ctx: ctx} do
+    test "an agent-scope row carries no thread, and is keyed by the athanor", %{ctx: ctx} do
       assert {:ok, row} = grant(ctx, %{scope: "agent"})
       assert is_nil(row.thread_id)
       assert row.athanor_id == ctx.athanor_id

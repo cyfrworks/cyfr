@@ -163,7 +163,7 @@ defmodule Cyfr.Test.AttemptFixtures do
 
   @doc """
   The grant options (`Arca.ExecutionStanding`) a test admits a root in
-  `athanor_id` under: the estate's standing read now
+  `athanor_id` under: the athanor's standing read now
   (`Sanctum.ExecutionStanding.capture/1`), checked as admission checks it.
   """
   @spec standing(String.t()) :: keyword()

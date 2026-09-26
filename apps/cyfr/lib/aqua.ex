@@ -28,13 +28,13 @@ defmodule Aqua do
     `Aqua.Roster` — who may be addressed.
   - `Aqua.Models` — what a model can do, the model listing and whether
     each soul's model has a key; `Aqua.ConsentStatus` — whether what the
-    estate consented to still covers its sources.
+    athanor consented to still covers its sources.
   - `Aqua.ScheduleNotes` — a schedule's outcome kept as a note when the
     schedule asked for it.
   - `Aqua.Aloud` — the one deliberate copy: your own lines, said into an
-    estate you belong to.
+    athanor you belong to.
   - `Aqua.Notes` — what somebody chose to keep out of a thread: the
-    estate's pinned page and its filed pile, surviving the tape.
+    athanor's pinned page and its filed pile, surviving the tape.
   - `Aqua.RoomExcerpt` — what the person has open beside the thread, read
     for the turn as quoted material.
   - `Aqua.Attachments` — chat attachment refs and blobs.
@@ -146,7 +146,7 @@ defmodule Aqua do
   @spec virtual_tool_catalog() :: [{String.t(), [{String.t(), atom()}]}]
   defdelegate virtual_tool_catalog(), to: Aqua.Hands, as: :list_for_panel
 
-  @doc "The most bytes the estate's pinned page holds (`Aqua.Notes.pin_max_bytes/0`)."
+  @doc "The most bytes the athanor's pinned page holds (`Aqua.Notes.pin_max_bytes/0`)."
   @spec pin_max_bytes() :: pos_integer()
   defdelegate pin_max_bytes(), to: Notes
 
@@ -154,7 +154,7 @@ defmodule Aqua do
   @spec describe_note_result(term()) :: String.t() | nil
   defdelegate describe_note_result(result), to: Notes, as: :describe
 
-  @doc "The estate's pinned page (`Aqua.Notes.pinned_page/1`)."
+  @doc "The athanor's pinned page (`Aqua.Notes.pinned_page/1`)."
   @spec pinned_note_page(Context.t()) :: {:ok, String.t()} | {:error, :not_found}
   defdelegate pinned_note_page(ctx), to: Notes, as: :pinned_page
 
@@ -162,7 +162,7 @@ defmodule Aqua do
   @spec note_pinned?(String.t()) :: boolean()
   defdelegate note_pinned?(name), to: Notes, as: :pinned?
 
-  @doc "Who in the estate may be addressed (`Aqua.Roster.roster/1`)."
+  @doc "Who in the athanor may be addressed (`Aqua.Roster.roster/1`)."
   @spec roster(Context.t()) :: [map()]
   defdelegate roster(ctx), to: Aqua.Roster
 

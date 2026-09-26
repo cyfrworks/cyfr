@@ -28,7 +28,7 @@ defmodule Cyfr.Cluster.ThreadTest do
 
   describe "two turns competing for one thread" do
     test "a turn started on the peer meets the one holding the thread" do
-      %{athanor: athanor, thread: thread} = estate(:a, "busy")
+      %{athanor: athanor, thread: thread} = athanor(:a, "busy")
 
       first = Cell.call(:a, Cyfr.Cluster.Fixtures, :accept!, [athanor, thread, "@aqua one"])
 
@@ -59,7 +59,7 @@ defmodule Cyfr.Cluster.ThreadTest do
     end
 
     test "a claim whose sequence moved under it writes nothing, and the loser re-reads" do
-      %{athanor: athanor, thread: thread} = estate(:a, "stale")
+      %{athanor: athanor, thread: thread} = athanor(:a, "stale")
 
       # The first member reads the thread, then the peer accepts the next
       # message — the interleaving is made by the order of these two
@@ -94,7 +94,7 @@ defmodule Cyfr.Cluster.ThreadTest do
     end
 
     test "two members claiming one thread at one instant land one claim" do
-      %{athanor: athanor, thread: thread} = estate(:a, "instant")
+      %{athanor: athanor, thread: thread} = athanor(:a, "instant")
 
       # §4.2's statement on its own, which is where the race lives: both
       # members name the same consumed sequence — the one the thread
@@ -129,7 +129,7 @@ defmodule Cyfr.Cluster.ThreadTest do
 
   describe "a peer's running turn" do
     test "is not recovered, not counted against, and reported as running elsewhere" do
-      %{athanor: athanor, thread: thread} = estate(:a, "peers")
+      %{athanor: athanor, thread: thread} = athanor(:a, "peers")
 
       accepted = Cell.call(:a, Cyfr.Cluster.Fixtures, :accept!, [athanor, thread, "@aqua go"])
 
@@ -161,7 +161,7 @@ defmodule Cyfr.Cluster.ThreadTest do
     end
 
     test "becomes takeable once its holder is not a live member, and only then" do
-      %{athanor: athanor, thread: thread} = estate(:a, "takeover")
+      %{athanor: athanor, thread: thread} = athanor(:a, "takeover")
 
       accepted = Cell.call(:a, Cyfr.Cluster.Fixtures, :accept!, [athanor, thread, "@aqua go"])
 
@@ -203,7 +203,7 @@ defmodule Cyfr.Cluster.ThreadTest do
 
   # An athanor and a thread of this case's own, made on one member and
   # read by both because they are rows.
-  defp estate(id, label) do
+  defp athanor(id, label) do
     athanor = Cell.call(id, Cyfr.Cluster.Fixtures, :athanor!, [label])
     thread = Cell.call(id, Cyfr.Cluster.Fixtures, :thread!, [athanor.id, "cluster #{label}"])
     %{athanor: athanor.id, thread: thread.id}

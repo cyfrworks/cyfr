@@ -444,7 +444,7 @@ defmodule Aqua.LoopTest do
     {:ok, authority} = Crucible.authority_for(ctx, :default, @soul)
 
     for {ref, refusal} <- [
-          {"catalyst:local.claude:0.0.1", :catalyst_not_in_estate},
+          {"catalyst:local.claude:0.0.1", :catalyst_not_in_athanor},
           {files_catalyst(ctx), :catalyst_not_chat}
         ] do
       assert {:error, {^refusal, ^ref}} =
@@ -759,7 +759,7 @@ defmodule Aqua.LoopTest do
     assert Enum.count(steps, &(&1.kind == "model")) == 30
   end
 
-  test "a card expires when the estate says, not after a day", %{ctx: ctx, thread: thread} do
+  test "a card expires when the athanor says, not after a day", %{ctx: ctx, thread: thread} do
     {:ok, athanor} = Sanctum.Tenancy.Athanors.get(ctx.athanor_id)
 
     {:ok, _} =

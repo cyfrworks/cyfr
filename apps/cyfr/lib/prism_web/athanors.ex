@@ -1,12 +1,12 @@
 # SPDX-License-Identifier: Apache-2.0
 # Copyright 2026 CYFR Works Inc.
 
-defmodule PrismWeb.Estates do
+defmodule PrismWeb.Athanors do
   @moduledoc """
-  How an estate is named on the console, once, to the person looking.
+  How an athanor is named on the console, once, to the person looking.
 
   The person's OWN athanor reads as "You" — theirs, not any person-kind
-  athanor: an operator opening someone else's estate must never be told
+  athanor: an operator opening someone else's athanor must never be told
   it is theirs. A DM (a frozen pair) reads as the other person's name, a
   group as its own. `PrismWeb.People.label/2` is the sibling for people.
   """

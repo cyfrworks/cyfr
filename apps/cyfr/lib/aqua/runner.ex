@@ -19,7 +19,7 @@ defmodule Aqua.Runner do
 
   A send is held to, in order: the text and its size; the sender's
   standing; the addressing (`Aqua.Runner.Admission`); then, for a turn,
-  the estate being filled (`:not_provisioned`, nothing written), the
+  the athanor being filled (`:not_provisioned`, nothing written), the
   engine being up (`:execution_unavailable`), and the queue having room
   (`:busy`). Only then is the message accepted, atomically with the
   turn — or attached to the running turn as a steer when its own sender
@@ -166,7 +166,7 @@ defmodule Aqua.Runner do
     do: Sanctum.internal_context(user_id: "_threads", athanor_id: athanor_id, scope: :athanor)
 
   # A runner that declines to start answers why: the plane was lost in
-  # between, or the thread is not an active estate's.
+  # between, or the thread is not an active athanor's.
   defp start_runner(thread_id, athanor_id) do
     case DynamicSupervisor.start_child(
            @supervisor,
@@ -190,7 +190,7 @@ defmodule Aqua.Runner do
 
   @doc """
   Whether a turn is running in this thread right now, for a viewer of its
-  estate.
+  athanor.
 
   No local runner is not "no turn": the thread row is asked, and a claim
   a live peer's turn holds is a turn that is running, on another member.

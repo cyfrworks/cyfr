@@ -4,7 +4,7 @@
 defmodule Cyfr.SeedOffer do
   @moduledoc """
   The boot's seed offer: a new release may ship new seed media (bundle
-  versions, a new AQUA template), and boot is when the estates that
+  versions, a new AQUA template), and boot is when the athanors that
   already exist are offered it — additively, never over anything they own
   (`Compendium.sync_seeds/0`).
 

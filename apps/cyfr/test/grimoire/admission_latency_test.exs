@@ -733,8 +733,8 @@ defmodule Grimoire.AdmissionLatencyTest do
     authority
   end
 
-  # The rows are committed, so they are deleted: the estate's through the
-  # tenant roster, then the estate, the person and their identities.
+  # The rows are committed, so they are deleted: the athanor's through the
+  # tenant roster, then the athanor, the person and their identities.
   defp cleanup!(%{athanor_id: athanor_id, user_id: user_id}) do
     Arca.RecordSink.flush()
     {:ok, _} = Arca.TenantTables.delete_all_for(Prima.Actor.in_athanor(athanor_id))

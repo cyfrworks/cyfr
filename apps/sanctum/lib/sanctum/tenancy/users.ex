@@ -130,7 +130,7 @@ defmodule Sanctum.Tenancy.Users do
   Here rather than beside a caller because it is a fact about the `users`
   row, and it is now read by two domains that must not depend on each
   other — the agent harness prefixing a group turn's lines, and tenancy
-  naming a pair estate after the two people in it.
+  naming a pair athanor after the two people in it.
   """
   @spec display_name(String.t() | nil) :: String.t()
   def display_name(nil), do: "someone"
@@ -178,7 +178,7 @@ defmodule Sanctum.Tenancy.Users do
 
   `:none` covers a person the server does not know, one whose furnace has
   not been minted yet, and an unanswerable read alike: every caller asks
-  so it may open something (a cross-estate note read, a copy out of a
+  so it may open something (a cross-athanor note read, a copy out of a
   private thread), and "could not tell" must read as "not yours" there.
   """
   @spec personal_athanor_id(String.t() | nil) :: {:ok, String.t()} | :none
@@ -195,7 +195,7 @@ defmodule Sanctum.Tenancy.Users do
   Whether `athanor_id` is this person's own athanor.
 
   The one predicate behind "is the caller at home": a running chain reads
-  notes across estates only from there, and an assistant's line is the
+  notes across athanors only from there, and an assistant's line is the
   person's to say aloud only when it was said there. Spelled once so the
   domains that ask it cannot drift from the row that answers.
   """
@@ -264,8 +264,8 @@ defmodule Sanctum.Tenancy.Users do
   Eject a person from this server, as one transaction
   (`Arca.SecurityTransitions.deny_user/3`): mark them denied, revoke every
   session and API key they created, archive their own athanor, every
-  frozen estate they sit in and every group they leave empty (revoking
-  those estates' keys), and remove their memberships, the invitations
+  frozen athanor they sit in and every group they leave empty (revoking
+  those athanors' keys), and remove their memberships, the invitations
   their address still holds and their thread follows. Either all of it
   commits or none of it does, and a failure is answered, never reported
   as an eject. The door entry that keeps them out is written by the
@@ -273,7 +273,7 @@ defmodule Sanctum.Tenancy.Users do
 
   After the commit, and only from what it returned: the removed sessions'
   established contexts are dropped and their revocation announced, every
-  archived estate's members lose their cached contexts and the estate's
+  archived athanor's members lose their cached contexts and the athanor's
   archival is announced, and every roster the denial changed is told.
   Denying a person already denied re-runs the retirement and checks it.
   """
@@ -317,9 +317,9 @@ defmodule Sanctum.Tenancy.Users do
     end
   end
 
-  # Taking the place of an archived estate back has to ask for it, or
+  # Taking the place of an archived athanor back has to ask for it, or
   # archiving and reopening would be the way past `CYFR_MAX_ATHANORS`. The
-  # count runs inside the transition, with the estate locked.
+  # count runs inside the transition, with the athanor locked.
   defp restorable(%{athanor: %{status: "archived"}}),
     do: Sanctum.Tenancy.Caps.check_counted(:max_athanors, &Athanors.count/0)
 

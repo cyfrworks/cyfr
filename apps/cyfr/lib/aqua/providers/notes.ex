@@ -18,14 +18,14 @@ defmodule Aqua.Providers.Notes do
   inside the chain under the turn's authority. The consent class keeps its
   surface half there — only an `:oidc` session's chain gets through — so
   the same formula started by a key or a schedule is refused exactly as at
-  the door. A running chain reads across estates only from the person's
+  the door. A running chain reads across athanors only from the person's
   own athanor (`Aqua.Notes`); a room's assistant sees the room's pile.
 
   ## Where a note lands
 
-  Writes take no scope: `keep`, `pin` and `forget` act on the estate in
+  Writes take no scope: `keep`, `pin` and `forget` act on the athanor in
   focus — your own athanor when you are talking to your own assistant, the
-  room's when you are in a room. Reads take one: `estate` (the default),
+  room's when you are in a room. Reads take one: `athanor` (the default),
   `mine`, or `everywhere` you hold a seat.
 
   ## What a person may pre-answer
@@ -121,8 +121,8 @@ defmodule Aqua.Providers.Notes do
           [
             Arg.new("scope", :string,
               description:
-                "Reads only: where to look — the estate in focus (default), your own athanor, or every estate you belong to. Writes take none; a note lands where you are.",
-              enum: ["estate", "mine", "everywhere"]
+                "Reads only: where to look — the athanor in focus (default), your own athanor, or every athanor you belong to. Writes take none; a note lands where you are.",
+              enum: ["athanor", "mine", "everywhere"]
             ),
             Arg.new("limit", :integer,
               description: "list, search: how many to answer at most (default 100).",
@@ -149,12 +149,12 @@ defmodule Aqua.Providers.Notes do
             ),
             Arg.new("scope", :string,
               description:
-                "Reads only: where to look — the estate in focus (default), your own athanor, or every estate you belong to. Writes take none; a note lands where you are.",
-              enum: ["estate", "mine", "everywhere"]
+                "Reads only: where to look — the athanor in focus (default), your own athanor, or every athanor you belong to. Writes take none; a note lands where you are.",
+              enum: ["athanor", "mine", "everywhere"]
             ),
             Arg.new("athanor_id", :string,
               description:
-                "read: the estate a search answered for the note — reads it there, under your own seat."
+                "read: the athanor a search answered for the note — reads it there, under your own seat."
             )
           ],
           kind: :read,
@@ -187,8 +187,8 @@ defmodule Aqua.Providers.Notes do
             ),
             Arg.new("scope", :string,
               description:
-                "Reads only: where to look — the estate in focus (default), your own athanor, or every estate you belong to. Writes take none; a note lands where you are.",
-              enum: ["estate", "mine", "everywhere"]
+                "Reads only: where to look — the athanor in focus (default), your own athanor, or every athanor you belong to. Writes take none; a note lands where you are.",
+              enum: ["athanor", "mine", "everywhere"]
             ),
             Arg.new("limit", :integer,
               description: "list, search: how many to answer at most (default 100).",
@@ -206,7 +206,7 @@ defmodule Aqua.Providers.Notes do
         )
       ],
       description:
-        "What was kept out of a thread. Distinct from the transcript: erasing a thread does not erase what someone kept from it. A note lands in the estate you are working in; two pinned pages (about-you, about-us) are read into every turn and held short.",
+        "What was kept out of a thread. Distinct from the transcript: erasing a thread does not erase what someone kept from it. A note lands in the athanor you are working in; two pinned pages (about-you, about-us) are read into every turn and held short.",
       title: "Notes"
     )
   end
@@ -217,13 +217,13 @@ defmodule Aqua.Providers.Notes do
 
   # ---------------------------------------------------------------------------
 
-  # A write that names an estate is refused rather than obeyed or ignored:
+  # A write that names an athanor is refused rather than obeyed or ignored:
   # the caller believed the argument meant something, and the one thing it
   # must never mean is "somewhere other than here".
   defp dispatch(_ctx, %{"action" => action, "scope" => _}) when action in @writes do
     {:error,
      {:invalid_argument,
-      "#{action} takes no scope — a note lands in the estate you are working in"}}
+      "#{action} takes no scope — a note lands in the athanor you are working in"}}
   end
 
   defp dispatch(ctx, %{"action" => "keep", "name" => name, "content" => content} = args)
@@ -270,7 +270,7 @@ defmodule Aqua.Providers.Notes do
   defp dispatch(_ctx, %{"action" => action}), do: {:error, {:unknown_action, "notes.#{action}"}}
   defp dispatch(_ctx, _args), do: {:error, :action_missing}
 
-  defp scope(args), do: Map.get(args, "scope", "estate")
+  defp scope(args), do: Map.get(args, "scope", "athanor")
 
   defp page(args), do: [limit: args["limit"], after: args["after"]]
 

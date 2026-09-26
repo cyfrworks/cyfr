@@ -112,7 +112,7 @@ defmodule PrismWeb.AquaLive.NotesComponent do
   defp load(socket), do: socket |> load_about() |> load_notes() |> assign(:loaded, true)
 
   # The pinned page: what the soul reads first, every turn here. Which
-  # page is the estate's kind (`Aqua.pinned_note_page/1`); its body is
+  # page is the athanor's kind (`Aqua.pinned_note_page/1`); its body is
   # read the way any note is.
   defp load_about(socket) do
     ctx = socket.assigns.context
@@ -132,7 +132,7 @@ defmodule PrismWeb.AquaLive.NotesComponent do
     end
   end
 
-  # The estate's filed notes; a pinned page is a slot, not a note.
+  # The athanor's filed notes; a pinned page is a slot, not a note.
   defp load_notes(socket) do
     notes =
       case call_tool(socket.assigns.context, "notes/list", %{}) do

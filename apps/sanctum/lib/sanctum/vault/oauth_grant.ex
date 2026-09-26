@@ -160,11 +160,11 @@ defmodule Sanctum.Vault.OAuthGrant do
   end
 
   # The grant's actor, re-established: a session that started the grant must
-  # still be a live session of a standing person focused on the same estate;
+  # still be a live session of a standing person focused on the same athanor;
   # any other holder is held to the rule an athanor-owned channel stands by.
   defp still_standing(%{context: %Context{} = ctx, actor: actor}) do
     case Sanctum.Caller.revalidate_session(ctx) do
-      {:ok, %Context{} = fresh} -> same_estate(fresh, actor)
+      {:ok, %Context{} = fresh} -> same_athanor(fresh, actor)
       {:error, :unavailable} -> {:error, :unavailable}
       {:error, _refused} -> {:error, :unauthenticated}
     end
@@ -172,12 +172,12 @@ defmodule Sanctum.Vault.OAuthGrant do
 
   defp still_standing(%{actor: actor}), do: channel(actor)
 
-  defp same_estate(%Context{session_token_hash: hash, athanor_id: athanor_id}, actor)
+  defp same_athanor(%Context{session_token_hash: hash, athanor_id: athanor_id}, actor)
        when is_binary(hash) do
     if athanor_id == actor.athanor_id, do: :ok, else: {:error, :unauthenticated}
   end
 
-  defp same_estate(%Context{}, actor), do: channel(actor)
+  defp same_athanor(%Context{}, actor), do: channel(actor)
 
   defp channel(%Prima.Actor{athanor_id: athanor_id, user_id: user_id}) do
     if Sanctum.Tenancy.channel_active?(athanor_id, user_id),

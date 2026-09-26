@@ -3,10 +3,10 @@
 
 defmodule Aqua.NotesUnavailableTest do
   @moduledoc """
-  A note read that crosses estates opens each one under the reader's seat
+  A note read that crosses athanors opens each one under the reader's seat
   (`Sanctum.Context.focus/2`). A seat the store cannot read is an outage,
-  and says so in the notes' own vocabulary: never an estate that does not
-  exist, and never an estate silently left out of an `everywhere` page.
+  and says so in the notes' own vocabulary: never an athanor that does not
+  exist, and never an athanor silently left out of an `everywhere` page.
   """
 
   use ExUnit.Case, async: false
@@ -35,27 +35,27 @@ defmodule Aqua.NotesUnavailableTest do
     {:ok, ctx: ctx, other: other}
   end
 
-  # The seat read fails while the estate listing still answers: the
+  # The seat read fails while the athanor listing still answers: the
   # listing selects no membership column, the seat read selects them all.
   defp seats_unreadable!,
     do: Arca.Repo.query!("ALTER TABLE memberships DROP COLUMN added_by")
 
-  test "a locator whose seat cannot be read is unavailable, not a missing estate", %{
+  test "a locator whose seat cannot be read is unavailable, not a missing athanor", %{
     ctx: ctx,
     other: other
   } do
     refute match?(
              {:error, {:unavailable, _}},
-             Notes.read(ctx, "flight", "estate", athanor_id: other.id)
+             Notes.read(ctx, "flight", "athanor", athanor_id: other.id)
            )
 
     seats_unreadable!()
 
     assert {:error, {:unavailable, "Storage"}} =
-             Notes.read(ctx, "flight", "estate", athanor_id: other.id)
+             Notes.read(ctx, "flight", "athanor", athanor_id: other.id)
   end
 
-  test "an everywhere page refuses rather than leave out an estate it could not open", %{
+  test "an everywhere page refuses rather than leave out an athanor it could not open", %{
     ctx: ctx
   } do
     assert {:ok, _page} = Notes.list(ctx, "everywhere")

@@ -90,7 +90,7 @@ defmodule Arca.CredentialIssuanceTest do
   defp targets(user_id, athanor_id),
     do: %{user_id: user_id, athanor_id: athanor_id, membership_id: nil, source: nil}
 
-  # The identity domain's policy in miniature: the person and the estate
+  # The identity domain's policy in miniature: the person and the athanor
   # active at the generations the issuing context read (1, at birth).
   defp at_birth(test) do
     fn rows ->
@@ -195,7 +195,7 @@ defmodule Arca.CredentialIssuanceTest do
     } do
       test = self()
 
-      # The estate stays open: the person is one of two, so the denial
+      # The athanor stays open: the person is one of two, so the denial
       # leaves the group standing and the refusal is the person's.
       other = Prima.UUID7.generate_id(Prima.PersonId.prefix())
 

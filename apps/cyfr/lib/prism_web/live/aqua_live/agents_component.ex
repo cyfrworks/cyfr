@@ -174,7 +174,7 @@ defmodule PrismWeb.AquaLive.AgentsComponent do
 
   def handle_event("editor_update_field", _params, socket), do: {:noreply, socket}
 
-  # The tool owns the disposition: a role this estate made is deleted, an
+  # The tool owns the disposition: a role this athanor made is deleted, an
   # edited copy of a shipped one is restored. The card offers the verb
   # only where one of those applies (`removal/1`).
   def handle_event("editor_delete", %{"name" => name}, socket) do
@@ -207,7 +207,7 @@ defmodule PrismWeb.AquaLive.AgentsComponent do
 
   # Taking a role out of the closet — and putting it back — without
   # touching its file's content. This is how a shipped role is set aside,
-  # since the estate does not own it and cannot delete it.
+  # since the athanor does not own it and cannot delete it.
   def handle_event("editor_set_disabled", %{"name" => name, "disabled" => flag}, socket)
       when flag in ["true", "false"] do
     CyfrWeb.ContextGuard.guard(socket, fn socket ->
@@ -600,7 +600,7 @@ defmodule PrismWeb.AquaLive.AgentsComponent do
   end
 
   # The one removal verb a card may offer — label, confirm prefix, event —
-  # read from its provenance: the estate's own role is deleted, an edited
+  # read from its provenance: the athanor's own role is deleted, an edited
   # copy of a shipped one is restored, an unedited shipped role and the
   # soul offer nothing. A provenance the page could not read offers
   # nothing either.

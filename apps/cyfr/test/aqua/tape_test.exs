@@ -196,7 +196,7 @@ defmodule Aqua.TapeTest do
     assert_receive %ThreadEvent{kind: :turn_finished}
   end
 
-  test "a card is announced to the estate, and its decision too", %{ctx: ctx, thread: thread} do
+  test "a card is announced to the athanor, and its decision too", %{ctx: ctx, thread: thread} do
     actor = Sanctum.Context.actor(ctx)
     :ok = Cyfr.Bus.subscribe(actor, Cyfr.Bus.notify(actor))
     turn = started!(ctx, thread, "@aqua write")

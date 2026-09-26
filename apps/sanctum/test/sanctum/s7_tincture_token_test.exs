@@ -135,7 +135,7 @@ defmodule Sanctum.S7TinctureTokenTest do
     end
 
     test "?_t= still flows through the tenant gate" do
-      # An athanor-less context has no estate to bind a token to, so none is
+      # An athanor-less context has no athanor to bind a token to, so none is
       # minted for it: the gate now closes at the mint.
       unresolved =
         Context.build(

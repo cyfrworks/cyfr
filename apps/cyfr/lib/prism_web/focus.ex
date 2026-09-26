@@ -42,7 +42,7 @@ defmodule PrismWeb.Focus do
       {:error, :not_found} ->
         {:halt,
          socket
-         |> put_flash(:error, "There is no estate at #{segment}.")
+         |> put_flash(:error, "There is no athanor at #{segment}.")
          |> redirect(to: "/")}
 
       {:error, :unavailable} ->
@@ -54,7 +54,7 @@ defmodule PrismWeb.Focus do
       {:error, _not_member} ->
         {:halt,
          socket
-         |> put_flash(:error, "You are not a member of that estate.")
+         |> put_flash(:error, "You are not a member of that athanor.")
          |> redirect(to: "/")}
     end
   end

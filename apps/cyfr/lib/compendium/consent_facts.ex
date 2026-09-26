@@ -7,9 +7,9 @@ defmodule Compendium.ConsentFacts do
   `Sanctum.Consent.Components`.
 
   Consent decides what a component may do; deciding it means reading what
-  the estate holds, which is this domain's to know. Four of the five
+  the athanor holds, which is this domain's to know. Four of the five
   answers are one call each — the activation, the verified activation, the
-  row a ref names, the estate's agents. The fifth, `shipped_nodes/2`,
+  row a ref names, the athanor's agents. The fifth, `shipped_nodes/2`,
   is the seed-vouching fact the consent bootstrap mints over: the release
   digest the **install media** ships at a row's path, never the athanor's
   copy. Its three cases are this domain's own layout — an agent file under
@@ -83,7 +83,7 @@ defmodule Compendium.ConsentFacts do
     end
   end
 
-  # The seed's own agent file, projected under the estate's roster: a
+  # The seed's own agent file, projected under the athanor's roster: a
   # prose-only edit of the athanor's copy leaves this digest alone, a
   # policy, model or catalyst edit of the seed file moves it.
   defp seed_agent_digest(name, roster) do

@@ -56,7 +56,7 @@ defmodule Opus.ModelsCatalogueTest do
     {:ok, %{minted: minted}} = Bootstrap.run(ctx)
     for unit <- models, do: assert(unit.ref in minted, "#{unit.ref} not minted")
 
-    # The estate is filled by hand above; marked so, a listing starts no
+    # The athanor is filled by hand above; marked so, a listing starts no
     # fill of its own behind this test.
     {:ok, athanor} = Sanctum.Tenancy.Athanors.get(ctx.athanor_id)
     {:ok, _} = Sanctum.Tenancy.Athanors.mark_provisioned(athanor)

@@ -5,11 +5,11 @@ Code.require_file("support/support.exs", __DIR__)
 
 defmodule Cyfr.Cluster.ProvisioningTest do
   @moduledoc """
-  Two first touches of one estate, and the death of the member that won.
+  Two first touches of one athanor, and the death of the member that won.
 
   `cell-ownership.md` §4.7 keeps provisioning's shape from F3: one row per
   athanor, `(owner, fence)` compare-and-set, a lease on database time. An
-  estate is filled once whichever member the person's first request
+  athanor is filled once whichever member the person's first request
   reaches, and a second member is told `:provisioning_busy` rather than
   filling it again beside the first.
 
@@ -28,16 +28,16 @@ defmodule Cyfr.Cluster.ProvisioningTest do
   # itself being read late rather than the successor being slow.
   @ask_bound_ms 2_000
 
-  describe "two first touches of one estate" do
+  describe "two first touches of one athanor" do
     test "fill it once: the second member is told it is busy" do
-      athanor = Cell.call(:a, Cyfr.Cluster.Fixtures, :athanor!, ["estate"])
+      athanor = Cell.call(:a, Cyfr.Cluster.Fixtures, :athanor!, ["athanor"])
 
       assert {:ok, claim} =
-               Cell.call(:a, Cyfr.Cluster.Fixtures, :take_estate, [athanor.id, "first_need"])
+               Cell.call(:a, Cyfr.Cluster.Fixtures, :take_athanor, [athanor.id, "first_need"])
 
-      assert Cell.call(:b, Cyfr.Cluster.Fixtures, :take_estate, [athanor.id, "first_need"]) ==
+      assert Cell.call(:b, Cyfr.Cluster.Fixtures, :take_athanor, [athanor.id, "first_need"]) ==
                {:error, :provisioning_busy},
-             "two members both took one estate's claim"
+             "two members both took one athanor's claim"
 
       # The row is the evidence, read from outside both, and it names the
       # boot that won — not the node, so a restart of that node is a
@@ -48,16 +48,16 @@ defmodule Cyfr.Cluster.ProvisioningTest do
       assert row["owner"] =~ to_string(Cell.member(:a).node)
 
       # And what the peer *sees* is a fill in progress, not an absence.
-      assert Cell.call(:b, Cyfr.Cluster.Fixtures, :estate_status, [athanor.id]) == :filling
+      assert Cell.call(:b, Cyfr.Cluster.Fixtures, :athanor_status, [athanor.id]) == :filling
     end
 
     test "raced from a barrier, one of them fills it" do
-      athanor = Cell.call(:a, Cyfr.Cluster.Fixtures, :athanor!, ["estate-race"])
-      take = {Cyfr.Cluster.Fixtures, :take_estate, [athanor.id, "first_need"]}
+      athanor = Cell.call(:a, Cyfr.Cluster.Fixtures, :athanor!, ["athanor-race"])
+      take = {Cyfr.Cluster.Fixtures, :take_athanor, [athanor.id, "first_need"]}
       results = Barrier.race(a: take, b: take)
 
       won = for {member, {:ok, claim}} <- results, do: {member, claim}
-      assert length(won) == 1, "two members filled one estate: #{inspect(results)}"
+      assert length(won) == 1, "two members filled one athanor: #{inspect(results)}"
 
       losers = for {_m, answer} <- results, not match?({:ok, _}, answer), do: answer
       assert losers == [{:error, :provisioning_busy}], inspect(results)
@@ -70,13 +70,13 @@ defmodule Cyfr.Cluster.ProvisioningTest do
     end
   end
 
-  describe "the member holding an estate dying" do
+  describe "the member holding an athanor dying" do
     @tag timeout: 400_000
     test "leaves a claim its peer takes over once the lease has run out, and not before" do
-      athanor = Cell.call(:a, Cyfr.Cluster.Fixtures, :athanor!, ["estate-death"])
+      athanor = Cell.call(:a, Cyfr.Cluster.Fixtures, :athanor!, ["athanor-death"])
 
       assert {:ok, claim} =
-               Cell.call(:a, Cyfr.Cluster.Fixtures, :take_estate, [athanor.id, "first_need"])
+               Cell.call(:a, Cyfr.Cluster.Fixtures, :take_athanor, [athanor.id, "first_need"])
 
       # The row's own deadline, on database time. What a successor waits
       # is this instant and not a duration measured from anywhere else:
@@ -92,22 +92,22 @@ defmodule Cyfr.Cluster.ProvisioningTest do
              "the claim was not leased for the 60 s §4.7 states"
 
       # Process death. Nothing is released and nothing renews, so the only
-      # thing between the peer and the estate is that deadline.
+      # thing between the peer and the athanor is that deadline.
       Cell.kill(:a)
 
-      assert Cell.call(:b, Cyfr.Cluster.Fixtures, :take_estate, [athanor.id, "first_need"]) ==
+      assert Cell.call(:b, Cyfr.Cluster.Fixtures, :take_athanor, [athanor.id, "first_need"]) ==
                {:error, :provisioning_busy},
-             "the peer took an estate whose claim was still standing"
+             "the peer took an athanor whose claim was still standing"
 
       {_waited_ms, answer} =
         Wait.measure!(
           fn ->
-            case Cell.call(:b, Cyfr.Cluster.Fixtures, :take_estate, [athanor.id, "first_need"]) do
+            case Cell.call(:b, Cyfr.Cluster.Fixtures, :take_athanor, [athanor.id, "first_need"]) do
               {:ok, taken} -> taken
               _busy -> false
             end
           end,
-          "the dead member's estate claim never became takeable",
+          "the dead member's athanor claim never became takeable",
           @lease_ms * 2
         )
 
@@ -116,7 +116,7 @@ defmodule Cyfr.Cluster.ProvisioningTest do
       Wait.report("a successor's wait past a dead member's lease", past_lease_ms, @ask_bound_ms)
 
       assert past_lease_ms >= 0,
-             "the peer took the estate #{-past_lease_ms} ms before the lease ran out"
+             "the peer took the athanor #{-past_lease_ms} ms before the lease ran out"
 
       assert past_lease_ms <= @ask_bound_ms,
              "the peer waited #{past_lease_ms} ms past the lease, more than its own asking interval"

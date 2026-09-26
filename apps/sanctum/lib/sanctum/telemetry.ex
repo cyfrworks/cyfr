@@ -129,7 +129,7 @@ defmodule Sanctum.Telemetry do
   def sessions_revoked(user_id),
     do: :telemetry.execute(@sessions_revoked_event, %{count: 1}, %{user_id: user_id})
 
-  @doc "One person's seat in one athanor changed — which estates they may now reach."
+  @doc "One person's seat in one athanor changed — which athanors they may now reach."
   @spec membership_changed(String.t(), String.t() | nil, term()) :: :ok
   def membership_changed(user_id, athanor_id, change) when is_binary(user_id) do
     :telemetry.execute(@membership_event, %{count: 1}, %{

@@ -17,16 +17,16 @@ defmodule Cyfr.RetentionScheduler do
   unbounded storage growth. Every step runs behind one crash barrier: a
   fault in one is logged and the cycle moves on.
 
-  ## The estates it walks
+  ## The athanors it walks
 
   Which athanors are active is the identity domain's
   (`Sanctum.Tenancy.Athanors.list_active/0`), and the walk asks again
-  (`active?/1`) just before each one: an estate archived after the list
-  was read is passed over, since its records freeze with it. Each estate
+  (`active?/1`) just before each one: an athanor archived after the list
+  was read is passed over, since its records freeze with it. Each athanor
   is cleaned by `Arca.Retention.cleanup_athanor/2` under an actor of its
   own — the server's, narrowed to that one athanor, reading and writing
   storage and nothing else. A kind that fails is logged against its
-  athanor; settings that cannot be read refuse the whole estate, which
+  athanor; settings that cannot be read refuse the whole athanor, which
   is logged once. Either way the walk goes on to the next.
 
   ## Only a current claimant acts, and only the proposed one asks
@@ -449,9 +449,9 @@ defmodule Cyfr.RetentionScheduler do
   end
 
   # The admission decisions made before any tenant was resolved carry no
-  # athanor, so no estate's retention reaches them: the host purges them
+  # athanor, so no athanor's retention reaches them: the host purges them
   # under the claim it holds, as the platform's own actor, once they are
-  # older than CYFR_DECISION_RETENTION_DAYS. Never an estate's row.
+  # older than CYFR_DECISION_RETENTION_DAYS. Never an athanor's row.
   defp purge_host_decisions do
     days = Application.get_env(:cyfr, :decision_retention_days, @decision_retention_days)
     cutoff = DateTime.add(DateTime.utc_now(), -days * 86_400, :second)
@@ -562,7 +562,7 @@ defmodule Cyfr.RetentionScheduler do
     :ok
   end
 
-  # The actor each estate's retention runs under: the server's own, inside
+  # The actor each athanor's retention runs under: the server's own, inside
   # that one athanor; the user_id is audit attribution only. Least
   # privilege: a deleter reads settings and drops rows and blobs, it
   # executes nothing.

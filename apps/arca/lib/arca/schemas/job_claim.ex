@@ -12,7 +12,7 @@ defmodule Arca.Schemas.JobClaim do
   actor as any other caller, so `key` naming an athanor's credential grants
   no reach into that athanor — it only says which job this row is about.
   That is why the table carries no `athanor_id`: several of its kinds have
-  no estate at all, and a claim is not the thing tenancy is decided by.
+  no athanor at all, and a claim is not the thing tenancy is decided by.
 
   `detail` carries the job's own progress under the holder's fence, so a
   takeover inherits what its predecessor had learned — the worker watch's

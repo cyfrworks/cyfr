@@ -3,8 +3,8 @@
 
 defmodule Compendium.Supervisor do
   @moduledoc """
-  The component domain's processes: the builds' and the estate fills'
-  task supervisors, the estate filler and the projection reconciler.
+  The component domain's processes: the builds' and the athanor fills'
+  task supervisors, the athanor filler and the projection reconciler.
   `one_for_one`, because none of them holds a reference into another: each
   restarts alone.
   """
@@ -26,19 +26,19 @@ defmodule Compendium.Supervisor do
         Supervisor.child_spec({Task.Supervisor, name: Compendium.Builds.TaskSupervisor},
           shutdown: 30_000
         ),
-        # Filling an athanor's component estate: the background fills the
+        # Filling an athanor's component athanor: the background fills the
         # first-need hook and a sign-in ask for, and the registry pulls each
         # attempt runs under its own deadline. 30 s: the longest fill step
         # it lets finish.
         Supervisor.child_spec({Task.Supervisor, name: Compendium.ProvisioningSupervisor},
           shutdown: 30_000
         ),
-        # The estate filler itself — it reacts to the identity domain's
+        # The athanor filler itself — it reacts to the identity domain's
         # announcement that an athanor needs filling. 5 s: its stop, which
         # holds no work in flight.
         Supervisor.child_spec(Compendium.Provisioning, shutdown: 5_000),
         # The registry and the agent index follow the seeded roots' changes:
-        # it reconciles the estate a change names, and recovers every estate
+        # it reconciles the athanor a change names, and recovers every athanor
         # a root is behind in once started and on every tick this member
         # holds its slot. Every read passes its own barrier, so nothing
         # waits on this child to be right. 5 s: its terminate detaching

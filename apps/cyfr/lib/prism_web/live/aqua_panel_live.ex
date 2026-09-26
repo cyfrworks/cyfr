@@ -6,7 +6,7 @@ defmodule PrismWeb.AquaPanelLive do
   The person's own AQUA, on every page: a floating button and, opened, a
   panel over the page onto their own athanor — the threads of You, one of
   them open as `PrismWeb.ThreadPaneLive` focused on You, whatever
-  estate the page is on.
+  athanor the page is on.
 
   Opened beside a room (the chat page tells it what is in view through
   `PrismWeb.RoomFeed`), a send from here carries a bounded excerpt of the
@@ -208,7 +208,7 @@ defmodule PrismWeb.AquaPanelLive do
         phx-click={if @open, do: "close", else: "open"}
         aria-expanded={to_string(@open)}
         aria-controls={@open && "aqua-panel-sheet"}
-        title="Your own AQUA — on your own estate, wherever you are"
+        title="Your own AQUA — on your own athanor, wherever you are"
         class="fixed bottom-20 right-4 z-40 rounded-full bg-indigo-600 px-4 py-2 text-sm font-medium text-white shadow-lg hover:bg-indigo-500"
       >
         AQUA

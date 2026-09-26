@@ -17,7 +17,7 @@ defmodule PrismWeb.ShellLiveInvokeThrottleTest do
   setup %{conn: conn} do
     user = test_user()
     conn = log_in_user(conn, user)
-    estate = seated_athanor()
+    athanor = seated_athanor()
 
     base = Path.join(System.tmp_dir!(), "shell_throttle_#{System.unique_integer([:positive])}")
     original_path = Application.get_env(:arca, :base_path)
@@ -25,7 +25,7 @@ defmodule PrismWeb.ShellLiveInvokeThrottleTest do
 
     dir =
       Arca.Adapters.Local.build_path(
-        Sanctum.Context.actor(%{Sanctum.TestContext.local() | athanor_id: estate.id}),
+        Sanctum.Context.actor(%{Sanctum.TestContext.local() | athanor_id: athanor.id}),
         ["components", "tinctures", "local", @tincture, "1.0.0"]
       )
 
@@ -48,7 +48,7 @@ defmodule PrismWeb.ShellLiveInvokeThrottleTest do
     Application.put_env(:cyfr, :tincture_rate_limit_max, 1)
 
     # Reload the registry after writing fixtures directly to disk without an AutoIndexer notification.
-    Prism.TinctureRegistry.reload_athanor(estate.id)
+    Prism.TinctureRegistry.reload_athanor(athanor.id)
 
     on_exit(fn ->
       Application.put_env(:arca, :base_path, original_path)

@@ -10,7 +10,7 @@ defmodule Aqua.Notes do
 
   ## One pile, two temperatures
 
-  An estate has one flat pile. Two names in it are **pinned** — `about-you`
+  An athanor has one flat pile. Two names in it are **pinned** — `about-you`
   in a person's own athanor, `about-us` in a shared one — and a pinned page
   is read into every turn, so it is held short (`pin_max_bytes/0`, refused
   rather than truncated). Everything else is **filed**: listed by name,
@@ -18,17 +18,17 @@ defmodule Aqua.Notes do
 
   ## A note lands where you are
 
-  Writes take no scope. `keep/4`, `pin/4` and `forget/2` act on the estate
+  Writes take no scope. `keep/4`, `pin/4` and `forget/2` act on the athanor
   the context is focused on: your own when you are talking to your own
   assistant, the room's when you are in a room. A room's assistant cannot
   file into your private pile and nothing you keep at home reaches a room —
   the tenant boundary is the whole rule, and there is no argument to get it
   wrong with.
 
-  Reads take a scope: `"estate"` (where you are; the default), `"mine"`
+  Reads take a scope: `"athanor"` (where you are; the default), `"mine"`
   (your own athanor, reached through `Sanctum.Context.focus/2` so
   membership and archival are checked, never by a raw swap), or
-  `"everywhere"` (every estate you hold a seat in).
+  `"everywhere"` (every athanor you hold a seat in).
 
   ## Provenance
 
@@ -57,7 +57,7 @@ defmodule Aqua.Notes do
   @name_format ~r/\A[A-Za-z0-9][A-Za-z0-9 _.-]{0,80}\z/
   @pinned_names ~w(about-you about-us)
   @pin_max_bytes 2048
-  @scopes ~w(estate mine everywhere)
+  @scopes ~w(athanor mine everywhere)
   @snippet_chars 160
   @index_limit 40
 
@@ -77,7 +77,7 @@ defmodule Aqua.Notes do
   every surface renders it as a sentence. A storage fault is folded in at
   this boundary (`storage_refusal/1`): the adapter's term goes to the log, the wire
   gets the one word every storage-backed tool answers with, and the
-  estate's cap gets its own sentence because a retry will not lift it.
+  athanor's cap gets its own sentence because a retry will not lift it.
   """
   @type refusal ::
           {:invalid_argument, String.t()}
@@ -85,10 +85,10 @@ defmodule Aqua.Notes do
           | {:unavailable, String.t()}
 
   @doc """
-  The one pinned page this estate has: `about-you` in a person's own
+  The one pinned page this athanor has: `about-you` in a person's own
   athanor, `about-us` in a shared one. The other name is refused at
-  `pin/4` — an estate has one page, and which one is a fact about the
-  estate, not a choice per call.
+  `pin/4` — an athanor has one page, and which one is a fact about the
+  athanor, not a choice per call.
   """
   @spec pinned_page(Context.t()) :: {:ok, String.t()} | {:error, :not_found}
   def pinned_page(%Context{} = ctx) do
@@ -101,7 +101,7 @@ defmodule Aqua.Notes do
 
   @doc """
   Whether the context is focused on the person's own athanor. A running
-  chain may read across estates only from there — see `list/2`. The
+  chain may read across athanors only from there — see `list/2`. The
   predicate itself is tenancy's (`Sanctum.Tenancy.Users.own_athanor?/2`);
   this is its spelling over a context.
   """
@@ -117,7 +117,7 @@ defmodule Aqua.Notes do
   def pin_max_bytes, do: @pin_max_bytes
 
   @doc """
-  A note name is a filename under the estate's tree, so it is held to a
+  A note name is a filename under the athanor's tree, so it is held to a
   grammar rather than trusted — letters, digits, spaces, `.`, `_` and `-`.
   """
   @spec check_name(term()) :: :ok | {:error, {:invalid_argument, String.t()}}
@@ -130,11 +130,11 @@ defmodule Aqua.Notes do
   def check_name(_), do: {:error, {:invalid_argument, "a note needs a name"}}
 
   # ---------------------------------------------------------------------------
-  # Writes — the focused estate, no scope
+  # Writes — the focused athanor, no scope
   # ---------------------------------------------------------------------------
 
   @doc """
-  File a note in the focused estate. A pinned name is refused — `pin/4` is
+  File a note in the focused athanor. A pinned name is refused — `pin/4` is
   the verb for those, and the difference (short, read every turn) is the
   point of having two.
   """
@@ -156,7 +156,7 @@ defmodule Aqua.Notes do
   end
 
   @doc """
-  Set a pinned page in the focused estate. Only the pinned names are
+  Set a pinned page in the focused athanor. Only the pinned names are
   accepted; a page over the cap is refused, not truncated — the person trims
   it or keeps the detail as a note. Empty content clears the page.
   """
@@ -175,7 +175,7 @@ defmodule Aqua.Notes do
   end
 
   @doc """
-  Remove a filed note from the focused estate. A pinned page is cleared by
+  Remove a filed note from the focused athanor. A pinned page is cleared by
   pinning nothing, not forgotten — the two names always exist as slots.
   """
   @spec forget(Context.t(), String.t()) ::
@@ -227,7 +227,7 @@ defmodule Aqua.Notes do
   # Reads — scoped
   # ---------------------------------------------------------------------------
 
-  @doc "The estate's pinned page with its provenance, or `:none` when nothing is pinned."
+  @doc "The athanor's pinned page with its provenance, or `:none` when nothing is pinned."
   @spec pinned(Context.t()) :: {:ok, note()} | :none
   def pinned(%Context{} = ctx) do
     with {:ok, name} <- pinned_page(ctx),
@@ -243,7 +243,7 @@ defmodule Aqua.Notes do
   def index_limit, do: @index_limit
 
   @doc """
-  The filed notes of the focused estate as name and first line, sorted by
+  The filed notes of the focused athanor as name and first line, sorted by
   name — what a turn is shown so it can read one on demand. No timestamps
   and no sizes, so the same pile renders the same bytes. Bounded to
   `index_limit/0` entries, with a count of what lies beyond: a pile an
@@ -289,8 +289,8 @@ defmodule Aqua.Notes do
   @typedoc """
   A page of notes — `notes`, whether `more` lie beyond it, and the `next`
   cursor to continue from (`"<athanor_id>/<name>"`, the last one shown).
-  One budget across every estate a scope names, in a fixed order — the
-  focus first, then the person's other estates by id, names sorted — so a
+  One budget across every athanor a scope names, in a fixed order — the
+  focus first, then the person's other athanors by id, names sorted — so a
   page and its successor never overlap or skip.
   """
   @type page(entry) :: %{notes: [entry], more: boolean(), next: String.t() | nil}
@@ -300,18 +300,18 @@ defmodule Aqua.Notes do
   def page_max, do: @page_max
 
   @doc """
-  The note names in the scope, with the estate each lives in — a page of
+  The note names in the scope, with the athanor each lives in — a page of
   them (`t:page/1`). `opts`: `:limit` (default #{@page_limit}, at most
   #{@page_max}), `:after` (a cursor from a previous page).
   """
   @spec list(Context.t(), scope(), keyword()) ::
           {:ok, page(%{name: String.t(), athanor_id: String.t()})} | {:error, refusal()}
-  def list(%Context{} = ctx, scope \\ "estate", opts \\ []) do
+  def list(%Context{} = ctx, scope \\ "athanor", opts \\ []) do
     walk(ctx, scope, opts, fn c, name -> [%{name: name, athanor_id: c.athanor_id}] end)
   end
 
-  # One walk for `list/3` and `search/4`: the scope's estates in their
-  # fixed order, each estate's names sorted, resumed after the cursor, and
+  # One walk for `list/3` and `search/4`: the scope's athanors in their
+  # fixed order, each athanor's names sorted, resumed after the cursor, and
   # `visit` asked about each name until the page is full. The work is
   # bounded by the page, not by the pile: a name past the page is never
   # visited (for a search, never read). A visit answers the hits a name
@@ -380,16 +380,16 @@ defmodule Aqua.Notes do
 
   defp encode_cursor({athanor_id, name}), do: athanor_id <> "/" <> name
 
-  # Resume after the cursor. Estates are visited in the scope's fixed
+  # Resume after the cursor. Athanors are visited in the scope's fixed
   # order: those before the cursor's were shown whole and are dropped, the
   # cursor's continues past the name, later ones start at their
-  # beginning. A cursor naming an estate the scope does not hold — a
+  # beginning. A cursor naming an athanor the scope does not hold — a
   # different scope, a seat since lost — is not a place to resume from.
   defp from_cursor(contexts, nil), do: {:ok, contexts}
 
   defp from_cursor(contexts, {cursor_athanor, _name}) do
     case Enum.drop_while(contexts, &(&1.athanor_id != cursor_athanor)) do
-      [] -> {:error, {:invalid_argument, "after names an estate this scope does not hold"}}
+      [] -> {:error, {:invalid_argument, "after names an athanor this scope does not hold"}}
       rest -> {:ok, rest}
     end
   end
@@ -402,18 +402,18 @@ defmodule Aqua.Notes do
 
   @doc """
   One note with its provenance. `everywhere` is not a read scope: a
-  search answers the estate each match lives in, and a read follows it
-  with the `:athanor_id` locator — the one estate, opened under the
+  search answers the athanor each match lives in, and a read follows it
+  with the `:athanor_id` locator — the one athanor, opened under the
   reader's own seat (`Sanctum.Context.focus/2`: membership and archive
   checked), and never from a room's chain, which reads its own pile alone.
   """
   @spec read(Context.t(), String.t(), scope(), keyword()) :: {:ok, note()} | {:error, refusal()}
-  def read(ctx, name, scope \\ "estate", opts \\ [])
+  def read(ctx, name, scope \\ "athanor", opts \\ [])
 
   def read(%Context{}, _name, "everywhere", _opts) do
     {:error,
      {:invalid_argument,
-      "read takes a scope of estate or mine, or the athanor_id a search answered — " <>
+      "read takes a scope of athanor or mine, or the athanor_id a search answered — " <>
         "search everywhere, then read where the note was found"}}
   end
 
@@ -433,7 +433,7 @@ defmodule Aqua.Notes do
   @spec search(Context.t(), String.t(), scope(), keyword()) ::
           {:ok, page(%{name: String.t(), athanor_id: String.t(), snippet: String.t()})}
           | {:error, refusal()}
-  def search(ctx, query, scope \\ "estate", opts \\ [])
+  def search(ctx, query, scope \\ "athanor", opts \\ [])
 
   def search(%Context{} = ctx, query, scope, opts) when is_binary(query) do
     case query |> String.trim() |> String.downcase() do
@@ -470,10 +470,10 @@ defmodule Aqua.Notes do
             :ok
 
           {:ok, other} ->
-            {:error, {:invalid_argument, "this estate's pinned page is #{other}, not #{name}"}}
+            {:error, {:invalid_argument, "this athanor's pinned page is #{other}, not #{name}"}}
 
           {:error, :not_found} ->
-            {:error, {:invalid_argument, "the estate in focus could not be read"}}
+            {:error, {:invalid_argument, "the athanor in focus could not be read"}}
         end
     end
   end
@@ -511,7 +511,7 @@ defmodule Aqua.Notes do
   defp written(:ok), do: :ok
   defp written({:error, reason}), do: {:error, storage_refusal(reason)}
 
-  # The estate's cap is the one storage refusal a person can act on, so it
+  # The athanor's cap is the one storage refusal a person can act on, so it
   # keeps a sentence of its own; everything else (a plane that may not
   # write here, an adapter fault, a cap that could not be measured) is
   # logged with the adapter's term and answered with the one word every
@@ -519,7 +519,7 @@ defmodule Aqua.Notes do
   @spec storage_refusal(term()) :: refusal()
   defp storage_refusal({:limit_reached, :athanor_storage_bytes, cap}) do
     {:invalid_argument,
-     "the estate's storage cap of #{cap} bytes is reached — forget a note, or keep less"}
+     "the athanor's storage cap of #{cap} bytes is reached — forget a note, or keep less"}
   end
 
   defp storage_refusal(reason) do
@@ -582,10 +582,10 @@ defmodule Aqua.Notes do
   # Scope → contexts
   # ---------------------------------------------------------------------------
 
-  # The one estate a read names: the locator a search answered, else
-  # `estate` (the focus) or `mine` (the person's own). `everywhere` is not
-  # one estate, so it is not a read scope. A locator for the focus is the
-  # focus; any other estate is opened under the reader's seat, and never
+  # The one athanor a read names: the locator a search answered, else
+  # `athanor` (the focus) or `mine` (the person's own). `everywhere` is not
+  # one athanor, so it is not a read scope. A locator for the focus is the
+  # focus; any other athanor is opened under the reader's seat, and never
   # from a room's chain.
   defp read_context(ctx, _scope, athanor_id) when is_binary(athanor_id) and athanor_id != "" do
     cond do
@@ -594,7 +594,7 @@ defmodule Aqua.Notes do
     end
   end
 
-  defp read_context(ctx, "estate", _none), do: {:ok, ctx}
+  defp read_context(ctx, "athanor", _none), do: {:ok, ctx}
 
   defp read_context(ctx, "mine", _none) do
     with :ok <- guest_may_cross(ctx), do: personal(ctx)
@@ -604,22 +604,22 @@ defmodule Aqua.Notes do
     {:error, {:invalid_argument, "scope must be one of #{Enum.join(@scopes, ", ")}"}}
   end
 
-  # The estate a locator names, as the reader may open it: a seat they do
-  # not hold, or an archived estate, reads as no such note — the locator
-  # is not a way to learn which estates exist. A store that cannot answer
+  # The athanor a locator names, as the reader may open it: a seat they do
+  # not hold, or an archived athanor, reads as no such note — the locator
+  # is not a way to learn which athanors exist. A store that cannot answer
   # is unavailable, never an absence.
   defp locate(ctx, athanor_id) do
     case Context.focus(ctx, athanor_id) do
       {:ok, focused} -> {:ok, focused}
       {:error, :unavailable} -> {:error, {:unavailable, "Storage"}}
-      {:error, _} -> {:error, {:not_found, "estate", athanor_id}}
+      {:error, _} -> {:error, {:not_found, "athanor", athanor_id}}
     end
   end
 
-  # Every seat the person holds, the focus first. An estate the focus can
+  # Every seat the person holds, the focus first. An athanor the focus can
   # no longer open (archived between the listing and the read) is skipped,
   # not an error — the answer is what can be read now. A store that cannot
-  # answer refuses the whole read: an estate skipped for an outage would
+  # answer refuses the whole read: an athanor skipped for an outage would
   # read as one holding no notes.
   defp contexts(%Context{} = ctx, "everywhere") do
     with :ok <- guest_may_cross(ctx),
@@ -650,7 +650,7 @@ defmodule Aqua.Notes do
     end
   end
 
-  # A running chain reads across estates only from the person's own
+  # A running chain reads across athanors only from the person's own
   # athanor. In a room, the room's assistant sees the room's pile and
   # nothing else — a private ledger is not something a shared turn can
   # open, however politely it asks. The person can, from their own

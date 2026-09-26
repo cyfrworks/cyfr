@@ -226,7 +226,7 @@ defmodule Arca.ScheduleOccurrencesTest do
     assert {:ok, "failed"} =
              ScheduleOccurrences.settle_dead(actor, claimed.id)
 
-    # Another estate reads none of it.
+    # Another athanor reads none of it.
     assert {:error, :not_found} =
              ScheduleOccurrences.get(
                %{actor | athanor_id: "ath_elsewhere"},
@@ -333,7 +333,7 @@ defmodule Arca.ScheduleOccurrencesTest do
     assert 1 = ScheduleOccurrences.start!(actor, abandoned.id, "exec_started")
     assert :held = ScheduleOccurrences.recover(actor, abandoned.id, "boot-a", "boot-c")
 
-    # Nor is another estate's.
+    # Nor is another athanor's.
     assert :held =
              ScheduleOccurrences.recover(
                %{actor | athanor_id: "ath_elsewhere"},

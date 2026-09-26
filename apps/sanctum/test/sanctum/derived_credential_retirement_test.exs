@@ -6,8 +6,8 @@ defmodule Sanctum.DerivedCredentialRetirementTest do
   A tincture access token (`?_t=`) and an asset token (`/_s/`) are narrowed
   derivatives of one stored session or API key, held to that credential's
   rows at every use. Every transition that retires the source, the person,
-  the estate or the membership the focus rested on retires both tokens for
-  good; a restore brings none back. A key creator leaving the estate keeps
+  the athanor or the membership the focus rested on retires both tokens for
+  good; a restore brings none back. A key creator leaving the athanor keeps
   the key's tokens standing, by the key's own rule. A store that cannot
   answer is `:unavailable` and opens nothing.
 

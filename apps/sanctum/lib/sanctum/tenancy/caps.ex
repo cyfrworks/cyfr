@@ -23,7 +23,7 @@ defmodule Sanctum.Tenancy.Caps do
   them to 50, 200 and 1000 (`0` turns any of them off). A thread is
   a row any member — or any headless client of theirs — can mint from the
   wire (`thread.create`), each with a follow row of its own, so an
-  estate's thread count needs a ceiling the way its DMs do. A DM is minted from the wire against anyone
+  athanor's thread count needs a ceiling the way its DMs do. A DM is minted from the wire against anyone
   the caller shares a room with, and nobody else's consent is asked, so
   one member of a large room could otherwise spend `CYFR_MAX_ATHANORS`
   for everyone by opening a DM per co-member. It counts the ACTIVE pairs a
@@ -229,7 +229,7 @@ defmodule Sanctum.Tenancy.Caps do
 
   # An actor with no resolved athanor names no tree, so there is no total
   # to compare against the ceiling. That is unverifiable, not zero: a
-  # `{:ok, 0}` here would read an unresolved tenant as an empty estate and
+  # `{:ok, 0}` here would read an unresolved tenant as an empty athanor and
   # admit the write, which is the refusal-as-silence the tenancy rules
   # forbid. Nothing reaches it through the `Arca` gate, which refuses such
   # an actor first; it is the backstop for a direct caller.

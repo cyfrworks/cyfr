@@ -6,7 +6,7 @@ defmodule Cyfr.Test.StepBench do
   The per-step latency of a turn's model step, measured in one BEAM
   against the real host path.
 
-  An estate is laid whose soul's model is `catalyst:local.step-stub`
+  An athanor is laid whose soul's model is `catalyst:local.step-stub`
   (`test_wasm/step_stub/`): a `model/chat@1` catalyst that reads its key,
   emits a few `text.delta` events and answers one text block at once, so
   the time measured is the host's and not a provider's. The stub's key is
@@ -80,8 +80,8 @@ defmodule Cyfr.Test.StepBench do
         raise("the Opus worker service of this boot does not answer; run from the umbrella root")
 
     with_sandbox(fn ->
-      with_estate_env(fn ->
-        ctx = estate!()
+      with_athanor_env(fn ->
+        ctx = athanor!()
         measure(ctx, steps, warmup)
       end)
     end)
@@ -143,7 +143,7 @@ defmodule Cyfr.Test.StepBench do
     end
   end
 
-  defp with_estate_env(fun) do
+  defp with_athanor_env(fun) do
     run_dir = Path.join(System.tmp_dir!(), "step_bench_#{System.unique_integer([:positive])}")
     keys = [:base_path, :seed_path]
     previous = Map.new(keys, &{&1, Application.get_env(:arca, &1)})
@@ -165,7 +165,7 @@ defmodule Cyfr.Test.StepBench do
   end
 
   # ---------------------------------------------------------------------------
-  # The estate
+  # The athanor
   # ---------------------------------------------------------------------------
 
   # A seed tree with the stub catalyst and a soul that runs on it.
@@ -218,7 +218,7 @@ defmodule Cyfr.Test.StepBench do
     }
   end
 
-  defp estate! do
+  defp athanor! do
     ctx = Sanctum.TestContext.local()
     :ok = Sanctum.TestContext.shipped!(ctx.athanor_id)
     {:ok, %{errors: 0}} = Compendium.AutoIndexer.scan(ctx: ctx)
@@ -226,7 +226,7 @@ defmodule Cyfr.Test.StepBench do
     {:ok, %{minted: minted}} = Bootstrap.run(ctx)
 
     if @soul not in minted or @stub not in minted,
-      do: raise("the bench estate minted #{inspect(minted)}, not the soul and #{@stub}")
+      do: raise("the bench athanor minted #{inspect(minted)}, not the soul and #{@stub}")
 
     bind_key!(ctx)
     ctx

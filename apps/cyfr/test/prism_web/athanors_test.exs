@@ -1,13 +1,12 @@
 # SPDX-License-Identifier: Apache-2.0
 # Copyright 2026 CYFR Works Inc.
 
-defmodule PrismWeb.EstatesTest do
-  # One spelling of "what to call this estate to this person": the
+defmodule PrismWeb.AthanorsTest do
+  # One spelling of "what to call this athanor to this person": the
   # person's OWN athanor is "You" — theirs, not any person-kind athanor an
   # operator happens to have opened.
   use ExUnit.Case, async: false
 
-  alias PrismWeb.Estates
   alias Sanctum.Tenancy.{Athanors, Members, Users}
 
   setup do
@@ -44,19 +43,19 @@ defmodule PrismWeb.EstatesTest do
     n: n
   } do
     me = %{user_id: alice}
-    assert Estates.label(mine, me) == "You"
-    assert Estates.own?(mine, me)
+    assert PrismWeb.Athanors.label(mine, me) == "You"
+    assert PrismWeb.Athanors.own?(mine, me)
 
     operator = %{user_id: "local|idp|operator-#{n}"}
-    assert Estates.label(mine, operator) == "Alice"
-    refute Estates.own?(mine, operator)
+    assert PrismWeb.Athanors.label(mine, operator) == "Alice"
+    refute PrismWeb.Athanors.own?(mine, operator)
 
-    assert Estates.label(mine, nil) == "Alice"
+    assert PrismWeb.Athanors.label(mine, nil) == "Alice"
   end
 
   test "a group is its name and a pair is the other person", %{alice: alice, n: n} do
     {:ok, group} = Athanors.create_group(alice, "Trip #{n}")
-    assert Estates.label(group, %{user_id: alice}) == "Trip #{n}"
+    assert PrismWeb.Athanors.label(group, %{user_id: alice}) == "Trip #{n}"
 
     {:ok, %{id: bob}} =
       Users.upsert_from_provider(%{
@@ -68,7 +67,7 @@ defmodule PrismWeb.EstatesTest do
 
     {:ok, _} = Members.add(group, [user_id: bob], alice)
     {:ok, pair} = Athanors.create_pair(alice, bob)
-    assert Estates.label(pair, %{user_id: alice}) == "Bob"
-    assert Estates.label(pair, %{user_id: bob}) == "Alice"
+    assert PrismWeb.Athanors.label(pair, %{user_id: alice}) == "Bob"
+    assert PrismWeb.Athanors.label(pair, %{user_id: bob}) == "Alice"
   end
 end

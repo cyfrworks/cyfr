@@ -78,13 +78,13 @@ defmodule Arca.RetentionSettingsTest do
               ~s({"executions": 1.5}),
               ~s({"mcp_log_days": null})
             ]) do
-        estate = "#{athanor}_#{n}"
-        store!(estate, settings)
-        actor = %Prima.Actor{athanor_id: estate}
+        numbered = "#{athanor}_#{n}"
+        store!(numbered, settings)
+        actor = %Prima.Actor{athanor_id: numbered}
 
         assert {:error, :corrupt} = RetentionSettings.get(actor), settings
         assert {:error, :corrupt} = RetentionSettings.patch(actor, %{"builds" => 3}), settings
-        assert %Row{settings: ^settings, revision: 1} = row(estate)
+        assert %Row{settings: ^settings, revision: 1} = row(numbered)
       end
     end
 

@@ -256,17 +256,17 @@ defmodule PrismWeb.ClaimNamespaceControllerTest do
           verified: true
         })
 
-      {:ok, estate} = Sanctum.Tenancy.Athanors.create_group(person_id, "Claim #{n}")
+      {:ok, athanor} = Sanctum.Tenancy.Athanors.create_group(person_id, "Claim #{n}")
 
       {:ok, _} =
-        Sanctum.Tenancy.Members.ensure(person_id, scope: "athanor", athanor_id: estate.id)
+        Sanctum.Tenancy.Members.ensure(person_id, scope: "athanor", athanor_id: athanor.id)
 
       ctx =
         Sanctum.Context.build(
           user_id: person_id,
           email: "claim#{n}@example.com",
           provider: "github",
-          athanor_id: estate.id,
+          athanor_id: athanor.id,
           permissions: [:*]
         )
 

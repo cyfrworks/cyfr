@@ -207,7 +207,7 @@ config :cyfr, :max_backends_per_server, 4
 # dependency pulls: the closure of every component the bundle cannot run
 # without, pulled when an athanor is first filled and at the seed sync
 # after a release. A pull past it stops where it is; what landed stays
-# registered, the estate is left unprovisioned with the timeout recorded,
+# registered, the athanor is left unprovisioned with the timeout recorded,
 # and the next attempt resumes from what is installed. The OCI transport
 # waits up to two minutes per request and retries twice, so one stalled
 # blob can hold an attempt for several minutes within this bound.
@@ -221,7 +221,7 @@ config :cyfr, :retention_scheduler_interval, :timer.hours(6)
 
 # The reconciler of the component registry and the agent index
 # (`Compendium.ProjectionReconciler`): whether it runs, how often it
-# recovers every estate a seeded root is behind in while this member holds
+# recovers every athanor a seeded root is behind in while this member holds
 # its slot, and how old a pending change must be before its writer is
 # taken for gone — given one repair attempt, then settled where it stands.
 config :cyfr, Compendium.ProjectionReconciler,
@@ -230,7 +230,7 @@ config :cyfr, Compendium.ProjectionReconciler,
   settle_after_ms: :timer.seconds(60)
 
 # How long an approval card waits for a decision before it expires as a
-# denial the agent observes, in hours. An estate overrides it in its
+# denial the agent observes, in hours. An athanor overrides it in its
 # settings under `approvals.expiry_hours`.
 config :cyfr, Aqua.Approvals, expiry_hours: 24
 
@@ -278,7 +278,7 @@ config :arca, Arca.Retention,
   # How many staged prefixes one sweep of one athanor collects or
   # repairs. A bound, not a target: the next sweep takes up where this one
   # stopped, so a large backlog is worked off over several runs rather
-  # than in one long walk of the estate's staging area.
+  # than in one long walk of the athanor's staging area.
   staging_sweep_limit: 200
 
 # Read-but-not-set here, deliberately: `:webhook_max_body_bytes` derives

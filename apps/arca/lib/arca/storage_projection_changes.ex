@@ -57,7 +57,7 @@ defmodule Arca.StorageProjectionChanges do
 
   Every function takes the `Prima.Actor` first and refuses one with no
   athanor as `{:error, :no_athanor}` before any query, except
-  `pending_athanors/2`, the recovery walk across estates, which a
+  `pending_athanors/2`, the recovery walk across athanors, which a
   platform-scope actor alone may make. A token names its athanor, and a
   replacement under another athanor's actor is `{:error, :cross_tenant}`.
   A store that cannot answer is `{:error, :unavailable}`.
@@ -517,9 +517,9 @@ defmodule Arca.StorageProjectionChanges do
   defp settled?(_refused), do: false
 
   @doc """
-  The estates holding a root whose projection is behind its epoch — the
+  The athanors holding a root whose projection is behind its epoch — the
   recovery walk's roster, read before any caller is known. The one read
-  across estates here, and a platform-scope actor's alone
+  across athanors here, and a platform-scope actor's alone
   (`{:error, :forbidden}` for any other). `limit:` bounds it (default
   1000).
   """
@@ -534,7 +534,7 @@ defmodule Arca.StorageProjectionChanges do
 
   def pending_athanors(%Prima.Actor{}, _opts), do: {:error, :forbidden}
 
-  # arca:unscoped-ok the recovery walk reads every estate's root rows to find a projection behind its epoch before any caller is known (Cyfr.Boundaries.system_responsibilities/0).
+  # arca:unscoped-ok the recovery walk reads every athanor's root rows to find a projection behind its epoch before any caller is known (Cyfr.Boundaries.system_responsibilities/0).
   defp behind(limit) do
     from(r in StorageProjectionRoot,
       where: r.epoch > r.acknowledged_epoch,

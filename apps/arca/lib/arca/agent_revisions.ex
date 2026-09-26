@@ -3,7 +3,7 @@
 
 defmodule Arca.AgentRevisions do
   @moduledoc """
-  The `agent_revisions` rows: every agent file the estate's index has
+  The `agent_revisions` rows: every agent file the athanor's index has
   seen, by the digest of its bytes. Content-addressed and immutable — a
   revision is written once and read back verified, so what a turn pinned
   is retrievable as it was, whatever the tree holds now.

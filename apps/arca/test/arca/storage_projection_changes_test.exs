@@ -288,7 +288,7 @@ defmodule Arca.StorageProjectionChangesTest do
   end
 
   describe "recovery and retention" do
-    test "pending_athanors/2 names an estate behind its epoch, to a platform-scope actor alone",
+    test "pending_athanors/2 names an athanor behind its epoch, to a platform-scope actor alone",
          %{actor: actor, key: key} do
       generation = commit!(actor, key, "rev_1")
       platform = %Prima.Actor{scope: :platform, system: true}

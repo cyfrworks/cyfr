@@ -1001,7 +1001,7 @@ The window comes from the provider's models API where it reports one (claude, ge
 ```json
 {"operation": "chat", "params": {
   "model": "claude-sonnet-4-6",
-  "system": "You are the estate's assistant.",
+  "system": "You are the athanor's assistant.",
   "messages": [
     {"role": "user", "content": "Read a.txt"},
     {"role": "assistant", "content": [
@@ -1171,7 +1171,7 @@ The AQUA tree — the soul, its roles and its scrolls — follows the same
 model: provisioning copies the shipped tree into the athanor's `aqua/`, an
 edited file reads as edited by its bytes, and the `aqua` tool's `reset`
 action (from the AQUA page or over MCP) restores edited copies — one role by name, or every one —
-while keeping the roles and scrolls the estate made; `skill_reset` restores
+while keeping the roles and scrolls the athanor made; `skill_reset` restores
 one scroll.
 
 ### The Files page

@@ -6,7 +6,7 @@ defmodule Arca.AgentStorageTest do
   The `agents` rows, the `aqua` root's projection, and the claim a
   provisioning attempt publishes them under.
 
-  The index speaks for the estate, so an attempt whose claim a successor
+  The index speaks for the athanor, so an attempt whose claim a successor
   took must not publish one. The guard, the rewrite and its
   acknowledgment are one transaction, which is what makes the answer a
   decision and not a guess: a takeover racing it either lands first and

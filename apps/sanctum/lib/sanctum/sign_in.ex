@@ -84,7 +84,7 @@ defmodule Sanctum.SignIn do
       # Filling the athanor is a background job whose failure lands on the
       # row and is retried; it never refuses the sign-in. Failing to MINT
       # one does refuse it: the caps bound how fast strangers arrive and
-      # how many estates the server holds, and a person admitted without an
+      # how many athanors the server holds, and a person admitted without an
       # athanor would hold a session with nowhere to work.
       case Sanctum.Provisioning.after_sign_in(user_id) do
         {:error, reason} -> {:error, reason}

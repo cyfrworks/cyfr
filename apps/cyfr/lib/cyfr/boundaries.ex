@@ -315,8 +315,8 @@ defmodule Cyfr.Boundaries do
           "consent state: the assistant composes them with an agent's policy and " <>
           "checks which may stand, and reads and writes the rows only through it. " <>
           "`Sanctum.Provisioning` is `Aqua.AgentConfig`'s two in-process agent reads " <>
-          "alone — the first-need hook: a turn reads its estate's tree in-process " <>
-          "now rather than through the `aqua` tool, and the bundle a group estate " <>
+          "alone — the first-need hook: a turn reads its athanor's tree in-process " <>
+          "now rather than through the `aqua` tool, and the bundle a group athanor " <>
           "is filled with on first read has to be there before the turn roots an " <>
           "authority in it. `Sanctum.ExecutionStanding` is `Aqua.Tape`'s check over " <>
           "the grant a turn's root attempt stores, handed to the turn's writes. " <>
@@ -348,7 +348,7 @@ defmodule Cyfr.Boundaries do
       ),
       reason:
         "`Sanctum.Provisioning` is the first-need hook and the half of filling an " <>
-          "estate that is identity's: the claim it runs under, the baseline consents, " <>
+          "athanor that is identity's: the claim it runs under, the baseline consents, " <>
           "the readiness and failure writes on the row. `Compendium.Provisioning` owns " <>
           "the component work and calls down into it. OCI and registry transports " <>
           "use Sanctum.Network and Sanctum.Egress for validated outbound requests. " <>
@@ -480,7 +480,7 @@ defmodule Cyfr.Boundaries do
       depth: 3,
       allow: ~w(Sanctum.Consent Sanctum.Consent.Components Sanctum.Consent.ShapeDerivation),
       reason:
-        "the consent WRITE plane stays behind Sanctum's own surface: the estate " <>
+        "the consent WRITE plane stays behind Sanctum's own surface: the athanor " <>
           "filler mints its baseline consents through `Sanctum.Provisioning`, never " <>
           "`Sanctum.Consent.Bootstrap`. `Sanctum.Consent.Components` is the " <>
           "component-facts port — naming a behaviour one implements is the opposite " <>
@@ -1944,7 +1944,7 @@ defmodule Cyfr.Boundaries do
       reason:
         "row work inside one athanor for a caller established by other means than a " <>
           "context — a MAC-verified host call naming its attempt, a schedule's own " <>
-          "occurrence row, a recovery scan already narrowed to one estate. The " <>
+          "occurrence row, a recovery scan already narrowed to one athanor. The " <>
           "athanor and nothing else: `scope: :athanor`, `system: false`."
     },
     %{
@@ -1983,10 +1983,10 @@ defmodule Cyfr.Boundaries do
       check: "Sanctum.ExecutionStanding.stamp_only/1",
       reason:
         "a failure, a cancel, a lease lapse and the sweep's cancellation of an " <>
-          "archived estate's work end an admitted execution without asking whether " <>
+          "archived athanor's work end an admitted execution without asking whether " <>
           "its grant still stands: the attempt must carry the grant's stored stamp " <>
           "and be the current one, and the member must hold its slot, but retiring " <>
-          "work its estate no longer admits is exactly when these run. None of them " <>
+          "work its athanor no longer admits is exactly when these run. None of them " <>
           "can report success, and none can write over a successor's attempt. A " <>
           "completion, new output, a renewal, a resume and a recovery each need the " <>
           "grant to stand (`Sanctum.ExecutionStanding.verify/1`)."
@@ -2013,7 +2013,7 @@ defmodule Cyfr.Boundaries do
       check: "Arca.Storage.authorize_path/2",
       reason:
         "the readiness probe is anonymous and asks whether the store still takes a " <>
-          "write, so it runs before any caller is known and in no estate: `ready/2` " <>
+          "write, so it runs before any caller is known and in no athanor: `ready/2` " <>
           "puts one fixed key under the global `system/` root " <>
           "(`CyfrWeb.Ingress.HealthController.probe_dir/0`) and deletes it again, under " <>
           "the platform's internal context, whose system actor is the only kind " <>
@@ -2030,25 +2030,25 @@ defmodule Cyfr.Boundaries do
         "the component registry and the agent index must catch up with a change whose " <>
           "writer died or whose notification was lost, and nobody is asking yet: the " <>
           "reconciler's recovery reads, under the platform-scope actor alone, which " <>
-          "estates hold a seeded root whose projection is behind its epoch — one column of " <>
-          "the root rows and nothing of any tenant's content. Every estate it names is " <>
-          "then reconciled inside that estate's own context, and every replacement is " <>
+          "athanors hold a seeded root whose projection is behind its epoch — one column of " <>
+          "the root rows and nothing of any tenant's content. Every athanor it names is " <>
+          "then reconciled inside that athanor's own context, and every replacement is " <>
           "checked against the generations it read, so a recovery can do no more than a " <>
-          "reader of that estate would."
+          "reader of that athanor would."
     },
     %{
       responsibility:
-        "apply each active estate's retention policy on the cell's cadence, with no caller",
+        "apply each active athanor's retention policy on the cell's cadence, with no caller",
       modules: ~w(Cyfr.RetentionScheduler),
       check: "Arca.Retention.cleanup_athanor/2",
       reason:
-        "retention deletes what each estate's own settings say it no longer keeps, and " <>
+        "retention deletes what each athanor's own settings say it no longer keeps, and " <>
           "nobody asks for it: the scheduler, holding the cell's retention claim and its " <>
-          "slot, walks the estates the identity domain names active, asks again before " <>
-          "each, and hands the storage layer one actor per estate — the server's, narrowed " <>
+          "slot, walks the athanors the identity domain names active, asks again before " <>
+          "each, and hands the storage layer one actor per athanor — the server's, narrowed " <>
           "to that athanor, reading and writing storage and nothing else. The storage " <>
-          "layer refuses any other actor, and refuses the whole estate when its settings " <>
-          "are corrupt or cannot be read. An archived estate is passed over, so its " <>
+          "layer refuses any other actor, and refuses the whole athanor when its settings " <>
+          "are corrupt or cannot be read. An archived athanor is passed over, so its " <>
           "records freeze with it."
     },
     %{
@@ -2057,12 +2057,12 @@ defmodule Cyfr.Boundaries do
       check: "Arca.DecisionLog.purge_global/2",
       reason:
         "a decision refused before any caller or tenant was established is appended " <>
-          "with no athanor, so no estate's retention reaches it and no tenant reads it: " <>
+          "with no athanor, so no athanor's retention reaches it and no tenant reads it: " <>
           "the scheduler's `decisions_global` step, holding the cell's retention claim " <>
           "and its slot, deletes those rows once they are older than " <>
           "CYFR_DECISION_RETENTION_DAYS. The storage layer takes only the platform's own " <>
           "system actor for it and matches only rows without an athanor, so the purge " <>
-          "can reach no estate's decisions, which go with the estate or its own policy."
+          "can reach no athanor's decisions, which go with the athanor or its own policy."
     }
   ]
 

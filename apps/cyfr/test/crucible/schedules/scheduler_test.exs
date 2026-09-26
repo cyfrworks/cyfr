@@ -601,7 +601,7 @@ defmodule Crucible.Schedules.SchedulerTest do
       claimed_at: DateTime.utc_now()
     })
 
-    # The estate stops standing with no announcement: recovery reads it.
+    # The athanor stops standing with no announcement: recovery reads it.
     Arca.Repo.update_all(from(a in Arca.Schemas.Athanor, where: a.id == ^ctx.athanor_id),
       set: [status: "archived"]
     )

@@ -6,9 +6,9 @@ defmodule Sanctum.Consent.Components do
   The component facts a consent decision rests on.
 
   A consent governs the shape of what a component may do, so deciding one
-  means reading what the estate actually holds: the activation a ref
+  means reading what the athanor actually holds: the activation a ref
   resolves to, the verified graph and its digest, the registry row a ref
-  names, the estate's enabled agents, and what the install media ships at
+  names, the athanor's enabled agents, and what the install media ships at
   a row's path. None of that is identity's to know, and all of it
   lives in the component domain — so the contract is written here, in the
   domain that depends on it, and the component domain implements it
@@ -30,10 +30,10 @@ defmodule Sanctum.Consent.Components do
 
   Every call answers `{:error, :component_facts_unavailable}` when no
   implementation is installed, which is a different word from
-  `{:error, :not_found}` (the estate holds no such component) and from
+  `{:error, :not_found}` (the athanor holds no such component) and from
   every refusal `Sanctum.Consent.Authz` renders (the consent does not
   cover it). A decision taken while the facts cannot be read refuses, and
-  the caller can tell which of the three happened — an unreadable estate
+  the caller can tell which of the three happened — an unreadable athanor
   must never read as a component that does not exist, and neither must
   read as a denial. `impl!/0`, which a caller asks only when it needs
   the module itself, raises `Sanctum.Consent.Components.NotInstalledError`
@@ -92,7 +92,7 @@ defmodule Sanctum.Consent.Components do
               String.t() | nil
             ) :: {:ok, map()} | {:error, term()}
 
-  @doc "The row of every enabled agent in the estate's tree, the soul first."
+  @doc "The row of every enabled agent in the athanor's tree, the soul first."
   @callback agent_rows(Context.t()) :: {:ok, [map()]} | {:error, term()}
 
   @doc """
@@ -184,7 +184,7 @@ defmodule Sanctum.Consent.Components do
   def get_component(%Context{} = ctx, name, version, publisher, type) when is_binary(name),
     do: call(& &1.get_component(ctx, name, version, publisher, type))
 
-  @doc "The row of every enabled agent in the estate's tree."
+  @doc "The row of every enabled agent in the athanor's tree."
   @spec agent_rows(Context.t()) :: {:ok, [map()]} | {:error, term()}
   def agent_rows(%Context{} = ctx), do: call(& &1.agent_rows(ctx))
 
@@ -194,7 +194,7 @@ defmodule Sanctum.Consent.Components do
   def shipped_nodes(%Context{} = ctx, rows) when is_list(rows),
     do: call(& &1.shipped_nodes(ctx, rows))
 
-  # An uninstalled port is an unreadable estate, not an empty one: every
+  # An uninstalled port is an unreadable athanor, not an empty one: every
   # caller refuses on this word, and none of them may mistake it for
   # `:not_found`.
   defp call(fun) do

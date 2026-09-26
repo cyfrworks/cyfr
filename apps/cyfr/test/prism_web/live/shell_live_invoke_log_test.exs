@@ -18,7 +18,7 @@ defmodule PrismWeb.ShellLiveInvokeLogTest do
   setup %{conn: conn} do
     user = test_user()
     conn = log_in_user(conn, user)
-    estate = seated_athanor()
+    athanor = seated_athanor()
 
     base = Path.join(System.tmp_dir!(), "shell_log_#{System.unique_integer([:positive])}")
     original_path = Application.get_env(:arca, :base_path)
@@ -26,7 +26,7 @@ defmodule PrismWeb.ShellLiveInvokeLogTest do
 
     dir =
       Arca.Adapters.Local.build_path(
-        Sanctum.Context.actor(%{Sanctum.TestContext.local() | athanor_id: estate.id}),
+        Sanctum.Context.actor(%{Sanctum.TestContext.local() | athanor_id: athanor.id}),
         ["components", "tinctures", "local", @tincture, "1.0.0"]
       )
 
@@ -46,7 +46,7 @@ defmodule PrismWeb.ShellLiveInvokeLogTest do
     File.write!(Path.join(dir, "index.html"), "<html><body>log</body></html>")
 
     # Reload the registry after writing fixtures directly to disk without an AutoIndexer notification.
-    Prism.TinctureRegistry.reload_athanor(estate.id)
+    Prism.TinctureRegistry.reload_athanor(athanor.id)
 
     on_exit(fn ->
       Application.put_env(:arca, :base_path, original_path)
@@ -54,7 +54,7 @@ defmodule PrismWeb.ShellLiveInvokeLogTest do
       reload_registry()
     end)
 
-    {:ok, conn: conn, user: user, estate: estate}
+    {:ok, conn: conn, user: user, athanor: athanor}
   end
 
   # The registry is one server-wide process; it is left holding the real
@@ -80,7 +80,7 @@ defmodule PrismWeb.ShellLiveInvokeLogTest do
     end
   end
 
-  test "an invoke files one request-log row, the gate's", %{conn: conn, estate: estate} do
+  test "an invoke files one request-log row, the gate's", %{conn: conn, athanor: athanor} do
     {view, html} = mount_athanor(conn, "/tinctures")
     assert html =~ @tincture
 
@@ -97,7 +97,7 @@ defmodule PrismWeb.ShellLiveInvokeLogTest do
     rows =
       Arca.Repo.all(
         from(l in Arca.Schemas.McpLog,
-          where: l.tool == "tincture" and l.athanor_id == ^estate.id
+          where: l.tool == "tincture" and l.athanor_id == ^athanor.id
         )
       )
 

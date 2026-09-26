@@ -322,7 +322,7 @@ defmodule Compendium.ProjectionReconcilerTest do
              )
     end
 
-    test "a notification reconciles the estate it names", %{actor: actor, name: name} do
+    test "a notification reconciles the athanor it names", %{actor: actor, name: name} do
       {_process, pid} = start!(interval_ms: :timer.hours(1))
       settle(pid)
 

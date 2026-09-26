@@ -8,7 +8,7 @@ defmodule Arca.ExecutionStandingTest do
   write missing its grant or its check is refused, and a stamp that is
   not the attempt's own matches nothing. A child inherits its parent's
   stamp and a successor its predecessor's; neither is rebuilt from the
-  estate as it stands.
+  athanor as it stands.
   """
 
   use ExUnit.Case, async: false
@@ -59,7 +59,7 @@ defmodule Arca.ExecutionStandingTest do
                verify: &Actor.admits/1
              )
 
-    # A grant of another estate is not this row's.
+    # A grant of another athanor is not this row's.
     assert {:error, :not_standing} =
              Arca.Execution.admit(missing, Actor.standing("ath_other"))
 
@@ -262,7 +262,7 @@ end
 defmodule Arca.ExecutionStandingLockTest do
   @moduledoc """
   An admission and an archive under two real connections, outside the
-  sandbox, in both orders. Each serializes on the estate's row — on
+  sandbox, in both orders. Each serializes on the athanor's row — on
   PostgreSQL by waiting on the row, on SQLite by waiting at the lock its transaction takes at entry
   — and the one that waits acts on what the other committed: an admission
   that committed first is retired by the archive, and one that waited
@@ -328,7 +328,7 @@ defmodule Arca.ExecutionStandingLockTest do
     }
   end
 
-  # The identity domain's check, which stops once it holds the estate's
+  # The identity domain's check, which stops once it holds the athanor's
   # row until the test says go.
   defp holding(test, label) do
     fn grant ->
@@ -345,7 +345,7 @@ defmodule Arca.ExecutionStandingLockTest do
     Arca.SecurityTransitions.archive_athanor(Prima.Actor.system(), athanor_id, verify: verify)
   end
 
-  test "an admission holding the estate retires under the archive that waited for it", %{
+  test "an admission holding the athanor retires under the archive that waited for it", %{
     athanor_id: athanor_id
   } do
     test = self()
@@ -362,7 +362,7 @@ defmodule Arca.ExecutionStandingLockTest do
     assert_receive {:holding, :admission}, 5_000
 
     archiver = Task.async(fn -> unboxed(fn -> archive(athanor_id, fn _ -> :ok end) end) end)
-    refute Task.yield(archiver, 300), "the archive decided while the admission held the estate"
+    refute Task.yield(archiver, 300), "the archive decided while the admission held the athanor"
 
     send(admitter.pid, :go)
     assert {:ok, %{attempt: attempt}} = Task.await(admitter, 25_000)
@@ -412,7 +412,7 @@ defmodule Arca.ExecutionStandingLockTest do
         unboxed(fn -> Arca.Execution.admit(row, grant: grant, verify: &Actor.verify/1) end)
       end)
 
-    refute Task.yield(admitter, 300), "the admission decided while the archive held the estate"
+    refute Task.yield(admitter, 300), "the admission decided while the archive held the athanor"
 
     send(archiver.pid, :go)
     assert {:ok, %{archived_athanor_ids: [^athanor_id]}} = Task.await(archiver, 25_000)
@@ -423,7 +423,7 @@ defmodule Arca.ExecutionStandingLockTest do
   end
 
   @tag :postgres
-  test "two verifications share the estate, and an archive waits behind either", %{
+  test "two verifications share the athanor, and an archive waits behind either", %{
     athanor_id: athanor_id
   } do
     if Arca.Repo.adapter() == Ecto.Adapters.SQLite3 do
@@ -441,7 +441,7 @@ defmodule Arca.ExecutionStandingLockTest do
       end
 
       # A write's check and a read-only effect's check, each holding the
-      # estate row until told to go.
+      # athanor row until told to go.
       writer = verification.(:writer, &Arca.Repo.locking_transaction/1)
       assert_receive {:holding, :writer}, 5_000
 
@@ -449,11 +449,11 @@ defmodule Arca.ExecutionStandingLockTest do
       assert_receive {:holding, :reader}, 5_000
 
       archiver = Task.async(fn -> unboxed(fn -> archive(athanor_id, fn _ -> :ok end) end) end)
-      refute Task.yield(archiver, 300), "the archive locked an estate two checks held"
+      refute Task.yield(archiver, 300), "the archive locked an athanor two checks held"
 
       send(writer.pid, :go)
       assert {:ok, :ok} = Task.await(writer, 5_000)
-      refute Task.yield(archiver, 300), "the archive locked an estate a check still held"
+      refute Task.yield(archiver, 300), "the archive locked an athanor a check still held"
 
       send(reader.pid, :go)
       assert {:ok, :ok} = Task.await(reader, 5_000)

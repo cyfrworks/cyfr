@@ -76,7 +76,7 @@ defmodule Compendium.Providers.Aqua do
     # registry's dispatch gate and does not see these actions in
     # `tools/list`.
     #
-    # A scroll is a procedure the estate learns. Writing one is a
+    # A scroll is a procedure the athanor learns. Writing one is a
     # member's act at the door and a card from a chain — the soul's
     # policy holds both writes at `ask`, so an agent proposes a
     # scroll and a person clicks. In-chain the interactive class
@@ -361,7 +361,7 @@ defmodule Compendium.Providers.Aqua do
         )
       ],
       description:
-        "The estate's AQUA: one soul (the assistant, reserved name 'aqua'), a flat closet of roles it clones into, the scrolls it has learned, and the documentation guides. Use 'list' to see the soul, roles and guides, 'get' to read one (the soul by name 'aqua'), 'create'/'update'/'delete' to manage roles ('aqua' cannot be created or deleted — edit it, or reset), 'status' for per-file provenance, 'skill_list'/'skill_get' to read scrolls (Agent Skills under aqua/skills/<name>/SKILL.md), 'skill_create'/'skill_update' to write one, 'skill_delete' to remove one the estate made, 'skill_reset' to restore an edited scroll to what ships, or 'reset' to restore edited copies of shipped files (one role with name, else every one; member-created roles and scrolls are kept unless all=true).",
+        "The athanor's AQUA: one soul (the assistant, reserved name 'aqua'), a flat closet of roles it clones into, the scrolls it has learned, and the documentation guides. Use 'list' to see the soul, roles and guides, 'get' to read one (the soul by name 'aqua'), 'create'/'update'/'delete' to manage roles ('aqua' cannot be created or deleted — edit it, or reset), 'status' for per-file provenance, 'skill_list'/'skill_get' to read scrolls (Agent Skills under aqua/skills/<name>/SKILL.md), 'skill_create'/'skill_update' to write one, 'skill_delete' to remove one the athanor made, 'skill_reset' to restore an edited scroll to what ships, or 'reset' to restore edited copies of shipped files (one role with name, else every one; member-created roles and scrolls are kept unless all=true).",
       title: "AQUA Agent System"
     )
   end
@@ -702,7 +702,7 @@ defmodule Compendium.Providers.Aqua do
   # A scroll is a dir unit with `SKILL.md` as its sentinel. Creating one
   # lands the manifest through the overlay's unit commit — sentinel last,
   # rollback on failure — so a half-written scroll never reads as one. The
-  # name is taken if the union holds it, shipped or the estate's own, and
+  # name is taken if the union holds it, shipped or the athanor's own, and
   # the commit asks that while it holds the unit's draft (`if_absent:`),
   # so two creators of one name cannot both pass a probe and have the
   # second silently replace the first.
@@ -779,7 +779,7 @@ defmodule Compendium.Providers.Aqua do
   end
 
   # Same disposition as an agent: a shipped scroll is restored by a reset,
-  # never deleted; the estate's own goes.
+  # never deleted; the athanor's own goes.
   def handle(%Context{} = ctx, %{"action" => "skill_delete", "name" => name}) do
     with :ok <- validate_name(name) do
       case Arca.Overlay.drop_unit(Sanctum.Context.actor(ctx), AquaPath.skill_dir(name)) do
@@ -859,7 +859,7 @@ defmodule Compendium.Providers.Aqua do
           "disable it instead (update name=#{name} disabled=true)"
   end
 
-  # One unit back to what ships; the estate's own work refuses in words.
+  # One unit back to what ships; the athanor's own work refuses in words.
   defp restore_unit(ctx, unit, noun, name) do
     case Compendium.AquaTemplate.restore(ctx, unit) do
       :ok ->
@@ -869,7 +869,7 @@ defmodule Compendium.Providers.Aqua do
       {:error, :not_a_copy} ->
         {:error,
          {:invalid_argument,
-          "#{noun} '#{name}' is this estate's own and has no shipped version to restore"}}
+          "#{noun} '#{name}' is this athanor's own and has no shipped version to restore"}}
 
       {:error, :not_found} ->
         {:error, {:not_found, noun, name}}
@@ -883,7 +883,7 @@ defmodule Compendium.Providers.Aqua do
     end
   end
 
-  # The tree changed; the derived index follows it now, and the estate's
+  # The tree changed; the derived index follows it now, and the athanor's
   # consent caches with it. Never the write's failure: the write stamped
   # its unit, so an index that could not follow here is brought up to the
   # tree by its next read (`Compendium.ProjectionReconciler`).
@@ -958,7 +958,7 @@ defmodule Compendium.Providers.Aqua do
   # A role no glob on the soul names is a file the runtime never offers,
   # so the soul's leave to clone into the new role is given in the same
   # act as the role — one `<name>.*` key on its allowlist. The role stands
-  # either way; an estate with no soul, or a soul write that fails, is
+  # either way; an athanor with no soul, or a soul write that fails, is
   # said in the answer (`cloneable: false` and why), never hidden.
   defp clone_leave(ctx, name) do
     soul = AquaPath.soul_name()
@@ -1115,7 +1115,7 @@ defmodule Compendium.Providers.Aqua do
     end
   end
 
-  # First need. A group estate is minted as a row and filled the first time
+  # First need. A group athanor is minted as a row and filled the first time
   # something actually reads its bundle, so clicking a person's name opens
   # a chat instead of waiting on a registry round trip that can fail.
   #

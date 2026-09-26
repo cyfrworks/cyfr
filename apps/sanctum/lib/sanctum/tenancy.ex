@@ -55,9 +55,9 @@ defmodule Sanctum.Tenancy do
   (`t:Sanctum.Context.credential_binding/0`). A context that holds no
   credential yet — an admitted sign-in, the only caller that passes
   `force: true` — is stamped `source_kind: :identity` with the person's
-  and the chosen estate's generations and the membership that granted it,
+  and the chosen athanor's generations and the membership that granted it,
   read after the door's verdict; a session or key context keeps its
-  source and person generation and takes the new estate's. A person with
+  source and person generation and takes the new athanor's. A person with
   no `users` row carries no binding, and can be issued nothing.
   """
   @spec resolve_status(Context.t(), keyword()) :: {:ok, Context.t()} | {:error, :unavailable}
@@ -138,7 +138,7 @@ defmodule Sanctum.Tenancy do
   end
 
   # Set capability and athanor from an already-loaded membership list;
-  # answers the context and the chosen estate's row.
+  # answers the context and the chosen athanor's row.
   defp apply_membership(%Context{} = ctx, memberships, user) do
     admin? = platform_admin?(memberships)
     athanor = working_athanor(ctx, memberships, admin?, user)
@@ -154,7 +154,7 @@ defmodule Sanctum.Tenancy do
   # The binding the resolve's own reads support. A context with no source
   # of its own — an admitted sign-in — is bound as `:identity`; a session
   # or key context keeps its source and its person generation and follows
-  # the estate this resolve chose.
+  # the athanor this resolve chose.
   defp bind(%Context{} = ctx, nil, _athanor, _memberships), do: %{ctx | credential_binding: nil}
 
   defp bind(
@@ -216,7 +216,7 @@ defmodule Sanctum.Tenancy do
   end
 
   @typedoc """
-  The generations a person and an estate stand at, read from their rows:
+  The generations a person and an athanor stand at, read from their rows:
   what an issuance from a context with no binding of its own is checked
   against (`Sanctum.Session.create/2`'s `:generation_snapshot`).
   """
@@ -358,7 +358,7 @@ defmodule Sanctum.Tenancy do
   missing (read first — a denial marks the user before memberships are
   swept, so a surviving membership proves nothing), `:not_member` when
   the person is not seated in the turn's own athanor, `:archived` when
-  the estate is not active, `:unavailable` when the store cannot answer.
+  the athanor is not active, `:unavailable` when the store cannot answer.
   """
   @spec continuation(String.t(), String.t()) ::
           {:ok, Context.t()} | {:error, :denied | :not_member | :archived | :unavailable}

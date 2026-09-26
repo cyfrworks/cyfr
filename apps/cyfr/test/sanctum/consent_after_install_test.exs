@@ -3,12 +3,12 @@
 
 defmodule Sanctum.ConsentAfterInstallTest do
   @moduledoc """
-  What installing a component does to what the estate consented to.
+  What installing a component does to what the athanor consented to.
 
   A baseline consent is minted against the closure that exists when the
-  estate is filled. Installing a component a formula names as an optional
+  athanor is filled. Installing a component a formula names as an optional
   dependency widens that closure, so the consent no longer answers for it
-  and a turn is refused until a member consents again. The estate reports
+  and a turn is refused until a member consents again. The athanor reports
   that state rather than leaving it unexplained — and only for the
   formula the install touched: the bundled assistant's closure ships in
   the seed and stands.
@@ -110,7 +110,7 @@ defmodule Sanctum.ConsentAfterInstallTest do
     {:ok, port: port}
   end
 
-  test "installing a component changes what the estate consented to, and it says so", %{
+  test "installing a component changes what the athanor consented to, and it says so", %{
     port: port
   } do
     n = System.unique_integer([:positive])
@@ -144,7 +144,7 @@ defmodule Sanctum.ConsentAfterInstallTest do
     # The optional provider is installed, as the console's Install does.
     # That widens the closure the formula's consent was minted against, so
     # the consent no longer answers for it and a turn is refused until a
-    # member consents again. The estate must SAY that rather than look
+    # member consents again. The athanor must SAY that rather than look
     # unexplained.
     Application.put_env(:cyfr, :registry_url, "127.0.0.1:19")
     # `localhost:` is the one host the OCI reference layer maps to http.

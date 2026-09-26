@@ -29,9 +29,9 @@ defmodule PrismWeb.TopbarLive do
 
   The tray — badges on the switcher rows for what happened in an athanor
   while the person was elsewhere — is `Prism.Tray`, per session, so it
-  survives the remounts; reading an estate in the chat clears its count.
-  Which estate is being looked at is `@viewing`: the focused one on a
-  workbench page, and on the chat page whichever estate the page has open
+  survives the remounts; reading an athanor in the chat clears its count.
+  Which athanor is being looked at is `@viewing`: the focused one on a
+  workbench page, and on the chat page whichever athanor the page has open
   — the chat says so (`viewing/2`) each time it moves, since it moves by
   patch and this bar does not remount for a patch.
   """
@@ -52,7 +52,7 @@ defmodule PrismWeb.TopbarLive do
   on_mount {CyfrWeb.ContextGuard, :protected}
 
   # `CyfrWeb.ContextGuard` established the session, focused on the page's
-  # estate, and subscribed this bar to the person's standing — their
+  # athanor, and subscribed this bar to the person's standing — their
   # memberships among it, which is what the switcher lists; a session the
   # guard refuses never reaches here.
   @impl true
@@ -62,7 +62,7 @@ defmodule PrismWeb.TopbarLive do
     ui_mode = Prism.Labels.mode(session["ui_mode"], ctx)
 
     if connected?(socket) do
-      # The page this bar sits on says which estate it has in view.
+      # The page this bar sits on says which athanor it has in view.
       Bus.subscribe_page(Bus.page_viewing(socket.parent_pid))
 
       if ctx.platform_admin,
@@ -118,8 +118,8 @@ defmodule PrismWeb.TopbarLive do
 
   @doc """
   Tell the bar over page `host` (the LiveView it is rendered in) that
-  `athanor_id` is the estate in view — the chat calls it as it moves
-  between estates, and after it has read the estate's tray count.
+  `athanor_id` is the athanor in view — the chat calls it as it moves
+  between athanors, and after it has read the athanor's tray count.
   """
   @spec viewing(pid(), String.t()) :: :ok
   def viewing(host, athanor_id) when is_pid(host) and is_binary(athanor_id),
@@ -140,7 +140,7 @@ defmodule PrismWeb.TopbarLive do
   end
 
   # The one create the chat list offers: a group, born with its creator as
-  # the only member. The chat opens on the new estate — named in the
+  # the only member. The chat opens on the new athanor — named in the
   # address, since the session's default is still the previous one.
   def handle_event("create_group", %{"name" => name}, socket) do
     case call_tool(socket, "athanor/create", %{"name" => String.trim(name)}) do
@@ -166,7 +166,7 @@ defmodule PrismWeb.TopbarLive do
 
     socket =
       socket
-      # The counts as the session left them: reading an estate in the chat
+      # The counts as the session left them: reading an athanor in the chat
       # is what clears one, and the chat has done so before this bar loads.
       |> assign(:badges, Prism.Tray.get(socket.assigns.tray_key))
       |> assign(:platform_requests, platform_requests(ctx))
@@ -176,12 +176,12 @@ defmodule PrismWeb.TopbarLive do
     {:noreply, socket}
   end
 
-  # The chat moved to another estate (and cleared its count on the way):
+  # The chat moved to another athanor (and cleared its count on the way):
   # follow it, and re-read the tray rather than trust the copy held here.
-  # Only an estate this person holds a seat in — the set the rows and the
+  # Only an athanor this person holds a seat in — the set the rows and the
   # badges are drawn from — can be the one in view.
-  # The chat moves between estates by `push_patch`; the bar's name AND its
-  # links follow, so every page the bar offers is the viewed estate's.
+  # The chat moves between athanors by `push_patch`; the bar's name AND its
+  # links follow, so every page the bar offers is the viewed athanor's.
   def handle_info(%Viewing{athanor_id: athanor_id}, socket) do
     known = Enum.map(socket.assigns.athanors, & &1.id)
 
@@ -270,7 +270,7 @@ defmodule PrismWeb.TopbarLive do
   #
   # The subscription was keyed when the list was read; whether this person
   # still holds a seat there is read again, through the focus rule, before
-  # anything of that estate is read or counted.
+  # anything of that athanor is read or counted.
   def handle_info(%Notify{athanor_id: athanor_id, payload: %{thread_id: thread_id}}, socket)
       when is_binary(athanor_id) and is_binary(thread_id) do
     %{context: ctx, viewing: viewing} = socket.assigns
@@ -581,7 +581,7 @@ defmodule PrismWeb.TopbarLive do
             ]}
           >
             <span id="viewing-name" class="truncate text-xs font-medium">
-              {Map.get(@labels, @viewing, "Estate")}
+              {Map.get(@labels, @viewing, "Athanor")}
             </span>
             <span
               :if={badge_total(@badges, @viewing) > 0}
@@ -595,7 +595,7 @@ defmodule PrismWeb.TopbarLive do
             phx-click-away="close_popover"
             class="absolute left-0 top-full mt-2 w-64 rounded-lg border border-gray-700 bg-gray-900 shadow-xl p-2 z-40"
           >
-            <%!-- A row opens the estate's chat; its small AQUA link, the
+            <%!-- A row opens the athanor's chat; its small AQUA link, the
                   workbench. --%>
             <ul :if={length(@athanors) > 1} class="space-y-0.5 text-sm">
               <li
@@ -618,7 +618,7 @@ defmodule PrismWeb.TopbarLive do
                     <span
                       :if={a.roster == "frozen"}
                       class="rounded bg-gray-800 px-1 text-[10px] text-gray-500 ml-1"
-                      title="A DM — a frozen two-person estate"
+                      title="A DM — a frozen two-person athanor"
                     >
                       DM
                     </span>
@@ -983,7 +983,7 @@ defmodule PrismWeb.TopbarLive do
         Bus.unsubscribe(actor, Bus.notify(actor))
       end
 
-      # Each seat's own tray topic, keyed by the estate the person's
+      # Each seat's own tray topic, keyed by the athanor the person's
       # membership list names.
       for a <- athanors do
         actor = Prima.Actor.in_athanor(a.id)
@@ -998,10 +998,10 @@ defmodule PrismWeb.TopbarLive do
     |> assign(:badges, Map.take(socket.assigns[:badges] || %{}, Enum.map(athanors, & &1.id)))
   end
 
-  # Named once, at load: the person's own estate is "You", a DM is the
+  # Named once, at load: the person's own athanor is "You", a DM is the
   # other person, a group its name — read here rather than in the render,
   # which would ask the store for every DM row on every paint.
-  defp row_label(athanor, ctx), do: PrismWeb.Estates.label(athanor, ctx)
+  defp row_label(athanor, ctx), do: PrismWeb.Athanors.label(athanor, ctx)
 
   defp badge_total(badges, viewing) do
     badges |> Map.delete(viewing) |> Map.values() |> Enum.sum()

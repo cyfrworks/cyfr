@@ -60,7 +60,7 @@ defmodule Arca.ExecutionEventsTest do
     assert Enum.all?(rows, &is_integer(ExecutionEvents.data(&1)["i"]))
   end
 
-  test "an execution of another estate takes no event", %{actor: actor, exec: exec} do
+  test "an execution of another athanor takes no event", %{actor: actor, exec: exec} do
     assert {:error, _} =
              ExecutionEvents.append(
                Prima.Actor.in_athanor("ath_elsewhere"),

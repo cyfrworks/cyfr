@@ -15,7 +15,7 @@ defmodule Arca.Users do
   (`personal_athanor_id`) is a pointer out of the row, not a tenant
   stamp. Scoping these reads to an athanor would make sign-in impossible
   and would answer "not on this server" for every person outside the
-  caller's estate.
+  caller's athanor.
 
   So every function here is a cross-tenant read or write and says so in
   its head: it matches `scope: :platform` and refuses an athanor-scoped

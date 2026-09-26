@@ -69,7 +69,7 @@ defmodule Aqua.RoomExcerptTest do
     })
 
     assert {:ok, text} =
-             RoomExcerpt.read(me, room(room, thread, %{title: "Plans", estate: "Team"}))
+             RoomExcerpt.read(me, room(room, thread, %{title: "Plans", athanor: "Team"}))
 
     assert String.starts_with?(text, ~s(Read from the room "Team · Plans"))
     assert text =~ ": plan?"

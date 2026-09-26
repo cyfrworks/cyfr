@@ -12,7 +12,7 @@ defmodule Arca.Repo.Migrations.Baseline do
   archived, never deleted, so nothing needs the constraint and every fixture
   is spared a parent row. Several tables do name it inside a COMPOSITE key,
   which is a different thing: a child references its parent by
-  `(id, athanor_id)`, so nothing can point across estates. Those constrain
+  `(id, athanor_id)`, so nothing can point across athanors. Those constrain
   the pair, never the athanor itself. A 3+-column composite foreign key
   silently truncates on SQLite, so every composite is a two-column pair and
   its parent carries a unique `(id, athanor_id)` index created first.
@@ -23,7 +23,7 @@ defmodule Arca.Repo.Migrations.Baseline do
   tenant was resolved is the host's record, not a tenant's). `server_meta`, `registry_tokens`,
   `external_identities`, `cell_leases` and `job_claims` are not
   athanor-scoped: the first three are the server's own facts and the last
-  two the cell's, and a cell has no estate.
+  two the cell's, and a cell has no athanor.
 
   This file is the schema's single source: a change edits it, and
   `Arca.SchemaFingerprint` refuses a database built from a different
@@ -238,11 +238,11 @@ defmodule Arca.Repo.Migrations.Baseline do
   # Provisioning claims
   # ==========================================================================
 
-  # Who is filling an estate: one row per athanor, taken and settled by
+  # Who is filling an athanor: one row per athanor, taken and settled by
   # compare-and-set on `(owner, fence)`, so a stale owner — a boot that
   # lost its lease mid-fill — cannot mark readiness, overwrite a
   # successor's failure, mint consent or replace the agent index. Every
-  # entry point that fills or heals an estate (`Sanctum.Provisioning`)
+  # entry point that fills or heals an athanor (`Sanctum.Provisioning`)
   # takes the same row; the lease is what a successor waits out.
   defp provisioning do
     create table(:provisioning_claims, primary_key: false) do
@@ -274,7 +274,7 @@ defmodule Arca.Repo.Migrations.Baseline do
 
   defp identity do
     # A session is a person's: what they may do is decided by their
-    # memberships, the estate's consents and the policy, never by a list
+    # memberships, the athanor's consents and the policy, never by a list
     # frozen at sign-in.
     create table(:sessions, primary_key: false) do
       add :id, :string, primary_key: true
@@ -645,7 +645,7 @@ defmodule Arca.Repo.Migrations.Baseline do
   # ==========================================================================
 
   defp agents do
-    # The estate's agents as rows: an index of the `aqua/` tree, one row per
+    # The athanor's agents as rows: an index of the `aqua/` tree, one row per
     # soul or role, carrying the digest of the file's bytes (its revision)
     # and of its security-relevant subset (its capability).
     create table(:agents, primary_key: false) do
@@ -746,7 +746,7 @@ defmodule Arca.Repo.Migrations.Baseline do
     create index(:executions, [:athanor_id, :kind, :status])
 
     # The fence: one row per attempt at an execution.
-    # The estate standing an attempt was admitted under
+    # The athanor standing an attempt was admitted under
     # (`Prima.ExecutionGrant`): the athanor's `security_generation` its
     # root read, inherited unchanged by every child and successor. No
     # default: an attempt whose admission named no generation is not

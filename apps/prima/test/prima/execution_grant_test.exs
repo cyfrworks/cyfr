@@ -3,15 +3,15 @@
 
 defmodule Prima.ExecutionGrantTest do
   @moduledoc """
-  A grant names one estate and one positive generation of its standing,
-  and nothing else: no permission, no credential. A malformed estate id or
+  A grant names one athanor and one positive generation of its standing,
+  and nothing else: no permission, no credential. A malformed athanor id or
   generation is refused rather than coerced.
   """
   use ExUnit.Case, async: true
 
   alias Prima.ExecutionGrant
 
-  test "a grant is an estate and a positive generation" do
+  test "a grant is an athanor and a positive generation" do
     assert {:ok, %ExecutionGrant{athanor_id: "ath_a", generation: 1} = grant} =
              ExecutionGrant.new("ath_a", 1)
 
@@ -19,7 +19,7 @@ defmodule Prima.ExecutionGrantTest do
     assert {:ok, %ExecutionGrant{generation: 42}} = ExecutionGrant.new("ath_a", 42)
   end
 
-  test "a malformed estate or generation is refused" do
+  test "a malformed athanor or generation is refused" do
     for {athanor_id, generation} <- [
           {"", 1},
           {nil, 1},

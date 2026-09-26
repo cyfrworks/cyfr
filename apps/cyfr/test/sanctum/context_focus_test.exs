@@ -209,8 +209,8 @@ defmodule Sanctum.ContextFocusTest do
 
   test "resolve_status gives an admin the capability, an :athanor scope, and their own athanor",
        %{ops: ops} do
-    {:ok, estate} = Athanors.create_group(ops, "Ops #{System.unique_integer([:positive])}")
-    {:ok, _} = Members.ensure(ops, scope: "athanor", athanor_id: estate.id)
+    {:ok, athanor} = Athanors.create_group(ops, "Ops #{System.unique_integer([:positive])}")
+    {:ok, _} = Members.ensure(ops, scope: "athanor", athanor_id: athanor.id)
 
     {:ok, resolved} =
       Sanctum.Tenancy.resolve_status(
@@ -220,7 +220,7 @@ defmodule Sanctum.ContextFocusTest do
 
     assert resolved.platform_admin
     assert resolved.scope == :athanor
-    assert resolved.athanor_id == estate.id
+    assert resolved.athanor_id == athanor.id
   end
 
   test "revalidate keeps a granted athanor and re-derives the capability", %{

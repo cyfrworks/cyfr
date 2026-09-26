@@ -69,7 +69,7 @@ defmodule Sanctum.SignInTest do
     assert {:ok, _} = SignIn.admitted(i, :admin)
     refute_receive {:bootstrap, _}
     # the platform row and the seat in their own athanor, and nothing else:
-    # no estate is shared server-wide for an operator to be seated in
+    # no athanor is shared server-wide for an operator to be seated in
     assert length(rows!(Members.list_by_user(user.id))) == 2
   end
 

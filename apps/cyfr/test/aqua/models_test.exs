@@ -3,7 +3,7 @@
 
 defmodule Aqua.ModelsTest do
   @moduledoc """
-  The model listing's refusals: the listing reads the estate's catalysts
+  The model listing's refusals: the listing reads the athanor's catalysts
   through the component domain's facade and refuses as it refuses, and a
   model status needs a context. The assistant's root roster is
   `Aqua.FacadeTest`'s.
@@ -34,12 +34,12 @@ defmodule Aqua.ModelsTest do
     assert {:error, :forbidden} = Aqua.models(Context.enter_guest(local))
   end
 
-  test "an estate whose component index is behind answers unavailable, not an empty listing" do
+  test "an athanor whose component index is behind answers unavailable, not an empty listing" do
     n = System.unique_integer([:positive])
     user = "local|idp|models-#{n}"
-    {:ok, estate} = Sanctum.Tenancy.Athanors.create_group(user, "Models #{n}")
-    {:ok, _} = Sanctum.Tenancy.Athanors.mark_provisioned(estate)
-    ctx = %{Sanctum.TestContext.local() | user_id: user, athanor_id: estate.id}
+    {:ok, athanor} = Sanctum.Tenancy.Athanors.create_group(user, "Models #{n}")
+    {:ok, _} = Sanctum.Tenancy.Athanors.mark_provisioned(athanor)
+    ctx = %{Sanctum.TestContext.local() | user_id: user, athanor_id: athanor.id}
 
     assert {:ok, %{"models" => %{}, "refs" => %{}, "errors" => %{}}} = Aqua.models(ctx)
 

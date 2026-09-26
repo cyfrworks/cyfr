@@ -3,13 +3,13 @@
 
 defmodule Aqua.ConsentStatus do
   @moduledoc """
-  Whether the consent this estate signed still covers what the shipped
+  Whether the consent this athanor signed still covers what the shipped
   source grants — for the AQUA soul and its roles, which are agent
-  sources, and for the estate's own formulas, which a person may bring.
+  sources, and for the athanor's own formulas, which a person may bring.
 
   The chain authority checks every in-chain call against the consent blob
-  the estate froze, not against the manifest on disk. A seed upgrade that
-  adds an action to `caps.tools` therefore leaves an estate consented
+  the athanor froze, not against the manifest on disk. A seed upgrade that
+  adds an action to `caps.tools` therefore leaves an athanor consented
   against the older manifest with a policy that names the action and a
   click that is "Denied by chain authority" — silently, until someone
   re-consents. This names the gap so a page can say so.
@@ -34,7 +34,7 @@ defmodule Aqua.ConsentStatus do
       declares.
     * `{:drifted, actions}` — the consent predates the source and lacks
       these actions.
-    * `:stale` — the consent no longer answers for the estate's closure
+    * `:stale` — the consent no longer answers for the athanor's closure
       at all, which is what installing a dependency does to it: a turn is
       refused `consent_required` until a member consents again.
     * `:absent` — there is no one consent to judge: no source row, no
@@ -48,7 +48,7 @@ defmodule Aqua.ConsentStatus do
   @typedoc """
   Why a state could not be read: a store that did not answer
   (`:unavailable`), a stored profile, consent or row that is damaged
-  (`:corrupt`), or a context that names no estate (`:forbidden`).
+  (`:corrupt`), or a context that names no athanor (`:forbidden`).
   """
   @type refusal :: :unavailable | :corrupt | :forbidden
 

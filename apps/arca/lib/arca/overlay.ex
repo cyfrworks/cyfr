@@ -14,7 +14,7 @@ defmodule Arca.Overlay do
   FROM: at provisioning (`materialize_shipped/2`), and when a person
   pulls a shipped version or restores a unit to what ships
   (`pull_shipped/2`). A release that ships newer versions changes nothing
-  in an estate; the newer units read as `:available` until pulled.
+  in an athanor; the newer units read as `:available` until pulled.
 
   ## Shadow units — the domain's grammar, not a depth
 
@@ -622,7 +622,7 @@ defmodule Arca.Overlay do
   droppings excluded, committed as any unit is (`commit_unit/4`) —
   replacing whatever stands at the path. What provisioning does for every
   shipped unit, what a pull of a shipped version does for one, and what a
-  restore does over an edited copy. Shipped media is not capped: an estate
+  restore does over an edited copy. Shipped media is not capped: an athanor
   must always be able to hold what the server ships.
 
   A unit the seed does not ship refuses as `{:error, :not_shipped}`; a
@@ -666,7 +666,7 @@ defmodule Arca.Overlay do
   @doc """
   Copy every shipped unit under `root` the athanor does not hold — the
   `:available` ones — leaving what it holds alone, edited or not. What
-  fills a fresh estate at provisioning and what heals an estate whose
+  fills a fresh athanor at provisioning and what heals an athanor whose
   tree lost a copy. Answers the units copied; stops at the first unit
   that cannot be copied.
   """

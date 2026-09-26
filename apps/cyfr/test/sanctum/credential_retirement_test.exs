@@ -45,7 +45,7 @@ defmodule Sanctum.CredentialRetirementTest do
     user
   end
 
-  # A person with their own estate and a seat in it, as sign-in leaves them.
+  # A person with their own athanor and a seat in it, as sign-in leaves them.
   defp owner!(label) do
     user = person!(label)
     n = uniq()
@@ -134,7 +134,7 @@ defmodule Sanctum.CredentialRetirementTest do
       assert {:error, :missing_generation} = Session.create(bare)
       assert {:error, :missing_generation} = ApiKey.create(bare, %{name: "unbound"})
 
-      # A person focused on an estate through no membership has no standing
+      # A person focused on an athanor through no membership has no standing
       # to issue there, whatever generations the binding names; unfocused,
       # the same binding issues.
       Sanctum.TestContext.athanor!()
@@ -231,7 +231,7 @@ defmodule Sanctum.CredentialRetirementTest do
       refute fresh.token == session.token
     end
 
-    test "a context read before an archive cannot issue in the estate after the reopen" do
+    test "a context read before an archive cannot issue in the athanor after the reopen" do
       {user, _own} = owner!("pre-archive")
       {:ok, group} = Athanors.create_group(user.id, "Pre-archive #{uniq()}")
       {_session, ctx} = signed_in!(user)
@@ -255,7 +255,7 @@ defmodule Sanctum.CredentialRetirementTest do
       assert {:ok, _} = ApiKey.rotate(refocused, fresh)
     end
 
-    test "a context whose seat was removed cannot issue in that estate" do
+    test "a context whose seat was removed cannot issue in that athanor" do
       {user, _own} = owner!("seatless")
       other = person!("stays")
       {:ok, group} = Athanors.create_group(user.id, "Seat #{uniq()}")
@@ -338,7 +338,7 @@ defmodule Sanctum.CredentialRetirementTest do
       assert {:ok, %{status: "archived"}} = Athanors.get(own.id)
     end
 
-    test "a frozen estate ended by a denial stays ended" do
+    test "a frozen athanor ended by a denial stays ended" do
       {user, _own} = owner!("frozen")
       other = person!("partner")
       {:ok, pair} = Athanors.create_pair(user.id, other.id)

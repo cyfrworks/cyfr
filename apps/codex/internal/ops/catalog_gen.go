@@ -623,7 +623,7 @@ func (args AthanorListArgs) MarshalJSON() ([]byte, error) {
 
 // AthanorPairArgs carries arguments for athanor.pair.
 type AthanorPairArgs struct {
-	// pair: the other person's user id — someone you already share an active estate with
+	// pair: the other person's user id — someone you already share an active athanor with
 	User string `json:"user"`
 }
 
@@ -2034,7 +2034,7 @@ func (args NotesKeepArgs) MarshalJSON() ([]byte, error) {
 
 // NotesListArgs carries arguments for notes.list.
 type NotesListArgs struct {
-	// Reads only: where to look — the estate in focus (default), your own athanor, or every estate you belong to. Writes take none; a note lands where you are.
+	// Reads only: where to look — the athanor in focus (default), your own athanor, or every athanor you belong to. Writes take none; a note lands where you are.
 	Scope Field[string] `json:"scope,omitzero"`
 	// list, search: how many to answer at most (default 100).
 	Limit Field[int] `json:"limit,omitzero"`
@@ -2076,9 +2076,9 @@ func (args NotesPinArgs) MarshalJSON() ([]byte, error) {
 type NotesReadArgs struct {
 	// What the note is called (keep, pin, read, forget)
 	Name string `json:"name"`
-	// Reads only: where to look — the estate in focus (default), your own athanor, or every estate you belong to. Writes take none; a note lands where you are.
+	// Reads only: where to look — the athanor in focus (default), your own athanor, or every athanor you belong to. Writes take none; a note lands where you are.
 	Scope Field[string] `json:"scope,omitzero"`
-	// read: the estate a search answered for the note — reads it there, under your own seat.
+	// read: the athanor a search answered for the note — reads it there, under your own seat.
 	AthanorId Field[string] `json:"athanor_id,omitzero"`
 }
 
@@ -2095,7 +2095,7 @@ func (args NotesReadArgs) MarshalJSON() ([]byte, error) {
 type NotesSearchArgs struct {
 	// search: text to find in a note's name or body
 	Query string `json:"query"`
-	// Reads only: where to look — the estate in focus (default), your own athanor, or every estate you belong to. Writes take none; a note lands where you are.
+	// Reads only: where to look — the athanor in focus (default), your own athanor, or every athanor you belong to. Writes take none; a note lands where you are.
 	Scope Field[string] `json:"scope,omitzero"`
 	// list, search: how many to answer at most (default 100).
 	Limit Field[int] `json:"limit,omitzero"`
@@ -3010,7 +3010,7 @@ type ScheduleCreateArgs struct {
 	ProfileId string `json:"profile_id"`
 	// Input data to pass to the component (create/update)
 	Input Field[map[string]any] `json:"input,omitzero"`
-	// Optional metadata (create/update). `keep_outcome: true` files every completed run's output as a note in the schedule's estate, named by `note_name` or, when unset, by the schedule's id; each run replaces the note before it.
+	// Optional metadata (create/update). `keep_outcome: true` files every completed run's output as a note in the schedule's athanor, named by `note_name` or, when unset, by the schedule's id; each run replaces the note before it.
 	Metadata Field[map[string]any] `json:"metadata,omitzero"`
 	// Whether a due occurrence runs while another of this schedule is still open (default forbid)
 	Concurrency Field[string] `json:"concurrency,omitzero"`
@@ -3129,7 +3129,7 @@ type ScheduleUpdateArgs struct {
 	ProfileId Field[string] `json:"profile_id,omitzero"`
 	// Input data to pass to the component (create/update)
 	Input Field[*map[string]any] `json:"input,omitzero"`
-	// Optional metadata (create/update). `keep_outcome: true` files every completed run's output as a note in the schedule's estate, named by `note_name` or, when unset, by the schedule's id; each run replaces the note before it.
+	// Optional metadata (create/update). `keep_outcome: true` files every completed run's output as a note in the schedule's athanor, named by `note_name` or, when unset, by the schedule's id; each run replaces the note before it.
 	Metadata Field[*map[string]any] `json:"metadata,omitzero"`
 	// Whether a due occurrence runs while another of this schedule is still open (default forbid)
 	Concurrency Field[string] `json:"concurrency,omitzero"`
@@ -3285,9 +3285,9 @@ type ThreadAloudArgs struct {
 	Thread string `json:"thread"`
 	// aloud: your own messages to copy, in any order — or your assistant's replies to you in your own athanor
 	MessageIds []string `json:"message_ids"`
-	// aloud: the estate to post into (you must be a member)
+	// aloud: the athanor to post into (you must be a member)
 	TargetAthanor string `json:"target_athanor"`
-	// aloud: the thread in that estate to post onto
+	// aloud: the thread in that athanor to post onto
 	TargetThread string `json:"target_thread"`
 }
 
@@ -3543,7 +3543,7 @@ type ThreadSendArgs struct {
 	Id Field[string] `json:"id,omitzero"`
 	// send: a model override for this turn
 	Model Field[string] `json:"model,omitzero"`
-	// send: the room the sender has open beside this thread (athanor_id, thread_id, title, estate); its newest lines are read for this one turn, never stored
+	// send: the room the sender has open beside this thread (athanor_id, thread_id, title, athanor); its newest lines are read for this one turn, never stored
 	Room Field[ThreadSendArgsRoom] `json:"room,omitzero"`
 }
 
@@ -3578,7 +3578,7 @@ type ThreadSendArgsRoom struct {
 	AthanorId string        `json:"athanor_id"`
 	ThreadId  string        `json:"thread_id"`
 	Title     Field[string] `json:"title,omitzero"`
-	Estate    Field[string] `json:"estate,omitzero"`
+	Athanor   Field[string] `json:"athanor,omitzero"`
 }
 
 // UnmarshalJSON refuses unknown fields and preserves required presence.

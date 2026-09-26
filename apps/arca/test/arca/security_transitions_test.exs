@@ -47,12 +47,12 @@ defmodule Arca.SecurityTransitions.Fixtures do
     user
   end
 
-  # A person with their own estate, seated in it.
+  # A person with their own athanor, seated in it.
   def owner! do
     user = person!()
     n = uniq()
 
-    {:ok, estate} =
+    {:ok, athanor} =
       Arca.Athanors.insert(server(), %{
         kind: "person",
         name: "Own #{n}",
@@ -61,9 +61,9 @@ defmodule Arca.SecurityTransitions.Fixtures do
         created_by: user.id
       })
 
-    {:ok, user} = Arca.Users.update(server(), user.id, %{personal_athanor_id: estate.id})
-    seat!(estate.id, user.id)
-    {user, estate}
+    {:ok, user} = Arca.Users.update(server(), user.id, %{personal_athanor_id: athanor.id})
+    seat!(athanor.id, user.id)
+    {user, athanor}
   end
 
   def group!(attrs \\ %{}) do
@@ -235,7 +235,7 @@ defmodule Arca.SecurityTransitionsTest do
       assert user(user.id).status == "denied"
       assert user(user.id).security_generation == 2
 
-      # Archived: the person's own estate, the frozen pair they sat in, the
+      # Archived: the person's own athanor, the frozen pair they sat in, the
       # open group they leave empty; the group a peer still holds stands.
       assert change.archived_athanor_ids == Enum.sort([own.id, pair.id, open.id])
       for id <- change.archived_athanor_ids, do: assert(athanor(id).status == "archived")
@@ -280,7 +280,7 @@ defmodule Arca.SecurityTransitionsTest do
       assert athanor(own.id).security_generation == 2
     end
 
-    test "a person with no own estate is denied; a pointer to no row is refused" do
+    test "a person with no own athanor is denied; a pointer to no row is refused" do
       plain = person!()
 
       assert {:ok, %{archived_athanor_ids: []}} =
@@ -339,7 +339,7 @@ defmodule Arca.SecurityTransitionsTest do
           {"api_keys", "UPDATE", "the key UPDATE"},
           {"memberships", "DELETE", "the membership DELETE"},
           {"thread_subscriptions", "DELETE", "the follow DELETE"},
-          {"athanors", "UPDATE", "the estate UPDATE"},
+          {"athanors", "UPDATE", "the athanor UPDATE"},
           {"users", "UPDATE", "the person UPDATE"}
         ] do
       test "#{label} failing rolls the denial back, and an allow then revives nothing" do
@@ -356,7 +356,7 @@ defmodule Arca.SecurityTransitionsTest do
                  SecurityTransitions.deny_user(server(), user.id, verify: admit())
 
         # Nothing committed: no denial with a live credential, and no
-        # half-archived estate.
+        # half-archived athanor.
         assert user(user.id).status == "active"
         assert user(user.id).security_generation == 1
         assert athanor(own.id).status == "active"
@@ -387,7 +387,7 @@ defmodule Arca.SecurityTransitionsTest do
   end
 
   describe "allow_user/3" do
-    test "restores standing, the own estate and a new seat in it, and nothing else" do
+    test "restores standing, the own athanor and a new seat in it, and nothing else" do
       {user, own} = owner!()
       group = group!()
       seat!(group.id, user.id)
@@ -414,7 +414,7 @@ defmodule Arca.SecurityTransitionsTest do
       assert change.revoked_session_hashes == [] and change.revoked_api_key_ids == []
     end
 
-    test "the caller's cap refusal leaves the person denied and the estate archived" do
+    test "the caller's cap refusal leaves the person denied and the athanor archived" do
       {user, own} = owner!()
       {:ok, _} = SecurityTransitions.deny_user(server(), user.id, verify: admit())
 
@@ -433,7 +433,7 @@ defmodule Arca.SecurityTransitionsTest do
   end
 
   describe "archive_athanor/3 and unarchive_athanor/3" do
-    test "an archive revokes the estate's keys with it; a reopen revokes none back" do
+    test "an archive revokes the athanor's keys with it; a reopen revokes none back" do
       group = group!()
       member = person!()
       seat!(group.id, member.id)
@@ -468,7 +468,7 @@ defmodule Arca.SecurityTransitionsTest do
                SecurityTransitions.unarchive_athanor(server(), group.id, verify: admit())
     end
 
-    test "an injected key UPDATE failure leaves the estate open and its keys live" do
+    test "an injected key UPDATE failure leaves the athanor open and its keys live" do
       group = group!()
       key = key!(group.id, person!().id)
       failure = fail_on!("api_keys", "UPDATE")
@@ -531,7 +531,7 @@ defmodule Arca.SecurityTransitionsLockTest do
   transition waiting behind another acts on what that one committed — on
   PostgreSQL by waiting on the row, on SQLite by waiting at the lock its transaction takes at entry
   — and never on a read taken before the wait; and a denial whose
-  membership set moves while it locks the estates runs again on the set
+  membership set moves while it locks the athanors runs again on the set
   as it now stands.
   """
 
@@ -601,15 +601,15 @@ defmodule Arca.SecurityTransitionsLockTest do
         Arca.Repo.delete_all(where(User, id: ^user_id))
       end)
 
-      remove_estates!([own_id])
+      remove_athanors!([own_id])
     end)
 
     {:ok, user_id: user_id, own_id: own_id}
   end
 
-  # The estates a case minted, named by the case before it runs anything,
+  # The athanors a case minted, named by the case before it runs anything,
   # with every row that names them.
-  defp remove_estates!(ids) do
+  defp remove_athanors!(ids) do
     unboxed(fn ->
       Arca.Repo.delete_all(from(m in Membership, where: m.athanor_id in ^ids))
       Arca.Repo.delete_all(from(k in ApiKey, where: k.athanor_id in ^ids))
@@ -833,7 +833,7 @@ defmodule Arca.SecurityTransitionsLockTest do
         end)
       end)
 
-    refute Task.yield(reopener, 300), "the reopen decided while the estate was held"
+    refute Task.yield(reopener, 300), "the reopen decided while the athanor was held"
     send(archiver.pid, :go)
     assert {:ok, %{transitioned: true}} = Task.await(archiver, 25_000)
     assert {:ok, reopened} = Task.await(reopener, 25_000)
@@ -842,7 +842,7 @@ defmodule Arca.SecurityTransitionsLockTest do
   end
 
   @tag :postgres
-  test "a membership taken while a denial locks the estates is on the set it runs again on", %{
+  test "a membership taken while a denial locks the athanors is on the set it runs again on", %{
     user_id: user_id
   } do
     if Arca.Repo.adapter() == Ecto.Adapters.SQLite3 do
@@ -851,10 +851,10 @@ defmodule Arca.SecurityTransitionsLockTest do
       :ok
     else
       pair_id = group!(%{roster: "frozen"})
-      on_exit(fn -> remove_estates!([pair_id]) end)
+      on_exit(fn -> remove_athanors!([pair_id]) end)
       test = self()
 
-      # Hold the person's own estate: the denial plans without the pair,
+      # Hold the person's own athanor: the denial plans without the pair,
       # then waits on this row while the pair's seat is written.
       holder =
         Task.async(fn ->
@@ -910,7 +910,7 @@ defmodule Arca.SecurityTransitionsLockTest do
       :ok
     else
       groups = for _ <- 1..3, do: group!()
-      on_exit(fn -> remove_estates!(groups) end)
+      on_exit(fn -> remove_athanors!(groups) end)
       {:ok, _} = seat(own_id, user_id)
       {:ok, agent} = Agent.start_link(fn -> groups end)
 
@@ -947,23 +947,23 @@ defmodule Arca.SecurityTransitionsLockTest do
     end
   end
 
-  test "a seat into an estate a denial is archiving waits for it and is refused", %{
+  test "a seat into an athanor a denial is archiving waits for it and is refused", %{
     user_id: user_id
   } do
     group_id = group!()
-    on_exit(fn -> remove_estates!([group_id]) end)
+    on_exit(fn -> remove_athanors!([group_id]) end)
     {:ok, _} = seat(group_id, user_id)
 
     other = Prima.UUID7.generate_id(Prima.PersonId.prefix())
     on_exit(fn -> unboxed(fn -> Arca.Repo.delete_all(where(Membership, user_id: ^other)) end) end)
 
     # The person is the group's last member, so the denial archives it; it
-    # holds the estate while its policy is asked.
+    # holds the athanor while its policy is asked.
     denier = paused(:deny_user, user_id)
     assert_receive {:holding, :deny_user}, 5_000
 
     seater = Task.async(fn -> seat(group_id, other) end)
-    refute Task.yield(seater, 300), "the seat was written while the denial held the estate"
+    refute Task.yield(seater, 300), "the seat was written while the denial held the athanor"
 
     send(denier.pid, :go)
     assert {:ok, change} = Task.await(denier, 25_000)

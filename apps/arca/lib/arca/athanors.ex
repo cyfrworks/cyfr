@@ -169,7 +169,7 @@ defmodule Arca.Athanors do
       is resolved against rows this transaction can see.
     * `:seats` — a one-arity function taking the inserted athanor, as
       the plain map the mint answers, and answering `:ok` or
-      `{:error, reason}`: the memberships an estate is born with.
+      `{:error, reason}`: the memberships an athanor is born with.
   """
   @spec mint(Prima.Actor.t(), keyword()) :: {:ok, map()} | {:error, term()}
   def mint(%Prima.Actor{scope: :platform}, opts) when is_list(opts) do
@@ -234,7 +234,7 @@ defmodule Arca.Athanors do
 
   def get_by_slug(%Prima.Actor{}, _kind, _slug), do: {:error, :cross_tenant}
 
-  @doc "The ACTIVE frozen estate with this canonical pair key, if there is one."
+  @doc "The ACTIVE frozen athanor with this canonical pair key, if there is one."
   @spec get_by_pair_key(Prima.Actor.t(), String.t()) ::
           {:ok, map()} | {:error, :not_found} | refusal()
   def get_by_pair_key(%Prima.Actor{scope: :platform}, key) when is_binary(key) do

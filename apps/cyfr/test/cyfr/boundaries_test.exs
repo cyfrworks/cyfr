@@ -360,7 +360,7 @@ defmodule Cyfr.BoundariesTest do
     end
 
     # Retention moved below the host with the doors. It is handed one actor
-    # per estate and decides nothing about which estates are active, so it
+    # per athanor and decides nothing about which athanors are active, so it
     # names neither a layer above Arca nor the athanor rows that say so.
     test "retention names nothing above Arca, and not the athanor rows" do
       named =
@@ -1795,7 +1795,7 @@ defmodule Cyfr.BoundariesTest do
       end
     end
 
-    test "the projection recovery's read across estates is rostered, and its query says why" do
+    test "the projection recovery's read across athanors is rostered, and its query says why" do
       assert %{modules: modules} =
                Enum.find(
                  Boundaries.system_responsibilities(),
@@ -1805,7 +1805,7 @@ defmodule Cyfr.BoundariesTest do
 
       assert "Compendium.ProjectionReconciler" in modules
 
-      # The one cross-estate query behind that check carries the marker the
+      # The one cross-athanor query behind that check carries the marker the
       # unscoped-query seam reads, and names the roster row.
       source =
         SourceTree.read(Path.join(root(), "apps/arca/lib/arca/storage_projection_changes.ex"))
@@ -1814,7 +1814,7 @@ defmodule Cyfr.BoundariesTest do
                ~r/# arca:unscoped-ok .*system_responsibilities\/0.*\n\s+defp behind\(/
     end
 
-    test "retention's walk across the estates is rostered, and its check refuses any other actor" do
+    test "retention's walk across the athanors is rostered, and its check refuses any other actor" do
       assert %{modules: ["Cyfr.RetentionScheduler"]} =
                Enum.find(
                  Boundaries.system_responsibilities(),
@@ -1824,11 +1824,11 @@ defmodule Cyfr.BoundariesTest do
 
       # Refused before any query: only the server's own actor, narrowed to
       # one athanor, is what the row names.
-      estate = %Prima.Actor{athanor_id: "ath_boundaries", scope: :athanor, system: true}
+      athanor = %Prima.Actor{athanor_id: "ath_boundaries", scope: :athanor, system: true}
 
-      assert {:error, :forbidden} = Arca.Retention.cleanup_athanor(%{estate | system: false})
-      assert {:error, :forbidden} = Arca.Retention.cleanup_athanor(%{estate | scope: :platform})
-      assert {:error, :no_athanor} = Arca.Retention.cleanup_athanor(%{estate | athanor_id: nil})
+      assert {:error, :forbidden} = Arca.Retention.cleanup_athanor(%{athanor | system: false})
+      assert {:error, :forbidden} = Arca.Retention.cleanup_athanor(%{athanor | scope: :platform})
+      assert {:error, :no_athanor} = Arca.Retention.cleanup_athanor(%{athanor | athanor_id: nil})
     end
 
     test "the host's decision purge is rostered, and its check refuses any other actor" do

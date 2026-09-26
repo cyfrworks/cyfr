@@ -39,7 +39,7 @@ defmodule Sanctum.TenancyMCPTest do
     Ecto.Adapters.SQL.Sandbox.mode(Arca.Repo, {:shared, self()})
 
     user = "github|https://github.com|tenancy_#{System.unique_integer([:positive])}"
-    {:ok, estate} = Athanors.create_group(user, "Tenancy #{System.unique_integer([:positive])}")
+    {:ok, athanor} = Athanors.create_group(user, "Tenancy #{System.unique_integer([:positive])}")
 
     ctx =
       Sanctum.Context.build(
@@ -47,16 +47,16 @@ defmodule Sanctum.TenancyMCPTest do
         email: "#{System.unique_integer([:positive])}@example.com",
         provider: "github",
         namespace: "tenancyns",
-        athanor_id: estate.id,
+        athanor_id: athanor.id,
         permissions: [:*],
         scope: :athanor,
         auth_method: :oidc,
         authenticated: true
       )
 
-    {:ok, _} = Members.ensure(user, scope: "athanor", athanor_id: estate.id)
+    {:ok, _} = Members.ensure(user, scope: "athanor", athanor_id: athanor.id)
 
-    {:ok, ctx: ctx, user: user, estate: estate}
+    {:ok, ctx: ctx, user: user, athanor: athanor}
   end
 
   defp group!(ctx, name \\ nil) do

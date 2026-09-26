@@ -439,7 +439,7 @@ defmodule Aqua.Providers.ThreadTest do
       assert Enum.any?(rows, &(&1.id == id))
     end
 
-    test "the estate's thread count is held to the operator's cap", %{ctx: ctx} do
+    test "the athanor's thread count is held to the operator's cap", %{ctx: ctx} do
       # The setup already minted one thread; a cap of one refuses the next.
       original = Application.get_env(:sanctum, :caps, [])
       Application.put_env(:sanctum, :caps, Keyword.put(original, :max_threads_per_athanor, 1))
@@ -448,7 +448,7 @@ defmodule Aqua.Providers.ThreadTest do
       assert {:error, {:limit_reached, :max_threads_per_athanor, 1}} =
                call(ctx, %{"action" => "create", "title" => "One too many"})
 
-      # Another estate's count is its own.
+      # Another athanor's count is its own.
       {:ok, room} =
         Sanctum.Tenancy.Athanors.create_group(
           ctx.user_id,
@@ -458,7 +458,7 @@ defmodule Aqua.Providers.ThreadTest do
       assert {:ok, %{id: _}} = call(%{ctx | athanor_id: room.id}, %{"action" => "create"})
     end
 
-    test "follow and unfollow are the caller's own rows, on this estate's threads only", %{
+    test "follow and unfollow are the caller's own rows, on this athanor's threads only", %{
       ctx: ctx,
       thread: thread
     } do
@@ -477,7 +477,7 @@ defmodule Aqua.Providers.ThreadTest do
 
       refute MapSet.member?(Subs.followed(Sanctum.Context.actor(ctx), ctx.user_id), thread.id)
 
-      # A thread in another estate is not followable from here.
+      # A thread in another athanor is not followable from here.
       elsewhere = %{ctx | athanor_id: "ath_elsewhere"}
 
       assert {:error, {:not_found, "thread", _}} =

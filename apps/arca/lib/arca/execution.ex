@@ -115,7 +115,7 @@ defmodule Arca.Execution do
   @doc """
   Whether `reason` is the refusal of one of `admit/2`'s barriers: an
   expired hold, a superseded step, a parent that ended, an occurrence not
-  claimed, a grant whose estate no longer stands at its generation, or an
+  claimed, a grant whose athanor no longer stands at its generation, or an
   admission that named no grant.
   """
   @spec barrier_refusal?(term()) :: boolean()
@@ -166,7 +166,7 @@ defmodule Arca.Execution do
   - `:grant` and `:verify` (required, `Arca.ExecutionStanding`) — the
     `Prima.ExecutionGrant` the attempt is stamped with and the caller's
     check over it, asked first in the transaction, before any row is
-    written or locked. A root's grant is its estate's standing read at
+    written or locked. A root's grant is its athanor's standing read at
     admission; a child's must be the stamp its parent's current attempt
     carries, and one that is not is refused `{:error, :not_standing}`.
     The check's refusal is answered as itself; an admission missing
@@ -215,7 +215,7 @@ defmodule Arca.Execution do
       |> Map.put(:current_attempt, attempt_id)
 
     Arca.Repo.locking_transaction(fn ->
-      # The estate's standing first, before any execution or attempt row
+      # The athanor's standing first, before any execution or attempt row
       # is written or locked; a child's grant is its parent's stamp.
       Arca.ExecutionStanding.verify!(grant, verify)
       inherits!(athanor_id, Map.get(attrs, :parent_execution_id), grant)
@@ -346,7 +346,7 @@ defmodule Arca.Execution do
   end
 
   # A child inherits its parent's stored grant unchanged: the stamp the
-  # parent's current attempt carries, never one read from the estate now.
+  # parent's current attempt carries, never one read from the athanor now.
   # arca:db-raise-ok inside the caller's transaction
   defp inherits!(_athanor_id, nil, _grant), do: :ok
 

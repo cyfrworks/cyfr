@@ -320,10 +320,10 @@ defmodule Prima.Refusal do
   defp row(:slot_not_held),
     do: {:not_owner, "This server does not hold its member slot — retry shortly"}
 
-  # The estate exists and is being filled. A turn waits for that; reads of
+  # The athanor exists and is being filled. A turn waits for that; reads of
   # the tree answer meanwhile.
   defp row(:not_provisioned),
-    do: {:unavailable, "This estate is still being prepared — retry shortly"}
+    do: {:unavailable, "This athanor is still being prepared — retry shortly"}
 
   # The runner's queue is full: the one `:busy`. A live peer holding the
   # thread is `:held_elsewhere`.
@@ -336,11 +336,11 @@ defmodule Prima.Refusal do
   defp row({:held_elsewhere, turn_id}) when is_binary(turn_id),
     do: {:conflict, "Another turn holds this thread — send again once it finishes"}
 
-  defp row(:not_member), do: {:forbidden, "Only a member of the estate can act in its threads"}
-  defp row(:archived), do: {:forbidden, "This estate is archived — nothing runs in it"}
+  defp row(:not_member), do: {:forbidden, "Only a member of the athanor can act in its threads"}
+  defp row(:archived), do: {:forbidden, "This athanor is archived — nothing runs in it"}
 
   defp row(:no_agent),
-    do: {:setup_required, "This estate has no assistant to address — reset its AQUA tree"}
+    do: {:setup_required, "This athanor has no assistant to address — reset its AQUA tree"}
 
   defp row(:execution_unavailable),
     do: {:unavailable, "The execution engine is unavailable — retry shortly"}
@@ -495,7 +495,7 @@ defmodule Prima.Refusal do
     do: {:unauthenticated, "The presented credential has expired — sign in again"}
 
   defp row(:no_athanor),
-    do: {:unauthenticated, "This credential names no estate — sign in to one"}
+    do: {:unauthenticated, "This credential names no athanor — sign in to one"}
 
   defp row(:missing_generation),
     do: {:unauthenticated, "This session cannot vouch for its standing — sign in again"}
@@ -621,10 +621,10 @@ defmodule Prima.Refusal do
 
   # A send's own limits.
   defp row(:storage_full),
-    do: {:rate_limited, "The estate's storage is full — free some space and retry"}
+    do: {:rate_limited, "The athanor's storage is full — free some space and retry"}
 
   defp row(:storage_unverifiable),
-    do: {:unavailable, "The estate's storage use could not be read — retry shortly"}
+    do: {:unavailable, "The athanor's storage use could not be read — retry shortly"}
 
   defp row(:context_too_long),
     do: {:invalid_argument, "The thread is longer than the model accepts"}

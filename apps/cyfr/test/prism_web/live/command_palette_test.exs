@@ -35,8 +35,8 @@ defmodule PrismWeb.CommandPaletteTest do
        %{conn: conn} do
     user = test_user()
     conn = log_in_user(conn, user)
-    estate = seated_athanor()
-    ctx = %{Sanctum.TestContext.local() | user_id: user.user_id, athanor_id: estate.id}
+    athanor = seated_athanor()
+    ctx = %{Sanctum.TestContext.local() | user_id: user.user_id, athanor_id: athanor.id}
 
     {:ok, _} =
       Compendium.Registry.publish_bytes(ctx, @wasm, %{

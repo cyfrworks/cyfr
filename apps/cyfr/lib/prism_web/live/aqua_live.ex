@@ -3,17 +3,17 @@
 
 defmodule PrismWeb.AquaLive do
   @moduledoc """
-  The estate's AQUA, at `/a/<athanor>/aqua`: the soul and the roles it
+  The athanor's AQUA, at `/a/<athanor>/aqua`: the soul and the roles it
   clones into — each with a prompt, a model and a capability allowlist,
-  the estate's own (`Compendium.AquaTemplate` seeds them), edited by any
+  the athanor's own (`Compendium.AquaTemplate` seeds them), edited by any
   member through the `aqua` tool — beside the page the soul reads first
   (`about-you` in a person's athanor, `about-us` in a group's, pinned
   through the `notes` tool), the notes kept here, and the scrolls it can
   read on demand. Every write from this page goes through the tool a
   card in chat goes through, so one gate answers for both.
 
-  The page shows the tree of the estate in focus and nothing else: a
-  person's own estate page edits their own tree, a group's page the
+  The page shows the tree of the athanor in focus and nothing else: a
+  person's own athanor page edits their own tree, a group's page the
   group's. The soul reads only the tree it lives in, so a role in
   someone's private closet is not the group's to offer.
 
@@ -57,7 +57,7 @@ defmodule PrismWeb.AquaLive do
       |> assign(:models_loaded, false)
       |> assign(:consent_sheet_ref, nil)
 
-    # Subscribe before the load asks whether the estate is ready: a fill
+    # Subscribe before the load asks whether the athanor is ready: a fill
     # that finishes in between must still reach this page.
     if connected?(socket) and socket.assigns[:context] do
       actor = Sanctum.Context.actor(socket.assigns.context)
@@ -111,7 +111,7 @@ defmodule PrismWeb.AquaLive do
   def handle_info({:catalyst_installed, tag, ref, result}, socket),
     do: CyfrWeb.ContextGuard.deliver(socket, tag, &installed(&1, ref, result))
 
-  # The estate's row changed. A fill completing mints the consents the
+  # The athanor's row changed. A fill completing mints the consents the
   # page reports on, so it is read again.
   def handle_info(%Cyfr.Bus.Notify{kind: :athanor_changed}, socket) do
     if connected?(socket) and not socket.assigns.loading, do: send(self(), :load)
@@ -201,7 +201,7 @@ defmodule PrismWeb.AquaLive do
   defp load_section(socket, section) when section in [:about, :notes], do: load_notes(socket)
 
   # Every unit's provenance, keyed by its path in the tree: shipped and
-  # unedited, shipped but edited here, or the estate's own. What a card
+  # unedited, shipped but edited here, or the athanor's own. What a card
   # may offer — delete, revert, nothing — is read from this, never guessed
   # from a name.
   defp load_provenance(socket) do
@@ -263,17 +263,17 @@ defmodule PrismWeb.AquaLive do
         _many -> "#{length(missing)} actions the shipped manifest grants are"
       end
 
-    "This estate consented to an older #{short_ref(ref)}: #{count} not in its consent " <>
+    "This athanor consented to an older #{short_ref(ref)}: #{count} not in its consent " <>
       "(#{shown}#{rest}), so a card for one is denied on Approve until a member re-consents."
   end
 
   defp consent_warning(ref, :stale) do
-    "This estate's components changed since it consented — installing one does that — " <>
+    "This athanor's components changed since it consented — installing one does that — " <>
       "so #{short_ref(ref)} cannot run until a member consents again."
   end
 
   @doc """
-  What the estate's consent status says: one row per formula or agent
+  What the athanor's consent status says: one row per formula or agent
   whose consent no longer answers, each with its re-consent button, or —
   when the status could not be read — one line that says so and offers
   nothing to press, so an outage never reads as "all consents current".

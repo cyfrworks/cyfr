@@ -5,8 +5,8 @@ defmodule PrismWeb.AquaLive.RestoreComponent do
   @moduledoc """
   The shipped files: what the server brought, and the way back to it. Two
   restores, two confirms — the first reverts edited copies of what ships
-  and keeps what the estate made; the second also deletes every role and
-  scroll the estate made. Either changes what the roster and the scrolls
+  and keeps what the athanor made; the second also deletes every role and
+  scroll the athanor made. Either changes what the roster and the scrolls
   show, so both are asked of the page (`{:refresh, :agents}`,
   `{:refresh, :skills}`).
   """
@@ -22,8 +22,8 @@ defmodule PrismWeb.AquaLive.RestoreComponent do
   def handle_event("dismiss_flash", _params, socket), do: {:noreply, clear_flash(socket)}
 
   # Two restores, two confirms: the first reverts edited copies of what
-  # ships and keeps what the estate made; the second also deletes every
-  # role and scroll the estate made, so the tree is exactly the shipped
+  # ships and keeps what the athanor made; the second also deletes every
+  # role and scroll the athanor made, so the tree is exactly the shipped
   # set again. The tool answers what it reverted and what it kept, and
   # the page shows both lists rather than a bare "done".
   def handle_event("restore_shipped", _params, socket),
@@ -62,14 +62,14 @@ defmodule PrismWeb.AquaLive.RestoreComponent do
           <div>
             <h4 class="text-sm font-medium text-gray-200">Shipped files</h4>
             <p class="text-[11px] text-gray-500">
-              The soul, some roles and some scrolls ship with the server. Restoring puts an edited copy back to what shipped; roles and scrolls this estate made are kept.
+              The soul, some roles and some scrolls ship with the server. Restoring puts an edited copy back to what shipped; roles and scrolls this athanor made are kept.
             </p>
           </div>
           <button
             type="button"
             phx-click="restore_shipped"
             phx-target={@myself}
-            data-confirm="Restore the shipped files? Edited copies of the soul, the shipped roles and the shipped scrolls go back to what ships with the server. Roles and scrolls this estate made are kept."
+            data-confirm="Restore the shipped files? Edited copies of the soul, the shipped roles and the shipped scrolls go back to what ships with the server. Roles and scrolls this athanor made are kept."
             class="shrink-0 rounded border border-gray-700 px-3 py-1 text-xs text-gray-200 hover:bg-gray-800"
           >
             Restore shipped files
@@ -108,7 +108,7 @@ defmodule PrismWeb.AquaLive.RestoreComponent do
           <p :if={not @reset_result.all?} class="text-gray-500">
             Kept ({length(@reset_result.kept)}):
             <span :if={@reset_result.kept == []} class="text-gray-600">
-              nothing this estate made
+              nothing this athanor made
             </span>
             <code :for={path <- @reset_result.kept} class="font-mono text-gray-300 mr-2">{path}</code>
           </p>
@@ -116,16 +116,16 @@ defmodule PrismWeb.AquaLive.RestoreComponent do
         <div class="border-t border-gray-800 pt-3 flex items-center justify-between gap-3">
           <p class="text-[11px] text-gray-500">
             Or start over: revert every edited copy <em>and</em>
-            delete every role and scroll this estate made, so the tree is exactly what ships.
+            delete every role and scroll this athanor made, so the tree is exactly what ships.
           </p>
           <button
             type="button"
             phx-click="restore_all"
             phx-target={@myself}
-            data-confirm="Remove everything this estate made? Every edited copy reverts AND every role and scroll this estate made is deleted — the tree becomes exactly the shipped set. This cannot be undone."
+            data-confirm="Remove everything this athanor made? Every edited copy reverts AND every role and scroll this athanor made is deleted — the tree becomes exactly the shipped set. This cannot be undone."
             class="shrink-0 rounded px-3 py-1 text-xs text-red-300 hover:bg-red-900/40"
           >
-            Remove everything this estate made too
+            Remove everything this athanor made too
           </button>
         </div>
       </section>

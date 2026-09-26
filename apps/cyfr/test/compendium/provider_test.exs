@@ -112,7 +112,7 @@ defmodule Compendium.ProviderTest do
     original_base_path = Application.fetch_env!(:arca, :base_path)
     Application.put_env(:arca, :base_path, test_dir)
 
-    # The estate holds the shipped tree, as a fill leaves it; the fixture
+    # The athanor holds the shipped tree, as a fill leaves it; the fixture
     # then edits every shipped agent.
     :ok = Sanctum.TestContext.shipped!(Sanctum.TestContext.athanor_id())
     setup_aqua_dir()
@@ -1818,7 +1818,7 @@ defmodule Compendium.ProviderTest do
       refute Arca.exists?(Sanctum.Context.actor(ctx), ["aqua", "skills", "pdf", "SKILL.md"])
     end
 
-    test "skill_list and skill_get serve the scrolls, shipped and the estate's own", %{ctx: ctx} do
+    test "skill_list and skill_get serve the scrolls, shipped and the athanor's own", %{ctx: ctx} do
       # The shipped scroll is read in place from the seed.
       {:ok, shipped} = Provider.handle("aqua", ctx, %{"action" => "skill_list"})
       assert [%{name: "capability-acquisition", description: line}] = shipped.skills
@@ -1925,7 +1925,7 @@ defmodule Compendium.ProviderTest do
                })
     end
 
-    test "the shipped scroll is never deleted, edited or not; a reset restores it; the estate's own goes",
+    test "the shipped scroll is never deleted, edited or not; a reset restores it; the athanor's own goes",
          %{ctx: ctx} do
       assert {:error, {:invalid_argument, msg}} =
                Provider.handle("aqua", ctx, %{
@@ -1969,7 +1969,7 @@ defmodule Compendium.ProviderTest do
 
       assert back.content =~ "component(action: \"search\""
 
-      # Restoring again changes nothing and answers the same; the estate's
+      # Restoring again changes nothing and answers the same; the athanor's
       # own has nothing to restore to.
       {:ok, %{restored: "capability-acquisition"}} =
         Provider.handle("aqua", ctx, %{
@@ -1988,7 +1988,7 @@ defmodule Compendium.ProviderTest do
       assert {:error, {:invalid_argument, msg}} =
                Provider.handle("aqua", ctx, %{"action" => "skill_reset", "name" => "pdf"})
 
-      assert msg =~ "estate's own"
+      assert msg =~ "athanor's own"
 
       {:ok, %{deleted: "pdf"}} =
         Provider.handle("aqua", ctx, %{"action" => "skill_delete", "name" => "pdf"})

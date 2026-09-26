@@ -2,7 +2,7 @@
 # Copyright 2026 CYFR Works Inc.
 
 defmodule PrismWeb.AquaLiveTest do
-  # The AQUA page shows the tree of the estate in focus — a person's own
+  # The AQUA page shows the tree of the athanor in focus — a person's own
   # on their page, the group's on the group's — and every write lands
   # there through the `aqua` and `notes` tools. These drive the LiveView
   # itself: the AgentConfig-level test cannot catch a handler that reads
@@ -139,13 +139,13 @@ defmodule PrismWeb.AquaLiveTest do
     render(view)
   end
 
-  describe "the estate's page" do
+  describe "the athanor's page" do
     setup %{conn: conn} do
       user = test_user()
       conn = log_in_user(conn, user)
-      estate = seated_athanor()
-      ctx = %{Sanctum.TestContext.local() | user_id: user.user_id, athanor_id: estate.id}
-      {:ok, conn: conn, ctx: ctx, estate: estate}
+      athanor = seated_athanor()
+      ctx = %{Sanctum.TestContext.local() | user_id: user.user_id, athanor_id: athanor.id}
+      {:ok, conn: conn, ctx: ctx, athanor: athanor}
     end
 
     test "the soul offers no Delete; a shipped role is disabled and enabled from its card",
@@ -185,7 +185,7 @@ defmodule PrismWeb.AquaLiveTest do
       assert {:ok, %{"disabled" => false}} = get_agent(ctx, "planner")
     end
 
-    test "restoring the shipped files reverts an edited soul and keeps what the estate made",
+    test "restoring the shipped files reverts an edited soul and keeps what the athanor made",
          %{conn: conn, ctx: ctx} do
       {:ok, %{"title" => shipped_title}} = get_agent(ctx, "aqua")
 
@@ -209,7 +209,7 @@ defmodule PrismWeb.AquaLiveTest do
       assert has_element?(view, "#aqua-restore-result", "Kept (1)")
     end
 
-    test "removing everything the estate made deletes a member-made role too",
+    test "removing everything the athanor made deletes a member-made role too",
          %{conn: conn, ctx: ctx} do
       {:ok, _} =
         AgentConfig.call_aqua(ctx, %{"action" => "create", "name" => "scout", "content" => "# S"})
@@ -281,8 +281,8 @@ defmodule PrismWeb.AquaLiveTest do
 
     test "the pinned page is written from the page and is what the soul reads",
          %{conn: conn, ctx: ctx} do
-      # The estate here is the person's own, so its one pinned page is
-      # `about-you`; a shared estate's is `about-us`.
+      # The athanor here is the person's own, so its one pinned page is
+      # `about-you`; a shared athanor's is `about-us`.
       {view, html} = mount_athanor(conn, "/aqua")
       assert html =~ "About you"
       assert html =~ "Nothing pinned yet."
@@ -471,7 +471,7 @@ defmodule PrismWeb.AquaLiveTest do
       assert {:ok, %{"content" => "# PDF forms\nUse qpdf."}} =
                AgentConfig.call_aqua(ctx, %{"action" => "skill_get", "name" => "pdf-forms"})
 
-      # The estate's own scroll is deleted, with the verb spelled as such.
+      # The athanor's own scroll is deleted, with the verb spelled as such.
       assert has_element?(view, "#aqua-scroll-open button[phx-click=skill_delete]", "Delete")
 
       view
@@ -511,7 +511,7 @@ defmodule PrismWeb.AquaLiveTest do
       assert has_element?(view, "form[phx-submit=editor_create_role]")
     end
 
-    test "a catalyst the estate does not hold is offered an Install, which refuses without a registry",
+    test "a catalyst the athanor does not hold is offered an Install, which refuses without a registry",
          %{conn: conn, ctx: ctx} do
       # The soul names a model catalyst nothing here holds: the page says so
       # and offers to fetch it, rather than leaving a dead end.
@@ -643,12 +643,12 @@ defmodule PrismWeb.AquaLiveTest do
 
     test "a key bound from the page drops the kept catalogue, so the picker is read again",
          %{conn: conn, ctx: ctx} do
-      estate = seated_athanor()
+      athanor = seated_athanor()
 
       :ok =
-        PrismWeb.ModelCatalog.remember(estate.id, %{"models" => %{"kept" => ["kept-model-1"]}})
+        PrismWeb.ModelCatalog.remember(athanor.id, %{"models" => %{"kept" => ["kept-model-1"]}})
 
-      on_exit(fn -> PrismWeb.ModelCatalog.forget(estate.id) end)
+      on_exit(fn -> PrismWeb.ModelCatalog.forget(athanor.id) end)
 
       {view, html} = mount_athanor(conn, "/aqua")
       assert html =~ "kept-model-1"

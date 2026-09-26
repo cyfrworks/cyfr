@@ -19,7 +19,7 @@ defmodule PrismWeb.ChatRedirectLive do
     end
   end
 
-  # The estate is the path's, so a stray `a` in the query is dropped with
+  # The athanor is the path's, so a stray `a` in the query is dropped with
   # the route param; the rest rides along in a stable order, nested keys
   # included.
   defp chat_path(athanor, params) do

@@ -115,7 +115,7 @@ defmodule Sanctum.Session do
   where `generation_snapshot:` supplies one read from the rows
   (`Sanctum.Tenancy.generation_snapshot/2`), which only a test fixture
   building a context by hand does. `{:error, :unauthenticated}` is a
-  person, estate or membership that no longer stands.
+  person, athanor or membership that no longer stands.
 
   Returns a session map containing the token and identity fields.
   """
@@ -137,7 +137,7 @@ defmodule Sanctum.Session do
       end
 
     # A session carries no permission list: it is a person's, and what
-    # they may do is decided by their memberships, the estate's consents
+    # they may do is decided by their memberships, the athanor's consents
     # and the policy on every request — never by a bag frozen at sign-in.
     attrs = %{
       token_prefix: String.slice(token, 0, 8),

@@ -12,7 +12,7 @@ defmodule Aqua.Tape do
   `{:error, :superseded}`. The rows a person sees are broadcast on the
   thread's topic AFTER the transaction commits, as plain maps in
   `Cyfr.Bus.ThreadEvent`s of kind `:message`; approvals are also
-  announced to the estate (`Sanctum.Notify`). A
+  announced to the athanor (`Sanctum.Notify`). A
   guest-planed context writes here unchanged: the tape is a narrow
   interface, not a plane, and the tenant is the context's.
 
@@ -466,7 +466,7 @@ defmodule Aqua.Tape do
   # Approvals
   # ---------------------------------------------------------------------------
 
-  @doc "Open a card for a proposed step; the estate is told after commit."
+  @doc "Open a card for a proposed step; the athanor is told after commit."
   @spec open_approval(Context.t(), turn(), step(), map()) ::
           {:ok, %{approval: approval(), card: row()}} | {:error, term()}
   def open_approval(%Context{} = ctx, turn, step, attrs) when is_map(attrs) do
@@ -623,7 +623,7 @@ defmodule Aqua.Tape do
   def pending_approvals(%Context{} = ctx, turn),
     do: TurnStorage.pending_approvals(Sanctum.Context.actor(ctx), turn.id)
 
-  @doc "The estate's pending approvals past their expiry."
+  @doc "The athanor's pending approvals past their expiry."
   @spec expired_approvals(Context.t()) :: {:ok, [approval()]} | {:error, term()}
   def expired_approvals(%Context{} = ctx),
     do: TurnStorage.expired_approvals(Sanctum.Context.actor(ctx), DateTime.utc_now())

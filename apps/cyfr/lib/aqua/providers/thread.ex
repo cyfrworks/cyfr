@@ -39,7 +39,7 @@ defmodule Aqua.Providers.Thread do
       `:guest` context outright, and these actions declare
       `planes: [:external]` so they never appear in-chain. A running agent
       cannot read or post into threads — including other people's in
-      the same estate.
+      the same athanor.
     * **Surface.** Every action declares `consent: :interactive`, which the
       registry's dispatch gate holds to
       `Sanctum.Consent.Authz.authorize_interactive/1` — `:oidc` and nothing
@@ -62,7 +62,7 @@ defmodule Aqua.Providers.Thread do
   @behaviour Prima.Provider
 
   # The most lines one `aloud` may carry: each one copies bytes into the
-  # target estate, so a call moves a slice, never a thread.
+  # target athanor, so a call moves a slice, never a thread.
   @aloud_max 50
 
   alias Aqua.{Approvals, Runner, Tape}
@@ -189,10 +189,10 @@ defmodule Aqua.Providers.Thread do
                  Arg.new("athanor_id", :string, required: true),
                  Arg.new("thread_id", :string, required: true),
                  Arg.new("title", :string),
-                 Arg.new("estate", :string)
+                 Arg.new("athanor", :string)
                ]},
               description:
-                "send: the room the sender has open beside this thread (athanor_id, thread_id, title, estate); its newest lines are read for this one turn, never stored"
+                "send: the room the sender has open beside this thread (athanor_id, thread_id, title, athanor); its newest lines are read for this one turn, never stored"
             )
           ],
           kind: :write,
@@ -407,11 +407,11 @@ defmodule Aqua.Providers.Thread do
             ),
             Arg.new("target_athanor", :string,
               required: true,
-              description: "aloud: the estate to post into (you must be a member)"
+              description: "aloud: the athanor to post into (you must be a member)"
             ),
             Arg.new("target_thread", :string,
               required: true,
-              description: "aloud: the thread in that estate to post onto"
+              description: "aloud: the thread in that athanor to post onto"
             )
           ],
           kind: :write,
@@ -434,7 +434,7 @@ defmodule Aqua.Providers.Thread do
         )
       ],
       description:
-        "Talk to an agent: open or list threads, send a message, follow the reply, stop a turn, decide the approval cards a turn raises, follow or unfollow a thread, and say one of your own private lines aloud into an estate you belong to. Addressing: in an estate with one person every send starts a turn; with more than one, a send starts a turn only when it names one — @aqua for the estate's assistant, or @<role> for one of its roles. An unaddressed send is people talking: it persists and starts nothing (the result says running: false). A send may carry a pre-minted id with files attached under it, a model, an agent, the sender's own client id, and the room open beside the thread. Wraps the same runner and the same verbs the console drives, with the same gates — this is not a second way to run an agent.",
+        "Talk to an agent: open or list threads, send a message, follow the reply, stop a turn, decide the approval cards a turn raises, follow or unfollow a thread, and say one of your own private lines aloud into an athanor you belong to. Addressing: in an athanor with one person every send starts a turn; with more than one, a send starts a turn only when it names one — @aqua for the athanor's assistant, or @<role> for one of its roles. An unaddressed send is people talking: it persists and starts nothing (the result says running: false). A send may carry a pre-minted id with files attached under it, a model, an agent, the sender's own client id, and the room open beside the thread. Wraps the same runner and the same verbs the console drives, with the same gates — this is not a second way to run an agent.",
       title: "Threads"
     )
   end
@@ -777,7 +777,7 @@ defmodule Aqua.Providers.Thread do
   # Following is a person's sidebar and notify roster, never an ACL — and
   # never someone else's: the row is always the CALLER's, no `user_id`
   # argument exists on the wire. The tenant-scoped `get` proves the thread
-  # is the focused estate's before the row is written.
+  # is the focused athanor's before the row is written.
   defp act("follow", ctx, id, _args) do
     with {:ok, _thread} <- Arca.ThreadStorage.get(Sanctum.Context.actor(ctx), id),
          :ok <- Arca.ThreadSubscriptionStorage.follow(Sanctum.Context.actor(ctx), id, ctx.user_id) do
@@ -797,7 +797,7 @@ defmodule Aqua.Providers.Thread do
     end
   end
 
-  # Saying your own lines aloud into an estate you belong to. Everything
+  # Saying your own lines aloud into an athanor you belong to. Everything
   # that matters is decided in `Aqua.Aloud.post/5` — membership on both
   # sides, author-only, byte-copied attachments — this wraps it exactly as
   # every other action wraps the runner.
@@ -808,7 +808,7 @@ defmodule Aqua.Providers.Thread do
        })
        when is_list(ids) and is_binary(target_athanor) and is_binary(target_thread) do
     # Keep the direct domain entry bounded too: every selected message
-    # copies bytes into the target estate.
+    # copies bytes into the target athanor.
     cond do
       not Enum.all?(ids, &is_binary/1) ->
         {:error, {:invalid_argument, "aloud takes a list of message ids"}}
@@ -834,7 +834,7 @@ defmodule Aqua.Providers.Thread do
         {:ok, %{said_aloud: length(rows), target_thread: target_thread}}
 
       {:error, :not_a_member} ->
-        {:error, {:invalid_argument, "aloud reaches only estates you are a member of"}}
+        {:error, {:invalid_argument, "aloud reaches only athanors you are a member of"}}
 
       {:error, :not_the_author} ->
         {:error,

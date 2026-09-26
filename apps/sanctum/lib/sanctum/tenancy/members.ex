@@ -25,7 +25,7 @@ defmodule Sanctum.Tenancy.Members do
 
   The statements are `Arca.Members`'. What stays here is the deciding: who
   may be seated and on what proof, which cap bounds a roster, that a
-  frozen estate never gains a member, what a leave archives, and who is
+  frozen athanor never gains a member, what a leave archives, and who is
   told afterwards. A row inside one athanor is written and read as the
   server narrowed to that athanor; the rows that name no athanor, or that
   name a person across every athanor, run as the server itself.
@@ -53,7 +53,7 @@ defmodule Sanctum.Tenancy.Members do
     end
   end
 
-  # A frozen estate took its members at birth and never gains another —
+  # A frozen athanor took its members at birth and never gains another —
   # every writer of a membership row is held to that here, not only
   # `add/3`; the birth itself says so with `birth: true`
   # (`Sanctum.Tenancy.Athanors`).
@@ -232,11 +232,11 @@ defmodule Sanctum.Tenancy.Members do
 
   def add(%{kind: "person"}, _target, _added_by), do: {:error, :person_athanor}
 
-  # A frozen estate took its members at birth and never gains another —
+  # A frozen athanor took its members at birth and never gains another —
   # that is what makes a DM a DM. Guarded here, beside the person clause,
   # so BOTH the `user_id:` and `email:` arms are covered: a rule enforced
   # on one arm is a rule an invitation walks around. Growing the room is a
-  # different act — mint an open estate with the three of them, and the
+  # different act — mint an open athanor with the three of them, and the
   # pair stays as it was.
   def add(%{roster: "frozen"}, _target, _added_by), do: {:error, :frozen_roster}
 
@@ -455,7 +455,7 @@ defmodule Sanctum.Tenancy.Members do
   @doc """
   Announce the rows a committed denial removed, from the data it
   returned (`Arca.SecurityTransitions.deny_user/3`): the person hears
-  they left every estate they sat in, and every roster that lost a seat
+  they left every athanor they sat in, and every roster that lost a seat
   or an invitation is told.
   """
   @spec announce_removed(String.t(), map()) :: :ok
@@ -494,13 +494,13 @@ defmodule Sanctum.Tenancy.Members do
   def count_by_athanor(athanor_id), do: Arca.Members.count_active(in_athanor(athanor_id))
 
   @doc """
-  Whether two people currently sit together in at least one ACTIVE estate.
+  Whether two people currently sit together in at least one ACTIVE athanor.
 
   The DM reachability rule: a pair can be minted only with someone already
   in a room with you. This is what keeps `athanor.pair` from being a
   directory — a user id you cannot see on any members list is a user id you
   cannot pair with, and probing one answers exactly what probing an unknown
-  one does. No estate is shared server-wide, so two people who belong to no
+  one does. No athanor is shared server-wide, so two people who belong to no
   group together cannot reach each other at all; operators are no exception
   and add each other to a group to talk.
 
@@ -508,14 +508,14 @@ defmodule Sanctum.Tenancy.Members do
   and an archived room is not a room. Fails toward "no", like `solo?/1` —
   an unanswerable read must not open a door.
   """
-  @spec shared_estate?(String.t(), String.t()) :: boolean()
-  def shared_estate?(user_a, user_b) when is_binary(user_a) and is_binary(user_b),
-    do: match?({:ok, true}, Arca.Members.shared_estate?(server(), user_a, user_b))
+  @spec shared_athanor?(String.t(), String.t()) :: boolean()
+  def shared_athanor?(user_a, user_b) when is_binary(user_a) and is_binary(user_b),
+    do: match?({:ok, true}, Arca.Members.shared_athanor?(server(), user_a, user_b))
 
-  def shared_estate?(_, _), do: false
+  def shared_athanor?(_, _), do: false
 
   @doc """
-  Whether exactly one human is in this estate.
+  Whether exactly one human is in this athanor.
 
   Returns whether the athanor has a single human member. Used for implicit
   agent addressing and speaker prefixes in turn tasks.
@@ -547,7 +547,7 @@ defmodule Sanctum.Tenancy.Members do
   # before any query.
   defp in_athanor(id), do: %{Prima.Actor.system() | athanor_id: id, scope: :athanor}
 
-  # A frozen estate ends when ANYONE leaves, not when the last person does.
+  # A frozen athanor ends when ANYONE leaves, not when the last person does.
   # Waiting for empty would leave a one-member pair standing: a second You
   # that the person who stayed can still open, whose `pair_key` still
   # hashes both ids — so the two could never be paired again, because the

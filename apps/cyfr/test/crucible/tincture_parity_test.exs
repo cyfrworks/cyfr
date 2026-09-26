@@ -35,7 +35,7 @@ defmodule Crucible.TinctureParityTest do
     Arca.Cache.init()
     user = test_user()
     conn = log_in_user(conn, user)
-    estate = seated_athanor()
+    athanor = seated_athanor()
 
     base = Path.join(System.tmp_dir!(), "tincture_parity_#{System.unique_integer([:positive])}")
     keys = [cyfr: :opus_workers, arca: :base_path]
@@ -46,7 +46,7 @@ defmodule Crucible.TinctureParityTest do
       Sanctum.Context.build(
         user_id: user.user_id,
         namespace: user.namespace,
-        athanor_id: estate.id,
+        athanor_id: athanor.id,
         permissions: [:*],
         scope: :athanor,
         auth_method: :oidc,
@@ -54,7 +54,7 @@ defmodule Crucible.TinctureParityTest do
       )
 
     on_exit(fn ->
-      Prima.Slots.forgive_unreaped(Crucible.Slots, estate.id)
+      Prima.Slots.forgive_unreaped(Crucible.Slots, athanor.id)
       File.rm_rf(base)
 
       for {{app, key}, value} <- prev do
@@ -79,7 +79,7 @@ defmodule Crucible.TinctureParityTest do
      conn: conn,
      ctx: ctx,
      token: Plug.Conn.get_session(conn, PrismWeb.ConnCase.session_key()),
-     segment: Sanctum.Tenancy.Athanors.route_slug(estate)}
+     segment: Sanctum.Tenancy.Athanors.route_slug(athanor)}
   end
 
   # The tincture as the component store holds it (what the gate's handler

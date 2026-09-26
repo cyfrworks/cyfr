@@ -458,7 +458,7 @@ defmodule Aqua.ApprovalsTest do
   end
 
   describe "ttl_seconds/1" do
-    test "is the estate's setting in hours, else the configured default, never a bad value" do
+    test "is the athanor's setting in hours, else the configured default, never a bad value" do
       ctx = Sanctum.TestContext.local()
       assert Approvals.ttl_seconds(ctx) == 24 * 3600
 

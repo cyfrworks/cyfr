@@ -82,7 +82,7 @@ defmodule Crucible.Close do
   node's `max_response_size` or cannot be encoded closes the run failed. Answers the result — `%{status: :completed, output: masked,
   metadata: map}` — or `{:error, message}`. A cancel that closed the row
   first leaves the cancelled row standing; the result is still answered.
-  A run whose estate was archived while it ran is never answered as a
+  A run whose athanor was archived while it ran is never answered as a
   success: its completion is refused (`Crucible.Record.write_completed/1`),
   the row closes failed and the answer is `{:error, message}`.
   """
