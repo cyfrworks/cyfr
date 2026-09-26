@@ -39,10 +39,21 @@ scrubbed, the container's CPU flat).
   that runner there, the sibling, the release and the container
   untouched; without the `writable-cgroups=true` security option no runner
   starts at all (memory.py, whose cases these are).
+- A guest's outbound request connects only where the control plane pinned
+  it (`egress_pin`): the shipped `local.http` catalyst, under an authority
+  whose egress edge admits the `.test` hosts below, fetches a URL whose
+  host resolves nowhere, pinned to the host gateway, and reaches the
+  harness's own listener, the only address there is; a pin refused as
+  `denied`, `metadata` or `resolution` reaches the guest as the engine's
+  refusal and opens no connection. A stream and a redirect's next hop
+  across origin are not driven here, since no shipped guest makes either
+  to a URL a test chooses: `apps/opus/test/opus/http_handler_test.exs` and
+  the stream handler's boundary test cover them.
 
 Usage: tests/worker-image/runners.py IMAGE
 """
 
+import http.server
 import json
 import os
 import re
@@ -57,7 +68,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 import memory  # noqa: E402
 import worker_auth as auth  # noqa: E402
-from control_plane import DROP, ControlPlane  # noqa: E402
+from control_plane import DROP, ZERO_AUTHORITY, ControlPlane  # noqa: E402
 from stack import (  # noqa: E402
     HOME_ROOT, POOL_FIRST, POOL_LAST, ROOT, SERVICE, SERVICE_UID, SPAWNER_CAPS, Stack, StatusSampler, expect, run, wait_until,
 )
@@ -67,12 +78,24 @@ FIXTURES = {
     "echo": os.path.join(ROOT, "apps", "opus", "test", "support", "test_wasm", "echo.wasm"),
     "stub": os.path.join(ROOT, "apps", "cyfr", "test", "support", "test_wasm", "step_stub", "step_stub.wasm"),
     "probe": os.path.join(ROOT, "apps", "cyfr", "test", "integration", "opus", "support", "test_wasm", "nested_probe", "nested_probe.wasm"),
+    "web": os.path.join(ROOT, "seed", "components", "catalysts", "local", "http", "1.1.2", "catalyst.wasm"),
 }
 REFS = {
     "spin": "reagent:local.spin:0.1.0",
     "echo": "reagent:local.echo:0.1.0",
     "stub": "catalyst:local.step-stub:0.1.0",
     "probe": "formula:local.nested-probe:0.1.0",
+    "web": "catalyst:local.http:1.1.2",
+}
+# The hosts the egress case's guest asks for. `.test` names resolve
+# nowhere, so a connection to one reaches only the address pinned for it.
+EGRESS_HOSTS = {"fetch": "origin.test", "denied": "private.test", "metadata": "metadata.test", "resolution": "nothing.test"}
+# The authority of the egress case: the zero authority with an egress edge
+# admitting exactly those hosts over plain HTTP GET, so the engine's own
+# edge checks pass and every decision left is the pin's.
+EGRESS_AUTHORITY = {
+    **ZERO_AUTHORITY,
+    "resources": {"egress": {"domains": sorted(EGRESS_HOSTS.values()), "methods": ["GET"], "schemes": ["http"]}},
 }
 STUB_KEY = {"STUB_API_KEY": "sk-worker-image-test"}
 # A runner is a VM booting from nothing: its first attach takes seconds.
@@ -97,11 +120,13 @@ def prerequisites(image):
         with open(path, "rb") as f:
             WASM[name] = f.read()
     memory.prerequisites()
-    vectors = os.path.join(ROOT, "tests", "fixtures", "worker_auth.json")
-    if not os.path.isfile(vectors):
-        sys.exit(f"FAIL: prerequisite missing: {vectors}")
-    auth.check_vectors(vectors)
-    print("ok: the control plane reproduces every vector of tests/fixtures/worker_auth.json", flush=True)
+    fixtures = os.path.join(ROOT, "tests", "fixtures")
+    for name in ("worker_auth.json", "host_api.json", "worker_api.json"):
+        if not os.path.isfile(os.path.join(fixtures, name)):
+            sys.exit(f"FAIL: prerequisite missing: {os.path.join(fixtures, name)}")
+    auth.check_vectors(os.path.join(fixtures, "worker_auth.json"))
+    print("ok: the control plane reproduces every vector of tests/fixtures/worker_auth.json, host_api.json and worker_api.json",
+          flush=True)
 
 
 def ms(seconds):
@@ -155,6 +180,57 @@ def since(stack, plane, execution_id, t):
     return [r for r in plane.seen(None, execution_id) if r["t"] > t]
 
 
+class Origin:
+    """The harness's own HTTP listener, the one address a pin names: every
+    connection it accepts and every request it answers is recorded."""
+
+    def __init__(self):
+        origin = self
+        self.lock = threading.Lock()
+        self.connections = []
+        self.requests = []
+
+        class Handler(http.server.BaseHTTPRequestHandler):
+            protocol_version = "HTTP/1.1"
+
+            def log_message(self, *args):
+                pass
+
+            def setup(self):
+                super().setup()
+                with origin.lock:
+                    origin.connections.append(self.client_address[0])
+
+            def do_GET(self):
+                with origin.lock:
+                    origin.requests.append({"path": self.path, "host": self.headers.get("host"),
+                                            "authorization": self.headers.get("authorization")})
+                body = b"pinned"
+                self.send_response(200)
+                self.send_header("content-type", "text/plain")
+                self.send_header("content-length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+
+        class Server(http.server.ThreadingHTTPServer):
+            daemon_threads = True
+            allow_reuse_address = True
+
+        self.server = Server(("0.0.0.0", 0), Handler)
+        self.port = self.server.server_address[1]
+        self.thread = threading.Thread(target=self.server.serve_forever, kwargs={"poll_interval": 0.05}, daemon=True)
+        self.thread.start()
+
+    def seen(self):
+        with self.lock:
+            return list(self.connections), list(self.requests)
+
+    def stop(self):
+        self.server.shutdown()
+        self.server.server_close()
+        self.thread.join(5)
+
+
 # ---------------------------------------------------------------------------
 # The cases
 # ---------------------------------------------------------------------------
@@ -177,6 +253,58 @@ def test_process_model(stack):
            "the home root holds exactly the fresh runners' homes", {"homes": homes, "runners": runners})
     expect(all(r["cap_eff"] == "0000000000000000" for r in procs if r["uids"][0] in {x["uid"] for x in runners}),
            "a runner holds no capability", procs)
+
+
+def test_pinned_egress(stack, plane):
+    """A guest's outbound request goes where the control plane pinned it and
+    nowhere else, and a refused pin opens no connection."""
+    gateway = stack.host_gateway()
+    expect(gateway is not None, f"the container reaches this machine at {gateway}", stack.exec("getent ahostsv4 host.docker.internal").stdout)
+    origin = Origin()
+    plane.egress(EGRESS_HOSTS["fetch"], gateway)
+    plane.egress(EGRESS_HOSTS["denied"], "denied")
+    plane.egress(EGRESS_HOSTS["metadata"], "metadata")
+    # The resolution case's host is in no row: the plane resolves it to nothing.
+    refusals = {
+        "denied": "the egress policy refuses it",
+        "metadata": "metadata IP blocked",
+        "resolution": "DNS resolution failed",
+    }
+    try:
+        outputs = {}
+        for case, host in EGRESS_HOSTS.items():
+            url = f"http://{host}:{origin.port}/{case}"
+            attempt = plane.mint(stack.boot, "catalyst", REFS["web"], WASM["web"], {"operation": "fetch", "params": {"url": url}},
+                                 "ath_egress", 30_000, authority=EGRESS_AUTHORITY)
+            expect(stack.start(attempt)[1] == {"v": 1, "ok": True}, f"a guest fetching {url} starts")
+            closes = plane.wait_for(
+                lambda: [r for r in plane.seen(None, attempt["execution_id"]) if r["op"] in ("complete", "fail") and "answered" in r],
+                BOOT_S, f"the {case} attempt to close")
+            complete = closes[0]
+            expect(complete["op"] == "complete", f"{case}: the guest answered, and its attempt closed completed", complete)
+            pins = plane.seen("egress_pin", attempt["execution_id"])
+            expect(len(pins) == 1 and pins[0]["args"] == {"url": url, "purpose": "fetch"},
+                   f"{case}: the runner asked the control plane to pin {url}, once", pins)
+            outputs[case] = complete["args"]["outcome"]["output"]
+            if case == "fetch":
+                expect(pins[0]["answered"] == "ok", f"fetch: {host} was pinned to {gateway}", plane.pins[-1:])
+            else:
+                expect(pins[0]["answered"] == case, f"{case}: the control plane refused the pin as {case}", pins)
+
+        connections, requests = origin.seen()
+        fetched = outputs["fetch"]
+        expect(isinstance(fetched, dict) and fetched.get("status") == 200 and fetched.get("data", {}).get("body") == "pinned",
+               "fetch: the guest read the answer of the harness's listener", fetched)
+        expect(len(requests) == 1 and requests[0]["path"] == "/fetch" and requests[0]["host"] == f"{EGRESS_HOSTS['fetch']}:{origin.port}",
+               f"fetch: the listener answered one request, for {EGRESS_HOSTS['fetch']} as its Host header names it", requests)
+        expect(len(connections) == 1,
+               "the runner opened one connection in all, to the pinned address: no refused pin reached the network", connections)
+        for case, sentence in refusals.items():
+            output = outputs[case]
+            message = (output.get("error") or {}).get("message", "") if isinstance(output, dict) else ""
+            expect(sentence in message, f"{case}: the guest was refused ({message})", output)
+    finally:
+        origin.stop()
 
 
 def test_spinning_guest_killed_at_bound(stack, plane):
@@ -499,6 +627,7 @@ def main(image):
         stack.up()
         print(f"the service runs boot {stack.boot} with a pool of {stack.pool_size}, watchdog grace {stack.watchdog_grace_ms} ms, release grace {stack.release_grace_ms} ms", flush=True)
         test_process_model(stack)
+        test_pinned_egress(stack, plane)
         test_spinning_guest_killed_at_bound(stack, plane)
         test_sibling_survives(stack, plane)
         test_tainted_never_reassigned(stack, plane)

@@ -590,6 +590,31 @@ defmodule Cyfr.DocsDriftTest do
     end
   end
 
+  # A pin the control plane refuses reaches the guest as one of the
+  # engine's error types (`Opus.Egress`), and the fetch interface's error
+  # list in the component guide names every one.
+  test "component-guide's fetch error types name every type a refused pin reaches the guest as" do
+    answered =
+      @repo_root
+      |> Path.join("apps/opus/lib/opus/egress.ex")
+      |> File.read!()
+      |> then(&Regex.scan(~r/\{:(?:refused|error), :([a-z_]+),/, &1, capture: :all_but_first))
+      |> List.flatten()
+      |> Enum.uniq()
+
+    assert "redirect_credentials" in answered and "private_ip_blocked" in answered
+
+    guide = File.read!(Path.join(@repo_root, "component-guide.md"))
+
+    [_, types] =
+      Regex.run(~r/^### `cyfr:http\/fetch`.*?^Error: `\{"error": \{"type": "([a-z_|]+)"/ms, guide)
+
+    documented = String.split(types, "|")
+
+    assert answered -- documented == [],
+           "component-guide.md's fetch error types lack #{inspect(answered -- documented)}"
+  end
+
   test "the guides' tincture-block keys are ones the code actually reads" do
     # Documented tincture keys must match validator and consumer support.
     documented_only = ~w(sandbox)

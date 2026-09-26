@@ -8,6 +8,23 @@ key, its sealed body opened and its answer sealed back; a worker service's
 plain report under the service's dispatch key) under the tests' own root,
 recorded with its time, and answered from a script.
 
+The wire is versioned (`Prima.WorkerWire`): every body and answer this
+plane writes carries `"v": 1` first; a header at another version is
+answered `401 {"v":1,"error":"unknown_version"}` before its body is read,
+on a connection closed with the body unread; and a body that opens without
+`v`, or at another version, is answered `400` `unknown_version` before its
+`op` is read. Every other header refusal is `401 lost`, as CYFR answers it.
+
+A guest's outbound target is an `egress_pin` host call, answered from a
+table the test sets (`egress`): a host pinned to an address, as a
+`Prima.PinnedTarget` naming the URL's own scheme, host and port, or
+refused by name (`denied`, `metadata`, `resolution`,
+`redirect_credentials`); a host the table does not name does not resolve.
+A `redirect` names, as `from`, a pin this plane answered the same attempt
+within two windows, and keeps its scheme and host, or it is
+`redirect_credentials`, as CYFR decides it. Every pin answered is kept
+(`pins`).
+
 `mint` makes an attempt as CYFR would — its keys, a signed assignment, the
 keys sealed for the worker service, the artifact the runner fetches by the
 assignment's digest and the vault fields its attach answers — and `start`,
@@ -24,6 +41,7 @@ opens it again on the same port.
 import base64
 import http.server
 import json
+import secrets as random
 import socket
 import threading
 import time
@@ -71,6 +89,13 @@ class ControlPlane:
         self.artifacts = {}
         self.secrets = {}
         self.connections = set()
+        # What `egress_pin` answers, by (host, execution_id or None): an IP
+        # literal, or a refusal name.
+        self.egress_table = {}
+        # Every pin answered, oldest first, and the pins a redirect may
+        # follow, by (attempt, id): (host, scheme, keep_until).
+        self.pins = []
+        self.pinned = {}
         self.server = None
         self.thread = None
         self.epoch = time.monotonic()
@@ -150,6 +175,16 @@ class ControlPlane:
         with self.lock:
             self.scripts.pop((op, execution_id), None)
 
+    def egress(self, host, answer, execution_id=None):
+        """What `egress_pin` answers for a URL whose host is `host` (lowercase,
+        an IPv6 literal in brackets): an IP literal the URL is pinned to, or
+        one of `denied`, `metadata`, `resolution`, `redirect_credentials`;
+        for `execution_id`'s calls, or for every call when None."""
+        if answer not in auth.PIN_REFUSALS:
+            auth.ipaddress.ip_address(answer)
+        with self.lock:
+            self.egress_table[(host.lower(), execution_id)] = answer
+
     def seen(self, op=None, execution_id=None):
         """The recorded requests, oldest first, filtered by op and execution."""
         with self.lock:
@@ -196,36 +231,51 @@ class ControlPlane:
     def handle(self, handler):
         now = auth.now_ms()
         path = handler.path
-        length = int(handler.headers.get("content-length") or 0)
-        body = handler.rfile.read(length) if length else b""
-        header = handler.headers.get("x-cyfr-auth")
         op = path[len("/host/v1/") :] if path.startswith("/host/v1/") else None
         if op is None:
-            return self.answer_plain(handler, 404, {"error": "not_found"})
+            return self.refuse(handler, 404, "not_found")
+        headers = handler.headers.get_all("x-cyfr-auth") or []
+        header = headers[0] if len(headers) == 1 else None
+
+        # Everything the header alone decides is refused before the body is
+        # read, on a connection closed with the body unread.
+        if op == "runner_exited":
+            verified, refusal = auth.verify_report_header(self.root, header, now)
+        else:
+            verified, refusal = auth.verify_host_call_header(self.root, header, now, self.generation, self.member)
+        if refusal:
+            self.record({"op": op, "refused": refusal})
+            return self.refuse(handler, 401, "unknown_version" if refusal == "unknown_version" else "lost")
+        caller, body_hash = verified
+        length = int(handler.headers.get("content-length") or 0)
+        body = handler.rfile.read(length) if length else b""
+        if not auth.verify_body(body_hash, body):
+            self.record({"op": op, "refused": "bad_mac"})
+            return self.refuse(handler, 401, "lost")
 
         if op == "runner_exited":
-            report, refusal = auth.verify_report(self.root, header, body, now)
+            args, refusal = auth.read_body(op, body)
             if refusal:
                 self.record({"op": op, "refused": refusal})
-                return self.answer_plain(handler, 401, {"error": "lost"})
-            args = self.args(body, op)
-            entry = {"op": op, "report": report, "args": args, "attempts": args.get("attempts", [])}
+                return self.refuse(handler, 400, refusal)
+            entry = {"op": op, "report": caller, "args": args, "attempts": args.get("attempts", [])}
             self.record(entry)
-            answer = self.encode(self.answer_for(op, args, report, entry))
+            answer = self.encode(self.answer_for(op, args, caller, entry))
             entry["answered"] = "ok" if "ok" in answer else answer.get("error")
             entry["answered_t"] = self.elapsed()
             return self.answer_plain(handler, 200, answer)
 
-        call, refusal = auth.verify_host_call(self.root, header, body, now, self.generation, self.member)
-        if refusal:
-            self.record({"op": op, "refused": refusal})
-            return self.answer_plain(handler, 401, {"error": "lost"})
+        call = caller
         seal_key = auth.attempt_seal_key(self.root, call)
-        plain = auth.open_call(seal_key, "body", call, body.decode())
+        plain = auth.open_call(seal_key, "body", call, body.decode(errors="replace"))
         if plain is None:
             self.record({"op": op, "refused": "unsealable", "execution_id": call["execution_id"]})
-            return self.answer_plain(handler, 401, {"error": "lost"})
-        args = self.args(plain, op)
+            return self.refuse(handler, 401, "lost")
+        # The version is read before the operation.
+        args, refusal = auth.read_body(op, plain)
+        if refusal:
+            self.record({"op": op, "refused": refusal, "execution_id": call["execution_id"]})
+            return self.refuse(handler, 400, refusal)
         entry = {"op": op, "caller": call, "args": args, "execution_id": call["execution_id"], "runner": call["runner"]}
         self.record(entry)
         answer = self.answer_for(op, args, call, entry)
@@ -249,16 +299,6 @@ class ControlPlane:
         except (BrokenPipeError, ConnectionResetError, OSError) as error:
             entry["answered"] = f"unread: {type(error).__name__}"
         return None
-
-    @staticmethod
-    def args(body, op):
-        try:
-            decoded = json.loads(body)
-        except ValueError:
-            return {}
-        if decoded.get("op") != op or not isinstance(decoded.get("args"), dict):
-            return {}
-        return decoded["args"]
 
     def answer_for(self, op, args, caller, entry):
         with self.lock:
@@ -286,26 +326,69 @@ class ControlPlane:
             if bytes_ is None:
                 return {"error": "not_found"}
             return {"ok": base64.b64encode(bytes_).decode()}
+        if op == "egress_pin":
+            return self.pin(args, caller)
         if op in ("take_rate", "record_denial", "release_child", "runner_exited"):
             return {"ok": True}
         return {"error": "guest_error", "type": "dispatch_error", "message": "The scripted control plane has no answer for this call."}
 
-    @staticmethod
-    def encode(answer):
-        answer = answer if isinstance(answer, dict) else {"ok": answer}
-        return {"v": 1, **answer}
+    def pin(self, args, caller):
+        """The `egress_pin` answer for `args` from the calling attempt, as CYFR
+        decides it: a redirect follows a pin this attempt was answered, to
+        the same scheme and host; then the table's answer for the host."""
+        request = auth.read_pin_request(args)
+        if request is None:
+            return {"error": "malformed"}
+        url, purpose, from_ = request
+        scheme, host, port = auth.parse_url(url)
+        now = auth.now_ms()
+        with self.lock:
+            if purpose == "redirect":
+                held = self.pinned.get((caller["attempt"], from_))
+                if held is None or held[2] < now or held[:2] != (host, scheme):
+                    return {"error": "redirect_credentials"}
+            answer = self.egress_table.get((host, caller["execution_id"]), self.egress_table.get((host, None), "resolution"))
+            if answer in auth.PIN_REFUSALS:
+                return {"error": answer}
+            pin = {
+                "expires_at": now + auth.WINDOW_MS,
+                "family": auth.ipaddress.ip_address(answer).version,
+                "host": host,
+                "id": "pin_" + auth.b64url(random.token_bytes(12)),
+                "ip": answer,
+                "port": port,
+                "scheme": scheme,
+            }
+            self.pinned[(caller["attempt"], pin["id"])] = (host, scheme, now + 2 * auth.WINDOW_MS)
+            self.pins.append({"purpose": purpose, "url": url, "from": from_, "execution_id": caller["execution_id"], **pin})
+        return {"ok": pin}
 
     @staticmethod
-    def answer_plain(handler, status, answer):
-        encoded = json.dumps({"v": 1, **answer}, separators=(",", ":")).encode()
+    def encode(answer):
+        """An answer as the wire writes it, `v` first."""
+        answer = answer if isinstance(answer, dict) else {"ok": answer}
+        return {"v": 1, **{k: v for k, v in answer.items() if k != "v"}}
+
+    @staticmethod
+    def answer_plain(handler, status, answer, close=False):
+        encoded = json.dumps(ControlPlane.encode(answer), separators=(",", ":")).encode()
         try:
             handler.send_response(status)
             handler.send_header("content-type", "application/json")
             handler.send_header("content-length", str(len(encoded)))
+            if close:
+                handler.send_header("connection", "close")
+                handler.close_connection = True
             handler.end_headers()
             handler.wfile.write(encoded)
         except (BrokenPipeError, ConnectionResetError, OSError):
             pass
+
+    @staticmethod
+    def refuse(handler, status, error):
+        """A listener's refusal, plain, on a connection it closes: whatever
+        of the body is unread is never read."""
+        ControlPlane.answer_plain(handler, status, {"error": error}, close=True)
 
     # ------------------------------------------------------------------
     # Minting
@@ -389,7 +472,7 @@ class ControlPlane:
     # ------------------------------------------------------------------
 
     def request(self, base_url, op, args, timeout=35):
-        body = json.dumps({"v": 1, "op": op, "args": args}, separators=(",", ":")).encode()
+        body = auth.request_body(op, args).encode()
         fields = {"service": self.service, "boot": self.boot, "ts": auth.now_ms(), "nonce": auth.nonce()}
         header = auth.request_header(self.dispatch_key, fields, body)
         request = urllib.request.Request(

@@ -710,8 +710,10 @@ Behavior: `cyfr pull` and `cyfr build compile` auto-fetch missing published depe
 ### `cyfr:http/fetch` — `request(json) -> string`
 Request: `{"method": "POST", "url": "...", "headers": {...}, "body": "..."}`
 Success: `{"status": 200, "headers": {...}, "body": "..."}`
-Error: `{"error": {"type": "invalid_json|invalid_request|domain_blocked|method_blocked|scheme_blocked|rate_limited|timeout|private_ip_blocked|dns_error|request_too_large|response_too_large|http_error", "message": "..."}}`
+Error: `{"error": {"type": "invalid_json|invalid_request|domain_blocked|method_blocked|scheme_blocked|rate_limited|timeout|private_ip_blocked|dns_error|redirect_credentials|request_too_large|response_too_large|http_error", "message": "..."}}`
 (`invalid_json`/`invalid_request` are the same malformed-input types every host interface uses; `http_error` is a transport failure after validation passed.)
+
+The engine resolves no name: CYFR resolves each request's host and pins the address it connects to under the run's consent, and a pin it refuses reaches the component as `private_ip_blocked` (a metadata address, or a private one the consent does not grant), `dns_error` (a host that resolves to nothing) or `redirect_credentials`. The host follows no redirect: a `3xx` answer is the component's, and its next request to the `Location` is the redirect's next hop, pinned from the request it came from. A hop to another scheme or host is refused as `redirect_credentials`, since it would carry the request's credentials to another origin, and the engine never sends `Authorization` or `Cookie` across origins.
 
 **Binary data** — base64 encode request body and/or request base64 response:
 ```json

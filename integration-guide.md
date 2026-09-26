@@ -1004,6 +1004,7 @@ The committed consent is the runtime capability — `ask ∩ operator choices �
 
 - **Domains** — exact (`"api.stripe.com"`) or wildcard (`"*.stripe.com"`); deny-by-default. Schemes default to https-only.
 - **Private IPs** — all private/reserved ranges blocked (SSRF prevention) unless the ask carried `egress.private_ips` and the operator approved it. `169.254.0.0/16` (link-local / cloud metadata) is always blocked.
+- **Addresses** — the engine resolves no name. CYFR resolves each outbound host and pins the address the engine connects to, under the execution's grant (`egress_pin`); `CYFR_PRIVATE_EGRESS_TARGETS` is CYFR's own and never applies to a component. The engine follows no redirect: a component's next request to a `Location` is the redirect's next hop, pinned from the request it came from, and a hop to another scheme or host is refused as `redirect_credentials`, so a request's credentials never cross origins.
 - **Storage** — granted `storage.paths` (directory prefixes end with `/`, must start with `data/` or `components/`) and `storage.actions`; empty = hard deny.
 - **Tools (formulas)** — granted patterns (`"execution.run"`, `"component.*"`, `"*"`) expand to the concrete action list at commit; a tool added to the platform later never widens an existing consent. Discovery via `{"tool": "tools", "action": "list"}`.
 - **Limits** — `timeout`, `rate_limit`, sizes, `max_concurrent_tasks`; the manifest's suggestions as adjusted by the operator, capped by the ceiling. Defaults when unasked: catalyst `"3m"`, formula `"5m"`, reagent `"1m"`, rate limit `{"requests": 100, "window": "1m"}`, memory 64 MB, request 1 MB, response 5 MB.
@@ -1218,6 +1219,16 @@ compose service). `cyfr init` mints the root into `.env` and derives the
 the host API's URL from `.env`; `.env.opus.example` documents the worker's
 own settings, and [Running a worker outside
 Compose](#running-a-worker-outside-compose) what compose sets for it.
+
+CYFR and its workers speak one versioned wire. Every body and answer
+carries `"v": 1` as its first member and every `x-cyfr-auth` header begins
+with the version token `v1`; a header at another version is refused
+`unknown_version` before its body is read, and a body without `v` or at
+another version is refused `unknown_version` before its operation is read,
+so a worker and a CYFR at different versions refuse each other's work
+rather than misread it. The engine resolves no name: a run's outbound
+address is the one CYFR pins for it under the run's grant (see [What a
+grant enforces](#what-a-grant-enforces)).
 
 | Variable | Default | Description |
 |----------|---------|-------------|

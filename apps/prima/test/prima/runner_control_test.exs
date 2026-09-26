@@ -4,8 +4,8 @@
 defmodule Prima.RunnerControlTest do
   @moduledoc """
   The runner control codec reproduces the shared vectors
-  (`tests/fixtures/runner_control.json`, which the keeper's suite reads
-  too): every valid frame encodes to exactly its line and decodes back to
+  (`tests/fixtures/runner_control.json`, which Opus's runner and service
+  suite reads too): every valid frame encodes to exactly its line and decodes back to
   its message, with or without its newline, and every invalid line is
   refused with its reason. An `assign` carries what `start` was given,
   its keys opened: the token reads, the input hashes to the token's

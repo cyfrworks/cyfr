@@ -14,8 +14,9 @@ defmodule Cyfr.EgressInventoryTest do
   it — the fail-closed direction.
 
   The pure `Prima.Network` policy validates a supplied address and constructs
-  pinned options. Sanctum and Opus own their DNS resolution; Sanctum.Egress
-  sends control-plane requests, and Opus owns the guest HTTP handlers.
+  pinned options. Sanctum owns DNS resolution; Sanctum.Egress sends
+  control-plane requests, and Opus owns the guest HTTP handlers, which
+  connect to the address the control plane pinned and resolve nothing.
 
   Resolving an outbound name is inventoried beside sending to it: every
   site that resolves a host (`getaddr`) or pins a URL through the control
@@ -87,12 +88,22 @@ defmodule Cyfr.EgressInventoryTest do
 
   @resolver_patterns ["getaddr(", "Sanctum.Network.pin("]
 
+  # The operator's private targets (`CYFR_PRIVATE_EGRESS_TARGETS`) are the
+  # control plane's own: its outbound callers reach them through
+  # `Sanctum.Network` under `private_policy: :operator`. What decides a
+  # guest's outbound target — the engine, and the execution domain whose
+  # `Crucible.Host.Egress` pins it under the attempt's authority — never
+  # names them.
+  @operator_targets [":operator", "private_egress_targets", "private_allowed?"]
+  @guest_side ~w(apps/opus/lib/**/*.ex apps/cyfr/lib/crucible/**/*.ex apps/cyfr/lib/crucible.ex)
+
   defp root, do: Path.expand("../../../..", __DIR__)
 
-  # The lib files whose code (docs and comment lines aside) names any of
-  # `patterns`, relative to the root.
-  defp sites(patterns) do
-    Prima.Test.SourceTree.files!(Path.join(root(), "apps/*/lib/**/*.ex"))
+  # The files under `globs` whose code (docs and comment lines aside) names
+  # any of `patterns`, relative to the root.
+  defp sites(patterns, globs \\ ["apps/*/lib/**/*.ex"]) do
+    globs
+    |> Enum.flat_map(&Prima.Test.SourceTree.files!(Path.join(root(), &1)))
     |> Enum.filter(fn path ->
       source =
         path
@@ -140,6 +151,15 @@ defmodule Cyfr.EgressInventoryTest do
            stale rows (the site no longer resolves a host):
              #{inspect(allowed -- found)}
            """
+  end
+
+  test "a guest's outbound target is never decided under the operator's private targets" do
+    assert sites(@operator_targets, @guest_side) == [],
+           "the guest side names the operator's private targets"
+
+    # The scan sees the control plane's own reader, so its silence above is
+    # a finding rather than a pattern that matches nothing.
+    assert "apps/sanctum/lib/sanctum/network.ex" in sites(@operator_targets)
   end
 
   test "the backends service's egress arm still exists where this inventory says" do
