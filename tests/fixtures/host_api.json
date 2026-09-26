@@ -1,5 +1,5 @@
 {
-  "comment": "The vectors pinning Prima.HostAPI as it crosses HTTP (Prima.WorkerWire): every call a runner makes and the report a worker service makes, sealed and signed with the keys of tests/fixtures/worker_auth.json, whose values keys repeats (root_hex is the root every other key derives from). Every consumer reproduces each call from its fields: body is the request body Prima.WorkerWire.request_body/2 writes, sealed as body_sealed in the body direction under the attempt seal key with body_iv_hex (Prima.WorkerAuth.seal_call/5); header is the host-call header over body_sealed, the bytes posted, under the attempt call key; answer is the answer written for it, sealed as answer_sealed in the answer direction with answer_iv_hex. Every body and answer carries v, the wire version, as its first member; a body whose v is absent or not version is unknown_version after it is opened and before its op is read, and an answer without it, or at another, is a lost answer. refusals are the plain answers each call may be given instead, with why. pre_body_refusals are headers a listener refuses before it reads a body, at now, for the member at standing, each answered at status with the refusal error names, in the order Prima.WorkerAuth documents: a version token other than v1, a header that does not parse, a timestamp outside window_ms, a MAC that is not the call key's, another generation, another member at the same generation, and a nonce the storage call (never retried) already presented for its attempt within the window. body_refusals are opened bodies posted at the renew route, refused with error. report is a worker service's runner_exited, plain under its dispatch key, answered plain; its cross_member names another member than the verifying one and is refused with error. retry_identity is one admit_child body sent twice, each time sealed and signed afresh under a new timestamp and nonce: the body, and so its child_key, is the same. egress_pin_cases are egress_pin calls by name, answered with a Prima.PinnedTarget (id, ip, family, scheme, port, host, expires_at) or refused as Prima.PinnedTarget.refusals/0 names; a redirect names the pin its hop came from as from.",
+  "comment": "The vectors pinning Prima.HostAPI as it crosses HTTP (Prima.WorkerWire): every call a runner makes and the report a worker service makes, sealed and signed with the keys of tests/fixtures/worker_auth.json, whose values keys repeats (root_hex is the root every other key derives from). Every consumer reproduces each call from its fields: body is the request body Prima.WorkerWire.request_body/2 writes, sealed as body_sealed in the body direction under the attempt seal key with body_iv_hex (Prima.WorkerAuth.seal_call/5); header is the host-call header over body_sealed, the bytes posted, under the attempt call key; answer is the answer written for it, sealed as answer_sealed in the answer direction with answer_iv_hex. Every body and answer carries v, the wire version, as its first member; a body whose v is absent or not version is unknown_version after it is opened and before its op is read, and an answer without it, or at another, is a lost answer. refusals are the plain answers each call may be given instead, with why. pre_body_refusals are headers a listener refuses before it reads a body, at now, for the member at standing, each answered at status with the refusal error names, in the order Prima.WorkerAuth documents: a version token other than v1, a header that does not parse, a timestamp outside window_ms, a MAC that is not the call key's, another generation, another member at the same generation, and a nonce the storage call (never retried) already presented for its attempt within the window. body_refusals are opened bodies posted at the renew route, refused with error. report is a worker service's runner_exited, plain under its dispatch key, answered plain; its cross_member names another member than the verifying one and is refused with error. retry_identity is one admit_child body sent twice, each time sealed and signed afresh under a new timestamp and nonce: the body, and so its child_key, is the same. egress_pin_cases are egress_pin calls by name, answered with a Prima.PinnedTarget (id, ip, family, scheme, port, host, expires_at) or refused as Prima.PinnedTarget.refusals/0 names; a redirect names the pin its hop came from as from. egress_policy_cases are egress_pin calls in the order one attempt makes them, under an authority whose egress.domains is domains, each answered as an egress_pin case is; expect names whether the URL's host matches domains (domain_allowed, Prima.Network.domain_allowed?/2) and, for a redirect, whether its URL has the origin of the URL whose pin it names as from (same_origin, Prima.Network.same_origin?/2: scheme, host and effective port). A pin is answered only where both hold; a first request outside domains is denied and a hop to another origin is redirect_credentials. headers_before are a hop's request headers as [name, value] pairs, and headers_after are what a hop to another origin keeps of them (Prima.Network.strip_credentials/1).",
   "version": 1,
   "auth_header": "x-cyfr-auth",
   "routes": {
@@ -962,6 +962,326 @@
       "answer_iv_hex": "93f5a12d1a494a9a5b36c204",
       "answer_sealed": "k_WhLRpJSppbNsIEgddnMckMdJ66q7FY7f8RmOLIH9MhmXDMe52c7mqJPmISipEJOgUami5_kVfpm2foIiqNk7zT",
       "refusals": []
+    }
+  ],
+  "egress_policy_cases": [
+    {
+      "name": "fetch",
+      "callback": "egress_pin",
+      "fields": {
+        "athanor_id": "ath_01a09fee-045b-770b-b745-a62792bb8798",
+        "execution_id": "exec_01a09fee-07cc-791f-a598-e7f90608c9e2",
+        "attempt": "att_01a09fee-0a31-7a2b-8f0c-3d1e5b7c9a42",
+        "fence": 2,
+        "generation": 7,
+        "service": "wrk_4f3c2a1e9d8b7c6a",
+        "boot": "boot_01a09fee-2e4f-7a5b-9c6d-7e8f9a0b1c2d",
+        "runner": "run_01a09fee-1c2d-7e3f-8a4b-5c6d7e8f9a0b",
+        "member": "cyfr@10.0.0.1#boot_01a09fee-5d7e-7f80-91a2-b3c4d5e6f708",
+        "ts": 1789305251300,
+        "nonce": "n_host_policy_fetch"
+      },
+      "body": "{\"v\":1,\"op\":\"egress_pin\",\"args\":{\"purpose\":\"fetch\",\"url\":\"https://api.example.test/v1/items\"}}",
+      "body_iv_hex": "b9d690e61d48298a9a50b2cd",
+      "body_sealed": "udaQ5h1IKYqaULLNeupLyly8938RO1rkpQzrg52qEVk-R4whwNepovLU22u9k6XEu3i-nwUG0KLKcdtWITAogvRL6ReKiw4IJWfnFx84iKv-J1bhiEVgUiw3JwvbZxgE8ZekRiXUgb7tllv0kO4Hj-bo4deTMkp1sbw",
+      "header": "v1 kind=call athanor_id=ath_01a09fee-045b-770b-b745-a62792bb8798 execution_id=exec_01a09fee-07cc-791f-a598-e7f90608c9e2 attempt=att_01a09fee-0a31-7a2b-8f0c-3d1e5b7c9a42 fence=2 generation=7 service=wrk_4f3c2a1e9d8b7c6a boot=boot_01a09fee-2e4f-7a5b-9c6d-7e8f9a0b1c2d runner=run_01a09fee-1c2d-7e3f-8a4b-5c6d7e8f9a0b member=cyfr@10.0.0.1#boot_01a09fee-5d7e-7f80-91a2-b3c4d5e6f708 ts=1789305251300 nonce=n_host_policy_fetch body=efb401f3d9d2c0aebb4b7f339e28e90084e043715dca11d05ac756a251c7f658 mac=FC2Ni84f8XC-IOSW0aPL7ruDcWTCST92ivcoCMr6wPA",
+      "answer": "{\"v\":1,\"ok\":{\"expires_at\":1789305281300,\"family\":4,\"host\":\"api.example.test\",\"id\":\"pin_Vp1\",\"ip\":\"203.0.113.10\",\"port\":443,\"scheme\":\"https\"}}",
+      "answer_iv_hex": "5406e009d4e7a615463a99d4",
+      "answer_sealed": "VAbgCdTnphVGOpnUnidPVjoB6pMbi_9Q4gaFTQis6eh_uXu2_HbG1NQkd4KHXt3fX81Vd7HhZz4eShzkzkulIwb9uboE95jek5fyojTXewVYIqU0rEGEKaJtQMB0PlIF8UN4k3JDSK-EfepkBd0lJHKJbRYVmE7dVP3ygfMPoH_ZNqv1Ji8QDqwVQm_ANfKKTQ1vUqkkQO2z1FOfV7U-wRaMwC4BchWLdg",
+      "refusals": [],
+      "domains": [
+        "api.example.test",
+        "*.cdn.example.test",
+        "2001:db8::20",
+        "2001:0db8:0:0:0:0:0:20"
+      ],
+      "expect": {
+        "domain_allowed": true
+      }
+    },
+    {
+      "name": "outside_domains",
+      "callback": "egress_pin",
+      "fields": {
+        "athanor_id": "ath_01a09fee-045b-770b-b745-a62792bb8798",
+        "execution_id": "exec_01a09fee-07cc-791f-a598-e7f90608c9e2",
+        "attempt": "att_01a09fee-0a31-7a2b-8f0c-3d1e5b7c9a42",
+        "fence": 2,
+        "generation": 7,
+        "service": "wrk_4f3c2a1e9d8b7c6a",
+        "boot": "boot_01a09fee-2e4f-7a5b-9c6d-7e8f9a0b1c2d",
+        "runner": "run_01a09fee-1c2d-7e3f-8a4b-5c6d7e8f9a0b",
+        "member": "cyfr@10.0.0.1#boot_01a09fee-5d7e-7f80-91a2-b3c4d5e6f708",
+        "ts": 1789305251310,
+        "nonce": "n_host_policy_outside_domains"
+      },
+      "body": "{\"v\":1,\"op\":\"egress_pin\",\"args\":{\"purpose\":\"fetch\",\"url\":\"https://outside.example.org/v1/items\"}}",
+      "body_iv_hex": "14319f2adf6c3fd26305eb40",
+      "body_sealed": "FDGfKt9sP9JjBetA8kskTmx0MvVKrEI4d3jg-a2uezn9MH4cOaFcye-xIaBgt5xwAkV6JclXGj8mpWGfAU-IX7luF3oL7LF7UbDn-PggFhdfkAEXjwrmj682xFPxb4FPaY1skK5uLU-Tl-E-knzEbza7EEWcTJnl4ARiaQc",
+      "header": "v1 kind=call athanor_id=ath_01a09fee-045b-770b-b745-a62792bb8798 execution_id=exec_01a09fee-07cc-791f-a598-e7f90608c9e2 attempt=att_01a09fee-0a31-7a2b-8f0c-3d1e5b7c9a42 fence=2 generation=7 service=wrk_4f3c2a1e9d8b7c6a boot=boot_01a09fee-2e4f-7a5b-9c6d-7e8f9a0b1c2d runner=run_01a09fee-1c2d-7e3f-8a4b-5c6d7e8f9a0b member=cyfr@10.0.0.1#boot_01a09fee-5d7e-7f80-91a2-b3c4d5e6f708 ts=1789305251310 nonce=n_host_policy_outside_domains body=fe6e95c07b1b17c83d81c15781af9cd86badf14a1cb1237064585430234c6670 mac=8wZ1_4Y_IXttJSCc5eZcOAdy6HJdHK02moK9T0nu37A",
+      "answer": "{\"v\":1,\"error\":\"denied\"}",
+      "answer_iv_hex": "eb3b52ab98b3828cbb771d93",
+      "answer_sealed": "6ztSq5izgoy7dx2TW6VgBYK7jlL-HqZEwuGEwz2zlOkPgCQRbPEfv_2bkVA4MfB4TUytpg",
+      "refusals": [],
+      "domains": [
+        "api.example.test",
+        "*.cdn.example.test",
+        "2001:db8::20",
+        "2001:0db8:0:0:0:0:0:20"
+      ],
+      "expect": {
+        "domain_allowed": false
+      }
+    },
+    {
+      "name": "redirect_other_port",
+      "callback": "egress_pin",
+      "fields": {
+        "athanor_id": "ath_01a09fee-045b-770b-b745-a62792bb8798",
+        "execution_id": "exec_01a09fee-07cc-791f-a598-e7f90608c9e2",
+        "attempt": "att_01a09fee-0a31-7a2b-8f0c-3d1e5b7c9a42",
+        "fence": 2,
+        "generation": 7,
+        "service": "wrk_4f3c2a1e9d8b7c6a",
+        "boot": "boot_01a09fee-2e4f-7a5b-9c6d-7e8f9a0b1c2d",
+        "runner": "run_01a09fee-1c2d-7e3f-8a4b-5c6d7e8f9a0b",
+        "member": "cyfr@10.0.0.1#boot_01a09fee-5d7e-7f80-91a2-b3c4d5e6f708",
+        "ts": 1789305251320,
+        "nonce": "n_host_policy_redirect_other_port"
+      },
+      "body": "{\"v\":1,\"op\":\"egress_pin\",\"args\":{\"from\":\"pin_Vp1\",\"purpose\":\"redirect\",\"url\":\"https://api.example.test:8443/v1/items/2\"}}",
+      "body_iv_hex": "d1be2e04d5d1c2625b3fc360",
+      "body_sealed": "0b4uBNXRwmJbP8NgN18hkdkaCyh3wLnhMsVlkDuPxlTYDQH16OUWnpWNrfPJhecbkC1rzBamF2ZoBOXv571Z_8Nv4a6OO7qgHMkTF_Ds7btnOTN37A8ViF2hEghsfY8geYp7b97UoV-f5Ja7XcFQ2FJmRoHSycqVKXZxQrR_VN0b0qUdiuSFV_rblLpzwJZ_jyCZcJw",
+      "header": "v1 kind=call athanor_id=ath_01a09fee-045b-770b-b745-a62792bb8798 execution_id=exec_01a09fee-07cc-791f-a598-e7f90608c9e2 attempt=att_01a09fee-0a31-7a2b-8f0c-3d1e5b7c9a42 fence=2 generation=7 service=wrk_4f3c2a1e9d8b7c6a boot=boot_01a09fee-2e4f-7a5b-9c6d-7e8f9a0b1c2d runner=run_01a09fee-1c2d-7e3f-8a4b-5c6d7e8f9a0b member=cyfr@10.0.0.1#boot_01a09fee-5d7e-7f80-91a2-b3c4d5e6f708 ts=1789305251320 nonce=n_host_policy_redirect_other_port body=ca6c3d067a30895f28f935096a6c838637dfc758f05b01bc40631b59332732de mac=plaFgmPooKsY_R7fo_ZMgdvfMagJo2JV9Wo7piDDKH8",
+      "answer": "{\"v\":1,\"error\":\"redirect_credentials\"}",
+      "answer_iv_hex": "e827ccac56be38d583a03654",
+      "answer_sealed": "6CfMrFa-ONWDoDZUZU76gdw1kQMMT7wTqKyGM3tQ7144oO3n9-0RgJjR1tKA3SNS4GCO5Ff6VrIX3IRkkI4aVMb2",
+      "refusals": [],
+      "domains": [
+        "api.example.test",
+        "*.cdn.example.test",
+        "2001:db8::20",
+        "2001:0db8:0:0:0:0:0:20"
+      ],
+      "expect": {
+        "domain_allowed": true,
+        "same_origin": false
+      }
+    },
+    {
+      "name": "redirect_default_port",
+      "callback": "egress_pin",
+      "fields": {
+        "athanor_id": "ath_01a09fee-045b-770b-b745-a62792bb8798",
+        "execution_id": "exec_01a09fee-07cc-791f-a598-e7f90608c9e2",
+        "attempt": "att_01a09fee-0a31-7a2b-8f0c-3d1e5b7c9a42",
+        "fence": 2,
+        "generation": 7,
+        "service": "wrk_4f3c2a1e9d8b7c6a",
+        "boot": "boot_01a09fee-2e4f-7a5b-9c6d-7e8f9a0b1c2d",
+        "runner": "run_01a09fee-1c2d-7e3f-8a4b-5c6d7e8f9a0b",
+        "member": "cyfr@10.0.0.1#boot_01a09fee-5d7e-7f80-91a2-b3c4d5e6f708",
+        "ts": 1789305251330,
+        "nonce": "n_host_policy_redirect_default_port"
+      },
+      "body": "{\"v\":1,\"op\":\"egress_pin\",\"args\":{\"from\":\"pin_Vp1\",\"purpose\":\"redirect\",\"url\":\"https://api.example.test:443/v1/items/3\"}}",
+      "body_iv_hex": "aabf3bf901bc34b8716cba35",
+      "body_sealed": "qr87-QG8NLhxbLo1QkPfE5yfVMcryXQLDX9ZD17sRi4hiT0jnIePsOP9XZberHf9tLyCM6mN3X3WcXlmAFMVbcssDM-Dh18lsdLY64HFfkODxdR3tefPxfSfdajV_hL-rZqUunz-P0h8FqBJepNRUAbV00rYt2T8XkpgJAzPJVJ-JSaXg3VQ_acEsZzUx947sz5dRg",
+      "header": "v1 kind=call athanor_id=ath_01a09fee-045b-770b-b745-a62792bb8798 execution_id=exec_01a09fee-07cc-791f-a598-e7f90608c9e2 attempt=att_01a09fee-0a31-7a2b-8f0c-3d1e5b7c9a42 fence=2 generation=7 service=wrk_4f3c2a1e9d8b7c6a boot=boot_01a09fee-2e4f-7a5b-9c6d-7e8f9a0b1c2d runner=run_01a09fee-1c2d-7e3f-8a4b-5c6d7e8f9a0b member=cyfr@10.0.0.1#boot_01a09fee-5d7e-7f80-91a2-b3c4d5e6f708 ts=1789305251330 nonce=n_host_policy_redirect_default_port body=638dca979268bb45bc528322fbef6204099991911ec1eddca0b6d3b13a3d7d6a mac=m25e70ZZGRyBfMp4gg3fMi6eCC-XWv5USa3cXwsoZ78",
+      "answer": "{\"v\":1,\"ok\":{\"expires_at\":1789305281330,\"family\":4,\"host\":\"api.example.test\",\"id\":\"pin_Vp2\",\"ip\":\"203.0.113.11\",\"port\":443,\"scheme\":\"https\"}}",
+      "answer_iv_hex": "20dcc039035512212f54702b",
+      "answer_sealed": "INzAOQNVEiEvVHAr5cylhwNcEYhp_kHz8WWZF1vLVpeZYmdm-rXNSwmG8mkzvqv0js_UHFa0jsaJALU6sJTxlV14NkxPyjvl4ERliBHpdnB3Km39zx9hSCBTuTYDE4RBgkNjfmTp6f5UFWUNmEnFe-KvtLga57y4ZK83GHWfmrlLzVjZYVg-RJ67Ofnf-y6pJsr-Gspo5l7-F2MRnJ_Wlv5bvuqBOJ_Prg",
+      "refusals": [],
+      "domains": [
+        "api.example.test",
+        "*.cdn.example.test",
+        "2001:db8::20",
+        "2001:0db8:0:0:0:0:0:20"
+      ],
+      "expect": {
+        "domain_allowed": true,
+        "same_origin": true
+      }
+    },
+    {
+      "name": "redirect_strip_credentials",
+      "callback": "egress_pin",
+      "fields": {
+        "athanor_id": "ath_01a09fee-045b-770b-b745-a62792bb8798",
+        "execution_id": "exec_01a09fee-07cc-791f-a598-e7f90608c9e2",
+        "attempt": "att_01a09fee-0a31-7a2b-8f0c-3d1e5b7c9a42",
+        "fence": 2,
+        "generation": 7,
+        "service": "wrk_4f3c2a1e9d8b7c6a",
+        "boot": "boot_01a09fee-2e4f-7a5b-9c6d-7e8f9a0b1c2d",
+        "runner": "run_01a09fee-1c2d-7e3f-8a4b-5c6d7e8f9a0b",
+        "member": "cyfr@10.0.0.1#boot_01a09fee-5d7e-7f80-91a2-b3c4d5e6f708",
+        "ts": 1789305251340,
+        "nonce": "n_host_policy_redirect_strip_credentials"
+      },
+      "body": "{\"v\":1,\"op\":\"egress_pin\",\"args\":{\"from\":\"pin_Vp1\",\"purpose\":\"redirect\",\"url\":\"https://static.cdn.example.test/v1/items/4\"}}",
+      "body_iv_hex": "997ad927cad898716e7c873b",
+      "body_sealed": "mXrZJ8rYmHFufIc7zX2JGvM9O-ozmYqgmjAfR9jY5cklJvgrf-yjBRl5B8i2e-he2qYPXVY8BJbTdGmOwiY7F7QE6YE7XDfeH85ReIYy_shEEEnTiOwNo0zWRfBnQN8DhXXdU71ozGEmVHDsQpbB-ROabiH1A-qrSQml1dcKIy5QQI99Ysse4nuNIwQvz3cv4ictiMKC5g",
+      "header": "v1 kind=call athanor_id=ath_01a09fee-045b-770b-b745-a62792bb8798 execution_id=exec_01a09fee-07cc-791f-a598-e7f90608c9e2 attempt=att_01a09fee-0a31-7a2b-8f0c-3d1e5b7c9a42 fence=2 generation=7 service=wrk_4f3c2a1e9d8b7c6a boot=boot_01a09fee-2e4f-7a5b-9c6d-7e8f9a0b1c2d runner=run_01a09fee-1c2d-7e3f-8a4b-5c6d7e8f9a0b member=cyfr@10.0.0.1#boot_01a09fee-5d7e-7f80-91a2-b3c4d5e6f708 ts=1789305251340 nonce=n_host_policy_redirect_strip_credentials body=f69b00d3ca78978c89f359997a4e260c1548af5d837177167f6ee726f61df6f9 mac=C_iEzuTHyF015KaMZnRoWJUn6TVr38t3CaQ3lUPrtgs",
+      "answer": "{\"v\":1,\"error\":\"redirect_credentials\"}",
+      "answer_iv_hex": "b260325467177f3288bf780c",
+      "answer_sealed": "smAyVGcXfzKIv3gMZMDS9nNevn1K2SxgjoDsrQjD_6j3-xdGERpoiolq2fZs8CCDTCDwKqX5qoYmklOFb6g5XVBI",
+      "refusals": [],
+      "domains": [
+        "api.example.test",
+        "*.cdn.example.test",
+        "2001:db8::20",
+        "2001:0db8:0:0:0:0:0:20"
+      ],
+      "expect": {
+        "domain_allowed": true,
+        "same_origin": false
+      },
+      "headers_before": [
+        [
+          "Accept",
+          "application/json"
+        ],
+        [
+          "Authorization",
+          "Bearer vector-not-a-credential"
+        ],
+        [
+          "Cookie",
+          "session=vector"
+        ],
+        [
+          "Proxy-Authorization",
+          "Basic dmVjdG9y"
+        ],
+        [
+          "X-API-Key",
+          "vector"
+        ],
+        [
+          "x-auth-token",
+          "vector"
+        ],
+        [
+          "X-Access-Token",
+          "vector"
+        ],
+        [
+          "X-CSRF-Token",
+          "vector"
+        ],
+        [
+          "X-Session-Token",
+          "vector"
+        ],
+        [
+          "X-Signing-KEY",
+          "vector"
+        ],
+        [
+          "X-Client-Secret",
+          "vector"
+        ],
+        [
+          "X-Monkey",
+          "kept"
+        ],
+        [
+          "X-Tokenizer",
+          "kept"
+        ],
+        [
+          "User-Agent",
+          "cyfr-vector"
+        ]
+      ],
+      "headers_after": [
+        [
+          "Accept",
+          "application/json"
+        ],
+        [
+          "X-Monkey",
+          "kept"
+        ],
+        [
+          "X-Tokenizer",
+          "kept"
+        ],
+        [
+          "User-Agent",
+          "cyfr-vector"
+        ]
+      ]
+    },
+    {
+      "name": "fetch_ipv6",
+      "callback": "egress_pin",
+      "fields": {
+        "athanor_id": "ath_01a09fee-045b-770b-b745-a62792bb8798",
+        "execution_id": "exec_01a09fee-07cc-791f-a598-e7f90608c9e2",
+        "attempt": "att_01a09fee-0a31-7a2b-8f0c-3d1e5b7c9a42",
+        "fence": 2,
+        "generation": 7,
+        "service": "wrk_4f3c2a1e9d8b7c6a",
+        "boot": "boot_01a09fee-2e4f-7a5b-9c6d-7e8f9a0b1c2d",
+        "runner": "run_01a09fee-1c2d-7e3f-8a4b-5c6d7e8f9a0b",
+        "member": "cyfr@10.0.0.1#boot_01a09fee-5d7e-7f80-91a2-b3c4d5e6f708",
+        "ts": 1789305251350,
+        "nonce": "n_host_policy_fetch_ipv6"
+      },
+      "body": "{\"v\":1,\"op\":\"egress_pin\",\"args\":{\"purpose\":\"stream\",\"url\":\"http://[2001:db8::20]:8080/events\"}}",
+      "body_iv_hex": "c44d49bf502516db4cb107c2",
+      "body_sealed": "xE1Jv1AlFttMsQfCHNdcgW6oiSEItxfhWaSXVIX4RESezzsu769YI8d3pDeOrDPEJ8BoD8rMSPOOO2ObiDKWMAzQ8TAezGasiHuwo6Mgu1MXM5pVxhW7V1BOjGwF64RAVm4NPSePsd8oIZYQKLJoDRCSdhUdE4SnD6by",
+      "header": "v1 kind=call athanor_id=ath_01a09fee-045b-770b-b745-a62792bb8798 execution_id=exec_01a09fee-07cc-791f-a598-e7f90608c9e2 attempt=att_01a09fee-0a31-7a2b-8f0c-3d1e5b7c9a42 fence=2 generation=7 service=wrk_4f3c2a1e9d8b7c6a boot=boot_01a09fee-2e4f-7a5b-9c6d-7e8f9a0b1c2d runner=run_01a09fee-1c2d-7e3f-8a4b-5c6d7e8f9a0b member=cyfr@10.0.0.1#boot_01a09fee-5d7e-7f80-91a2-b3c4d5e6f708 ts=1789305251350 nonce=n_host_policy_fetch_ipv6 body=ca5630e364bfadada435fb59d721ad783f332bc180af02b1934536f291512d77 mac=Okh6E8oWg5HIkIqq3y6bKZQzNTElIpu-zcTRY3wRsJ4",
+      "answer": "{\"v\":1,\"ok\":{\"expires_at\":1789305281350,\"family\":6,\"host\":\"[2001:db8::20]\",\"id\":\"pin_Vp3\",\"ip\":\"2001:db8::20\",\"port\":8080,\"scheme\":\"http\"}}",
+      "answer_iv_hex": "0251d3612baa76f9af165ad3",
+      "answer_sealed": "AlHTYSuqdvmvFlrT_JuPWoitAXvahtdD8eFA7pk50oQD9AMotVU5ytorfV5DWYwxnqx1CTPeWF0NvMVIoRX3JPcTuy1S4hyh3yi9F9Q2bmjeyj6ZtxoqupaQJoJ8e3dnp9GVW3U9tE1IPBu6QwFH6w1lBnUw0GrbOJSJ0wGXKsSIfziaIxy7PNh8NLJebtdoefRB0uJykqGsl3i77moBzlghuLobKRw",
+      "refusals": [],
+      "domains": [
+        "api.example.test",
+        "*.cdn.example.test",
+        "2001:db8::20",
+        "2001:0db8:0:0:0:0:0:20"
+      ],
+      "expect": {
+        "domain_allowed": true
+      }
+    },
+    {
+      "name": "redirect_ipv6_spelling",
+      "callback": "egress_pin",
+      "fields": {
+        "athanor_id": "ath_01a09fee-045b-770b-b745-a62792bb8798",
+        "execution_id": "exec_01a09fee-07cc-791f-a598-e7f90608c9e2",
+        "attempt": "att_01a09fee-0a31-7a2b-8f0c-3d1e5b7c9a42",
+        "fence": 2,
+        "generation": 7,
+        "service": "wrk_4f3c2a1e9d8b7c6a",
+        "boot": "boot_01a09fee-2e4f-7a5b-9c6d-7e8f9a0b1c2d",
+        "runner": "run_01a09fee-1c2d-7e3f-8a4b-5c6d7e8f9a0b",
+        "member": "cyfr@10.0.0.1#boot_01a09fee-5d7e-7f80-91a2-b3c4d5e6f708",
+        "ts": 1789305251360,
+        "nonce": "n_host_policy_redirect_ipv6_spelling"
+      },
+      "body": "{\"v\":1,\"op\":\"egress_pin\",\"args\":{\"from\":\"pin_Vp3\",\"purpose\":\"redirect\",\"url\":\"http://[2001:0db8:0:0:0:0:0:20]:8080/events/next\"}}",
+      "body_iv_hex": "2154851b3c68990ea3988631",
+      "body_sealed": "IVSFGzxomQ6jmIYxshC7n88jrVZ7lwBwSc0ph-q8U_JWb-SI9wsJ3x6396mfNONO6xGuOIkSMnuXqQHHWrLiVcZFPopV8_Cv8HuZQ-2T0kZlwAEAKg9lx06PKn-xy7pWYURBHHLrQEcTIxGGTu1YmdMxf8wiFY8wj4NHUpusT_qY9evdMRVZQQWifXraE1PRQWOxAmCNLUrMQfoYPw",
+      "header": "v1 kind=call athanor_id=ath_01a09fee-045b-770b-b745-a62792bb8798 execution_id=exec_01a09fee-07cc-791f-a598-e7f90608c9e2 attempt=att_01a09fee-0a31-7a2b-8f0c-3d1e5b7c9a42 fence=2 generation=7 service=wrk_4f3c2a1e9d8b7c6a boot=boot_01a09fee-2e4f-7a5b-9c6d-7e8f9a0b1c2d runner=run_01a09fee-1c2d-7e3f-8a4b-5c6d7e8f9a0b member=cyfr@10.0.0.1#boot_01a09fee-5d7e-7f80-91a2-b3c4d5e6f708 ts=1789305251360 nonce=n_host_policy_redirect_ipv6_spelling body=1968828ca0ac4f233aa5779c491c581f83b778716fdcab2e67bb8fbc6513cb78 mac=ImyZTL-RXy2TGekh6sgKQyDsy3WjgTakBTFZV4KJA7g",
+      "answer": "{\"v\":1,\"ok\":{\"expires_at\":1789305281360,\"family\":6,\"host\":\"[2001:0db8:0:0:0:0:0:20]\",\"id\":\"pin_Vp4\",\"ip\":\"2001:db8::20\",\"port\":8080,\"scheme\":\"http\"}}",
+      "answer_iv_hex": "a092021201f7804a96585001",
+      "answer_sealed": "oJICEgH3gEqWWFABwMy-d2SREJ0XyIYBnj2vpzMxwjCqmQTBI-td3HS3lK27jWE1r5W02IrhMJiPKJhxWkk0y488zIrnKc9yMH6VSDYGpZZeINFiSGrv1sOlC_yd0hYxTmQ7tri3w10JDDSDLOl4EcUolX1Uof_dLsGH20xxChOKutHn_gmMlxQTa8noqc1gIToZpjdPoqXemSDD9MTSFoRw-08UOOqTBAu6nCXOxH7c",
+      "refusals": [],
+      "domains": [
+        "api.example.test",
+        "*.cdn.example.test",
+        "2001:db8::20",
+        "2001:0db8:0:0:0:0:0:20"
+      ],
+      "expect": {
+        "domain_allowed": true,
+        "same_origin": true
+      }
     }
   ]
 }

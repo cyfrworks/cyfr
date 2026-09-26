@@ -15,11 +15,18 @@ defmodule Prima.HostAPITest do
   dispatch key and names its member; a retried call is the same body under
   a fresh header; and every `egress_pin` case's args and answer read
   through `Prima.PinnedTarget`.
+
+  Every `egress_policy` case reproduces and reads the same way, and its
+  answer is the policy's: pinned only for a host its `domains` match
+  (`Prima.Network.domain_allowed?/2`) and, for a redirect, a URL with the
+  origin of the pin it follows (`Prima.Network.same_origin?/2`); the
+  headers a hop to another origin keeps are
+  `Prima.Network.strip_credentials/1`'s.
   """
 
   use ExUnit.Case, async: true
 
-  alias Prima.{HostAPI, PinnedTarget, WorkerAuth, WorkerWire}
+  alias Prima.{HostAPI, Network, PinnedTarget, WorkerAuth, WorkerWire}
 
   @vectors Path.expand("../../../../tests/fixtures/host_api.json", __DIR__)
            |> File.read!()
@@ -247,6 +254,82 @@ defmodule Prima.HostAPITest do
       end
     end
   end
+
+  describe "the egress policy vectors" do
+    test "pin only a host in domains and a hop on its pin's origin, refused by name otherwise" do
+      cases = @vectors["egress_policy_cases"]
+
+      assert Enum.map(cases, & &1["name"]) ==
+               ~w(fetch outside_domains redirect_other_port redirect_default_port
+                  redirect_strip_credentials fetch_ipv6 redirect_ipv6_spelling)
+
+      # The URL each pin was answered for, by its id, for the hops naming it.
+      pinned_urls =
+        for call <- cases,
+            {:ok, %{"id" => id}} <- [answer_result(call)],
+            into: %{},
+            do: {id, args_of(call)["url"]}
+
+      for call <- cases, name = call["name"] do
+        {fields, args, answer} = reproduces(call)
+        assert call["callback"] == "egress_pin"
+        assert call["refusals"] == []
+        assert {:ok, request} = PinnedTarget.read_request(args), name
+        uri = URI.parse(request.url)
+        expect = call["expect"]
+
+        assert Network.domain_allowed?(uri.host, call["domains"]) == expect["domain_allowed"],
+               name
+
+        same_origin = same_origin(request, uri, expect, pinned_urls, name)
+
+        case answer do
+          {:ok, wire} ->
+            assert expect["domain_allowed"] and same_origin, name
+            assert {:ok, pin} = PinnedTarget.read(wire), name
+            assert pin.expires_at == fields.ts + WorkerAuth.window_ms()
+            assert pin.scheme == uri.scheme and pin.port == uri.port, name
+            assert Network.same_origin?(uri, "#{pin.scheme}://#{pin.host}:#{pin.port}"), name
+
+          {:error, error, %{}} ->
+            refute expect["domain_allowed"] and same_origin, name
+            expected = if expect["domain_allowed"], do: "redirect_credentials", else: "denied"
+            assert error == expected, name
+        end
+      end
+    end
+
+    test "a hop to another origin keeps the headers that carry no credential, in order" do
+      [call] = Enum.filter(@vectors["egress_policy_cases"], &Map.has_key?(&1, "headers_before"))
+      assert call["expect"]["same_origin"] == false
+      before = Enum.map(call["headers_before"], fn [name, value] -> {name, value} end)
+      kept = Enum.map(call["headers_after"], fn [name, value] -> {name, value} end)
+
+      assert Network.strip_credentials(before) == kept
+      refute Enum.any?(kept, fn {name, _value} -> Network.credential_header?(name) end)
+
+      # The hop carries every name of the roster, and some in another case
+      # than the roster's.
+      dropped = Enum.map(before -- kept, fn {name, _value} -> name end)
+      assert Network.credential_headers() -- Enum.map(dropped, &String.downcase/1) == []
+      assert Enum.any?(dropped, &(&1 != String.downcase(&1)))
+    end
+  end
+
+  # A redirect's hop names a pin of an earlier case and is on its origin or
+  # not, as the case expects; a first request is on no pin's origin to check.
+  defp same_origin(%{purpose: :redirect, from: from}, uri, expect, pinned_urls, name) do
+    assert Map.has_key?(pinned_urls, from), name
+    assert Network.same_origin?(pinned_urls[from], uri) == expect["same_origin"], name
+    expect["same_origin"]
+  end
+
+  defp same_origin(_first, _uri, expect, _pinned_urls, name) do
+    refute Map.has_key?(expect, "same_origin"), name
+    true
+  end
+
+  defp answer_result(call), do: call["answer"] |> Jason.decode!() |> WorkerWire.read_answer()
 
   defp args_of(call), do: Jason.decode!(call["body"])["args"]
   defp answer_of(call), do: Jason.decode!(call["answer"])["ok"]
