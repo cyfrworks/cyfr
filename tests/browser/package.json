@@ -1,0 +1,13 @@
+{
+  "name": "cyfr-browser-harness",
+  "private": true,
+  "description": "The browser harness: Playwright's library over the browsers the official Playwright image ships (tests/browser/README.md).",
+  "license": "Apache-2.0",
+  "type": "module",
+  "engines": {
+    "node": ">=22"
+  },
+  "dependencies": {
+    "playwright-core": "1.63.0"
+  }
+}

@@ -182,6 +182,29 @@ defmodule Cyfr.Test.ScriptedWorker do
   def kills, do: GenServer.call(__MODULE__, :kills)
 
   @doc """
+  `ctx` moved into an athanor minted for the calling test alone: an
+  active group row under an id no other test names, so the node-global
+  state keyed by athanor (`Prima.Slots`'s unreaped kills, the consented
+  rate windows, the slot counts) holds this test's runs and nobody
+  else's. The row is written through the test's own sandbox checkout.
+  """
+  @spec athanor!(Sanctum.Context.t()) :: Sanctum.Context.t()
+  def athanor!(%Sanctum.Context{} = ctx) do
+    n = System.unique_integer([:positive])
+
+    {:ok, %{id: athanor_id, status: "active"}} =
+      Sanctum.Tenancy.Athanors.create(%{
+        id: "ath_scripted_#{n}",
+        kind: "group",
+        name: "Scripted #{n}",
+        slug: "scripted-#{n}",
+        created_by: "system"
+      })
+
+    %{ctx | athanor_id: athanor_id}
+  end
+
+  @doc """
   Start the context's athanor on fresh execution limits: a fresh consented
   rate window (`Crucible.Rates`) for the pinned releases of `refs`,
   and no unreaped-kill penalty (`Prima.Slots.forgive_unreaped/2`).
