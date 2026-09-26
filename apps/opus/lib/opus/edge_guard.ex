@@ -21,8 +21,10 @@ defmodule Opus.EdgeGuard do
   Fail-closed throughout: a `nil` edge (an authority with `resources: :none`)
   or a `nil` resource group behaves as all-empty lists, and an empty list
   denies. Schemes are always explicit in blobs — there is no "no scheme
-  restriction" value. Domain patterns support `"*"` and `"*.example.com"`
-  wildcards.
+  restriction" value. Domains match as `Prima.Network.domain_allowed?/2`
+  matches them, the matcher CYFR's pin applies to the same edge: `"*"`,
+  `"*.example.com"` by whole label, and exact names, case-folded. The
+  engine's domain check is its own, made before it asks for the pin.
 
   Denial messages are part of the guest-visible contract: components and
   tests pin them, so they must not drift.
@@ -45,14 +47,14 @@ defmodule Opus.EdgeGuard do
   @doc """
   Check a domain against the edge's egress allowlist.
 
-  Supports `"*"` and `"*.example.com"` wildcard patterns. Returns `:ok` or
+  Matched by `Prima.Network.domain_allowed?/2`. Returns `:ok` or
   `{:error, message}` with the message shape guests and tests pin.
   """
   @spec check_domain(edge(), String.t()) :: :ok | {:error, String.t()}
   def check_domain(edge, domain) when is_binary(domain) do
     allowed = Edge.domains(edge)
 
-    if Enum.any?(allowed, &domain_matches?(&1, domain)) do
+    if Prima.Network.domain_allowed?(domain, allowed) do
       :ok
     else
       {:error,
@@ -179,23 +181,6 @@ defmodule Opus.EdgeGuard do
   defp egress(nil, _key), do: []
   defp egress(%Edge{egress: nil}, _key), do: []
   defp egress(%Edge{egress: egress}, key), do: Map.get(egress, key, [])
-
-  defp domain_matches?(pattern, domain) when is_binary(pattern) and is_binary(domain) do
-    cond do
-      pattern == "*" ->
-        true
-
-      pattern == domain ->
-        true
-
-      String.starts_with?(pattern, "*.") ->
-        suffix = String.slice(pattern, 1..-1//1)
-        String.ends_with?(domain, suffix)
-
-      true ->
-        false
-    end
-  end
 
   @doc """
   Check an event a guest emits against the node's `max_request_size`: the

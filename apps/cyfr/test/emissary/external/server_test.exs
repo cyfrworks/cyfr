@@ -360,6 +360,15 @@ defmodule Emissary.External.ServerTest do
       assert masked["a"] == "[REDACTED]"
       assert masked["b"] == "application/json"
     end
+
+    test "masks the literal value of every header Prima names a credential carrier" do
+      names = Prima.Network.credential_headers() ++ ["X-Session-Token", "X-Client-Secret"]
+      values = Map.new(names, &{&1, "literal-value-of-#{&1}"})
+      state = %{raw_headers: values, headers: values}
+
+      masked = Server.mask_credentials(%{"echo" => Map.values(values)}, state)
+      assert Enum.uniq(masked["echo"]) == ["[REDACTED]"]
+    end
   end
 
   describe "reinit backoff" do

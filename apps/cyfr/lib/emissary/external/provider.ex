@@ -497,8 +497,8 @@ defmodule Emissary.External.Provider do
   defp credential_shaped_header_name?(key) do
     k = key |> to_string() |> String.downcase()
 
-    k in ["authorization", "proxy-authorization", "cookie", "x-api-key"] or
-      String.contains?(k, "token") or String.contains?(k, "secret") or
+    Prima.Network.credential_header?(k) or String.contains?(k, "token") or
+      String.contains?(k, "secret") or
       String.contains?(k, "auth") or String.contains?(k, "key")
   end
 

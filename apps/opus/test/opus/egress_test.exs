@@ -263,15 +263,45 @@ defmodule Opus.EgressTest do
     assert again.from == nil
   end
 
-  test "a cross-origin hop's request goes without the guest's credentials" do
-    headers = [
-      {"Authorization", "Bearer a"},
-      {"cookie", "s=1"},
-      {"COOKIE", "t=2"},
-      {"accept", "application/json"}
-    ]
+  test "a hop is cross-origin by its scheme, host or effective port, as Prima compares them", %{
+    host: host,
+    client: client
+  } do
+    ScriptedHost.pins(host, %{
+      "public.test" => "203.0.113.10",
+      "2001:db8::20" => "2001:db8::20",
+      "2001:0db8:0:0:0:0:0:20" => "2001:db8::20"
+    })
 
-    assert Egress.strip_credentials(headers) == [{"accept", "application/json"}]
+    hop = fn origin, request_url, to ->
+      :ok = Egress.redirected(client, origin, request_url, to)
+      assert {:ok, pinned} = Egress.pin(client, to)
+      assert pinned.from == origin.target
+      pinned
+    end
+
+    assert {:ok, origin} = Egress.pin(client, "https://public.test/start")
+
+    for {to, cross?} <- [
+          {"https://public.test:443/same", false},
+          {"https://PUBLIC.test/case", false},
+          {"https://public.test:8443/port", true},
+          {"http://public.test/scheme", true}
+        ] do
+      assert Egress.cross_origin?(hop.(origin, "https://public.test/start", to)) == cross?, to
+    end
+
+    # An IPv6 literal is one host however it is spelled.
+    assert {:ok, v6} = Egress.pin(client, "http://[2001:db8::20]:8080/events", purpose: :stream)
+
+    spelled =
+      hop.(v6, "http://[2001:db8::20]:8080/events", "http://[2001:0db8:0:0:0:0:0:20]:8080/n")
+
+    refute Egress.cross_origin?(spelled)
+
+    assert Egress.cross_origin?(
+             hop.(v6, "http://[2001:db8::20]:8080/events", "http://[2001:db8::20]:8081/n")
+           )
   end
 
   test "a scheme other than http or https, and a missing host, are invalid URLs, asked of no one",

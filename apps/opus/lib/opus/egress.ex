@@ -32,10 +32,12 @@ defmodule Opus.Egress do
   redirecting answer records where it points (`redirected/4`); the
   guest's next request to that URL is the redirect's next hop, pinned
   with `purpose: :redirect` naming the pin the redirecting answer came
-  from, and the hop is consumed. CYFR may refuse the hop
-  (`redirect_credentials`); a hop whose scheme or host differs from the
-  pin it came from is `cross_origin?/1`, and its request is sent without
-  the guest's credentials (`strip_credentials/1`).
+  from, and the hop is consumed. CYFR refuses a hop to another origin
+  than the pin it came from (`redirect_credentials`). The engine checks
+  it again: a hop whose scheme, host or effective port differs from its
+  pin's is `cross_origin?/1` (`Prima.Network.same_origin?/2`), and its
+  request is sent without the guest's credentials
+  (`Prima.Network.strip_credentials/1`).
   """
 
   alias Opus.HostClient
@@ -68,8 +70,6 @@ defmodule Opus.Egress do
   # The redirects an attempt's handlers remember before the guest follows
   # them; the oldest is forgotten first.
   @max_hops 8
-
-  @credential_headers ["authorization", "cookie"]
 
   @doc """
   Pin `url` for one outbound request of the attempt `client` holds.
@@ -133,24 +133,18 @@ defmodule Opus.Egress do
   end
 
   @doc """
-  Whether `pinned` is a redirect's next hop to another scheme or host than
-  the pin its redirect came from: a request its credentials must not
-  follow.
+  Whether `pinned` is a redirect's next hop to another origin than the pin
+  its redirect came from (`Prima.Network.same_origin?/2`: scheme, host and
+  effective port): a request its credentials must not follow.
   """
   @spec cross_origin?(pinned()) :: boolean()
   def cross_origin?(%{from: nil}), do: false
 
   def cross_origin?(%{from: %PinnedTarget{} = from, target: %PinnedTarget{} = target}),
-    do: from.scheme != target.scheme or host_key(from.host) != host_key(target.host)
+    do: not Prima.Network.same_origin?(origin(from), origin(target))
 
-  @doc "`headers` without the guest's credentials: every `Authorization` and `Cookie`, in any case."
-  @spec strip_credentials([{String.t(), String.t()}]) :: [{String.t(), String.t()}]
-  def strip_credentials(headers) when is_list(headers), do: Enum.reject(headers, &credential?/1)
-
-  defp credential?({name, _value}) when is_binary(name),
-    do: String.downcase(name) in @credential_headers
-
-  defp credential?(_header), do: false
+  defp origin(%PinnedTarget{scheme: scheme, host: host, port: port}),
+    do: %URI{scheme: scheme, host: host, port: port}
 
   defp connect(client, url, uri, purpose, from, opts) do
     with {:ok, target} <- target(client, url, uri, purpose, from),
