@@ -16,9 +16,15 @@ defmodule Opus.HostClientTest do
 
   import ExUnit.CaptureLog
 
-  alias Prima.{Assignment, WorkerWire}
+  alias Prima.{Assignment, PinnedTarget, WorkerWire}
   alias Opus.HostClient
   alias Opus.Test.ScriptedHost
+
+  # Read as this module compiles, so a checkout without the file fails
+  # here, naming it, rather than running without the vectors.
+  @host_api Path.expand("../../../../tests/fixtures/host_api.json", __DIR__)
+            |> File.read!()
+            |> Jason.decode!()
 
   setup do
     host = ScriptedHost.start!()
@@ -72,7 +78,8 @@ defmodule Opus.HostClientTest do
 
     for %{op: op, header: header, body: body, caller: caller} <- ScriptedHost.requests(host) do
       assert String.starts_with?(header, "v1 kind=call ")
-      assert %{"op" => ^op, "args" => %{}} = Jason.decode!(body)
+      assert %{"v" => 1, "op" => ^op, "args" => %{}} = Jason.decode!(body)
+      assert String.starts_with?(body, ~s({"v":1,))
       assert caller.execution_id == attempt.execution_id
       assert caller.runner == client.runner
       assert caller.boot == client.boot
@@ -182,6 +189,137 @@ defmodule Opus.HostClientTest do
 
     ScriptedHost.script(host, "renew", {:raw, 200, ~s({"neither": "ok"})})
     assert {:error, :lost} = HostClient.renew(client, [client.attempt])
+  end
+
+  describe "the wire's version" do
+    test "an answer without v, or at another version, is no answer: lost under the retry class",
+         %{host: host, client: client} do
+      ScriptedHost.script(host, "renew", [
+        {:answer, ~s({"ok":{}})},
+        {:answer, ~s({"v":2,"ok":{}})}
+      ])
+
+      assert {:error, :lost} = HostClient.renew(client, [client.attempt])
+      assert length(ScriptedHost.requests(host, "renew")) == 2
+
+      ScriptedHost.script(host, "take_rate", {:answer, ~s({"v":"1","ok":true})})
+      assert {:error, {:uncertain, _}} = HostClient.take_rate(client, "http:x")
+      assert length(ScriptedHost.requests(host, "take_rate")) == 1
+
+      ScriptedHost.script(host, "renew", {:answer, ~s({"v":1,"ok":{},"extra":true})})
+      assert {:error, :lost} = HostClient.renew(client, [client.attempt])
+    end
+
+    test "a host at another version is not this engine's: its refusal stops the attempt, asked once",
+         %{host: host, client: client} do
+      # Refused before the body, plain, whatever version the host speaks.
+      for refusal <- [
+            ~s({"v":1,"error":"unknown_version"}),
+            ~s({"v":2,"error":"unknown_version"})
+          ] do
+        ScriptedHost.script(host, "renew", {:raw, 401, refusal})
+        before = length(ScriptedHost.requests(host, "renew"))
+
+        log =
+          capture_log(fn ->
+            assert {:error, :lost} = HostClient.renew(client, [client.attempt])
+          end)
+
+        assert log =~ "another version"
+        assert length(ScriptedHost.requests(host, "renew")) == before + 1
+      end
+
+      # Refused after the body was opened, sealed.
+      ScriptedHost.script(host, "storage", {:error, :unknown_version})
+
+      capture_log(fn ->
+        assert {:error, :lost} = HostClient.storage(client, :read, %{"path" => "a"})
+      end)
+
+      # Any other refusal by status is lost, and asked again as its class allows.
+      ScriptedHost.script(host, "renew", {:raw, 401, ~s({"v":1,"error":"bad_mac"})})
+      before = length(ScriptedHost.requests(host, "renew"))
+      assert {:error, :lost} = HostClient.renew(client, [client.attempt])
+      assert length(ScriptedHost.requests(host, "renew")) == before + 2
+    end
+  end
+
+  describe "egress_pin/3" do
+    test "every egress_pin vector crosses as its body and reads as its answer", %{
+      host: host,
+      client: client
+    } do
+      cases = @host_api["egress_pin_cases"]
+
+      assert Enum.map(cases, & &1["name"]) ==
+               ~w(fetch stream redirect denied metadata resolution redirect_credentials)
+
+      for vector <- cases do
+        %{"v" => 1, "op" => "egress_pin", "args" => args} = Jason.decode!(vector["body"])
+        ScriptedHost.script(host, "egress_pin", {:answer, vector["answer"]})
+
+        opts =
+          [purpose: String.to_existing_atom(args["purpose"])] ++
+            if(args["from"], do: [from: args["from"]], else: [])
+
+        result = HostClient.egress_pin(client, args["url"], opts)
+
+        assert %{body: body} = List.last(ScriptedHost.requests(host, "egress_pin"))
+        assert body == vector["body"], vector["name"]
+
+        case Jason.decode!(vector["answer"]) do
+          %{"ok" => wire} ->
+            assert {:ok, %PinnedTarget{} = pin} = result, vector["name"]
+            assert PinnedTarget.to_wire(pin) == wire
+
+          %{"error" => name} ->
+            assert result == {:error, String.to_existing_atom(name)}, vector["name"]
+        end
+      end
+
+      assert length(ScriptedHost.requests(host, "egress_pin")) == length(cases)
+    end
+
+    test "a pin answer that is not a pin is lost, and a lost answer is asked once more", %{
+      host: host,
+      client: client
+    } do
+      ScriptedHost.script(host, "egress_pin", [
+        {:ok, %{"id" => "pin_x", "ip" => "not an address"}},
+        :drop,
+        :drop
+      ])
+
+      assert {:error, :lost} = HostClient.egress_pin(client, "https://api.test/")
+      assert length(ScriptedHost.requests(host, "egress_pin")) == 1
+
+      assert {:error, :lost} = HostClient.egress_pin(client, "https://api.test/")
+      assert [_, first, second] = ScriptedHost.requests(host, "egress_pin")
+      assert first.body == second.body
+    end
+
+    test "a request the contract refuses is malformed, asked of no one", %{
+      host: host,
+      client: client
+    } do
+      assert {:error, :malformed} = HostClient.egress_pin(client, "ftp://api.test/")
+
+      assert {:error, :malformed} =
+               HostClient.egress_pin(client, "https://api.test/", purpose: :x)
+
+      assert {:error, :malformed} =
+               HostClient.egress_pin(client, "https://api.test/", purpose: :redirect)
+
+      assert {:error, :malformed} =
+               HostClient.egress_pin(client, "https://api.test/", purpose: :fetch, from: "pin_1")
+
+      assert ScriptedHost.requests(host, "egress_pin") == []
+    end
+
+    test "a pin refusal answers only an egress_pin", %{host: host, client: client} do
+      ScriptedHost.script(host, "renew", {:error, :denied})
+      assert {:error, :lost} = HostClient.renew(client, [client.attempt])
+    end
   end
 
   test "a host that cannot be reached loses every call", %{host: host} do

@@ -46,7 +46,6 @@ defmodule Opus.ReleaseTest do
              Release.runner_command(
                env: env,
                log_level: :debug,
-               resolver: Opus.Test.Resolver,
                schedulers: {2, 2, 2, 2, 2}
              )
 
@@ -65,7 +64,6 @@ defmodule Opus.ReleaseTest do
              Release.runner_command(
                env: %{"LC_ALL" => "C.UTF-8", "OPUS_SERVICE_KEY" => "0"},
                log_level: :warning,
-               resolver: nil,
                schedulers: {8, 4, 8, 3, 10}
              )
 
@@ -74,27 +72,30 @@ defmodule Opus.ReleaseTest do
     assert env == %{"LC_ALL" => "C.UTF-8"}
 
     # What a plain VM has no sys.config to read travels as its arguments:
-    # the scheduler counts, the log level, and no resolver when none is set.
-    assert ["+S", "8:4", "+SDcpu", "8:3", "+SDio", "10", "-pa" | rest] = rest
+    # the scheduler counts, no scheduler busy-wait, and the log level.
+    assert [
+             "+S",
+             "8:4",
+             "+SDcpu",
+             "8:3",
+             "+SDio",
+             "10",
+             "+sbwt",
+             "none",
+             "+sbwtdcpu",
+             "none",
+             "+sbwtdio",
+             "none",
+             "-pa" | rest
+           ] = rest
 
     {paths, ["-logger", "level", "warning", "-run", "Elixir.Opus.Release", "runner"]} =
       Enum.split(rest, -6)
 
     assert paths == Release.code_paths()
-
-    %{argv: argv} =
-      Release.runner_command(
-        env: %{},
-        log_level: :error,
-        resolver: Opus.Test.Resolver,
-        schedulers: {1, 1, 1, 1, 1}
-      )
-
-    assert ["-logger", "level", "error", "-opus", "resolver", "'Elixir.Opus.Test.Resolver'"] =
-             Enum.slice(argv, -9, 6)
   end
 
-  test "this boot's runner command carries this VM's log level, resolver and scheduler counts" do
+  test "this boot's runner command carries this VM's log level and scheduler counts" do
     %{argv: argv} = Release.runner_command()
     online = Integer.to_string(:erlang.system_info(:schedulers_online))
     assert Enum.any?(argv, &String.ends_with?(&1, ":" <> online))

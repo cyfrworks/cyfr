@@ -32,7 +32,11 @@ defmodule Opus.HttpStreamHandler do
 
   All the same edge enforcement as `cyfr:http/fetch` applies — both handlers
   go through `Opus.HttpRequestValidation`, the single pre-flight path:
-  - Domain/method/scheme allowlisting, SSRF prevention with IP pinning
+  - Domain/method/scheme allowlisting, and the address CYFR pins under the
+    attempt's authority, taken once, when the stream opens, as a fetch
+    takes it (`Opus.Egress.pin/3`): a stream that outlives its pin keeps
+    the connection it opened, and a stream opened past the pin's
+    `expires_at` is pinned again
   - Request body checked against the node's `max_request_size`
   - Response bytes capped at `max_response_size` both when the collector
     buffers them and when the guest reads them
@@ -180,13 +184,18 @@ defmodule Opus.HttpStreamHandler do
       )
     else
       case HttpRequestValidation.validate(json_request, edge, limits, host, component_ref,
-             allow_multipart: false
+             allow_multipart: false,
+             purpose: :stream
            ) do
         {:ok, request} ->
           start_stream(request, exec_ref, component_ref, limits)
 
         {:error, type, message} ->
           HttpHandler.record_refusal(host, type, message)
+          encode_error(type, message)
+
+        # CYFR refused the pin, and has already recorded the denial.
+        {:refused, type, message} ->
           encode_error(type, message)
       end
     end
@@ -310,7 +319,7 @@ defmodule Opus.HttpStreamHandler do
   end
 
   defp perform_streaming_request(request, buffer, component_ref, timeout_ms, max_response_size) do
-    # The pinned URL and transport policy come from `Opus.Egress.pin/2`
+    # The pinned URL and transport policy come from `Opus.Egress.pin/3`
     # via validation — same seam as the buffered fetch path.
     req_opts =
       request.pin_req_opts

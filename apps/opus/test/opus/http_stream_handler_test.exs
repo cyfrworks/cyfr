@@ -8,10 +8,17 @@ defmodule Opus.HttpStreamHandlerTest do
   alias Opus.Test.EdgeFixtures
   alias Opus.Test.ScriptedHost
 
+  @pins %{"localhost" => "127.0.0.1", "api.openai.com" => "127.0.0.1"}
+
   # The host client of an attempt on a scripted host for `component_ref`,
-  # which takes every request from the rate and records every refusal.
-  defp attached_host(component_ref, _limits) do
-    ScriptedHost.attempt!(ScriptedHost.start!(), component_ref: component_ref).client
+  # which takes every request from the rate, pins every address from
+  # `pins` and records every refusal. The default pins the loopback names
+  # these tests reach, so a request that is refused a connection fails
+  # fast and on this machine.
+  defp attached_host(component_ref, _limits, pins \\ @pins) do
+    host = ScriptedHost.start!()
+    ScriptedHost.pins(host, pins)
+    ScriptedHost.attempt!(host, component_ref: component_ref).client
   end
 
   # ============================================================================
@@ -113,15 +120,18 @@ defmodule Opus.HttpStreamHandlerTest do
       assert decoded["error"]["message"] =~ "Invalid JSON"
     end
 
-    test "blocks private IP (localhost)", %{stream_ns: _ns} do
-      # Need to allow localhost domain first
+    test "a private address the host refuses to pin is refused", %{stream_ns: _ns} do
+      # Need to allow localhost domain first; the private-address policy is
+      # the host's, which refuses it here.
       edge = EdgeFixtures.edge(domains: ["localhost"], methods: ["POST"])
 
       {imports, _exec_ref} =
         HttpStreamHandler.build_stream_imports(
           edge,
           EdgeFixtures.limits(),
-          attached_host("catalyst:local.test:1.0.0", EdgeFixtures.limits()),
+          attached_host("catalyst:local.test:1.0.0", EdgeFixtures.limits(), %{
+            "localhost" => :denied
+          }),
           "catalyst:local.test:1.0.0"
         )
 
@@ -203,10 +213,9 @@ defmodule Opus.HttpStreamHandlerTest do
       stream_ns = imports["cyfr:http/streaming@0.1.0"]
       {:fn, request_fn} = stream_ns["request"]
 
-      # The request will fail at DNS/connection level, but the handle will be
-      # created before the async task fails. We need to test the limit.
-      # To reliably test the limit, we use a domain that will be allowed but
-      # fail to connect — that still creates the handle.
+      # The request will fail at the connection, but the handle is created
+      # before the async task fails: the host pins the domain to the
+      # loopback, where nothing listens on 443.
 
       # Create 3 streams (they'll fail to connect but handles are created)
       request =
@@ -223,15 +232,9 @@ defmodule Opus.HttpStreamHandlerTest do
           Jason.decode!(result)
         end
 
-      # First 3 should succeed (have "handle" key), 4th should fail
-      # Note: some may fail at DNS level instead, so we check for either handle or DNS error
-      stream_limit_errors =
-        Enum.filter(results, fn r ->
-          r["error"]["type"] == "stream_limit"
-        end)
-
-      # At least one should be a stream limit error (the 4th)
-      assert stream_limit_errors != []
+      # The first 3 have a handle, the 4th is over the limit.
+      assert [%{"handle" => _}, %{"handle" => _}, %{"handle" => _}, %{"error" => error}] = results
+      assert error["type"] == "stream_limit"
     end
   end
 
@@ -306,7 +309,7 @@ defmodule Opus.HttpStreamHandlerTest do
       # A "0s" consented timeout makes the derived deadline elapse immediately;
       # the 60s fallback would never fire within test time.
       edge =
-        EdgeFixtures.edge(domains: ["localhost"], methods: ["GET"], private_ips: ["127.0.0.1"])
+        EdgeFixtures.edge(domains: ["localhost"], methods: ["GET"])
 
       limits = EdgeFixtures.limits(timeout: "0s")
 
@@ -371,7 +374,7 @@ defmodule Opus.HttpStreamHandlerTest do
         end)
 
       edge =
-        EdgeFixtures.edge(domains: ["localhost"], methods: ["GET"], private_ips: ["127.0.0.1"])
+        EdgeFixtures.edge(domains: ["localhost"], methods: ["GET"])
 
       limits = EdgeFixtures.limits(max_response_size: 8)
 
@@ -410,7 +413,7 @@ defmodule Opus.HttpStreamHandlerTest do
   describe "what a read reports" do
     setup do
       edge =
-        EdgeFixtures.edge(domains: ["localhost"], methods: ["GET"], private_ips: ["127.0.0.1"])
+        EdgeFixtures.edge(domains: ["localhost"], methods: ["GET"])
 
       {imports, _exec_ref} =
         HttpStreamHandler.build_stream_imports(
@@ -502,7 +505,7 @@ defmodule Opus.HttpStreamHandlerTest do
         end)
 
       edge =
-        EdgeFixtures.edge(domains: ["localhost"], methods: ["GET"], private_ips: ["127.0.0.1"])
+        EdgeFixtures.edge(domains: ["localhost"], methods: ["GET"])
 
       {imports, exec_ref} =
         HttpStreamHandler.build_stream_imports(

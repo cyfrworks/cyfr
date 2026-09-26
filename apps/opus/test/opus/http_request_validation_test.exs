@@ -11,11 +11,13 @@ defmodule Opus.HttpRequestValidationTest do
   alias Opus.Test.ScriptedHost
 
   # A scripted host, the client of an attempt on it — which takes each
-  # request from the attempt's rate through a `take_rate` host call — and
-  # the component reference its bucket keys on.
-  defp attached_host(opts \\ []) do
+  # request from the attempt's rate through a `take_rate` host call and asks
+  # for each request's address through an `egress_pin` one, pinned from the
+  # host's table — and the component reference its bucket keys on.
+  defp attached_host(pins \\ %{"localhost" => "127.0.0.1"}) do
     host = ScriptedHost.start!()
-    attempt = ScriptedHost.attempt!(host, opts)
+    ScriptedHost.pins(host, pins)
+    attempt = ScriptedHost.attempt!(host)
     {host, attempt.client, attempt.component_ref}
   end
 
@@ -34,29 +36,69 @@ defmodule Opus.HttpRequestValidationTest do
     |> Jason.encode!()
   end
 
-  # An edge that lets validation reach DNS resolution without leaving the host
+  # An edge that lets validation reach the pin
   defp localhost_edge(opts \\ []) do
-    EdgeFixtures.edge(
-      Keyword.merge(
-        [domains: ["localhost"], methods: ["GET", "POST"], private_ips: ["127.0.0.1"]],
-        opts
-      )
-    )
+    EdgeFixtures.edge(Keyword.merge([domains: ["localhost"], methods: ["GET", "POST"]], opts))
   end
 
   describe "validate/6" do
-    test "returns a validated request with pinned IP and method atom" do
+    test "returns a validated request with the pinned address, the pin and the method atom" do
+      {host, client, ref} = attached_host()
+
       assert {:ok, request} =
-               validate(
+               HttpRequestValidation.validate(
                  encode(%{}),
                  localhost_edge(),
-                 EdgeFixtures.limits()
+                 EdgeFixtures.limits(),
+                 client,
+                 ref
                )
 
       assert request.ip == "127.0.0.1"
+      assert request.pin_req_opts[:url] == "http://127.0.0.1/x"
+      assert request.pin_req_opts[:connect_options][:hostname] == "localhost"
+      assert request.pinned.target.host == "localhost"
       assert request.method_atom == :get
       assert request.method == "GET"
       assert request.hostname == "localhost"
+
+      assert [%{args: %{"url" => "http://localhost/x", "purpose" => "fetch"}}] =
+               ScriptedHost.requests(host, "egress_pin")
+    end
+
+    test "a stream's request is pinned for a stream" do
+      {host, client, ref} = attached_host()
+
+      assert {:ok, _request} =
+               HttpRequestValidation.validate(
+                 encode(%{}),
+                 localhost_edge(),
+                 EdgeFixtures.limits(),
+                 client,
+                 ref,
+                 purpose: :stream
+               )
+
+      assert [%{args: %{"purpose" => "stream"}}] = ScriptedHost.requests(host, "egress_pin")
+    end
+
+    test "the engine sends to exactly the address the host pins, which decides private ones" do
+      # The consented private-address policy is the host's: the engine
+      # connects to the private address the host pinned, and to nothing
+      # it resolved itself.
+      {_host, client, ref} = attached_host(%{"localhost" => "10.0.0.5"})
+
+      assert {:ok, request} =
+               HttpRequestValidation.validate(
+                 encode(%{}),
+                 localhost_edge(),
+                 EdgeFixtures.limits(),
+                 client,
+                 ref
+               )
+
+      assert request.ip == "10.0.0.5"
+      assert request.pin_req_opts[:url] == "http://10.0.0.5/x"
     end
 
     test "rejects invalid JSON" do
@@ -93,9 +135,10 @@ defmodule Opus.HttpRequestValidationTest do
                )
     end
 
-    test "request size is enforced before DNS resolution" do
+    test "request size is enforced before the address is pinned" do
       edge = EdgeFixtures.edge(domains: ["*"], methods: ["POST"])
       limits = EdgeFixtures.limits(max_request_size: 16)
+      {host, client, ref} = attached_host()
 
       request =
         encode(%{
@@ -105,7 +148,9 @@ defmodule Opus.HttpRequestValidationTest do
         })
 
       assert {:error, :request_too_large, msg} =
-               validate(request, edge, limits)
+               HttpRequestValidation.validate(request, edge, limits, client, ref)
+
+      assert ScriptedHost.requests(host, "egress_pin") == []
 
       # 100 body bytes plus the URL: the ceiling counts what the host holds
       # and puts on the wire, not the body alone.
@@ -145,13 +190,20 @@ defmodule Opus.HttpRequestValidationTest do
       assert msg =~ "consented max_request_size"
     end
 
-    test "blocks private IPs through the shared resolve path" do
+    test "an address the host refuses is its refusal, which the host has recorded" do
       edge = EdgeFixtures.edge(domains: ["localhost"], methods: ["GET"])
+      {_host, client, ref} = attached_host(%{"localhost" => :denied})
 
-      assert {:error, :private_ip_blocked, msg} =
-               validate(encode(%{}), edge, EdgeFixtures.limits())
+      assert {:refused, :private_ip_blocked, msg} =
+               HttpRequestValidation.validate(
+                 encode(%{}),
+                 edge,
+                 EdgeFixtures.limits(),
+                 client,
+                 ref
+               )
 
-      assert msg =~ "127.0.0.1"
+      assert msg =~ "localhost"
     end
 
     test "rejects an edge-allowed but unsupported HTTP verb as method_blocked" do
@@ -230,7 +282,7 @@ defmodule Opus.HttpRequestValidationTest do
   end
 
   describe "egress rate limiting" do
-    test "the rate is taken from CYFR, per component, before DNS, and its refusal denies the request" do
+    test "the rate is taken from CYFR, per component, before the pin, and its refusal denies the request" do
       {host, client, ref} = attached_host()
       limits = EdgeFixtures.limits()
 
@@ -251,6 +303,9 @@ defmodule Opus.HttpRequestValidationTest do
                ScriptedHost.requests(host, "take_rate")
 
       assert bucket == "http:" <> ref
+
+      # The refused request asked for no address: only the admitted one did.
+      assert length(ScriptedHost.requests(host, "egress_pin")) == 1
     end
 
     test "the rate is the attempt's: the limits the runner passes grant nothing" do

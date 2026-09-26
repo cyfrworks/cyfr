@@ -17,17 +17,23 @@ defmodule Opus.HostClient do
   worker service is configured with (`Opus.Credentials`), which is the
   whole deployment where only one member issues. Every call is one `POST`
   to the callback's route
-  (`Prima.WorkerWire.host_route/1`): its body is the JSON
-  `{"op": name, "args": {...}}` sealed with the attempt's seal key to the
-  call's fields (`Prima.WorkerAuth.seal_call/5`), and its `x-cyfr-auth`
-  header is the attempt's call-key signature over those fields — a fresh
-  nonce and the current time among them — and the sealed body
+  (`Prima.WorkerWire.host_route/1`): its body is the versioned JSON
+  `{"v": 1, "op": name, "args": {...}}` (`Prima.WorkerWire.request_body/2`)
+  sealed with the attempt's seal key to the call's fields
+  (`Prima.WorkerAuth.seal_call/5`), and its `x-cyfr-auth` header is the
+  attempt's call-key signature over those fields — a fresh nonce and the
+  current time among them — and the sealed body
   (`Prima.WorkerAuth.host_call_header/3`). A `200` answer is the JSON
   `Prima.WorkerWire` describes, sealed to the same fields in the answer
-  direction and read up to `Prima.HostAPI.max_answer_bytes/0`; any other
-  status is the listener's refusal, and is lost. The attempt's seal key
-  also opens the keys of a child CYFR admits for this client's runner
-  (`admit_child/5`).
+  direction, read up to `Prima.HostAPI.max_answer_bytes/0` and read as an
+  answer of this wire's version (`Prima.WorkerWire.read_answer/1`); an
+  answer without `v`, or at another version, is no answer and is lost.
+  Any other status is the listener's refusal, and is lost, except a
+  refusal naming `unknown_version`: the host speaks another version of the
+  wire, so it is not this engine's host, and the call is answered
+  `{:error, :lost}` at once, which stops the attempt's work, rather than
+  asked again. The attempt's seal key also opens the keys of a child CYFR
+  admits for this client's runner (`admit_child/5`).
 
   Each function answers as the `Prima.HostAPI` callback of the same name.
   An answer that does not arrive within `Prima.HostAPI.request_timeout_ms/1`,
@@ -40,6 +46,11 @@ defmodule Opus.HostClient do
   happened. A second loss is `{:error, :lost}`. CYFR's own answers, `lost`
   included, are never retried: they are answers.
 
+  `egress_pin/3` asks CYFR for the address a guest's outbound URL may be
+  reached at (`c:Prima.HostAPI.egress_pin/3`): the engine resolves no name
+  itself, and connects to the address the answer names
+  (`Opus.Egress.pin/3`).
+
   One call reaches CYFR beside a runner's: `runner_exited/4`, a worker
   service's report that one of its runners exited, a plain JSON body
   signed with that worker service's dispatch key and posted to the
@@ -51,7 +62,7 @@ defmodule Opus.HostClient do
 
   require Logger
 
-  alias Prima.{Assignment, BoundedBody, HostAPI, WorkerAuth, WorkerWire}
+  alias Prima.{Assignment, BoundedBody, HostAPI, PinnedTarget, WorkerAuth, WorkerWire}
 
   @derive {Inspect, except: [:call_key, :seal_key]}
   @enforce_keys [
@@ -107,10 +118,12 @@ defmodule Opus.HostClient do
     "replayed" => :replayed,
     "malformed" => :malformed,
     "bad_mac" => :bad_mac,
-    "unknown_version" => :unknown_version,
     "claim_expired" => :claim_expired,
     "not_found" => :not_found
   }
+
+  # The refusals only an `egress_pin` answer names.
+  @pin_refusals Map.new(PinnedTarget.refusals(), &{Atom.to_string(&1), &1})
 
   @uncertain "The call's answer was lost and its effect is unknown"
 
@@ -378,6 +391,40 @@ defmodule Opus.HostClient do
   end
 
   @doc """
+  Pin the address the attempt's guest may reach `url` at, for one request
+  of the `:purpose` `opts` names (`:fetch`, `:stream` or `:redirect`,
+  default `:fetch`), naming for a redirect the id of the pin the
+  redirecting answer came from (`:from`). Answers the pin CYFR validated
+  (`Prima.PinnedTarget`), a refusal it names
+  (`Prima.PinnedTarget.refusals/0`, each already recorded by CYFR as a
+  denial of the attempt), or `{:error, :lost | :unavailable}`. A request
+  `Prima.PinnedTarget.request_args/3` refuses is `{:error, :malformed}`
+  without a call. The call is idempotent: a lost answer is asked once
+  more.
+  """
+  @spec egress_pin(t(), String.t(), keyword()) :: {:ok, PinnedTarget.t()} | {:error, term()}
+  def egress_pin(%__MODULE__{} = client, url, opts \\ []) when is_binary(url) and is_list(opts) do
+    purpose = Keyword.get(opts, :purpose, :fetch)
+
+    with {:ok, args} <- pin_args(url, purpose, Keyword.get(opts, :from)),
+         {:ok, wire} <- request(client, :egress_pin, args) do
+      case PinnedTarget.read(wire) do
+        {:ok, pin} -> {:ok, pin}
+        :error -> {:error, :lost}
+      end
+    end
+  end
+
+  defp pin_args(url, purpose, from) when purpose in [:fetch, :stream, :redirect] do
+    case PinnedTarget.request_args(url, purpose, from) do
+      {:ok, args} -> {:ok, args}
+      :error -> {:error, :malformed}
+    end
+  end
+
+  defp pin_args(_url, _purpose, _from), do: {:error, :malformed}
+
+  @doc """
   Report, for the worker service `credentials` name on its boot `boot`,
   that its runner `runner` exited while it held `attempts`. Every attempt
   one runner holds was issued by one member, so the report names that
@@ -480,15 +527,37 @@ defmodule Opus.HostClient do
     with {:ok, header, body, read} <- try.(),
          {:ok, raw} <- transport(host_url <> WorkerWire.host_route(op), header, body, op),
          {:ok, json} <- read.(raw) do
-      answer(json)
+      answer(json, op)
     else
+      {:refused, raw} -> refused(raw, op)
       _ -> :lost
     end
   end
 
-  # The bytes of a `200` answer, or `:error` for anything else: a refusal
-  # by status, a transport failure, an answer past the bound or later than
-  # the callback's timeout. No answer body is logged.
+  # A refusal by status is lost, unless it says the host speaks another
+  # version of the wire: such a host refuses every call this engine makes,
+  # so the call is answered as the refusal that stops the attempt's work
+  # instead of being asked again. The refusal is plain, since a listener
+  # that cannot read the header cannot seal to it, and is read whatever
+  # version it carries, since it is the other version's answer.
+  defp refused(raw, op) do
+    case Jason.decode(raw) do
+      {:ok, %{"error" => "unknown_version"}} -> other_version(op)
+      _ -> :lost
+    end
+  end
+
+  defp other_version(op) do
+    Logger.warning(
+      "[Opus.HostClient] #{op} was refused: the host speaks another version of the wire"
+    )
+
+    {:ok, {:error, :lost}}
+  end
+
+  # The bytes of a `200` answer, `{:refused, bytes}` for the body of any
+  # other status, or `:error` for a transport failure, an answer past the
+  # bound or later than the callback's timeout. No answer body is logged.
   defp transport(url, header, body, op) do
     max = HostAPI.max_answer_bytes()
 
@@ -506,11 +575,18 @@ defmodule Opus.HostClient do
       into: BoundedBody.collector(max)
     ]
 
-    with {:ok, %Req.Response{status: 200} = response} <- Req.request(request),
-         {:ok, raw} <- BoundedBody.read(response, max) do
-      {:ok, raw}
-    else
-      _ -> :error
+    case Req.request(request) do
+      {:ok, %Req.Response{status: 200} = response} ->
+        with {:ok, raw} <- BoundedBody.read(response, max), do: {:ok, raw}
+
+      {:ok, %Req.Response{} = response} ->
+        case BoundedBody.read(response, max) do
+          {:ok, raw} -> {:refused, raw}
+          _ -> :error
+        end
+
+      _ ->
+        :error
     end
   end
 
@@ -554,24 +630,38 @@ defmodule Opus.HostClient do
     })
   end
 
-  # An answer CYFR gave, or `:lost` for bytes that are not one.
-  defp answer(json) do
+  # An answer CYFR gave to `op`, or `:lost` for bytes that are not one at
+  # this wire's version (`Prima.WorkerWire.read_answer/1`).
+  defp answer(json, op) do
     case Jason.decode(json) do
-      {:ok, %{"ok" => value}} ->
+      {:ok, decoded} -> read_answer(decoded, op)
+      {:error, _} -> :lost
+    end
+  end
+
+  defp read_answer(decoded, op) do
+    case WorkerWire.read_answer(decoded) do
+      {:ok, value} ->
         {:ok, {:ok, value}}
 
-      {:ok, %{"error" => "setup_required", "payload" => %{} = payload}} ->
+      {:error, "setup_required", %{"payload" => %{} = payload}} ->
         {:ok, {:error, {:setup_required, payload}}}
 
-      {:ok, %{"error" => "guest_error", "type" => type, "message" => message} = refusal}
+      {:error, "guest_error", %{"type" => type, "message" => message} = fields}
       when is_binary(type) and is_binary(message) ->
-        {:ok, guest_error(refusal, type, message)}
+        {:ok, guest_error(fields, type, message)}
 
-      {:ok, %{"error" => "failed", "message" => message}} when is_binary(message) ->
+      {:error, "failed", %{"message" => message}} when is_binary(message) ->
         {:ok, {:error, {:failed, message}}}
 
-      {:ok, %{"error" => refusal}} when is_map_key(@refusals, refusal) ->
+      {:error, "unknown_version", _fields} ->
+        other_version(op)
+
+      {:error, refusal, _fields} when is_map_key(@refusals, refusal) ->
         {:ok, {:error, Map.fetch!(@refusals, refusal)}}
+
+      {:error, refusal, _fields} when op == :egress_pin and is_map_key(@pin_refusals, refusal) ->
+        {:ok, {:error, Map.fetch!(@pin_refusals, refusal)}}
 
       _ ->
         :lost
@@ -581,7 +671,7 @@ defmodule Opus.HostClient do
   defp guest_error(%{"remediation" => %{} = remediation}, type, message),
     do: {:error, {:guest_error, type, message, remediation}}
 
-  defp guest_error(_refusal, type, message), do: {:error, {:guest_error, type, message}}
+  defp guest_error(_fields, type, message), do: {:error, {:guest_error, type, message}}
 
   defp renewal(%{"lease_until" => until}) when is_integer(until), do: {:ok, until}
   defp renewal(_lost), do: :lost
