@@ -6,6 +6,7 @@ package cgroup
 import (
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 )
@@ -101,6 +102,42 @@ func TestDelegateSaysWhyBoundsAreUnavailable(t *testing.T) {
 		if err == nil || m != nil || !strings.Contains(err.Error(), c.want) {
 			t.Errorf("%s: Delegate = %v, %v; want an error naming %q", name, m, err, c.want)
 		}
+	}
+}
+
+// A process the root keeps is named with the write's error and what /proc
+// says it is: one whose move the kernel refused, and one listed still
+// after a write that succeeded.
+func TestDrainNamesEveryProcessItCannotMove(t *testing.T) {
+	self := strconv.Itoa(os.Getpid())
+	files := delegated()
+	files["cgroup.procs"] = self + "\n"
+
+	refused := namespaceRoot(t, files)
+	// A directory where the leaf's cgroup.procs belongs: every write fails.
+	if err := os.MkdirAll(filepath.Join(refused, keeperLeaf, "cgroup.procs"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	_, err := Delegate(refused, []byte("0::/\n"))
+	if err == nil {
+		t.Fatal("a root whose process cannot move was delegated")
+	}
+	for _, want := range []string{"processes remain in " + refused, "pid " + self + " (", "moving it: ", "is a directory", "state "} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("the refusal %q does not name %q", err, want)
+		}
+	}
+
+	stuck := namespaceRoot(t, files)
+	_, err = Delegate(stuck, []byte("0::/\n"))
+	if err == nil || !strings.Contains(err.Error(), "pid "+self+" (") || !strings.Contains(err.Error(), "still listed") {
+		t.Fatalf("a process listed after its move: %v", err)
+	}
+
+	gone := namespaceRoot(t, map[string]string{"cgroup.controllers": "memory\n", "memory.max": "max\n", "cgroup.procs": "999999999\n"})
+	_, err = Delegate(gone, []byte("0::/\n"))
+	if err == nil || !strings.Contains(err.Error(), "pid 999999999 (no /proc entry") {
+		t.Fatalf("a pid /proc does not know: %v", err)
 	}
 }
 

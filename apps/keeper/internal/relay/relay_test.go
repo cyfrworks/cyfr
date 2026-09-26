@@ -5,11 +5,14 @@ package relay
 
 import (
 	"bytes"
+	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"io"
 	"net"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"syscall"
 	"testing"
@@ -90,20 +93,35 @@ type session struct {
 	done    chan error
 	p       backendPipes
 	backend *net.UnixConn
+	// relayBackend is the backend's end of its relay, which an isolated
+	// spawn's command holds as fd 4.
+	relayBackend *net.UnixConn
 }
 
 func start(t *testing.T, withControl bool) *session {
 	t.Helper()
+	return startWith(t, withControl, false)
+}
+
+// startWith is start for a spawn with a relay, as every spawn of an
+// isolated pool has, when withRelay.
+func startWith(t *testing.T, withControl, withRelay bool) *session {
+	t.Helper()
 	path, ln := listen(t)
 	s := &session{buf: make([]byte, frame.MaxPayload), done: make(chan error, 1), p: newPipes(t)}
-	var control Control
+	var control, relay Control
 	if withControl {
 		var relayEnd *net.UnixConn
 		relayEnd, s.backend = newControlPair(t)
 		control = relayEnd
 	}
-	spec := Spec{Path: path, Token: token, Control: withControl}
-	go func() { s.done <- Run(spec, s.p.stdinW, s.p.stdoutR, s.p.stderrR, control, time.Second) }()
+	if withRelay {
+		var relayEnd *net.UnixConn
+		relayEnd, s.relayBackend = newControlPair(t)
+		relay = relayEnd
+	}
+	spec := Spec{Path: path, Token: token, Control: withControl, Relay: withRelay}
+	go func() { s.done <- Run(spec, s.p.stdinW, s.p.stdoutR, s.p.stderrR, control, relay, time.Second) }()
 	conn, err := ln.Accept()
 	if err != nil {
 		t.Fatal(err)
@@ -225,7 +243,7 @@ func TestRelayRefusesOutputFramesFromTheClient(t *testing.T) {
 func TestRelayRefusesAnInvalidSpecAndClosesItsFiles(t *testing.T) {
 	p := newPipes(t)
 	relayEnd, backendEnd := newControlPair(t)
-	err := Run(Spec{Path: "relative.sock", Token: token, Control: true}, p.stdinW, p.stdoutR, p.stderrR, relayEnd, time.Second)
+	err := Run(Spec{Path: "relative.sock", Token: token, Control: true}, p.stdinW, p.stdoutR, p.stderrR, relayEnd, nil, time.Second)
 	if err == nil {
 		t.Fatal("a relative attach path was accepted")
 	}
@@ -358,5 +376,136 @@ func TestRelayEndsOnAnOversizeControlFrame(t *testing.T) {
 	}
 	if n, err := s.backend.Read(make([]byte, 1)); n != 0 || err != io.EOF {
 		t.Fatalf("the backend's end was not closed with the relay: %d %v", n, err)
+	}
+}
+
+// relayStreamVector is one of the shared vectors' relay_streams cases.
+type relayStreamVector struct {
+	Why             string `json:"why"`
+	BackendWrites   string `json:"backend_writes_hex"`
+	ClientOpens     bool   `json:"client_opens"`
+	Ended           []int  `json:"ended_streams"`
+	RelayPayloadHex string `json:"relay_payload_hex"`
+}
+
+func relayStreamVectors(t *testing.T) map[string]relayStreamVector {
+	t.Helper()
+	data, err := os.ReadFile(filepath.Join("..", "..", "..", "..", "tests", "fixtures", "keeper_protocol.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var v struct {
+		RelayStreams map[string]relayStreamVector `json:"relay_streams"`
+	}
+	if err := json.Unmarshal(data, &v); err != nil {
+		t.Fatal(err)
+	}
+	if len(v.RelayStreams) != 2 {
+		t.Fatalf("relay_streams holds %d cases, want unused and opened", len(v.RelayStreams))
+	}
+	return v.RelayStreams
+}
+
+// The shared vectors' relay rule: a spawn with a relay whose command
+// writes to it and exits sends nothing on the relay stream, its end frame
+// included, unless the client opened the stream, and then carries what
+// the command wrote and ends the stream.
+func TestTheRelayStreamIsSilentUntilTheClientOpensIt(t *testing.T) {
+	for name, c := range relayStreamVectors(t) {
+		s := startWith(t, true, true)
+		writes, _ := hex.DecodeString(c.BackendWrites)
+		want, _ := hex.DecodeString(c.RelayPayloadHex)
+		// The command writes a relay frame to fd 4, then exits: every one
+		// of its ends closes. With the stream opened, it exits once what it
+		// wrote has arrived, so the exit does not race the opening frame.
+		exit := func() {
+			s.relayBackend.Close()
+			s.backend.Close()
+			s.p.stdoutW.Close()
+			s.p.stderrW.Close()
+		}
+		if c.ClientOpens {
+			if err := frame.Write(s.conn, frame.StreamRelay, nil); err != nil {
+				t.Fatal(err)
+			}
+		}
+		if _, err := s.relayBackend.Write(writes); err != nil {
+			t.Fatal(err)
+		}
+		exited := !c.ClientOpens
+		if exited {
+			exit()
+		}
+
+		got := map[byte][]byte{}
+		var ended []int
+		for {
+			if !exited && bytes.Equal(got[frame.StreamRelay], want) {
+				exit()
+				exited = true
+			}
+			stream, payload, err := frame.Read(s.conn, s.buf)
+			if errors.Is(err, io.EOF) {
+				break
+			}
+			if err != nil {
+				t.Fatalf("%s: reading the relay: %v", name, err)
+			}
+			if len(payload) == 0 {
+				ended = append(ended, int(stream))
+				continue
+			}
+			got[stream] = append(got[stream], payload...)
+		}
+		if err := s.result(t); err != nil {
+			t.Fatalf("%s: the relay ended with %v", name, err)
+		}
+		slices.Sort(ended)
+		if !slices.Equal(ended, c.Ended) || !bytes.Equal(got[frame.StreamRelay], want) {
+			t.Errorf("%s (%s): ended %v, relay stream %x; want ended %v, relay stream %x", name, c.Why, ended, got[frame.StreamRelay], c.Ended, want)
+		}
+		if _, sent := got[frame.StreamRelay]; !c.ClientOpens && sent {
+			t.Errorf("%s: a frame on the unopened relay stream", name)
+		}
+	}
+}
+
+// Once open, the relay stream carries the client's bytes to the command's
+// fd 4 and a zero-length client frame closes the command's reading side,
+// while what the command writes still arrives.
+func TestTheOpenedRelayStreamCarriesBothWays(t *testing.T) {
+	s := startWith(t, true, true)
+	defer s.p.stdoutW.Close()
+	defer s.p.stderrW.Close()
+	if err := frame.Write(s.conn, frame.StreamRelay, []byte("answer")); err != nil {
+		t.Fatal(err)
+	}
+	got := make([]byte, 16)
+	if n, err := io.ReadAtLeast(s.relayBackend, got, len("answer")); err != nil || string(got[:n]) != "answer" {
+		t.Fatalf("the command read %q %v", got[:n], err)
+	}
+	if err := frame.Write(s.conn, frame.StreamRelay, nil); err != nil {
+		t.Fatal(err)
+	}
+	if n, err := s.relayBackend.Read(got); n != 0 || err != io.EOF {
+		t.Fatalf("the command's reading side stayed open: %d %v", n, err)
+	}
+	if _, err := s.relayBackend.Write([]byte("call")); err != nil {
+		t.Fatal(err)
+	}
+	if payload, ok := s.next(t, frame.StreamRelay); !ok || string(payload) != "call" {
+		t.Fatalf("relay frame %q %v", payload, ok)
+	}
+}
+
+func TestRelayRefusesARelayFrameWithoutARelay(t *testing.T) {
+	s := start(t, true)
+	defer s.p.stdoutW.Close()
+	defer s.p.stderrW.Close()
+	if err := frame.Write(s.conn, frame.StreamRelay, nil); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.result(t); !errors.Is(err, errProtocol) {
+		t.Fatalf("relay ended with %v", err)
 	}
 }

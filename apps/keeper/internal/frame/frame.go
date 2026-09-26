@@ -30,6 +30,16 @@ const (
 	// from the relay reports that the backend's end is closed; one from the
 	// client closes the backend's reading side.
 	StreamControl byte = 4
+	// StreamRelay carries the bytes of an isolated spawn's relay, the
+	// socket on the backend's file descriptor 4 (Prima.RunnerRelay frames),
+	// in both directions; only a spawn of an isolated pool has this
+	// stream. The relay sends nothing on it, its end frame included, until
+	// the client has sent on it first, so a client that never uses the
+	// stream never receives a frame on it. The client's first frame opens
+	// it, a zero-length one included, which ends nothing; after that a
+	// zero-length frame from the relay reports that the backend's end is
+	// closed, and one from the client closes the backend's reading side.
+	StreamRelay byte = 5
 )
 
 const (
@@ -47,7 +57,7 @@ var (
 )
 
 func validStream(stream byte) bool {
-	return stream <= StreamControl
+	return stream <= StreamRelay
 }
 
 // Append encodes one frame onto dst.

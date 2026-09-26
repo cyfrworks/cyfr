@@ -102,6 +102,10 @@ func TestKeeperCapsAreExactlySetuidSetgidKill(t *testing.T) {
 		"extra permitted":           withField(keeperStatus, "CapPrm", "00000000000001e0"),
 		"no capabilities":           withField(withField(keeperStatus, "CapEff", "0000000000000000"), "CapPrm", "0000000000000000"),
 		"without KILL":              withField(keeperStatus, "CapEff", "00000000000000c0"),
+		"bounding without KILL":     withField(keeperStatus, "CapBnd", "00000000000000c0"),
+		"inheritable SETUID":        withField(keeperStatus, "CapInh", "0000000000000080"),
+		"inheritable as permitted":  withField(keeperStatus, "CapInh", "00000000000000e0"),
+		"ambient as permitted":      withField(withField(keeperStatus, "CapInh", "00000000000000e0"), "CapAmb", "00000000000000e0"),
 		"full root":                 withField(withField(withField(keeperStatus, "CapEff", "000001ffffffffff"), "CapPrm", "000001ffffffffff"), "CapBnd", "000001ffffffffff"),
 	} {
 		st, err := ParseStatus([]byte(input))
@@ -110,6 +114,50 @@ func TestKeeperCapsAreExactlySetuidSetgidKill(t *testing.T) {
 		}
 		if err := CheckKeeperCaps(st); err == nil {
 			t.Errorf("%s: accepted", name)
+		}
+	}
+
+	// The refusal names the set at fault.
+	st, _ = ParseStatus([]byte(withField(keeperStatus, "CapAmb", "0000000000000080")))
+	if err := CheckKeeperCaps(st); err == nil || !strings.HasPrefix(err.Error(), "CapAmb ") {
+		t.Fatalf("an ambient SETUID: %v", err)
+	}
+}
+
+// A status file of a stage in a namespace of its own once it dropped every
+// set, and the sets it may still hold.
+func TestNoCapsChecksAllFiveSets(t *testing.T) {
+	empty := withField(withField(withField(keeperStatus, "CapPrm", "0000000000000000"), "CapEff", "0000000000000000"), "CapBnd", "0000000000000000")
+	st, _ := ParseStatus([]byte(empty))
+	if err := CheckNoCaps(st, 0); err != nil {
+		t.Fatalf("every set empty was refused: %v", err)
+	}
+	shared := withField(empty, "CapBnd", "00000000000000e0")
+	st, _ = ParseStatus([]byte(shared))
+	if err := CheckNoCaps(st, KeeperCaps); err != nil {
+		t.Fatalf("the keeper's bounding set outside a namespace was refused: %v", err)
+	}
+	for name, c := range map[string]struct {
+		input    string
+		bounding uint64
+		set      string
+	}{
+		"inheritable":                    {withField(empty, "CapInh", "0000000000000100"), 0, "CapInh"},
+		"permitted":                      {withField(empty, "CapPrm", "0000000000000001"), 0, "CapPrm"},
+		"effective":                      {withField(empty, "CapEff", "0000000000200000"), 0, "CapEff"},
+		"a full bounding set":            {withField(empty, "CapBnd", "000001ffffffffff"), 0, "CapBnd"},
+		"the keeper's in a namespace":    {shared, 0, "CapBnd"},
+		"beyond the keeper's":            {withField(empty, "CapBnd", "00000000000001e0"), KeeperCaps, "CapBnd"},
+		"ambient, whatever the bounding": {withField(shared, "CapAmb", "0000000000000080"), AnyBounding, "CapAmb"},
+		"ambient":                        {withField(empty, "CapAmb", "0000000000000100"), 0, "CapAmb"},
+		"no_new_privs unset":             {withField(empty, "NoNewPrivs", "0"), 0, "no_new_privs"},
+	} {
+		st, err := ParseStatus([]byte(c.input))
+		if err != nil {
+			t.Fatalf("%s: %v", name, err)
+		}
+		if err := CheckNoCaps(st, c.bounding); err == nil || !strings.HasPrefix(err.Error(), c.set) {
+			t.Errorf("%s: %v, want a refusal naming %s", name, err, c.set)
 		}
 	}
 }

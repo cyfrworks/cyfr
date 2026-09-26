@@ -212,26 +212,33 @@ class Stack:
                 out.append({"pid": int(pid), "uids": [int(u) for u in uids.split(",")], "cap_eff": eff, "cmd": cmd.strip()})
         return out
 
-    def runner_processes(self):
-        """The runner VMs: each pooled uid's beam.smp with the runner id and home its environment names.
+    def observe(self, script):
+        """`script` run in the container with every capability (`docker exec --privileged`), the observer's alone.
 
-        Another uid's environ is readable only by that uid (or with
-        CAP_SYS_PTRACE, which the container lacks), so it is read as the
-        runner's own uid through setpriv, which root's SETUID and SETGID
-        allow."""
+        A runner's environ and descriptors are readable only by its own uid
+        from inside its user namespace, or with CAP_SYS_PTRACE there and
+        CAP_DAC_READ_SEARCH over its 0500 /proc entries: the runner's uid
+        in the container's namespace may not read them, and neither may the
+        container's root, which holds neither capability. Only the
+        observer's own process is privileged: the service and its runners
+        keep the shipped settings."""
+        return run("docker", "exec", "--privileged", self.container, "sh", "-c", script, check=False)
+
+    def runner_processes(self):
+        """The runner VMs: each pooled uid's beam.smp with the runner id and home its environment names, read by the observer (`observe`)."""
         script = r"""
           for d in /proc/[0-9]*; do
             s="$(cat "$d/status" 2>/dev/null)" || continue
             uid="$(printf '%s\n' "$s" | awk '/^Uid:/ {print $2}')"
             [ "$uid" -ge FIRST ] && [ "$uid" -le LAST ] || continue
             tr '\0' ' ' < "$d/cmdline" 2>/dev/null | grep -q 'beam.smp' || continue
-            env="$(setpriv --reuid="$uid" --regid="$uid" --clear-groups sh -c "tr '\\0' '\\n' < $d/environ" 2>/dev/null)"
+            env="$(tr '\0' '\n' < "$d/environ" 2>/dev/null)"
             runner="$(printf '%s\n' "$env" | sed -n 's/^OPUS_RUNNER_ID=//p')"
             home="$(printf '%s\n' "$env" | sed -n 's/^HOME=//p')"
             printf '%s|%s|%s|%s\n' "${d#/proc/}" "$uid" "$runner" "$home"
           done""".replace("FIRST", str(POOL_FIRST)).replace("LAST", str(POOL_LAST))
         out = []
-        for line in self.exec(script).stdout.splitlines():
+        for line in self.observe(script).stdout.splitlines():
             if line.count("|") < 3:
                 continue
             pid, uid, runner, home = line.split("|", 3)

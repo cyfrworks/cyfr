@@ -8,6 +8,7 @@ package relay
 import (
 	"bytes"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net"
 	"os"
@@ -18,13 +19,15 @@ import (
 )
 
 // File descriptors of a relay process; 0-2 are /dev/null, /dev/null and
-// the keeper's stderr. ControlFD is present only when the spec says so.
+// the keeper's stderr. ControlFD and RelayFD are present only when the
+// spec says so; a relay without a control channel has fd 7 closed.
 const (
 	SpecFD    = 3
 	StdinFD   = 4
 	StdoutFD  = 5
 	StderrFD  = 6
 	ControlFD = 7
+	RelayFD   = 8
 )
 
 // Main runs `cyfr-keeper relay`.
@@ -48,27 +51,38 @@ func Main() int {
 		}
 		files = append(files, os.NewFile(uintptr(fd), "backend"))
 	}
-	var control Control
+	var control, relay Control
 	if spec.Control {
-		// FileConn duplicates the descriptor into a polled socket, so the
-		// original is closed once it is wrapped.
-		f := os.NewFile(ControlFD, "control")
-		conn, err := net.FileConn(f)
-		_ = f.Close()
-		if err != nil {
-			return failf("fd %d: %v", ControlFD, err)
+		if control, err = socketAt(ControlFD); err != nil {
+			return failf("%v", err)
 		}
-		sock, ok := conn.(*net.UnixConn)
-		if !ok {
-			_ = conn.Close()
-			return failf("fd %d is not a unix socket", ControlFD)
-		}
-		control = sock
 	}
-	if err := Run(spec, files[0], files[1], files[2], control, DialTimeout); err != nil {
+	if spec.Relay {
+		if relay, err = socketAt(RelayFD); err != nil {
+			return failf("%v", err)
+		}
+	}
+	if err := Run(spec, files[0], files[1], files[2], control, relay, DialTimeout); err != nil {
 		return failf("%v", err)
 	}
 	return 0
+}
+
+// socketAt wraps the unix socket on fd. FileConn duplicates the descriptor
+// into a polled socket, so the original is closed once it is wrapped.
+func socketAt(fd int) (Control, error) {
+	f := os.NewFile(uintptr(fd), "socket")
+	conn, err := net.FileConn(f)
+	_ = f.Close()
+	if err != nil {
+		return nil, fmt.Errorf("fd %d: %w", fd, err)
+	}
+	sock, ok := conn.(*net.UnixConn)
+	if !ok {
+		_ = conn.Close()
+		return nil, fmt.Errorf("fd %d is not a unix socket", fd)
+	}
+	return sock, nil
 }
 
 func failf(format string, args ...any) int {

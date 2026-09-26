@@ -7,7 +7,7 @@
 //
 // Client to keeper:
 //
-//	{"v":1,"type":"spawn","id":…,"pool":…,"argv":[…],"env":{…},"rlimits":{…},"memory_bytes":…,"control":true,"attach":{"path":…,"token":…}}
+//	{"v":1,"type":"spawn","id":…,"pool":…,"argv":[…],"env":{…},"rlimits":{…},"memory_bytes":…,"control":true,"isolation":"netns","attach":{"path":…,"token":…}}
 //	{"v":1,"type":"signal","spawn_id":…,"sig":"SIGTERM"}
 //	{"v":1,"type":"release","spawn_id":…,"grace_ms":…}
 //	{"v":1,"type":"pool","id":…,"pool":…}
@@ -56,6 +56,16 @@
 // serve such a spawn; a long-lived command is ended only by a `release`, by
 // its own exit or by the loss of the client, whichever pool it came from.
 //
+// A spawn's `isolation` is IsolationNetns or absent, and is present exactly
+// when its pool is isolated (`--pool <name>:<first>-<last>:netns` on the
+// keeper's command line): the keeper refuses the one without the other as
+// CodeBadRequest. An isolated spawn's command runs in a user and network
+// namespace cloned for it, whose loopback stays down and whose only
+// mapping is the pooled uid and gid to themselves, so the command keeps
+// its uid, its home and its cgroup and has no route to anything: a
+// descriptor it inherited is its only way out. It holds no capability in
+// any of the five sets and runs with no_new_privs.
+//
 // The client's environment carries ChannelEnv, the name /proc/self/fd/3
 // links to for the channel socket (`socket:[inode]`), so a client whose
 // runtime opens descriptors of its own before it can inspect fd 3 tells the
@@ -76,6 +86,10 @@ import (
 
 // Version is the protocol version every message carries as `v`.
 const Version = 1
+
+// IsolationNetns is the one value a spawn's `isolation` takes: a user and
+// network namespace of the spawn's own.
+const IsolationNetns = "netns"
 
 // ChannelEnv is the client environment variable naming the channel socket.
 const ChannelEnv = "KEEPER_CHANNEL"
@@ -233,10 +247,13 @@ type Request struct {
 	// MemoryBytes is a spawn's memory bound; nil asks for none.
 	MemoryBytes *uint64 `json:"memory_bytes,omitempty"`
 	Control     bool    `json:"control,omitempty"`
-	Attach      *Attach `json:"attach,omitempty"`
-	SpawnID     string  `json:"spawn_id,omitempty"`
-	Sig         string  `json:"sig,omitempty"`
-	GraceMs     *int64  `json:"grace_ms,omitempty"`
+	// Isolation is IsolationNetns for a spawn of an isolated pool and
+	// empty for any other.
+	Isolation string  `json:"isolation,omitempty"`
+	Attach    *Attach `json:"attach,omitempty"`
+	SpawnID   string  `json:"spawn_id,omitempty"`
+	Sig       string  `json:"sig,omitempty"`
+	GraceMs   *int64  `json:"grace_ms,omitempty"`
 }
 
 // RequestError is a refused request: the code to reply with, the request's
@@ -323,8 +340,8 @@ func ParseRequest(line []byte) (*Request, *RequestError) {
 }
 
 func validateSpawn(req *Request) error {
-	if !req.only("id", "pool", "argv", "env", "rlimits", "memory_bytes", "control", "attach") {
-		return errors.New("spawn carries only id, pool, argv, env, rlimits, memory_bytes, control and attach")
+	if !req.only("id", "pool", "argv", "env", "rlimits", "memory_bytes", "control", "isolation", "attach") {
+		return errors.New("spawn carries only id, pool, argv, env, rlimits, memory_bytes, control, isolation and attach")
 	}
 	if !idPattern.MatchString(req.ID) {
 		return errors.New("id must match " + idPattern.String())
@@ -340,6 +357,9 @@ func validateSpawn(req *Request) error {
 	}
 	if m := req.MemoryBytes; m != nil && (*m < MinMemoryBytes || *m > MaxMemoryBytes) {
 		return fmt.Errorf("memory_bytes must be within %d..%d", uint64(MinMemoryBytes), uint64(MaxMemoryBytes))
+	}
+	if req.Isolation != "" && req.Isolation != IsolationNetns {
+		return errors.New("isolation must be " + IsolationNetns)
 	}
 	if req.Attach == nil {
 		return errors.New("attach is required")
@@ -408,6 +428,7 @@ func (r *Request) only(fields ...string) bool {
 		"rlimits":      r.Rlimits != nil,
 		"memory_bytes": r.MemoryBytes != nil,
 		"control":      r.Control,
+		"isolation":    r.Isolation != "",
 		"attach":       r.Attach != nil,
 		"spawn_id":     r.SpawnID != "",
 		"sig":          r.Sig != "",

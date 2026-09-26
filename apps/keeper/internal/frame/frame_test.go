@@ -38,7 +38,7 @@ func TestRoundTripAndEndMarker(t *testing.T) {
 	}
 }
 
-func TestControlIsTheLastStream(t *testing.T) {
+func TestControlAndRelayAreTheLastStreams(t *testing.T) {
 	var buf bytes.Buffer
 	if err := Write(&buf, StreamControl, []byte(`{"v":1}`+"\n")); err != nil {
 		t.Fatal(err)
@@ -50,8 +50,17 @@ func TestControlIsTheLastStream(t *testing.T) {
 	if err != nil || stream != StreamControl || string(payload) != `{"v":1}`+"\n" {
 		t.Fatalf("control frame = %d %q %v", stream, payload, err)
 	}
-	if err := Write(io.Discard, StreamControl+1, nil); !errors.Is(err, ErrUnknownStream) {
-		t.Fatalf("the stream after control was accepted: %v", err)
+	if err := Write(&buf, StreamRelay, []byte{0, 0, 0, 2, '{', '}'}); err != nil {
+		t.Fatal(err)
+	}
+	if got := hex.EncodeToString(buf.Bytes()); got != "0500000006"+"000000027b7d" {
+		t.Fatalf("relay encoding = %s", got)
+	}
+	if stream, _, err := Read(&buf, make([]byte, MaxPayload)); err != nil || stream != StreamRelay {
+		t.Fatalf("relay frame = %d %v", stream, err)
+	}
+	if err := Write(io.Discard, StreamRelay+1, nil); !errors.Is(err, ErrUnknownStream) {
+		t.Fatalf("the stream after the relay was accepted: %v", err)
 	}
 }
 

@@ -6,8 +6,8 @@ defmodule Opus.KeeperVectorsTest do
   `Opus.Keeper.Channel` against the keeper's shared vectors
   (`tests/fixtures/keeper_protocol.json`), the test holding the keeper's
   end of the channel and dialling as a runner's relay: the spawn it
-  writes is the vectors' bounded runner spawn with a control channel,
-  byte for byte but for its own id, command and attach target; every
+  writes is the vectors' bounded, isolated runner spawn with a control
+  channel, byte for byte but for its own id, command and attach target; every
   reply the vectors hold reaches the spawn's handle as the event it
   means; a reply of the wrong shape is ignored; the relay's stdout,
   stderr and control frames are carried, and a frame on stdin or the
@@ -125,7 +125,7 @@ defmodule Opus.KeeperVectorsTest do
 
   test "the spawn is the vectors' bounded runner spawn with a control channel, byte for byte",
        ctx do
-    assert %{"control" => true, "memory_bytes" => bound} = @runner_spawn
+    assert %{"control" => true, "memory_bytes" => bound, "isolation" => "netns"} = @runner_spawn
     client = start_client!(ctx)
     {_ref, line} = spawn!(client, @runner_spawn["argv"], @runner_spawn["env"])
     sent = Jason.decode!(line)

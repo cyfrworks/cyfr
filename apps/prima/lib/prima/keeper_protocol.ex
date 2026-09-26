@@ -41,6 +41,33 @@ defmodule Prima.KeeperProtocol do
   payload is the spawn's token of `token_hex_bytes/0` lowercase hex
   digits. Which streams a client accepts past the attach frame is the
   client's own: a stream it never asked for is a relay fault there.
+
+  The relay stream, 5, is the exception to that rule's premise: every
+  spawn of an isolated pool has one, the socket on its command's file
+  descriptor 4 carrying `Prima.RunnerRelay` frames verbatim, asked for or
+  not. The keeper sends nothing on it, its end frame included, until the
+  client has sent on it first, so a client that never uses the stream
+  never receives a frame on it. The client's first frame opens it, and a
+  zero-length first frame opens it and ends nothing, since the service
+  speaks second on a runner's relay; after that a zero-length frame ends
+  it in either direction, as on any other stream. An opening frame the
+  keeper had not read when every other stream of the spawn ended opens
+  nothing: the attach connection ends.
+
+  ## Isolation
+
+  A spawn's `isolation` is `"netns"`, the only value, or absent. The
+  keeper declares on its command line which of its pools are isolated
+  (`--pool runner:30101-30108:netns`): it starts every spawn of such a
+  pool in a user and network namespace of its own, whose only interface
+  is a loopback left down, and refuses as `bad_request` a spawn of an
+  isolated pool that does not carry `isolation`, and one of any other
+  pool that does, so a client never takes a command for isolated that is
+  not. The namespace maps the spawn's pooled uid and gid to themselves,
+  so the command keeps its uid, its home and its cgroup; it holds no
+  capability in any set and runs with `no_new_privs`. Its relay on file
+  descriptor 4, carried as stream 5, is its only way to anything beyond
+  its control channel.
   """
 
   @version 1
@@ -48,7 +75,7 @@ defmodule Prima.KeeperProtocol do
   @max_line_bytes 1_048_576
   @token_hex_bytes 64
 
-  @streams [stdin: 0, stdout: 1, stderr: 2, attach: 3, control: 4]
+  @streams [stdin: 0, stdout: 1, stderr: 2, attach: 3, control: 4, relay: 5]
   @stream_byte Map.new(@streams)
   @stream_name Map.new(@streams, fn {name, byte} -> {byte, name} end)
   @attach_stream Keyword.fetch!(@streams, :attach)
@@ -62,6 +89,7 @@ defmodule Prima.KeeperProtocol do
   @max_socket_path 107
   @min_memory_bytes 16 * 1024 * 1024
   @max_memory_bytes 1024 * 1024 * 1024 * 1024
+  @isolations ~w(netns)
   @signals ~w(SIGTERM SIGKILL SIGINT SIGHUP SIGQUIT SIGUSR1 SIGUSR2)
   @reserved_env ~w(PATH HOME USER LOGNAME SHELL TMPDIR PWD)
   @reserved_env_prefixes ~w(CYFR_ LOCUS_ KEEPER_)
@@ -96,6 +124,7 @@ defmodule Prima.KeeperProtocol do
          rlimits: :optional,
          memory_bytes: :optional,
          control: :optional,
+         isolation: :optional,
          attach: :required
        ]},
     signal: {"signal", [spawn_id: :required, sig: :required]},
@@ -124,7 +153,7 @@ defmodule Prima.KeeperProtocol do
   @optional_reply_members %{error: [:id, :spawn_id]}
 
   @typedoc "A stream of an attach connection."
-  @type stream :: :stdin | :stdout | :stderr | :attach | :control
+  @type stream :: :stdin | :stdout | :stderr | :attach | :control | :relay
 
   @typedoc "A signal a `signal` request may name."
   @type signal :: String.t()
@@ -133,8 +162,8 @@ defmodule Prima.KeeperProtocol do
   A request, as `encode/1` takes it: its `type` and its members, with atom
   keys but for `env`'s names. `spawn` requires `id`, `pool`, `argv` and
   `attach` (`%{path: path, token: token}`); `env` (names to values),
-  `rlimits` (`nofile`, `nproc`, `core`, `fsize`), `memory_bytes` and
-  `control` are optional.
+  `rlimits` (`nofile`, `nproc`, `core`, `fsize`), `memory_bytes`,
+  `control` and `isolation` (`"netns"`) are optional.
   """
   @type request ::
           %{
@@ -146,6 +175,7 @@ defmodule Prima.KeeperProtocol do
             optional(:rlimits) => %{optional(atom()) => non_neg_integer()},
             optional(:memory_bytes) => pos_integer(),
             optional(:control) => boolean(),
+            optional(:isolation) => String.t(),
             required(:attach) => %{path: String.t(), token: String.t()}
           }
           | %{type: :signal, spawn_id: String.t(), sig: signal()}
@@ -198,8 +228,12 @@ defmodule Prima.KeeperProtocol do
   def token_hex_bytes, do: @token_hex_bytes
 
   @doc "The streams of an attach connection and their bytes, in byte order."
-  @spec streams() :: [{stream(), 0..4}]
+  @spec streams() :: [{stream(), 0..5}]
   def streams, do: @streams
+
+  @doc "The values a spawn's `isolation` may take."
+  @spec isolations() :: [String.t()]
+  def isolations, do: @isolations
 
   @doc "The variable names no spawn's `env` may carry."
   @spec reserved_env_names() :: [String.t()]
@@ -391,6 +425,10 @@ defmodule Prima.KeeperProtocol do
        do: {"memory_bytes", bytes}
 
   defp write(:spawn, {:control, control}) when is_boolean(control), do: {"control", control}
+
+  defp write(:spawn, {:isolation, isolation}) when isolation in @isolations,
+    do: {"isolation", isolation}
+
   defp write(:signal, {:sig, sig}) when sig in @signals, do: {"sig", sig}
 
   defp write(:release, {:grace_ms, grace})
