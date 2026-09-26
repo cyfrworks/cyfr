@@ -59,7 +59,11 @@ defmodule Compendium.OCI.Client do
          {:ok, readme_bytes} <- maybe_fetch_layer(ctx, ref, parsed, &Manifest.readme_layer/1),
          {:ok, source_bytes} <- maybe_fetch_layer(ctx, ref, parsed, &Manifest.source_layer/1),
          {:ok, cyfr_manifest} <- parse_config(config_bytes),
-         {:ok, sig_meta} <- verify_signature(oci_ref),
+         # The digest fetch_manifest answered is the one the pull stores,
+         # whether it came from the registry or the cache; the signature is
+         # checked against exactly that manifest, never the tag, which may
+         # have moved since.
+         {:ok, sig_meta} <- verify_signature(ref, manifest_digest),
          # README and src/ ride the same unit commit as the artifact and
          # the manifest sentinel: one unit, one outcome — a local write
          # failure fails the pull and rolls the unit back, and the DB row
@@ -399,7 +403,23 @@ defmodule Compendium.OCI.Client do
     end
   end
 
+  # The signature is verified against the recorded digest, so the body the
+  # pull parses must hash to it: an entry whose body does not is discarded
+  # and refetched, as a pin's is.
   defp cached_tag(ctx, ref, tag, credential, cached_manifest, cached_digest) do
+    if Blob.compute_digest(cached_manifest) == cached_digest do
+      revalidate_tag(ctx, ref, tag, credential, cached_manifest, cached_digest)
+    else
+      Logger.warning(
+        "[Compendium.OCI.Client] Cached manifest for #{ref.registry}/#{ref.repository}" <>
+          ":#{tag} does not hash to its recorded digest — discarding and refetching"
+      )
+
+      fetch_manifest_remote(ctx, ref, tag, credential)
+    end
+  end
+
+  defp revalidate_tag(ctx, ref, tag, credential, cached_manifest, cached_digest) do
     case head_manifest(ctx, ref, tag) do
       {:ok, remote_digest} when remote_digest == cached_digest ->
         Cache.entitle(credential, ref.registry, ref.repository)
@@ -620,12 +640,16 @@ defmodule Compendium.OCI.Client do
   # a component pulled before the knob was turned on does not keep running.
   # With the knob off, running unsigned is the operator's accepted posture and
   # each such execution emits `[:cyfr, :opus, :execution, :unsigned]`.
-  defp verify_signature(oci_ref) do
-    case Compendium.Cosign.verify(oci_ref) do
+  defp verify_signature(%Reference{} = ref, manifest_digest) do
+    oci_ref = "#{ref.registry}/#{ref.repository}@#{manifest_digest}"
+
+    case Compendium.Cosign.verify(oci_ref, manifest_digest) do
       {:ok, %{identity: identity, issuer: issuer}} ->
         {:ok, %{verified: true, identity: identity, issuer: issuer}}
 
-      {:error, reason} ->
+      {:error, refusal} ->
+        reason = Compendium.Cosign.describe(refusal)
+
         if Cyfr.RuntimeConfig.require_signed_pulls?() do
           {:error,
            "Signature verification failed for #{oci_ref}: #{reason} — " <>
