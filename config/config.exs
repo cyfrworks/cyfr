@@ -48,6 +48,9 @@ config :cyfr,
     # `compendium`: builds and components.
     Compendium.Builds.Provider,
     Compendium.Provider,
+    # `compendium`: a person's layout document, which the desktop reads and
+    # every edit, the console's or the assistant's, arranges through.
+    Compendium.Providers.Layout,
     # `emissary`: external MCP server management. `Emissary.External.Proxy`
     # is not here: it owns no tool of its own — the tools it discovers are
     # the upstream servers', reached through `Grimoire.Catalog` on a lookup

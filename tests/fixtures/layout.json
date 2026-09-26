@@ -1,0 +1,76 @@
+{
+  "about": "Vectors for Prima.Layout (apps/prima/test/prima/layout_test.exs) and the JavaScript SDK test (apps/cyfr/assets/test/sdk/layout.test.mjs). `valid` is a document in canonical order whose canonical JSON (RFC 8785) is `canonical` and whose digest is `digest`; it names a tincture nobody installed, which stays valid. Every `invalid` document is refused for the reason `why` gives. `confirmation_classes` pins Prima.ConfirmationClass's wire spellings, least first; they live here until the device protocol's own vector file holds them.",
+  "valid": {
+    "version": 1,
+    "postures": {
+      "desk": {
+        "desktop": "tincture:local.desktop",
+        "slots": [
+          {"id": "weather", "tincture": "tincture:local.weather-lookup", "size": "card", "order": 0, "card": "today"},
+          {"id": "vault", "tincture": "tincture:local.vault", "size": "icon", "order": 1},
+          {"id": "game", "tincture": "tincture:local.flappy-bird", "size": "full", "order": 2},
+          {"id": "gone", "tincture": "tincture:example.com.not-installed", "size": "icon", "order": 3}
+        ],
+        "floating": [
+          {"tincture": "tincture:local.timer", "position": {"x": 9000, "y": 500}}
+        ]
+      },
+      "hand": {
+        "desktop": "tincture:local.desktop",
+        "slots": [
+          {"id": "vault", "tincture": "tincture:local.vault", "size": "icon", "order": 0}
+        ],
+        "floating": []
+      }
+    }
+  },
+  "canonical": "{\"postures\":{\"desk\":{\"desktop\":\"tincture:local.desktop\",\"floating\":[{\"position\":{\"x\":9000,\"y\":500},\"tincture\":\"tincture:local.timer\"}],\"slots\":[{\"card\":\"today\",\"id\":\"weather\",\"order\":0,\"size\":\"card\",\"tincture\":\"tincture:local.weather-lookup\"},{\"id\":\"vault\",\"order\":1,\"size\":\"icon\",\"tincture\":\"tincture:local.vault\"},{\"id\":\"game\",\"order\":2,\"size\":\"full\",\"tincture\":\"tincture:local.flappy-bird\"},{\"id\":\"gone\",\"order\":3,\"size\":\"icon\",\"tincture\":\"tincture:example.com.not-installed\"}]},\"hand\":{\"desktop\":\"tincture:local.desktop\",\"floating\":[],\"slots\":[{\"id\":\"vault\",\"order\":0,\"size\":\"icon\",\"tincture\":\"tincture:local.vault\"}]}},\"version\":1}",
+  "digest": "sha256:5a031797be00fad2e0b58e9b548f9a70b85a3e986fbb53f4a4b1f966d0ce8346",
+  "invalid": [
+    {
+      "why": "a slot names an operation: a layout can only arrange",
+      "document": {"version": 1, "postures": {"hand": {"desktop": "tincture:local.desktop", "slots": [{"id": "vault", "tincture": "tincture:local.vault", "size": "icon", "order": 0, "action": "vault.list"}], "floating": []}}}
+    },
+    {
+      "why": "a posture names a stream: a layout can only arrange",
+      "document": {"version": 1, "postures": {"hand": {"desktop": "tincture:local.desktop", "slots": [], "floating": [], "stream": "vault.status"}}}
+    },
+    {
+      "why": "a posture that is neither hand nor desk",
+      "document": {"version": 1, "postures": {"wall": {"desktop": "tincture:local.desktop", "slots": [], "floating": []}}}
+    },
+    {
+      "why": "a tincture named at a version",
+      "document": {"version": 1, "postures": {"desk": {"desktop": "tincture:local.desktop:0.1.0", "slots": [], "floating": []}}}
+    },
+    {
+      "why": "a component that is not a tincture",
+      "document": {"version": 1, "postures": {"desk": {"desktop": "catalyst:local.claude", "slots": [], "floating": []}}}
+    },
+    {
+      "why": "a size that is not icon, card or full",
+      "document": {"version": 1, "postures": {"desk": {"desktop": "tincture:local.desktop", "slots": [{"id": "vault", "tincture": "tincture:local.vault", "size": "huge", "order": 0}], "floating": []}}}
+    },
+    {
+      "why": "one slot id used twice in a posture",
+      "document": {"version": 1, "postures": {"desk": {"desktop": "tincture:local.desktop", "slots": [{"id": "a", "tincture": "tincture:local.vault", "size": "icon", "order": 0}, {"id": "a", "tincture": "tincture:local.timer", "size": "icon", "order": 1}], "floating": []}}}
+    },
+    {
+      "why": "a card named on a slot that is not a card",
+      "document": {"version": 1, "postures": {"desk": {"desktop": "tincture:local.desktop", "slots": [{"id": "vault", "tincture": "tincture:local.vault", "size": "icon", "order": 0, "card": "today"}], "floating": []}}}
+    },
+    {
+      "why": "a floating position outside the viewport",
+      "document": {"version": 1, "postures": {"desk": {"desktop": "tincture:local.desktop", "slots": [], "floating": [{"tincture": "tincture:local.timer", "position": {"x": 10001, "y": 0}}]}}}
+    },
+    {
+      "why": "a version this reader does not read",
+      "document": {"version": 2, "postures": {"desk": {"desktop": "tincture:local.desktop", "slots": [], "floating": []}}}
+    },
+    {
+      "why": "no posture at all",
+      "document": {"version": 1, "postures": {}}
+    }
+  ],
+  "confirmation_classes": ["none", "session", "paired", "strong"]
+}

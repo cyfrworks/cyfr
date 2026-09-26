@@ -22,6 +22,7 @@ const (
 	Execution          = "execution"
 	File               = "file"
 	Key                = "key"
+	Layout             = "layout"
 	McpLog             = "mcp_log"
 	McpServers         = "mcp_servers"
 	Member             = "member"
@@ -124,6 +125,8 @@ const (
 	KeyList                 = "list"
 	KeyRevoke               = "revoke"
 	KeyRotate               = "rotate"
+	LayoutEdit              = "edit"
+	LayoutGet               = "get"
 	McpLogCorrelate         = "correlate"
 	McpLogFanOuts           = "fan_outs"
 	McpLogGet               = "get"
@@ -258,6 +261,7 @@ var Actions = map[string][]string{
 	"execution":           {"cancel", "force_release", "list", "logs", "read_resource", "run", "run_stream", "status"},
 	"file":                {"delete", "list", "read", "write"},
 	"key":                 {"create", "get", "list", "revoke", "rotate"},
+	"layout":              {"edit", "get"},
 	"mcp_log":             {"correlate", "fan_outs", "get", "list", "stats"},
 	"mcp_servers":         {"create", "delete", "disable", "enable", "get", "list", "refresh", "restart", "test", "update"},
 	"member":              {"add", "leave", "list", "remove"},
@@ -1598,6 +1602,38 @@ func (args KeyRotateArgs) MarshalJSON() ([]byte, error) {
 		Action string `json:"action"`
 		fields
 	}{Action: KeyRotate, fields: fields(args)})
+}
+
+// LayoutEditArgs carries arguments for layout.edit.
+type LayoutEditArgs struct {
+	// edit: the whole layout document — {version: 1, postures: {hand|desk: {desktop, slots: [{id, tincture, size: icon|card|full, order, card}], floating: [{tincture, position: {x, y}}]}}}
+	Document any `json:"document"`
+	// edit: the revision get answered; a layout published since refuses the edit
+	Revision int `json:"revision"`
+}
+
+// MarshalJSON supplies the operation's fixed action discriminator.
+func (args LayoutEditArgs) MarshalJSON() ([]byte, error) {
+	type fields LayoutEditArgs
+	return json.Marshal(struct {
+		Action string `json:"action"`
+		fields
+	}{Action: LayoutEdit, fields: fields(args)})
+}
+
+// LayoutGetArgs carries arguments for layout.get.
+type LayoutGetArgs struct {
+	// get: also answer this posture's arrangement
+	Posture Field[string] `json:"posture,omitzero"`
+}
+
+// MarshalJSON supplies the operation's fixed action discriminator.
+func (args LayoutGetArgs) MarshalJSON() ([]byte, error) {
+	type fields LayoutGetArgs
+	return json.Marshal(struct {
+		Action string `json:"action"`
+		fields
+	}{Action: LayoutGet, fields: fields(args)})
 }
 
 // McpLogCorrelateArgs carries arguments for mcp_log.correlate.

@@ -11,6 +11,8 @@ import OptimisticNav from "./hooks/optimistic_nav"
 import Thread from "./hooks/thread"
 import AquaChat from "./hooks/aqua_chat"
 import MarkdownContent from "./hooks/markdown_content"
+import Canvas from "./canvas/index"
+import SystemLayer from "./system_layer/index"
 
 // Optional-chained: this runs at module top level, so a page rendered without
 // the root layout (an error page, a minimal page) would otherwise throw here
@@ -27,6 +29,8 @@ Hooks.OptimisticNav = OptimisticNav
 Hooks.Thread = Thread
 Hooks.AquaChat = AquaChat
 Hooks.MarkdownContent = MarkdownContent
+Hooks.Canvas = Canvas
+Hooks.SystemLayer = SystemLayer
 
 Hooks.FlashAutoHide = {
   mounted() {

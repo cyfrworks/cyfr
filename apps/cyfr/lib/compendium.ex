@@ -137,6 +137,35 @@ defmodule Compendium do
           :ok | {:error, Rules.refusal()}
   defdelegate tincture_check_streams(declaration, streams), to: Rules, as: :check_streams
 
+  # ---------------------------------------------------------------------------
+  # The layout (`Compendium.Providers.Layout`)
+  # ---------------------------------------------------------------------------
+
+  @doc """
+  The caller's layout as the desktop renders it: the whole document, its
+  revision and digest (the shipped default at revision 0, with
+  `shipped_default: true`, when the person never arranged one) and
+  `posture`'s arrangement. Read under the caller's context for the person
+  it names; an edit is never made here, only through the gate's
+  `layout.edit`. Refusals are the `layout` tool's.
+  """
+  @spec layout(Context.t(), Prima.Layout.posture_name()) ::
+          {:ok,
+           %{
+             document: Prima.Layout.t(),
+             revision: non_neg_integer(),
+             digest: String.t(),
+             shipped_default: boolean(),
+             arrangement: Prima.Layout.posture()
+           }}
+          | {:error, term()}
+  def layout(%Context{} = ctx, posture) do
+    with {:ok, layout} <- Compendium.Providers.Layout.read(ctx),
+         {:ok, arrangement} <- Compendium.Providers.Layout.arrangement(layout.document, posture) do
+      {:ok, Map.put(layout, :arrangement, arrangement)}
+    end
+  end
+
   @doc """
   Every installed catalyst release in the caller's athanor, each with the
   contracts its manifest declares — what the assistant's model listing

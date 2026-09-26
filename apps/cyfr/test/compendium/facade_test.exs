@@ -94,6 +94,7 @@ defmodule Compendium.FacadeTest do
     group_by_component: 1,
     group_search_results: 1,
     inspect_component: 2,
+    layout: 2,
     local_formula_refs: 1,
     manifest_leaves: 1,
     model_catalysts: 1,

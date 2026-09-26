@@ -511,7 +511,8 @@ defmodule Sanctum.Providers.Profile do
               :no_capability,
               :capability_digest_mismatch,
               :capability_expired,
-              :override_requires_interactive
+              :override_requires_interactive,
+              :class_too_low
             ],
        do: Sanctum.Consent.Authz.message(refusal)
 
