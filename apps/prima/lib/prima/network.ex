@@ -13,6 +13,14 @@ defmodule Prima.Network do
 
   import Prima.MapUtil, only: [put_unless_nil: 3]
 
+  # Lowercase header names that carry a credential, besides any name ending
+  # in one of @credential_suffixes.
+  @credential_headers ~w(authorization cookie proxy-authorization x-api-key x-auth-token
+                         x-access-token x-csrf-token)
+  @credential_suffixes ["-token", "-key", "-secret"]
+
+  @default_ports %{"http" => 80, "https" => 443}
+
   @type pinned :: %{
           ip: String.t(),
           ip_tuple: :inet.ip_address(),
@@ -117,4 +125,153 @@ defmodule Prima.Network do
   end
 
   defp format_ip(ip_tuple), do: :inet.ntoa(ip_tuple) |> to_string()
+
+  @doc """
+  Whether `a` and `b` name one origin: the same scheme, host and effective
+  port.
+
+  Each is a `%URI{}` or a URL. Scheme and host compare case-folded, and one
+  trailing dot on a host is dropped first. An IPv6 literal compares by its
+  address, so `[::1]` and `[0:0:0:0:0:0:0:1]` are one host. The effective
+  port is the explicit one, or 80 for `http` and 443 for `https`; a
+  `%URI{}`'s `port` counts as explicit. Anything malformed answers `false`:
+  a URL that does not parse, no scheme, an empty host, an IPv6 literal that
+  is not an address or names a zone, a port of 0 or above 65535, or a
+  scheme other than `http` and `https` without an explicit port.
+  """
+  @spec same_origin?(URI.t() | String.t(), URI.t() | String.t()) :: boolean()
+  def same_origin?(a, b) do
+    case {origin(a), origin(b)} do
+      {{:ok, origin}, {:ok, origin}} -> true
+      _different_or_malformed -> false
+    end
+  end
+
+  defp origin(url) when is_binary(url) do
+    case URI.new(url) do
+      {:ok, uri} -> origin(uri, explicit_port?(url))
+      {:error, _part} -> :error
+    end
+  end
+
+  defp origin(%URI{port: port} = uri), do: origin(uri, port != nil)
+  defp origin(_url), do: :error
+
+  defp origin(%URI{scheme: scheme, host: host, port: port}, explicit?)
+       when is_binary(scheme) and scheme != "" and is_binary(host) do
+    scheme = String.downcase(scheme)
+
+    with {:ok, host} <- origin_host(host),
+         {:ok, port} <- effective_port(scheme, port, explicit?) do
+      {:ok, {scheme, host, port}}
+    end
+  end
+
+  defp origin(_uri, _explicit?), do: :error
+
+  defp origin_host(host) do
+    host = host |> unbracket() |> drop_trailing_dot() |> String.downcase()
+
+    cond do
+      host == "" or String.contains?(host, "%") ->
+        :error
+
+      String.contains?(host, ":") ->
+        case :inet.parse_address(String.to_charlist(host)) do
+          {:ok, {_, _, _, _, _, _, _, _} = address} -> {:ok, {:ipv6, address}}
+          _not_ipv6 -> :error
+        end
+
+      true ->
+        {:ok, host}
+    end
+  end
+
+  # `URI` fills in the registered default port of every scheme it knows, so
+  # for a scheme without a default of ours the port counts only when the URL
+  # spells it.
+  defp effective_port(scheme, nil, _explicit?), do: Map.fetch(@default_ports, scheme)
+
+  defp effective_port(scheme, port, explicit?) when is_integer(port) and port in 1..65_535 do
+    if Map.has_key?(@default_ports, scheme) or explicit?, do: {:ok, port}, else: :error
+  end
+
+  defp effective_port(_scheme, _port, _explicit?), do: :error
+
+  @explicit_port ~r{\A[^:/?#]+://(?:[^/?#@]*@)?(?:\[[^\]/?#]*\]|[^:/?#]*):[0-9]+(?:[/?#]|\z)}
+
+  defp explicit_port?(url), do: Regex.match?(@explicit_port, url)
+
+  defp unbracket("[" <> rest), do: String.trim_trailing(rest, "]")
+  defp unbracket(host), do: host
+
+  defp drop_trailing_dot(host) do
+    if String.ends_with?(host, "."),
+      do: binary_part(host, 0, byte_size(host) - 1),
+      else: host
+  end
+
+  @doc """
+  The lowercase names of the headers that carry a credential by name:
+  `authorization`, `cookie`, `proxy-authorization`, `x-api-key`,
+  `x-auth-token`, `x-access-token` and `x-csrf-token`. Any name ending in
+  `-token`, `-key` or `-secret` carries one too (`credential_header?/1`).
+  """
+  @spec credential_headers() :: [String.t()]
+  def credential_headers, do: @credential_headers
+
+  @doc """
+  Whether a header `name`, in any case, carries a credential: one of
+  `credential_headers/0`, or a name ending in `-token`, `-key` or `-secret`.
+  """
+  @spec credential_header?(term()) :: boolean()
+  def credential_header?(name) when is_binary(name) do
+    name = String.downcase(name)
+    name in @credential_headers or String.ends_with?(name, @credential_suffixes)
+  end
+
+  def credential_header?(_name), do: false
+
+  @doc """
+  `headers` without any `{name, value}` pair whose name
+  `credential_header?/1` accepts, the rest in their order.
+  """
+  @spec strip_credentials([{String.t(), String.t()}]) :: [{String.t(), String.t()}]
+  def strip_credentials(headers) when is_list(headers),
+    do: Enum.reject(headers, &credential_pair?/1)
+
+  defp credential_pair?({name, _value}), do: credential_header?(name)
+  defp credential_pair?(_header), do: false
+
+  @doc """
+  Whether `host` matches one of the `egress.domains` `patterns`.
+
+  `"*"` matches any host. `"*.example.com"` matches every name below
+  `example.com` (`a.example.com`, `a.b.example.com`) and neither
+  `example.com` itself nor a name sharing only part of a label
+  (`aexample.com`). Any other pattern matches exactly. Host and pattern
+  compare case-folded, each with one trailing dot dropped. An empty host,
+  or no pattern, matches nothing.
+  """
+  @spec domain_allowed?(String.t() | nil, [String.t()]) :: boolean()
+  def domain_allowed?(host, patterns) when is_binary(host) and is_list(patterns) do
+    host = host |> drop_trailing_dot() |> String.downcase()
+    host != "" and Enum.any?(patterns, &domain_matches?(&1, host))
+  end
+
+  def domain_allowed?(_host, _patterns), do: false
+
+  defp domain_matches?("*", _host), do: true
+
+  defp domain_matches?("*." <> base, host) do
+    case base |> drop_trailing_dot() |> String.downcase() do
+      "" -> false
+      base -> String.ends_with?(host, "." <> base)
+    end
+  end
+
+  defp domain_matches?(pattern, host) when is_binary(pattern),
+    do: pattern |> drop_trailing_dot() |> String.downcase() == host
+
+  defp domain_matches?(_pattern, _host), do: false
 end
