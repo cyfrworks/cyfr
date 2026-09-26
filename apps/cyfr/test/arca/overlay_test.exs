@@ -243,14 +243,9 @@ defmodule Arca.OverlayTest do
   describe "pulling what ships" do
     test "pull_shipped/2 copies the unit whole — droppings excluded, sentinel last, uncapped",
          %{actor: actor} do
-      prev = Application.get_env(:sanctum, :caps)
-      Application.put_env(:sanctum, :caps, athanor_storage_bytes: 5)
+      Cyfr.Test.Settings.put("athanor_storage_bytes", 5)
 
       on_exit(fn ->
-        if prev,
-          do: Application.put_env(:sanctum, :caps, prev),
-          else: Application.delete_env(:sanctum, :caps)
-
         Arca.Cache.delete_match({:athanor_usage, :_, :_})
       end)
 
@@ -1688,14 +1683,9 @@ defmodule Arca.OverlayTest do
     end
 
     test "cap refuses before the first write", %{actor: actor} do
-      prev = Application.get_env(:sanctum, :caps)
-      Application.put_env(:sanctum, :caps, athanor_storage_bytes: 1)
+      Cyfr.Test.Settings.put("athanor_storage_bytes", 1)
 
       on_exit(fn ->
-        if prev,
-          do: Application.put_env(:sanctum, :caps, prev),
-          else: Application.delete_env(:sanctum, :caps)
-
         Arca.Cache.delete_match({:athanor_usage, :_, :_})
       end)
 

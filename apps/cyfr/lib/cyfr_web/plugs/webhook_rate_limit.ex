@@ -13,7 +13,8 @@ defmodule CyfrWeb.Plugs.WebhookRateLimit do
       smaller cap (`10/1m`). This defends against slug-enumeration scans
       without giving every random slug attempt a fresh per-slug bucket.
     * **Every request, whatever the slug** → also keyed on `{:ip, ip}` at
-      a much higher ceiling (`6_000/1m`, `:webhook_per_ip_rate_limit_max`).
+      a much higher ceiling (`6_000/1m` by default, the
+      `webhook_per_ip_rate_limit_max` platform setting).
       One address cannot mint unbounded per-slug buckets, and bulk probing
       is throttled the same whether the slugs it tries are real or not.
       Configurable because it is checked FIRST and so clamps every
@@ -57,13 +58,15 @@ defmodule CyfrWeb.Plugs.WebhookRateLimit do
   @unknown_window_ms 60_000
 
   # Meter all requests per IP, including unknown slugs. This budget also
-  # limits valid deliveries; configure it above the per-slug throughput
-  # required from a single sender address.
-  @default_per_ip_max 6_000
+  # limits valid deliveries; set it above the per-slug throughput required
+  # from a single sender address. The ceiling is the
+  # `webhook_per_ip_rate_limit_max` platform setting, which serves a stale
+  # value: a store outage throttles by the last value read.
   @per_ip_window_ms 60_000
 
   defp per_ip_max do
-    Application.get_env(:cyfr, :webhook_per_ip_rate_limit_max, @default_per_ip_max)
+    {:ok, max} = Arca.PlatformSettings.effective("webhook_per_ip_rate_limit_max")
+    max
   end
 
   def init(_opts), do: %{}

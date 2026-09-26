@@ -53,10 +53,6 @@ defmodule Sanctum.Webhook do
   @max_input_template_bytes 16 * 1024
   @reserved_input_keys ~w(_webhook)
 
-  # Maximum acceptable clock skew (seconds) between sender and receiver
-  # for timestamp-protected webhooks. 300s = 5 min matches Stripe's window.
-  @default_max_skew_seconds 300
-
   # After a rotation the outgoing secret keeps verifying for this long so
   # in-flight requests aren't dropped while the sender is updated. 24h is a
   # generous-but-bounded window; the old secret is ignored once it expires.
@@ -495,7 +491,8 @@ defmodule Sanctum.Webhook do
   `previous_secret_encrypted` are opened here with an AAD rebuilt from the
   row's tenant tuple, or a `resolve_ingress/1` row, whose secrets were
   opened under the same AAD when it was resolved. A secret that does not
-  open is `{:error, :secret_unreadable}`.
+  open is `{:error, :secret_unreadable}`, and a timestamped delivery whose
+  skew window the store cannot answer is `{:error, :unavailable}`.
   """
   @spec verify_with_grace(map(), binary(), binary(), binary() | nil) ::
           :ok | {:error, atom()}
@@ -506,6 +503,11 @@ defmodule Sanctum.Webhook do
     case do_verify(current, raw_body, received_signature, timestamp) do
       :ok ->
         :ok
+
+      # The skew window could not be read: the previous secret would meet
+      # the same window.
+      {:error, :unavailable} ->
+        {:error, :unavailable}
 
       {:error, reason} ->
         if previous != nil and
@@ -552,14 +554,29 @@ defmodule Sanctum.Webhook do
     end
   end
 
+  # The window is the `webhook_max_skew_seconds` platform setting, which
+  # refuses a stale value: a store that cannot answer it refuses the
+  # delivery (`{:error, :unavailable}`) rather than admit one against a
+  # window this member cannot read.
   defp check_skew(ts) when is_integer(ts) do
     skew = abs(System.system_time(:second) - ts)
-    max = Application.get_env(:sanctum, :webhook_max_skew_seconds, @default_max_skew_seconds)
 
-    if skew <= max do
-      :ok
-    else
-      {:error, :timestamp_skew}
+    case Arca.PlatformSettings.effective("webhook_max_skew_seconds") do
+      {:ok, max} when is_integer(max) and skew <= max ->
+        :ok
+
+      {:ok, max} when is_integer(max) ->
+        {:error, :timestamp_skew}
+
+      {:ok, _malformed} ->
+        {:error, :unavailable}
+
+      {:error, :unavailable} ->
+        {:error, :unavailable}
+
+      {:error, reason} when reason in [:uninstalled, :unknown_key] ->
+        raise "[Sanctum.Webhook] webhook_max_skew_seconds cannot be read: the setting is " <>
+                "#{reason}"
     end
   end
 

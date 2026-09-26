@@ -1705,18 +1705,7 @@ defmodule Cyfr.Boundaries do
   @spec config_applications() :: [atom()]
   def config_applications, do: [:arca, :cyfr, :sanctum]
 
-  @config_keys_read_by_name %{
-    api_rate_limit_max:
-      "the `:api` bucket's own budget, read by `CyfrWeb.Plugs.MCPRateLimit` " <>
-        "under a key it builds from the bucket's name",
-    api_rate_limit_window_ms: "the same bucket's window, built the same way",
-    crucible_events_max_concurrent:
-      "handed to `CyfrWeb.SSE.claim_slot/3` as the key to read, so the two SSE " <>
-        "surfaces share one reader",
-    crucible_events_max_ms: "handed to `CyfrWeb.SSE.deadline/1` as the key to read",
-    mcp_subscription_max_concurrent: "handed to `CyfrWeb.SSE.claim_slot/3` as the key to read",
-    mcp_subscription_max_ms: "handed to `CyfrWeb.SSE.deadline/1` as the key to read"
-  }
+  @config_keys_read_by_name %{}
 
   @config_keys_read_outside_lib %{
     default_test_namespace:

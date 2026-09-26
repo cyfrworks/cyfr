@@ -45,45 +45,43 @@ defmodule Sanctum.Session do
 
   alias Sanctum.Context
 
-  # Session configuration
-  # 30 days by default — sessions slide forward on activity (see refresh_if_stale/1),
-  # so this acts as an idle timeout, not a hard cap.
-  @default_session_ttl_hours 720
-  @min_session_ttl_hours 1
+  # The idle timeout is the `session_ttl_hours` platform setting (720, 30
+  # days, by default), read through `Arca.PlatformSettings.effective/1` on
+  # each create and refresh. Sessions slide forward on activity (see
+  # `refresh_if_stale/1`), so it is an idle timeout, not a hard cap.
   @token_bytes 32
   # Year 9999 — used as expires_at when TTL is 0 (infinite)
   # Microsecond precision so it dumps cleanly into the `:utc_datetime_usec`
   # `expires_at` column on both adapters.
   @never_expires ~U[9999-12-31 23:59:59.999999Z]
 
+  # `{:ok, 0}` is sessions that never idle out, an intentional self-hosted
+  # choice. The setting refuses a stale value: a store that cannot answer
+  # it is `{:error, :unavailable}`, and nothing is issued or extended on a
+  # window this member cannot read.
   defp session_ttl_hours do
-    case Application.get_env(:sanctum, :session_ttl_hours, @default_session_ttl_hours) do
-      0 ->
-        # Infinite sessions — intentional self-hosted feature
-        0
+    case Arca.PlatformSettings.effective("session_ttl_hours") do
+      {:ok, hours} when is_integer(hours) and hours >= 0 ->
+        {:ok, hours}
 
-      hours when is_integer(hours) and hours < @min_session_ttl_hours ->
-        Logger.warning(
-          "[Sanctum.Session] CYFR_SESSION_TTL_HOURS=#{hours} is below minimum (#{@min_session_ttl_hours}). " <>
-            "Using #{@min_session_ttl_hours} hour(s). Set to 0 for infinite sessions."
+      {:ok, other} ->
+        Logger.error(
+          "[Sanctum.Session] the stored session_ttl_hours #{inspect(other)} is not a " <>
+            "whole number of hours; refusing until it is"
         )
 
-        @min_session_ttl_hours
+        {:error, :unavailable}
 
-      hours when is_integer(hours) ->
-        hours
+      {:error, :unavailable} ->
+        {:error, :unavailable}
 
-      # A non-integer (a string that slipped past runtime.exs, a typo'd
-      # override) must not turn every create/refresh into a CaseClauseError.
-      other ->
-        Logger.warning(
-          "[Sanctum.Session] invalid :session_ttl_hours #{inspect(other)} — " <>
-            "using the #{@default_session_ttl_hours}h default"
-        )
-
-        @default_session_ttl_hours
+      {:error, reason} when reason in [:uninstalled, :unknown_key] ->
+        raise "[Sanctum.Session] session_ttl_hours cannot be read: the setting is #{reason}"
     end
   end
+
+  defp expires_at(0, _now), do: @never_expires
+  defp expires_at(hours, now), do: DateTime.add(now, hours * 3600, :second)
 
   @type session :: %{
           token: String.t(),
@@ -115,7 +113,8 @@ defmodule Sanctum.Session do
   where `generation_snapshot:` supplies one read from the rows
   (`Sanctum.Tenancy.generation_snapshot/2`), which only a test fixture
   building a context by hand does. `{:error, :unauthenticated}` is a
-  person, athanor or membership that no longer stands.
+  person, athanor or membership that no longer stands, and
+  `{:error, :unavailable}` an idle timeout the store cannot answer.
 
   Returns a session map containing the token and identity fields.
   """
@@ -127,14 +126,14 @@ defmodule Sanctum.Session do
   end
 
   defp insert(%Context{} = ctx, expectation) do
-    token = generate_token()
-    now = DateTime.utc_now() |> DateTime.truncate(:microsecond)
+    with {:ok, hours} <- session_ttl_hours() do
+      now = DateTime.utc_now() |> DateTime.truncate(:microsecond)
+      insert(ctx, expectation, now, expires_at(hours, now))
+    end
+  end
 
-    expires_at =
-      case session_ttl_hours() do
-        0 -> @never_expires
-        hours -> DateTime.add(now, hours * 3600, :second)
-      end
+  defp insert(%Context{} = ctx, expectation, now, expires_at) do
+    token = generate_token()
 
     # A session carries no permission list: it is a person's, and what
     # they may do is decided by their memberships, the athanor's consents
@@ -275,20 +274,16 @@ defmodule Sanctum.Session do
       # Session expiration extended by 24 hours from now
 
   """
-  @spec refresh(String.t()) :: {:ok, session()} | {:error, :invalid_session | :database_error}
+  @spec refresh(String.t()) ::
+          {:ok, session()} | {:error, :invalid_session | :database_error | :unavailable}
   def refresh(token) when is_binary(token) do
     token_hash = hash_token(token)
 
-    with {:ok, _row} <- get_session_direct(token) do
-      now = DateTime.utc_now()
+    with {:ok, _row} <- get_session_direct(token),
+         {:ok, hours} <- session_ttl_hours() do
+      now = DateTime.utc_now() |> DateTime.truncate(:microsecond)
 
-      new_expires_at =
-        case session_ttl_hours() do
-          0 -> @never_expires
-          hours -> DateTime.add(now, hours * 3600, :second) |> DateTime.truncate(:microsecond)
-        end
-
-      case Arca.SessionStorage.refresh_session(token_hash, new_expires_at) do
+      case Arca.SessionStorage.refresh_session(token_hash, expires_at(hours, now)) do
         :ok ->
           case get_session_direct(token) do
             {:ok, row} -> {:ok, row_to_external(row, token)}
@@ -305,6 +300,7 @@ defmodule Sanctum.Session do
     else
       {:error, :not_found} -> {:error, :invalid_session}
       {:error, :database_error} -> {:error, :database_error}
+      {:error, :unavailable} -> {:error, :unavailable}
     end
   end
 
@@ -332,18 +328,22 @@ defmodule Sanctum.Session do
   @doc """
   Whether a session expiring at `expires_at` is due its sliding refresh:
   more than ~1 day (or half the TTL, whichever is smaller) has passed
-  since it was last extended. Never for infinite (TTL 0) sessions.
+  since it was last extended. Never for infinite (TTL 0) sessions, nor
+  while the idle timeout cannot be read.
   """
   @spec slide_due?(DateTime.t() | term()) :: boolean()
   def slide_due?(expires_at) do
     case {session_ttl_hours(), coerce_datetime(expires_at)} do
-      {0, _} ->
+      {{:ok, 0}, _} ->
+        false
+
+      {{:error, :unavailable}, _} ->
         false
 
       {_ttl_hours, nil} ->
         false
 
-      {ttl_hours, %DateTime{} = at} ->
+      {{:ok, ttl_hours}, %DateTime{} = at} ->
         ttl_seconds = ttl_hours * 3600
         stale_after = ttl_seconds - min(86_400, div(ttl_seconds, 2))
         DateTime.diff(at, DateTime.utc_now()) < stale_after

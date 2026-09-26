@@ -707,13 +707,8 @@ defmodule Emissary.External.BackendsTest do
 
   test "the configured lease and idle period are what a sync asks for, renewed every third of the lease",
        %{ctx: ctx, fake: fake} do
-    Application.put_env(:cyfr, :locus_backends_lease_ms, 6_000)
-    Application.put_env(:cyfr, :locus_backends_idle_ms, 120_000)
-
-    on_exit(fn ->
-      Application.delete_env(:cyfr, :locus_backends_lease_ms)
-      Application.delete_env(:cyfr, :locus_backends_idle_ms)
-    end)
+    Cyfr.Test.Settings.put("locus_backends_lease_ms", 6_000)
+    Cyfr.Test.Settings.put("locus_backends_idle_ms", 120_000)
 
     controller = supervise_controller(url: fake.url, root: @root)
     assert %{lease_ms: 6_000, idle_ms: 120_000, tick_ms: 2_000} = :sys.get_state(controller)

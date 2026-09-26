@@ -215,14 +215,7 @@ defmodule Sanctum.Tenancy.MembersTest do
     end
 
     test "the member cap counts invitations as seats", %{athanor: athanor} do
-      prev = Application.get_env(:sanctum, :caps)
-      Application.put_env(:sanctum, :caps, max_members_per_group: 2)
-
-      on_exit(fn ->
-        if prev,
-          do: Application.put_env(:sanctum, :caps, prev),
-          else: Application.delete_env(:sanctum, :caps)
-      end)
+      Cyfr.Test.Settings.put("max_members_per_group", 2)
 
       n = System.unique_integer([:positive])
       # the group's creator is not seated by create/1 here, so two seats are free

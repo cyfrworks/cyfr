@@ -463,8 +463,9 @@ defmodule PrismWeb.SettingsLive do
           <p class="text-xs text-gray-500 mb-1">
             A live change reaches new and refreshed work, not work already in flight, on
             every member within {bound_seconds(@settings_ttl_ms)}. A restart setting is
-            applied at each member's next start and is pending until then. Stream limits
-            are counted by each member on its own.
+            applied at each member's next start and is pending until then. The stream
+            limits (subscriptions and execution events) and the rate limits are counted
+            per member: each member admits up to the limit on its own.
           </p>
           <p class="text-xs text-gray-500 mb-4" id="settings-revision">
             Store revision {@settings_revision || "-"} · observed:

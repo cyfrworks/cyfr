@@ -493,6 +493,11 @@ defmodule Prima.Refusal do
   defp row({:limit_reached, _what, _limit}),
     do: {:rate_limited, "A limit on this account was reached — try again later"}
 
+  # A counted cap whose ceiling or count the store could not answer
+  # (`Prima.Caps`): refused, and not the caller's to fix.
+  defp row({:cap_unverifiable, key}) when is_atom(key),
+    do: {:unavailable, "A limit on this account could not be checked — retry shortly"}
+
   # A presented credential that does not open anything.
   defp row(:invalid_bearer),
     do: {:unauthenticated, "The presented credential is not valid. If it expired, sign in again."}

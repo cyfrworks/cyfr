@@ -84,8 +84,8 @@ defmodule Emissary.External.Backends do
       on their own time;
     * `renew` every third of the lease for every live owner whose row
       still passes the fence, asking for the lease again
-      (`:locus_backends_lease_ms`, `CYFR_LOCUS_BACKENDS_LEASE_MS`: 30 s
-      unless set), and more often — every 250 ms while a server process
+      (the `locus_backends_lease_ms` platform setting: 30 s unless set),
+      and more often — every 250 ms while a server process
       waits for its backends, every second while any backend is still
       starting — to learn each owner's state and rev. An owner that fails
       the fence is released; an owner the service no longer knows has its
@@ -104,9 +104,12 @@ defmodule Emissary.External.Backends do
       never a cut answer, an empty one, or an unavailable service.
 
   Every sync asks the service to retire a backend that has had no call for
-  the idle period (`:locus_backends_idle_ms`,
-  `CYFR_LOCUS_BACKENDS_IDLE_MS`: 15 minutes unless set) and to start it
-  again for its next call.
+  the idle period (the `locus_backends_idle_ms` platform setting: 15
+  minutes unless set) and to start it again for its next call.
+
+  Both periods are read through `Arca.PlatformSettings.effective/1` at
+  every tick, so a change reaches the next renewal and sync; both serve a
+  stale value, so a store outage keeps the last periods read.
 
   Nothing is sent, and no claim renewed, while this member does not hold
   its slot in the cell (`Arca.ControlPlane.held?/0`), or while its
@@ -156,8 +159,6 @@ defmodule Emissary.External.Backends do
   # a new epoch is the same backend, and the claim carries across it.
   @claim_kind "mcp_backend"
 
-  @default_lease_ms 30_000
-  @default_idle_ms 900_000
   @control_timeout_ms 10_000
   # How long a sync's caller waits, after the service admitted the owner,
   # for its backends to be ready or failed.
@@ -194,6 +195,8 @@ defmodule Emissary.External.Backends do
       :inflight,
       :poll_timer,
       generation_source: &Arca.ControlPlane.generation/0,
+      # The periods the caller fixed; the rest are read at every tick.
+      fixed: [],
       lease_ms: 30_000,
       idle_ms: 900_000,
       tick_ms: 10_000,
@@ -221,10 +224,9 @@ defmodule Emissary.External.Backends do
   32-byte service key are configured (`:locus_backends_url` and
   `:locus_backends_key`, or the `:url` and `:root` options), and while
   `:cluster` is on: a cluster of control planes runs no stdio servers.
-  `:lease_ms` sets the lease each sync and renewal asks for (default
-  `:locus_backends_lease_ms`, else 30 s), `:idle_ms` the idle period each
-  sync asks for (default `:locus_backends_idle_ms`, else 15 minutes),
-  `:tick_ms` the renewal cadence
+  `:lease_ms` fixes the lease each sync and renewal asks for and `:idle_ms`
+  the idle period each sync asks for (absent, each is its platform
+  setting as it reads at every tick), `:tick_ms` the renewal cadence
   (default a third of the lease), `:ready_wait_ms` how long a sync's
   caller waits for its backends (default 15 s) and `:generation` the
   zero-arity function the control-plane generation is read from (default
@@ -335,30 +337,17 @@ defmodule Emissary.External.Backends do
   def init(opts) do
     root = Keyword.fetch!(opts, :root)
 
-    lease_ms =
-      Keyword.get(
-        opts,
-        :lease_ms,
-        Application.get_env(:cyfr, :locus_backends_lease_ms, @default_lease_ms)
-      )
-
-    state = %State{
-      url: String.trim_trailing(Keyword.fetch!(opts, :url), "/"),
-      root: root,
-      control_key: LocusBackends.control_key(root),
-      seal_key: LocusBackends.seal_key(root),
-      cyfr_boot: Prima.Boot.id(),
-      lease_ms: lease_ms,
-      idle_ms:
-        Keyword.get(
-          opts,
-          :idle_ms,
-          Application.get_env(:cyfr, :locus_backends_idle_ms, @default_idle_ms)
-        ),
-      tick_ms: Keyword.get(opts, :tick_ms, div(lease_ms, 3)),
-      ready_wait_ms: Keyword.get(opts, :ready_wait_ms, @ready_wait_ms),
-      generation_source: Keyword.get(opts, :generation, &Arca.ControlPlane.generation/0)
-    }
+    state =
+      periods(%State{
+        url: String.trim_trailing(Keyword.fetch!(opts, :url), "/"),
+        root: root,
+        control_key: LocusBackends.control_key(root),
+        seal_key: LocusBackends.seal_key(root),
+        cyfr_boot: Prima.Boot.id(),
+        fixed: Keyword.take(opts, [:lease_ms, :idle_ms, :tick_ms]),
+        ready_wait_ms: Keyword.get(opts, :ready_wait_ms, @ready_wait_ms),
+        generation_source: Keyword.get(opts, :generation, &Arca.ControlPlane.generation/0)
+      })
 
     send(self(), :tick)
     {:ok, state}
@@ -433,6 +422,7 @@ defmodule Emissary.External.Backends do
 
   @impl true
   def handle_info(:tick, state) do
+    state = periods(state)
     Process.send_after(self(), :tick, state.tick_ms)
 
     state =
@@ -1713,6 +1703,26 @@ defmodule Emissary.External.Backends do
   defp refusal({:error, {:response_too_large, _read, _limit}}), do: :status_too_large
   defp refusal({:error, reason}), do: reason
   defp refusal(other), do: {:unexpected, other}
+
+  # The periods this tick runs on: each one the caller fixed, else its
+  # platform setting as it reads now. The tick is a third of the lease
+  # unless fixed, so a claim stands while the service lease it goes with
+  # does.
+  defp periods(%State{fixed: fixed} = state) do
+    lease_ms = Keyword.get_lazy(fixed, :lease_ms, fn -> setting("locus_backends_lease_ms") end)
+
+    %{
+      state
+      | lease_ms: lease_ms,
+        idle_ms: Keyword.get_lazy(fixed, :idle_ms, fn -> setting("locus_backends_idle_ms") end),
+        tick_ms: Keyword.get(fixed, :tick_ms, div(lease_ms, 3))
+    }
+  end
+
+  defp setting(key) do
+    {:ok, value} = Arca.PlatformSettings.effective(key)
+    value
+  end
 
   defp log_failure(what, result) do
     case refusal(result) do

@@ -335,9 +335,7 @@ defmodule Arca.ThreadStorageTest do
     {:ok, _first} = Threads.create(ctx, %{title: "One"})
     before = Threads.list(ctx) |> Enum.map(& &1.id) |> Enum.sort()
 
-    original = Application.get_env(:sanctum, :caps, [])
-    Application.put_env(:sanctum, :caps, Keyword.put(original, :max_threads_per_athanor, 1))
-    on_exit(fn -> Application.put_env(:sanctum, :caps, original) end)
+    Cyfr.Test.Settings.put("max_threads_per_athanor", 1)
 
     # The refusal is the port's vocabulary (`Prima.Caps`), not the tenancy
     # domain named from below it, and the row it refused is not there.

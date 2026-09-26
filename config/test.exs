@@ -16,11 +16,6 @@ config :cyfr, CyfrWeb.Endpoint,
 # The origin an absolute URL falls back to, the endpoint's own above.
 config :sanctum, :fallback_origin, "http://localhost:4002"
 
-# Effectively disable the MCP transport rate limit in tests — controller
-# suites drive hundreds of /mcp requests from 127.0.0.1 within one window.
-# MCPRateLimitTest overrides this per-test to exercise the limiter itself.
-config :cyfr, :mcp_rate_limit_max, 1_000_000
-
 # Proofs likewise: unit tests run on the ETS store; proof_db_test.exs
 # exercises the durable adapter directly.
 config :sanctum, :consent_proof_store, Sanctum.Consent.Proof.Memory
@@ -241,8 +236,3 @@ config :logger, level: :warning
 # sandbox rollback is a write no invalidation ever sees, so tests read the
 # users row every time.
 config :sanctum, :namespace_cache_ttl_ms, 0
-
-# A subscription stream is long-lived by design, so a test that opens one would
-# otherwise block until the production bound. Short enough that the graceful
-# close is what the assertions actually observe.
-config :cyfr, :mcp_subscription_max_ms, 50

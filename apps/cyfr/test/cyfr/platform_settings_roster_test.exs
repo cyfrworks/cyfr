@@ -5,14 +5,16 @@ defmodule Cyfr.PlatformSettingsRosterTest do
   @moduledoc """
   The one declaration of every name the `cyfr` boot reads
   (`Cyfr.Platform.Settings.Roster`), held to the tree: each setting
-  complete, written under the application its reader reads, restart-scoped
-  only with an apply, and stale-served only where a stale value refuses no
-  one; the compose-only class derived from `docker-compose.yml`; every
-  documented and every read name declared. Then the boot itself, evaluated
-  from `config/runtime.exs` the way a release evaluates it: presence
-  recorded as pins, the caps merged, every undeclared `CYFR_*` name
-  refused by name, and an `opus` release that reads no roster refusing its
-  own stray names.
+  complete, restart-scoped only with an apply, stale-served only where a
+  stale value refuses no one, and read through
+  `Arca.PlatformSettings.effective/1`: no reader takes a live setting from
+  the application environment, and no test puts one there. The
+  compose-only class derived from `docker-compose.yml`; every documented
+  and every read name declared. Then the boot itself, evaluated from
+  `config/runtime.exs` the way a release evaluates it: presence recorded as
+  pins, only the restart-scoped settings written to the application
+  environment, every undeclared `CYFR_*` name refused by name, and an
+  `opus` release that reads no roster refusing its own stray names.
 
   The checks are functions of the entries, so each is also run on a
   planted violation it must refuse.
@@ -66,7 +68,8 @@ defmodule Cyfr.PlatformSettingsRosterTest do
         do: {key, stale}
   end
 
-  # The application a setting is written under is the one its reader reads
+  # A setting still written to the application environment (a
+  # restart-scoped one) is written under the application its reader reads
   # it under, found in the code: a literal read of `{app, key}`, or a key
   # `Cyfr.Boundaries` records as read by a name the caller computes.
   defp misplaced(entries, reads) do
@@ -77,6 +80,50 @@ defmodule Cyfr.PlatformSettingsRosterTest do
         not MapSet.member?(reads, {app, head}),
         not Map.has_key?(by_name, head),
         do: {key, app, head}
+  end
+
+  # Restart-scoped settings are read once at boot from the application
+  # environment, where the boot wrote a pinned value and the setting's
+  # apply a stored one: `Arca.PlatformSettings.effective/1` answers the
+  # stored row, which may be a value saved for the next boot and not the
+  # one running, so these alone are read there.
+  @restart_read ~w(crucible_max_concurrent crucible_max_concurrent_per_tenant)
+
+  # The keywords a group of settings was once read under whole: the caps
+  # under Sanctum and the worker watch's bounds under the host.
+  @keywords ~w(caps opus_watch)
+
+  # Every use of a live setting's value in the application environment,
+  # under any application, by one of `verbs`: `{path, app, key}`. The key
+  # is the setting's store key or one of `@keywords`.
+  defp env_reads(sources, verbs) do
+    names =
+      MapSet.new(
+        for(%Entry{key: key} <- Roster.entries(), key not in @restart_read, do: key) ++
+          @keywords
+      )
+
+    pattern =
+      Regex.compile!(
+        "Application\\.(?:#{Enum.join(verbs, "|")})\\(\\s*:([a-z_]+),\\s*:([a-z_0-9]+)"
+      )
+
+    for {path, source} <- sources,
+        [app, key] <- Regex.scan(pattern, source, capture: :all_but_first),
+        MapSet.member?(names, key),
+        do: {path, String.to_atom(app), String.to_atom(key)}
+  end
+
+  # The islands (Opus, Locus) read none of the roster's settings: each
+  # declares its own under its own prefix, and may name a key of its own
+  # alike (Locus's `:log_level`).
+  @islands ~w(apps/opus/ apps/locus/)
+
+  defp tree(glob) do
+    for path <- Path.wildcard(Path.join(@root, glob)),
+        relative = Path.relative_to(path, @root),
+        not String.starts_with?(relative, @islands),
+        do: {relative, File.read!(path)}
   end
 
   defp lib_reads do
@@ -210,16 +257,87 @@ defmodule Cyfr.PlatformSettingsRosterTest do
       end
     end
 
-    test "each setting is written under the application its reader reads it under" do
+    test "only the restart-scoped settings and the log level have a configuration path" do
+      configured = for %Entry{config: [_ | _], key: key} <- Roster.entries(), do: key
+      assert Enum.sort(configured) == Enum.sort(["log_level" | @restart_read])
+
+      restart = for %Entry{scope: :restart, key: key} <- Roster.entries(), do: key
+      assert Enum.sort(restart) == Enum.sort(@restart_read)
+
+      {:ok, cap} = Roster.fetch("max_athanors")
+      assert {cap.app, cap.config} == {:sanctum, nil}
+    end
+
+    test "each setting still configured is written under the application its reader reads it under" do
       reads = lib_reads()
       assert misplaced(Roster.entries(), reads) == []
 
-      {:ok, cap} = Roster.fetch("max_athanors")
-      assert {cap.app, cap.config} == {:sanctum, [:caps, :max_athanors]}
+      {:ok, slots} = Roster.fetch("crucible_max_concurrent")
+      assert {slots.app, slots.config} == {:cyfr, [:crucible_max_concurrent]}
 
-      # The caps under the host would be written where nothing reads them.
-      wrong = %{cap | app: :cyfr}
-      assert misplaced([wrong], reads) == [{"max_athanors", :cyfr, :caps}]
+      # The slots under Sanctum would be written where nothing reads them.
+      wrong = %{slots | app: :sanctum}
+
+      assert misplaced([wrong], reads) == [
+               {"crucible_max_concurrent", :sanctum, :crucible_max_concurrent}
+             ]
+    end
+
+    test "no reader takes a live setting from the application environment, under any application" do
+      reads =
+        env_reads(tree("apps/*/lib/**/*.ex"), ~w(get_env fetch_env!? get_all_env compile_env!?))
+
+      assert reads == [],
+             """
+             These read a platform setting from the application environment:
+
+             #{Enum.map_join(reads, "\n", fn {path, app, key} -> "  #{path}: #{inspect(app)}, #{inspect(key)}" end)}
+
+             A live setting is read through `Arca.PlatformSettings.effective/1`,
+             which answers the environment's pin, the stored row or the default.
+             """
+
+      planted = [
+        {"apps/sanctum/lib/planted.ex",
+         "Keyword.get(Application.get_env(:sanctum, :caps, []), k)"},
+        {"apps/cyfr/lib/planted.ex", "Application.fetch_env!(:cyfr, :mcp_rate_limit_max)"},
+        {"apps/arca/lib/planted.ex", "Application.get_env(:arca, :session_ttl_hours)"},
+        {"apps/cyfr/lib/slots.ex", "Application.get_env(:cyfr, :crucible_max_concurrent)"}
+      ]
+
+      assert env_reads(planted, ~w(get_env fetch_env!?)) == [
+               {"apps/sanctum/lib/planted.ex", :sanctum, :caps},
+               {"apps/cyfr/lib/planted.ex", :cyfr, :mcp_rate_limit_max},
+               {"apps/arca/lib/planted.ex", :arca, :session_ttl_hours}
+             ]
+    end
+
+    test "no test sets a live setting in the application environment" do
+      puts =
+        env_reads(
+          tree("apps/*/test/**/*.ex") ++ tree("apps/*/test/**/*.exs") ++ tree("config/*.exs"),
+          ~w(put_env)
+        )
+
+      assert puts == [],
+             """
+             These set a platform setting in the application environment, where
+             no reader reads it:
+
+             #{Enum.map_join(puts, "\n", fn {path, app, key} -> "  #{path}: #{inspect(app)}, #{inspect(key)}" end)}
+
+             A test sets one through `Cyfr.Test.Settings.put/2` (the Sanctum
+             suite, `Sanctum.Test.Settings.put/2`).
+             """
+    end
+
+    test "the Sanctum suite's declaration is the roster's, for the settings Sanctum reads" do
+      sanctum = Sanctum.Test.Settings.defaults()
+
+      assert Map.take(Roster.defaults(), Map.keys(sanctum)) == sanctum
+
+      assert Enum.sort(Map.keys(sanctum)) ==
+               Enum.sort(for %Entry{app: :sanctum, key: key} <- Roster.entries(), do: key)
     end
 
     test "a restart-scoped setting names its apply; of the live ones, the log level alone" do
@@ -421,18 +539,30 @@ defmodule Cyfr.PlatformSettingsRosterTest do
   end
 
   describe "config/runtime.exs" do
-    test "a set setting is written where its reader reads it, and recorded as a pin" do
-      with_env(%{"CYFR_MCP_RATE_LIMIT_MAX" => "240", "CYFR_SESSION_TTL_HOURS" => "0"}, fn ->
-        config = read_prod_config!()
+    test "a set setting is recorded as a pin; only a restart-scoped one is configured too" do
+      with_env(
+        %{
+          "CYFR_MCP_RATE_LIMIT_MAX" => "240",
+          "CYFR_SESSION_TTL_HOURS" => "0",
+          "CYFR_CRUCIBLE_MAX_CONCURRENT" => "64"
+        },
+        fn ->
+          config = read_prod_config!()
 
-        assert config[:cyfr][:mcp_rate_limit_max] == 240
-        assert config[:sanctum][:session_ttl_hours] == 0
+          assert config[:cyfr][:deployment_pinned] == [
+                   {"crucible_max_concurrent", 64},
+                   {"mcp_rate_limit_max", 240},
+                   {"session_ttl_hours", 0}
+                 ]
 
-        assert config[:cyfr][:deployment_pinned] == [
-                 {"mcp_rate_limit_max", 240},
-                 {"session_ttl_hours", 0}
-               ]
-      end)
+          # A live setting is read through the accessor, which answers the pin.
+          refute Keyword.has_key?(config[:cyfr], :mcp_rate_limit_max)
+          refute Keyword.has_key?(config[:sanctum] || [], :session_ttl_hours)
+
+          # The slots are read once at boot, where the pin is written.
+          assert config[:cyfr][:crucible_max_concurrent] == 64
+        end
+      )
     end
 
     test "nothing set pins nothing, and the production log level is info" do
@@ -453,22 +583,14 @@ defmodule Cyfr.PlatformSettingsRosterTest do
       end)
     end
 
-    test "one cap set merges into the caps: every other cap keeps its default" do
+    test "a cap set is a pin, and nothing writes the caps to the application environment" do
       unset = Map.new(Roster.variables(), &{&1, nil})
 
       with_env(Map.put(unset, "CYFR_MAX_ATHANORS", "5"), fn ->
-        caps = read_prod_config!()[:sanctum][:caps]
+        config = read_prod_config!()
 
-        assert Enum.sort(caps) ==
-                 Enum.sort(
-                   max_athanors: 5,
-                   max_groups_per_person: 50,
-                   max_pairs_per_person: 200,
-                   max_members_per_group: nil,
-                   max_threads_per_athanor: 1000,
-                   mint_per_hour: nil,
-                   athanor_storage_bytes: nil
-                 )
+        assert config[:cyfr][:deployment_pinned] == [{"max_athanors", 5}]
+        refute Keyword.has_key?(config[:sanctum] || [], :caps)
       end)
     end
 
@@ -500,7 +622,7 @@ defmodule Cyfr.PlatformSettingsRosterTest do
 
     test "a .env file may carry the server's names alone" do
       with_env_file(["CYFR_MCP_RATE_LIMIT_MAX=240", "CADDY_ACME_EMAIL=a@example.com"], fn ->
-        assert read_prod_config!()[:cyfr][:mcp_rate_limit_max] == 240
+        assert {"mcp_rate_limit_max", 240} in read_prod_config!()[:cyfr][:deployment_pinned]
       end)
 
       with_env_file(["CYFR_RETIRED_KNOB=1"], fn ->

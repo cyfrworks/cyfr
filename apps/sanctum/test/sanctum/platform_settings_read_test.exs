@@ -32,16 +32,20 @@ defmodule Sanctum.PlatformSettingsReadTest do
     {:ok, before: before}
   end
 
-  test "a boot of Arca and Sanctum without the host installs no setting", %{before: before} do
-    # Only a host installs a declaration: where none booted, there is none,
-    # and every read answers that it is uninstalled rather than a value.
+  test "a boot of Arca and Sanctum without the host installs no setting" do
+    # Only a host installs a declaration: where none booted, there was
+    # none before the suite installed its own (`Sanctum.Test.Settings`),
+    # and without one every read answers that it is uninstalled rather
+    # than a value.
     started = Enum.map(Application.started_applications(), &elem(&1, 0))
     assert :arca in started and :sanctum in started
 
     if :cyfr not in started do
-      assert before == nil
-      assert PlatformSettings.effective("session_ttl_hours") == {:error, :uninstalled}
+      assert Sanctum.Test.Settings.boot_installation() == nil
     end
+
+    PlatformSettings.uninstall()
+    assert PlatformSettings.effective("session_ttl_hours") == {:error, :uninstalled}
   end
 
   test "with a declaration installed, Sanctum's setting reads its default, then its row" do

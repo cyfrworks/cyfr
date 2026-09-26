@@ -944,11 +944,14 @@ defmodule Cyfr.BoundariesTest do
             do: key
 
       assert settings == rostered
-      # The caps are one keyword under Sanctum, the worker watch one under
-      # the host; each is one key of the class.
-      assert :caps in settings and :opus_watch in settings
-      assert :mcp_rate_limit_max in settings and :session_ttl_hours in settings
-      refute :max_athanors in settings
+      # Only the restart-scoped settings are read from the application
+      # environment; every other setting is read through
+      # `Arca.PlatformSettings.effective/1`, and none of its keys is set by
+      # a configuration file.
+      assert settings ==
+               MapSet.new([:crucible_max_concurrent, :crucible_max_concurrent_per_tenant])
+
+      refute :caps in settings or :mcp_rate_limit_max in settings
 
       # No hand-written class shadows a setting's, and the hand-written ones
       # are all still there.

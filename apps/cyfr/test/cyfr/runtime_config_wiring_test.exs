@@ -116,7 +116,7 @@ defmodule Cyfr.RuntimeConfigWiringTest do
 
   describe "the admission floors" do
     # Each rate-limit maximum and window, concurrency ceiling, subscription
-    # and event limit, the key it configures and the least value it takes.
+    # and event limit, the setting it pins and the least value it takes.
     @floors [
       {"CYFR_CRUCIBLE_MAX_CONCURRENT", :crucible_max_concurrent, 32},
       {"CYFR_CRUCIBLE_MAX_CONCURRENT_PER_TENANT", :crucible_max_concurrent_per_tenant, 1},
@@ -131,18 +131,22 @@ defmodule Cyfr.RuntimeConfigWiringTest do
       {"CYFR_CRUCIBLE_EVENTS_MAX_MS", :crucible_events_max_ms, 1}
     ]
 
-    test "unset leaves the code's default; set, the least value and above are taken" do
+    test "unset pins nothing; set, the least value and above are pinned" do
       with_env(Map.new(@floors, fn {name, _key, _least} -> {name, nil} end), fn ->
         cyfr = read_prod_config!()[:cyfr]
 
         for {_name, key, _least} <- @floors do
+          refute List.keymember?(cyfr[:deployment_pinned], Atom.to_string(key), 0),
+                 "#{key} is pinned with its variable unset"
+
           refute Keyword.has_key?(cyfr, key), "#{key} is configured with its variable unset"
         end
       end)
 
       for {name, key, least} <- @floors, value <- [least, least + 1] do
         with_env(%{name => Integer.to_string(value)}, fn ->
-          assert read_prod_config!()[:cyfr][key] == value, "#{name}=#{value}"
+          pinned = read_prod_config!()[:cyfr][:deployment_pinned]
+          assert {Atom.to_string(key), value} in pinned, "#{name}=#{value}"
         end)
       end
     end
@@ -299,13 +303,13 @@ defmodule Cyfr.RuntimeConfigWiringTest do
       "CYFR_LOCUS_BACKENDS_IDLE_MS" => nil
     }
 
-    test "unset, none is configured; set, the URL without its trailing slash, the key's 32 bytes and each period in milliseconds" do
+    test "unset, none is configured; set, the URL without its trailing slash, the key's 32 bytes and each period pinned in milliseconds" do
       with_env(@backends_unset, fn ->
         cyfr = read_prod_config!()[:cyfr]
         assert cyfr[:locus_backends_url] == nil
         assert cyfr[:locus_backends_key] == nil
-        refute Keyword.has_key?(cyfr, :locus_backends_lease_ms)
-        refute Keyword.has_key?(cyfr, :locus_backends_idle_ms)
+        refute List.keymember?(cyfr[:deployment_pinned], "locus_backends_lease_ms", 0)
+        refute List.keymember?(cyfr[:deployment_pinned], "locus_backends_idle_ms", 0)
       end)
 
       with_env(
@@ -319,8 +323,9 @@ defmodule Cyfr.RuntimeConfigWiringTest do
           cyfr = read_prod_config!()[:cyfr]
           assert cyfr[:locus_backends_url] == "http://locus-backends:4101"
           assert cyfr[:locus_backends_key] == @backends_key
-          assert cyfr[:locus_backends_lease_ms] == 5_000
-          assert cyfr[:locus_backends_idle_ms] == 600_000
+          assert {"locus_backends_lease_ms", 5_000} in cyfr[:deployment_pinned]
+          assert {"locus_backends_idle_ms", 600_000} in cyfr[:deployment_pinned]
+          refute Keyword.has_key?(cyfr, :locus_backends_lease_ms)
         end
       )
     end

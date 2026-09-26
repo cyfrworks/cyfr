@@ -1221,14 +1221,7 @@ defmodule Emissary.Web.MCPControllerTest do
       # A test conn's chunk writes always succeed, so nothing would close the
       # stream before its deadline — bound the window to milliseconds and let
       # the graceful close end it.
-      original = Application.get_env(:cyfr, :mcp_subscription_max_ms)
-      Application.put_env(:cyfr, :mcp_subscription_max_ms, 50)
-
-      on_exit(fn ->
-        if original,
-          do: Application.put_env(:cyfr, :mcp_subscription_max_ms, original),
-          else: Application.delete_env(:cyfr, :mcp_subscription_max_ms)
-      end)
+      Cyfr.Test.Settings.put("mcp_subscription_max_ms", 50)
 
       conn =
         conn
@@ -1249,16 +1242,12 @@ defmodule Emissary.Web.MCPControllerTest do
       conn: conn,
       api_key: api_key
     } do
-      original = Application.get_env(:cyfr, :mcp_subscription_max_concurrent)
-      Application.put_env(:cyfr, :mcp_subscription_max_concurrent, 0)
+      # One stream the key holds open fills a budget of one; the next the
+      # same key asks for is refused while it stays open.
+      Cyfr.Test.Settings.put("mcp_subscription_max_concurrent", 1)
+      Cyfr.Test.Settings.put("mcp_subscription_max_ms", 5_000)
 
-      on_exit(fn ->
-        if original,
-          do: Application.put_env(:cyfr, :mcp_subscription_max_concurrent, original),
-          else: Application.delete_env(:cyfr, :mcp_subscription_max_concurrent)
-      end)
-
-      conn =
+      listen = fn conn ->
         conn
         |> put_req_header("content-type", "application/json")
         |> put_req_header("authorization", "Bearer #{api_key}")
@@ -1268,6 +1257,14 @@ defmodule Emissary.Web.MCPControllerTest do
           "method" => "subscriptions/listen",
           "params" => %{"notifications" => %{"toolsListChanged" => true}}
         })
+      end
+
+      open = Task.async(fn -> listen.(conn) end)
+      on_exit(fn -> Process.exit(open.pid, :kill) end)
+
+      Prima.Test.Wait.wait_until(fn -> Registry.count(CyfrWeb.SSE.Registry) == 1 end)
+
+      conn = listen.(recycle(conn))
 
       assert conn.status == 429
       response = json_response(conn, 429)

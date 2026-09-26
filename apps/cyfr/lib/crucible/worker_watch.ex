@@ -6,7 +6,7 @@ defmodule Crucible.WorkerWatch do
   Hears from each configured worker service, and lapses what a boot the
   cell stopped hearing from, or saw replaced, was running.
 
-  Every poll interval (`config :cyfr, :opus_watch`, `poll_ms`, 5 s by
+  Every poll interval (the `opus_watch_poll_ms` platform setting, 5 s by
   default) the watch asks each worker service of `config :cyfr, :opus_workers`
   for its status (`Crucible.WorkerClient.status/1`), every entry at
   once, each poll bounded by the client. A status of the contract's shape
@@ -117,12 +117,14 @@ defmodule Crucible.WorkerWatch do
 
   Started by `Cyfr.Application` with no options, the watch reads its
   worker services from `config :cyfr, :opus_workers` and its bounds from
-  `config :cyfr, :opus_watch` (`poll_ms` and `misses`, positive
-  integers; any other value refuses the start with the reason), and
-  starts only when `config :cyfr, :worker_watch_enabled` is true. That
-  key defaults to `config :cyfr, :execution_sweeper_enabled` (itself true
-  by default): both are timer-driven detectors that write rows, and a
-  configuration that turns off one turns off the other. Started with
+  the `opus_watch_poll_ms` and `opus_watch_misses` platform settings,
+  through `Arca.PlatformSettings.effective/1` at every tick, so a change
+  reaches the next poll; both serve a stale value, so a store outage
+  keeps the last bounds read. It starts only when
+  `config :cyfr, :worker_watch_enabled` is true. That key defaults to
+  `config :cyfr, :execution_sweeper_enabled` (itself true by default):
+  both are timer-driven detectors that write rows, and a configuration
+  that turns off one turns off the other. Started with
   `:workers`, as a test starts it, the watch polls those endpoints
   whatever the gate says; `:poll_ms`, `:misses`, `:lease_ms`, `:owner`
   (the member the claim is taken for, this boot by default) and `:name`
@@ -138,7 +140,6 @@ defmodule Crucible.WorkerWatch do
   alias Prima.WorkerAPI
 
   @kind "worker_watch"
-  @defaults [poll_ms: 5_000, misses: 3]
 
   @typedoc """
   The watch's view of one worker service.
@@ -165,8 +166,9 @@ defmodule Crucible.WorkerWatch do
   @doc """
   Start the watch. `opts`: `:workers` (the endpoints to poll; default
   `config :cyfr, :opus_workers`, and then only when the watch is enabled),
-  `:poll_ms` and `:misses` (default `config :cyfr, :opus_watch`, then
-  5 000 and 3), `:lease_ms` (default twice the poll interval; see the
+  `:poll_ms` and `:misses` (positive integers that fix the bound, read
+  from its platform setting at every tick when absent), `:lease_ms`
+  (default twice the poll interval; see the
   module doc for why the width is what makes a partitioned member
   harmless), `:owner` (default `Prima.Boot.id/0`) and `:name` (default
   this module). `{:error, reason}` names the setting that refused the
@@ -242,6 +244,7 @@ defmodule Crucible.WorkerWatch do
 
   @impl true
   def handle_info(:poll, state) do
+    state = bounded(state)
     state = if Arca.ControlPlane.held?(), do: poll(state), else: state
     Process.send_after(self(), :poll, state.poll_ms)
     {:noreply, state}
@@ -671,12 +674,10 @@ defmodule Crucible.WorkerWatch do
   end
 
   defp settings(opts) do
+    fixed = Keyword.take(opts, [:poll_ms, :misses, :lease_ms])
+
     with {:ok, name} <- name(Keyword.fetch!(opts, :name)),
-         {:ok, configured} <- configured_bounds(),
-         bounds = Keyword.merge(configured, Keyword.take(opts, [:poll_ms, :misses, :lease_ms])),
-         {:ok, poll_ms} <- bound(bounds, :poll_ms),
-         {:ok, misses} <- bound(bounds, :misses),
-         {:ok, lease_ms} <- lease(bounds, poll_ms),
+         :ok <- fixed(fixed),
          {:ok, workers} <-
            workers(
              Keyword.get_lazy(opts, :workers, fn ->
@@ -684,53 +685,41 @@ defmodule Crucible.WorkerWatch do
              end)
            ) do
       {:ok,
-       %{
+       bounded(%{
          name: name,
-         poll_ms: poll_ms,
-         misses: misses,
-         lease_ms: lease_ms,
+         fixed: fixed,
          owner: Keyword.get_lazy(opts, :owner, &Prima.Boot.id/0),
          workers: workers
-       }}
+       })}
     end
   end
 
   defp name(name) when is_atom(name) and not is_nil(name), do: {:ok, name}
   defp name(_other), do: {:error, "worker watch: the name must be an atom"}
 
-  defp configured_bounds do
-    case Application.get_env(:cyfr, :opus_watch, []) do
-      bounds when is_list(bounds) ->
-        if Keyword.keyword?(bounds),
-          do: {:ok, bounds},
-          else: {:error, "worker watch: config :cyfr, :opus_watch must be a keyword list"}
-
-      _other ->
-        {:error, "worker watch: config :cyfr, :opus_watch must be a keyword list"}
+  # A bound the caller fixed is a positive integer.
+  defp fixed(fixed) do
+    case Enum.find(fixed, fn {_key, value} -> not (is_integer(value) and value > 0) end) do
+      nil -> :ok
+      {key, _value} -> {:error, "worker watch: #{key} must be a positive integer"}
     end
   end
 
-  defp bound(bounds, key) do
-    case Keyword.get(bounds, key, Keyword.fetch!(@defaults, key)) do
-      value when is_integer(value) and value > 0 ->
-        {:ok, value}
-
-      _other ->
-        {:error, "worker watch: #{key} must be a positive integer"}
-    end
-  end
-
-  # Twice the poll interval, so a member that hears the worker renews with
+  # The bounds this tick runs on: each one the caller fixed, else its
+  # platform setting as it reads now. The lease is twice the poll
+  # interval unless fixed, so a member that hears the worker renews with
   # a whole poll of headroom and a member that stops hearing loses the
   # watch after two polls at the most. See the module doc.
-  defp lease(bounds, poll_ms) do
-    case Keyword.get(bounds, :lease_ms, poll_ms * 2) do
-      value when is_integer(value) and value > 0 ->
-        {:ok, value}
+  defp bounded(%{fixed: fixed} = state) do
+    poll_ms = Keyword.get_lazy(fixed, :poll_ms, fn -> setting("opus_watch_poll_ms") end)
+    misses = Keyword.get_lazy(fixed, :misses, fn -> setting("opus_watch_misses") end)
+    lease_ms = Keyword.get(fixed, :lease_ms, poll_ms * 2)
+    Map.merge(state, %{poll_ms: poll_ms, misses: misses, lease_ms: lease_ms})
+  end
 
-      _other ->
-        {:error, "worker watch: lease_ms must be a positive integer"}
-    end
+  defp setting(key) do
+    {:ok, value} = Arca.PlatformSettings.effective(key)
+    value
   end
 
   # The endpoints by id, each as `Crucible.Dispatch` reads it.

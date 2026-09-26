@@ -230,9 +230,7 @@ defmodule Sanctum.Tenancy.PairsTest do
       bob: bob,
       carol: carol
     } do
-      original = Application.get_env(:sanctum, :caps, [])
-      Application.put_env(:sanctum, :caps, Keyword.put(original, :max_groups_per_person, 1))
-      on_exit(fn -> Application.put_env(:sanctum, :caps, original) end)
+      Sanctum.Test.Settings.put("max_groups_per_person", 1)
 
       # `CYFR_MAX_GROUPS_PER_PERSON` bounds groups a person deliberately
       # made. Counting DMs would turn it into "how many people may you
@@ -251,9 +249,7 @@ defmodule Sanctum.Tenancy.PairsTest do
       bob: bob,
       carol: carol
     } do
-      original = Application.get_env(:sanctum, :caps, [])
-      Application.put_env(:sanctum, :caps, Keyword.put(original, :max_pairs_per_person, 1))
-      on_exit(fn -> Application.put_env(:sanctum, :caps, original) end)
+      Sanctum.Test.Settings.put("max_pairs_per_person", 1)
 
       {:ok, pair} = Athanors.create_pair(alice, bob)
 
@@ -278,9 +274,7 @@ defmodule Sanctum.Tenancy.PairsTest do
       bob: bob,
       carol: carol
     } do
-      original = Application.get_env(:sanctum, :caps, [])
-      Application.put_env(:sanctum, :caps, Keyword.put(original, :max_pairs_per_person, 1))
-      on_exit(fn -> Application.put_env(:sanctum, :caps, original) end)
+      Sanctum.Test.Settings.put("max_pairs_per_person", 1)
 
       results =
         [bob, carol]
@@ -301,9 +295,7 @@ defmodule Sanctum.Tenancy.PairsTest do
       bob: bob,
       carol: carol
     } do
-      original = Application.get_env(:sanctum, :caps, [])
-      Application.put_env(:sanctum, :caps, Keyword.put(original, :max_pairs_per_person, 1))
-      on_exit(fn -> Application.put_env(:sanctum, :caps, original) end)
+      Sanctum.Test.Settings.put("max_pairs_per_person", 1)
 
       {:ok, pair} = Athanors.create_pair(alice, bob)
 

@@ -88,14 +88,7 @@ defmodule CyfrWeb.Plugs.WebhookRateLimitTest do
     # operator who set a higher rate_limit was held to 600 with nothing
     # saying why.
     test "a per-slug limit above the per-IP ceiling is not silently clamped", %{ctx: ctx} do
-      prev = Application.get_env(:cyfr, :webhook_per_ip_rate_limit_max)
-      Application.put_env(:cyfr, :webhook_per_ip_rate_limit_max, 3)
-
-      on_exit(fn ->
-        if prev,
-          do: Application.put_env(:cyfr, :webhook_per_ip_rate_limit_max, prev),
-          else: Application.delete_env(:cyfr, :webhook_per_ip_rate_limit_max)
-      end)
+      Cyfr.Test.Settings.put("webhook_per_ip_rate_limit_max", 3)
 
       name = "rl-clamped-#{:rand.uniform(1_000_000)}"
       slug = create_webhook!(ctx, name, %{rate_limit: "50/1m"})

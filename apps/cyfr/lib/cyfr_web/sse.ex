@@ -6,9 +6,14 @@ defmodule CyfrWeb.SSE do
   The per-caller bounds every SSE surface shares: a concurrent-stream slot
   and a hard deadline.
 
-  Each surface uses its own subscription tag and configured budget.
-  Slots are released when the connection process exits. Count and register
-  are separate steps, so bursts can briefly exceed the configured cap.
+  Each surface uses its own subscription tag and its own pair of platform
+  settings (`mcp_subscription_*` for `subscriptions/listen`,
+  `crucible_events_*` for execution events), read through
+  `Arca.PlatformSettings.effective/1` when a stream opens: a change
+  reaches the streams opened after it. Slots are counted per member, in
+  this member's registry, so a caller's budget is per member of the cell.
+  Slots are released when the connection process exits. Count and
+  register are separate steps, so bursts can briefly exceed the cap.
 
   What happens ON the stream stays per-surface (JSON-RPC notifications vs
   execution events, and their renderers) — only the bounds are one thing.
@@ -18,8 +23,10 @@ defmodule CyfrWeb.SSE do
   # nothing; a quiet stream is the normal state, not a broken one.
   @keep_alive_ms :timer.seconds(15)
 
-  @default_max_concurrent 8
-  @default_max_ms :timer.minutes(30)
+  # The settings a surface may name: each surface's concurrent-stream cap
+  # and stream lifetime.
+  @limits ~w(mcp_subscription_max_concurrent crucible_events_max_concurrent)a
+  @lifetimes ~w(mcp_subscription_max_ms crucible_events_max_ms)a
 
   @doc "How long to wait before writing a keep-alive comment."
   @spec keep_alive_ms() :: pos_integer()
@@ -59,16 +66,17 @@ defmodule CyfrWeb.SSE do
 
   @doc """
   Claim a stream slot for the caller under `tag`, bounded by the
-  `limit_key` app-config budget (default #{@default_max_concurrent}).
+  `limit_key` platform setting (8 streams by default).
 
   The key carries the credential, not only the person: API-key callers
   share a nil `user_id`, so without it every integration in an athanor
   drew on one budget and a single chatty one starved the rest.
   """
   @spec claim_slot(atom(), Sanctum.Context.t(), atom()) :: :ok | {:error, :stream_limit}
-  def claim_slot(tag, %Sanctum.Context{} = ctx, limit_key) when is_atom(tag) do
+  def claim_slot(tag, %Sanctum.Context{} = ctx, limit_key)
+      when is_atom(tag) and limit_key in @limits do
     key = {tag, ctx.athanor_id, ctx.user_id, ctx.api_key_id || ctx.session_token_hash}
-    limit = Application.get_env(:cyfr, limit_key, @default_max_concurrent)
+    limit = setting(limit_key)
 
     if CyfrWeb.SSE.Registry.count(key) >= limit do
       {:error, :stream_limit}
@@ -80,13 +88,19 @@ defmodule CyfrWeb.SSE do
 
   @doc """
   The monotonic deadline for a stream opened now, from the `max_ms_key`
-  app-config window (default 30 minutes). A stream does not live forever:
-  an unbounded one means a client that vanished uncleanly holds a process
-  and a socket until the VM restarts; the client reconnects.
+  platform setting (30 minutes by default). A stream does not live
+  forever: an unbounded one means a client that vanished uncleanly holds
+  a process and a socket until the VM restarts; the client reconnects.
   """
   @spec deadline(atom()) :: integer()
-  def deadline(max_ms_key) do
-    System.monotonic_time(:millisecond) +
-      Application.get_env(:cyfr, max_ms_key, @default_max_ms)
+  def deadline(max_ms_key) when max_ms_key in @lifetimes do
+    System.monotonic_time(:millisecond) + setting(max_ms_key)
+  end
+
+  # Both limits serve a stale value, so a store outage answers the last
+  # one read and refuses no stream for it.
+  defp setting(key) do
+    {:ok, value} = Arca.PlatformSettings.effective(Atom.to_string(key))
+    value
   end
 end

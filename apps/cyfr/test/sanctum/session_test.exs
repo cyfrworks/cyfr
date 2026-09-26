@@ -50,9 +50,8 @@ defmodule Sanctum.SessionTest do
       assert diff >= 719 and diff <= 720
     end
 
-    test "respects CYFR_SESSION_TTL_HOURS override", %{ctx: ctx} do
-      Application.put_env(:sanctum, :session_ttl_hours, 1)
-      on_exit(fn -> Application.delete_env(:sanctum, :session_ttl_hours) end)
+    test "takes the session_ttl_hours setting, with no restart", %{ctx: ctx} do
+      Cyfr.Test.Settings.put("session_ttl_hours", 1)
 
       {:ok, session} = Session.create(ctx)
       {:ok, expires_at, _} = DateTime.from_iso8601(session.expires_at)
@@ -270,8 +269,7 @@ defmodule Sanctum.SessionTest do
 
     test "no-ops when TTL is infinite", %{ctx: ctx} do
       {:ok, session} = Session.create(ctx)
-      Application.put_env(:sanctum, :session_ttl_hours, 0)
-      on_exit(fn -> Application.delete_env(:sanctum, :session_ttl_hours) end)
+      Cyfr.Test.Settings.put("session_ttl_hours", 0)
 
       assert :ok = Session.refresh_if_stale(session.token)
     end
