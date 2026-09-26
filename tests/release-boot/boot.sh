@@ -109,7 +109,7 @@ CYFR_HOST_API_BIND=127.0.0.1
 CYFR_HOST_API_PORT=$HOST_API_PORT
 CYFR_CORS_ALLOWED_ORIGINS=$cors
 CYFR_SECRET_KEY_BASE=$SECRET_KEY_BASE
-CYFR_MCP_BRIDGE_KEY=$BRIDGE_KEY
+CYFR_LOCUS_BACKENDS_KEY=$BACKENDS_KEY
 CYFR_OPUS_KEY=$WORKER_KEY
 OPUS_SERVICE_ID=wrk_opus
 CYFR_LOCUS_BUILDS_URL=http://locus-builds:4100
@@ -117,7 +117,7 @@ CYFR_LOCUS_BUILDS_KEY=$BUILDS_KEY
 CYFR_GITHUB_CLIENT_ID=Ov23lib66tiIwXkgUpwm
 CYFR_PLATFORM_ADMIN_EMAILS=operator@example.com
 CYFR_BEHIND_PROXY=false
-CYFR_PRIVATE_EGRESS_TARGETS=mcp-bridge
+CYFR_PRIVATE_EGRESS_TARGETS=locus-backends
 ENV
 }
 
@@ -187,7 +187,7 @@ fi
 # The keys the stack runs on, minted for this run alone, as `cyfr init`
 # mints them: 32 random bytes as 64 hexadecimal digits, and a key base.
 WORKER_KEY="$(openssl rand -hex 32)"
-BRIDGE_KEY="$(openssl rand -hex 32)"
+BACKENDS_KEY="$(openssl rand -hex 32)"
 BUILDS_KEY="$(openssl rand -hex 32)"
 SECRET_KEY_BASE="$(openssl rand -base64 48 | tr -d '\n')"
 

@@ -156,34 +156,58 @@ defmodule Cyfr.RuntimeConfigWiringTest do
     end
   end
 
-  describe "the MCP bridge's lease and idle period" do
-    test "unset, neither is configured; set, each is taken in milliseconds" do
-      with_env(%{"CYFR_MCP_BRIDGE_LEASE_MS" => nil, "CYFR_MCP_BRIDGE_IDLE_MS" => nil}, fn ->
+  describe "the Locus backends service" do
+    @backends_key :binary.copy(<<0xBA>>, 32)
+    @backends_unset %{
+      "CYFR_LOCUS_BACKENDS_URL" => nil,
+      "CYFR_LOCUS_BACKENDS_KEY" => nil,
+      "CYFR_LOCUS_BACKENDS_LEASE_MS" => nil,
+      "CYFR_LOCUS_BACKENDS_IDLE_MS" => nil
+    }
+
+    test "unset, none is configured; set, the URL without its trailing slash, the key's 32 bytes and each period in milliseconds" do
+      with_env(@backends_unset, fn ->
         cyfr = read_prod_config!()[:cyfr]
-        refute Keyword.has_key?(cyfr, :mcp_bridge_lease_ms)
-        refute Keyword.has_key?(cyfr, :mcp_bridge_idle_ms)
+        assert cyfr[:locus_backends_url] == nil
+        assert cyfr[:locus_backends_key] == nil
+        refute Keyword.has_key?(cyfr, :locus_backends_lease_ms)
+        refute Keyword.has_key?(cyfr, :locus_backends_idle_ms)
       end)
 
       with_env(
-        %{"CYFR_MCP_BRIDGE_LEASE_MS" => "5000", "CYFR_MCP_BRIDGE_IDLE_MS" => "600000"},
+        %{
+          "CYFR_LOCUS_BACKENDS_URL" => "http://locus-backends:4101/",
+          "CYFR_LOCUS_BACKENDS_KEY" => Base.encode16(@backends_key),
+          "CYFR_LOCUS_BACKENDS_LEASE_MS" => "5000",
+          "CYFR_LOCUS_BACKENDS_IDLE_MS" => "600000"
+        },
         fn ->
           cyfr = read_prod_config!()[:cyfr]
-          assert cyfr[:mcp_bridge_lease_ms] == 5_000
-          assert cyfr[:mcp_bridge_idle_ms] == 600_000
+          assert cyfr[:locus_backends_url] == "http://locus-backends:4101"
+          assert cyfr[:locus_backends_key] == @backends_key
+          assert cyfr[:locus_backends_lease_ms] == 5_000
+          assert cyfr[:locus_backends_idle_ms] == 600_000
         end
       )
     end
 
-    test "a value that is not a whole number of milliseconds in range refuses the boot" do
+    test "a malformed URL or key, or a period that is not a whole number of milliseconds in range, refuses the boot by name and never echoes the key" do
+      hex = Base.encode16(@backends_key, case: :lower)
+
       for {key, bad} <- [
-            {"CYFR_MCP_BRIDGE_LEASE_MS", "999"},
-            {"CYFR_MCP_BRIDGE_LEASE_MS", "30s"},
-            {"CYFR_MCP_BRIDGE_IDLE_MS", "86400001"},
-            {"CYFR_MCP_BRIDGE_IDLE_MS", "15m"}
+            {"CYFR_LOCUS_BACKENDS_URL", "locus-backends:4101"},
+            {"CYFR_LOCUS_BACKENDS_URL", "http://locus-backends:4101/mcp"},
+            {"CYFR_LOCUS_BACKENDS_KEY", String.slice(hex, 0..62)},
+            {"CYFR_LOCUS_BACKENDS_LEASE_MS", "999"},
+            {"CYFR_LOCUS_BACKENDS_LEASE_MS", "30s"},
+            {"CYFR_LOCUS_BACKENDS_IDLE_MS", "86400001"},
+            {"CYFR_LOCUS_BACKENDS_IDLE_MS", "15m"}
           ] do
-        with_env(%{key => bad}, fn ->
-          error = assert_raise RuntimeError, fn -> read_prod_config!() end
-          assert Exception.message(error) =~ key
+        with_env(Map.put(@backends_unset, key, bad), fn ->
+          message = Exception.message(assert_raise(RuntimeError, &read_prod_config!/0))
+          assert message =~ "[Cyfr] FATAL: "
+          assert message =~ key
+          refute message =~ String.slice(hex, 0..62)
         end)
       end
     end

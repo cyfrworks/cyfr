@@ -76,8 +76,8 @@ def cargo_toml(stack):
 
 
 def main(image):
-    empty = tempfile.mkdtemp(prefix="cyfr-builder-smoke-")
-    stack = Stack("cyfr-builder-smoke", image, empty)
+    empty = tempfile.mkdtemp(prefix="locus-builds-smoke-")
+    stack = Stack("locus-builds-smoke", image, empty)
     try:
         stack.up()
         expect(stack.health.get("version") == VERSION and all(t["available"] for t in stack.health["toolchains"].values()),

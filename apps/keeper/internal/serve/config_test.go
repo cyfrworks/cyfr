@@ -15,15 +15,15 @@ import (
 )
 
 func TestParseArgs(t *testing.T) {
-	cfg, err := ParseArgs(strings.Fields("--pool backends:20001-20032 --home-root /var/lib/cyfr-bridge/homes --client-user cyfr-bridge -- node server.mjs"))
+	cfg, err := ParseArgs(strings.Fields("--pool backends:20001-20032 --home-root /var/lib/locus/homes --client-user locus -- /app/bin/locus start"))
 	if err != nil {
 		t.Fatal(err)
 	}
 	want := Config{
 		Pools:      []pool.Spec{{Name: "backends", First: 20001, Last: 20032}},
-		HomeRoot:   "/var/lib/cyfr-bridge/homes",
-		ClientUser: "cyfr-bridge",
-		ClientArgv: []string{"node", "server.mjs"},
+		HomeRoot:   "/var/lib/locus/homes",
+		ClientUser: "locus",
+		ClientArgv: []string{"/app/bin/locus", "start"},
 	}
 	if !reflect.DeepEqual(cfg, want) {
 		t.Fatalf("config %+v", cfg)
@@ -82,15 +82,15 @@ func poolUser(uid int, gid int) user.User {
 	return user.User{Uid: strconv.Itoa(uid), Gid: strconv.Itoa(gid), Username: name, HomeDir: "/nonexistent"}
 }
 
-var bridgeUser = user.User{Uid: "10001", Gid: "10001", Username: "cyfr-bridge", HomeDir: "/nonexistent"}
+var locusUser = user.User{Uid: "10001", Gid: "10001", Username: "locus", HomeDir: "/nonexistent"}
 
 func TestResolveAccounts(t *testing.T) {
-	cfg := Config{Pools: []pool.Spec{{Name: "backends", First: 20001, Last: 20003}}, ClientUser: "cyfr-bridge"}
-	client, accounts, err := ResolveAccounts(cfg, fakeLookup(bridgeUser, poolUser(20001, 20001), poolUser(20002, 20002)))
+	cfg := Config{Pools: []pool.Spec{{Name: "backends", First: 20001, Last: 20003}}, ClientUser: "locus"}
+	client, accounts, err := ResolveAccounts(cfg, fakeLookup(locusUser, poolUser(20001, 20001), poolUser(20002, 20002)))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if client != (Account{UID: 10001, GID: 10001, Name: "cyfr-bridge", Home: "/nonexistent"}) {
+	if client != (Account{UID: 10001, GID: 10001, Name: "locus", Home: "/nonexistent"}) {
 		t.Fatalf("client %+v", client)
 	}
 	if accounts[20001].Name != "cyfr-b20001" || accounts[20002].GID != 20002 {
@@ -110,16 +110,16 @@ func TestResolveAccountsRefusesSharedOrPrivilegedIdentities(t *testing.T) {
 		"unknown client": {Config{Pools: pools, ClientUser: "nobody-here"}, nil},
 		"root client": {Config{Pools: pools, ClientUser: "root"},
 			[]user.User{{Uid: "0", Gid: "0", Username: "root"}}},
-		"client in group 0": {Config{Pools: pools, ClientUser: "cyfr-bridge"},
-			[]user.User{{Uid: "10001", Gid: "0", Username: "cyfr-bridge"}}},
-		"client uid in a pool": {Config{Pools: []pool.Spec{{Name: "p", First: 10000, Last: 10002}}, ClientUser: "cyfr-bridge"},
-			[]user.User{bridgeUser}},
-		"pool uid in group 0": {Config{Pools: pools, ClientUser: "cyfr-bridge"},
-			[]user.User{bridgeUser, poolUser(20001, 0)}},
-		"pool uid in the client's group": {Config{Pools: pools, ClientUser: "cyfr-bridge"},
-			[]user.User{bridgeUser, poolUser(20001, 10001)}},
-		"two pool uids share a group": {Config{Pools: pools, ClientUser: "cyfr-bridge"},
-			[]user.User{bridgeUser, poolUser(20001, 20002)}},
+		"client in group 0": {Config{Pools: pools, ClientUser: "locus"},
+			[]user.User{{Uid: "10001", Gid: "0", Username: "locus"}}},
+		"client uid in a pool": {Config{Pools: []pool.Spec{{Name: "p", First: 10000, Last: 10002}}, ClientUser: "locus"},
+			[]user.User{locusUser}},
+		"pool uid in group 0": {Config{Pools: pools, ClientUser: "locus"},
+			[]user.User{locusUser, poolUser(20001, 0)}},
+		"pool uid in the client's group": {Config{Pools: pools, ClientUser: "locus"},
+			[]user.User{locusUser, poolUser(20001, 10001)}},
+		"two pool uids share a group": {Config{Pools: pools, ClientUser: "locus"},
+			[]user.User{locusUser, poolUser(20001, 20002)}},
 	}
 	for name, c := range cases {
 		if _, _, err := ResolveAccounts(c.cfg, fakeLookup(c.users...)); err == nil {
@@ -129,9 +129,9 @@ func TestResolveAccountsRefusesSharedOrPrivilegedIdentities(t *testing.T) {
 }
 
 func TestClientEnvironDescribesTheClientUserAndItsChannel(t *testing.T) {
-	got := ClientEnviron([]string{"PATH=/usr/bin", "HOME=/root", "USER=root", "CYFR_MCP_BRIDGE_KEY=t", "KEEPER_CHANNEL=socket:[1]", "LOGNAME=root"},
-		Account{Name: "cyfr-bridge", Home: "/nonexistent"}, "socket:[4242]")
-	want := []string{"PATH=/usr/bin", "CYFR_MCP_BRIDGE_KEY=t", "HOME=/nonexistent", "USER=cyfr-bridge", "LOGNAME=cyfr-bridge", "KEEPER_CHANNEL=socket:[4242]"}
+	got := ClientEnviron([]string{"PATH=/usr/bin", "HOME=/root", "USER=root", "CYFR_LOCUS_BACKENDS_KEY=t", "KEEPER_CHANNEL=socket:[1]", "LOGNAME=root"},
+		Account{Name: "locus", Home: "/nonexistent"}, "socket:[4242]")
+	want := []string{"PATH=/usr/bin", "CYFR_LOCUS_BACKENDS_KEY=t", "HOME=/nonexistent", "USER=locus", "LOGNAME=locus", "KEEPER_CHANNEL=socket:[4242]"}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("environ %q", got)
 	}

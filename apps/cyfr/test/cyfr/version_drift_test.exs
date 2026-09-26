@@ -6,8 +6,7 @@ defmodule Cyfr.VersionDriftTest do
   Every release view states `Prima.Version.current/0`.
 
   `scripts/release.sh` bumps the root and every application's `mix.exs`
-  and the bridge's `package.json` and lock together; each is held to the
-  compiled value here. The frozen Locus wire vector, Codex's tag-derived
+  together; each is held to the compiled value here. The frozen Locus wire vector, Codex's tag-derived
   version, the images' ref-derived tags and `Cyfr.Release` are not
   version views and are not read.
   """
@@ -30,17 +29,5 @@ defmodule Cyfr.VersionDriftTest do
              "#{Path.relative_to(file, @root)} states #{version}, " <>
                "the build states #{Prima.Version.current()}"
     end
-  end
-
-  test "the bridge's package and its lock state it" do
-    package =
-      @root |> Path.join("apps/mcp-bridge/package.json") |> File.read!() |> Jason.decode!()
-
-    lock =
-      @root |> Path.join("apps/mcp-bridge/package-lock.json") |> File.read!() |> Jason.decode!()
-
-    assert package["version"] == Prima.Version.current()
-    assert lock["version"] == Prima.Version.current()
-    assert lock["packages"][""]["version"] == Prima.Version.current()
   end
 end

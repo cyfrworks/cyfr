@@ -6,7 +6,7 @@ defmodule Arca.Schemas.McpServer do
   Ecto schema for the `mcp_servers` table (backs `Arca.McpServerStorage`).
 
   `transport` is `"http"` (the server is reached at `url`) or `"stdio"` (its
-  backends, in `config_json`, run on the MCP bridge and `url` is nil).
+  backends, in `config_json`, run on the backends service and `url` is nil).
   `epoch` rises with every change to the row. `created_by` is the id of the
   person who created it, set once.
   """

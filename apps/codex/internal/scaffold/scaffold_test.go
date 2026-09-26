@@ -40,8 +40,7 @@ func TestIsManaged(t *testing.T) {
 		"Caddyfile",
 		".env",
 		".env.example",
-		"Dockerfile.node",
-		"apps/mcp-bridge/server.mjs",
+		".env.locus.example",
 		"cyfr.yaml",
 		"aqua",
 		"aqua/README.md",                     // only the soul, roles and scrolls ship

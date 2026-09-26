@@ -33,7 +33,7 @@ defmodule Cyfr.Cell do
   execution on the member that admitted it, and ownership is settled after
   the fact by a claim row. Three things must happen once in the cell
   rather than once per member — watching a worker service, holding a
-  backend's bridge controller, and running a singleton job — and those are
+  backend's controller, and running a singleton job — and those are
   proposed by **rendezvous hashing** over the live roster:
 
       owner(subject) = argmax over live members m of sha256(subject <> "\\0" <> m)

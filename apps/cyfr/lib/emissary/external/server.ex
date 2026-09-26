@@ -19,24 +19,25 @@ defmodule Emissary.External.Server do
 
   ## Stdio transport
 
-  A stdio server's backends run on the MCP bridge. Connecting asks the
-  controller (`Emissary.External.Backends.sync/1`) to run this server's owner at
-  its epoch and receives a grant; every request to the bridge's `/mcp` then
-  carries a `Cyfr-Bridge-Auth` header signed with the grant's owner key
-  over the exact body sent (`Prima.BridgeAuth.invoke_header/3`), with a
-  fresh nonce and timestamp. The process holds the owner key and never an
-  env value: the bridge masks backend credentials in what it answers.
+  A stdio server's backends run on the backends service Locus serves.
+  Connecting asks the controller (`Emissary.External.Backends.sync/1`) to
+  run this server's owner at its epoch and receives a grant; every request
+  to the service's MCP route then carries an `x-cyfr-auth` header signed
+  with the grant's owner key over the exact body sent
+  (`Prima.LocusBackends.invoke_header/3`), with a fresh nonce and
+  timestamp. The process holds the owner key and never an env value: the
+  service masks backend credentials in what it answers.
 
   One member of the cell runs a backend, and the controller that answers
   `sync/1` is the one holding its claim; a member that holds none refuses
   the connection rather than starting a second copy, and says which case
   it is.
 
-  A call the bridge refuses before running it is answered as follows:
+  A call the service refuses before running it is answered as follows:
   `stale_boot`, `epoch_ahead`, `unknown_owner` and `lapsed` sync again and
   retry the call once; `stale_epoch` re-reads the row, and a row whose epoch
   moved leaves this process in error until it is replaced. Stopping the
-  process releases its owner on the bridge within 3 s.
+  process releases its owner on the service within 3 s.
 
   The tool catalogue is listed again whenever the controller issues a new
   grant or reports that the owner's catalogue changed — a backend that
@@ -64,7 +65,7 @@ defmodule Emissary.External.Server do
 
   @initialize_timeout_ms 15_000
   # How long a caller waits for a connect, which for a stdio server includes
-  # the bridge starting its backends.
+  # the service starting its backends.
   @connect_call_timeout_ms 60_000
   @retried_refusals ~w(stale_boot epoch_ahead unknown_owner lapsed)
   # Client-side deadline for a call_tool round-trip. The upstream timeout is
@@ -222,10 +223,10 @@ defmodule Emissary.External.Server do
     @moduledoc false
     # `headers` holds RESOLVED credential values (vault references already
     # unsealed to plaintext), `raw_headers` may carry inline ones and
-    # `bridge` holds a stdio owner's key. OTP prints `inspect(state)` in
+    # `grant` holds a stdio owner's key. OTP prints `inspect(state)` in
     # every GenServer crash/exit report, so all three are excluded from
     # Inspect — a crashed call must not write credentials into the log.
-    @derive {Inspect, except: [:headers, :raw_headers, :bridge]}
+    @derive {Inspect, except: [:headers, :raw_headers, :grant]}
     defstruct [
       :name,
       :url,
@@ -234,7 +235,7 @@ defmodule Emissary.External.Server do
       :server_id,
       :epoch,
       # The grant `Emissary.External.Backends.sync/1` issued (stdio only).
-      :bridge,
+      :grant,
       :server_info,
       :error,
       :last_init_attempt,
@@ -266,7 +267,7 @@ defmodule Emissary.External.Server do
   # Exits are trapped so a stop — a vault change, a deleted row, an archived
   # athanor — runs `terminate/2`, which ends every upstream call still in
   # flight with the credentials this process resolved, and releases a
-  # stdio server's owner on the bridge.
+  # stdio server's owner on the service.
   @impl true
   def init(config) do
     Process.flag(:trap_exit, true)
@@ -351,7 +352,7 @@ defmodule Emissary.External.Server do
         server_info: nil,
         error: nil,
         headers: %{},
-        bridge: nil
+        grant: nil
     }
 
     case do_initialize(state) do
@@ -361,7 +362,7 @@ defmodule Emissary.External.Server do
   end
 
   # Runs a call in a detached task, or answers why it cannot run. `attempt`
-  # counts the times the bridge refused this call before running it.
+  # counts the times the service refused this call before running it.
   defp dispatch_call(state, from, {tool_name, arguments, _attempt} = call) do
     state = ensure_ready(state)
 
@@ -417,8 +418,8 @@ defmodule Emissary.External.Server do
 
                case reply do
                  # Refused before it ran: the server decides what happens next.
-                 {:bridge_refused, code, boot} ->
-                   send(server, {:bridge_refused, self(), code, boot})
+                 {:backends_refused, code, boot} ->
+                   send(server, {:backends_refused, self(), code, boot})
 
                  reply ->
                    GenServer.reply(from, reply)
@@ -475,8 +476,8 @@ defmodule Emissary.External.Server do
     end
   end
 
-  # The bridge refused a call before running it.
-  def handle_info({:bridge_refused, task_pid, code, boot}, state) do
+  # The service refused a call before running it.
+  def handle_info({:backends_refused, task_pid, code, boot}, state) do
     case Map.get(state.in_flight, task_pid) do
       {task_ref, from, caller_ref} ->
         Process.demonitor(task_ref, [:flush])
@@ -494,18 +495,18 @@ defmodule Emissary.External.Server do
   end
 
   # The controller synced this server's owner again and issued a new grant.
-  def handle_info({:bridge_owner, %{epoch: epoch} = grant}, %State{epoch: epoch} = state) do
-    {:noreply, relist_tools(%{state | bridge: grant, url: grant.url})}
+  def handle_info({:backends_owner, %{epoch: epoch} = grant}, %State{epoch: epoch} = state) do
+    {:noreply, relist_tools(%{state | grant: grant, url: grant.url})}
   end
 
-  def handle_info({:bridge_owner, _grant_for_another_epoch}, state), do: {:noreply, state}
+  def handle_info({:backends_owner, _grant_for_another_epoch}, state), do: {:noreply, state}
 
-  # The bridge reports that this owner's tool catalogue changed.
-  def handle_info({:bridge_tools_changed, epoch}, %State{epoch: epoch} = state) do
+  # The service reports that this owner's tool catalogue changed.
+  def handle_info({:backends_tools_changed, epoch}, %State{epoch: epoch} = state) do
     {:noreply, relist_tools(state)}
   end
 
-  def handle_info({:bridge_tools_changed, _another_epoch}, state), do: {:noreply, state}
+  def handle_info({:backends_tools_changed, _another_epoch}, state), do: {:noreply, state}
 
   def handle_info(msg, state) do
     Prima.LoggerContext.unexpected(__MODULE__, msg)
@@ -523,7 +524,7 @@ defmodule Emissary.External.Server do
   # A lifetime, generation or lease the grant no longer matches: sync again
   # and send the call once more.
   defp after_refusal(state, from, {tool, arguments, 0}, code) when code in @retried_refusals do
-    state = %{state | status: :disconnected, bridge: nil, last_init_attempt: nil}
+    state = %{state | status: :disconnected, grant: nil, last_init_attempt: nil}
 
     case dispatch_call(state, from, {tool, arguments, 1}) do
       {:reply, reply, state} ->
@@ -535,7 +536,7 @@ defmodule Emissary.External.Server do
     end
   end
 
-  # The bridge runs a newer version of this owner. A row whose epoch moved
+  # The service runs a newer version of this owner. A row whose epoch moved
   # has been changed since this process started: it stays in error until
   # `Emissary.External.ServerSupervisor.ensure_started/1` replaces it.
   defp after_refusal(state, from, _call, "stale_epoch") do
@@ -547,7 +548,7 @@ defmodule Emissary.External.Server do
           state
 
         _moved_or_gone ->
-          %{state | status: :error, error: "the server's configuration changed", bridge: nil}
+          %{state | status: :error, error: "the server's configuration changed", grant: nil}
       end
 
     GenServer.reply(
@@ -559,7 +560,11 @@ defmodule Emissary.External.Server do
   end
 
   defp after_refusal(state, from, _call, code) do
-    GenServer.reply(from, {:error, "The MCP bridge refused the call to #{state.name} (#{code})"})
+    GenServer.reply(
+      from,
+      {:error, "The backends service refused the call to #{state.name} (#{code})"}
+    )
+
     {:noreply, state}
   end
 
@@ -569,7 +574,7 @@ defmodule Emissary.External.Server do
   # A connected stdio server lists its tools again under its grant. A
   # refused or failed listing leaves the catalogue as it was: the next call
   # meets the refusal and recovers from it.
-  defp relist_tools(%State{transport: :stdio, status: :ready, bridge: %{}} = state) do
+  defp relist_tools(%State{transport: :stdio, status: :ready, grant: %{}} = state) do
     listing = %{state | timeout_ms: min(state.timeout_ms, @initialize_timeout_ms)}
 
     case send_tools_list(listing) do
@@ -662,7 +667,7 @@ defmodule Emissary.External.Server do
       {:legacy, _state} ->
         {:error, "#{state.name} changed protocol era mid-connection"}
 
-      {:bridge_refused, _code, _boot} = refused ->
+      {:backends_refused, _code, _boot} = refused ->
         refused
 
       {:error, reason} ->
@@ -699,11 +704,14 @@ defmodule Emissary.External.Server do
   # MCP Handshake
   # ============================================================================
 
-  # A stdio server connects through the bridge: a grant for its owner, then
-  # a signed `tools/list`. A grant the bridge stops honouring between the
+  # A stdio server connects through the service: a grant for its owner, then
+  # a signed `tools/list`. A grant the service stops honouring between the
   # two (it restarted, or the lease lapsed) is asked for once more.
   defp do_initialize(%State{transport: :stdio} = state) do
-    Logger.info("[Emissary.External.Server] Connecting to #{state.name} through the MCP bridge")
+    Logger.info(
+      "[Emissary.External.Server] Connecting to #{state.name} through the backends service"
+    )
+
     state = %{state | last_init_attempt: System.monotonic_time(:millisecond), era: :modern}
 
     case record_revisions(state) do
@@ -800,7 +808,7 @@ defmodule Emissary.External.Server do
     with {:ok, grant} <- Emissary.External.Backends.sync(owner(state)),
          granted = %{
            state
-           | bridge: grant,
+           | grant: grant,
              url: grant.url,
              timeout_ms: min(state.timeout_ms, @initialize_timeout_ms)
          },
@@ -811,44 +819,51 @@ defmodule Emissary.External.Server do
 
       {:ok, %{connected | timeout_ms: state.timeout_ms, status: :ready, tools: tools, error: nil}}
     else
-      {:error, {:bridge_refused, code, _boot}} when code in @retried_refusals and attempt == 0 ->
+      {:error, {:backends_refused, code, _boot}}
+      when code in @retried_refusals and attempt == 0 ->
         stdio_connect(state, 1)
 
       {:error, reason} ->
-        fail_initialize(%{state | bridge: nil}, bridge_reason(reason))
+        fail_initialize(%{state | grant: nil}, backends_reason(reason))
 
       {:legacy, _state} ->
-        fail_initialize(%{state | bridge: nil}, "the MCP bridge refused the request")
+        fail_initialize(%{state | grant: nil}, "the backends service refused the request")
     end
   end
 
-  defp bridge_reason({:bridge_refused, code, _boot}), do: "the MCP bridge refused (#{code})"
-  defp bridge_reason(:bridge_not_configured), do: "no MCP bridge is configured"
-  defp bridge_reason(:bridge_unavailable), do: "the MCP bridge is unavailable"
-  defp bridge_reason(:control_plane_lost), do: "this server does not own its control plane"
-  defp bridge_reason(:capacity), do: "the MCP bridge has no free backend slots"
+  defp backends_reason({:backends_refused, code, _boot}),
+    do: "the backends service refused (#{code})"
 
-  defp bridge_reason(:claimed_elsewhere),
+  defp backends_reason(:backends_not_configured), do: "no backends service is configured"
+  defp backends_reason(:backends_unavailable), do: "the backends service is unavailable"
+
+  defp backends_reason(:protocol_mismatch),
+    do: "the backends service speaks another protocol version"
+
+  defp backends_reason(:control_plane_lost), do: "this server does not own its control plane"
+  defp backends_reason(:capacity), do: "the backends service has no free backend slots"
+
+  defp backends_reason(:claimed_elsewhere),
     do: "another member of the cell holds this server's backends"
 
-  defp bridge_reason(:claim_unavailable),
+  defp backends_reason(:claim_unavailable),
     do: "which member holds this server's backends could not be read"
 
-  defp bridge_reason({:pool_share, limit}),
-    do: "this athanor already runs its share of the MCP bridge (#{limit} backends)"
+  defp backends_reason({:pool_share, limit}),
+    do: "this athanor already runs its share of the backends service (#{limit} backends)"
 
-  defp bridge_reason({:person_share, limit}),
+  defp backends_reason({:person_share, limit}),
     do:
-      "the member who created this server already runs their share of the MCP bridge " <>
+      "the member who created this server already runs their share of the backends service " <>
         "(#{limit} backends, across every athanor)"
 
-  defp bridge_reason({:control_too_large, limit}),
+  defp backends_reason({:control_too_large, limit}),
     do: "this server's backends and their env exceed what one sync may carry (#{limit} bytes)"
 
-  defp bridge_reason({:env_unresolved, backend, name}),
+  defp backends_reason({:env_unresolved, backend, name}),
     do: "backend '#{backend}' env #{name} does not resolve to a single-field vault entry"
 
-  defp bridge_reason(reason), do: reason
+  defp backends_reason(reason), do: reason
 
   # `state.error` surfaces to callers and the status view — the same egress
   # rule as results: a sentence, never a term's spelling, with the
@@ -880,7 +895,7 @@ defmodule Emissary.External.Server do
   #
   # The fallback exists for third-party servers, which are on their own release
   # cadence and mostly still expect `initialize`. It is not a compatibility
-  # shim for anything CYFR ships: `apps/mcp-bridge` speaks the current revision,
+  # shim for anything CYFR ships: the backends service speaks the current revision,
   # so the bundled deployment never takes this path. The specification
   # prescribes exactly this probe — attempt a modern request, and read the body
   # of a `400` before concluding the peer is legacy, because a modern server
@@ -963,7 +978,7 @@ defmodule Emissary.External.Server do
       {:legacy, state} ->
         {:legacy, state}
 
-      {:bridge_refused, _code, _boot} = refused ->
+      {:backends_refused, _code, _boot} = refused ->
         {:error, refused}
 
       {:error, reason} ->
@@ -994,7 +1009,7 @@ defmodule Emissary.External.Server do
 
   # A stdio server's request carries the owner's signature over the exact
   # bytes sent, with a nonce and timestamp of its own.
-  defp sign(%State{transport: :stdio, bridge: %{} = grant} = state, headers, json_body) do
+  defp sign(%State{transport: :stdio, grant: %{} = grant} = state, headers, json_body) do
     invoke = %{
       athanor: state.athanor_id,
       server: state.server_id,
@@ -1005,8 +1020,9 @@ defmodule Emissary.External.Server do
       nonce: Base.url_encode64(:crypto.strong_rand_bytes(18), padding: false)
     }
 
-    with {:ok, header} <- Prima.BridgeAuth.invoke_header(grant.owner_key, invoke, json_body) do
-      {:ok, [{"cyfr-bridge-auth", header} | headers]}
+    with {:ok, header} <-
+           Prima.LocusBackends.invoke_header(grant.owner_key, invoke, json_body) do
+      {:ok, [{Prima.LocusBackends.auth_header(), header} | headers]}
     end
   end
 
@@ -1019,7 +1035,7 @@ defmodule Emissary.External.Server do
     # Pin to the validated IP on EVERY request (not just at init), with the
     # original hostname preserved for SNI/Host. This both blocks SSRF and
     # closes the DNS-rebinding gap that connecting by hostname would reopen.
-    # A private server (mcp-bridge on the compose network) is reachable
+    # A private server (locus-backends on the compose network) is reachable
     # only when the operator named it in the private-egress allowlist.
     opts = [
       receive_timeout: state.timeout_ms,
@@ -1038,7 +1054,7 @@ defmodule Emissary.External.Server do
         {:error, "Response too large (max 10MB)"}
 
       {:ok, status, resp_headers, resp_body} when state.transport == :stdio ->
-        bridge_refusal(status, resp_headers, resp_body)
+        backends_refusal(status, resp_headers, resp_body)
 
       {:ok, status, _headers, resp_body} ->
         # A 4xx while speaking the current revision is how a peer says it
@@ -1082,23 +1098,28 @@ defmodule Emissary.External.Server do
     end
   end
 
-  # The bridge refuses before anything runs: a bad signature (401), or a
-  # request that names another lifetime, version, lease or nonce (409, 503).
-  # Anything else is a JSON-RPC error the MCP layer answered.
-  defp bridge_refusal(401, _headers, _body),
-    do: {:error, "the MCP bridge refused this server's signature"}
+  # The service refuses before anything runs: a bad signature (401), or a
+  # request that names another lifetime, version, lease or nonce, answered
+  # as a `Prima.LocusBackends` refusal at its code's status. Anything else
+  # is a JSON-RPC error the MCP layer answered.
+  defp backends_refusal(401, _headers, _body),
+    do: {:error, "the backends service refused this server's signature"}
 
-  defp bridge_refusal(status, headers, body) when status in [409, 503] do
-    case Jason.decode(body) do
-      {:ok, %{"error" => code}} when is_binary(code) ->
-        {:bridge_refused, code, Emissary.External.Backends.boot_header(headers)}
+  defp backends_refusal(status, headers, body) do
+    case Prima.LocusBackends.read_refusal(body) do
+      {:ok, code} ->
+        if Prima.LocusBackends.status(code) == status,
+          do:
+            {:backends_refused, Atom.to_string(code),
+             Emissary.External.Backends.boot_header(headers)},
+          else: {:error, "HTTP #{status}"}
 
-      _ ->
-        {:error, "HTTP #{status}"}
+      {:error, _not_a_refusal} ->
+        rpc_error(status, body)
     end
   end
 
-  defp bridge_refusal(status, _headers, body) do
+  defp rpc_error(status, body) do
     case Jason.decode(body) do
       {:ok, %{"error" => %{"message" => message}}} when is_binary(message) ->
         {:error, "HTTP #{status}: #{message}"}

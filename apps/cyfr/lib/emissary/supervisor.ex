@@ -18,7 +18,7 @@ defmodule Emissary.Supervisor do
   def init(_opts) do
     Supervisor.init(
       [
-        # The external-server registry, the MCP bridge controller, servers
+        # The external-server registry, the backends controller, servers
         # and reconciler restart from the registry down: a failure restarts
         # its dependents. The controller starts before the servers and
         # stops after them, because a stopping stdio server releases its

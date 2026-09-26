@@ -4,9 +4,9 @@
 defmodule Prima.MacEnvelope do
   @moduledoc """
   The construction two parties sharing a 32-byte root secret use to
-  authenticate messages and seal values to each other. `Prima.BridgeAuth`
-  (CYFR and the MCP bridge) and `Prima.WorkerAuth` (CYFR and its execution
-  workers) are built on it.
+  authenticate messages and seal values to each other.
+  `Prima.LocusBackends` (CYFR and the Locus backends service) and
+  `Prima.WorkerAuth` (CYFR and its execution workers) are built on it.
 
     * **Keys** are HMAC-SHA256 of the root over a label, or over a label
       followed by field values one per line (`derive/2`, `derive/4`), so

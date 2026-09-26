@@ -75,8 +75,8 @@ jobs:
 
       # Every image is scanned before it is pushed: a fixable HIGH or
       # CRITICAL finding fails the release. The findings .trivyignore.yaml
-      # lists are npm's bundled dependencies, which the builder runs for
-      # tincture builds as the bridge runs them for its backends.
+      # lists are npm's bundled dependencies, which the Locus image runs for
+      # tincture builds and for the stdio backends it serves.
       - name: Scan the image
         uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
         with:

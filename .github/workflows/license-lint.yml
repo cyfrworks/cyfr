@@ -11,9 +11,8 @@ on:
       - '**/*.ex'
       - '**/*.exs'
       - 'apps/codex/**'
-      - 'apps/mcp-bridge/**/*.mjs'
       - 'apps/keeper/**'
-      - 'tests/bridge-image/**'
+      - 'tests/locus-backends-image/**'
       - 'tests/fixtures/*.go'
       - 'wit/**'
       - 'LICENSES/**'
@@ -27,9 +26,8 @@ on:
       - '**/*.ex'
       - '**/*.exs'
       - 'apps/codex/**'
-      - 'apps/mcp-bridge/**/*.mjs'
       - 'apps/keeper/**'
-      - 'tests/bridge-image/**'
+      - 'tests/locus-backends-image/**'
       - 'tests/fixtures/*.go'
       - 'wit/**'
       - 'LICENSES/**'
@@ -43,8 +41,8 @@ jobs:
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
 
-      # Verify SPDX headers in tracked Elixir, Go, bridge, WIT and console JS
-      # source. Seed examples are outside this lint's scope.
+      # Verify SPDX headers in tracked Elixir, Go, backends image suite, WIT
+      # and console JS source. Seed examples are outside this lint's scope.
       - name: Assert SPDX license boundary
         run: |
           set -uo pipefail
@@ -59,7 +57,7 @@ jobs:
             return 1
           }
 
-          patterns=('*.ex' '*.exs' 'apps/codex/*.go' 'apps/keeper/*.go' 'apps/mcp-bridge/*.mjs' 'apps/mcp-bridge/test/*.mjs' 'tests/bridge-image/*.mjs' 'tests/fixtures/*.go' 'wit/*.wit' 'apps/cyfr/assets/js/*.js' 'apps/cyfr/assets/js/hooks/*.js')
+          patterns=('*.ex' '*.exs' 'apps/codex/*.go' 'apps/keeper/*.go' 'tests/locus-backends-image/*.py' 'tests/locus-backends-image/*.mjs' 'tests/fixtures/*.go' 'wit/*.wit' 'apps/cyfr/assets/js/*.js' 'apps/cyfr/assets/js/hooks/*.js')
 
           # A pattern that matches nothing checks nothing while the scan of
           # the others passes; refuse each such pattern by itself.

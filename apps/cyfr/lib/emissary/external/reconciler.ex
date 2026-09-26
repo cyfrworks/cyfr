@@ -7,13 +7,13 @@ defmodule Emissary.External.Reconciler do
   servers.
 
   Server processes cache resolved header credentials for their lifetime,
-  and the MCP bridge holds a stdio server's resolved env for its lease, so
-  a rotate, rebind, revoke, delete or rename of a referenced entry would
-  otherwise keep flowing until a restart. This listener watches the global
+  and the backends service holds a stdio server's resolved env for its
+  lease, so a rotate, rebind, revoke, delete or rename of a referenced
+  entry would otherwise keep flowing until a restart. This listener watches the global
   vault signal and acts on the names it carries — a signal that names no
   entry matches every template:
 
-    1. in memory first, the bridge controller releases every live stdio
+    1. in memory first, the backends controller releases every live stdio
        owner of the athanor whose env templates reference a changed name
        (`Emissary.External.Backends.release_referencing/2`), which needs no store;
     2. then the tenant's servers whose header or env templates reference one

@@ -65,7 +65,7 @@ defmodule Locus.Backends.Backend do
   `max_in_flight/0` calls await one backend. The backend's own requests
   are answered `-32601` and never answer a call. A backend that is
   `failed`, `stopped` or still `starting` refuses a call, in the MCP
-  bridge's words.
+  backends service's words.
 
   ## Masking
 
@@ -359,7 +359,7 @@ defmodule Locus.Backends.Backend do
   def handle_info({:wake_timeout, _timer}, state), do: {:noreply, state}
 
   # A retirement the launcher never reported within its bound is taken as
-  # done, as the bridge takes one.
+  # done, as the service takes one.
   def handle_info({:retire_timeout, ref}, state) do
     if is_map_key(state.retiring, ref),
       do: {:noreply, retired(state, ref)},
@@ -537,7 +537,9 @@ defmodule Locus.Backends.Backend do
   defp on_message({:child, nil, _method}, state), do: state
 
   defp on_message({:child, id, method}, state) do
-    line = Relay.reply_error(id, -32_601, "method not supported by bridge: #{method}")
+    line =
+      Relay.reply_error(id, -32_601, "method not supported by the backends service: #{method}")
+
     _ = state.launcher.send(state.handle, line)
     state
   end
@@ -789,7 +791,7 @@ defmodule Locus.Backends.Backend do
 
   defp reply(%{from: from}, answer), do: GenServer.reply(from, answer)
 
-  # ————— the bridge's sentences —————
+  # ————— the refusal sentences —————
 
   defp not_ready(state), do: "backend '#{state.name}' not ready: #{state.error || state.status}"
 

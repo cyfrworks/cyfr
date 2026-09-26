@@ -1,28 +1,33 @@
 # syntax=docker/dockerfile:1.7-labs
-# The Locus container: the builder and its toolchains, and nothing else.
-# The app image (Dockerfile) carries no compilers; this one carries no
-# endpoint of the product's, no database and no tenant state, and the
-# release holds only the shared contracts and Locus (`mix release locus`).
-# It holds one builds key (LOCUS_BUILDS_KEY) and is reached by CYFR over
-# the build wire (Prima.BuilderProtocol): sources arrive in a signed
-# request, artifacts leave in its answer.
+# The Locus container: the untrusted native processes CYFR runs, and
+# nothing else. It serves the builds service, the backends service or
+# both, each by its key: holding LOCUS_BUILDS_KEY it compiles components
+# and tinctures over the build wire (Prima.BuilderProtocol), sources in a
+# signed request and artifacts in its answer; holding LOCUS_BACKENDS_KEY it
+# runs the stdio MCP servers CYFR registers over the backends wire
+# (Prima.LocusBackends). The app image (Dockerfile) carries no compilers and
+# runs no backend; this one carries no endpoint of the product's, no
+# database and no tenant state, and the release holds only the shared
+# contracts and Locus (`mix release locus`). Compose runs it twice, as
+# locus-builds and as locus-backends, each with its own key and pool.
 #
 # Process model: cyfr-keeper runs as root holding only SETUID, SETGID and
 # KILL (it refuses to start with any other capability), starts the locus
-# release as cyfr-builder, and runs every build under a pooled uid of its
-# own (cyfr-build01…cyfr-build16) with a 0700 home under
-# /var/lib/cyfr-builder/homes, inside a memory bound of its own
-# (LOCUS_BUILDS_MEMORY_BYTES, 1 GiB unless set). When a build ends every
-# process of its uid is killed and everything the uid left is removed
-# before another build gets it; the locus release refuses to serve builds
-# without cyfr-keeper.
+# release as locus, and runs every build or backend under a pooled uid of
+# its own — builds as cyfr-build01…cyfr-build16 (30001-30016), backends as
+# cyfr-backend01…cyfr-backend32 (20001-20032) — with a 0700 home under
+# /var/lib/locus/homes, inside a memory bound of its own
+# (LOCUS_BUILDS_MEMORY_BYTES, 1 GiB, and LOCUS_BACKENDS_MEMORY_BYTES, 512
+# MiB, unless set). When a build or a backend ends every process of its uid
+# is killed and everything the uid left is removed before another gets it;
+# the locus release refuses to serve either without cyfr-keeper.
 #
-# The memory bound is a cgroup v2 group cyfr-keeper makes for each build, so
+# The memory bound is a cgroup v2 group cyfr-keeper makes for each spawn, so
 # the container must be started with the security option
 # `writable-cgroups=true` (Docker Engine 28 or later on a cgroup v2 host).
-# It adds no capability. Without it cyfr-keeper cannot bound a build and
-# refuses every one: the service answers each build `unavailable`, naming
-# the option, and none runs unbounded.
+# It adds no capability. Without it cyfr-keeper cannot bound a spawn and
+# refuses every one: the service answers each `unavailable`, naming the
+# option, and none runs unbounded.
 
 # ---- cyfr-keeper, the process helper: a static Go binary, pinned to the Go
 # release apps/keeper/go.mod names ----
@@ -122,8 +127,10 @@ RUN ARCH=$(dpkg --print-architecture) \
     && rm -rf /usr/local/cargo/registry /usr/local/cargo/git \
     && mkdir -p /usr/local/cargo/registry /usr/local/cargo/git
 
-# Node.js LTS for tincture builds (npm + Vite). Direct binary install,
-# checksum-pinned against nodejs.org's SHASUMS256.txt for this version.
+# Node.js LTS for tincture builds (npm + Vite) and for the stdio MCP
+# servers the backends service runs (`npx -y <package>`). Direct binary
+# install, checksum-pinned against nodejs.org's SHASUMS256.txt for this
+# version.
 ARG NODE_VERSION=24.21.0
 RUN ARCH=$(dpkg --print-architecture) \
     && case "$ARCH" in \
@@ -138,24 +145,30 @@ RUN ARCH=$(dpkg --print-architecture) \
     && rm /tmp/node.tar.xz \
     && node --version && npm --version
 
-# The toolchains stay root-owned: a build reads them and writes only its
-# own home, so no build can alter what the next one compiles with. A build
-# runs with cyfr-keeper's fixed PATH, so the Rust toolchain's commands are
-# linked into /usr/local/bin.
+# The toolchains stay root-owned: a build or a backend reads them and
+# writes only its own home, so none can alter what the next one runs
+# with. Every spawn runs with cyfr-keeper's fixed PATH, so the Rust
+# toolchain's commands are linked into /usr/local/bin.
 RUN ln -s /usr/local/cargo/bin/* /usr/local/bin/
 
-# The locus release's user and the build pool: each user is alone in its
-# own group and belongs to no other. /run/cyfr-builder holds the release's
-# temporary files and the attach socket builds' relays connect to.
-RUN groupadd -r -g 10001 cyfr-builder \
-    && useradd -r -u 10001 -g cyfr-builder -d /nonexistent -M -s /usr/sbin/nologin cyfr-builder \
+# The locus release's user, the build pool and the backend pool: each user
+# is alone in its own group and belongs to no other. /run/locus holds the
+# release's temporary files and the attach socket spawns' relays connect
+# to.
+RUN groupadd -r -g 10001 locus \
+    && useradd -r -u 10001 -g locus -d /nonexistent -M -s /usr/sbin/nologin locus \
     && for i in $(seq 1 16); do \
          name="$(printf 'cyfr-build%02d' "$i")"; uid=$((30000 + i)); \
          groupadd -r -g "$uid" "$name" \
          && useradd -r -u "$uid" -g "$name" -d /nonexistent -M -s /usr/sbin/nologin "$name" || exit 1; \
        done \
-    && install -d -m 1733 -o root -g root /var/lib/cyfr-builder/homes \
-    && install -d -m 0700 -o cyfr-builder -g cyfr-builder /run/cyfr-builder
+    && for i in $(seq 1 32); do \
+         name="$(printf 'cyfr-backend%02d' "$i")"; uid=$((20000 + i)); \
+         groupadd -r -g "$uid" "$name" \
+         && useradd -r -u "$uid" -g "$name" -d /nonexistent -M -s /usr/sbin/nologin "$name" || exit 1; \
+       done \
+    && install -d -m 1733 -o root -g root /var/lib/locus/homes \
+    && install -d -m 0700 -o locus -g locus /run/locus
 
 ENV LANG=en_US.UTF-8
 ENV LANGUAGE=en_US:en
@@ -193,19 +206,24 @@ RUN LOCUS_BUILDS_KEY="$(head -c 32 /dev/urandom | od -An -v -tx1 | tr -d ' \n')"
 # reach, authenticated by a cookie any build could read. Its temporary
 # files go where only its own user can reach them.
 ENV RELEASE_DISTRIBUTION=none \
-    RELEASE_TMP=/run/cyfr-builder
+    RELEASE_TMP=/run/locus
 
 ARG LOCUS_BUILDS_PORT=4100
-EXPOSE ${LOCUS_BUILDS_PORT}
+ARG LOCUS_BACKENDS_PORT=4101
+EXPOSE ${LOCUS_BUILDS_PORT} ${LOCUS_BACKENDS_PORT}
 
-# The wire's health operation: a POST of the versioned body, answered
-# without a key (Prima.BuilderProtocol).
+# The builds wire's health operation: a POST of the versioned body,
+# answered without a key (Prima.BuilderProtocol). A container serving the
+# backends service alone probes its own (Prima.LocusBackends), as
+# docker-compose.yml's locus-backends service does.
 HEALTHCHECK --interval=10s --timeout=3s --start-period=20s --retries=3 \
     CMD curl -fsS -X POST -H 'content-type: application/json' -d '{"version":1}' \
         "http://localhost:${LOCUS_BUILDS_PORT:-4100}/locus/v1/builds/health" || exit 1
 
 # Run with `cap_drop: [ALL]`, `cap_add: [SETUID, SETGID, KILL]`,
 # `security_opt: [no-new-privileges, writable-cgroups=true]`, a read-only
-# root, `ipc: none` and the homes and /run/cyfr-builder tmpfs mounts
-# (docker-compose.yml's locus-builds service).
-ENTRYPOINT ["cyfr-keeper", "serve", "--pool", "build:30001-30016", "--home-root", "/var/lib/cyfr-builder/homes", "--client-user", "cyfr-builder", "--", "/app/bin/locus", "start"]
+# root, `ipc: none` and the homes and /run/locus tmpfs mounts
+# (docker-compose.yml's locus-builds service). The backends service runs
+# the same image with the backends pool in its place (docker-compose.yml's
+# locus-backends service).
+ENTRYPOINT ["cyfr-keeper", "serve", "--pool", "build:30001-30016", "--home-root", "/var/lib/locus/homes", "--client-user", "locus", "--", "/app/bin/locus", "start"]

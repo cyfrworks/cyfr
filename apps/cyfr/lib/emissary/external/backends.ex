@@ -3,13 +3,14 @@
 
 defmodule Emissary.External.Backends do
   @moduledoc """
-  The controller of the MCP bridge (`apps/mcp-bridge`): the one process that
-  tells the bridge which stdio servers run, and the only holder of the root
-  key (`CYFR_MCP_BRIDGE_KEY`).
+  The controller of the backends service Locus serves (`locus-backends`,
+  over `Prima.LocusBackends`): the one process that tells the service which
+  stdio servers run, and the only holder of the service key
+  (`CYFR_LOCUS_BACKENDS_KEY`).
 
   An **owner** is one stdio server row of one athanor — the pair
   `(athanor_id, mcp_servers.id)` — served by one
-  `Emissary.External.Server`. The bridge runs an owner's backends at a
+  `Emissary.External.Server`. The service runs an owner's backends at a
   version `(g, e)`: `g` is this member's control-plane generation
   (`Arca.ControlPlane.generation/0`; a member that holds no claim speaks
   generation 1) and `e` is the row's epoch.
@@ -43,7 +44,7 @@ defmodule Emissary.External.Backends do
       fails that fence releases the backend and stops its process;
     * this member's **generation** — is the authority the grants were
       issued under still current? It rises only when this member's slot is
-      taken over, so a member that won its slot back greets the bridge
+      taken over, so a member that won its slot back greets the service
       again and re-syncs, and nothing is sent under a generation that is
       not this member's now.
 
@@ -51,78 +52,91 @@ defmodule Emissary.External.Backends do
   peer has taken is found before a renewal or a release goes out under it.
   A controller that finds its claim taken **stands down**: it stops the
   backend's server process here, forgets the claim and drops any release
-  still pending for it, because the owner on the bridge is the peer's to
+  still pending for it, because the owner on the service is the peer's to
   renew and to release now. A claim that merely lapsed — the row still
   this member's, its lease run out — is asked for again, and only a peer
   that got there first turns it into a stand-down.
 
   ## Messages
 
-  Control messages are POSTed to `<url>/control` one at a time, each signed
-  with the control key (`Prima.BridgeAuth.control_header/3`) under a sequence
-  number that only grows, so the bridge refuses a replayed, reordered or
-  delayed one. The bridge answers each without waiting on a backend, so no
-  message holds the channel for longer than a store read and a round trip.
-  Lease maintenance — `renew` and `release`, with `hello` and `reconcile`
-  ahead of them — is sent before any `sync` or `status` still waiting:
+  Control messages are POSTed to the service's control route
+  (`Prima.LocusBackends.route/1`) one at a time, each encoded at the
+  protocol version (`Prima.LocusBackends.encode_control/1`) and signed with
+  the control key (`Prima.LocusBackends.control_header/3`) under a sequence
+  number that only grows, so the service refuses a replayed, reordered or
+  delayed one. Every answer is read strictly at the same version
+  (`Prima.LocusBackends.read_answer/2`). The service answers each message
+  without waiting on a backend, so no message holds the channel for longer
+  than a store read and a round trip. Lease maintenance — `renew` and
+  `release`, with `hello` and `reconcile` ahead of them — is sent before
+  any `sync` or `status` still waiting:
 
-    * `hello` at start, and whenever the bridge's boot id or this boot's
+    * `hello` at start, and whenever the service's boot id or this boot's
       generation changes; then `reconcile`, which releases every owner the
-      bridge runs that is not kept here at its version, and a `sync` of
+      service runs that is not kept here at its version, and a `sync` of
       every owner still registered here;
     * `sync` when a server process starts: the row is read again (fenced:
       the same epoch, enabled, stdio, its athanor active), its env templates
       are resolved through `Sanctum.VaultReader` and sealed for the owner
-      and the bridge's lifetime (`Prima.BridgeAuth.seal/5`). The resolved
-      values live only in the task that sends the message. The bridge
-      admits the version and answers at once; its backends start on their
-      own time;
+      and the service's lifetime (`Prima.LocusBackends.seal/5`). The
+      resolved values live only in the task that sends the message. The
+      service admits the version and answers at once; its backends start
+      on their own time;
     * `renew` every third of the lease for every live owner whose row
-      still passes the fence, asking for the lease again (`:mcp_bridge_lease_ms`,
-      `CYFR_MCP_BRIDGE_LEASE_MS`: 30 s unless set), and more often — every
-      250 ms while a server process waits for its backends, every second
-      while any backend is still starting — to learn each owner's state and
-      rev. An owner that fails the fence is released; an owner the bridge
-      no longer knows has its epoch raised. Either way its process is
-      stopped;
+      still passes the fence, asking for the lease again
+      (`:locus_backends_lease_ms`, `CYFR_LOCUS_BACKENDS_LEASE_MS`: 30 s
+      unless set), and more often — every 250 ms while a server process
+      waits for its backends, every second while any backend is still
+      starting — to learn each owner's state and rev. An owner that fails
+      the fence is released; an owner the service no longer knows has its
+      epoch raised. Either way its process is stopped;
     * `release` on every stop path — a server process that stops or exits,
       a failed fence, `release_referencing/2` — retried on every tick until
-      the bridge acknowledges it or a later sync of the owner supersedes it;
-    * `status` for `mcp_servers.get`, naming one owner. The bridge bounds a
-      status to `MAX_STATUS_OWNERS` owners and its answer to the control
-      limit, refusing past either as `too_many_owners` or
-      `status_too_large`; this controller mirrors the owner bound and reads
-      no more of any answer than the limit, so a status it cannot have is
-      the typed refusal `{:error, :too_many_owners}` or
-      `{:error, :status_too_large}`, never a cut answer, an empty one, or an
-      unavailable bridge.
+      the service acknowledges it or a later sync of the owner supersedes
+      it;
+    * `status` for `mcp_servers.get`, naming one owner. The service bounds
+      a status to `Prima.LocusBackends.max_status_owners/0` owners and its
+      answer to `Prima.LocusBackends.max_status_answer_bytes/0`, refusing
+      past either as `too_many_owners` or `status_too_large`; this
+      controller mirrors the owner bound and reads no more of any answer
+      than the answer bound, so a status it cannot have is the typed
+      refusal `{:error, :too_many_owners}` or `{:error, :status_too_large}`,
+      never a cut answer, an empty one, or an unavailable service.
 
-  Every sync asks the bridge to retire a backend that has had no call for
-  the idle period (`:mcp_bridge_idle_ms`, `CYFR_MCP_BRIDGE_IDLE_MS`: 15
-  minutes unless set) and to start it again for its next call.
+  Every sync asks the service to retire a backend that has had no call for
+  the idle period (`:locus_backends_idle_ms`,
+  `CYFR_LOCUS_BACKENDS_IDLE_MS`: 15 minutes unless set) and to start it
+  again for its next call.
 
   Nothing is sent, and no claim renewed, while this member does not hold
   its slot in the cell (`Arca.ControlPlane.held?/0`), or while its
   generation cannot be read: `sync/1` refuses, queued messages are
-  dropped, and both the bridge's leases and the claim rows lapse until a
+  dropped, and both the service's leases and the claim rows lapse until a
   tick finds both again.
+
+  A refusal is its code (`Prima.LocusBackends.classes/0`) as an atom, except
+  that a bad signature is `:backends_refused_signature`, an unavailable
+  service `:backends_unavailable`, another protocol version
+  `:protocol_mismatch`, and an answer that does not read at its status
+  `{:backends_status, status}`.
 
   ## Grants and readiness
 
-  A server process receives a **grant** for its owner — the bridge's `/mcp`
-  URL, the generation, epoch and bridge boot id, and the owner key
-  (`Prima.BridgeAuth.owner_key/2`) it signs its requests with — as the answer
-  to `sync/1`, once every backend of the owner has been ready or failed, or
-  15 s after the bridge admitted it, whichever comes first. A re-sync the
-  controller starts itself sends the process `{:bridge_owner, grant}`; a
-  later change to the owner's tool catalogue, which the bridge reports as a
-  new rev, sends it `{:bridge_tools_changed, epoch}`.
+  A server process receives a **grant** for its owner — the service's MCP
+  route, the generation, epoch and service boot id, and the owner key
+  (`Prima.LocusBackends.owner_key/2`) it signs its requests with — as the
+  answer to `sync/1`, once every backend of the owner has been ready or
+  failed, or 15 s after the service admitted it, whichever comes first. A
+  re-sync the controller starts itself sends the process
+  `{:backends_owner, grant}`; a later change to the owner's tool
+  catalogue, which the service reports as a new rev, sends it
+  `{:backends_tools_changed, epoch}`.
 
   ## Shares
 
   Every live owner of one athanor together, and every live owner whose row
   one person created (`mcp_servers.created_by`) together, run at most a
-  quarter of the bridge's pool of backends; a sync past either share is
+  quarter of the service's pool of backends; a sync past either share is
   refused. The server's synthetic principal (`"system"`, the creator of a
   row made under `Sanctum.Context.internal/1`) is one person for the share,
   across every athanor, exactly as a real person is.
@@ -133,9 +147,9 @@ defmodule Emissary.External.Backends do
   require Logger
 
   alias Arca.JobClaims
-  alias Prima.BridgeAuth
   alias Emissary.External.BackendDefinition
   alias Emissary.External.StatusRedaction
+  alias Prima.LocusBackends
   alias Prima.VaultRef
 
   # The cell's claim on one backend. Its key carries no epoch: a restart at
@@ -145,26 +159,17 @@ defmodule Emissary.External.Backends do
   @default_lease_ms 30_000
   @default_idle_ms 900_000
   @control_timeout_ms 10_000
-  # How long a sync's caller waits, after the bridge admitted the owner, for
-  # its backends to be ready or failed.
+  # How long a sync's caller waits, after the service admitted the owner,
+  # for its backends to be ready or failed.
   @ready_wait_ms 15_000
   @poll_waiting_ms 250
   @poll_starting_ms 1_000
   @release_wait_ms 3_000
-  # The most of a control answer this controller reads: the bridge's
-  # STATUS_ANSWER_LIMIT (apps/mcp-bridge/server.mjs), which bounds the one
-  # answer that can grow — a status — before it is sent.
-  @max_response_bytes 1_048_576
-  # The bridge reads at most this much of a control message's body.
-  @max_control_bytes 1_048_576
-  # The most owners one status may name: the bridge's MAX_STATUS_OWNERS
-  # (apps/mcp-bridge/server.mjs), past which it refuses `too_many_owners`.
-  @max_status_owners 64
 
   @typedoc "One stdio server of one athanor at one epoch."
   @type owner :: %{athanor_id: String.t(), server_id: String.t(), epoch: pos_integer()}
 
-  @typedoc "What a server process signs its requests to the bridge with."
+  @typedoc "What a server process signs its requests to the service with."
   @type grant :: %{
           url: String.t(),
           generation: pos_integer(),
@@ -195,7 +200,7 @@ defmodule Emissary.External.Backends do
       ready_wait_ms: 15_000,
       owners: %{},
       # The `mcp_backend` claim this controller holds for each backend, and
-      # the keys whose claims it is giving up once the bridge has released
+      # the keys whose claims it is giving up once the service has released
       # their owner.
       claims: %{},
       releasing: %{},
@@ -212,13 +217,14 @@ defmodule Emissary.External.Backends do
   # ============================================================================
 
   @doc """
-  Start the controller. Answers `:ignore` unless a bridge URL and a 32-byte
-  root key are configured (`:mcp_bridge_url` and `:mcp_bridge_key`, or the
-  `:url` and `:root` options), and while `:cluster` is on: a cluster of
-  control planes runs no stdio servers. `:lease_ms` sets the lease each
-  sync and renewal asks for (default `:mcp_bridge_lease_ms`, else 30 s),
-  `:idle_ms` the idle period each sync asks for (default
-  `:mcp_bridge_idle_ms`, else 15 minutes), `:tick_ms` the renewal cadence
+  Start the controller. Answers `:ignore` unless a service URL and a
+  32-byte service key are configured (`:locus_backends_url` and
+  `:locus_backends_key`, or the `:url` and `:root` options), and while
+  `:cluster` is on: a cluster of control planes runs no stdio servers.
+  `:lease_ms` sets the lease each sync and renewal asks for (default
+  `:locus_backends_lease_ms`, else 30 s), `:idle_ms` the idle period each
+  sync asks for (default `:locus_backends_idle_ms`, else 15 minutes),
+  `:tick_ms` the renewal cadence
   (default a third of the lease), `:ready_wait_ms` how long a sync's
   caller waits for its backends (default 15 s) and `:generation` the
   zero-arity function the control-plane generation is read from (default
@@ -226,12 +232,12 @@ defmodule Emissary.External.Backends do
 
   `:lease_ms` is also the lease each backend claim asks for, and the tick
   is what renews it: a third of the lease by default, so the claim stands
-  while the bridge lease it goes with does, and a member that stops
+  while the service lease it goes with does, and a member that stops
   ticking gives up both together.
   """
   def start_link(opts \\ []) do
-    url = Keyword.get(opts, :url, Application.get_env(:cyfr, :mcp_bridge_url))
-    root = Keyword.get(opts, :root, Application.get_env(:cyfr, :mcp_bridge_key))
+    url = Keyword.get(opts, :url, Application.get_env(:cyfr, :locus_backends_url))
+    root = Keyword.get(opts, :root, Application.get_env(:cyfr, :locus_backends_key))
     cluster? = Application.get_env(:cyfr, :cluster, false) == true
 
     if is_binary(url) and url != "" and is_binary(root) and byte_size(root) == 32 and
@@ -244,26 +250,26 @@ defmodule Emissary.External.Backends do
     end
   end
 
-  @doc "Whether a bridge controller runs on this boot."
+  @doc "Whether a backends controller runs on this boot."
   @spec running?() :: boolean()
   def running?, do: is_pid(Process.whereis(__MODULE__))
 
   @doc """
-  Ask the bridge to run `owner` for the calling server process, and answer
+  Ask the service to run `owner` for the calling server process, and answer
   its grant once its backends are ready or failed, or the readiness wait
   passed. Refused with a reason when another member of the cell holds the
   backend's claim (`:claimed_elsewhere`) or the claim row cannot be read
   (`:claim_unavailable`), when the row no longer passes the fence, an env
   template does not resolve, the athanor or the row's creator would hold
   more than their share of the pool, the pool is full, this member does
-  not hold its slot in the cell, or the bridge cannot be reached.
+  not hold its slot in the cell, or the service cannot be reached.
   """
   @spec sync(owner()) :: {:ok, grant()} | {:error, term()}
   def sync(owner),
     do: call({:sync, owner, self()}, @ready_wait_ms + 3 * @control_timeout_ms)
 
   @doc """
-  Release `owner` on the bridge. Answers once the bridge acknowledged the
+  Release `owner` on the service. Answers once the service acknowledged the
   release or the attempt failed, and within 3 s either way; an
   unacknowledged release is retried on every tick.
   """
@@ -274,10 +280,11 @@ defmodule Emissary.External.Backends do
   end
 
   @doc """
-  The bridge's status of one owner — version, lease and backends — or nil
-  when it runs none. Refused as `{:error, :too_many_owners}` or
-  `{:error, :status_too_large}` when the bridge will not answer within its
-  bounds, `{:error, :bridge_unavailable}` when it cannot be reached, and
+  The service's status of one owner — version, lease and backends, as the
+  wire names them — or nil when it runs none. Refused as
+  `{:error, :too_many_owners}` or `{:error, :status_too_large}` when the
+  service will not answer within its bounds,
+  `{:error, :backends_unavailable}` when it cannot be reached, and
   `{:error, :control_plane_lost}` while this boot does not own the plane.
   """
   @spec status(String.t(), String.t()) :: {:ok, map() | nil} | {:error, term()}
@@ -285,10 +292,13 @@ defmodule Emissary.External.Backends do
     do: call({:status, {athanor_id, server_id}}, 2 * @control_timeout_ms)
 
   @doc false
-  # The bounds a status is asked and read within, for the test that binds
-  # them to the bridge's literals.
+  # The bounds a status is asked and read within: the wire's.
   @spec status_bounds() :: %{owners: pos_integer(), bytes: pos_integer()}
-  def status_bounds, do: %{owners: @max_status_owners, bytes: @max_response_bytes}
+  def status_bounds,
+    do: %{
+      owners: LocusBackends.max_status_owners(),
+      bytes: LocusBackends.max_status_answer_bytes()
+    }
 
   @doc """
   Release, at once and without reading the store, every live owner of the
@@ -303,7 +313,7 @@ defmodule Emissary.External.Backends do
     end
   end
 
-  @doc "Report the bridge boot id a server process saw, so a restarted bridge is greeted."
+  @doc "Report the service boot id a server process saw, so a restarted service is greeted."
   @spec boot_seen(String.t()) :: :ok
   def boot_seen(boot) when is_binary(boot) do
     if running?(), do: GenServer.cast(__MODULE__, {:boot_seen, boot})
@@ -313,8 +323,8 @@ defmodule Emissary.External.Backends do
   defp call(message, timeout) do
     GenServer.call(__MODULE__, message, timeout)
   catch
-    :exit, {:noproc, _} -> {:error, :bridge_not_configured}
-    :exit, _ -> {:error, :bridge_unavailable}
+    :exit, {:noproc, _} -> {:error, :backends_not_configured}
+    :exit, _ -> {:error, :backends_unavailable}
   end
 
   # ============================================================================
@@ -329,21 +339,21 @@ defmodule Emissary.External.Backends do
       Keyword.get(
         opts,
         :lease_ms,
-        Application.get_env(:cyfr, :mcp_bridge_lease_ms, @default_lease_ms)
+        Application.get_env(:cyfr, :locus_backends_lease_ms, @default_lease_ms)
       )
 
     state = %State{
       url: String.trim_trailing(Keyword.fetch!(opts, :url), "/"),
       root: root,
-      control_key: BridgeAuth.control_key(root),
-      seal_key: BridgeAuth.seal_key(root),
+      control_key: LocusBackends.control_key(root),
+      seal_key: LocusBackends.seal_key(root),
       cyfr_boot: Prima.Boot.id(),
       lease_ms: lease_ms,
       idle_ms:
         Keyword.get(
           opts,
           :idle_ms,
-          Application.get_env(:cyfr, :mcp_bridge_idle_ms, @default_idle_ms)
+          Application.get_env(:cyfr, :locus_backends_idle_ms, @default_idle_ms)
         ),
       tick_ms: Keyword.get(opts, :tick_ms, div(lease_ms, 3)),
       ready_wait_ms: Keyword.get(opts, :ready_wait_ms, @ready_wait_ms),
@@ -555,7 +565,7 @@ defmodule Emissary.External.Backends do
   # controller's to send only while it holds the backend's claim. A member
   # that stood down writes nothing more for the backend — not even the
   # release its own server process asks for on the way out — because the
-  # owner on the bridge belongs to the peer that took the row.
+  # owner on the service belongs to the peer that took the row.
   defp pend_release(state, key, epoch) do
     if Map.has_key?(state.claims, key),
       do: %{state | releases: Map.update(state.releases, key, epoch, &max(&1, epoch))},
@@ -579,7 +589,7 @@ defmodule Emissary.External.Backends do
   defp hold_claim(state, key, claim), do: %{state | claims: Map.put(state.claims, key, claim)}
 
   # Give the backend up, so the next member may take it. The row is written
-  # only once the bridge has released the owner running under it, which is
+  # only once the service has released the owner running under it, which is
   # why the two travel in one job: a claim given up while a release may not
   # have arrived would let a peer take the backend and then be ended by
   # this controller's retry.
@@ -612,7 +622,7 @@ defmodule Emissary.External.Backends do
 
   # The row is a peer's now. Stop the backend here — its process, and with
   # it the grant that process holds — forget the claim, and drop any
-  # release still pending for it: the owner on the bridge is the peer's to
+  # release still pending for it: the owner on the service is the peer's to
   # renew and to release, and a release sent from here would end a backend
   # this controller no longer runs.
   defp stand_down(state, {_athanor, server} = key) do
@@ -637,7 +647,7 @@ defmodule Emissary.External.Backends do
     |> reply_release_waiters([key])
   end
 
-  # A sync the bridge acknowledged at `epoch` replaces any version of the
+  # A sync the service acknowledged at `epoch` replaces any version of the
   # owner at or below it, so a release still pending for one is moot — and
   # so is giving the backend's claim up, which this controller is running
   # again.
@@ -654,7 +664,7 @@ defmodule Emissary.External.Backends do
   end
 
   # Out of service here first — no renewal, no grant — then released on the
-  # bridge, and the process stopped. The stop runs in another process,
+  # service, and the process stopped. The stop runs in another process,
   # because the server's terminate/2 asks this one to release.
   defp revoke(state, key) do
     state =
@@ -721,21 +731,21 @@ defmodule Emissary.External.Backends do
 
   # What a renewal reports of a live owner: its state, and a rev that moves
   # whenever its tool catalogue does.
-  defp observe_renewed(state, %{"athanor" => athanor, "server" => server, "e" => epoch} = item) do
+  defp observe_renewed(state, %{athanor: athanor, server: server, e: epoch} = item) do
     key = {athanor, server}
 
     case state.owners[key] do
       %{epoch: ^epoch, live?: true} = entry ->
-        running? = item["state"] == "running"
-        changed? = item["rev"] != entry.rev
-        state = put_owner(state, key, %{entry | rev: item["rev"], running?: running?})
+        running? = item.state == :running
+        changed? = item.rev != entry.rev
+        state = put_owner(state, key, %{entry | rev: item.rev, running?: running?})
 
         cond do
           entry.waiters != [] and (running? or overdue?(entry)) ->
             grant_waiters(state, key)
 
           entry.waiters == [] and changed? ->
-            send(entry.pid, {:bridge_tools_changed, epoch})
+            send(entry.pid, {:backends_tools_changed, epoch})
             state
 
           true ->
@@ -746,8 +756,6 @@ defmodule Emissary.External.Backends do
         state
     end
   end
-
-  defp observe_renewed(state, _item), do: state
 
   # Renew sooner than the tick while a process waits for its backends, or
   # any backend is still starting.
@@ -789,7 +797,7 @@ defmodule Emissary.External.Backends do
   end
 
   # This boot won the plane again under a new generation, so every grant it
-  # issued names the old one: greet the bridge under the new generation.
+  # issued names the old one: greet the service under the new generation.
   defp check_generation(%State{generation: nil} = state, _generation), do: state
 
   defp check_generation(state, generation) do
@@ -797,10 +805,10 @@ defmodule Emissary.External.Backends do
       state
     else
       Logger.warning(
-        "[Emissary.External.Backends] the control-plane generation changed; greeting the bridge"
+        "[Emissary.External.Backends] the control-plane generation changed; greeting the service"
       )
 
-      forget_bridge(state)
+      forget_service(state)
     end
   end
 
@@ -810,14 +818,14 @@ defmodule Emissary.External.Backends do
 
   defp observe_boot(state, _other) do
     Logger.warning(
-      "[Emissary.External.Backends] the bridge restarted; greeting it and syncing live owners"
+      "[Emissary.External.Backends] the backends service restarted; greeting it and syncing live owners"
     )
 
-    forget_bridge(state)
+    forget_service(state)
   end
 
   # Every registered owner is synced again after the next hello.
-  defp forget_bridge(state) do
+  defp forget_service(state) do
     owners =
       Map.new(state.owners, fn {key, entry} ->
         {key, %{entry | live?: false, rev: nil, running?: false}}
@@ -831,7 +839,7 @@ defmodule Emissary.External.Backends do
   # ============================================================================
 
   # One message is in flight at a time, so sequence numbers reach the
-  # bridge in the order they were issued. A release is sent before a sync
+  # service in the order they were issued. A release is sent before a sync
   # still waiting: a sync of the same owner reads the owner as registered
   # when it is prepared, so it never names a version a release it follows
   # covers.
@@ -887,7 +895,7 @@ defmodule Emissary.External.Backends do
 
           job != {:hello} and state.boot != nil and generation != {:ok, state.generation} ->
             state
-            |> forget_bridge()
+            |> forget_service()
             |> enqueue_front(job)
             |> enqueue_front({:hello})
             |> dispatch()
@@ -965,16 +973,16 @@ defmodule Emissary.External.Backends do
 
   # `state.generation` is the generation this boot speaks now (dispatch/1).
   defp prepare({:hello}, state) do
-    body = %{"type" => "hello", "g" => state.generation, "cyfr_boot" => state.cyfr_boot}
+    body = %{type: :hello, g: state.generation, cyfr_boot: state.cyfr_boot}
     {:send, state |> base_spec(:hello) |> Map.merge(%{boot: "-", body: body})}
   end
 
   defp prepare({:reconcile}, state) do
     keep =
       for {athanor, server} = key <- live_keys(state),
-          do: %{"athanor" => athanor, "server" => server, "e" => state.owners[key].epoch}
+          do: %{athanor: athanor, server: server, e: state.owners[key].epoch}
 
-    body = %{"type" => "reconcile", "keep" => keep}
+    body = %{type: :reconcile, keep: keep}
     {:send, state |> base_spec(:reconcile) |> Map.put(:body, body)}
   end
 
@@ -1030,7 +1038,7 @@ defmodule Emissary.External.Backends do
     else
       owners =
         for {{athanor, server}, epoch} <- state.releases,
-            do: %{"athanor" => athanor, "server" => server, "e" => epoch}
+            do: %{athanor: athanor, server: server, e: epoch}
 
       spec =
         state
@@ -1038,7 +1046,7 @@ defmodule Emissary.External.Backends do
         |> Map.merge(%{
           releases: state.releases,
           giving_up: giving_up,
-          body: %{"type" => "release", "owners" => owners}
+          body: %{type: :release, owners: owners}
         })
 
       {:send, spec}
@@ -1046,7 +1054,7 @@ defmodule Emissary.External.Backends do
   end
 
   defp prepare({:status, {athanor, server}, from}, state) do
-    case status_body([%{"athanor" => athanor, "server" => server}]) do
+    case status_body([%{athanor: athanor, server: server}]) do
       {:ok, body} ->
         {:send, state |> base_spec(:status) |> Map.put(:body, body)}
 
@@ -1057,17 +1065,18 @@ defmodule Emissary.External.Backends do
   end
 
   # What a task needs to write a claim row: who this member is, and the
-  # lease the row is asked for, which is the bridge lease the claim stands
+  # lease the row is asked for, which is the service lease the claim stands
   # for.
   defp claim_spec(spec, state),
     do: Map.merge(spec, %{claim_owner: state.cyfr_boot, claim_lease_ms: state.lease_ms})
 
-  # A status names no more owners than the bridge answers for; one that
-  # would is refused here, as the bridge would refuse it, and never sent.
-  defp status_body(owners) when length(owners) > @max_status_owners,
-    do: {:error, :too_many_owners}
-
-  defp status_body(owners), do: {:ok, %{"type" => "status", "owners" => owners}}
+  # A status names no more owners than the service answers for; one that
+  # would is refused here, as the service would refuse it, and never sent.
+  defp status_body(owners) do
+    if length(owners) > LocusBackends.max_status_owners(),
+      do: {:error, :too_many_owners},
+      else: {:ok, %{type: :status, owners: owners}}
+  end
 
   # The most backends one athanor's owners, or one person's, may run.
   defp share(%State{pool_size: size}) when is_integer(size), do: max(div(size, 4), 1)
@@ -1119,7 +1128,7 @@ defmodule Emissary.External.Backends do
     end
   end
 
-  # The bridge is told first and the rows only then, so a claim is given up
+  # The service is told first and the rows only then, so a claim is given up
   # with nothing of its backend left running under this member's version.
   # A release that may not have arrived keeps its claim and is retried.
   defp do_perform(%{kind: :release} = spec, keys) do
@@ -1142,13 +1151,13 @@ defmodule Emissary.External.Backends do
          :ok <- within_shares(spec, row.created_by, length(backends)),
          {:ok, sealed} <- seal_env(spec, keys.seal, backends) do
       body = %{
-        "type" => "sync",
-        "owner" => %{"athanor" => spec.athanor_id, "server" => spec.server_id},
-        "e" => spec.epoch,
-        "lease_ms" => spec.lease_ms,
-        "idle_ms" => spec.idle_ms,
-        "backends" => Enum.map(backends, &definition/1),
-        "sealed" => sealed
+        type: :sync,
+        owner: %{athanor: spec.athanor_id, server: spec.server_id},
+        e: spec.epoch,
+        lease_ms: spec.lease_ms,
+        idle_ms: spec.idle_ms,
+        backends: Enum.map(backends, &definition/1),
+        sealed: sealed
       }
 
       case post(spec, keys.control, body) do
@@ -1197,12 +1206,13 @@ defmodule Emissary.External.Backends do
     end
   end
 
-  # A claim is given up once nothing of its backend is left on the bridge:
+  # A claim is given up once nothing of its backend is left on the service:
   # the release landed, or this controller had no owner there to release.
   # `release/1` is itself fenced, so a claim a peer has taken meanwhile is
   # refused rather than reset.
   defp released_claims(spec, answer) do
-    landed? = match?({:http, 200, _boot, _body}, answer) or answer == :nothing_to_release
+    landed? =
+      match?({:http, 200, _boot, %{released: _}}, answer) or answer == :nothing_to_release
 
     Enum.flat_map(spec.giving_up, fn {key, claim} ->
       if landed? or not Map.has_key?(spec.releases, key) do
@@ -1214,18 +1224,18 @@ defmodule Emissary.External.Backends do
     end)
   end
 
-  # An owner the bridge no longer knows lapsed there: its epoch is raised,
+  # An owner the service no longer knows lapsed there: its epoch is raised,
   # so the grant its process holds names a version nothing will run again.
   defp renew(spec, control_key, kept) do
     owners =
       for {athanor, server} = key <- kept,
-          do: %{"athanor" => athanor, "server" => server, "e" => spec.owners[key]}
+          do: %{athanor: athanor, server: server, e: spec.owners[key]}
 
-    body = %{"type" => "renew", "lease_ms" => spec.lease_ms, "owners" => owners}
+    body = %{type: :renew, lease_ms: spec.lease_ms, owners: owners}
     answer = post(spec, control_key, body)
 
-    with {:http, 200, _boot, %{"unknown" => [_ | _] = unknown}} <- answer do
-      for %{"athanor" => athanor, "server" => server, "e" => epoch} <- unknown do
+    with {:http, 200, _boot, %{unknown: [_ | _] = unknown}} <- answer do
+      for %{athanor: athanor, server: server, e: epoch} <- unknown do
         ctx = Sanctum.Context.internal(athanor_id: athanor, scope: :athanor)
         Arca.McpServerStorage.bump_epoch(Sanctum.Context.actor(ctx), server, epoch)
       end
@@ -1236,9 +1246,9 @@ defmodule Emissary.External.Backends do
 
   defp definition(backend) do
     %{
-      "name" => backend["name"],
-      "command" => backend["command"],
-      "env_names" => backend["env"] |> Map.keys() |> Enum.sort()
+      name: backend["name"],
+      command: backend["command"],
+      env_names: backend["env"] |> Map.keys() |> Enum.sort()
     }
   end
 
@@ -1286,7 +1296,7 @@ defmodule Emissary.External.Backends do
     }
 
     with {:ok, env} <- resolve_env(spec.athanor_id, backends) do
-      BridgeAuth.seal(seal_key, owner, spec.boot, Jason.encode!(env))
+      LocusBackends.seal(seal_key, owner, spec.boot, Jason.encode!(env))
     end
   end
 
@@ -1330,9 +1340,12 @@ defmodule Emissary.External.Backends do
     end
   end
 
-  defp post(spec, control_key, body_map) do
-    body = Jason.encode!(body_map)
-
+  # A message the wire would refuse is never sent: past the control bound
+  # it is `{:control_too_large, bound}`, and otherwise the refusal the
+  # service would answer it with. An answer at 200 is read strictly as the
+  # answer to its type; any other status as a refusal. Either that does
+  # not read is `{:unreadable, error}`.
+  defp post(spec, control_key, message) do
     control = %{
       generation: spec.generation,
       seq: spec.seq,
@@ -1341,23 +1354,28 @@ defmodule Emissary.External.Backends do
       ts: System.os_time(:millisecond)
     }
 
-    with :ok <- within_control_size(body),
-         {:ok, header} <- BridgeAuth.control_header(control_key, control, body) do
-      headers = [{"content-type", "application/json"}, {"cyfr-bridge-auth", header}]
+    with {:ok, body} <- encode(message),
+         {:ok, header} <- LocusBackends.control_header(control_key, control, body) do
+      headers = [{"content-type", "application/json"}, {LocusBackends.auth_header(), header}]
 
       opts = [
         receive_timeout: @control_timeout_ms,
         private_policy: :operator,
-        max_response_bytes: @max_response_bytes
+        max_response_bytes: answer_bytes(message.type)
       ]
 
-      case Sanctum.Egress.pinned_request(:post, spec.url <> "/control", headers, body, opts) do
-        {:ok, status, resp_headers, resp_body} ->
-          {:http, status, boot_header(resp_headers), decode(resp_body)}
+      url = spec.url <> LocusBackends.route(:control)
 
-        # An answer past the limit was stopped mid-read: the bridge answered,
-        # so this is a refusal of the answer, not a bridge that could not be
-        # reached.
+      case Sanctum.Egress.pinned_request(:post, url, headers, body, opts) do
+        {:ok, 200, resp_headers, resp_body} ->
+          {:http, 200, boot_header(resp_headers), read_answer(message.type, resp_body)}
+
+        {:ok, status, resp_headers, resp_body} ->
+          {:http, status, boot_header(resp_headers), read_refusal(resp_body)}
+
+        # An answer past the limit was stopped mid-read: the service
+        # answered, so this is a refusal of the answer, not a service that
+        # could not be reached.
         {:error, {:response_too_large, _read, _limit} = reason} ->
           {:error, reason}
 
@@ -1367,23 +1385,42 @@ defmodule Emissary.External.Backends do
     end
   end
 
-  defp within_control_size(body) when byte_size(body) <= @max_control_bytes, do: :ok
-  defp within_control_size(_body), do: {:error, {:control_too_large, @max_control_bytes}}
-
-  @doc false
-  # The bridge boot id a response names, from its `Cyfr-Bridge-Boot` header.
-  @spec boot_header([{String.t(), String.t()}]) :: String.t() | nil
-  def boot_header(headers) do
-    Enum.find_value(headers, fn {name, value} ->
-      if String.downcase(to_string(name)) == "cyfr-bridge-boot", do: to_string(value)
-    end)
+  defp encode(message) do
+    case LocusBackends.encode_control(message) do
+      {:ok, body} -> {:ok, body}
+      {:error, {:too_large, :control, _bytes, max}} -> {:error, {:control_too_large, max}}
+      {:error, error} -> {:error, LocusBackends.refusal_for(error)}
+    end
   end
 
-  defp decode(body) do
-    case Jason.decode(body) do
-      {:ok, %{} = map} -> map
-      _ -> %{}
+  # The most of an answer this controller reads: the one answer that can
+  # grow, a status, is bounded before it is sent.
+  defp answer_bytes(:status), do: LocusBackends.max_status_answer_bytes()
+  defp answer_bytes(_type), do: LocusBackends.max_control_bytes()
+
+  defp read_answer(type, body) do
+    case LocusBackends.read_answer(type, body) do
+      {:ok, answer} -> answer
+      {:error, error} -> {:unreadable, error}
     end
+  end
+
+  defp read_refusal(body) do
+    case LocusBackends.read_refusal(body) do
+      {:ok, code} -> {:refused, code}
+      {:error, error} -> {:unreadable, error}
+    end
+  end
+
+  @doc false
+  # The service boot id a response names, from its `x-cyfr-boot` header.
+  @spec boot_header([{String.t(), String.t()}]) :: String.t() | nil
+  def boot_header(headers) do
+    name = LocusBackends.boot_header()
+
+    Enum.find_value(headers, fn {header, value} ->
+      if String.downcase(to_string(header)) == name, do: to_string(value)
+    end)
   end
 
   # ============================================================================
@@ -1403,17 +1440,16 @@ defmodule Emissary.External.Backends do
   defp answer_boot({:released, answer, _given_up}), do: answer_boot(answer)
   defp answer_boot(_result), do: nil
 
-  defp settle_job(state, {:hello}, spec, {:http, 200, _boot, %{"boot" => boot} = body})
-       when is_binary(boot) do
+  defp settle_job(state, {:hello}, spec, {:http, 200, _boot, %{boot: boot, pool: pool}}) do
     Logger.info(
-      "[Emissary.External.Backends] greeted bridge #{boot} under generation #{spec.generation}"
+      "[Emissary.External.Backends] greeted the backends service #{boot} under generation #{spec.generation}"
     )
 
     state = %{
       state
       | boot: boot,
         generation: spec.generation,
-        pool_size: get_in(body, ["pool", "size"])
+        pool_size: pool.size
     }
 
     resyncs = for {key, %{live?: false}} <- state.owners, do: {:sync, key}
@@ -1426,12 +1462,12 @@ defmodule Emissary.External.Backends do
 
   defp settle_job(state, {:hello}, _spec, result) do
     log_failure("hello", result)
-    refuse_queued(state, :bridge_unavailable)
+    refuse_queued(state, :backends_unavailable)
   end
 
-  # The bridge released everything not kept, so nothing pending remains.
-  defp settle_job(state, {:reconcile}, _spec, {:http, 200, _boot, body}) do
-    case body["released"] do
+  # The service released everything not kept, so nothing pending remains.
+  defp settle_job(state, {:reconcile}, _spec, {:http, 200, _boot, %{released: released}}) do
+    case released do
       [_ | _] = released ->
         Logger.info("[Emissary.External.Backends] reconcile released #{length(released)} owners")
 
@@ -1470,7 +1506,7 @@ defmodule Emissary.External.Backends do
          state,
          {:sync, key},
          spec,
-         {:synced, {:http, 200, _boot, body}, names, count, person}
+         {:synced, {:http, 200, _boot, %{status: status, rev: rev}}, names, count, person}
        ) do
     case state.owners[key] do
       %{epoch: epoch} = entry when epoch == spec.epoch ->
@@ -1481,8 +1517,8 @@ defmodule Emissary.External.Backends do
             names: names,
             backends: count,
             person: person,
-            rev: body["rev"],
-            running?: body["status"] == "running",
+            rev: rev,
+            running?: status == :running,
             ready_by: System.monotonic_time(:millisecond) + state.ready_wait_ms
         }
 
@@ -1490,7 +1526,7 @@ defmodule Emissary.External.Backends do
 
         cond do
           entry.waiters == [] ->
-            send(entry.pid, {:bridge_owner, grant(state, key, entry)})
+            send(entry.pid, {:backends_owner, grant(state, key, entry)})
             state
 
           entry.running? ->
@@ -1524,7 +1560,7 @@ defmodule Emissary.External.Backends do
         log_failure("sync", result)
         Enum.each(entry.waiters, &GenServer.reply(&1, {:error, reason}))
         # A re-sync this controller started failed: the process holds a
-        # grant the bridge no longer honours.
+        # grant the service no longer honours.
         if entry.waiters == [], do: stop_process(entry.pid)
 
         state
@@ -1540,8 +1576,7 @@ defmodule Emissary.External.Backends do
 
     state =
       case answer do
-        {:http, 200, _boot, %{"renewed" => renewed, "unknown" => unknown}}
-        when is_list(renewed) and is_list(unknown) ->
+        {:http, 200, _boot, %{renewed: renewed, unknown: unknown}} ->
           state = Enum.reduce(unknown, state, &lapsed(&2, &1))
           Enum.reduce(renewed, state, &observe_renewed(&2, &1))
 
@@ -1567,7 +1602,7 @@ defmodule Emissary.External.Backends do
   defp settle_job(state, {:release}, spec, :nothing_to_release),
     do: reply_release_waiters(state, Map.keys(spec.releases))
 
-  defp settle_job(state, {:release}, spec, {:http, 200, _boot, _body}) do
+  defp settle_job(state, {:release}, spec, {:http, 200, _boot, %{released: _released}}) do
     releases =
       Enum.reduce(spec.releases, state.releases, fn {key, epoch}, acc ->
         case acc do
@@ -1584,9 +1619,9 @@ defmodule Emissary.External.Backends do
     reply_release_waiters(state, Map.keys(spec.releases))
   end
 
-  defp settle_job(state, {:status, key, from}, _spec, {:http, 200, _boot, body}) do
-    status = Enum.find(body["owners"] || [], &({&1["athanor"], &1["server"]} == key))
-    GenServer.reply(from, {:ok, status})
+  defp settle_job(state, {:status, key, from}, _spec, {:http, 200, _boot, %{owners: owners}}) do
+    status = Enum.find(owners, &({&1.athanor, &1.server} == key))
+    GenServer.reply(from, {:ok, status && wire(status)})
     state
   end
 
@@ -1595,13 +1630,13 @@ defmodule Emissary.External.Backends do
     state
   end
 
-  defp lapsed(state, %{"athanor" => athanor, "server" => server, "e" => epoch}) do
+  defp lapsed(state, %{athanor: athanor, server: server, e: epoch}) do
     key = {athanor, server}
 
     case state.owners[key] do
       %{epoch: ^epoch, live?: true} ->
         Logger.warning(
-          "[Emissary.External.Backends] the bridge no longer runs #{server}; its epoch was raised"
+          "[Emissary.External.Backends] the backends service no longer runs #{server}; its epoch was raised"
         )
 
         revoke(state, key)
@@ -1611,7 +1646,11 @@ defmodule Emissary.External.Backends do
     end
   end
 
-  defp lapsed(state, _unknown), do: state
+  # An owner report as the wire names it, which is how `status/2` answers.
+  defp wire(%{} = map), do: Map.new(map, fn {key, value} -> {to_string(key), wire(value)} end)
+  defp wire(list) when is_list(list), do: Enum.map(list, &wire/1)
+  defp wire(atom) when is_atom(atom) and atom not in [nil, true, false], do: Atom.to_string(atom)
+  defp wire(value), do: value
 
   # A sync whose answer never arrived may have started the owner.
   defp release_unanswered(state, key, spec, {:error, {kind, _}})
@@ -1634,10 +1673,10 @@ defmodule Emissary.External.Backends do
       epoch: entry.epoch
     }
 
-    {:ok, owner_key} = BridgeAuth.owner_key(state.root, owner)
+    {:ok, owner_key} = LocusBackends.owner_key(state.root, owner)
 
     %{
-      url: state.url <> "/mcp",
+      url: state.url <> LocusBackends.route(:mcp),
       generation: entry.generation,
       epoch: entry.epoch,
       boot: state.boot,
@@ -1645,36 +1684,32 @@ defmodule Emissary.External.Backends do
     }
   end
 
-  @refusals %{
-    "stale_boot" => :stale_boot,
-    "stale_control" => :stale_control,
-    "stale_epoch" => :stale_epoch,
-    "epoch_ahead" => :epoch_ahead,
-    "capacity" => :capacity,
-    "lapsed" => :lapsed,
-    "conflict" => :conflict,
-    "bad_request" => :bad_request,
-    "too_large" => :too_large,
-    "too_many_owners" => :too_many_owners,
-    "status_too_large" => :status_too_large,
-    "unavailable" => :bridge_unavailable
+  # The wire's refusal codes (`Prima.LocusBackends.classes/0`) as this
+  # controller answers them: each its own atom but these.
+  @renamed_refusals %{
+    unauthorized: :backends_refused_signature,
+    unavailable: :backends_unavailable,
+    version: :protocol_mismatch
   }
 
   defp refusal({:synced, answer, _names, _count, _person}), do: refusal(answer)
   defp refusal({:renewed, answer, _fenced_out}), do: refusal(answer)
   defp refusal({:claimed, _claim, result}), do: refusal(result)
   defp refusal({:released, answer, _given_up}), do: refusal(answer)
-  defp refusal({:http, 401, _boot, _body}), do: :bridge_refused_signature
+  defp refusal({:http, 401, _boot, _body}), do: :backends_refused_signature
+  defp refusal({:http, _status, _boot, {:unreadable, {:version, _}}}), do: :protocol_mismatch
 
-  defp refusal({:http, status, _boot, %{"error" => code}})
-       when status in [400, 409, 413, 503] and is_map_key(@refusals, code),
-       do: Map.fetch!(@refusals, code)
+  defp refusal({:http, status, _boot, {:refused, code}} = answer) do
+    if LocusBackends.status(code) == status,
+      do: Map.get(@renamed_refusals, code, code),
+      else: refusal(put_elem(answer, 3, :unreadable))
+  end
 
-  defp refusal({:http, status, _boot, _body}), do: {:bridge_status, status}
-  defp refusal({:error, {:transport, _}}), do: :bridge_unavailable
-  defp refusal({:error, {:crashed, _}}), do: :bridge_unavailable
-  # The one answer that can grow is a status; one the bridge sent past the
-  # limit is the refusal the bridge itself gives for it.
+  defp refusal({:http, status, _boot, _body}), do: {:backends_status, status}
+  defp refusal({:error, {:transport, _}}), do: :backends_unavailable
+  defp refusal({:error, {:crashed, _}}), do: :backends_unavailable
+  # The one answer that can grow is a status; one the service sent past the
+  # limit is the refusal the service itself gives for it.
   defp refusal({:error, {:response_too_large, _read, _limit}}), do: :status_too_large
   defp refusal({:error, reason}), do: reason
   defp refusal(other), do: {:unexpected, other}
@@ -1687,10 +1722,10 @@ defmodule Emissary.External.Backends do
           "[Emissary.External.Backends] #{what} refused: another member of the cell holds the backend"
         )
 
-      :bridge_refused_signature ->
+      :backends_refused_signature ->
         Logger.error(
-          "[Emissary.External.Backends] the bridge refused the #{what} signature — CYFR_MCP_BRIDGE_KEY must " <>
-            "be the same value for cyfr and the bridge"
+          "[Emissary.External.Backends] the backends service refused the #{what} signature — " <>
+            "CYFR_LOCUS_BACKENDS_KEY must be the same value for cyfr and locus-backends"
         )
 
       reason ->

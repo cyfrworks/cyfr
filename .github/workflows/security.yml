@@ -123,15 +123,10 @@ jobs:
         run: bash ../../scripts/security-scan.sh govulncheck ./...
 
   security-scan-harness:
-    name: Security Scan Wrapper and npm Adapter Tests
+    name: Security Scan Wrapper Tests
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
-
-      # The npm adapter cases run scripts/npm-audit-report.mjs under node.
-      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
-        with:
-          node-version: '24'
 
       - name: Run security scan regression tests
         run: bash tests/security-scan-test.sh

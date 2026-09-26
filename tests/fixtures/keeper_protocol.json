@@ -1,6 +1,6 @@
 {
-  "comment": "The vectors binding cyfr-keeper (apps/keeper, Go) and its clients, the MCP bridge (apps/mcp-bridge/spawn-client.mjs, Node), the builder (apps/locus/lib/locus/keeper.ex, Elixir) and the Opus worker service (apps/opus/lib/opus/keeper/channel.ex, Elixir), the Elixir clients through one codec (apps/prima/lib/prima/keeper_protocol.ex): the spawner accepts every valid request and refuses every invalid one with its code, every side encodes each frame to the bytes given, and the clients understand every reply. `reserved_env_prefixes` are the variable name prefixes no spawn may carry in its `env`, CYFR's, the bridge's and the keeper's own (its channel variable is KEEPER_CHANNEL): the keeper refuses them, and CYFR and the bridge refuse a backend definition that names one. `frames` are the stdio and attach streams every client carries; `control_frames` are the control stream (4) of a spawn that asked for a control channel with `control: true`, carrying Prima.RunnerControl lines (tests/fixtures/runner_control.json) verbatim between a worker service and its runner's fd 3, and a zero-length one ending the stream. A client that never asks for the channel refuses a control frame. A spawn of any pool may carry `memory_bytes`, its memory bound, from 16777216 to 1099511627776: zero is not 'no bound', and a bound that is not a whole number of bytes in that range is refused. Every `exited` says whether the kernel killed processes of the spawn at that bound (`memory_exceeded`), and a spawner that cannot enforce a bound refuses the spawn as `memory_unavailable`.",
-  "reserved_env_prefixes": ["CYFR_", "MCP_BRIDGE_", "KEEPER_"],
+  "comment": "The vectors binding cyfr-keeper (apps/keeper, Go) and its clients, Locus's builds and backends services (apps/locus/lib/locus/keeper.ex, Elixir) and the Opus worker service (apps/opus/lib/opus/keeper/channel.ex, Elixir), the Elixir clients through one codec (apps/prima/lib/prima/keeper_protocol.ex): the spawner accepts every valid request and refuses every invalid one with its code, every side encodes each frame to the bytes given, and the clients understand every reply. `reserved_env_prefixes` are the variable name prefixes no spawn may carry in its `env`, CYFR's, Locus's and the keeper's own (its channel variable is KEEPER_CHANNEL): the keeper refuses them, and CYFR and the backends service refuse a backend definition that names one. `frames` are the stdio and attach streams every client carries; `control_frames` are the control stream (4) of a spawn that asked for a control channel with `control: true`, carrying Prima.RunnerControl lines (tests/fixtures/runner_control.json) verbatim between a worker service and its runner's fd 3, and a zero-length one ending the stream. A client that never asks for the channel refuses a control frame. A spawn of any pool may carry `memory_bytes`, its memory bound, from 16777216 to 1099511627776: zero is not 'no bound', and a bound that is not a whole number of bytes in that range is refused. Every `exited` says whether the kernel killed processes of the spawn at that bound (`memory_exceeded`), and a spawner that cannot enforce a bound refuses the spawn as `memory_unavailable`.",
+  "reserved_env_prefixes": ["CYFR_", "LOCUS_", "KEEPER_"],
   "frames": [
     { "stream": 3, "payload_hex": "30313233343536373839616263646566303132333435363738396162636465663031323334353637383961626364656630313233343536373839616263646566", "encoded_hex": "030000004030313233343536373839616263646566303132333435363738396162636465663031323334353637383961626364656630313233343536373839616263646566" },
     { "stream": 0, "payload_hex": "7b7d0a", "encoded_hex": "00000000037b7d0a" },
@@ -19,7 +19,7 @@
       "pool": "backends",
       "argv": ["/bin/sh", "-c", "npx -y @modelcontextprotocol/server-everything"],
       "env": { "GITHUB_TOKEN": "ghp_example", "NODE_ENV": "production" },
-      "attach": { "path": "/run/cyfr-bridge/attach.sock", "token": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef" }
+      "attach": { "path": "/run/locus/attach.sock", "token": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef" }
     },
     {
       "v": 1,
@@ -29,7 +29,7 @@
       "argv": ["node", "probe.mjs"],
       "env": {},
       "rlimits": { "nofile": 256, "nproc": 32, "core": 0, "fsize": 1048576 },
-      "attach": { "path": "/run/cyfr-bridge/attach.sock", "token": "fedcba9876543210fedcba9876543210fedcba9876543210fedcba9876543210" }
+      "attach": { "path": "/run/locus/attach.sock", "token": "fedcba9876543210fedcba9876543210fedcba9876543210fedcba9876543210" }
     },
     { "v": 1, "type": "signal", "spawn_id": "00112233445566778899aabbccddeeff", "sig": "SIGTERM" },
     { "v": 1, "type": "release", "spawn_id": "00112233445566778899aabbccddeeff", "grace_ms": 2000 },
@@ -63,7 +63,7 @@
       "argv": ["/bin/sh", "-c", "cargo component build --release", "locus-build"],
       "env": { "LANG": "C.UTF-8" },
       "memory_bytes": 1073741824,
-      "attach": { "path": "/run/cyfr-builder/attach.sock", "token": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef" }
+      "attach": { "path": "/run/locus/attach.sock", "token": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef" }
     },
     {
       "v": 1,
@@ -85,7 +85,7 @@
       "env": {},
       "rlimits": { "nproc": 64 },
       "memory_bytes": 16777216,
-      "attach": { "path": "/run/cyfr-builder/attach.sock", "token": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef" }
+      "attach": { "path": "/run/locus/attach.sock", "token": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef" }
     },
     {
       "v": 1,
@@ -95,7 +95,7 @@
       "argv": ["true"],
       "env": {},
       "memory_bytes": 1099511627776,
-      "attach": { "path": "/run/cyfr-builder/attach.sock", "token": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef" }
+      "attach": { "path": "/run/locus/attach.sock", "token": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef" }
     }
   ],
   "invalid_requests": [
@@ -105,7 +105,7 @@
     { "why": "field of another type", "code": "bad_request", "id": "1", "request": { "v": 1, "type": "pool", "id": "1", "pool": "backends", "sig": "SIGTERM" } },
     { "why": "empty argv", "code": "bad_request", "id": "2", "request": { "v": 1, "type": "spawn", "id": "2", "pool": "backends", "argv": [], "attach": { "path": "/run/a.sock", "token": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef" } } },
     { "why": "reserved env name", "code": "bad_request", "id": "2", "request": { "v": 1, "type": "spawn", "id": "2", "pool": "backends", "argv": ["x"], "env": { "PATH": "/tmp" }, "attach": { "path": "/run/a.sock", "token": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef" } } },
-    { "why": "reserved env prefix", "code": "bad_request", "id": "2", "request": { "v": 1, "type": "spawn", "id": "2", "pool": "backends", "argv": ["x"], "env": { "MCP_BRIDGE_PORT": "t" }, "attach": { "path": "/run/a.sock", "token": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef" } } },
+    { "why": "reserved env prefix", "code": "bad_request", "id": "2", "request": { "v": 1, "type": "spawn", "id": "2", "pool": "backends", "argv": ["x"], "env": { "LOCUS_BACKENDS_PORT": "t" }, "attach": { "path": "/run/a.sock", "token": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef" } } },
     { "why": "the keeper's channel variable", "code": "bad_request", "id": "2", "request": { "v": 1, "type": "spawn", "id": "2", "pool": "backends", "argv": ["x"], "env": { "KEEPER_CHANNEL": "socket:[1]" }, "attach": { "path": "/run/a.sock", "token": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef" } } },
     { "why": "malformed env name", "code": "bad_request", "id": "2", "request": { "v": 1, "type": "spawn", "id": "2", "pool": "backends", "argv": ["x"], "env": { "A=B": "t" }, "attach": { "path": "/run/a.sock", "token": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef" } } },
     { "why": "NUL in argv", "code": "bad_request", "id": "2", "request": { "v": 1, "type": "spawn", "id": "2", "pool": "backends", "argv": ["x\u0000y"], "attach": { "path": "/run/a.sock", "token": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef" } } },

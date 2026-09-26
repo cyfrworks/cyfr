@@ -6,8 +6,8 @@ defmodule Emissary.External.ServerEraTest do
   CYFR is a client as well as a server, and the ecosystem it talks to is mixed.
 
   The fallback exists for third-party servers on the older revision — the
-  bundled `apps/mcp-bridge` speaks the current one inbound, so the default
-  deployment never takes it.
+  bundled backends service (`Locus.Backends.Service`) speaks the current one
+  inbound, so the default deployment never takes it.
 
   What has to hold is that the fallback triggers on the right signal. A modern
   server also answers `4xx` — for an unsupported version, a missing capability,

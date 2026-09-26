@@ -41,8 +41,8 @@ defmodule Locus.Config do
   or neither key, refuses the boot with a message naming the variable. So
   does the control plane's configuration in the node's environment
   (`refused_environment/1`): the database URL, the keyring, the worker
-  root, the bridge key and the control plane's copy of the backends key
-  are CYFR's, and a node that can see them was given more than it holds.
+  root and the control plane's copy of the backends key are CYFR's, and a
+  node that can see them was given more than it holds.
 
   `:memory_bytes` is the bound every build's spawn asks cyfr-keeper for
   (`Locus.Keeper`), and `:backends_memory_bytes` the bound each backend's
@@ -95,7 +95,7 @@ defmodule Locus.Config do
   # protocol, MinMemoryBytes to MaxMemoryBytes).
   @memory_range 16_777_216..1_099_511_627_776
 
-  @control_plane_only ~w(CYFR_DATABASE_URL CYFR_CRYPTO_KEYRING CYFR_OPUS_KEY CYFR_MCP_BRIDGE_KEY
+  @control_plane_only ~w(CYFR_DATABASE_URL CYFR_CRYPTO_KEYRING CYFR_OPUS_KEY
                          CYFR_LOCUS_BACKENDS_KEY)
 
   @typedoc "The `:locus` application environment `from_env/1` writes."
@@ -140,8 +140,8 @@ defmodule Locus.Config do
       refused when is_list(refused) ->
         {:error,
          "the locus release must not see #{Enum.join(refused, ", ")}: the database, " <>
-           "the keyring, the worker root, the bridge key and the control plane's " <>
-           "backends key are CYFR's"}
+           "the keyring, the worker root and the control plane's backends key " <>
+           "are CYFR's"}
     end
   end
 
@@ -216,9 +216,8 @@ defmodule Locus.Config do
 
   @doc """
   The names in the environment that only the control plane may hold: the
-  database URL, the keyring, the worker root, the bridge key and the
-  control plane's copy of the backends key. Empty for an environment a
-  Locus node may run in.
+  database URL, the keyring, the worker root and the control plane's copy
+  of the backends key. Empty for an environment a Locus node may run in.
   """
   @spec refused_environment(EnvValue.getenv()) :: [String.t()]
   def refused_environment(getenv) when is_function(getenv, 1),

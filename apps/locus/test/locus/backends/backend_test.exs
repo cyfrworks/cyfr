@@ -140,7 +140,8 @@ defmodule Locus.Backends.BackendTest do
       assert answer == %{
                "child_answer" => %{
                  "code" => -32_601,
-                 "message" => "method not supported by bridge: sampling/createMessage"
+                 "message" =>
+                   "method not supported by the backends service: sampling/createMessage"
                }
              }
     end

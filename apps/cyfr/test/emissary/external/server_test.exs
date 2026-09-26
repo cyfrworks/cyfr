@@ -552,7 +552,7 @@ defmodule Emissary.External.ServerTest do
       assert state.headers == %{}
     end
 
-    test "a stdio connect records every backend env reference before the bridge resolves it",
+    test "a stdio connect records every backend env reference before the backends service resolves it",
          %{name: name, ctx: ctx} do
       vault!(ctx, "rev-env")
       vault!(ctx, "rev-env-other")
@@ -572,7 +572,7 @@ defmodule Emissary.External.ServerTest do
           ]
         )
 
-      # No bridge runs here: the sync that would resolve the env is refused.
+      # No backends service runs here: the sync that would resolve the env is refused.
       assert {:error, _} = connect(pid)
 
       {:ok, expected} =

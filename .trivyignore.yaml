@@ -1,21 +1,21 @@
-# Findings the bridge and builder images cannot take a fix for, with what
-# would lift each. Read by every image scan: the four in
+# Findings the Locus image cannot take a fix for, with what would lift
+# each. Read by every image scan: the three in
 # .github/workflows/test.yml, which run on every push, and the one in
 # .github/workflows/docker.yml, which runs before an image is published.
 # Every other fixable HIGH or CRITICAL still fails those jobs.
 #
 # Each entry is scoped to the path where the finding was observed, so the
-# same identifier appearing anywhere else — above all in the bridge's own
-# `app/node_modules` tree — still fails. A bare id would have suppressed it
-# image-wide, which is wider than the reasoning below supports.
+# same identifier appearing anywhere else still fails. A bare id would have
+# suppressed it image-wide, which is wider than the reasoning below
+# supports.
 #
 # All four live in npm's bundled dependencies, pinned by npm's lockfile. No
 # npm release ships any of these fixes: 12.0.2 is the newest and was
 # measured carrying all of them. Patching a dependency inside npm's own tree
 # is not something an image should do to itself, and npm cannot be removed —
-# the bridge launches its backends through `npx` and the builder installs a
-# tincture's dependencies with `npm install`, so npm is runtime code in both
-# rather than build tooling.
+# the backends service launches its backends through `npx` and the builds
+# service installs a tincture's dependencies with `npm install`, so npm is
+# runtime code in both rather than build tooling.
 #
 # What reaches them is a package a stdio server's backend command names, or
 # a tincture's own package.json, and running that package's code is

@@ -6,7 +6,7 @@ defmodule Cyfr.EnvExampleSecretsTest do
   Checks that active assignments in every tracked env example
   (`.env.example` and each service's `.env.*.example`) contain no values
   matching the credential patterns below. A key the stack needs — the
-  worker root, the bridge key, the builds key, a service key — is left
+  worker root, the backends key, the builds key, a service key — is left
   empty for `cyfr init` or the operator to generate, never shipped.
   """
   use ExUnit.Case, async: true
@@ -26,7 +26,7 @@ defmodule Cyfr.EnvExampleSecretsTest do
   defp examples do
     files = Path.wildcard(Path.join(@root, ".env*.example"), match_dot: true)
 
-    assert Path.join(@root, ".env.example") in files and length(files) >= 4,
+    assert Path.join(@root, ".env.example") in files and length(files) >= 3,
            "the scan found only #{inspect(Enum.map(files, &Path.basename/1))}"
 
     files
@@ -48,7 +48,8 @@ defmodule Cyfr.EnvExampleSecretsTest do
   # The keys are generated per deployment: shipped with a value, every
   # deployment that copied the example would share it.
   test "every key the stack needs is shipped empty" do
-    for key <- ~w(CYFR_OPUS_KEY CYFR_MCP_BRIDGE_KEY OPUS_SERVICE_KEY CYFR_LOCUS_BUILDS_KEY) do
+    for key <-
+          ~w(CYFR_OPUS_KEY CYFR_LOCUS_BACKENDS_KEY OPUS_SERVICE_KEY CYFR_LOCUS_BUILDS_KEY) do
       text = File.read!(Path.join(@root, ".env.example"))
       assert text =~ ~r/^(# )?#{key}=$/m, ".env.example must ship #{key} empty"
     end

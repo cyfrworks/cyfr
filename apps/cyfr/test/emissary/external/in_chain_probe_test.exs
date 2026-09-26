@@ -3,16 +3,16 @@
 
 defmodule Emissary.External.InChainProbeTest do
   @moduledoc """
-  The in-chain probe the bridge image suite evaluates in the running
-  release (`tests/bridge-image/e2e.test.mjs`: `callTool/3` on the
+  The in-chain call of a stdio server's tool (`callTool/3` on the
   `in_chain` plane, and the stored rows it reads back), run step for step
   against this application: the caller established from a session token,
   a root execution admitted under the grant its estate stands at, a stdio
   server's tool called in-chain under the root's lineage, the root closed
-  with the call's outcome, and the execution rows and payloads read as the
-  suite reads them. The server process is a stub that answers as the
-  bridge does once it has masked the backend's credential; the masking
-  itself is the image suite's to prove. A call that names no parent has no
+  with the call's outcome, and the execution rows and payloads read back.
+  The server process is a stub that answers as the
+  backends service does once it has masked the backend's credential; the
+  masking itself is the backends image suite's to prove
+  (`tests/locus-backends-image/e2e.py`). A call that names no parent has no
   grant to inherit and is refused.
   """
 
@@ -25,7 +25,7 @@ defmodule Emissary.External.InChainProbeTest do
 
   # The server process a stdio row's calls reach, registered where the
   # supervisor finds one: under the row's configuration digest. It answers
-  # every call with the bridge's masked `echo_env` and tells the test.
+  # every call with the backends service's masked `echo_env` and tells the test.
   defmodule BackendStub do
     use GenServer
 
@@ -143,7 +143,7 @@ defmodule Emissary.External.InChainProbeTest do
     {:ok, grant} = Sanctum.ExecutionStanding.capture(ctx)
 
     root =
-      Crucible.Record.new(ctx, "formula:local.bridge-e2e-chain:0.1.0", %{},
+      Crucible.Record.new(ctx, "formula:local.backends-e2e-chain:0.1.0", %{},
         component_type: :formula,
         grant: grant
       )

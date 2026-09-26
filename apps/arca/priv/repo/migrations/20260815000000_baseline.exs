@@ -1237,7 +1237,7 @@ defmodule Arca.Repo.Migrations.Baseline do
 
   defp registrations do
     # An `http` server has a url; a `stdio` server has none and runs its
-    # backends (`config_json.backends`) on the MCP bridge. `epoch` is 1 on
+    # backends (`config_json.backends`) on the backends service. `epoch` is 1 on
     # insert and rises in the same statement as every change to the row.
     # SQLite takes a check only inside CREATE TABLE and Postgres only as a
     # table constraint, so the one rule is spelled once per adapter.
@@ -1257,7 +1257,7 @@ defmodule Arca.Repo.Migrations.Baseline do
       add :enabled, :boolean, default: true
       add :epoch, :bigint, null: false
       # The person who created the row; their stdio servers share one quota
-      # of the MCP bridge across every athanor.
+      # of the backends service across every athanor.
       add :created_by, :string, null: false
       add :athanor_id, :string, null: false
 

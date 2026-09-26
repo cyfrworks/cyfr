@@ -154,7 +154,7 @@ func TestSpawnRequestFieldsAreDecoded(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if req.Pool != "backends" || !reflect.DeepEqual(req.Argv, []string{"node", "probe.mjs"}) || req.Attach.Path != "/run/cyfr-bridge/attach.sock" {
+	if req.Pool != "backends" || !reflect.DeepEqual(req.Argv, []string{"node", "probe.mjs"}) || req.Attach.Path != "/run/locus/attach.sock" {
 		t.Fatalf("request %+v", req)
 	}
 	if got := req.Rlimits.Resolve(); got != (Limits{Nofile: 256, Nproc: 32, Core: 0, Fsize: 1 << 20}) {
@@ -300,7 +300,7 @@ func TestValidateCommandBounds(t *testing.T) {
 	if err := ValidateCommand([]string{"x"}, map[string]string{"V": strings.Repeat("x", MaxValueBytes+1)}); err == nil {
 		t.Error("an oversize value was accepted")
 	}
-	for _, name := range []string{"HOME", "TMPDIR", "CYFR_KEY", "MCP_BRIDGE_PORT", "1ABC", "", "A-B"} {
+	for _, name := range []string{"HOME", "TMPDIR", "CYFR_KEY", "LOCUS_BACKENDS_PORT", "1ABC", "", "A-B"} {
 		if err := ValidateEnvName(name); err == nil {
 			t.Errorf("env name %q accepted", name)
 		}

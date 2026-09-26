@@ -2,9 +2,11 @@
 // Copyright 2026 CYFR Works Inc.
 
 // A stdio MCP backend that reports what its process can see and do, for the
-// real-image isolation test (tests/bridge-image). Every tool answers with a
-// JSON object as text; an operation the kernel refuses is reported as
-// `{ ok: false, code }`, never thrown.
+// backends image suite (tests/locus-backends-image), which mounts it at
+// /probe. Every tool answers with a JSON object as text; an operation the
+// kernel refuses is reported as `{ ok: false, code }`, never thrown. `fail`
+// answers a JSON-RPC error naming a variable's value, and `hog` holds as many
+// bytes as it is asked to, touched, so a memory bound can be reached.
 
 import { spawn, spawnSync } from "node:child_process";
 import fs from "node:fs";
@@ -19,7 +21,12 @@ const TOOLS = {
   echo_env: "The value of one environment variable: { name }; with { stderr: true } it is also written to stderr.",
   exit: "Exit with { code } after answering.",
   run: "Run a command to completion: { argv }; answers its status, stdout and stderr.",
+  fail: "Answer a JSON-RPC error whose message names the value of one environment variable: { name }.",
+  hog: "Hold { bytes } bytes of memory, every page touched, and answer how many are held.",
 };
+
+// What `hog` holds, so nothing collects it.
+const held = [];
 
 function attempt(fn) {
   try {
@@ -103,6 +110,11 @@ const handlers = {
     setTimeout(() => process.exit(code), 50);
     return { exiting: code };
   },
+  hog({ bytes }) {
+    const chunk = 1 << 20;
+    for (let left = bytes; left > 0; left -= chunk) held.push(Buffer.alloc(Math.min(chunk, left), 1));
+    return { held: held.reduce((sum, b) => sum + b.length, 0) };
+  },
   run({ argv }) {
     const result = spawnSync(argv[0], argv.slice(1), { encoding: "utf8", timeout: 10_000 });
     return {
@@ -144,6 +156,9 @@ process.stdin.on("data", (chunk) => {
           tools: Object.entries(TOOLS).map(([name, description]) => ({ name, description, inputSchema: { type: "object" } })),
         },
       });
+    } else if (msg.method === "tools/call" && msg.params?.name === "fail") {
+      const name = msg.params.arguments?.name;
+      send({ jsonrpc: "2.0", id: msg.id, error: { code: -32000, message: `failed holding ${process.env[name]}` } });
     } else if (msg.method === "tools/call" && handlers[msg.params?.name]) {
       let text;
       try {

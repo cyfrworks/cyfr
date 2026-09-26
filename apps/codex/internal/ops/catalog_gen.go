@@ -1708,7 +1708,7 @@ type McpServersCreateArgsConfig struct {
 	TimeoutMs Field[int] `json:"timeout_ms,omitzero"`
 	// The tools the server may offer (default: all)
 	ToolPatterns Field[[]string] `json:"tool_patterns,omitzero"`
-	// http (default): a URL. stdio: backends the MCP bridge runs.
+	// http (default): a URL. stdio: backends the backends service runs.
 	Transport Field[string] `json:"transport,omitzero"`
 	// MCP server endpoint URL (http)
 	Url Field[string] `json:"url,omitzero"`
@@ -1890,7 +1890,7 @@ type McpServersUpdateArgsConfig struct {
 	TimeoutMs Field[int] `json:"timeout_ms,omitzero"`
 	// The tools the server may offer (default: all)
 	ToolPatterns Field[[]string] `json:"tool_patterns,omitzero"`
-	// http (default): a URL. stdio: backends the MCP bridge runs.
+	// http (default): a URL. stdio: backends the backends service runs.
 	Transport Field[string] `json:"transport,omitzero"`
 	// MCP server endpoint URL (http)
 	Url Field[string] `json:"url,omitzero"`

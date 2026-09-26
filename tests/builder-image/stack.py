@@ -46,9 +46,9 @@ PROFILE = "locus-builds"
 PROJECT_PREFIX = os.environ.get("STACK_PROJECT_PREFIX", "")
 POOL_FIRST, POOL_LAST = 30001, 30016
 RELEASE_UID = 10001
-RELEASE_USER = "cyfr-builder"
+RELEASE_USER = "locus"
 RELEASE_BIN = "/app/bin/locus"
-HOME_ROOT = "/var/lib/cyfr-builder/homes"
+HOME_ROOT = "/var/lib/locus/homes"
 
 with open(os.path.join(ROOT, "tests", "fixtures", "locus_builds.json"), encoding="utf-8") as _vectors:
     WIRE = json.load(_vectors)

@@ -4,7 +4,7 @@
 defmodule Cyfr.CrossLanguageDriftTest do
   @moduledoc """
   Mechanical drift guards for logic implemented more than once across
-  languages. The suites (mix / go test / node) run in mutually exclusive
+  languages. The suites (mix / go test) run in mutually exclusive
   path-filtered CI workflows, so nothing else can notice when a port and
   its original stop agreeing. Companion to
   `Emissary.MCP.ClientProtocolDriftTest`, which pins the protocol revision.
@@ -202,29 +202,40 @@ defmodule Cyfr.CrossLanguageDriftTest do
   # ==========================================================================
 
   test "the MCP conformance vocabulary is spelled the same in every client" do
-    # Check shared metadata keys, request headers and binary sentinels across bundled clients.
+    # Check shared metadata keys, request headers and binary sentinels across
+    # bundled clients: the Go CLI's literals, the backends wire's vector file
+    # (which the image suite's harness speaks from) and the codes the Locus
+    # backends service answers with, its numeric literals read without their
+    # digit separators.
     protocol = read!("apps/prima/lib/prima/mcp/protocol.ex")
     message = read!("apps/prima/lib/prima/mcp/message.ex")
-    mjs = read!("apps/mcp-bridge/server.mjs")
+    fixture = read!("tests/fixtures/locus_backends.json")
+
+    service =
+      "apps/locus/lib/locus/backends/service.ex"
+      |> read!()
+      |> String.replace(~r/(\d)_(\d)/, "\\1\\2")
+
     client_go = read!("apps/codex/internal/mcp/client.go")
     types_go = read!("apps/codex/internal/mcp/types.go")
     go = client_go <> types_go
 
     # {literal, [sources that must carry it]} — a source is listed only
-    # where it genuinely speaks that part of the vocabulary (the bridge
-    # never reads clientInfo, so it is not held to it).
+    # where it genuinely speaks that part of the vocabulary (the backends
+    # service names its `_meta` keys through Prima.MCP.Protocol, so the
+    # vector file carries them for it).
     vocabulary = [
-      {"io.modelcontextprotocol/protocolVersion", [protocol, mjs, go]},
-      {"io.modelcontextprotocol/clientCapabilities", [protocol, mjs, go]},
+      {"io.modelcontextprotocol/protocolVersion", [protocol, fixture, go]},
+      {"io.modelcontextprotocol/clientCapabilities", [protocol, fixture, go]},
       {"io.modelcontextprotocol/clientInfo", [protocol, go]},
-      {"io.modelcontextprotocol/serverInfo", [protocol, mjs, go]},
-      {"=?base64?", [protocol, mjs, go]},
-      {"-32020", [message, mjs]},
-      {"-32022", [message, mjs]},
+      {"io.modelcontextprotocol/serverInfo", [protocol, go]},
+      {"=?base64?", [protocol, go]},
+      {"-32020", [message, service]},
+      {"-32022", [message, service]},
       # The auth sentinel: the Go CLI keys `errors.Is(err, ErrAuthRequired)`
-      # on this number and the bridge answers with it, but all three defined
-      # it independently and nothing held them together.
-      {"-33001", [message, mjs, go]}
+      # on this number and the backends service answers with it, but all
+      # three define it independently and nothing else holds them together.
+      {"-33001", [message, service, go]}
     ]
 
     for {literal, sources} <- vocabulary,
@@ -236,10 +247,16 @@ defmodule Cyfr.CrossLanguageDriftTest do
 
     # The three request headers, case-insensitively — Go title-cases them.
     for header <- ["mcp-protocol-version", "mcp-method", "mcp-name"] do
-      for {name, source} <- [{"protocol.ex", protocol}, {"server.mjs", mjs}, {"go", go}] do
+      for {name, source} <- [{"protocol.ex", protocol}, {"go", go}] do
         assert String.contains?(String.downcase(source), header),
                "request header #{header} missing from #{name}"
       end
+    end
+
+    # The two every signed invoke of the vector file carries.
+    for header <- ["mcp-protocol-version", "mcp-method"] do
+      assert String.contains?(fixture, header),
+             "request header #{header} missing from tests/fixtures/locus_backends.json"
     end
   end
 end

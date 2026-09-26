@@ -14,7 +14,7 @@ func TestSpecValidation(t *testing.T) {
 	valid := Spec{
 		UID:     20007,
 		GraceMs: 2000,
-		Paths:   []string{"/var/lib/cyfr-bridge/homes/20007-0123456789abcdef0123456789abcdef", "/var/lib/cyfr-bridge/homes/left"},
+		Paths:   []string{"/var/lib/locus/homes/20007-0123456789abcdef0123456789abcdef", "/var/lib/locus/homes/left"},
 	}
 	if err := valid.Validate(); err != nil {
 		t.Fatal(err)

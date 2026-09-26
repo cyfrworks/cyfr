@@ -28,11 +28,6 @@ defmodule Prima.LocusBackendsTest do
 
   @control_types ~w(hello reconcile sync renew release status)
 
-  # The keeper still reserves `MCP_BRIDGE_`, the bridge's prefix, until the
-  # bridge is retired; the vectors are written as the wire reserves once it
-  # is, with `LOCUS_` in its place. This is the one place the two differ.
-  @retiring_prefixes %{"MCP_BRIDGE_" => "LOCUS_"}
-
   defp hex(bytes), do: Base.encode16(bytes, case: :lower)
   defp unhex(text), do: Base.decode16!(text, case: :lower)
   defp key, do: unhex(@vectors["key_hex"])
@@ -87,12 +82,10 @@ defmodule Prima.LocusBackendsTest do
       assert LocusBackends.max_status_answer_bytes() == LocusBackends.max_control_bytes()
     end
 
-    test "the reserved variables are the keeper's, and the vectors name them as they will be" do
+    test "the reserved variables are the keeper's, and the vectors name them" do
       assert LocusBackends.reserved_env_names() == KeeperProtocol.reserved_env_names()
       assert LocusBackends.reserved_env_prefixes() == KeeperProtocol.reserved_env_prefixes()
-
-      assert Enum.map(LocusBackends.reserved_env_prefixes(), &Map.get(@retiring_prefixes, &1, &1)) ==
-               @vectors["reserved_env_prefixes"]
+      assert LocusBackends.reserved_env_prefixes() == @vectors["reserved_env_prefixes"]
     end
 
     test "the MCP names an invoke carries through are Prima.MCP.Protocol's" do

@@ -3,22 +3,24 @@
 
 defmodule Emissary.External.BackendsTest do
   @moduledoc """
-  The MCP bridge controller and the stdio arm of a server process, against
-  a fake bridge that verifies every signature the way the bridge does:
-  the controller greets the bridge and reconciles at start; a stdio server
-  syncs its owner with its env sealed for its version and the bridge's
-  lifetime and signs every request with its owner key; one member of the
+  The backends controller and the stdio arm of a server process, against a
+  scripted backends service (`Cyfr.Test.ScriptedBackends`) that speaks the
+  wire (`Prima.LocusBackends`) and verifies every signature the way the
+  service does: the controller greets the service and reconciles at start;
+  a stdio server syncs its owner with its env sealed for its version and
+  the service's lifetime and signs every request with its owner key; one member of the
   cell holds each backend's claim and the losers of a proposal start
   nothing, a member that loses a claim stands down without revoking what
   a peer now runs, and a claim that only lapsed is asked for again; a
   sync's caller waits for its backends while every other owner's lease is
   renewed, and a catalogue that changes later is listed again; every stop
   path releases the owner; renewal fences each owner against its row; a
-  restarted bridge and a new generation are greeted and live owners synced
+  restarted service and a new generation are greeted and live owners synced
   again; nothing is sent and no claim written without the control plane;
   refusals of a call are answered as their kind requires; a status names
-  no more owners than the bridge answers for and is read no further than
-  the control limit, each refusal of it its own typed result; an athanor,
+  no more owners than the service answers for and is read no further than
+  the answer bound, each refusal of it, a refusal at another protocol
+  version and an answer at one included, its own typed result; an athanor,
   and the person who created the rows — the server's synthetic principal
   being one such person — each hold at most a quarter of the pool; no key
   reaches a status or a crash report.
@@ -28,313 +30,20 @@ defmodule Emissary.External.BackendsTest do
   import ExUnit.CaptureLog
 
   alias Arca.JobClaims
-  alias Prima.BridgeAuth
+  alias Cyfr.Test.ScriptedBackends, as: Scripted
   alias Emissary.External.Backends
   alias Emissary.External.Servers
   alias Emissary.External.Provider
+  alias Prima.LocusBackends
 
   @root :crypto.strong_rand_bytes(32)
-  @secret "ghp_bridge-test-secret-0123456789"
+  @secret "ghp_backends-test-secret-0123456789"
   @generation_key {Arca.ControlPlane, :generation}
   @project_root Path.expand("../../../../..", __DIR__)
   # A member of the cell that is not this one. Every claim assertion below
   # reads the one row of a freshly inserted server id, so it measures this
   # test's own delta on a key nothing else in the suite writes.
   @peer "peer@cell#boot_0199a000-0000-7000-8000-00000000cell"
-
-  defmodule FakeBridge do
-    @moduledoc false
-    # A bridge that checks what the real one checks before it acts — the
-    # control MAC, the lifetime, the (generation, seq) high-water mark, and
-    # an invoke's owner key and version — and reports every accepted
-    # message to the test process. Each owner runs and lists the tools the
-    # test sets for its server (running, rev 1 and `github__search` unless
-    # set), and reports `stderr_bytes` of stderr tail per backend in a
-    # status (none unless set): the fake does not bound its answers, so a
-    # test can see what the controller makes of an unbounded one.
-
-    import Plug.Conn
-
-    alias Prima.BridgeAuth
-
-    def start(test, root) do
-      bypass = Bypass.open()
-
-      # Supervised by the test before the controller is, so it answers until
-      # the controller has stopped.
-      agent =
-        ExUnit.Callbacks.start_supervised!(
-          {Agent,
-           fn ->
-             %{
-               test: test,
-               root: root,
-               boot: "bb_first",
-               hwm: {0, 0},
-               owners: %{},
-               readiness: %{},
-               tools: %{},
-               hold: MapSet.new(),
-               pool: 32,
-               stderr_bytes: 0,
-               refuse: %{}
-             }
-           end},
-          id: :fake_bridge
-        )
-
-      Bypass.stub(bypass, "POST", "/control", &serve(&1, fn conn -> control(conn, agent) end))
-      Bypass.stub(bypass, "POST", "/mcp", &serve(&1, fn conn -> invoke(conn, agent) end))
-      %{bypass: bypass, agent: agent, url: "http://127.0.0.1:#{bypass.port}"}
-    end
-
-    # Once the fake runs a request it traps exits, so a request whose client
-    # goes away mid-way (a controller that crashes while the fake holds its
-    # sync) still runs to its answer, 503 if the fake's state is gone. A
-    # request cut off before that, or while its body is read, ends with its
-    # connection and Bypass fails the test for it, so no test ends with a
-    # message of the controller's in flight (`supervise_bridge/1`).
-    defp serve(conn, handler) do
-      Process.flag(:trap_exit, true)
-      handler.(conn)
-    catch
-      :exit, _reason -> resp(conn, 503, "")
-    end
-
-    def restart(%{agent: agent}, boot),
-      do: Agent.update(agent, &%{&1 | boot: boot, hwm: {0, 0}, owners: %{}})
-
-    @doc "Refuse the next message of `what` (or invoke of that method) with `code` under `status`."
-    def refuse_once(%{agent: agent}, what, code, status \\ 409),
-      do: Agent.update(agent, &put_in(&1, [:refuse, what], {code, status}))
-
-    def set(%{agent: agent}, key, value), do: Agent.update(agent, &Map.put(&1, key, value))
-    def get(%{agent: agent}, key), do: Agent.get(agent, &Map.fetch!(&1, key))
-
-    @doc "What the owner of `server` reports: its state and rev."
-    def readiness(%{agent: agent}, server, state, rev),
-      do: Agent.update(agent, &put_in(&1, [:readiness, server], %{state: state, rev: rev}))
-
-    @doc "The tool names the owner of `server` lists."
-    def tools(%{agent: agent}, server, names),
-      do: Agent.update(agent, &put_in(&1, [:tools, server], names))
-
-    @doc "Hold the next message of `type` until the test sends `:go` to the pid it reports."
-    def hold(%{agent: agent}, type),
-      do: Agent.update(agent, &%{&1 | hold: MapSet.put(&1.hold, type)})
-
-    defp control(conn, agent) do
-      {:ok, body, conn} = read_body(conn)
-      st = Agent.get(agent, & &1)
-      [header] = get_req_header(conn, "cyfr-bridge-auth")
-      {:ok, fields, mac} = BridgeAuth.parse_header(:control, header)
-      message = Jason.decode!(body)
-
-      cond do
-        not BridgeAuth.verify(:control, BridgeAuth.control_key(st.root), fields, mac, body) ->
-          answer(conn, st, 401, %{"error" => "unauthorized"})
-
-        fields.boot != if(message["type"] == "hello", do: "-", else: st.boot) ->
-          answer(conn, st, 409, %{"error" => "stale_boot"})
-
-        {fields.generation, fields.seq} <= st.hwm ->
-          answer(conn, st, 409, %{"error" => "stale_control"})
-
-        true ->
-          Agent.update(agent, &%{&1 | hwm: {fields.generation, fields.seq}})
-          send(st.test, {:control, message["type"], message, fields})
-          held(agent, message["type"])
-
-          case pop_refusal(agent, message["type"]) do
-            nil -> handle(conn, agent, message, fields)
-            {code, status} -> answer(conn, st, status, %{"error" => code})
-          end
-      end
-    end
-
-    defp held(agent, type) do
-      st = Agent.get(agent, & &1)
-
-      if MapSet.member?(st.hold, type) do
-        Agent.update(agent, &%{&1 | hold: MapSet.delete(&1.hold, type)})
-        send(st.test, {:held, type, self()})
-
-        receive do
-          :go -> :ok
-        after
-          5_000 -> :ok
-        end
-      end
-    end
-
-    defp readiness_of(st, server), do: Map.get(st.readiness, server, %{state: "running", rev: 1})
-
-    defp handle(conn, agent, %{"type" => "hello"}, _fields) do
-      st = Agent.get(agent, & &1)
-
-      answer(conn, st, 200, %{
-        "boot" => st.boot,
-        "pool" => %{"size" => st.pool, "free" => st.pool}
-      })
-    end
-
-    defp handle(conn, agent, %{"type" => "reconcile", "keep" => keep}, fields) do
-      kept =
-        for %{"athanor" => a, "server" => s, "e" => e} <- keep,
-            do: {{a, s}, {fields.generation, e}}
-
-      Agent.update(agent, fn st ->
-        %{st | owners: Map.filter(st.owners, fn owner -> owner in kept end)}
-      end)
-
-      answer(conn, Agent.get(agent, & &1), 200, %{"released" => []})
-    end
-
-    defp handle(conn, agent, %{"type" => "sync"} = message, fields) do
-      st = Agent.get(agent, & &1)
-      %{"owner" => %{"athanor" => athanor, "server" => server}, "e" => e} = message
-
-      owner = %{athanor: athanor, server: server, generation: fields.generation, epoch: e}
-
-      {:ok, plaintext} =
-        BridgeAuth.open(BridgeAuth.seal_key(st.root), owner, st.boot, message["sealed"])
-
-      send(st.test, {:sealed_env, server, Jason.decode!(plaintext)})
-
-      Agent.update(agent, &put_in(&1, [:owners, {athanor, server}], {fields.generation, e}))
-      %{state: state, rev: rev} = readiness_of(st, server)
-
-      backends =
-        for backend <- message["backends"],
-            do: %{"name" => backend["name"], "status" => "ready", "tools" => 1}
-
-      answer(conn, st, 200, %{"status" => state, "rev" => rev, "backends" => backends})
-    end
-
-    defp handle(conn, agent, %{"type" => "renew", "owners" => owners}, fields) do
-      st = Agent.get(agent, & &1)
-
-      {renewed, unknown} =
-        Enum.split_with(owners, fn %{"athanor" => a, "server" => s, "e" => e} ->
-          Map.get(st.owners, {a, s}) == {fields.generation, e}
-        end)
-
-      renewed =
-        for %{"server" => server} = owner <- renewed do
-          %{state: state, rev: rev} = readiness_of(st, server)
-          Map.merge(owner, %{"state" => state, "rev" => rev})
-        end
-
-      answer(conn, st, 200, %{"renewed" => renewed, "unknown" => unknown})
-    end
-
-    defp handle(conn, agent, %{"type" => "release", "owners" => owners}, fields) do
-      released =
-        for %{"athanor" => a, "server" => s, "e" => e} = owner <- owners,
-            version = Agent.get(agent, &Map.get(&1.owners, {a, s})),
-            version != nil and version <= {fields.generation, e},
-            do: owner
-
-      Agent.update(agent, fn st ->
-        %{st | owners: Map.drop(st.owners, Enum.map(released, &{&1["athanor"], &1["server"]}))}
-      end)
-
-      answer(conn, Agent.get(agent, & &1), 200, %{"released" => released})
-    end
-
-    defp handle(conn, agent, %{"type" => "status", "owners" => named}, _fields) do
-      st = Agent.get(agent, & &1)
-
-      owners =
-        for owner <- named,
-            {g, e} <- List.wrap(Map.get(st.owners, {owner["athanor"], owner["server"]})) do
-          Map.merge(owner, %{
-            "g" => g,
-            "e" => e,
-            "backends" => [
-              %{
-                "name" => "github",
-                "status" => "ready",
-                "restarts" => 0,
-                "stderr_tail" => String.duplicate("x", st.stderr_bytes)
-              }
-            ]
-          })
-        end
-
-      answer(conn, st, 200, %{"owners" => owners})
-    end
-
-    defp invoke(conn, agent) do
-      {:ok, body, conn} = read_body(conn)
-      st = Agent.get(agent, & &1)
-      [header] = get_req_header(conn, "cyfr-bridge-auth")
-      {:ok, fields, mac} = BridgeAuth.parse_header(:invoke, header)
-
-      {:ok, key} =
-        BridgeAuth.owner_key(st.root, Map.take(fields, [:athanor, :server, :generation, :epoch]))
-
-      message = Jason.decode!(body)
-      running = Map.get(st.owners, {fields.athanor, fields.server})
-      version = {fields.generation, fields.epoch}
-
-      cond do
-        not BridgeAuth.verify(:invoke, key, fields, mac, body) ->
-          answer(conn, st, 401, %{})
-
-        fields.boot != st.boot ->
-          answer(conn, st, 409, %{"error" => "stale_boot"})
-
-        running == nil ->
-          answer(conn, st, 409, %{"error" => "unknown_owner"})
-
-        version < running ->
-          answer(conn, st, 409, %{"error" => "stale_epoch"})
-
-        version > running ->
-          answer(conn, st, 409, %{"error" => "epoch_ahead"})
-
-        refusal = pop_refusal(agent, message["method"]) ->
-          {code, status} = refusal
-          send(st.test, {:invoke, message["method"], fields})
-          answer(conn, st, status, %{"error" => code})
-
-        true ->
-          send(st.test, {:invoke, message["method"], fields})
-
-          answer(conn, st, 200, %{
-            "jsonrpc" => "2.0",
-            "id" => message["id"],
-            "result" => result(st, fields.server, message)
-          })
-      end
-    end
-
-    defp result(st, server, %{"method" => "tools/list"}) do
-      names = Map.get(st.tools, server, ["github__search"])
-
-      %{
-        "tools" =>
-          for(name <- names, do: %{"name" => name, "inputSchema" => %{"type" => "object"}})
-      }
-    end
-
-    defp result(_st, _server, %{"method" => "tools/call"}),
-      do: %{"content" => [%{"type" => "text", "text" => "found"}]}
-
-    defp pop_refusal(agent, what) do
-      Agent.get_and_update(agent, fn st ->
-        {Map.get(st.refuse, what), %{st | refuse: Map.delete(st.refuse, what)}}
-      end)
-    end
-
-    defp answer(conn, st, status, body) do
-      conn
-      |> put_resp_header("cyfr-bridge-boot", st.boot)
-      |> put_resp_content_type("application/json")
-      |> resp(status, Jason.encode!(body))
-    end
-  end
 
   defmodule Teardown do
     @moduledoc false
@@ -361,7 +70,7 @@ defmodule Emissary.External.BackendsTest do
     Arca.Cache.init()
 
     ctx = Sanctum.TestContext.local()
-    fake = FakeBridge.start(self(), @root)
+    fake = Scripted.start(self(), @root)
 
     on_exit(fn ->
       :persistent_term.erase(@generation_key)
@@ -371,24 +80,24 @@ defmodule Emissary.External.BackendsTest do
     {:ok, ctx: ctx, fake: fake}
   end
 
-  defp start_bridge(fake, opts \\ []) do
-    bridge =
-      supervise_bridge(Keyword.merge([url: fake.url, root: @root, tick_ms: 3_600_000], opts))
+  defp start_controller(fake, opts \\ []) do
+    controller =
+      supervise_controller(Keyword.merge([url: fake.url, root: @root, tick_ms: 3_600_000], opts))
 
     assert_receive {:control, "hello", %{"g" => 1}, %{boot: "-"}}, 2_000
     assert_receive {:control, "reconcile", %{"keep" => []}, _fields}, 2_000
-    await_idle(bridge)
-    bridge
+    await_idle(controller)
+    controller
   end
 
   # The controller, stopped when the test ends as the application stops it:
   # after the server processes, which release their owners through it as
   # they stop, and only once it has nothing left to send. Stopped with a
   # message in flight, it would cut off the request the fake is serving.
-  defp supervise_bridge(opts) do
-    bridge = start_supervised!({Backends, opts})
+  defp supervise_controller(opts) do
+    controller = start_supervised!({Backends, opts})
     start_supervised!({Teardown, &quiesce/0}, shutdown: 10_000)
-    bridge
+    controller
   end
 
   defp quiesce do
@@ -408,17 +117,17 @@ defmodule Emissary.External.BackendsTest do
     )
   end
 
-  defp tick(bridge) do
-    send(bridge, :tick)
-    await_idle(bridge)
+  defp tick(controller) do
+    send(controller, :tick)
+    await_idle(controller)
   end
 
   defp idle?(state),
     do: state.inflight == nil and :queue.is_empty(state.urgent) and :queue.is_empty(state.queue)
 
   # Until the controller has no message in flight and none queued.
-  defp await_idle(bridge, deadline \\ System.monotonic_time(:millisecond) + 3_000) do
-    state = :sys.get_state(bridge)
+  defp await_idle(controller, deadline \\ System.monotonic_time(:millisecond) + 3_000) do
+    state = :sys.get_state(controller)
 
     cond do
       idle?(state) ->
@@ -429,7 +138,7 @@ defmodule Emissary.External.BackendsTest do
 
       true ->
         Process.sleep(10)
-        await_idle(bridge, deadline)
+        await_idle(controller, deadline)
     end
   end
 
@@ -450,7 +159,7 @@ defmodule Emissary.External.BackendsTest do
   defp await_grant(pid, match) do
     eventually(
       fn ->
-        grant = :sys.get_state(pid).bridge
+        grant = :sys.get_state(pid).grant
         grant != nil and match.(grant) and grant
       end,
       "the server process to hold a matching grant"
@@ -528,16 +237,16 @@ defmodule Emissary.External.BackendsTest do
     peer
   end
 
-  test "at start the controller greets the bridge under generation 1 and keeps nothing", %{
+  test "at start the controller greets the service under generation 1 and keeps nothing", %{
     fake: fake
   } do
-    bridge = start_bridge(fake)
-    assert %{boot: "bb_first", generation: 1, pool_size: 32} = :sys.get_state(bridge)
+    controller = start_controller(fake)
+    assert %{boot: "bb_first", generation: 1, pool_size: 32} = :sys.get_state(controller)
   end
 
   test "a stdio server syncs with its env sealed for its version and lifetime, and signs every request",
        %{ctx: ctx, fake: fake} do
-    start_bridge(fake)
+    start_controller(fake)
     vault_entry(ctx)
     row = stdio_row(ctx, "gh")
     pid = connect(ctx, row)
@@ -576,15 +285,15 @@ defmodule Emissary.External.BackendsTest do
   describe "readiness" do
     test "a sync waiting for its backends holds no other owner's renewal back, and answers once its wait passes",
          %{ctx: ctx, fake: fake} do
-      start_bridge(fake, tick_ms: 100, ready_wait_ms: 1_200)
+      start_controller(fake, tick_ms: 100, ready_wait_ms: 1_200)
       kept = stdio_row(ctx, "kept", %{"NODE_ENV" => "production"})
       connect(ctx, kept)
       assert_receive {:control, "sync", %{"owner" => %{"server" => kept_id}}, _}, 2_000
       assert kept_id == kept.id
 
       slow = stdio_row(ctx, "slow", %{"NODE_ENV" => "production"})
-      FakeBridge.readiness(fake, slow.id, "starting", 0)
-      FakeBridge.tools(fake, slow.id, [])
+      Scripted.readiness(fake, slow.id, "starting", 0)
+      Scripted.tools(fake, slow.id, [])
       started = System.monotonic_time(:millisecond)
       waiting = Task.async(fn -> Servers.ensure_started(slow, ctx) end)
       assert_receive {:control, "sync", %{"owner" => %{"server" => slow_id}}, _}, 2_000
@@ -600,25 +309,25 @@ defmodule Emissary.External.BackendsTest do
       assert System.monotonic_time(:millisecond) - started >= 1_200
     end
 
-    test "a sync's caller is answered as soon as the bridge reports its owner running",
+    test "a sync's caller is answered as soon as the service reports its owner running",
          %{ctx: ctx, fake: fake} do
-      start_bridge(fake, ready_wait_ms: 10_000)
+      start_controller(fake, ready_wait_ms: 10_000)
       row = stdio_row(ctx, "soon", %{"NODE_ENV" => "production"})
-      FakeBridge.readiness(fake, row.id, "starting", 0)
+      Scripted.readiness(fake, row.id, "starting", 0)
       waiting = Task.async(fn -> Servers.ensure_started(row, ctx) end)
       assert_receive {:control, "sync", _sync, _fields}, 2_000
       assert_receive {:control, "renew", _renew, _fields}, 1_000
 
-      FakeBridge.readiness(fake, row.id, "running", 1)
+      Scripted.readiness(fake, row.id, "running", 1)
       assert {:ok, [%{"name" => "github__search"}]} = Task.await(waiting, 2_000)
     end
 
     test "a backend that becomes ready after the wait has its tools discovered without a refresh",
          %{ctx: ctx, fake: fake} do
-      start_bridge(fake, ready_wait_ms: 300)
+      start_controller(fake, ready_wait_ms: 300)
       row = stdio_row(ctx, "late", %{"NODE_ENV" => "production"})
-      FakeBridge.readiness(fake, row.id, "starting", 0)
-      FakeBridge.tools(fake, row.id, [])
+      Scripted.readiness(fake, row.id, "starting", 0)
+      Scripted.tools(fake, row.id, [])
 
       Cyfr.Bus.subscribe(
         Sanctum.Context.actor(ctx),
@@ -629,8 +338,8 @@ defmodule Emissary.External.BackendsTest do
       pid = server_pid(ctx, row)
       refute_received %Cyfr.Bus.McpServers{}
 
-      FakeBridge.tools(fake, row.id, ["github__search"])
-      FakeBridge.readiness(fake, row.id, "running", 2)
+      Scripted.tools(fake, row.id, ["github__search"])
+      Scripted.readiness(fake, row.id, "running", 2)
 
       assert_receive %Cyfr.Bus.McpServers{kind: :changed}, 3_000
       assert [%{"name" => "github__search"}] = :sys.get_state(pid).tools
@@ -643,7 +352,7 @@ defmodule Emissary.External.BackendsTest do
   describe "one claimed controller per backend" do
     test "the row admits one of two members proposing a backend, and the loser can tell which case it is",
          %{ctx: ctx, fake: fake} do
-      start_bridge(fake)
+      start_controller(fake)
       vault_entry(ctx)
       row = stdio_row(ctx, "contended")
       peer = claimed_by_peer(ctx, row)
@@ -678,11 +387,11 @@ defmodule Emissary.External.BackendsTest do
       assert given_up.fence > taken.fence
     end
 
-    test "a backend's claim is leased for the bridge lease and renewed on the tick, so a successor waits out lease plus tick",
+    test "a backend's claim is leased for the service lease and renewed on the tick, so a successor waits out lease plus tick",
          %{ctx: ctx, fake: fake} do
-      bridge = supervise_bridge(url: fake.url, root: @root)
+      controller = supervise_controller(url: fake.url, root: @root)
       assert_receive {:control, "hello", _hello, _fields}, 2_000
-      assert %{lease_ms: 30_000, tick_ms: 10_000} = :sys.get_state(bridge)
+      assert %{lease_ms: 30_000, tick_ms: 10_000} = :sys.get_state(controller)
 
       vault_entry(ctx)
       row = stdio_row(ctx, "leased-claim")
@@ -690,12 +399,12 @@ defmodule Emissary.External.BackendsTest do
       claim = claim_row(ctx, row)
 
       # Every write sets the two together, so the lease a successor waits
-      # out is the bridge lease, and the tick that renews it a third of it.
+      # out is the service lease, and the tick that renews it a third of it.
       assert DateTime.diff(claim.lease_until, claim.updated_at, :millisecond) == 30_000
 
       # A crash report prints the state, claim rows and all: they survive
       # the redaction whole, holding nothing that has to be redacted.
-      {:status, _pid, _module, items} = :sys.get_status(bridge)
+      {:status, _pid, _module, items} = :sys.get_status(controller)
       assert %Backends.State{claims: held} = status_state(items, Backends.State)
       assert [%{owner: owner}] = Map.values(held)
       assert owner == Prima.Boot.id()
@@ -703,7 +412,7 @@ defmodule Emissary.External.BackendsTest do
 
     test "a member that loses its claim stops the backend here and revokes nothing a peer now runs",
          %{ctx: ctx, fake: fake} do
-      bridge = start_bridge(fake, lease_ms: 300)
+      controller = start_controller(fake, lease_ms: 300)
       vault_entry(ctx)
       row = stdio_row(ctx, "handed-over")
       pid = connect(ctx, row)
@@ -716,11 +425,11 @@ defmodule Emissary.External.BackendsTest do
       eventually(fn -> not JobClaims.live?(held) end, "the backend claim to run out")
       peer = claimed_by_peer(ctx, row)
 
-      tick(bridge)
+      tick(controller)
 
       assert_receive {:DOWN, ^watched, :process, ^pid, _reason}, 2_000
       refute_received {:control, "release", _release, _fields}
-      state = await_idle(bridge)
+      state = await_idle(controller)
       assert state.owners == %{}
       assert state.claims == %{}
       assert state.releases == %{}
@@ -735,7 +444,7 @@ defmodule Emissary.External.BackendsTest do
 
     test "a claim that only lapsed is asked for again, and the backend runs on",
          %{ctx: ctx, fake: fake} do
-      bridge = start_bridge(fake, lease_ms: 300)
+      controller = start_controller(fake, lease_ms: 300)
       vault_entry(ctx)
       row = stdio_row(ctx, "lapsing")
       pid = connect(ctx, row)
@@ -743,7 +452,7 @@ defmodule Emissary.External.BackendsTest do
       held = claim_row(ctx, row)
 
       eventually(fn -> not JobClaims.live?(held) end, "the backend claim to run out")
-      tick(bridge)
+      tick(controller)
 
       assert %{owner: owner, fence: fence} = retaken = claim_row(ctx, row)
       assert owner == Prima.Boot.id()
@@ -756,7 +465,7 @@ defmodule Emissary.External.BackendsTest do
 
     test "an epoch bump gives the backend up here, and the new configuration takes it again",
          %{ctx: ctx, fake: fake} do
-      bridge = start_bridge(fake)
+      controller = start_controller(fake)
       vault_entry(ctx)
       row = stdio_row(ctx, "reconfigured")
       pid = connect(ctx, row)
@@ -766,7 +475,7 @@ defmodule Emissary.External.BackendsTest do
 
       watched = Process.monitor(pid)
       {:ok, _} = Arca.McpServerStorage.bump_epoch(Sanctum.Context.actor(ctx), row.id)
-      tick(bridge)
+      tick(controller)
 
       assert_receive {:DOWN, ^watched, :process, ^pid, _reason}, 2_000
       assert_released(row, 1)
@@ -789,7 +498,7 @@ defmodule Emissary.External.BackendsTest do
 
     test "a member that does not hold the control plane renews no claim and sends nothing",
          %{ctx: ctx, fake: fake} do
-      bridge = start_bridge(fake)
+      controller = start_controller(fake)
       vault_entry(ctx)
       row = stdio_row(ctx, "headless-claim")
       connect(ctx, row)
@@ -797,14 +506,14 @@ defmodule Emissary.External.BackendsTest do
       before = claim_row(ctx, row)
 
       Arca.ControlPlane.record(:lost)
-      tick(bridge)
+      tick(controller)
 
       refute_receive {:control, _type, _message, _fields}, 200
       assert claim_row(ctx, row).fence == before.fence
 
       # And the tick that finds the slot again renews both.
       Arca.ControlPlane.record(:unclaimed)
-      tick(bridge)
+      tick(controller)
       assert_receive {:control, "renew", _renew, _fields}, 2_000
       assert claim_row(ctx, row).fence > before.fence
     end
@@ -812,7 +521,7 @@ defmodule Emissary.External.BackendsTest do
     test "a controller whose generation cannot be read renews no claim and admits no sync",
          %{ctx: ctx, fake: fake} do
       reading = start_supervised!({Agent, fn -> :none end}, id: :claim_generation)
-      bridge = start_bridge(fake, generation: fn -> Agent.get(reading, & &1) end)
+      controller = start_controller(fake, generation: fn -> Agent.get(reading, & &1) end)
       vault_entry(ctx)
       row = stdio_row(ctx, "ungenerated")
       connect(ctx, row)
@@ -820,7 +529,7 @@ defmodule Emissary.External.BackendsTest do
       before = claim_row(ctx, row)
 
       Agent.update(reading, fn _ -> {:error, :unavailable} end)
-      tick(bridge)
+      tick(controller)
 
       refute_receive {:control, _type, _message, _fields}, 200
       assert claim_row(ctx, row).fence == before.fence
@@ -835,14 +544,14 @@ defmodule Emissary.External.BackendsTest do
 
       # And the tick that reads a generation again renews the claim.
       Agent.update(reading, fn _ -> :none end)
-      tick(bridge)
+      tick(controller)
       assert_receive {:control, "renew", _renew, %{generation: 1}}, 2_000
       assert claim_row(ctx, row).fence > before.fence
     end
 
     test "a generation of this member's own keeps the backend's claim, and sends nothing under the old one",
          %{ctx: ctx, fake: fake} do
-      bridge = start_bridge(fake)
+      controller = start_controller(fake)
       vault_entry(ctx)
       row = stdio_row(ctx, "regenerated")
       pid = connect(ctx, row)
@@ -850,7 +559,7 @@ defmodule Emissary.External.BackendsTest do
       before = claim_row(ctx, row)
 
       :persistent_term.put(@generation_key, 2)
-      tick(bridge)
+      tick(controller)
 
       assert_receive {:control, "hello", %{"g" => 2}, %{generation: 2}}, 2_000
       refute_received {:control, "renew", _renew, %{generation: 1}}
@@ -867,13 +576,13 @@ defmodule Emissary.External.BackendsTest do
 
   describe "every stop path releases the owner" do
     setup %{ctx: ctx, fake: fake} do
-      bridge = start_bridge(fake)
+      controller = start_controller(fake)
       vault_entry(ctx)
       row = stdio_row(ctx, "stoppable")
       pid = connect(ctx, row)
       assert_receive {:control, "sync", _sync, _fields}, 2_000
       admin = %{ctx | permissions: MapSet.new([:*])}
-      {:ok, bridge: bridge, row: row, pid: pid, admin: admin}
+      {:ok, controller: controller, row: row, pid: pid, admin: admin}
     end
 
     test "delete commits, then releases", %{ctx: ctx, row: row, admin: admin} do
@@ -918,20 +627,20 @@ defmodule Emissary.External.BackendsTest do
       assert_released(row, 1)
     end
 
-    test "a release the bridge did not acknowledge is dropped once the owner is synced again at its epoch",
-         %{ctx: ctx, fake: fake, bridge: bridge, row: row, pid: pid} do
-      FakeBridge.refuse_once(fake, "release", "conflict")
+    test "a release the service did not acknowledge is dropped once the owner is synced again at its epoch",
+         %{ctx: ctx, fake: fake, controller: controller, row: row, pid: pid} do
+      Scripted.refuse_once(fake, "release", "conflict")
       Process.exit(pid, :kill)
       assert_released(row, 1)
-      assert %{releases: pending} = :sys.get_state(bridge)
+      assert %{releases: pending} = :sys.get_state(controller)
       assert pending == %{{ctx.athanor_id, row.id} => 1}
 
       connect(ctx, row)
       assert_receive {:control, "sync", %{"e" => 1}, _fields}, 2_000
-      assert %{releases: releases} = await_idle(bridge)
+      assert %{releases: releases} = await_idle(controller)
       assert releases == %{}
 
-      tick(bridge)
+      tick(controller)
       refute_received {:control, "release", _release, _fields}
     end
 
@@ -963,19 +672,19 @@ defmodule Emissary.External.BackendsTest do
       assert_released(row, 1)
     end
 
-    test "renewal releases an owner whose row moved on, and raises the epoch of one the bridge forgot",
-         %{ctx: ctx, bridge: bridge, row: row, pid: pid, fake: fake} do
+    test "renewal releases an owner whose row moved on, and raises the epoch of one the service forgot",
+         %{ctx: ctx, controller: controller, row: row, pid: pid, fake: fake} do
       watched = Process.monitor(pid)
-      tick(bridge)
+      tick(controller)
 
       assert_receive {:control, "renew", %{"owners" => [%{"e" => 1}], "lease_ms" => 30_000}, _},
                      2_000
 
       refute_received {:control, "release", _release, _fields}
 
-      # The bridge no longer runs it: the epoch is raised and the process stopped.
-      FakeBridge.set(fake, :owners, %{})
-      tick(bridge)
+      # The service no longer runs it: the epoch is raised and the process stopped.
+      Scripted.set(fake, :owners, %{})
+      tick(controller)
       assert_receive {:control, "renew", _renew, _fields}, 2_000
       assert_receive {:DOWN, ^watched, :process, ^pid, _reason}, 2_000
       assert_released(row, 1)
@@ -990,7 +699,7 @@ defmodule Emissary.External.BackendsTest do
       assert server == other.id
       other_watched = Process.monitor(other_pid)
       {:ok, _} = Arca.McpServerStorage.bump_epoch(Sanctum.Context.actor(ctx), other.id)
-      tick(bridge)
+      tick(controller)
       assert_receive {:DOWN, ^other_watched, :process, ^other_pid, _reason}, 2_000
       assert_released(other, 1)
     end
@@ -998,16 +707,16 @@ defmodule Emissary.External.BackendsTest do
 
   test "the configured lease and idle period are what a sync asks for, renewed every third of the lease",
        %{ctx: ctx, fake: fake} do
-    Application.put_env(:cyfr, :mcp_bridge_lease_ms, 6_000)
-    Application.put_env(:cyfr, :mcp_bridge_idle_ms, 120_000)
+    Application.put_env(:cyfr, :locus_backends_lease_ms, 6_000)
+    Application.put_env(:cyfr, :locus_backends_idle_ms, 120_000)
 
     on_exit(fn ->
-      Application.delete_env(:cyfr, :mcp_bridge_lease_ms)
-      Application.delete_env(:cyfr, :mcp_bridge_idle_ms)
+      Application.delete_env(:cyfr, :locus_backends_lease_ms)
+      Application.delete_env(:cyfr, :locus_backends_idle_ms)
     end)
 
-    bridge = supervise_bridge(url: fake.url, root: @root)
-    assert %{lease_ms: 6_000, idle_ms: 120_000, tick_ms: 2_000} = :sys.get_state(bridge)
+    controller = supervise_controller(url: fake.url, root: @root)
+    assert %{lease_ms: 6_000, idle_ms: 120_000, tick_ms: 2_000} = :sys.get_state(controller)
     assert_receive {:control, "hello", _hello, _fields}, 2_000
 
     vault_entry(ctx)
@@ -1016,20 +725,20 @@ defmodule Emissary.External.BackendsTest do
     assert_receive {:control, "sync", %{"lease_ms" => 6_000, "idle_ms" => 120_000}, _fields},
                    2_000
 
-    tick(bridge)
+    tick(controller)
     assert_receive {:control, "renew", %{"lease_ms" => 6_000}, _fields}, 2_000
   end
 
-  test "a restarted bridge is greeted, reconciled and every live owner synced under its new boot",
+  test "a restarted service is greeted, reconciled and every live owner synced under its new boot",
        %{ctx: ctx, fake: fake} do
-    bridge = start_bridge(fake)
+    controller = start_controller(fake)
     vault_entry(ctx)
     row = stdio_row(ctx, "survivor")
     pid = connect(ctx, row)
     assert_receive {:control, "sync", _sync, %{boot: "bb_first"}}, 2_000
 
-    FakeBridge.restart(fake, "bb_second")
-    tick(bridge)
+    Scripted.restart(fake, "bb_second")
+    tick(controller)
 
     assert_receive {:control, "hello", _hello, %{boot: "-"}}, 2_000
     assert_receive {:control, "reconcile", _reconcile, %{boot: "bb_second"}}, 2_000
@@ -1042,14 +751,14 @@ defmodule Emissary.External.BackendsTest do
 
   test "a new generation is greeted, and every live owner synced and granted under it",
        %{ctx: ctx, fake: fake} do
-    bridge = start_bridge(fake)
+    controller = start_controller(fake)
     vault_entry(ctx)
     row = stdio_row(ctx, "regen")
     pid = connect(ctx, row)
     assert_receive {:control, "sync", _sync, %{generation: 1}}, 2_000
 
     :persistent_term.put(@generation_key, 2)
-    tick(bridge)
+    tick(controller)
 
     assert_receive {:control, "hello", %{"g" => 2}, %{generation: 2}}, 2_000
     assert_receive {:control, "reconcile", %{"keep" => []}, %{generation: 2}}, 2_000
@@ -1061,37 +770,37 @@ defmodule Emissary.External.BackendsTest do
 
   test "nothing is sent, and no owner synced, while this boot does not own the control plane",
        %{ctx: ctx, fake: fake} do
-    bridge = start_bridge(fake)
+    controller = start_controller(fake)
     row = stdio_row(ctx, "headless", %{"NODE_ENV" => "production"})
     Arca.ControlPlane.record(:lost)
 
     assert {:error, :control_plane_lost} =
              Backends.sync(%{athanor_id: ctx.athanor_id, server_id: row.id, epoch: 1})
 
-    tick(bridge)
+    tick(controller)
     refute_receive {:control, _type, _message, _fields}, 200
   end
 
   test "while the generation cannot be read nothing is sent and no owner synced, and the next tick that reads it goes on",
        %{ctx: ctx, fake: fake} do
     reading = start_supervised!({Agent, fn -> :none end}, id: :generation_reading)
-    bridge = start_bridge(fake, generation: fn -> Agent.get(reading, & &1) end)
+    controller = start_controller(fake, generation: fn -> Agent.get(reading, & &1) end)
     row = stdio_row(ctx, "unreadable", %{"NODE_ENV" => "production"})
     connect(ctx, row)
     assert_receive {:control, "sync", _sync, %{generation: 1}}, 2_000
 
     Agent.update(reading, fn _ -> {:error, :unavailable} end)
-    tick(bridge)
+    tick(controller)
     refute_receive {:control, _type, _message, _fields}, 200
 
     assert {:error, :control_plane_lost} =
              Backends.sync(%{athanor_id: ctx.athanor_id, server_id: row.id, epoch: 1})
 
-    assert Process.alive?(bridge)
-    assert %{generation: 1, boot: "bb_first"} = :sys.get_state(bridge)
+    assert Process.alive?(controller)
+    assert %{generation: 1, boot: "bb_first"} = :sys.get_state(controller)
 
     Agent.update(reading, fn _ -> :none end)
-    tick(bridge)
+    tick(controller)
 
     assert_receive {:control, "renew", %{"owners" => [%{"server" => server}]}, %{generation: 1}},
                    2_000
@@ -1101,12 +810,12 @@ defmodule Emissary.External.BackendsTest do
   end
 
   test "a call refused as epoch_ahead syncs again and is sent once more", %{ctx: ctx, fake: fake} do
-    start_bridge(fake)
+    start_controller(fake)
     row = stdio_row(ctx, "ahead", %{"NODE_ENV" => "production"})
     pid = connect(ctx, row)
     assert_receive {:control, "sync", _sync, _fields}, 2_000
 
-    FakeBridge.refuse_once(fake, "tools/call", "epoch_ahead")
+    Scripted.refuse_once(fake, "tools/call", "epoch_ahead")
 
     assert {:ok, %{"content" => _}} =
              Emissary.External.Server.call_tool(pid, "github__search", %{})
@@ -1118,13 +827,13 @@ defmodule Emissary.External.BackendsTest do
 
   test "a call refused as stale_epoch after the row moved leaves the server in error",
        %{ctx: ctx, fake: fake} do
-    start_bridge(fake)
+    start_controller(fake)
     row = stdio_row(ctx, "moved", %{"NODE_ENV" => "production"})
     pid = connect(ctx, row)
     assert_receive {:control, "sync", _sync, _fields}, 2_000
 
     {:ok, _} = Arca.McpServerStorage.bump_epoch(Sanctum.Context.actor(ctx), row.id)
-    FakeBridge.refuse_once(fake, "tools/call", "stale_epoch")
+    Scripted.refuse_once(fake, "tools/call", "stale_epoch")
 
     assert {:error, message} = Emissary.External.Server.call_tool(pid, "github__search", %{})
     assert message =~ "changed"
@@ -1132,9 +841,9 @@ defmodule Emissary.External.BackendsTest do
     refute_receive {:control, "sync", _sync, _fields}, 200
   end
 
-  test "one athanor holds at most a quarter of the bridge's pool", %{ctx: ctx, fake: fake} do
-    FakeBridge.set(fake, :pool, 4)
-    start_bridge(fake)
+  test "one athanor holds at most a quarter of the service's pool", %{ctx: ctx, fake: fake} do
+    Scripted.set(fake, :pool, 4)
+    start_controller(fake)
     first = stdio_row(ctx, "first", %{"NODE_ENV" => "production"})
     second = stdio_row(ctx, "second", %{"NODE_ENV" => "production"})
     connect(ctx, first)
@@ -1148,8 +857,8 @@ defmodule Emissary.External.BackendsTest do
 
   test "the rows one person created hold at most a quarter of the pool across every athanor",
        %{ctx: ctx, fake: fake} do
-    FakeBridge.set(fake, :pool, 8)
-    start_bridge(fake)
+    Scripted.set(fake, :pool, 8)
+    start_controller(fake)
     literal = %{"NODE_ENV" => "production"}
 
     for athanor <- ["ath_test", "ath_a"] do
@@ -1174,8 +883,8 @@ defmodule Emissary.External.BackendsTest do
 
   test "rows the server's synthetic principal created hold one person's share across every athanor",
        %{ctx: ctx, fake: fake} do
-    FakeBridge.set(fake, :pool, 8)
-    start_bridge(fake)
+    Scripted.set(fake, :pool, 8)
+    start_controller(fake)
     literal = %{"NODE_ENV" => "production"}
     system = &Sanctum.Context.internal(athanor_id: &1, scope: :athanor)
 
@@ -1206,7 +915,7 @@ defmodule Emissary.External.BackendsTest do
     ctx: ctx,
     fake: fake
   } do
-    start_bridge(fake)
+    start_controller(fake)
     row = stdio_row(ctx, "unresolved", %{"GITHUB_TOKEN" => "vault:absent"})
 
     assert {:error, {:env_unresolved, "github", "GITHUB_TOKEN"}} =
@@ -1215,8 +924,8 @@ defmodule Emissary.External.BackendsTest do
     refute_receive {:control, "sync", _sync, _fields}, 200
   end
 
-  test "get reports what the bridge runs for a stdio server", %{ctx: ctx, fake: fake} do
-    start_bridge(fake)
+  test "get reports what the service runs for a stdio server", %{ctx: ctx, fake: fake} do
+    start_controller(fake)
     row = stdio_row(ctx, "described", %{"NODE_ENV" => "production"})
     connect(ctx, row)
     admin = %{ctx | permissions: MapSet.new([:*])}
@@ -1233,9 +942,9 @@ defmodule Emissary.External.BackendsTest do
   end
 
   describe "status" do
-    test "is nil for an owner the bridge runs nothing for, its entry for one it runs, and names no more owners than the bridge's bound",
+    test "is nil for an owner the service runs nothing for, its entry for one it runs, and names no more owners than the service's bound",
          %{ctx: ctx, fake: fake} do
-      start_bridge(fake)
+      start_controller(fake)
       assert {:ok, nil} = Backends.status(ctx.athanor_id, "mcp_nothing")
       assert_receive {:control, "status", %{"owners" => [%{"server" => "mcp_nothing"}]}, _}, 2_000
 
@@ -1249,72 +958,87 @@ defmodule Emissary.External.BackendsTest do
       assert length(owners) <= Backends.status_bounds().owners
     end
 
-    test "each refusal of the bridge is its typed result, and a bridge that cannot be reached is unavailable",
+    test "each refusal of the service is its typed result, and a service that cannot be reached is unavailable",
          %{ctx: ctx, fake: fake} do
-      start_bridge(fake)
+      start_controller(fake)
       row = stdio_row(ctx, "bounded", %{"NODE_ENV" => "production"})
       connect(ctx, row)
 
-      FakeBridge.refuse_once(fake, "status", "too_many_owners", 400)
+      Scripted.refuse_once(fake, "status", "too_many_owners", 400)
       assert {:error, :too_many_owners} = Backends.status(ctx.athanor_id, row.id)
 
-      FakeBridge.refuse_once(fake, "status", "status_too_large")
+      Scripted.refuse_once(fake, "status", "status_too_large")
       assert {:error, :status_too_large} = Backends.status(ctx.athanor_id, row.id)
 
       Bypass.down(fake.bypass)
-      assert {:error, :bridge_unavailable} = Backends.status(ctx.athanor_id, row.id)
+      assert {:error, :backends_unavailable} = Backends.status(ctx.athanor_id, row.id)
 
       Bypass.up(fake.bypass)
       assert {:ok, %{"e" => 1}} = Backends.status(ctx.athanor_id, row.id)
     end
 
-    test "an answer the bridge did not bound is stopped at the control limit and is status_too_large as well: neither read whole, emptied nor unavailable",
+    test "an answer the service did not bound is stopped at the answer bound and is status_too_large as well: neither read whole, emptied nor unavailable",
          %{ctx: ctx, fake: fake} do
-      start_bridge(fake)
+      start_controller(fake)
       row = stdio_row(ctx, "verbose", %{"NODE_ENV" => "production"})
       connect(ctx, row)
-      FakeBridge.set(fake, :stderr_bytes, Backends.status_bounds().bytes + 1)
+      Scripted.set(fake, :stderr_bytes, Backends.status_bounds().bytes + 1)
       assert {:error, :status_too_large} = Backends.status(ctx.athanor_id, row.id)
 
-      FakeBridge.set(fake, :stderr_bytes, 0)
+      Scripted.set(fake, :stderr_bytes, 0)
       assert {:ok, %{"e" => 1}} = Backends.status(ctx.athanor_id, row.id)
     end
 
-    test "the bounds the controller keeps are the bridge's literals" do
-      source = File.read!(Path.join(@project_root, "apps/mcp-bridge/server.mjs"))
-      %{owners: owners, bytes: bytes} = Backends.status_bounds()
+    test "a refused signature, and a refusal or an answer at another protocol version, are their own typed results",
+         %{ctx: ctx, fake: fake} do
+      start_controller(fake)
+      row = stdio_row(ctx, "versioned", %{"NODE_ENV" => "production"})
+      connect(ctx, row)
 
-      assert [declared] =
-               Regex.run(~r/export const MAX_STATUS_OWNERS = (\d+);/, source,
-                 capture: :all_but_first
-               )
+      Scripted.refuse_once(fake, "status", "unauthorized")
+      assert {:error, :backends_refused_signature} = Backends.status(ctx.athanor_id, row.id)
 
-      assert String.to_integer(declared) == owners
+      Scripted.refuse_once(fake, "status", "version")
+      assert {:error, :protocol_mismatch} = Backends.status(ctx.athanor_id, row.id)
 
-      assert [factor, times] =
-               Regex.run(~r/export const CONTROL_BODY_LIMIT = (\d+) \* (\d+);/, source,
-                 capture: :all_but_first
-               )
+      Scripted.set(fake, :answer_version, LocusBackends.version() + 1)
+      assert {:error, :protocol_mismatch} = Backends.status(ctx.athanor_id, row.id)
 
-      assert String.to_integer(factor) * String.to_integer(times) == bytes
-      assert source =~ "export const STATUS_ANSWER_LIMIT = CONTROL_BODY_LIMIT;"
+      # A code that is not the one its status carries reads as nothing.
+      Scripted.set(fake, :answer_version, LocusBackends.version())
+      Scripted.refuse_once(fake, "status", "too_many_owners", 409)
+      assert {:error, {:backends_status, 409}} = Backends.status(ctx.athanor_id, row.id)
+
+      assert {:ok, %{"e" => 1}} = Backends.status(ctx.athanor_id, row.id)
+    end
+
+    test "the bounds the controller keeps are the wire's, as its vector file states them" do
+      vectors =
+        Path.join(@project_root, "tests/fixtures/locus_backends.json")
+        |> File.read!()
+        |> Jason.decode!()
+
+      assert Backends.status_bounds() == %{
+               owners: vectors["bounds"]["max_status_owners"],
+               bytes: vectors["bounds"]["max_status_answer_bytes"]
+             }
     end
   end
 
   describe "no key reaches a status or a crash report" do
     test "the controller's, with a sync in flight", %{ctx: ctx, fake: fake} do
-      bridge = start_bridge(fake)
+      controller = start_controller(fake)
       vault_entry(ctx)
       row = stdio_row(ctx, "held")
-      FakeBridge.hold(fake, "sync")
+      Scripted.hold(fake, "sync")
       Task.start(fn -> Servers.ensure_started(row, ctx) end)
       assert_receive {:held, "sync", held}, 2_000
 
-      keys = [@root, BridgeAuth.control_key(@root), BridgeAuth.seal_key(@root)]
-      assert %{inflight: {_ref, {:sync, _key}, spec}} = :sys.get_state(bridge)
+      keys = [@root, LocusBackends.control_key(@root), LocusBackends.seal_key(@root)]
+      assert %{inflight: {_ref, {:sync, _key}, spec}} = :sys.get_state(controller)
       for key <- keys, do: refute(inspect(spec, limit: :infinity) =~ rendered(key))
 
-      {:status, _pid, _module, items} = :sys.get_status(bridge)
+      {:status, _pid, _module, items} = :sys.get_status(controller)
 
       assert %Backends.State{
                root: "[REDACTED]",
@@ -1329,7 +1053,7 @@ defmodule Emissary.External.BackendsTest do
       # The report of a crash prints the state its reason carries, spec and all.
       log =
         capture_log(fn ->
-          catch_exit(GenServer.call(bridge, :no_such_call))
+          catch_exit(GenServer.call(controller, :no_such_call))
           Process.sleep(200)
         end)
 
@@ -1342,14 +1066,14 @@ defmodule Emissary.External.BackendsTest do
     end
 
     test "a server process's, with its grant and resolved headers", %{ctx: ctx, fake: fake} do
-      start_bridge(fake)
+      start_controller(fake)
       vault_entry(ctx)
       pid = connect(ctx, stdio_row(ctx, "granted"))
-      owner_key = :sys.get_state(pid).bridge.owner_key
+      owner_key = :sys.get_state(pid).grant.owner_key
 
       {:status, _pid, _module, items} = :sys.get_status(pid)
 
-      assert %Emissary.External.Server.State{bridge: %{owner_key: "[REDACTED]"}} =
+      assert %Emissary.External.Server.State{grant: %{owner_key: "[REDACTED]"}} =
                status_state(items, Emissary.External.Server.State)
 
       refute inspect(items, limit: :infinity, printable_limit: :infinity) =~ rendered(owner_key)
@@ -1366,7 +1090,12 @@ defmodule Emissary.External.BackendsTest do
     end
 
     test "a message carrying a grant, and a reason carrying a state, are redacted" do
-      grant = %{url: "http://bridge/mcp", owner_key: :crypto.strong_rand_bytes(32), epoch: 1}
+      grant = %{
+        url: "http://locus-backends:4101/locus/v1/backends/mcp",
+        owner_key: :crypto.strong_rand_bytes(32),
+        epoch: 1
+      }
+
       spec = %{control_key: :crypto.strong_rand_bytes(32), seal_key: <<1>>, sealed: "x", seq: 7}
 
       headers = %{"authorization" => "Bearer #{@secret}"}
@@ -1375,7 +1104,12 @@ defmodule Emissary.External.BackendsTest do
         {:function_clause, [{Backends, :handle_call, [:bogus, spec, [headers: headers]], []}]}
 
       assert %{
-               message: {:bridge_owner, %{owner_key: "[REDACTED]", url: "http://bridge/mcp"}},
+               message:
+                 {:backends_owner,
+                  %{
+                    owner_key: "[REDACTED]",
+                    url: "http://locus-backends:4101/locus/v1/backends/mcp"
+                  }},
                reason:
                  {:function_clause,
                   [
@@ -1394,7 +1128,7 @@ defmodule Emissary.External.BackendsTest do
                log: [[:io | "data"]]
              } =
                Emissary.External.StatusRedaction.format_status(%{
-                 message: {:bridge_owner, grant},
+                 message: {:backends_owner, grant},
                  reason: reason,
                  log: [[:io | "data"]]
                })

@@ -127,14 +127,14 @@ const (
 var Signals = []string{"SIGTERM", "SIGKILL", "SIGINT", "SIGHUP", "SIGQUIT", "SIGUSR1", "SIGUSR2"}
 
 // ReservedEnv are names the spawner sets itself or that belong to CYFR and
-// the bridge; a spawn request may not carry them.
+// Locus; a spawn request may not carry them.
 var ReservedEnv = []string{"PATH", "HOME", "USER", "LOGNAME", "SHELL", "TMPDIR", "PWD"}
 
 // ReservedEnvPrefixes are name prefixes a spawn request may not carry:
-// CYFR's, the bridge's and the keeper's own, which ChannelEnv carries. The
-// list is the shared vectors' reserved_env_prefixes, which CYFR and the
-// bridge hold too.
-var ReservedEnvPrefixes = []string{"CYFR_", "MCP_BRIDGE_", "KEEPER_"}
+// CYFR's, Locus's and the keeper's own, which ChannelEnv carries. The list
+// is the shared vectors' reserved_env_prefixes, which CYFR and Locus hold
+// too.
+var ReservedEnvPrefixes = []string{"CYFR_", "LOCUS_", "KEEPER_"}
 
 var (
 	idPattern      = regexp.MustCompile(`^[A-Za-z0-9._:-]{1,64}$`)
