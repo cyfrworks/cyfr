@@ -8,6 +8,7 @@ defmodule Prism do
 
   - `Prism.TinctureRegistry` — the member-facing tincture cache, populated
     lazily per athanor.
+  - `Prism.Frames` — the shell's tincture frames and their credentials.
   - `Prism.Labels` / `Prism.Tray` — mode vocabulary and the notification
     tray's badge state.
 
@@ -17,6 +18,7 @@ defmodule Prism do
   use Boundary,
     deps: [Grimoire, Sanctum, Arca, Cyfr, Compendium, Aqua, Crucible, CyfrWeb],
     exports: [
+      Frames,
       Labels,
       TinctureRegistry,
       Tray

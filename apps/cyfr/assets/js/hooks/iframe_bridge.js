@@ -2,6 +2,7 @@
 // Copyright 2026 CYFR Works Inc.
 
 import {CREDENTIAL, HANDSHAKE, VERSION, decodeShellMessage} from "../sdk/wire.js"
+import {FRAME_STATE_EVENT, acting, nextStanding} from "../canvas/signals.js"
 
 /**
  * IframeBridge hook — the shell's end of a tincture frame's MessagePort.
@@ -19,6 +20,13 @@ import {CREDENTIAL, HANDSHAKE, VERSION, decodeShellMessage} from "../sdk/wire.js
  * A later load (a reload, or the frame navigating itself) gets no second
  * handshake: the port is closed and the frame is spent until the person
  * opens the tincture again.
+ *
+ * A frame acts only while it is live and the view's socket is up. The
+ * shell renders the frame's state in `data-frame-state` and signals each
+ * change through the canvas (`cyfr:frame-state`, `assets/js/canvas/`); a
+ * frozen frame, or any frame while the socket is down, is made inert and
+ * every verb it posts is dropped and counted. Its port stays open, so the
+ * frame acts again once it is live and the socket is back.
  */
 const IframeBridge = {
   mounted() {
@@ -27,8 +35,19 @@ const IframeBridge = {
     this._port = null
     this.dropped = 0
 
+    this._standing = {state: "live", connected: true}
+    this._apply(this.el.dataset.frameState === "frozen" ? "frozen" : "live")
+
     this._onLoad = () => this._handshake()
     this.el.addEventListener("load", this._onLoad)
+
+    this._onState = (event) => this._apply(event.detail && event.detail.state)
+    this.el.addEventListener(FRAME_STATE_EVENT, this._onState)
+  },
+
+  _apply(signal) {
+    this._standing = nextStanding(this._standing, signal)
+    this.el.inert = !acting(this._standing)
   },
 
   _handshake() {
@@ -64,7 +83,7 @@ const IframeBridge = {
   _receive(data) {
     const decoded = decodeShellMessage(data)
 
-    if (!decoded.ok || decoded.message.frame !== this._frameId) {
+    if (!decoded.ok || decoded.message.frame !== this._frameId || !acting(this._standing)) {
       this.dropped += 1
       this.el.dataset.dropped = String(this.dropped)
       return
@@ -83,6 +102,7 @@ const IframeBridge = {
 
   destroyed() {
     this.el.removeEventListener("load", this._onLoad)
+    this.el.removeEventListener(FRAME_STATE_EVENT, this._onState)
     this._closePort()
   }
 }
