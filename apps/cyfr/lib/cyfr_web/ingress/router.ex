@@ -85,7 +85,8 @@ defmodule CyfrWeb.Ingress.Router do
           window_ms: 60_000
       end
 
-      # Tincture serving — auth via signed `?_t=` token or Authorization bearer.
+      # Tincture serving — a public tincture at its address, a private
+      # tincture version's files under the asset credential in their path.
       # No session cookie auth: a tincture page is embeddable cross-origin (see
       # the invoke pipeline below), and an ambient cookie credential on a
       # cross-origin surface is exactly the CSRF/rebinding food the design
@@ -246,6 +247,18 @@ defmodule CyfrWeb.Ingress.Router do
 
         get "/:athanor/:publisher/:tincture_name/*path", TinctureController, :asset,
           metadata: %{auth: :tincture_handler_auth}
+      end
+
+      # A private tincture version's files, under the asset credential in
+      # their path (`Prima.TinctureUrl`). The scrub plug redacts it from the
+      # request path, and the route logs no dispatch, whose parameters would
+      # carry it.
+      scope "/", CyfrWeb.Ingress do
+        pipe_through :tincture_asset
+
+        get "/_s/*path", TinctureController, :served,
+          metadata: %{auth: :tincture_handler_auth},
+          log: false
       end
 
       # Health check endpoint

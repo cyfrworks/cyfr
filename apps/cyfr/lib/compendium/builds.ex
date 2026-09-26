@@ -10,6 +10,14 @@ defmodule Compendium.Builds do
   `Cargo.lock` the build used, or a tincture's `dist/` — before the
   component is registered.
 
+  A tincture with a package manifest builds only from its lockfile: one
+  whose `package.json` ships without it is refused here before any request
+  (`Compendium.TinctureValidator.check_lockfile/1`), and the builder
+  installs exactly what it pins, under its isolation, with no credential
+  in the build's environment. The bundle the build answers keeps the
+  notices of the packages it ships (`dist/third-party-notices.json`), and
+  replaces the unit's `dist/` whole.
+
   This server runs no toolchain. It builds exactly when a builds service
   is configured (`Cyfr.RuntimeConfig.builds_enabled?/0`); otherwise every
   build is refused before a row is written or a request made. It keeps no
@@ -408,8 +416,13 @@ defmodule Compendium.Builds do
     package = base ++ ["package.json"]
 
     case Arca.get(Sanctum.Context.actor(ctx), package) do
+      # Refused here as well as by the builder, so a unit without its
+      # lockfile never reaches the builds service.
       {:ok, _} ->
-        {:ok, collect(ctx, base, &tincture_source?/1)}
+        sources = collect(ctx, base, &tincture_source?/1)
+
+        with :ok <- Compendium.TinctureValidator.check_lockfile(Map.keys(sources)),
+             do: {:ok, sources}
 
       {:error, _} ->
         {:error,

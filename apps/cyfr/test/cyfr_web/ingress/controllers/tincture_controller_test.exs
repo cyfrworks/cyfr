@@ -4,7 +4,14 @@
 defmodule CyfrWeb.Ingress.TinctureControllerTest do
   use CyfrWeb.ConnCase, async: false
 
+  import Prima.Test.Wait
   require Ecto.Query
+
+  # A version's artifact digest, and its release digest (its bytes bound to
+  # its manifest, `Compendium.ReleaseDigest`) as the registry records them:
+  # the release digest is what an asset credential names.
+  defp digest(name), do: "sha256:" <> Base.encode16(:crypto.hash(:sha256, name), case: :lower)
+  defp release_digest(name), do: digest("release:" <> name)
 
   defp tincture_dir(name) do
     Arca.Adapters.Local.build_path(
@@ -134,7 +141,8 @@ defmodule CyfrWeb.Ingress.TinctureControllerTest do
           component_type: "tincture",
           description: name,
           tags: "[]",
-          digest: "sha256:test_#{name}",
+          digest: digest(name),
+          release_digest: release_digest(name),
           size: 100,
           exports: "[]",
           manifest: Jason.encode!(manifest),
@@ -186,142 +194,58 @@ defmodule CyfrWeb.Ingress.TinctureControllerTest do
     %{private_dir: private_dir, public_dir: public_dir}
   end
 
-  # ── Private tincture (requires auth) ─────────────────────────────
+  # ── A private tincture at its address: served to nobody ─────────
 
-  describe "private tincture — unauthenticated" do
-    test "returns 404 (indistinguishable from missing)", %{conn: conn} do
-      conn = get(conn, "/t/test/local/auth-dash")
-      assert conn.status == 404
-    end
-  end
-
-  # Was "authenticated via MCP session header". That header carried the same
-  # Sanctum session token the bearer branch already resolves, so it was a second
-  # spelling of one credential, and it went out with the protocol session it was
-  # named for.
-  #
-  # These tests are about what a private tincture *renders* — CSP headers, the
-  # injected base tag — not about which credential got in, so they use the
-  # simplest working one. That the bearer session token authenticates at all is
-  # asserted directly in `Sanctum.TinctureAuthTest`, which is where the auth
-  # chain lives.
-  describe "private tincture — rendering under an authenticated caller" do
+  # A private tincture's files are served only under an asset credential
+  # in their path; its address answers as a missing tincture does, whatever
+  # credential the request carries.
+  describe "private tincture at its address" do
     setup do
       ctx = Sanctum.TestContext.issuer!(Sanctum.TestContext.local())
 
       {:ok, %{api_key: key}} =
         Sanctum.ApiKey.create(ctx, %{
-          name: "tincture-render-key-#{:rand.uniform(1_000_000)}",
+          name: "tincture-address-key-#{:rand.uniform(1_000_000)}",
           type: :service,
           scope: ["execute", "component_read", "storage_read"]
         })
 
-      %{session_token: key}
+      {:ok, session} = Sanctum.TestContext.create_session(ctx)
+      %{api_key: key, session: session}
     end
 
-    test "serves index.html with CSP headers", %{conn: conn, session_token: token} do
-      conn = put_req_header(conn, "authorization", "Bearer #{token}")
-
-      conn =
-        CyfrWeb.Ingress.TinctureController.index(conn, %{
-          "athanor" => "test",
-          "publisher" => "local",
-          "tincture_name" => "auth-dash"
-        })
-
-      assert conn.status == 200
-      assert conn.resp_body =~ "Auth"
-
-      [csp] = get_resp_header(conn, "content-security-policy")
-      assert csp =~ "connect-src 'self'"
-      # one origin: a tincture may be framed by Prism and by nothing else
-      assert csp =~ "frame-ancestors 'self'"
-      refute csp =~ "frame-ancestors *"
+    test "is not found without a credential", %{conn: conn} do
+      assert get(conn, "/t/test/local/auth-dash").status == 404
+      assert get(build_conn(), "/t/test/local/auth-dash/app.js").status == 404
+      assert get(build_conn(), "/t/test/local/auth-dash/data.db").status == 404
     end
 
-    test "injects base tag with signed token for private tincture", %{
-      conn: conn,
-      session_token: token
-    } do
-      conn = put_req_header(conn, "authorization", "Bearer #{token}")
-
-      conn =
-        CyfrWeb.Ingress.TinctureController.index(conn, %{
-          "athanor" => "test",
-          "publisher" => "local",
-          "tincture_name" => "auth-dash"
-        })
-
-      assert conn.resp_body =~
-               ~r/<base href="\/t\/test\/local\/auth-dash\/_s\/[^"]+\/">/
+    test "is not found under an Authorization bearer", %{api_key: key, session: session} do
+      for bearer <- [key, session.token],
+          path <- ["/t/test/local/auth-dash", "/t/test/local/auth-dash/app.js"] do
+        conn = build_conn() |> put_req_header("authorization", "Bearer #{bearer}") |> get(path)
+        assert json_response(conn, 404)["code"] == "not_found", path
+        refute conn.resp_body =~ "Auth"
+      end
     end
 
-    test "returns 404 for nonexistent tincture", %{conn: conn, session_token: token} do
-      # Was `?_session=` in the query string. Account credentials stopped being
-      # accepted from tincture URLs; this only kept passing because a missing
-      # tincture 404s whether or not the caller authenticated.
-      conn = put_req_header(conn, "authorization", "Bearer #{token}")
+    test "is not found under a ?_t= token", %{session: session} do
+      minted =
+        build_conn()
+        |> put_req_header("authorization", "Bearer #{session.token}")
+        |> get("/t/access-token?publisher=local&tincture_name=auth-dash")
+        |> json_response(200)
 
-      conn =
-        CyfrWeb.Ingress.TinctureController.index(conn, %{
-          "athanor" => "test",
-          "publisher" => "local",
-          "tincture_name" => "no-such-tincture"
-        })
-
-      assert conn.status == 404
-    end
-  end
-
-  describe "private tincture — API key auth" do
-    setup do
-      ctx = Sanctum.TestContext.issuer!(Sanctum.TestContext.local())
-
-      key_name = "tincture-test-key-#{:rand.uniform(1_000_000)}"
-
-      {:ok, %{api_key: key}} =
-        Sanctum.ApiKey.create(ctx, %{
-          name: key_name,
-          type: :service,
-          scope: ["execute", "component_read", "storage_read"]
-        })
-
-      on_exit(fn ->
-        try do
-          Sanctum.ApiKey.revoke(ctx, key_name)
-        rescue
-          _ -> :ok
-        catch
-          :exit, _ -> :ok
-        end
-      end)
-
-      %{api_key: key}
+      for path <- ["/t/test/local/auth-dash", "/t/test/local/auth-dash/app.js"] do
+        assert get(build_conn(), path <> "?_t=#{minted["token"]}").status == 404
+      end
     end
 
-    test "serves private tincture with valid API key", %{conn: conn, api_key: key} do
-      conn =
-        conn
-        |> put_req_header("authorization", "Bearer #{key}")
-        |> get("/t/test/local/auth-dash")
+    test "the old in-address asset prefix opens nothing", %{session: session} do
+      {:ok, ctx} = Sanctum.Caller.establish(session.token)
+      {:ok, token} = Sanctum.TinctureAuth.issue_asset_token(ctx, "local", "auth-dash")
 
-      assert conn.status == 200
-      assert conn.resp_body =~ "Auth"
-    end
-
-    test "an API key in the query string does not authenticate", %{conn: conn, api_key: key} do
-      # Account credentials must be rejected in query parameters, even when valid.
-      conn = get(conn, "/t/test/local/auth-dash?_key=#{key}")
-      assert conn.status == 404
-    end
-
-    test "returns 404 with invalid API key", %{conn: conn} do
-      conn =
-        conn
-        |> put_req_header("authorization", "Bearer cyfr_sk_invalidgarbage")
-        |> get("/t/test/local/auth-dash")
-
-      assert conn.status == 404
+      assert get(build_conn(), "/t/test/local/auth-dash/_s/#{token}/app.js").status == 404
     end
   end
 
@@ -334,10 +258,28 @@ defmodule CyfrWeb.Ingress.TinctureControllerTest do
       assert conn.resp_body =~ "Public"
     end
 
-    test "sets CSP header with connect-src including declared domains", %{conn: conn} do
+    test "its policy is the frame's rules' derivation, sandboxed like a private one's",
+         %{conn: conn} do
       conn = get(conn, "/t/test/local/pub-dash")
       [csp] = get_resp_header(conn, "content-security-policy")
-      assert csp =~ "connect-src 'self' https://*.supabase.co"
+      [_, nonce] = Regex.run(~r/'nonce-([A-Za-z0-9_-]+)'/, csp)
+
+      {:ok, component} =
+        Compendium.inspect_component(Sanctum.TestContext.local(), "tincture:local.pub-dash:1.0.0")
+
+      manifest = component["manifest"]
+
+      # The hand-written policy is gone: connect-src names the endpoint's
+      # origin and the declared domains, never `'self'`, and the document
+      # is sandboxed.
+      assert csp == CyfrWeb.Ingress.TinctureAssets.csp(manifest, nonce)
+      assert csp =~ ~r/connect-src https?:\/\/\S+ https:\/\/\*\.supabase\.co;/
+      refute csp =~ "connect-src 'self'"
+      assert String.ends_with?(csp, "; sandbox allow-scripts")
+
+      assert get_resp_header(conn, "referrer-policy") == ["no-referrer"]
+      # The address follows the latest version, so it is revalidated.
+      assert get_resp_header(conn, "cache-control") == ["no-cache"]
     end
 
     test "a connect domain with a trailing newline is rejected, not put in a header",
@@ -370,7 +312,8 @@ defmodule CyfrWeb.Ingress.TinctureControllerTest do
       assert conn.status == 200
       [csp] = get_resp_header(conn, "content-security-policy")
       assert csp =~ "default-src 'self'"
-      assert csp =~ "frame-ancestors 'self'"
+      assert csp =~ "frame-ancestors "
+      assert csp =~ "; sandbox allow-scripts"
       refute csp =~ "default-src 'none'"
     end
 
@@ -457,22 +400,12 @@ defmodule CyfrWeb.Ingress.TinctureControllerTest do
     end
   end
 
-  describe "assets — private tinctures (no token)" do
-    test "returns 404 for private tincture assets without token", %{conn: conn} do
-      conn = get(conn, "/t/test/local/auth-dash/app.js")
-      assert conn.status == 404
-    end
+  # ── A private tincture version under its asset credential ────────
 
-    test "returns 404 for private tincture data.db", %{conn: conn} do
-      conn = get(conn, "/t/test/local/auth-dash/data.db")
-      assert conn.status == 404
-    end
-  end
-
-  describe "assets — private tinctures (signed token)" do
+  describe "a private tincture version under its asset credential" do
     setup do
-      # The prefix is minted from the reader's own session: a private app's
-      # own assets are theirs to read while that session and their seat
+      # The credential is minted from the reader's own session: a private
+      # app's files are theirs to read while that session and their seat
       # stand, not anyone's who has the URL. A second seat keeps the athanor
       # open when the reader leaves it.
       {:ok, _} =
@@ -482,177 +415,201 @@ defmodule CyfrWeb.Ingress.TinctureControllerTest do
       {:ok, session} = Sanctum.TestContext.create_session(reader)
       {:ok, ctx} = Sanctum.Caller.establish(session.token)
 
-      {:ok, reader: reader, ctx: ctx}
+      {:ok, reader: reader, session: session, ctx: ctx}
     end
 
-    test "serves private tincture assets with valid token", %{conn: conn, ctx: ctx} do
-      token = asset_token(ctx)
+    defp credential(ctx, name \\ "auth-dash", opts \\ []) do
+      {:ok, %{credential: credential}} =
+        Sanctum.TinctureAuth.mint_asset_credential(ctx, release_digest(name), opts)
 
-      conn = get(conn, "/t/test/local/auth-dash/_s/#{token}/app.js")
-      assert conn.status == 200
-      assert conn.resp_body =~ "auth app"
-      # CORS required for sandboxed iframes (opaque origin)
-      assert get_resp_header(conn, "access-control-allow-origin") == ["*"]
-      # Cache stays private — token-bearing URLs shouldn't be proxy-cached
-      assert get_resp_header(conn, "cache-control") == ["private, max-age=3600"]
+      credential
     end
 
-    test "a prefix minted for someone else opens nothing — by name", %{
-      conn: conn,
-      ctx: ctx,
-      reader: reader
-    } do
-      # The URL is the whole credential a sandboxed iframe has, so a shared
-      # one must not be a shared key: it is held to the seat its reader held.
-      # A reader who left is refused as such, not hidden behind a 404 — the
-      # signed URL already names the tincture.
-      token = asset_token(ctx)
+    defp served(credential, file, name \\ "auth-dash"),
+      do: Prima.TinctureUrl.asset_path(credential, ["local", name, "1.0.0" | file])
+
+    test "serves the entry page with the SDK, based under the credential's own path",
+         %{conn: conn, ctx: ctx} do
+      credential = credential(ctx)
+      page = get(conn, served(credential, ["index.html"]))
+
+      assert page.status == 200
+      assert page.resp_body =~ "Auth"
+      assert page.resp_body =~ "window.cyfr"
+
+      base = Prima.TinctureUrl.asset_path(credential, ["local", "auth-dash", "1.0.0"]) <> "/"
+      assert page.resp_body =~ ~s(<base href="#{base}">)
+
+      # The document's policy is the frame's rules' derivation from the
+      # version's declaration, with its sandbox: a direct navigation to
+      # the page is never a first-party page of this origin.
+      [csp] = get_resp_header(page, "content-security-policy")
+      [_, nonce] = Regex.run(~r/'nonce-([A-Za-z0-9_-]+)'/, csp)
+      {:ok, component} = Compendium.inspect_component(ctx, "tincture:local.auth-dash:1.0.0")
+      manifest = component["manifest"]
+
+      assert csp == CyfrWeb.Ingress.TinctureAssets.csp(manifest, nonce)
+      assert String.ends_with?(csp, "; sandbox allow-scripts")
+      assert get_resp_header(page, "referrer-policy") == ["no-referrer"]
+    end
+
+    test "serves the version's files, cached for no longer than the credential has left",
+         %{conn: conn, ctx: ctx} do
+      credential = credential(ctx)
+      {:ok, %{remaining_s: left}} = Sanctum.TinctureAuth.verify_asset_credential(credential)
+
+      asset = get(conn, served(credential, ["app.js"]))
+      assert asset.status == 200
+      assert asset.resp_body =~ "auth app"
+      # CORS required for sandboxed frames (opaque origin).
+      assert get_resp_header(asset, "access-control-allow-origin") == ["*"]
+      assert get_resp_header(asset, "referrer-policy") == ["no-referrer"]
+
+      ["private, max-age=" <> seconds] = get_resp_header(asset, "cache-control")
+      assert String.to_integer(seconds) in 1..left
+
+      # A shorter window is a shorter lifetime.
+      short = credential(ctx, "auth-dash", window_s: 60)
+
+      ["private, max-age=" <> seconds] =
+        get_resp_header(get(build_conn(), served(short, ["app.js"])), "cache-control")
+
+      assert String.to_integer(seconds) <= 60
+    end
+
+    test "compresses a script for a client that accepts it", %{conn: conn, ctx: ctx} do
+      asset =
+        conn
+        |> put_req_header("accept-encoding", "gzip")
+        |> get(served(credential(ctx), ["app.js"]))
+
+      assert get_resp_header(asset, "content-encoding") == ["gzip"]
+      assert :zlib.gunzip(asset.resp_body) == "// auth app"
+    end
+
+    test "the credential never reaches the request path anything names the request by",
+         %{conn: conn, ctx: ctx} do
+      credential = credential(ctx)
+      asset = get(conn, served(credential, ["app.js"]))
+
+      assert asset.status == 200
+      refute asset.request_path =~ credential
+      assert asset.request_path == "/_s/[REDACTED]/local/auth-dash/1.0.0/app.js"
+    end
+
+    test "no telemetry span or request log names the credential, while routing still reads it",
+         %{conn: conn, ctx: ctx} do
+      credential = credential(ctx)
+      test_pid = self()
+      handler = "c1-scrub-#{System.unique_integer([:positive])}"
+
+      :ok =
+        :telemetry.attach_many(
+          handler,
+          [
+            [:phoenix, :endpoint, :start],
+            [:phoenix, :endpoint, :stop],
+            [:phoenix, :router_dispatch, :start]
+          ],
+          fn event, _measurements, %{conn: seen} = metadata, _config ->
+            send(test_pid, {:seen, event, seen.request_path, Map.get(metadata, :route)})
+          end,
+          nil
+        )
+
+      on_exit(fn -> :telemetry.detach(handler) end)
+
+      asset = get(conn, served(credential, ["app.js"]))
+      assert asset.status == 200
+      assert asset.resp_body =~ "auth app"
+
+      redacted = "/_s/[REDACTED]/local/auth-dash/1.0.0/app.js"
+
+      for event <- [[:phoenix, :endpoint, :start], [:phoenix, :endpoint, :stop]] do
+        assert_received {:seen, ^event, ^redacted, _route}
+      end
+
+      # The dispatch names the route by its pattern, not the path.
+      assert_received {:seen, [:phoenix, :router_dispatch, :start], ^redacted, "/_s/*path"}
+      refute_received {:seen, _event, _path_with_credential, _route}
+    end
+
+    test "never serves a reserved file", %{conn: conn, ctx: ctx} do
+      assert json_response(get(conn, served(credential(ctx), ["data.db"])), 404)["code"] ==
+               "not_found"
+    end
+
+    test "serves only the version whose digest the credential names", %{conn: conn, ctx: ctx} do
+      # Another tincture's path, a version the athanor does not hold, and a
+      # credential for another digest: none is this credential's version.
+      credential = credential(ctx)
+      assert get(conn, served(credential, ["index.html"], "pub-dash")).status == 404
+
+      missing =
+        Prima.TinctureUrl.asset_path(credential, ["local", "auth-dash", "9.9.9", "app.js"])
+
+      assert get(build_conn(), missing).status == 404
+
+      other = credential(ctx, "pub-dash")
+      assert get(build_conn(), served(other, ["app.js"])).status == 404
+      assert get(build_conn(), served(other, ["style.css"], "pub-dash")).status == 200
+
+      # The version's identity is its release digest: a credential naming
+      # its bare artifact digest, which a manifest change would leave
+      # standing, opens nothing.
+      {:ok, %{credential: artifact}} =
+        Sanctum.TinctureAuth.mint_asset_credential(ctx, digest("auth-dash"))
+
+      assert get(build_conn(), served(artifact, ["app.js"])).status == 404
+    end
+
+    test "a credential this server did not sign is refused by name", %{conn: conn} do
+      forged = String.duplicate("A", 40) <> "." <> String.duplicate("B", 40)
+      refused = get(conn, served(forged, ["app.js"]))
+      assert json_response(refused, 401)["code"] == "unauthenticated"
+      refute Enum.any?(get_resp_header(refused, "cache-control"), &(&1 =~ "private, max-age"))
+
+      # A segment outside the credential grammar is no served file at all.
+      assert get(build_conn(), "/_s/short/local/auth-dash/1.0.0/app.js").status == 404
+    end
+
+    test "a file requested after the window is refused", %{conn: conn, ctx: ctx} do
+      credential = credential(ctx, "auth-dash", window_s: 1)
+      path = served(credential, ["app.js"])
+
+      assert get(conn, path).status in [200, 401]
+
+      wait_until(
+        fn -> get(build_conn(), path).status == 401 end,
+        5_000,
+        "the one-second credential to expire"
+      )
+
+      assert json_response(get(build_conn(), path), 401)["code"] == "unauthenticated"
+    end
+
+    test "a retired source refuses the next request under its credential",
+         %{conn: conn, ctx: ctx, session: session} do
+      credential = credential(ctx)
+      assert get(conn, served(credential, ["app.js"])).status == 200
+
+      :ok = Sanctum.Session.destroy(session.token)
+      gone = get(build_conn(), served(credential, ["app.js"]))
+      assert json_response(gone, 403)["code"] == "forbidden"
+      refute gone.resp_body =~ "auth app"
+    end
+
+    test "a reader who left the athanor is refused by name",
+         %{conn: conn, ctx: ctx, reader: reader} do
+      credential = credential(ctx)
       {:ok, athanor} = Sanctum.Tenancy.Athanors.get("ath_test")
       :ok = Sanctum.Tenancy.Members.remove_member(athanor, user_id: reader.user_id)
 
-      conn = get(conn, "/t/test/local/auth-dash/_s/#{token}/app.js")
-      assert conn.status == 403
-      assert json_response(conn, 403)["code"] == "forbidden"
+      assert json_response(get(conn, served(credential, ["app.js"])), 403)["code"] ==
+               "forbidden"
     end
 
-    test "an invalid token is refused by name", %{conn: conn} do
-      conn = get(conn, "/t/test/local/auth-dash/_s/garbage_token/app.js")
-      assert conn.status == 401
-      assert json_response(conn, 401)["code"] == "unauthenticated"
-    end
-
-    test "a token scoped to a different tincture is refused as invalid", %{conn: conn, ctx: ctx} do
-      token = asset_token(ctx, "local", "pub-dash")
-
-      conn = get(conn, "/t/test/local/auth-dash/_s/#{token}/app.js")
-      assert conn.status == 401
-      assert json_response(conn, 401)["code"] == "unauthenticated"
-    end
-
-    test "a token with the wrong publisher is refused as invalid", %{conn: conn, ctx: ctx} do
-      token = asset_token(ctx, "evil", "auth-dash")
-
-      conn = get(conn, "/t/test/local/auth-dash/_s/#{token}/app.js")
-      assert conn.status == 401
-      assert json_response(conn, 401)["code"] == "unauthenticated"
-    end
-
-    test "a token whose athanor differs from the URL is refused as invalid", %{
-      conn: conn,
-      ctx: ctx
-    } do
-      token = asset_token(ctx)
-
-      {:ok, _} =
-        Sanctum.Tenancy.Athanors.create(%{
-          kind: "group",
-          name: "Other",
-          slug: "other",
-          created_by: "test"
-        })
-
-      conn = get(conn, "/t/other/local/auth-dash/_s/#{token}/app.js")
-      assert conn.status == 401
-      assert json_response(conn, 401)["code"] == "unauthenticated"
-    end
-
-    test "blocks data.db even with valid token", %{conn: conn, ctx: ctx} do
-      token = asset_token(ctx)
-
-      conn = get(conn, "/t/test/local/auth-dash/_s/#{token}/data.db")
-      assert conn.status == 404
-    end
-  end
-
-  defp asset_token(ctx, publisher \\ "local", name \\ "auth-dash") do
-    {:ok, token} = Sanctum.TinctureAuth.issue_asset_token(ctx, publisher, name)
-    token
-  end
-
-  describe "the derived tokens over HTTP" do
-    setup do
-      {:ok, _} =
-        Sanctum.Tenancy.Members.ensure("usr_keeper", scope: "athanor", athanor_id: "ath_test")
-
-      reader = Sanctum.TestContext.issuer!(Sanctum.TestContext.local())
-      {:ok, session} = Sanctum.TestContext.create_session(reader)
-      {:ok, reader: reader, session: session}
-    end
-
-    defp base_token(html) do
-      [_, token] = Regex.run(~r/<base href="\/t\/test\/local\/auth-dash\/_s\/([^\/"]+)\/">/, html)
-      token
-    end
-
-    test "the index's asset prefix opens the assets, and dies with the session it came from",
-         %{conn: conn, session: session} do
-      page =
-        conn
-        |> put_req_header("authorization", "Bearer #{session.token}")
-        |> get("/t/test/local/auth-dash")
-
-      token = base_token(page.resp_body)
-      assert get(build_conn(), "/t/test/local/auth-dash/_s/#{token}/app.js").status == 200
-
-      :ok = Sanctum.Session.destroy(session.token)
-      gone = get(build_conn(), "/t/test/local/auth-dash/_s/#{token}/app.js")
-      assert json_response(gone, 403)["code"] == "forbidden"
-    end
-
-    test "a ?_t= token opens no more than its :execute: no private index, no asset prefix",
-         %{conn: conn, session: session} do
-      minted =
-        conn
-        |> put_req_header("authorization", "Bearer #{session.token}")
-        |> get("/t/access-token?publisher=local&tincture_name=auth-dash")
-        |> json_response(200)
-
-      # Reading a private tincture's files takes `:storage_read`, which a
-      # token derived for one tincture's `:execute` does not carry; the
-      # derivative never widens what its source's policy grants it.
-      page = get(build_conn(), "/t/test/local/auth-dash?_t=#{minted["token"]}")
-      assert page.status == 404
-      refute page.resp_body =~ "_s/"
-    end
-
-    test "a credential that cannot mint renders a named refusal, never a URL", %{conn: conn} do
-      # A key whose creator is none of this server's people: it stands as a
-      # key, and it mints nothing.
-      ctx = Sanctum.TestContext.issuer!(Sanctum.TestContext.local())
-
-      {:ok, %{api_key: key}} =
-        Sanctum.ApiKey.create(ctx, %{name: "orphan-#{:rand.uniform(1_000_000)}"})
-
-      {1, _} =
-        Arca.Repo.update_all(
-          Ecto.Query.from(k in Arca.Schemas.ApiKey, where: k.created_by == ^ctx.user_id),
-          set: [created_by: "system"]
-        )
-
-      mint =
-        conn
-        |> put_req_header("authorization", "Bearer #{key}")
-        |> get("/t/access-token?publisher=local&tincture_name=auth-dash")
-
-      # A credential that cannot vouch for itself is `unauthenticated`: a
-      # 401 with its challenge, which tells a client to sign in again.
-      body = json_response(mint, 401)
-      assert body["code"] == "unauthenticated"
-      assert get_resp_header(mint, "www-authenticate") == ["Bearer"]
-      refute Map.has_key?(body, "token")
-
-      page =
-        build_conn()
-        |> put_req_header("authorization", "Bearer #{key}")
-        |> get("/t/test/local/auth-dash")
-
-      assert json_response(page, 401)["code"] == "unauthenticated"
-      assert get_resp_header(page, "www-authenticate") == ["Bearer"]
-      refute page.resp_body =~ "_s/"
-    end
-
-    test "a key's allowlist holds its derived tokens: admitted address served, other refused",
-         %{conn: conn} do
+    test "a key's allowlist holds its credential: admitted address served, other refused" do
       ctx = Sanctum.TestContext.issuer!(Sanctum.TestContext.local())
 
       {:ok, %{api_key: key}} =
@@ -663,76 +620,34 @@ defmodule CyfrWeb.Ingress.TinctureControllerTest do
           ip_allowlist: ["127.0.0.1"]
         })
 
-      mint =
-        conn
-        |> put_req_header("authorization", "Bearer #{key}")
-        |> get("/t/access-token?publisher=local&tincture_name=auth-dash")
+      {:ok, key_ctx} = Sanctum.Caller.establish({:api_key, key}, client_ip: "127.0.0.1")
+      key_ctx = %{key_ctx | client_ip: "127.0.0.1"}
+      path = served(credential(key_ctx), ["app.js"])
 
-      assert json_response(mint, 200)["token"]
+      assert get(build_conn(), path).status == 200
 
-      page =
-        build_conn()
-        |> put_req_header("authorization", "Bearer #{key}")
-        |> get("/t/test/local/auth-dash")
-
-      token = base_token(page.resp_body)
-      assert get(build_conn(), "/t/test/local/auth-dash/_s/#{token}/app.js").status == 200
-
-      elsewhere =
-        %{build_conn() | remote_ip: {198, 51, 100, 1}}
-        |> get("/t/test/local/auth-dash/_s/#{token}/app.js")
-
+      elsewhere = get(%{build_conn() | remote_ip: {198, 51, 100, 1}}, path)
       assert json_response(elsewhere, 403)["code"] == "forbidden"
     end
 
-    test "a store that cannot answer serves nothing", %{conn: conn, session: session} do
-      page =
-        conn
-        |> put_req_header("authorization", "Bearer #{session.token}")
-        |> get("/t/test/local/auth-dash")
-
-      token = base_token(page.resp_body)
+    test "a store that cannot answer serves nothing", %{conn: conn, ctx: ctx} do
+      path = served(credential(ctx), ["app.js"])
       Arca.Repo.query!("ALTER TABLE sessions RENAME TO sessions_unavailable")
 
-      asset = get(build_conn(), "/t/test/local/auth-dash/_s/#{token}/app.js")
+      asset = get(conn, path)
+      assert json_response(asset, 503)["code"] == "unavailable"
+      assert get_resp_header(asset, "retry-after") == ["5"]
+      refute asset.resp_body =~ "auth app"
+    end
+
+    test "a registry that cannot say which version it holds serves nothing, and says so",
+         %{conn: conn, ctx: ctx} do
+      path = served(credential(ctx), ["app.js"])
+      Arca.Repo.query!("ALTER TABLE components RENAME TO components_unavailable")
+
+      asset = get(conn, path)
       assert json_response(asset, 503)["code"] == "unavailable"
       refute asset.resp_body =~ "auth app"
-
-      # The private index, asked with the session, answers the same: the
-      # store cannot say whether the caller stands, so nothing is served.
-      index =
-        build_conn()
-        |> put_req_header("authorization", "Bearer #{session.token}")
-        |> get("/t/test/local/auth-dash")
-
-      assert json_response(index, 503)["code"] == "unavailable"
-      assert get_resp_header(index, "retry-after") == ["5"]
-      refute index.resp_body =~ "Auth"
-
-      mint =
-        build_conn()
-        |> put_req_header("authorization", "Bearer #{session.token}")
-        |> get("/t/access-token?publisher=local&tincture_name=auth-dash")
-
-      assert json_response(mint, 503)["code"] == "unavailable"
-    end
-  end
-
-  describe "assets — signed token expiry" do
-    test "a dead signed token is refused by name", %{conn: conn} do
-      # The controller verifies internally, so expiry cannot be waited out
-      # here: a token under the wrong salt fails the same verification the
-      # same way, which is the path under test.
-      expired_token =
-        Phoenix.Token.sign(
-          CyfrWeb.Endpoint,
-          "wrong_salt",
-          {"test", "local", "auth-dash"}
-        )
-
-      conn = get(conn, "/t/test/local/auth-dash/_s/#{expired_token}/app.js")
-      assert conn.status == 401
-      assert json_response(conn, 401)["code"] == "unauthenticated"
     end
   end
 

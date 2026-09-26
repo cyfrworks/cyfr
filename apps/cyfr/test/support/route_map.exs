@@ -67,6 +67,15 @@
       routes: [
         %{
           verb: "GET",
+          path: "/_s/*path",
+          plug: "CyfrWeb.Ingress.TinctureController",
+          plug_opts: ":served",
+          auth: "tincture_handler_auth",
+          live_view: nil,
+          pipe_through: ["tincture_asset"]
+        },
+        %{
+          verb: "GET",
           path: "/api/executions/:id/events",
           plug: "CyfrWeb.Ingress.ExecutionEventsController",
           plug_opts: ":stream",

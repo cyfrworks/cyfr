@@ -20,7 +20,17 @@ defmodule Locus.BuilderEnvTest do
       language: :javascript,
       target_type: :tincture,
       resolve: false,
-      sources: %{"package.json" => Jason.encode!(package)}
+      sources: %{
+        "package.json" => Jason.encode!(package),
+        # The lockfile of a package that installs nothing: a tincture
+        # builds only from its lockfile.
+        "package-lock.json" =>
+          Jason.encode!(%{
+            lockfileVersion: 3,
+            requires: true,
+            packages: %{"" => Map.take(package, [:name, :version])}
+          })
+      }
     }
   end
 

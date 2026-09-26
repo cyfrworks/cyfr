@@ -10,7 +10,10 @@ defmodule Prism.TinctureRegistry do
   cyfr-manifest.json files with `"type": "tincture"` and provides lookup APIs
   for the shell and public tincture controllers. Each row carries the
   athanor's route segment (`athanor_segment`) so callers can build public
-  URLs without a lookup per render.
+  URLs without a lookup per render, and the frame its manifest declares
+  (`frame`: capabilities, placement, background, or nil for a declaration
+  the rules refuse), read through the frame's rules
+  (`Compendium.tincture_declaration/1`), which the shell grants from.
 
   Reads go straight to a protected ETS table owned by the GenServer, so
   lookups never queue behind a `reload/1` scan (which walks Arca and can be
@@ -423,6 +426,7 @@ defmodule Prism.TinctureRegistry do
               media_icon: media_icon,
               media_previews: media_previews,
               entry: entry,
+              frame: declared_frame(manifest, manifest_segs),
               window: window,
               segments: version_segs,
               manifest: manifest
@@ -461,6 +465,27 @@ defmodule Prism.TinctureRegistry do
         end
 
         []
+    end
+  end
+
+  # The declared frame — its capabilities, placement and whether it runs
+  # in the background — as the frame's rules read it
+  # (`Compendium.tincture_declaration/1`), for the shell to grant from; nil
+  # when the rules refuse the declaration. Such a tincture is still listed:
+  # the publish check keeps it from being installed, and the shell opening
+  # one reads the declaration again and renders its refusal, never a frame.
+  defp declared_frame(manifest, manifest_segs) do
+    case Compendium.tincture_declaration(manifest) do
+      {:ok, declaration} ->
+        declaration.frame
+
+      {:error, {:invalid_tincture, refused}} ->
+        Logger.warning(
+          "[TinctureRegistry] tincture at #{Enum.join(manifest_segs, "/")} declares a frame " <>
+            "the rules refuse (#{refused}); it opens no frame"
+        )
+
+        nil
     end
   end
 

@@ -55,10 +55,21 @@ defmodule Locus.Builder do
 
   A Rust build carrying a `Cargo.lock` builds `--locked` to it — a
   dependency the lock does not cover fails with cargo's own message — and
-  one carrying none, or asked to `resolve`, resolves one. npm runs with
-  `--ignore-scripts`, so a dependency's lifecycle script never executes.
-  The compiled WASM is validated (`Prima.Wasm`) before it is
-  answered; it executes only inside the Opus sandbox.
+  one carrying none, or asked to `resolve`, resolves one. A tincture
+  builds only from its lockfile: one without `package-lock.json` beside
+  its `package.json` is refused as `malformed` before anything runs, and
+  `npm ci` installs exactly what the lockfile pins, refusing one out of
+  step with the package manifest. Install scripts run, as the build
+  itself does: under the build's uid, in its home, with the environment
+  above, which carries no credential — the builds key and anything else
+  of this node's environment stay outside. The compiled WASM is validated
+  (`Prima.Wasm`) before it is answered; it executes only inside the Opus
+  sandbox.
+
+  A tincture's bundle keeps the notices of what it ships:
+  `dist/third-party-notices.json` lists every runtime package the
+  lockfile installed, with its license and the text of its license and
+  notice files, unless the build wrote that file itself.
 
   ## What a build answers
 
@@ -108,15 +119,60 @@ defmodule Locus.Builder do
   if [ "$#" -gt 0 ]; then exec tar --format=ustar -cf - "$@"; fi
   """
 
+  # $1 the notices script, $2 the notices file's name. `npm ci` installs exactly what the lockfile
+  # pins, and refuses a lockfile out of step with package.json; install
+  # scripts run, under the build's uid and its environment, which holds no
+  # credential.
   @javascript_script """
   set -eu
   export CARGO_HOME="$HOME/cargo" npm_config_cache="$HOME/npm"
   mkdir -p "$HOME/src"
   cd "$HOME/src"
   tar -xf -
-  npm install --no-audit --no-fund --ignore-scripts </dev/null >&2
+  npm ci --no-audit --no-fund --ignore-scripts=false </dev/null >&2
   npm run build </dev/null >&2
-  if [ -d dist ]; then exec tar --format=ustar -cf - dist; fi
+  if [ -d dist ]; then
+    node -e "$1" "$2" </dev/null >&2
+    exec tar --format=ustar -cf - dist
+  fi
+  """
+
+  # The npm package manifest and the lockfile a tincture build installs
+  # from (`Compendium.Tincture.Rules.lockfile/0` names the same file on the
+  # control plane, which this island does not read).
+  @package_manifest "package.json"
+  @lockfile "package-lock.json"
+
+  # The notices the bundle keeps: every package the lockfile installs for
+  # runtime (not `dev`), its name, version, declared license and the text
+  # of its license and notice files, into `dist/third-party-notices.json`.
+  # A build that ships none writes nothing, and one whose own output
+  # already carries the file keeps its own.
+  @notices "third-party-notices.json"
+  @notices_script ~S"""
+  const fs = require("fs"), path = require("path");
+  const target = path.join("dist", process.argv[1]);
+  const lock = JSON.parse(fs.readFileSync("package-lock.json", "utf8"));
+  const out = [];
+  for (const [dir, entry] of Object.entries(lock.packages || {})) {
+    if (!dir.startsWith("node_modules/") || entry.dev || entry.link) continue;
+    let names;
+    try { names = fs.readdirSync(dir); } catch { continue; }
+    const notices = names
+      .filter((name) => /^(licen[cs]e|notice|copying)/i.test(name))
+      .sort()
+      .flatMap((name) => {
+        const file = path.join(dir, name);
+        const stat = fs.lstatSync(file);
+        if (!stat.isFile() || stat.size > 65536) return [];
+        return [{ file: name, text: fs.readFileSync(file, "utf8") }];
+      });
+    const name = entry.name || dir.slice(dir.lastIndexOf("node_modules/") + 13);
+    out.push({ name, version: entry.version, license: entry.license || null, notices });
+  }
+  if (out.length > 0 && !fs.existsSync(target)) {
+    fs.writeFileSync(target, JSON.stringify(out, null, 2) + "\n");
+  }
   """
 
   @typedoc "What a build is asked for: the fields of a wire request the builder builds from."
@@ -277,8 +333,17 @@ defmodule Locus.Builder do
   defp required_source(sources, :rust) when not is_map_key(sources, "src/lib.rs"),
     do: {:error, {:malformed, "a rust build needs src/lib.rs among its sources"}}
 
-  defp required_source(sources, :javascript) when not is_map_key(sources, "package.json"),
-    do: {:error, {:malformed, "a javascript build needs package.json among its sources"}}
+  defp required_source(sources, :javascript) when not is_map_key(sources, @package_manifest),
+    do: {:error, {:malformed, "a javascript build needs #{@package_manifest} among its sources"}}
+
+  # A tincture builds only from its lockfile: a build without one would
+  # install whatever the registry answers on the day.
+  defp required_source(sources, :javascript) when not is_map_key(sources, @lockfile),
+    do:
+      {:error,
+       {:malformed,
+        "a javascript build needs #{@lockfile} beside #{@package_manifest}: a tincture " <>
+          "builds only from its lockfile"}}
 
   defp required_source(_sources, _language), do: :ok
 
@@ -358,10 +423,17 @@ defmodule Locus.Builder do
        %{
          language: :javascript,
          target_type: target_type,
-         argv: ["/bin/sh", "-c", @javascript_script, "locus-build"],
+         argv: [
+           "/bin/sh",
+           "-c",
+           @javascript_script,
+           "locus-build",
+           @notices_script,
+           @notices
+         ],
          archive: archive,
          wasm: nil,
-         announce: "Building tincture (npm install && npm run build)..."
+         announce: "Building tincture (npm ci && npm run build)..."
        }}
     end
   end

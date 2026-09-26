@@ -717,7 +717,10 @@ defmodule Cyfr.Boundaries do
           "ingress (`CyfrWeb.Ingress.TinctureAssets`, " <>
           "`Compendium.tincture_asset_rules/0`), the sign-in probe " <>
           "(`CyfrWeb.Ingress.AuthController`, `Compendium.complete_sign_in/4`) and the " <>
-          "tincture controller's reads of a tincture's entry and connect domains. The " <>
+          "tincture controller's reads of a tincture's entry, the version an asset " <>
+          "credential names (`Compendium.inspect_component/2`), the served types and a " <>
+          "document's policy and sandbox, derived from its declaration by the frame's " <>
+          "rules (`Compendium.tincture_csp/2`, `Compendium.tincture_sandbox_tokens/1`). The " <>
           "composition root is excepted. " <>
           "Boundary's exports are global, and `Compendium` exports its two paths, " <>
           "`ConsentFacts`, `Providers.Component` and `Supervisor` beside its root to every " <>
@@ -1335,19 +1338,17 @@ defmodule Cyfr.Boundaries do
       prefs: 1,
       put_prefs: 2
     ],
-    "Sanctum.TinctureAccess" => [get_private: 3, get_public: 3, lookup: 3, public_context: 1],
+    "Sanctum.TinctureAccess" => [get_private: 3, get_public: 3, public_context: 1],
     "Sanctum.TinctureAuth" => [
       authenticate: 1,
       expires_in: 1,
       issue_access_token: 3,
-      issue_asset_token: 3,
       mint_asset_credential: 2,
       mint_frame_credential: 4,
       resume_frame: 2,
       revoke_frame: 2,
-      scrub_conn: 1,
       suspend_frame: 2,
-      verify_asset_token: 4
+      verify_asset_credential: 2
     ],
     "Sanctum.ToolGrants" => [for_thread: 2, grant_row: 2, put: 2, revoke: 2],
     "Sanctum.ToolServerDigest" => [
@@ -1441,10 +1442,14 @@ defmodule Cyfr.Boundaries do
     tincture_handler_auth: %{
       admits: :credential,
       why:
-        "a signed `?_t=` token or an Authorization bearer, resolved in the tincture " <>
-          "controller's helper. No session cookie: a tincture page is embeddable " <>
-          "cross-origin, and an ambient cookie credential on a cross-origin surface is " <>
-          "the CSRF food the design refuses"
+        "resolved in the tincture controller: a public tincture's address admits " <>
+          "anyone to its files; a private tincture version's files (`/_s/`) admit the " <>
+          "asset credential in their path, verified on every request " <>
+          "(`Sanctum.TinctureAuth.verify_asset_credential/2`) and redacted from the " <>
+          "request path by `CyfrWeb.Plugs.ScrubTinctureCredentials`; the invoke and " <>
+          "mint routes admit a signed `?_t=` token or an Authorization bearer. No " <>
+          "session cookie: a tincture page is embeddable cross-origin, and an ambient " <>
+          "cookie credential on a cross-origin surface is the CSRF food the design refuses"
     },
     browser_authenticated: %{
       admits: :session,

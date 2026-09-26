@@ -44,6 +44,10 @@ defmodule Compendium.Builds.TinctureSaveTest do
     # tincture's own data beside them.
     :ok = Arca.put(Sanctum.Context.actor(ctx), @base ++ ["cyfr-manifest.json"], @manifest)
     :ok = Arca.put(Sanctum.Context.actor(ctx), @base ++ ["package.json"], ~s({"name":"saver"}))
+
+    :ok =
+      Arca.put(Sanctum.Context.actor(ctx), @base ++ ["package-lock.json"], ~s({"name":"saver"}))
+
     :ok = Arca.put(Sanctum.Context.actor(ctx), @base ++ ["index.html"], "<html>source</html>")
 
     :ok =
@@ -175,7 +179,13 @@ defmodule Compendium.Builds.TinctureSaveTest do
       assert request.language == :javascript and request.target_type == :tincture
 
       assert Enum.sort(Map.keys(request.sources)) ==
-               ["cyfr-manifest.json", "index.html", "package.json", "src/main.tsx"]
+               [
+                 "cyfr-manifest.json",
+                 "index.html",
+                 "package-lock.json",
+                 "package.json",
+                 "src/main.tsx"
+               ]
 
       ScriptedBuilder.await_builds()
     end

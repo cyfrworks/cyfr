@@ -3,10 +3,11 @@
 
 defmodule CyfrWeb.Plugs.ScrubTinctureCredentialsTest do
   @moduledoc """
-  A tincture credential may arrive as a query param (`?_t=`, `?_key=`,
-  `?_session=`) because iframe and `<img>` URLs cannot carry headers. Whatever
-  else is true of that design, the raw value must not survive into anything that
-  logs the request.
+  A private tincture's served files carry their asset credential in the
+  path, because a script or image fetch carries no header. Whatever else is
+  true of that design, the credential must not survive into anything that
+  names the request: the plug redacts it from `conn.request_path` by shape,
+  while routing and the action still read it.
   """
   use ExUnit.Case, async: true
   import Plug.Test
@@ -14,65 +15,51 @@ defmodule CyfrWeb.Plugs.ScrubTinctureCredentialsTest do
 
   alias CyfrWeb.Plugs.ScrubTinctureCredentials
 
-  defp run(query_string) do
-    conn =
-      :get
-      |> conn("/t/home/local/demo?" <> query_string)
-      |> ScrubTinctureCredentials.call([])
+  @credential "AbCdEfGhIjKlMnOpQrSt.uvwxyz0123456789_-"
 
-    # The action still sees the raw credential — auth happens before the
-    # response is sent.
-    assert conn.query_string == query_string
-
-    send_resp(conn, 200, "ok")
+  defp run(path) do
+    :get
+    |> conn(path)
+    |> ScrubTinctureCredentials.call([])
   end
 
-  test "redacts a session credential before the response is sent" do
-    sent = run("_session=cyfr_live_secret_value")
+  test "redacts the credential segment, and routing still reads it" do
+    conn = run("/_s/#{@credential}/local/game/1.0.0/assets/app.js")
 
-    refute sent.query_string =~ "cyfr_live_secret_value"
-    assert sent.query_string =~ "REDACTED"
+    assert conn.request_path == "/_s/[REDACTED]/local/game/1.0.0/assets/app.js"
+    refute conn.request_path =~ @credential
+    # Routing matches on `path_info`, which keeps the credential.
+    assert conn.path_info == ["_s", @credential, "local", "game", "1.0.0", "assets", "app.js"]
   end
 
-  test "redacts every credential param shape" do
-    for {key, value} <- [
-          {"_session", "sess_secret"},
-          {"_key", "cyfr_sk_secret"},
-          {"_t", "signed_token_secret"}
-        ] do
-      sent = run("#{key}=#{value}")
-      refute sent.query_string =~ value, "#{key} leaked its value"
+  test "redacts by shape: a credential outside the grammar is redacted as well" do
+    for segment <- ["short", "..", "has%20space", String.duplicate("x", 2_000)] do
+      conn = run("/_s/#{segment}/index.html")
+      assert conn.request_path == "/_s/[REDACTED]/index.html", segment
+    end
+
+    assert run("/_s/#{@credential}").request_path == "/_s/[REDACTED]"
+  end
+
+  test "a response answered before the action carries the redacted path" do
+    sent =
+      "/_s/#{@credential}/local/game/1.0.0/index.html"
+      |> run()
+      |> Map.put(:request_path, "/_s/#{@credential}/local/game/1.0.0/index.html")
+      |> send_resp(429, "rate limited")
+
+    assert sent.status == 429
+    refute sent.request_path =~ @credential
+  end
+
+  test "leaves every other path as it is" do
+    for path <- ["/t/home/local/demo", "/t/home/local/demo/_s/x/app.js", "/api/health", "/"] do
+      assert run(path).request_path == path
     end
   end
 
-  test "leaves non-credential params intact" do
-    sent = run("_session=sess_secret&view=grid&page=2")
-
-    refute sent.query_string =~ "sess_secret"
-    assert sent.query_string =~ "view=grid"
-    assert sent.query_string =~ "page=2"
-  end
-
-  test "scrubs responses that never reach authentication" do
-    # A 429 or 503 is logged like any other response, and returns long before
-    # the action reads the credential.
-    conn =
-      :get
-      |> conn("/t/home/local/demo?_session=cyfr_live_secret_value")
-      |> ScrubTinctureCredentials.call([])
-      |> send_resp(429, "rate limited")
-
-    assert conn.status == 429
-    refute conn.query_string =~ "cyfr_live_secret_value"
-  end
-
-  test "is a no-op for a request with no query string" do
-    sent =
-      :get
-      |> conn("/t/home/local/demo")
-      |> ScrubTinctureCredentials.call([])
-      |> send_resp(200, "ok")
-
-    assert sent.query_string == ""
+  test "redact_path/1 names the served-file prefix of the URL grammar" do
+    path = Prima.TinctureUrl.asset_path(@credential, ["local", "game", "1.0.0", "index.html"])
+    assert ScrubTinctureCredentials.redact_path(path) =~ "/_s/[REDACTED]/"
   end
 end

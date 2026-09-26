@@ -278,9 +278,17 @@ class Stack:
 
 
 def tincture(build_script, files=None):
-    """A tincture whose `npm run build` runs build.sh, which must fill dist/."""
+    """A tincture whose `npm run build` runs build.sh, which must fill dist/.
+
+    It ships the lockfile of a package that installs nothing: a tincture
+    builds only from its lockfile.
+    """
     sources = {
         "package.json": json.dumps({"name": "image-test", "private": True, "version": "0.0.1", "scripts": {"build": "sh build.sh"}}),
+        "package-lock.json": json.dumps({
+            "name": "image-test", "version": "0.0.1", "lockfileVersion": 3, "requires": True,
+            "packages": {"": {"name": "image-test", "version": "0.0.1"}},
+        }),
         "build.sh": build_script,
     }
     sources.update(files or {})

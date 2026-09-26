@@ -64,7 +64,16 @@ defmodule Locus.Test.Wire do
         deadline: System.system_time(:millisecond) + 120_000,
         sources: %{
           "package.json" =>
-            Jason.encode!(%{name: "wire-probe", private: true, scripts: %{build: script}})
+            Jason.encode!(%{name: "wire-probe", private: true, scripts: %{build: script}}),
+          # The lockfile of a package that installs nothing: a tincture
+          # builds only from its lockfile.
+          "package-lock.json" =>
+            Jason.encode!(%{
+              name: "wire-probe",
+              lockfileVersion: 3,
+              requires: true,
+              packages: %{"" => %{name: "wire-probe"}}
+            })
         }
       },
       fields

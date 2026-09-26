@@ -27,7 +27,10 @@ defmodule Compendium.TinctureValidator do
   Checks:
   1. cyfr-manifest.json exists and type == "tincture"
   2. Entry file exists (manifest tincture.entry or default index.html)
-  3. Computes digest from all shipped files (sorted, deterministic).
+  3. The publish check (`Compendium.Tincture.check_version/2`): the
+     declaration, the served types and the decompressed size
+  4. A `package.json` ships with its lockfile
+  5. Computes digest from all shipped files (sorted, deterministic).
 
   Returns `{:ok, %{digest: sha256_hex, size: total_bytes, exports: []}}`.
   """
@@ -40,7 +43,8 @@ defmodule Compendium.TinctureValidator do
          :ok <- check_type(manifest),
          :ok <- check_entry(directory_path, manifest),
          :ok <- check_reserved_dirs(directory_path),
-         :ok <- check_no_symlinks(directory_path, directory_path) do
+         :ok <- check_no_symlinks(directory_path, directory_path),
+         :ok <- check_version(manifest, file_sizes(directory_path)) do
       {digest, size} = compute_digest(directory_path)
       # exports always [] — tinctures have no WASM exports; kept for return-shape
       # compatibility with Prima.Wasm so Registry can use either validator uniformly
@@ -66,7 +70,8 @@ defmodule Compendium.TinctureValidator do
          {:ok, manifest} <- decode_json(raw),
          :ok <- check_type(manifest),
          :ok <- check_entry_in_pairs(files, manifest),
-         :ok <- check_reserved_dirs_in_pairs(files) do
+         :ok <- check_reserved_dirs_in_pairs(files),
+         :ok <- check_version(manifest, Enum.map(files, fn {k, v} -> {k, byte_size(v)} end)) do
       {digest, size} = Prima.Digest.file_set(files)
       {:ok, %{digest: digest, size: size, exports: []}}
     end
@@ -75,6 +80,44 @@ defmodule Compendium.TinctureValidator do
   # ---------------------------------------------------------------------------
   # Private
   # ---------------------------------------------------------------------------
+
+  # The publish check the domain owns (`Compendium.Tincture.check_version/2`),
+  # then the lockfile rule: a version that ships an npm package manifest
+  # ships the lockfile its build installs from
+  # (`Compendium.Tincture.Rules.lockfile/0`), never a registry's answer on
+  # the day.
+  @package_manifest "package.json"
+
+  defp check_version(manifest, sizes) do
+    with {:ok, _size} <- Compendium.Tincture.check_version(manifest, sizes),
+         do: check_lockfile(Enum.map(sizes, &elem(&1, 0)))
+  end
+
+  @doc """
+  Whether a tincture's files (relative paths) that ship an npm package
+  manifest ship its lockfile beside it: the rule publish and a build
+  (`Compendium.Builds`) both hold a version to.
+  """
+  @spec check_lockfile([String.t()]) :: :ok | {:error, String.t()}
+  def check_lockfile(paths) when is_list(paths) do
+    lockfile = Compendium.Tincture.Rules.lockfile()
+
+    if @package_manifest in paths and lockfile not in paths,
+      do:
+        {:error,
+         "#{@package_manifest} ships without #{lockfile}: a tincture builds only from its lockfile"},
+      else: :ok
+  end
+
+  # arca:bypass-ok=D — tar-extract tmp dir walk; see module note. Sizes
+  # come from stat, so the ceiling refuses a version before its bytes are
+  # read for the digest.
+  defp file_sizes(directory_path) do
+    directory_path
+    |> list_files_recursive()
+    |> Enum.reject(&excluded?/1)
+    |> Enum.map(&{Path.relative_to(&1, directory_path), File.stat!(&1).size})
+  end
 
   # arca:bypass-ok=D — operates on the tar-extract tmp dir set up by
   # `Compendium.Registry.extract_and_store_tincture/5`. Validation completes
@@ -126,8 +169,9 @@ defmodule Compendium.TinctureValidator do
 
   # Traversal rules come from Prima.PathSafety (the repo-wide SSOT); keep the
   # user-facing messages this validator has always produced.
-  # _s is reserved by the tincture asset router for signed-token path prefixes.
-  @reserved_dirs ~w(_s)
+  # The served-file prefix (`Prima.TinctureUrl.asset_prefix/0`) is never a
+  # directory of a version, so no path inside one reads as that prefix.
+  @reserved_dirs [Prima.TinctureUrl.asset_prefix()]
 
   # Exclude SQLite WAL and shared-memory files before hashing and storing
   # the tree. A tincture may still ship data.db as an asset.

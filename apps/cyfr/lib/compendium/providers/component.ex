@@ -292,8 +292,11 @@ defmodule Compendium.Providers.Component do
               default: "0.1.0"
             ),
             Arg.new("template", :string,
-              description: "Scaffold template (tincture only). Omit for vanilla HTML/JS/CSS.",
-              enum: ["react"]
+              description:
+                "Scaffold template (tincture only): vanilla HTML/JS/CSS, Vite, or React on " <>
+                  "Vite; the built two ship the lockfile their build installs from. Omit for " <>
+                  "vanilla.",
+              enum: Enum.map(Compendium.tincture_templates(), & &1.name)
             )
           ],
           kind: :write,

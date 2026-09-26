@@ -86,6 +86,13 @@ defmodule Compendium.TinctureTest do
       refute ".webp" in rules.image_extensions
     end
 
+    test "an asset may have exactly the extensions of the frame's served types" do
+      assert Compendium.tincture_asset_rules().allowed_extensions ==
+               Compendium.tincture_served_types() |> Map.keys() |> Enum.sort()
+
+      assert Compendium.tincture_served_types() == Compendium.Tincture.Rules.served_types()
+    end
+
     test "the map is the rules the domain itself reads" do
       rules = Compendium.tincture_asset_rules()
 
@@ -93,6 +100,30 @@ defmodule Compendium.TinctureTest do
       assert rules.default_preview == Tincture.default_preview()
       assert rules.preview_count == Tincture.preview_count()
       assert rules.allowed_extensions == Tincture.allowed_extensions()
+    end
+  end
+
+  describe "the publish check" do
+    test "states the version's size, and names the first file of another type" do
+      assert {:ok, 30} = Tincture.check_version(%{}, [{"index.html", 10}, {"a.js", 20}])
+
+      assert {:error, message} =
+               Tincture.check_version(%{}, [
+                 {"index.html", 1},
+                 {"z.exe", 1},
+                 {"b.php", 1}
+               ])
+
+      assert message =~ "b.php is not a type a tincture serves (and 1 more)"
+    end
+
+    test "holds the declaration to the frame's rules" do
+      manifest = %{"tincture" => %{"frame" => %{"placement" => "sideways"}}}
+      assert {:error, message} = Tincture.check_version(manifest, [{"index.html", 1}])
+      assert message =~ "placement"
+
+      declared = %{"tincture" => %{"frame" => %{"capabilities" => ["fullscreen", "gamepad"]}}}
+      assert {:ok, 1} = Tincture.check_version(declared, [{"index.html", 1}])
     end
   end
 

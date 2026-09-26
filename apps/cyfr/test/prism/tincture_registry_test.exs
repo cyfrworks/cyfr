@@ -594,6 +594,67 @@ defmodule Prism.TinctureRegistryTest do
     end
   end
 
+  describe "the declared frame" do
+    defp lay(name, tincture) do
+      dir = fixture_dir("ath_test", "local", name, "1.0.0")
+      File.mkdir_p!(dir)
+
+      manifest = %{
+        "name" => name,
+        "type" => "tincture",
+        "version" => "1.0.0",
+        "publisher" => "local",
+        "tincture" => Map.put(tincture, "entry", "index.html")
+      }
+
+      File.write!(Path.join(dir, "cyfr-manifest.json"), Jason.encode!(manifest))
+      File.write!(Path.join(dir, "index.html"), "<html></html>")
+    end
+
+    defp listed(server) do
+      {:ok, pid} = TinctureRegistry.start_link(name: server)
+      on_exit(fn -> if Process.alive?(pid), do: GenServer.stop(pid) end)
+      Map.new(TinctureRegistry.list_tinctures(server, lookup("ath_test")), &{&1.name, &1})
+    end
+
+    test "each row carries the frame its manifest declares, as the frame's rules read it" do
+      frame = %{
+        "capabilities" => ["pointer_lock", "fullscreen", "audio_autoplay"],
+        "placement" => "desktop",
+        "background" => true
+      }
+
+      lay("declares-frame", %{"frame" => frame})
+      rows = listed(:test_declared_frame)
+
+      assert {:ok, declared} =
+               Compendium.tincture_declaration(%{"tincture" => %{"frame" => frame}})
+
+      row = rows["declares-frame"]
+      assert row.frame == declared.frame
+      assert Enum.sort(row.frame.capabilities) == ~w(audio_autoplay fullscreen pointer_lock)
+      assert row.frame.placement == "desktop"
+      assert row.frame.background == true
+
+      # A tincture that declares no frame holds none of its capabilities.
+      assert rows["test-dash"].frame.capabilities == []
+      assert rows["test-dash"].frame.background == false
+    end
+
+    test "a tincture whose declaration the rules refuse is listed with no frame to grant" do
+      lay("undeclarable", %{"frame" => %{"capabilities" => ["camera"]}})
+
+      log =
+        ExUnit.CaptureLog.capture_log(fn ->
+          rows = listed(:test_refused_frame)
+          assert Map.has_key?(rows, "undeclarable")
+          assert rows["undeclarable"].frame == nil
+        end)
+
+      assert log =~ "declares a frame the rules refuse"
+    end
+  end
+
   describe "reads bypass the GenServer" do
     test "list and get answer from ETS while the server is suspended" do
       name = :test_suspended_reads
