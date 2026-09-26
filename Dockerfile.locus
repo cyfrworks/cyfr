@@ -87,7 +87,11 @@ LABEL org.opencontainers.image.licenses="Apache-2.0"
 # it, so take what the archive has at build time: the image scan in
 # test.yml's builder-image job and docker.yml fails on a fixable HIGH or
 # CRITICAL.
-RUN apt-get update && apt-get upgrade -y && apt-get install -y \
+# APT_REFRESH busts the build cache for this layer so the upgrade is not
+# served stale from a cached layer: CI passes its run id; a local build may
+# leave it.
+ARG APT_REFRESH=0
+RUN echo "apt refresh ${APT_REFRESH}" && apt-get update && apt-get upgrade -y && apt-get install -y \
     libstdc++6 \
     openssl \
     libncurses6 \
