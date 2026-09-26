@@ -115,14 +115,14 @@ defmodule Cyfr.RuntimeConfig do
   defdelegate auth_provider(), to: Sanctum.Auth, as: :provider
 
   @doc """
-  Browser cross-origin allowlist. Unset means the wildcard default — the
-  single source of that default, read by both the CORS plug (enforcement)
-  and the boot guard (which refuses a wildcard once an auth provider is
-  configured). The two must never disagree about what "unset" means.
+  Browser cross-origin allowlist: `config/config.exs` configures the empty
+  one, which admits no cross-origin browser caller, and
+  `CYFR_CORS_ALLOWED_ORIGINS` replaces it. Read by both the CORS plug
+  (enforcement) and the boot guard (which refuses a wildcard once an auth
+  provider is configured), so the two never disagree about what it holds.
   """
   @spec cors_allowed_origins() :: [String.t()]
-  def cors_allowed_origins,
-    do: Application.get_env(:cyfr, :cors_allowed_origins, ["*"])
+  def cors_allowed_origins, do: Application.fetch_env!(:cyfr, :cors_allowed_origins)
 
   @doc """
   Whether cookies carry the `Secure` attribute.
@@ -619,28 +619,6 @@ defmodule Cyfr.RuntimeConfig do
     case Integer.parse(text) do
       {port, ""} when port in 1..65_535 -> {:ok, port}
       _ -> {:error, "CYFR_HOST_API_PORT=#{inspect(text)} is not a port from 1 to 65535."}
-    end
-  end
-
-  @doc """
-  Resolve the worker watch's bounds (`Crucible.WorkerWatch`):
-  `CYFR_OPUS_WATCH_POLL_MS`, the interval between its status polls of
-  each worker service, a whole number of milliseconds from 1000 to 60000
-  (default 5000), and `CYFR_OPUS_WATCH_MISSES`, the misses in a row
-  after which the boot last heard from has its running attempts lapsed,
-  from 1 to 100 (default 3). Answers the keyword `config :cyfr,
-  :opus_watch` takes with only the set bounds, so the code's defaults
-  stand for the rest; a set value outside its range, or not a whole
-  number, is an error naming it.
-  """
-  @spec resolve_opus_watch(getenv) :: {:ok, keyword()} | {:error, String.t()}
-  def resolve_opus_watch(getenv) when is_function(getenv, 1) do
-    with {:ok, poll_ms} <-
-           Prima.EnvValue.milliseconds(getenv, "CYFR_OPUS_WATCH_POLL_MS", 1_000..60_000),
-         {:ok, misses} <-
-           Prima.EnvValue.whole_number(getenv, "CYFR_OPUS_WATCH_MISSES", 1..100, "misses") do
-      {:ok,
-       Enum.reject([poll_ms: poll_ms, misses: misses], fn {_key, value} -> is_nil(value) end)}
     end
   end
 

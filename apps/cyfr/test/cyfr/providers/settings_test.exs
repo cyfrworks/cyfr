@@ -99,7 +99,13 @@ defmodule Cyfr.Providers.SettingsTest do
              call(admin, %{"action" => "reset", "key" => "mcp_rate_limit_max"})
 
     assert reset_at == set_at + 1
-    assert Store.effective("mcp_rate_limit_max") == {:ok, 120}
+
+    # The row is gone, so the key reads its installed default: the suite's
+    # own (`Cyfr.Test.Settings.suite/0`) over the roster's 120.
+    assert Store.get("mcp_rate_limit_max") == {:error, :not_found}
+
+    assert Store.effective("mcp_rate_limit_max") ==
+             {:ok, Cyfr.Test.Settings.suite()["mcp_rate_limit_max"]}
   end
 
   test "each refusal reaches the caller as its class", %{admin: admin} do

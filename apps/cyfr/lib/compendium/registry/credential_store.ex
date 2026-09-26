@@ -26,10 +26,10 @@ defmodule Compendium.Registry.CredentialStore do
 
   Precedence (first non-nil wins):
 
-  1. `:cyfr, :device_label` application env (test seam + ops override).
-  2. `CYFR_DEVICE_LABEL` OS env var (runtime override).
-  3. `:inet.gethostname/0` (the machine's configured hostname).
-  4. Literal `"cyfr-host"` fallback.
+  1. The `device_label` platform setting, read through
+     `Arca.PlatformSettings.effective/1` (`CYFR_DEVICE_LABEL` pins it).
+  2. `:inet.gethostname/0` (the machine's configured hostname).
+  3. Literal `"cyfr-host"` fallback.
 
   It rides along on every stored credential and on the token-minting requests
   that produce them, so it is named here rather than at either call site.
@@ -39,13 +39,18 @@ defmodule Compendium.Registry.CredentialStore do
   """
   @spec device_label() :: String.t()
   def device_label do
-    # :device_label is set by runtime.exs from CYFR_DEVICE_LABEL through
-    # Dotenvy — one environment pipeline for OS env and .env files alike.
-    Application.get_env(:cyfr, :device_label) ||
-      case :inet.gethostname() do
-        {:ok, host} -> to_string(host)
-        _ -> "cyfr-host"
-      end
+    # Unset is the hostname; the setting serves a stale value, so a store
+    # outage labels with the last value read.
+    case Arca.PlatformSettings.effective("device_label") do
+      {:ok, label} when is_binary(label) ->
+        label
+
+      {:ok, nil} ->
+        case :inet.gethostname() do
+          {:ok, host} -> to_string(host)
+          _ -> "cyfr-host"
+        end
+    end
   end
 
   @doc """

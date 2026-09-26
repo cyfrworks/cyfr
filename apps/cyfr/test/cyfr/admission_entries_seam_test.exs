@@ -28,10 +28,7 @@ defmodule Cyfr.AdmissionEntriesSeamTest do
     Prima.RateLimiter.reset()
 
     keys = [
-      cyfr: :mcp_rate_limit_max,
-      cyfr: :mcp_rate_limit_window_ms,
       cyfr: :tincture_rate_limit_max,
-      cyfr: :webhook_per_ip_rate_limit_max,
       cyfr: :cron_scheduler_enabled
     ]
 
@@ -250,8 +247,8 @@ defmodule Cyfr.AdmissionEntriesSeamTest do
   end
 
   def mcp_rate_limited(conn, _ctx) do
-    Application.put_env(:cyfr, :mcp_rate_limit_max, 1)
-    Application.put_env(:cyfr, :mcp_rate_limit_window_ms, 60_000)
+    Cyfr.Test.Settings.put("mcp_rate_limit_max", 1)
+    Cyfr.Test.Settings.put("mcp_rate_limit_window_ms", 60_000)
     Prima.RateLimiter.reset()
 
     first = mcp_call(conn, "system", %{"action" => "status"})
@@ -389,7 +386,7 @@ defmodule Cyfr.AdmissionEntriesSeamTest do
   end
 
   def webhook_rate_limited(conn, ctx) do
-    Application.put_env(:cyfr, :webhook_per_ip_rate_limit_max, 1)
+    Cyfr.Test.Settings.put("webhook_per_ip_rate_limit_max", 1)
     Prima.RateLimiter.reset()
     %{slug: slug, secret: secret} = hook!(ctx, %{replay_protection: "none"})
 

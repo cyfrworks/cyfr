@@ -302,21 +302,14 @@ if config_env() != :test do
            :deployment_pinned,
            Enum.sort(for({entry, value} <- settings, value != nil, do: {entry.key, value}))
 
-    # While a setting's reader still takes it from the application
-    # environment, the value is written there too. A top-level key is
-    # written only when set, so the reader's own default stands. An entry
-    # of a keyword the reader takes whole (the caps under `:sanctum`, the
-    # worker watch's bounds) is written every time, with its default when
-    # unset, and each such write merges into that keyword: it never
-    # replaces the entries written before it.
-    for {%{config: path, app: app} = entry, value} <- settings, path != nil, app != :logger do
-      case path do
-        [key] ->
-          if value != nil, do: config(app, key, value)
-
-        [key, subkey] ->
-          config(app, key, [{subkey, if(value == nil, do: entry.default, else: value)}])
-      end
+    # A restart-scoped setting (the execution slots) is read once at boot
+    # from the application environment, so a set value is written there
+    # too; unset, the stored row the boot applies or the roster's default
+    # stands. Every other setting is read through
+    # `Arca.PlatformSettings.effective/1`, which answers the pin once this
+    # member's settings process has stored it.
+    for {%{config: [key], app: app}, value} <- settings, app != :logger, value != nil do
+      config(app, key, value)
     end
 
     # The log level: the set value, else info in production and debug in

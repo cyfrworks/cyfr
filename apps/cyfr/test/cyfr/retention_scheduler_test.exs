@@ -131,15 +131,7 @@ defmodule Cyfr.RetentionSchedulerTest do
 
   describe "the host's decisions" do
     setup do
-      prev = Application.fetch_env(:cyfr, :decision_retention_days)
-      Application.put_env(:cyfr, :decision_retention_days, 30)
-
-      on_exit(fn ->
-        case prev do
-          {:ok, days} -> Application.put_env(:cyfr, :decision_retention_days, days)
-          :error -> Application.delete_env(:cyfr, :decision_retention_days)
-        end
-      end)
+      Cyfr.Test.Settings.put("decision_retention_days", 30)
     end
 
     test "the cycle purges the rows without a tenant past the host's days, under its claim",
@@ -195,6 +187,42 @@ defmodule Cyfr.RetentionSchedulerTest do
 
       admin = %{Prima.Actor.system() | platform_admin: true}
       assert {:ok, _} = Arca.DecisionLog.get_global(admin, old_host.call_id)
+    end
+  end
+
+  describe "the webhook deliveries" do
+    test "the sweep keeps a claim inside the idempotency window and drops one past it" do
+      ctx = Sanctum.TestContext.local()
+      Sanctum.Test.ComponentHelpers.register_test_component("handler", "1.0.0", "formula", %{})
+      profile = Sanctum.Test.ConsentFixtures.bindable_profile(ctx, "f:local.handler")
+
+      {:ok, %{slug: slug}} =
+        Sanctum.Webhook.create(ctx, %{
+          name: "retention-#{System.unique_integer([:positive])}",
+          target_ref: "f:local.handler",
+          profile_id: profile,
+          idempotency_key_header: "X-Cyfr-Delivery"
+        })
+
+      {:ok, hook} = Arca.WebhookStorage.get_by_slug(slug)
+      assert :fresh = Arca.WebhookDeliveryStorage.record(hook.id, "evt-old")
+
+      two_hours_ago =
+        DateTime.utc_now() |> DateTime.add(-7_200, :second) |> DateTime.truncate(:microsecond)
+
+      from(d in Arca.Schemas.WebhookDelivery, where: d.webhook_id == ^hook.id)
+      |> Arca.Repo.update_all(set: [first_seen_at: two_hours_ago])
+
+      Cyfr.Test.Settings.put("webhook_idempotency_ttl_seconds", 10_800)
+      cycle_key = "cell-retention-#{System.unique_integer([:positive])}"
+      assert {:ok, _summary} = RetentionScheduler.cycle(key: cycle_key, owner: "member-a")
+      assert {:duplicate, _} = Arca.WebhookDeliveryStorage.record(hook.id, "evt-old")
+
+      Cyfr.Test.Settings.put("webhook_idempotency_ttl_seconds", 3_600)
+      cycle_key = "cell-retention-#{System.unique_integer([:positive])}"
+      assert {:ok, summary} = RetentionScheduler.cycle(key: cycle_key, owner: "member-a")
+      assert "webhooks" in summary.steps
+      assert :fresh = Arca.WebhookDeliveryStorage.record(hook.id, "evt-old")
     end
   end
 

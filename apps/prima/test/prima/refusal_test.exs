@@ -198,6 +198,7 @@ defmodule Prima.RefusalTest do
     {:empty, :invalid_argument},
     {:storage_full, :rate_limited},
     {:storage_unverifiable, :unavailable},
+    {{:cap_unverifiable, :max_athanors}, :unavailable},
     {:context_too_long, :invalid_argument},
     {:too_many_attachments, :invalid_argument},
     {:attachment_too_large, :invalid_argument},

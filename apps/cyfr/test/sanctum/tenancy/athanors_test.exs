@@ -264,9 +264,7 @@ defmodule Sanctum.Tenancy.AthanorsTest do
     test "the per-person group cap applies, and a mint that trips it commits nothing" do
       n = System.unique_integer([:positive])
       creator = "u-cap-#{n}"
-      original = Application.get_env(:sanctum, :caps, [])
-      Application.put_env(:sanctum, :caps, max_groups_per_person: 1)
-      on_exit(fn -> Application.put_env(:sanctum, :caps, original) end)
+      Cyfr.Test.Settings.put("max_groups_per_person", 1)
 
       assert {:ok, first} = Athanors.create_group(creator, "One #{n}")
 

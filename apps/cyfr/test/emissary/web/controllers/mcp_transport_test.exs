@@ -207,14 +207,7 @@ defmodule Emissary.Web.MCPTransportTest do
   describe "subscriptions/listen holds its credential to its standing" do
     # The stream's own window, short: a case that leaves one open ends.
     setup do
-      prev = Application.get_env(:cyfr, :mcp_subscription_max_ms)
-      Application.put_env(:cyfr, :mcp_subscription_max_ms, 5_000)
-
-      on_exit(fn ->
-        if prev,
-          do: Application.put_env(:cyfr, :mcp_subscription_max_ms, prev),
-          else: Application.delete_env(:cyfr, :mcp_subscription_max_ms)
-      end)
+      Cyfr.Test.Settings.put("mcp_subscription_max_ms", 5_000)
 
       ctx = Sanctum.TestContext.issuer!(Sanctum.TestContext.local())
       {:ok, session} = Sanctum.Session.create(ctx)

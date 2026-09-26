@@ -13,8 +13,9 @@ defmodule CyfrWeb.Plugs.VerifyWebhookSignature do
 
     * 404 — slug not found OR webhook is disabled. (Same response in both
       cases — no enumeration leakage.)
-    * 503 — the webhook store could not answer. Never a 404, which would
-      read as "no such hook" to a sender that retries on 5xx only.
+    * 503 — the webhook store, or the skew window a timestamped delivery
+      is checked against, could not answer. Never a 404, which would read
+      as "no such hook" to a sender that retries on 5xx only.
     * 401 — signature header missing, malformed, or mismatched.
     * 500 — defensive: raw body wasn't captured (body_reader didn't run) or
       secret decryption failed. Should never happen in practice.
@@ -135,6 +136,9 @@ defmodule CyfrWeb.Plugs.VerifyWebhookSignature do
       # re-sealing, or a restored backup. Not the sender's fault and not
       # fixable by them, so it must not read as a signature failure.
       :secret_unreadable -> deny_500(conn)
+      # The skew window could not be read: refused, and retried by the
+      # sender like any outage.
+      :unavailable -> deny_503(conn)
       _ -> deny_500(conn)
     end
   end

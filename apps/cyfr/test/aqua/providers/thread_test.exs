@@ -441,9 +441,7 @@ defmodule Aqua.Providers.ThreadTest do
 
     test "the athanor's thread count is held to the operator's cap", %{ctx: ctx} do
       # The setup already minted one thread; a cap of one refuses the next.
-      original = Application.get_env(:sanctum, :caps, [])
-      Application.put_env(:sanctum, :caps, Keyword.put(original, :max_threads_per_athanor, 1))
-      on_exit(fn -> Application.put_env(:sanctum, :caps, original) end)
+      Cyfr.Test.Settings.put("max_threads_per_athanor", 1)
 
       assert {:error, {:limit_reached, :max_threads_per_athanor, 1}} =
                call(ctx, %{"action" => "create", "title" => "One too many"})

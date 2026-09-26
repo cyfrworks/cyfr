@@ -47,6 +47,11 @@ Cyfr.Test.OpusService.wire!()
 Cyfr.Test.LocusService.serve!()
 ExUnit.after_suite(fn _ -> Cyfr.Test.LocusService.stop!() end)
 
+# The platform settings the boot installed, with the suite's own values
+# over the roster's defaults (`Cyfr.Test.Settings.suite/0`); a test sets
+# one through `Cyfr.Test.Settings.put/2`.
+Cyfr.Test.Settings.install!()
+
 # Owned by the test-runner process so it outlives every test and no two
 # tests race to create it. `Prima.Test.SourceTree` fills it lazily; see that
 # module for why the architecture tests need to stop re-reading the tree.

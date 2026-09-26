@@ -15,53 +15,45 @@ defmodule CyfrWeb.Plugs.MCPRateLimit do
 
   ## Options
 
-  - `:bucket` — counter namespace, default `:mcp`. Each bucket uses its own
-    `:<bucket>_rate_limit_max` and `:<bucket>_rate_limit_window_ms` when set,
-    otherwise it uses the shared `:mcp_rate_limit_*` budget.
+  - `:bucket` — counter namespace, `:mcp` (the default) or `:api`. Each
+    bucket reads its own `<bucket>_rate_limit_max` and
+    `<bucket>_rate_limit_window_ms` platform settings; the `:api` pair,
+    unset, is the MCP pair's value.
   - `:errors` — rejection renderer, default `CyfrWeb.ApiError`. A JSON-RPC
     route passes its own renderer.
 
-  Limits are runtime config (defaults are generous — legitimate MCP clients
-  make many calls in a row):
+  The limits are platform settings, read on each request through
+  `Arca.PlatformSettings.effective/1` (defaults are generous — legitimate
+  MCP clients make many calls in a row: 120 requests a minute), pinned by
+  `CYFR_MCP_RATE_LIMIT_MAX` / `CYFR_MCP_RATE_LIMIT_WINDOW_MS` and
+  `CYFR_API_RATE_LIMIT_MAX` / `CYFR_API_RATE_LIMIT_WINDOW_MS`. They serve a
+  stale value, so a store that cannot answer throttles by the last value
+  read and refuses no one for it.
 
-      config :cyfr, :mcp_rate_limit_max, 120
-      config :cyfr, :mcp_rate_limit_window_ms, 60_000
-
-  or `CYFR_MCP_RATE_LIMIT_MAX` / `CYFR_MCP_RATE_LIMIT_WINDOW_MS`; the `:api`
-  bucket answers to `CYFR_API_RATE_LIMIT_MAX` / `CYFR_API_RATE_LIMIT_WINDOW_MS`.
-
-  Counters live in `Prima.RateLimiter` (ETS) — single-node only, same caveat as
+  Counters live in `Prima.RateLimiter` (ETS) — per member, same caveat as
   `CyfrWeb.Plugs.AuthRateLimit`.
   """
 
-  @default_max 120
-  @default_window_ms 60_000
-
   @default_errors CyfrWeb.ApiError
   @default_bucket :mcp
+  @buckets [:mcp, :api]
 
   def init(opts) do
     bucket = Keyword.get(opts, :bucket, @default_bucket)
 
+    unless bucket in @buckets do
+      raise ArgumentError, "CyfrWeb.Plugs.MCPRateLimit: :bucket must be :mcp or :api"
+    end
+
     opts
     |> Keyword.put_new(:errors, @default_errors)
     |> Keyword.put(:bucket, bucket)
-    # Derived once at init (compile time in a router pipeline), so call/2
-    # never builds atoms per request.
-    |> Keyword.put(:max_key, bucket_key(bucket, "_rate_limit_max"))
-    |> Keyword.put(:window_key, bucket_key(bucket, "_rate_limit_window_ms"))
   end
 
   def call(conn, opts) do
     bucket = Keyword.get(opts, :bucket, @default_bucket)
-
-    max_requests =
-      bucket_env(opts[:max_key]) ||
-        Application.get_env(:cyfr, :mcp_rate_limit_max, @default_max)
-
-    window_ms =
-      bucket_env(opts[:window_key]) ||
-        Application.get_env(:cyfr, :mcp_rate_limit_window_ms, @default_window_ms)
+    max_requests = limit(bucket, "_rate_limit_max")
+    window_ms = limit(bucket, "_rate_limit_window_ms")
 
     ip = Sanctum.ClientIp.resolve(conn)
     key = {:rate_limit, bucket, ip}
@@ -79,11 +71,17 @@ defmodule CyfrWeb.Plugs.MCPRateLimit do
     end
   end
 
-  # The default bucket reads the shared keys directly — no second spelling
-  # of the same knob for it.
-  defp bucket_key(@default_bucket, _suffix), do: nil
-  defp bucket_key(bucket, suffix), do: String.to_atom("#{bucket}#{suffix}")
+  # The bucket's own setting, else (the `:api` pair, unset) the MCP pair's.
+  # Both serve a stale value, so a store outage answers the last one read.
+  defp limit(bucket, suffix) do
+    case setting("#{bucket}#{suffix}") do
+      nil -> setting("#{@default_bucket}#{suffix}")
+      value -> value
+    end
+  end
 
-  defp bucket_env(nil), do: nil
-  defp bucket_env(key), do: Application.get_env(:cyfr, key)
+  defp setting(key) do
+    {:ok, value} = Arca.PlatformSettings.effective(key)
+    value
+  end
 end

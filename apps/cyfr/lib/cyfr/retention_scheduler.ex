@@ -12,7 +12,7 @@ defmodule Cyfr.RetentionScheduler do
   kind in `Arca.Retention.kinds/0` inside every active athanor, each
   under its own settings, plus the declared sweeps below — among them the
   host's own decisions, the ones made before any tenant was resolved,
-  purged past `CYFR_DECISION_RETENTION_DAYS`. The tick
+  purged past the `decision_retention_days` platform setting. The tick
   repeats on a configurable interval (default 6 hours) to prevent
   unbounded storage growth. Every step runs behind one crash barrier: a
   fault in one is logged and the cycle moves on.
@@ -91,7 +91,6 @@ defmodule Cyfr.RetentionScheduler do
   alias Arca.JobClaims
 
   @default_interval_ms :timer.hours(6)
-  @decision_retention_days 365
 
   @kind "retention"
   @lease_ms :timer.minutes(5)
@@ -451,9 +450,10 @@ defmodule Cyfr.RetentionScheduler do
   # The admission decisions made before any tenant was resolved carry no
   # athanor, so no athanor's retention reaches them: the host purges them
   # under the claim it holds, as the platform's own actor, once they are
-  # older than CYFR_DECISION_RETENTION_DAYS. Never an athanor's row.
+  # older than the `decision_retention_days` platform setting, which serves
+  # a stale value. Never an athanor's row.
   defp purge_host_decisions do
-    days = Application.get_env(:cyfr, :decision_retention_days, @decision_retention_days)
+    {:ok, days} = Arca.PlatformSettings.effective("decision_retention_days")
     cutoff = DateTime.add(DateTime.utc_now(), -days * 86_400, :second)
 
     case Arca.DecisionLog.purge_global(Prima.Actor.system(), cutoff) do
@@ -593,13 +593,37 @@ defmodule Cyfr.RetentionScheduler do
     end
   end
 
-  # Webhook idempotency table sweep. Default TTL 24h — webhook senders that
-  # retry beyond this window cannot rely on idempotency, but in practice
-  # senders give up well before that.
+  # Webhook idempotency table sweep, past the
+  # `webhook_idempotency_ttl_seconds` platform setting (24h by default) —
+  # webhook senders that retry beyond this window cannot rely on
+  # idempotency, but in practice senders give up well before that. The
+  # window refuses a stale value: a store that cannot answer it sweeps
+  # nothing this cycle, since a window read wrong would delete the claims
+  # that stop a replay.
   defp sweep_webhook_deliveries do
-    ttl = Application.get_env(:cyfr, :webhook_idempotency_ttl_seconds, 86_400)
-    cutoff = DateTime.utc_now() |> DateTime.add(-ttl, :second)
+    case Arca.PlatformSettings.effective("webhook_idempotency_ttl_seconds") do
+      {:ok, ttl} when is_integer(ttl) and ttl > 0 ->
+        sweep_webhook_deliveries(DateTime.utc_now() |> DateTime.add(-ttl, :second))
 
+      {:ok, other} ->
+        Logger.error(
+          "[RetentionScheduler] the stored webhook_idempotency_ttl_seconds " <>
+            "#{inspect(other)} is not a positive whole number; skipping the sweep"
+        )
+
+      {:error, :unavailable} ->
+        Logger.warning(
+          "[RetentionScheduler] webhook_idempotency_ttl_seconds could not be read; " <>
+            "skipping the webhook delivery sweep"
+        )
+
+      {:error, reason} when reason in [:uninstalled, :unknown_key] ->
+        raise "[RetentionScheduler] webhook_idempotency_ttl_seconds cannot be read: " <>
+                "the setting is #{reason}"
+    end
+  end
+
+  defp sweep_webhook_deliveries(cutoff) do
     case Arca.WebhookDeliveryStorage.sweep(cutoff) do
       {:ok, count} when count > 0 ->
         Logger.info("[RetentionScheduler] Cleaned #{count} webhook delivery records")

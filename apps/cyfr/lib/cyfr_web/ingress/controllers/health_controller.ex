@@ -20,13 +20,15 @@ defmodule CyfrWeb.Ingress.HealthController do
   # Probes from several monitors collapse onto one real check per window;
   # the DB query, PubSub round-trip and storage write are not free (on the
   # S3 adapter the write probe is a billable PUT per uncached hit).
-  # Operators on an object store can lengthen the window without a
-  # release via `CYFR_HEALTH_READY_CACHE_MS`.
-  @default_ready_cache_ms 5_000
+  # Operators on an object store can lengthen the window, the
+  # `health_ready_cache_ms` platform setting, without a release. It serves
+  # a stale value, so the probe of a store that cannot answer still runs.
   @ready_cache_key {__MODULE__, :ready_cache}
 
-  defp ready_cache_ms,
-    do: Application.get_env(:cyfr, :health_ready_cache_ms, @default_ready_cache_ms)
+  defp ready_cache_ms do
+    {:ok, ms} = Arca.PlatformSettings.effective("health_ready_cache_ms")
+    ms
+  end
 
   def ready(conn, _params) do
     checks = cached_checks()

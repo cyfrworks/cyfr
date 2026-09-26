@@ -507,6 +507,49 @@ defmodule Sanctum.WebhookTest do
                Webhook.verify_with_grace(hook, body, sig, stale_ts)
     end
 
+    test "the skew window is the platform setting, taken by the next delivery", %{ctx: ctx} do
+      {:ok, %{slug: slug, secret: secret}} =
+        create(ctx, %{
+          name: "ts-window",
+          target_ref: "f:local.handler",
+          timestamp_header: "X-Cyfr-Timestamp"
+        })
+
+      {:ok, hook} = Arca.WebhookStorage.get_by_slug(slug)
+
+      body = "{}"
+      ts = (System.system_time(:second) - 600) |> Integer.to_string()
+      sig = "sha256=" <> hmac_hex(secret, ts <> "." <> body)
+
+      assert {:error, :timestamp_skew} = Webhook.verify_with_grace(hook, body, sig, ts)
+
+      Cyfr.Test.Settings.put("webhook_max_skew_seconds", 900)
+      assert :ok = Webhook.verify_with_grace(hook, body, sig, ts)
+    end
+
+    @tag :capture_log
+    test "a window the store cannot answer refuses the delivery", %{ctx: ctx} do
+      {:ok, %{slug: slug, secret: secret}} =
+        create(ctx, %{
+          name: "ts-outage",
+          target_ref: "f:local.handler",
+          timestamp_header: "X-Cyfr-Timestamp"
+        })
+
+      {:ok, hook} = Arca.WebhookStorage.get_by_slug(slug)
+
+      body = "{}"
+      ts = System.system_time(:second) |> Integer.to_string()
+      sig = "sha256=" <> hmac_hex(secret, ts <> "." <> body)
+
+      Cyfr.Test.Settings.expire("webhook_max_skew_seconds")
+      Cyfr.Test.Settings.break_store!()
+
+      # A delivery inside the window, refused: the window cannot be read,
+      # so it is not admitted against a window this member cannot see.
+      assert {:error, :unavailable} = Webhook.verify_with_grace(hook, body, sig, ts)
+    end
+
     test "rejects malformed (non-integer) timestamps", %{ctx: ctx} do
       {:ok, %{slug: slug, secret: secret}} =
         create(ctx, %{name: "ts-bad", target_ref: "f:local.handler"})

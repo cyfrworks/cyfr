@@ -195,28 +195,19 @@ defmodule Compendium.Registry.CredentialStoreTest do
   end
 
   describe "device_label/0" do
-    # CYFR_DEVICE_LABEL reaches :cyfr, :device_label through runtime.exs's
-    # Dotenvy pipeline; the module reads app config only, so the OS env is
-    # not consulted here.
-    setup do
-      original_app = Application.get_env(:cyfr, :device_label)
+    # The `device_label` platform setting, which CYFR_DEVICE_LABEL pins; the
+    # module reads it through the accessor, so the OS env is not consulted
+    # here.
+    test "reads the device_label setting, with no restart" do
+      Cyfr.Test.Settings.put("device_label", "stored-label")
+      assert CredentialStore.device_label() == "stored-label"
 
-      on_exit(fn ->
-        if original_app,
-          do: Application.put_env(:cyfr, :device_label, original_app),
-          else: Application.delete_env(:cyfr, :device_label)
-      end)
-
-      :ok
-    end
-
-    test "reads :cyfr, :device_label" do
-      Application.put_env(:cyfr, :device_label, "app-env-value")
-      assert CredentialStore.device_label() == "app-env-value"
+      Cyfr.Test.Settings.put("device_label", "another-label")
+      assert CredentialStore.device_label() == "another-label"
     end
 
     test "falls back to machine hostname when unset" do
-      Application.delete_env(:cyfr, :device_label)
+      Cyfr.Test.Settings.reset("device_label")
 
       label = CredentialStore.device_label()
       assert is_binary(label)

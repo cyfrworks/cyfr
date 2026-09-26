@@ -1029,15 +1029,8 @@ defmodule Compendium.RegistryTest do
 
   describe "publish_tincture_archive/4 — athanor storage cap" do
     test "refuses when the extracted tree would pass the athanor cap", %{ctx: ctx} do
-      prev_caps = Application.get_env(:sanctum, :caps)
-      Application.put_env(:sanctum, :caps, athanor_storage_bytes: 1)
+      Cyfr.Test.Settings.put("athanor_storage_bytes", 1)
       Arca.Usage.invalidate(Sanctum.Context.actor(ctx))
-
-      on_exit(fn ->
-        if prev_caps,
-          do: Application.put_env(:sanctum, :caps, prev_caps),
-          else: Application.delete_env(:sanctum, :caps)
-      end)
 
       archive =
         tincture_archive([

@@ -195,6 +195,21 @@ defmodule Cyfr.PlatformSettingsTest do
       assert again == next + 1
     end
 
+    test "a cap set refuses the next creation over it, with no restart", %{ctx: ctx} do
+      {:ok, count} = Sanctum.Tenancy.Athanors.count()
+      mint = fn -> Sanctum.Tenancy.Athanors.create_group(ctx.user_id, "Capped") end
+
+      assert {:ok, %{pending: false}} = Settings.set(ctx, "max_athanors", count + 1)
+      assert {:ok, _} = mint.()
+
+      assert {:error, {:limit_reached, :max_athanors, cap}} = mint.()
+      assert cap == count + 1
+
+      # Reset reads the default again, which is no cap.
+      assert {:ok, _} = Settings.reset(ctx, "max_athanors")
+      assert {:ok, _} = mint.()
+    end
+
     test "a restart-scoped set is answered pending and applies nothing now", %{ctx: ctx} do
       running = Application.get_env(:cyfr, :crucible_max_concurrent)
 

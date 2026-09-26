@@ -23,7 +23,10 @@ defmodule CyfrWeb.Plugs.CORS do
 
   ## Configuration
 
-      # Default — allow all origins
+      # Default — no cross-origin browser caller
+      config :cyfr, :cors_allowed_origins, []
+
+      # Allow all origins (refused at boot once authentication is configured)
       config :cyfr, :cors_allowed_origins, ["*"]
 
       # Restrict to known origins

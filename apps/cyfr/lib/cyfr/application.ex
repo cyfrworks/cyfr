@@ -353,7 +353,11 @@ defmodule Cyfr.Application do
 
   @doc false
   # The caps the execution slots boot with: the total, and the roots one
-  # athanor may hold.
+  # athanor may hold. Restart-scoped settings, read once here from the
+  # application environment, where the boot wrote a pinned value and
+  # `Cyfr.Platform.Settings.apply/0` a stored one, and never through
+  # `Arca.PlatformSettings.effective/1`: that answers the stored row,
+  # which may be a value saved for the next boot and not the one running.
   @spec execution_slot_caps() :: {pos_integer(), pos_integer()}
   def execution_slot_caps do
     {Application.get_env(:cyfr, :crucible_max_concurrent, Prima.Slots.default_max()),

@@ -25,14 +25,7 @@ defmodule CyfrWeb.Ingress.ExecutionEventsStreamTest do
       )
 
     # The stream's own deadline, short: a test that leaves it open ends.
-    prev = Application.get_env(:cyfr, :crucible_events_max_ms)
-    Application.put_env(:cyfr, :crucible_events_max_ms, 3_000)
-
-    on_exit(fn ->
-      if prev,
-        do: Application.put_env(:cyfr, :crucible_events_max_ms, prev),
-        else: Application.delete_env(:cyfr, :crucible_events_max_ms)
-    end)
+    Cyfr.Test.Settings.put("crucible_events_max_ms", 3_000)
 
     {:ok, conn: conn, ctx: ctx, exec: execution}
   end

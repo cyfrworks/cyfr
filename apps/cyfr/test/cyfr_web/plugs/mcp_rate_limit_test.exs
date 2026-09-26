@@ -4,30 +4,23 @@
 defmodule CyfrWeb.Plugs.MCPRateLimitTest do
   use ExUnit.Case, async: false
 
+  alias Cyfr.Test.Settings
   alias CyfrWeb.Plugs.MCPRateLimit
 
   setup do
     Prima.RateLimiter.reset()
 
-    original_max = Application.get_env(:cyfr, :mcp_rate_limit_max)
-    original_window = Application.get_env(:cyfr, :mcp_rate_limit_window_ms)
     original_trust = Application.get_env(:sanctum, :trust_x_forwarded_for)
 
-    Application.put_env(:cyfr, :mcp_rate_limit_max, 3)
-    Application.put_env(:cyfr, :mcp_rate_limit_window_ms, 60_000)
+    Settings.put("mcp_rate_limit_max", 3)
+    Settings.put("mcp_rate_limit_window_ms", 60_000)
 
     on_exit(fn ->
-      restore = fn
-        _app, _key, nil -> :ok
-        app, key, value -> Application.put_env(app, key, value)
-      end
-
-      Application.delete_env(:cyfr, :mcp_rate_limit_max)
-      Application.delete_env(:cyfr, :mcp_rate_limit_window_ms)
       Application.delete_env(:sanctum, :trust_x_forwarded_for)
-      restore.(:cyfr, :mcp_rate_limit_max, original_max)
-      restore.(:cyfr, :mcp_rate_limit_window_ms, original_window)
-      restore.(:sanctum, :trust_x_forwarded_for, original_trust)
+
+      if original_trust != nil,
+        do: Application.put_env(:sanctum, :trust_x_forwarded_for, original_trust)
+
       Prima.RateLimiter.reset()
     end)
 
@@ -78,6 +71,58 @@ defmodule CyfrWeb.Plugs.MCPRateLimitTest do
     body = Jason.decode!(blocked.resp_body)
     assert body["code"] == "rate_limited"
     refute Map.has_key?(body, "jsonrpc")
+  end
+
+  test "a limit set takes the next request, with no restart" do
+    ip = {127, 0, 0, 20}
+
+    for _ <- 1..3, do: refute(MCPRateLimit.call(conn_from(ip), []).halted)
+    assert MCPRateLimit.call(conn_from(ip), []).halted
+
+    Settings.put("mcp_rate_limit_max", 5)
+
+    for _ <- 1..2, do: refute(MCPRateLimit.call(conn_from(ip), []).halted)
+    assert MCPRateLimit.call(conn_from(ip), []).halted
+  end
+
+  test "the :api bucket takes the MCP pair while its own is unset, and its own once set" do
+    api = MCPRateLimit.init(bucket: :api)
+    ip = {127, 0, 0, 21}
+
+    for _ <- 1..3, do: refute(MCPRateLimit.call(conn_from(ip, "/api/x"), api).halted)
+    assert MCPRateLimit.call(conn_from(ip, "/api/x"), api).halted
+
+    Settings.put("api_rate_limit_max", 4)
+    refute MCPRateLimit.call(conn_from(ip, "/api/x"), api).halted
+    assert MCPRateLimit.call(conn_from(ip, "/api/x"), api).halted
+
+    # Reset deletes the row: absent again, the pair inherits once more.
+    Settings.reset("api_rate_limit_max")
+    assert Arca.PlatformSettings.get("api_rate_limit_max") == {:error, :not_found}
+    assert MCPRateLimit.call(conn_from(ip, "/api/x"), api).halted
+  end
+
+  test "a bucket the plug does not know is refused where it is declared" do
+    assert_raise ArgumentError, ~r/:bucket must be :mcp or :api/, fn ->
+      MCPRateLimit.init(bucket: :tincture)
+    end
+  end
+
+  @tag :capture_log
+  test "a store that cannot answer throttles by the last value read, and says so" do
+    ref = :telemetry_test.attach_event_handlers(self(), [Arca.PlatformSettings.stale_event()])
+    on_exit(fn -> :telemetry.detach(ref) end)
+
+    ip = {127, 0, 0, 22}
+    Settings.expire("mcp_rate_limit_max")
+    Settings.expire("mcp_rate_limit_window_ms")
+    Settings.break_store!()
+
+    for _ <- 1..3, do: refute(MCPRateLimit.call(conn_from(ip), []).halted)
+    assert MCPRateLimit.call(conn_from(ip), []).status == 429
+
+    assert_received {[:cyfr, :platform_settings, :stale_served], ^ref, %{count: 1},
+                     %{key: "mcp_rate_limit_max"}}
   end
 
   test "different client IPs have independent buckets" do

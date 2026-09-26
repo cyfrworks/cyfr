@@ -25,6 +25,11 @@ File.mkdir_p!(Path.join(seed_path, "components"))
 # implementation itself — before the first test that writes a tenant byte.
 Prima.Caps.install!(Sanctum.Tenancy.Caps)
 
+# The platform settings Sanctum reads (the caps, the session idle timeout,
+# the webhook skew window). The host installs every setting's declaration
+# at its boot; with none booted here, the suite installs these itself.
+Sanctum.Test.Settings.install!()
+
 # The unit-locator port: the overlaid roots' unit boundaries are the
 # component domain's to spell. An umbrella run's boot installed that
 # domain's locators and keeps them; this build has no component domain,

@@ -9,8 +9,8 @@ defmodule Cyfr.Platform.Settings.Roster do
   decides how the box is reachable, or is a security posture a stolen
   operator session must not change: `deployment/0` lists them, and they
   stay in the environment. Everything else is a **platform setting**:
-  `entries/0` declares each one with its store key, the application and
-  configuration path it is written to today, its variable, type, default,
+  `entries/0` declares each one with its store key, its application, the
+  configuration path of the few read from there, its variable, type, default,
   validator, group, scope, stale policy, apply function and, for the API
   rate-limit pair, the mark that an absent value inherits the MCP pair.
 
@@ -40,11 +40,15 @@ defmodule Cyfr.Platform.Settings.Roster do
     One platform setting.
 
       * `key` — the store key (`platform_settings.key`), a string.
-      * `app` and `config` — the application and the configuration path the
-        boot writes the value to while a reader still takes it from there:
-        `[key]` for a top-level key, `[key, subkey]` for an entry of a
-        keyword the reader takes whole (the caps, the worker watch), `nil`
-        for a setting no reader takes from the application environment.
+      * `app` — the application whose reader reads it: `:sanctum` for the
+        caps and Sanctum's windows, `:logger` for the log level, `:cyfr` for
+        the rest.
+      * `config` — the configuration path the value is written to for a
+        reader that takes it from the application environment: `[key]` for
+        a restart-scoped setting, which the boot and its apply write there
+        and its reader reads once, and `[:level]` for the log level, which
+        Logger holds. `nil` for every other setting, whose reader calls
+        `Arca.PlatformSettings.effective/1` on each use.
       * `variable` — the `CYFR_*` name that pins it, or `nil`.
       * `type` — the value's shape: `:integer`, `:boolean`, `:string`,
         `:duration_s` (whole seconds), `:list`, `:keyword` or `:atom` (a
@@ -164,7 +168,6 @@ defmodule Cyfr.Platform.Settings.Roster do
       %Entry{
         key: "athanor_storage_bytes",
         app: :sanctum,
-        config: [:caps, :athanor_storage_bytes],
         variable: "CYFR_ATHANOR_STORAGE_BYTES",
         type: :integer,
         default: nil,
@@ -270,7 +273,6 @@ defmodule Cyfr.Platform.Settings.Roster do
       %Entry{
         key: "session_ttl_hours",
         app: :sanctum,
-        config: [:session_ttl_hours],
         variable: "CYFR_SESSION_TTL_HOURS",
         type: :integer,
         # 0 is a value: sessions that never idle out.
@@ -283,7 +285,6 @@ defmodule Cyfr.Platform.Settings.Roster do
       %Entry{
         key: "webhook_max_skew_seconds",
         app: :sanctum,
-        config: [:webhook_max_skew_seconds],
         variable: "CYFR_WEBHOOK_MAX_SKEW_SECONDS",
         type: :duration_s,
         default: 300,
@@ -295,7 +296,6 @@ defmodule Cyfr.Platform.Settings.Roster do
       %Entry{
         key: "webhook_idempotency_ttl_seconds",
         app: :cyfr,
-        config: [:webhook_idempotency_ttl_seconds],
         variable: "CYFR_WEBHOOK_IDEMPOTENCY_TTL_SECONDS",
         type: :duration_s,
         default: 86_400,
@@ -309,7 +309,6 @@ defmodule Cyfr.Platform.Settings.Roster do
       %Entry{
         key: "device_label",
         app: :cyfr,
-        config: [:device_label],
         variable: "CYFR_DEVICE_LABEL",
         type: :string,
         # Unset is the hostname, which the reader asks for itself.
@@ -336,7 +335,6 @@ defmodule Cyfr.Platform.Settings.Roster do
       %Entry{
         key: "opus_watch_poll_ms",
         app: :cyfr,
-        config: [:opus_watch, :poll_ms],
         variable: "CYFR_OPUS_WATCH_POLL_MS",
         type: :integer,
         default: 5_000,
@@ -348,7 +346,6 @@ defmodule Cyfr.Platform.Settings.Roster do
       %Entry{
         key: "opus_watch_misses",
         app: :cyfr,
-        config: [:opus_watch, :misses],
         variable: "CYFR_OPUS_WATCH_MISSES",
         type: :integer,
         default: 3,
@@ -415,7 +412,6 @@ defmodule Cyfr.Platform.Settings.Roster do
     %Entry{
       key: Atom.to_string(key),
       app: :sanctum,
-      config: [:caps, key],
       variable: variable,
       type: :integer,
       # 0 disables a defaulted cap, so it is a value, not "unset".
@@ -431,7 +427,6 @@ defmodule Cyfr.Platform.Settings.Roster do
     %Entry{
       key: Atom.to_string(key),
       app: :cyfr,
-      config: [key],
       variable: variable,
       type: :integer,
       default: default,
@@ -446,7 +441,6 @@ defmodule Cyfr.Platform.Settings.Roster do
     %Entry{
       key: key,
       app: :cyfr,
-      config: nil,
       variable: variable,
       type: type,
       default: default,
@@ -559,9 +553,9 @@ defmodule Cyfr.Platform.Settings.Roster do
   def defaults, do: Map.new(entries(), &{&1.key, %{default: &1.default, stale: &1.stale}})
 
   @doc """
-  The `{application, key}` pairs the entries are written under today: the
-  head of each entry's configuration path. `Cyfr.Boundaries` classes these
-  keys `:setting`.
+  The `{application, key}` pairs the entries are written under: the head
+  of each configuration path, the restart-scoped settings' and the log
+  level's. `Cyfr.Boundaries` classes these keys `:setting`.
   """
   @spec config_keys() :: [{atom(), atom()}]
   def config_keys do

@@ -20,9 +20,6 @@ defmodule Sanctum.AdmissionCapacityTest do
     :ok = Ecto.Adapters.SQL.Sandbox.checkout(Arca.Repo)
     Ecto.Adapters.SQL.Sandbox.mode(Arca.Repo, {:shared, self()})
 
-    previous = Application.get_env(:sanctum, :caps, [])
-    on_exit(fn -> Application.put_env(:sanctum, :caps, previous) end)
-
     :ok
   end
 
@@ -36,7 +33,7 @@ defmodule Sanctum.AdmissionCapacityTest do
     }
   end
 
-  defp at_capacity!, do: Application.put_env(:sanctum, :caps, max_athanors: 1)
+  defp at_capacity!, do: Sanctum.Test.Settings.put("max_athanors", 1)
 
   test "a stranger the caps refuse is turned away, with no athanor and no session" do
     n = System.unique_integer([:positive])

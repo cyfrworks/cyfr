@@ -355,9 +355,7 @@ defmodule CyfrWeb.Ingress.AuthControllerTest do
       # Nothing is shared server-wide for a refused mint to fall back on, so
       # admitting the person without an athanor would hand them a session
       # with nowhere to work. The door says so instead.
-      previous = Application.get_env(:sanctum, :caps, [])
-      Application.put_env(:sanctum, :caps, max_athanors: 1)
-      on_exit(fn -> Application.put_env(:sanctum, :caps, previous) end)
+      Cyfr.Test.Settings.put("max_athanors", 1)
 
       n = System.unique_integer([:positive])
       conn = callback(conn, verified_oidcc_auth("full_#{n}", email: "full#{n}@example.com"))

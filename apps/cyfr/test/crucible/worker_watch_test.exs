@@ -483,23 +483,21 @@ defmodule Crucible.WorkerWatchTest do
       assert {:error, message} = WorkerWatch.start_link(workers: [], name: "watch")
       assert message =~ "name"
 
-      # The application's configuration is read the same way, and the
-      # defaults stand where it says nothing.
-      previous = Application.get_env(:cyfr, :opus_watch)
+      # A bound the caller fixes must be a positive integer.
+      assert {:error, message} =
+               WorkerWatch.start_link(workers: [], poll_ms: "5000", name: :bad_watch)
 
-      on_exit(fn ->
-        if previous,
-          do: Application.put_env(:cyfr, :opus_watch, previous),
-          else: Application.delete_env(:cyfr, :opus_watch)
-      end)
-
-      Application.put_env(:cyfr, :opus_watch, poll_ms: "5000")
-      assert {:error, message} = WorkerWatch.start_link(workers: [], name: :bad_watch)
       assert message =~ "poll_ms"
 
-      Application.put_env(:cyfr, :opus_watch, misses: 2)
+      # Unfixed, each bound is its platform setting, the default where none
+      # is stored, and a setting stored later is the next tick's.
+      Cyfr.Test.Settings.put("opus_watch_misses", 2)
       {:ok, pid} = WorkerWatch.start_link(workers: [], name: :configured_watch)
-      assert %{poll_ms: 5_000, misses: 2} = :sys.get_state(pid)
+      assert %{poll_ms: 5_000, misses: 2, lease_ms: 10_000} = :sys.get_state(pid)
+
+      Cyfr.Test.Settings.put("opus_watch_poll_ms", 2_000)
+      send(pid, :poll)
+      assert %{poll_ms: 2_000, misses: 2, lease_ms: 4_000} = :sys.get_state(pid)
       GenServer.stop(pid)
     end
 

@@ -294,6 +294,33 @@ defmodule CyfrWeb.Plugs.VerifyWebhookSignatureTest do
       assert result.status == 401
     end
 
+    @tag :capture_log
+    test "503 when the skew window cannot be read — the delivery is refused, not admitted",
+         %{ctx: ctx} do
+      %{slug: slug, secret: secret} =
+        create_hook!(ctx, "ts-window-outage", timestamp_header: "X-Cyfr-Timestamp")
+
+      body = "{}"
+      ts = System.system_time(:second) |> Integer.to_string()
+      sig = "sha256=" <> hmac_hex(secret, ts <> "." <> body)
+
+      conn =
+        build_request(slug, body, [
+          {"x-cyfr-signature", sig},
+          {"x-cyfr-timestamp", ts}
+        ])
+
+      Cyfr.Test.Settings.expire("webhook_max_skew_seconds")
+      Cyfr.Test.Settings.break_store!()
+
+      result = VerifyWebhookSignature.call(conn, [])
+
+      assert result.halted
+      assert result.status == 503
+      assert Plug.Conn.get_resp_header(result, "retry-after") == ["5"]
+      assert result.resp_body =~ "unavailable"
+    end
+
     test "without timestamp_header on the webhook, no timestamp header is required", %{ctx: ctx} do
       %{slug: slug, secret: secret} = create_hook!(ctx, "no-ts-required")
 

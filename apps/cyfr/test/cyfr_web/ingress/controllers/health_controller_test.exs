@@ -71,6 +71,11 @@ defmodule CyfrWeb.Ingress.HealthControllerTest do
         Arca.Cache.invalidate({CyfrWeb.Ingress.HealthController, :ready_cache})
       end)
 
+      # The probe reads its cache window first, a setting served from the
+      # accessor's cache; read it now, while the pool still answers, since
+      # a pool that hands out nothing raises rather than answering as an
+      # unreachable database does.
+      {:ok, _window} = Arca.PlatformSettings.effective("health_ready_cache_ms")
       Ecto.Adapters.SQL.Sandbox.mode(Arca.Repo, :manual)
 
       response = json_response(get(conn, "/api/health/ready"), 503)
@@ -101,6 +106,26 @@ defmodule CyfrWeb.Ingress.HealthControllerTest do
       response = json_response(get(conn, "/api/health/ready"), 200)
       assert response["status"] == "ready"
       assert response["checks"]["control_plane"] == "ok"
+    end
+
+    test "a probe's result is kept for the health_ready_cache_ms window", %{conn: conn} do
+      # The window is read when a probe's result is stored: a long one keeps
+      # answering the stored result while the standing it recorded changes.
+      Cyfr.Test.Settings.put("health_ready_cache_ms", 60_000)
+      Arca.Cache.invalidate({CyfrWeb.Ingress.HealthController, :ready_cache})
+
+      on_exit(fn ->
+        Arca.ControlPlane.record(:unclaimed)
+        Arca.Cache.invalidate({CyfrWeb.Ingress.HealthController, :ready_cache})
+      end)
+
+      assert json_response(get(conn, "/api/health/ready"), 200)["status"] == "ready"
+
+      Arca.ControlPlane.record(:lost)
+      assert json_response(get(conn, "/api/health/ready"), 200)["status"] == "ready"
+
+      Arca.Cache.invalidate({CyfrWeb.Ingress.HealthController, :ready_cache})
+      assert json_response(get(conn, "/api/health/ready"), 503)["status"] == "not_ready"
     end
 
     test "a stranded probe key is overwritten, not accumulated", %{conn: conn} do

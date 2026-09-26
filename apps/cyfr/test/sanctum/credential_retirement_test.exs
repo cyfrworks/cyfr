@@ -329,9 +329,7 @@ defmodule Sanctum.CredentialRetirementTest do
       {user, own} = owner!("capped")
       {:ok, denied} = Users.deny(user)
       {:ok, count} = Athanors.count()
-      original = Application.get_env(:sanctum, :caps, [])
-      Application.put_env(:sanctum, :caps, Keyword.put(original, :max_athanors, count))
-      on_exit(fn -> Application.put_env(:sanctum, :caps, original) end)
+      Cyfr.Test.Settings.put("max_athanors", count)
 
       assert {:error, {:limit_reached, :max_athanors, ^count}} = Users.allow(denied)
       assert {:ok, %{status: "denied", security_generation: 2}} = Users.get(user.id)
