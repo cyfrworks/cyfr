@@ -218,6 +218,11 @@ defmodule CyfrWeb.Ingress.TinctureAssets do
 
   # Text, scripts, JSON and WebAssembly are compressed for a client that
   # accepts it; the response varies on that either way.
+  # The body is a tincture version's immutable file, served under its own
+  # content type, the derived CSP and the sandbox directive; nothing in it
+  # is echoed from the request, so Sobelow's send_resp finding does not
+  # apply here.
+  # sobelow_skip ["XSS.SendResp"]
   defp send_body(conn, type, content) do
     conn =
       conn
