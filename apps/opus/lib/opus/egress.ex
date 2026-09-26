@@ -5,19 +5,26 @@ defmodule Opus.Egress do
   @moduledoc """
   Where a guest's outbound HTTP request connects: the address CYFR pinned
   for it under the attempt's admitted authority
-  (`c:Prima.HostAPI.egress_pin/3`). The engine resolves no name itself.
+  (`c:Prima.HostAPI.egress_pin/3`). The engine resolves no name itself,
+  and the runner connects nowhere: its relay's service end does.
 
-  `pin/3` asks the attempt's host client for the pin of a URL
-  (`Opus.HostClient.egress_pin/3`), checks that the pin names the URL's
-  own scheme, host and port, and builds the request options that connect
-  to exactly the pinned address (`Prima.Network.pin/3`). CYFR has already
-  applied the attempt's private-address policy to that address, so the
-  options are built under `:allow_all`, and a metadata address is still
-  refused there whatever CYFR answered. The pin's host is kept for TLS
-  SNI, certificate verification and the `Host` header, and the transport
-  policy stays closed: no redirect, no retry, no compression, no body
-  decoding. A pin is only an address: every request is still checked and
-  charged as the handlers check and charge it, before it is pinned.
+  In the runner, `pin/3` asks the attempt's host client for the pin of a
+  URL (`Opus.HostClient.egress_pin/3`), a call the relay's service end
+  reads the answer of and keeps as a pin granted to that attempt, checks
+  that the pin names the URL's own scheme, host and port, and that its
+  address is no metadata address whatever CYFR answered. The runner's
+  handlers then send the request through the relay naming the pin by id
+  (`Opus.Relay.Runner.fetch/7`).
+
+  In the service, `connect_options/3` builds the request options that
+  connect to exactly the pinned address (`Prima.Network.pin/3`). CYFR has
+  already applied the attempt's private-address policy to that address,
+  so the options are built under `:allow_all`, and a metadata address is
+  still refused there. The pin's host is kept for TLS SNI, certificate
+  verification and the `Host` header, and the transport policy stays
+  closed: no redirect, no retry, no compression, no body decoding. A pin
+  is only an address: every request is still checked and charged, by the
+  handlers and again by the relay, before it connects.
 
   A pin is reused for the next request of the same attempt with the same
   purpose to the same scheme, host and port until its `expires_at`, and
@@ -45,18 +52,29 @@ defmodule Opus.Egress do
 
   @typedoc """
   What `pin/3` answers: the address as text and as a tuple, the URI with
-  the pin's host, the `Req` options that connect to that address with the
-  fail-closed transport policy, ready for the caller's method, headers and
-  body, the pin itself (`:target`) and, for a redirect's next hop, the pin
-  the redirect came from (`:from`).
+  the pin's host, the pin itself (`:target`), whose id the relay's fetch
+  names, and, for a redirect's next hop, the pin the redirect came from
+  (`:from`).
   """
   @type pinned :: %{
           ip: String.t(),
           ip_tuple: :inet.ip_address(),
           uri: URI.t(),
-          req_opts: keyword(),
           target: PinnedTarget.t(),
           from: PinnedTarget.t() | nil
+        }
+
+  @typedoc """
+  What `connect_options/3` answers: the address as text and as a tuple,
+  the URI with the pin's host, and the `Req` options that connect to that
+  address with the fail-closed transport policy, ready for the caller's
+  method, headers and body.
+  """
+  @type connection :: %{
+          ip: String.t(),
+          ip_tuple: :inet.ip_address(),
+          uri: URI.t(),
+          req_opts: keyword()
         }
 
   @typedoc "The guest error type of a refusal `pin/3` answers."
@@ -79,9 +97,6 @@ defmodule Opus.Egress do
     * `:purpose` — `:fetch` (default) or `:stream`; a request to where a
       redirect the attempt received points is its next hop instead, and
       is pinned as `:redirect`
-    * `:receive_timeout` — ms (default 30_000)
-    * `:protocols` — Mint protocols list (e.g. `[:http1]`)
-    * `:transport_opts` — extra Mint transport opts
 
   Answers `{:ok, pinned}` (`t:pinned/0`); `{:error, type, message}` for a
   refusal of the engine's own, which the caller records; or
@@ -97,8 +112,8 @@ defmodule Opus.Egress do
 
     with {:ok, uri} <- Prima.Network.parse_url(url) do
       case take_hop(client, uri) do
-        {:ok, from} -> connect(client, url, uri, :redirect, from, opts)
-        :none -> connect(client, url, uri, purpose, nil, opts)
+        {:ok, from} -> connect(client, url, uri, :redirect, from)
+        :none -> connect(client, url, uri, purpose, nil)
       end
     end
   end
@@ -146,11 +161,33 @@ defmodule Opus.Egress do
   defp origin(%PinnedTarget{scheme: scheme, host: host, port: port}),
     do: %URI{scheme: scheme, host: host, port: port}
 
-  defp connect(client, url, uri, purpose, from, opts) do
+  @doc """
+  The request options that connect to exactly the address `target` pins,
+  for `uri` (its path and query the request's), keeping the pin's host for
+  TLS SNI, certificate verification and the `Host` header. A metadata
+  address is `{:error, :private_ip_blocked, message}`.
+
+  ## Options
+
+    * `:receive_timeout` — ms (default 30_000)
+    * `:protocols` — Mint protocols list (e.g. `[:http1]`)
+    * `:transport_opts` — extra Mint transport opts
+  """
+  @spec connect_options(PinnedTarget.t(), URI.t(), keyword()) ::
+          {:ok, connection()} | {:error, :private_ip_blocked, String.t()}
+  def connect_options(%PinnedTarget{} = target, %URI{} = uri, opts) when is_list(opts),
+    do: build(uri, target, opts)
+
+  defp connect(client, url, uri, purpose, from) do
     with {:ok, target} <- target(client, url, uri, purpose, from),
-         {:ok, pinned} <- build(uri, target, opts) do
+         {:ok, pinned} <- build(uri, target, []) do
       if purpose != :redirect, do: remember(client, purpose, uri, target)
-      {:ok, pinned |> Map.put(:target, target) |> Map.put(:from, from)}
+
+      {:ok,
+       pinned
+       |> Map.delete(:req_opts)
+       |> Map.put(:target, target)
+       |> Map.put(:from, from)}
     end
   end
 

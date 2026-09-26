@@ -10,9 +10,12 @@ defmodule Opus.KeeperVectorsTest do
   channel, byte for byte but for its own id, command and attach target; every
   reply the vectors hold reaches the spawn's handle as the event it
   means; a reply of the wrong shape is ignored; the relay's stdout,
-  stderr and control frames are carried, and a frame on stdin or the
-  attach stream, an oversized one or one on no stream is refused in band
-  as a relay fault; and an attach frame of the wrong shape is closed.
+  stderr and control frames are carried; the relay stream (5) is opened
+  with the vectors' zero-length frame once the runner attaches, carries
+  runner relay frames both ways and ends with the keeper's zero-length
+  frame; a frame on stdin or the attach stream, an oversized one or one
+  on no stream is refused in band as a relay fault; and an attach frame
+  of the wrong shape is closed.
   """
 
   use ExUnit.Case, async: true
@@ -114,6 +117,14 @@ defmodule Opus.KeeperVectorsTest do
 
   defp encoded(frame), do: Base.decode16!(frame["encoded_hex"], case: :lower)
   defp payload(frame), do: Base.decode16!(frame["payload_hex"], case: :lower)
+
+  # The first bytes a relay reads once its runner attached: the zero-length
+  # frame that opens the relay stream and ends nothing.
+  defp opened!(relay) do
+    [open | _] = @vectors["relay_frames"]
+    assert {:ok, bytes} = :gen_tcp.recv(relay, 5, 5_000)
+    assert bytes == encoded(open)
+  end
 
   defp attach!(client, line) do
     %{"attach" => %{"path" => path, "token" => token}} = Jason.decode!(line)
@@ -269,12 +280,64 @@ defmodule Opus.KeeperVectorsTest do
     :gen_tcp.close(relay)
   end
 
+  test "the relay stream opens once the runner attaches, carries relay frames both ways and ends",
+       ctx do
+    client = start_client!(ctx)
+    {ref, line} = spawn!(client)
+    spawned(client, line)
+    relay = attach!(client, line)
+    assert_receive {Channel, ^ref, :attached}, 5_000
+
+    # The client speaks first on the stream, since the keeper sends nothing
+    # on it until the client has: the vectors' opening frame.
+    opened!(relay)
+
+    # What the runner wrote to its fd 4 reaches the owner verbatim.
+    [_open, carried, close] = @vectors["relay_frames"]
+    :ok = :gen_tcp.send(relay, encoded(carried))
+    carried_payload = payload(carried)
+    assert_receive {Channel, ^ref, {:relay, ^carried_payload}}, 5_000
+
+    # What the service writes is framed on stream 5, from any process.
+    handle = %{ref: ref, server: client.name}
+    task = Task.async(fn -> Channel.send_relay(handle, payload(carried)) end)
+    assert :ok = Task.await(task)
+    assert {:ok, bytes} = :gen_tcp.recv(relay, byte_size(encoded(carried)), 5_000)
+    assert bytes == encoded(carried)
+
+    # The keeper's zero-length frame ends the stream: the runner closed its
+    # fd 4. The control channel stays open.
+    :ok = :gen_tcp.send(relay, encoded(close))
+    assert_receive {Channel, ^ref, :relay_closed}, 5_000
+    refute_receive {Channel, ^ref, :control_closed}, 100
+    assert {:error, :relay_closed} = Channel.send_relay(handle, "more")
+    :gen_tcp.close(relay)
+  end
+
+  test "the service ends the relay stream with a zero-length frame", ctx do
+    client = start_client!(ctx)
+    {ref, line} = spawn!(client)
+    spawned(client, line)
+    relay = attach!(client, line)
+    assert_receive {Channel, ^ref, :attached}, 5_000
+    opened!(relay)
+
+    handle = %{ref: ref, server: client.name}
+    :ok = Channel.close_relay(handle)
+    [_open, _carried, close] = @vectors["relay_frames"]
+    assert {:ok, bytes} = :gen_tcp.recv(relay, 5, 5_000)
+    assert bytes == encoded(close)
+    assert {:error, :relay_closed} = Channel.send_relay(handle, "more")
+    :gen_tcp.close(relay)
+  end
+
   test "a frame on stdin or the attach stream, oversized or on no stream, is a relay fault",
        ctx do
+    # Stream 6 is no stream of the protocol's; stream 5 is the relay.
     refused =
       [frame_vector("frames", 0), frame_vector("frames", 3)]
       |> Enum.map(&encoded/1)
-      |> Kernel.++([<<1, KeeperProtocol.max_frame_bytes() + 1::32>>, <<5, 0::32>>])
+      |> Kernel.++([<<1, KeeperProtocol.max_frame_bytes() + 1::32>>, <<6, 0::32>>])
 
     for bytes <- refused do
       client = start_client!(ctx)
@@ -282,6 +345,7 @@ defmodule Opus.KeeperVectorsTest do
       spawned(client, line)
       relay = attach!(client, line)
       assert_receive {Channel, ^ref, :attached}, 5_000
+      opened!(relay)
 
       :ok = :gen_tcp.send(relay, bytes)
 

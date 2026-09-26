@@ -207,6 +207,16 @@ defmodule Opus.Release do
     do: Port.open({:fd, fd, fd}, [:binary, :stream, :eof])
 
   @doc """
+  The runner's end of its relay (`Opus.Relay.Runner`) as a port: file
+  descriptor `fd` (4, beside the control channel on 3, as the keeper
+  gives every runner) for both directions, reporting its end as
+  `{port, :eof}`.
+  """
+  @spec open_relay(pos_integer()) :: port()
+  def open_relay(fd) when is_integer(fd) and fd > 2,
+    do: Port.open({:fd, fd, fd}, [:binary, :stream, :eof])
+
+  @doc """
   Send the runner's own log output to standard error, so nothing but
   control frames reaches standard output when the channel is there.
   """

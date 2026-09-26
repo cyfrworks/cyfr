@@ -12,11 +12,15 @@ defmodule Opus.Keeper do
       the one keeper every build runs: each runner is spawned in the
       keeper's `runner` uid pool with an explicit environment, and its
       control channel (`Prima.RunnerControl`) is the socket on its file
-      descriptor 3, relayed over the attach connection as stream 4.
+      descriptor 3, relayed over the attach connection as stream 4, and its
+      relay (`Prima.RunnerRelay`) the socket on its file descriptor 4,
+      relayed as stream 5, in a network namespace of its own with no other
+      way out.
       Refused where no channel was inherited, which refuses the boot.
     * `:direct` — the test build's launcher for a machine without a keeper
       (`direct_keeper/0`), compiled from its test support alone: each
-      runner is a plain child process of this VM, with no uid of its own.
+      runner is a plain child process of this VM, with no uid of its own,
+      whose relay is a unix socket in its home.
       No other build compiles it, so no other build can name it.
 
   A `Opus.RunnerProcess` calls `c:spawn/1` in its own process and keeps
@@ -24,10 +28,14 @@ defmodule Opus.Keeper do
   process is read with `c:handle_message/2`, which answers the events it
   carries (`t:event/0`): the runner's OS pid once spawned, the channel
   attached, control bytes as the runner wrote them (lines are the
-  caller's to split), the runner's log output, the channel closed, the
+  caller's to split), relay bytes as the runner wrote them (frames are
+  the caller's to split), the relay's end, the runner's log output, the
+  channel closed, the
   process exited, its uid or process group retired, the spawn refused
   (no process of it ever ran, as when `c:spawn/1` refuses), or a failure.
-  `c:refusal/1` says what a refusal means for an operator. Control bytes go back with `c:send/2`;
+  `c:refusal/1` says what a refusal means for an operator. Control bytes go back with `c:send/2`,
+  relay bytes with `c:send_relay/2`, callable from any process once the
+  runner attached, and `c:close_relay/1` ends the relay;
   `c:release/2` ends the runner: a term signal, a grace to report what it
   holds, then the group kill. `c:memory_bytes/1` is the bound every
   runner runs under, nil for a keeper that applies none.
@@ -52,6 +60,8 @@ defmodule Opus.Keeper do
           {:spawned, non_neg_integer() | nil}
           | :attached
           | {:control, binary()}
+          | {:relay, binary()}
+          | :relay_closed
           | {:log, binary()}
           | :control_closed
           | {:exited, exit()}
@@ -73,6 +83,12 @@ defmodule Opus.Keeper do
 
   @doc "Write `data` to the runner's control channel."
   @callback send(channel(), iodata()) :: :ok | {:error, term()}
+
+  @doc "Write `data` to the runner's relay, from any process, once the runner attached."
+  @callback send_relay(channel(), iodata()) :: :ok | {:error, term()}
+
+  @doc "End the runner's relay: nothing more is written to it."
+  @callback close_relay(channel()) :: :ok
 
   @doc "End the runner: a term signal, `grace_ms` to report, then the kill of everything it started."
   @callback release(channel(), non_neg_integer()) :: :ok

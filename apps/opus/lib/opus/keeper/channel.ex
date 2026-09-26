@@ -26,12 +26,24 @@ defmodule Opus.Keeper.Channel do
   socketpair, and its relay, running as the service's user, connects to
   the attach socket, presents the token and then carries the runner's
   streams as frames: a stream byte (0 stdin, 1 stdout, 2 stderr, 3 the
-  token, 4 the control channel), a 4-byte big-endian length and at most
-  64 KiB of payload; a zero-length frame ends its stream. Control bytes
+  token, 4 the control channel, 5 the relay), a 4-byte big-endian length
+  and at most 64 KiB of payload; a zero-length frame ends its stream. Control bytes
   go both ways on stream 4: a `Prima.RunnerControl` line longer than a
   frame is split across frames and reassembled by its newline on the far
   side. A zero-length control frame from the relay means the runner
   closed its fd 3 or exited.
+
+  Every runner is spawned `isolation: "netns"`, in a network namespace of
+  its own with no route: its relay (`Prima.RunnerRelay`), the socketpair on
+  its fd 4, is its only way to CYFR and to the addresses CYFR pins, and the
+  keeper carries it as stream 5. The keeper sends nothing on that stream
+  until this client has, so once the runner is attached this client opens
+  it with a zero-length frame, which ends nothing: only then does the
+  runner's first frame reach its owner, as `{:relay, bytes}`. After that a
+  zero-length frame ends the stream in either direction: from the keeper
+  it means the runner closed its fd 4 or exited (`:relay_closed`), and
+  `close_relay/1` sends one. `send_relay/2` writes relay bytes, split into
+  frames, from whichever process holds the runner's handle.
 
   `release` sends the runner's process group a term signal, the grace to
   report what it holds, then the kill, and retires the uid: every process
@@ -153,6 +165,20 @@ defmodule Opus.Keeper.Channel do
   catch
     :exit, reason -> {:error, {:keeper_unavailable, reason}}
   end
+
+  @impl Opus.Keeper
+  def send_relay(%{ref: ref, server: server}, data) do
+    GenServer.call(
+      server,
+      {:send_relay, ref, IO.iodata_to_binary(data)},
+      @channel_send_timeout_ms
+    )
+  catch
+    :exit, reason -> {:error, {:keeper_unavailable, reason}}
+  end
+
+  @impl Opus.Keeper
+  def close_relay(%{ref: ref, server: server}), do: GenServer.cast(server, {:close_relay, ref})
 
   @impl Opus.Keeper
   def release(%{ref: ref, server: server}, grace_ms) when is_integer(grace_ms) and grace_ms >= 0,
@@ -366,6 +392,7 @@ defmodule Opus.Keeper.Channel do
         frames: "",
         pending: [],
         control_open: true,
+        relay_open: false,
         release_on_spawn: nil,
         released: false
       }
@@ -401,6 +428,20 @@ defmodule Opus.Keeper.Channel do
     end
   end
 
+  # Relay bytes are written only once the runner attached, since only
+  # then does anything send them; an empty write would end the stream.
+  def handle_call({:send_relay, _ref, ""}, _from, state), do: {:reply, :ok, state}
+
+  def handle_call({:send_relay, ref, data}, _from, state) do
+    case state.requests[ref] do
+      %{conn: conn, relay_open: true} when conn != nil ->
+        {:reply, :gen_tcp.send(conn, KeeperProtocol.frames(:relay, data)), state}
+
+      _closed ->
+        {:reply, {:error, :relay_closed}, state}
+    end
+  end
+
   def handle_call({:attach, token, conn}, _from, state) do
     {ref, tokens} = Map.pop(state.tokens, token)
     state = %{state | tokens: tokens}
@@ -410,12 +451,16 @@ defmodule Opus.Keeper.Channel do
         _ =
           :gen_tcp.send(conn, KeeperProtocol.frames(:control, IO.iodata_to_binary(entry.pending)))
 
+        # The zero-length frame opens the relay stream and ends nothing:
+        # the keeper sends none of the runner's relay bytes before it.
+        relay_open = :gen_tcp.send(conn, KeeperProtocol.end_frame(:relay)) == :ok
+
         :ok = :inet.setopts(conn, active: true)
         notify(entry, ref, :attached)
 
         {:reply, :ok,
          %{
-           put_entry(state, ref, %{entry | conn: conn, pending: []})
+           put_entry(state, ref, %{entry | conn: conn, pending: [], relay_open: relay_open})
            | conns: Map.put(state.conns, conn, ref)
          }}
 
@@ -439,6 +484,17 @@ defmodule Opus.Keeper.Channel do
 
   @impl GenServer
   def handle_cast({:release, ref, grace_ms}, state), do: {:noreply, release(state, ref, grace_ms)}
+
+  def handle_cast({:close_relay, ref}, state) do
+    case state.requests[ref] do
+      %{conn: conn, relay_open: true} = entry when conn != nil ->
+        _ = :gen_tcp.send(conn, KeeperProtocol.end_frame(:relay))
+        {:noreply, put_entry(state, ref, %{entry | relay_open: false})}
+
+      _closed ->
+        {:noreply, state}
+    end
+  end
 
   @impl GenServer
   def handle_info({:channel, data}, state) do
@@ -527,6 +583,9 @@ defmodule Opus.Keeper.Channel do
 
       {:message, {:send, ref, data}} ->
         {:message, {:send, ref, {:redacted, byte_size(data)}}}
+
+      {:message, {:send_relay, ref, data}} ->
+        {:message, {:send_relay, ref, {:redacted, byte_size(data)}}}
 
       {:message, {:attach, _token, conn}} ->
         {:message, {:attach, :redacted, conn}}
@@ -660,8 +719,9 @@ defmodule Opus.Keeper.Channel do
     end
   end
 
-  # A relay carries the runner's stdout, stderr and control channel; a
-  # frame on any other stream, or one the codec refuses, is its fault.
+  # A relay carries the runner's stdout, stderr, control channel and relay
+  # stream; a frame on any other stream, or one the codec refuses, is its
+  # fault.
   defp parse_frames(state, ref, conn, entry) do
     case KeeperProtocol.parse_frames(entry.frames) do
       {:ok, frames, rest} -> on_frames(state, ref, conn, %{entry | frames: rest}, frames)
@@ -685,6 +745,14 @@ defmodule Opus.Keeper.Channel do
 
   defp on_frame(entry, ref, :control, payload),
     do: {:ok, notify_entry(entry, ref, {:control, payload})}
+
+  defp on_frame(%{relay_open: true} = entry, ref, :relay, ""),
+    do: {:ok, notify_entry(%{entry | relay_open: false}, ref, :relay_closed)}
+
+  defp on_frame(entry, _ref, :relay, ""), do: {:ok, entry}
+
+  defp on_frame(entry, ref, :relay, payload),
+    do: {:ok, notify_entry(entry, ref, {:relay, payload})}
 
   defp on_frame(entry, _ref, stream, "") when stream in [:stdout, :stderr], do: {:ok, entry}
 
@@ -717,6 +785,11 @@ defmodule Opus.Keeper.Channel do
       entry =
         if entry.control_open,
           do: notify_entry(%{entry | control_open: false}, ref, :control_closed),
+          else: entry
+
+      entry =
+        if entry.relay_open,
+          do: notify_entry(%{entry | relay_open: false}, ref, :relay_closed),
           else: entry
 
       put_entry(state, ref, %{entry | conn: nil})

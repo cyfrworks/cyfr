@@ -3,8 +3,16 @@
 
 defmodule Opus.HostClient do
   @moduledoc """
-  A runner's client of CYFR's host calls (`Prima.HostAPI`), for one
-  execution attempt, over HTTP.
+  A client of CYFR's host calls (`Prima.HostAPI`) for one execution
+  attempt, and the worker service's poster of every host call.
+
+  A runner has no network. Its client sends each call through its relay
+  (`Opus.Relay.Runner`, the `:relay` a client is made with), whose service
+  end (`Opus.Relay`) verifies the call under the attempt's keys and posts
+  it unchanged with `post_call/4`: every host call reaches CYFR from the
+  worker service, never from a runner. The service's own calls for an
+  attempt (the `take_rate` its relay takes before a fetch) are made by a
+  client posting directly (`:host_url`), as are its runner exit reports.
 
   A client names the attempt (its athanor, execution, attempt id, fence,
   generation and worker service), the runner presenting it, the attempt's
@@ -33,7 +41,8 @@ defmodule Opus.HostClient do
   wire, so it is not this engine's host, and the call is answered
   `{:error, :lost}` at once, which stops the attempt's work, rather than
   asked again. The attempt's seal key also opens the keys of a child CYFR
-  admits for this client's runner (`admit_child/5`).
+  admits for this client's runner (`admit_child/5`), whose attempt the
+  runner's relay then carries.
 
   Each function answers as the `Prima.HostAPI` callback of the same name.
   An answer that does not arrive within `Prima.HostAPI.request_timeout_ms/1`,
@@ -65,6 +74,8 @@ defmodule Opus.HostClient do
   alias Prima.{Assignment, BoundedBody, HostAPI, PinnedTarget, WorkerAuth, WorkerWire}
 
   @derive {Inspect, except: [:call_key, :seal_key]}
+  # A client posts through a runner's relay (`relay`) or directly to the
+  # member's address (`host_url`), never both.
   @enforce_keys [
     :athanor_id,
     :execution_id,
@@ -79,7 +90,7 @@ defmodule Opus.HostClient do
     :seal_key,
     :host_url
   ]
-  defstruct @enforce_keys
+  defstruct @enforce_keys ++ [relay: nil]
 
   @type t :: %__MODULE__{
           athanor_id: String.t(),
@@ -93,7 +104,8 @@ defmodule Opus.HostClient do
           member: String.t(),
           call_key: binary(),
           seal_key: binary(),
-          host_url: String.t()
+          host_url: String.t() | nil,
+          relay: GenServer.server() | nil
         }
 
   @typedoc """
@@ -129,26 +141,35 @@ defmodule Opus.HostClient do
 
   @doc """
   A client for the attempt `keys` name (`t:Prima.WorkerAuth.attempt_keys/0`),
-  signing with its call key and posting to the member `at` names: its
-  `member` boot id, which every header presents, and the `host_url` its
-  host API answers at. `runner` names the runner presenting the calls (a
-  fresh runner id is minted when it is nil) and `boot` the worker service
-  boot it presents from.
+  signing with its call key, addressed to the member `at` names: its
+  `member` boot id, which every header presents, and either the `relay`
+  a runner sends its calls through (`Opus.Relay.Runner`) or the
+  `host_url` the worker service posts to. `runner` names the runner
+  presenting the calls (a fresh runner id is minted when it is nil) and
+  `boot` the worker service boot it presents from.
   """
   @spec new(
           Prima.WorkerAuth.attempt_keys(),
           String.t() | nil,
           String.t(),
           %{member: String.t(), host_url: String.t()}
+          | %{member: String.t(), relay: GenServer.server()}
         ) :: t()
-  def new(
-        %{attempt: attempt, call: call_key, seal: seal_key},
-        runner,
-        boot,
-        %{member: member, host_url: host_url}
-      )
-      when is_map(attempt) and is_binary(call_key) and is_binary(seal_key) and is_binary(boot) and
-             is_binary(member) and is_binary(host_url) do
+  def new(keys, runner, boot, %{member: member, relay: relay}) when relay != nil,
+    do: build(keys, runner, boot, member, {nil, relay})
+
+  def new(keys, runner, boot, %{member: member, host_url: host_url}) when is_binary(host_url),
+    do: build(keys, runner, boot, member, {host_url, nil})
+
+  defp build(
+         %{attempt: attempt, call: call_key, seal: seal_key},
+         runner,
+         boot,
+         member,
+         {url, relay}
+       )
+       when is_map(attempt) and is_binary(call_key) and is_binary(seal_key) and is_binary(boot) and
+              is_binary(member) do
     %__MODULE__{
       athanor_id: Map.fetch!(attempt, :athanor_id),
       execution_id: Map.fetch!(attempt, :execution_id),
@@ -161,7 +182,8 @@ defmodule Opus.HostClient do
       member: member,
       call_key: call_key,
       seal_key: seal_key,
-      host_url: host_url
+      host_url: url,
+      relay: relay
     }
   end
 
@@ -337,7 +359,8 @@ defmodule Opus.HostClient do
       with {:ok, keys} <- WorkerAuth.open_attempt_keys(client.seal_key, sealed),
            true <- names_attempt?(assignment, keys.attempt, client),
            true <- Prima.Digest.sha256(input_json) == assignment.input_digest,
-           {:ok, %{} = admitted_input} <- Jason.decode(input_json) do
+           {:ok, %{} = admitted_input} <- Jason.decode(input_json),
+           :ok <- carried(client, assignment.attempt) do
         {:ok,
          %{
            token: token,
@@ -462,7 +485,7 @@ defmodule Opus.HostClient do
            do: {:ok, header, body, &{:ok, &1}}
     end
 
-    case call(at.host_url, :runner_exited, try) do
+    case call({:http, at.host_url}, :runner_exited, try) do
       {:ok, true} -> :ok
       {:ok, _other} -> {:error, :lost}
       {:error, reason} -> {:error, reason}
@@ -483,15 +506,23 @@ defmodule Opus.HostClient do
       end
     end
 
-    call(client.host_url, op, try)
+    call(via(client), op, try)
   end
+
+  defp via(%__MODULE__{relay: nil, host_url: host_url}), do: {:http, host_url}
+  defp via(%__MODULE__{relay: relay, attempt: attempt}), do: {:relay, relay, attempt}
+
+  # A child's attempt is carried on the runner's relay before its first
+  # call; a client posting directly has no relay to tell.
+  defp carried(%__MODULE__{relay: nil}, _attempt), do: :ok
+  defp carried(%__MODULE__{relay: relay}, attempt), do: Opus.Relay.Runner.admit(relay, attempt)
 
   # One call: sealed and signed afresh for each try (`try` answers the
   # header, the body and how to read the answer), retried once after a
   # lost answer when its class allows, never on an answer CYFR gave.
-  defp call(host_url, op, try) do
+  defp call(via, op, try) do
     answer =
-      case post(host_url, op, try) do
+      case post(via, op, try) do
         {:ok, answer} ->
           answer
 
@@ -504,7 +535,7 @@ defmodule Opus.HostClient do
             _retried ->
               Logger.warning("[Opus.HostClient] #{op}'s answer was lost; calling once more")
 
-              case post(host_url, op, try) do
+              case post(via, op, try) do
                 {:ok, answer} -> answer
                 :lost -> {:error, :lost}
               end
@@ -523,9 +554,9 @@ defmodule Opus.HostClient do
     answer
   end
 
-  defp post(host_url, op, try) do
+  defp post(via, op, try) do
     with {:ok, header, body, read} <- try.(),
-         {:ok, raw} <- transport(host_url <> WorkerWire.host_route(op), header, body, op),
+         {:ok, raw} <- transport(via, op, header, body),
          {:ok, json} <- read.(raw) do
       answer(json, op)
     else
@@ -557,13 +588,42 @@ defmodule Opus.HostClient do
 
   # The bytes of a `200` answer, `{:refused, bytes}` for the body of any
   # other status, or `:error` for a transport failure, an answer past the
-  # bound or later than the callback's timeout. No answer body is logged.
-  defp transport(url, header, body, op) do
+  # bound or later than the callback's timeout, whether the worker service
+  # posted it for a runner's relay or itself. No answer body is logged.
+  defp transport(via, op, header, body) do
+    sent =
+      case via do
+        {:http, host_url} ->
+          post_call(host_url, op, header, body)
+
+        {:relay, relay, attempt} ->
+          Opus.Relay.Runner.call(relay, attempt, op, header, body, HostAPI.request_timeout_ms(op))
+      end
+
+    case sent do
+      {:ok, 200, raw} -> {:ok, raw}
+      {:ok, status, raw} when is_integer(status) -> {:refused, raw}
+      _lost -> :error
+    end
+  end
+
+  @doc """
+  Post one host call of `op`, its signed `header` and its `body`, to the
+  host API at `host_url`, once: CYFR's status and the answer's bytes, read
+  up to `Prima.HostAPI.max_answer_bytes/0`, or `:error` for a transport
+  failure, an answer past the bound or later than the callback's timeout.
+  The worker service posts every host call with it, its runners' as their
+  relay hands them over and its own.
+  """
+  @spec post_call(String.t(), atom(), String.t(), binary()) ::
+          {:ok, 100..599, binary()} | :error
+  def post_call(host_url, op, header, body)
+      when is_binary(host_url) and is_binary(header) and is_binary(body) do
     max = HostAPI.max_answer_bytes()
 
     request = [
       method: :post,
-      url: url,
+      url: host_url <> WorkerWire.host_route(op),
       headers: [{WorkerWire.auth_header(), header}, {"content-type", "application/json"}],
       body: body,
       receive_timeout: HostAPI.request_timeout_ms(op),
@@ -576,12 +636,9 @@ defmodule Opus.HostClient do
     ]
 
     case Req.request(request) do
-      {:ok, %Req.Response{status: 200} = response} ->
-        with {:ok, raw} <- BoundedBody.read(response, max), do: {:ok, raw}
-
-      {:ok, %Req.Response{} = response} ->
+      {:ok, %Req.Response{status: status} = response} ->
         case BoundedBody.read(response, max) do
-          {:ok, raw} -> {:refused, raw}
+          {:ok, raw} -> {:ok, status, raw}
           _ -> :error
         end
 
@@ -606,19 +663,25 @@ defmodule Opus.HostClient do
     }
   end
 
-  defp at(%__MODULE__{} = client), do: %{member: client.member, host_url: client.host_url}
+  defp at(%__MODULE__{relay: nil} = client),
+    do: %{member: client.member, host_url: client.host_url}
+
+  defp at(%__MODULE__{} = client), do: %{member: client.member, relay: client.relay}
 
   defp nonce, do: Base.url_encode64(:crypto.strong_rand_bytes(18), padding: false)
 
   # A child's assignment must name the attempt its keys open as, on this
   # client's worker service and boot, and be issued by the member its
   # parent's is: a child is admitted through the parent's host call, so a
-  # child of another member's is a child this runner cannot reach.
+  # child of another member's is a child this runner cannot reach. A
+  # runner's client knows no address: its relay's service end holds the
+  # child's to its parent's.
   defp names_attempt?(%Assignment{} = assignment, attempt, %__MODULE__{} = client) do
     Map.take(assignment, @attempt_fields) == Map.take(attempt, @attempt_fields) and
       assignment.service == client.service and assignment.boot == client.boot and
       attempt.service == client.service and assignment.member == client.member and
-      (assignment.host_url == nil or assignment.host_url == client.host_url)
+      (assignment.host_url == nil or client.host_url == nil or
+         assignment.host_url == client.host_url)
   end
 
   defp outcome(client, status, fields) do

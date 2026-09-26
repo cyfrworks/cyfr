@@ -11,25 +11,27 @@ defmodule Opus.HttpRequestValidation do
   through before any network I/O:
 
       parse → method → scheme → domain → body decode → request size →
-      egress rate limit → pin → method atom
+      pin → method atom
 
   Every check before the pin is the engine's own, made from the
-  assignment's edge and limits (`Opus.EdgeGuard`). The egress rate is taken
-  through the attempt's host client (`Opus.HostClient.take_rate/2`), so
-  CYFR counts it against the consented limit. The pin is CYFR's: the
+  assignment's edge and limits (`Opus.EdgeGuard`). The pin is CYFR's: the
   address the URL may be reached at under the attempt's authority,
-  including its private-address policy, obtained and turned into a pinned
-  connection by `Opus.Egress.pin/3`. The engine resolves no name, and
-  duplicates neither the address classes nor the pinned transport policy.
+  including its private-address policy (`Opus.Egress.pin/3`). The engine
+  resolves no name, and the runner connects nowhere: each handler sends
+  the validated request through the runner's relay naming the pin, and
+  the relay's service end (`Opus.Relay`) checks it again, takes it from
+  the consented rate with a `take_rate` host call of its own, so CYFR
+  counts it against the consented limit, and connects to the pinned
+  address. A runner's own `take_rate` is refused there.
   A redirect's next hop to another origin than the pin it came from goes
   without any header that carries a credential
   (`Prima.Network.strip_credentials/1`).
 
   `validate/6` returns a validated request map (including the pinned
   address, the pin and the Req method atom) that each handler then
-  executes its own way (buffered fetch vs. polling stream). Handlers own
-  transport, response handling, and telemetry; every pre-flight decision
-  lives here.
+  sends through the relay its own way (buffered fetch vs. polling
+  stream). Handlers own the relay's fetch, response handling, and
+  telemetry; every pre-flight decision of the runner's lives here.
   """
 
   require Logger
@@ -60,18 +62,15 @@ defmodule Opus.HttpRequestValidation do
           response_encoding: String.t() | nil,
           multipart: list() | nil,
           ip: String.t(),
-          pin_req_opts: keyword(),
           pinned: Opus.Egress.pinned()
         }
 
   @doc """
   Parse and validate a guest HTTP request against the consent edge and node
-  limits, take it from the consented rate through `host`, and pin its URL
-  through CYFR (`Opus.Egress.pin/3`).
+  limits, and pin its URL through CYFR (`Opus.Egress.pin/3`) with `host`.
 
   Returns `{:ok, validated_request}` with `:ip` (the pinned address),
-  `:pin_req_opts` (the pinned connection's Req options), `:pinned` (the
-  pin) and `:method_atom` (the Req method) added, and the guest's
+  `:pinned` (the pin) and `:method_atom` (the Req method) added, and the guest's
   credentials dropped from a cross-origin redirect hop's headers;
   `{:error, type, message}` for a refusal the caller records; or
   `{:refused, type, message}` for a refusal of CYFR's, which CYFR has
@@ -93,7 +92,7 @@ defmodule Opus.HttpRequestValidation do
         edge,
         %Limits{} = limits,
         %HostClient{} = host,
-        component_ref,
+        _component_ref,
         opts \\ []
       ) do
     with :ok <- envelope_bound(limits, json_request),
@@ -104,23 +103,21 @@ defmodule Opus.HttpRequestValidation do
          :ok <- check_multipart_allowed(request, Keyword.get(opts, :allow_multipart, true)),
          {:ok, request} <- decode_request_body(request),
          :ok <- EdgeGuard.check_request_size(limits, request),
-         :ok <- check_egress_rate(host, component_ref),
          {:ok, pinned} <- pin_url(host, request.url, Keyword.get(opts, :purpose, :fetch)),
          {:ok, method_atom} <- validated_method_atom(request.method) do
       {:ok,
        request
        |> Map.put(:ip, pinned.ip)
-       |> Map.put(:pin_req_opts, pinned.req_opts)
        |> Map.put(:pinned, pinned)
        |> Map.put(:method_atom, method_atom)
        |> hop_headers(pinned)}
     end
   end
 
-  # Pin through CYFR with the pinned transport's Req options, including
-  # explicit retry and decode behavior.
+  # Pin through CYFR: the relay's service end keeps the pin for the
+  # attempt and connects to its address.
   defp pin_url(host, url, purpose) do
-    case Opus.Egress.pin(host, url, purpose: purpose, protocols: [:http1]) do
+    case Opus.Egress.pin(host, url, purpose: purpose) do
       {:ok, pinned} -> {:ok, pinned}
       {:error, :invalid_url, message} -> {:error, :invalid_request, message}
       refusal -> refusal
@@ -133,31 +130,6 @@ defmodule Opus.HttpRequestValidation do
     if Opus.Egress.cross_origin?(pinned),
       do: %{request | headers: Prima.Network.strip_credentials(request.headers)},
       else: request
-  end
-
-  # The consented rate limit, on the wire-bound path itself: the WIT
-  # contract promises the host enforces rate limits before executing the
-  # request. Keyed per component under the node's `http:` bucket, counted
-  # by CYFR through a `take_rate` host call; before the pin, so a denied
-  # caller cannot have an address pinned either. A host call CYFR refuses
-  # fails CLOSED.
-  defp check_egress_rate(host, component_ref) do
-    case HostClient.take_rate(host, "http:" <> component_ref) do
-      :ok ->
-        :ok
-
-      {:error, {:guest_error, _type, message}} ->
-        {:error, :rate_limited, message}
-
-      {:error, :unavailable} ->
-        {:error, :rate_limited, "HTTP egress refused: rate limiter unavailable"}
-
-      {:error, {:uncertain, sentence}} ->
-        {:error, :rate_limited, "HTTP egress refused: " <> sentence}
-
-      {:error, _refusal} ->
-        {:error, :rate_limited, "HTTP egress refused: the execution attempt is not current"}
-    end
   end
 
   @doc """

@@ -992,11 +992,14 @@ defmodule Cyfr.DocsDriftTest do
     "KEEPER_CHANNEL" => :keeper,
     # The worker service hands each runner its role and identities
     # (`Opus.Settings.runner_environment/1`), and the keeper adds the
-    # control descriptor.
+    # control and relay descriptors; the test build's direct keeper names
+    # a relay socket in the descriptor's place.
     "OPUS_ROLE" => :worker_service,
     "OPUS_RUNNER_ID" => :worker_service,
     "OPUS_BOOT_ID" => :worker_service,
     "OPUS_CONTROL_FD" => :keeper,
+    "OPUS_RELAY_FD" => :keeper,
+    "OPUS_RELAY_SOCKET" => :keeper,
     # Retired: `Opus.Settings` reads it only to refuse a service that sets it.
     "OPUS_KEEPER" => :retired
   }

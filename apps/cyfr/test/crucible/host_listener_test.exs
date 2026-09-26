@@ -7,9 +7,10 @@ defmodule Crucible.HostListenerTest do
   `Crucible.Host` over HTTP through one listener of CYFR's own, and
   the listener refuses what the header alone disproves before it reads
   the body: a wrong key, another worker service, a stale generation, a
-  reused nonce, a body that is not the header's, a body over the bound, a
-  boot that does not hold the control plane, and a route that is no host
-  route. A host call's body and answer cross sealed under the attempt's
+  reused nonce, a runner other than the one the attempt row is claimed by
+  on any call but the attach that claims it, a body that is not the
+  header's, a body over the bound, a boot that does not hold the control
+  plane, and a route that is no host route. A host call's body and answer cross sealed under the attempt's
   seal key, as the call the header names; a body that does not open so is
   refused. Nothing refused leaves a claim, an event or a terminal row, and
   the answer of a call that passes is the JSON `Host` produces.
@@ -357,6 +358,71 @@ defmodule Crucible.HostListenerTest do
                  Prima.Actor.in_athanor(fixture.athanor_id),
                  fixture.attempt
                )
+    end
+  end
+
+  describe "the claim" do
+    @tag :capture_log
+    test "a call naming another runner than the attempt's claim is refused before its body is read",
+         %{listener: listener, url: url} do
+      fixture = AttemptFixtures.attached!(service_id: @service)
+      port = HostListener.port(listener)
+      assert claimed_by(fixture) == fixture.runner
+
+      # The header verifies: the runner is signed, never a key input. The
+      # row's claim refuses it, answered `lost` as `Host` answers it,
+      # sealed for the call, on a closed connection with the body unread.
+      for route <- [:renew, :storage, :push_deltas, :complete] do
+        opts = [runner: "runner_elsewhere", ts: now(), nonce: "n_#{route}"]
+
+        log =
+          capture_log(fn ->
+            assert {200, %{"connection" => "close"}, sealed} =
+                     unread_post(port, WorkerWire.host_route(route), [live_header(fixture, opts)],
+                       raw: true
+                     )
+
+            assert open_answer(fixture.keys.seal, fields(fixture, opts), sealed) ==
+                     %{"v" => 1, "error" => "lost"}
+          end)
+
+        assert log =~ "not claimed by the runner the header names", Atom.to_string(route)
+      end
+
+      # The claiming runner's calls go on.
+      assert {200, %{"ok" => %{} = renewals}} = renew(url, fixture)
+      assert %{"lease_until" => _} = renewals[fixture.attempt]
+      assert claimed_by(fixture) == fixture.runner
+      assert Process.alive?(fixture.pid)
+    end
+
+    @tag :capture_log
+    test "attach is the claim: no call is taken before it, and the claiming runner's are after it",
+         %{url: url} do
+      fixture = AttemptFixtures.attached!(attach: false, service_id: @service)
+
+      assert {200, %{"error" => "lost"}} = renew(url, fixture)
+      assert {200, %{"error" => "lost"}} = push(url, fixture, "too early")
+      assert claimed_by(fixture) == nil
+
+      assert {200, %{"ok" => _}} = attach(url, fixture)
+      assert claimed_by(fixture) == fixture.runner
+      assert {200, %{"ok" => [_reply]}} = push(url, fixture, "claimed")
+
+      assert {200, %{"error" => "lost"}} =
+               push(url, fixture, "another runner", runner: "runner_elsewhere")
+    end
+
+    @tag :capture_log
+    test "a call on an attempt no longer running is refused before its body", %{url: url} do
+      fixture = AttemptFixtures.attached!(service_id: @service)
+
+      assert {200, %{"ok" => true}} = report(url, fixture)
+
+      assert {:error, "Execution terminated: runner stopped without cleanup"} =
+               Dispatch.await(fixture.pid, fixture.close)
+
+      assert {200, %{"error" => "lost"}} = push(url, fixture, "after the lapse")
     end
   end
 
@@ -771,7 +837,7 @@ defmodule Crucible.HostListenerTest do
   # response headers and the decoded answer, once the listener has closed
   # the connection; a listener that kept it open to read the body fails
   # the read's deadline.
-  defp unread_post(port, path, auth_headers) do
+  defp unread_post(port, path, auth_headers, opts \\ []) do
     {:ok, socket} = :gen_tcp.connect({127, 0, 0, 1}, port, [:binary, active: false], 5_000)
 
     request = [
@@ -795,7 +861,7 @@ defmodule Crucible.HostListenerTest do
         {String.downcase(name), String.trim(value)}
       end)
 
-    {status, headers, Jason.decode!(body)}
+    {status, headers, if(Keyword.get(opts, :raw, false), do: body, else: Jason.decode!(body))}
   end
 
   defp read_until_closed(socket, read) do

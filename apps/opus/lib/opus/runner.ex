@@ -7,11 +7,18 @@ defmodule Opus.Runner do
   time from its worker service over the control channel
   (`Prima.RunnerControl`) and runs it in this VM.
 
+  The runner has no network. Its relay to the service (`Opus.Relay.Runner`,
+  on file descriptor 4) is its only way to CYFR and to the addresses CYFR
+  pins: every host call and every guest fetch goes through it, and the
+  service's end verifies, posts and connects for it. The runner starts
+  its end with its first assignment and halts if it ends.
+
   An `assign` carries the signed assignment, the input its digest binds
-  and the attempt's opened keys. The runner reads the assignment, starts
-  the root's attempt process (`Opus.Attempt`) with a host client of its
-  own runner id, presenting the boot its settings name, and tracks the
-  subtree that grows from it (`Opus.Subtree`): each child a formula's
+  and the attempt's opened keys. The runner reads the assignment, binds
+  its relay to the attempt, starts the root's attempt process
+  (`Opus.Attempt`) with a host client of its own runner id that sends its
+  calls through the relay, presenting the boot its settings name, and
+  tracks the subtree that grows from it (`Opus.Subtree`): each child a formula's
   guest starts runs in an attempt process of this VM, and the runner tells
   its service it holds it (`child`), so a kill of that child reaches this
   runner. The attempt
@@ -24,9 +31,10 @@ defmodule Opus.Runner do
 
   When every attempt process has ended, the subtree is complete. If each
   closed its attempt with CYFR and no component call was killed, no host
-  answer lost and no child cancelled, the runner clears what the job
-  left (open streams, tasks) and sends `complete` with `clean: true`,
-  ready for another assignment for the same athanor. A killed component
+  answer lost, no child cancelled and nothing is left open on its relay,
+  the runner clears what the job left (open streams, tasks) and sends
+  `complete` with `clean: true`, ready for another assignment for the
+  same athanor. A killed component
   call, a lost answer or a cancelled child makes it `clean: false`: the
   service ends this runner. An attempt process that ends leaving its
   attempt open ends the subtree: the rest is killed, and the runner
@@ -57,7 +65,9 @@ defmodule Opus.Runner do
   @doc """
   Start the runner. Options: `:settings` (`t:Opus.Settings.runner/0`),
   `:port` (the control port; default `Opus.Release.open_control/1` on the
-  settings' descriptor), `:supervisor` (the attempt processes' supervisor,
+  settings' descriptor), `:relay` (the runner's end of its relay; by
+  default started on the settings' relay with the first assignment),
+  `:supervisor` (the attempt processes' supervisor,
   default `#{inspect(@attempts)}`), `:halt` and `:stop` (what ends the VM;
   default `Opus.Release`'s), `:name` (default `#{inspect(__MODULE__)}`).
   """
@@ -78,6 +88,7 @@ defmodule Opus.Runner do
      Subtree.new(%{
        settings: settings,
        port: port,
+       relay: Keyword.get(opts, :relay),
        buffer: "",
        assignment: nil,
        cancelled: MapSet.new(),
@@ -103,6 +114,13 @@ defmodule Opus.Runner do
 
   def handle_info({:EXIT, port, _reason}, %{port: port} = state),
     do: {:noreply, channel_closed(state)}
+
+  # Without its relay the runner reaches nothing: it halts, and the
+  # service reports what it held.
+  def handle_info({:EXIT, relay, reason}, %{relay: relay} = state) do
+    state.halt.({:relay_lost, reason})
+    {:noreply, state}
+  end
 
   def handle_info({:EXIT, _pid, _reason}, state), do: {:noreply, state}
 
@@ -240,13 +258,17 @@ defmodule Opus.Runner do
 
     with {:ok, assignment} <- Assignment.read(token),
          true <- assignment.service == settings.service_id and assignment.boot == settings.boot,
-         {:ok, %{} = decoded} <- Jason.decode(input) do
+         {:ok, %{} = decoded} <- Jason.decode(input),
+         {:ok, relayed} <- relay(state),
+         :ok <- Opus.Relay.Runner.bind(relayed.relay, assignment.attempt) do
+      state = relayed
+
       client =
         HostClient.new(
           keys,
           settings.runner_id,
           settings.boot,
-          HostClient.at(assignment, settings.host_url)
+          %{member: assignment.member, relay: state.relay}
         )
 
       start = %{token: token, assignment: assignment, input: decoded, client: client}
@@ -285,6 +307,13 @@ defmodule Opus.Runner do
           state
       end
     else
+      # Without its relay bound to the attempt the runner reaches nothing.
+      {:error, reason}
+      when reason == :busy or (is_tuple(reason) and elem(reason, 0) == :relay_unavailable) ->
+        Logger.error("[Opus.Runner] the relay cannot carry the assignment; halting")
+        state.halt.({:relay, reason})
+        state
+
       _refused ->
         # The service verified this assignment; one that does not read
         # here is not the service's. The runner ends, and the service
@@ -294,6 +323,17 @@ defmodule Opus.Runner do
         state
     end
   end
+
+  # The runner's end of its relay, started with its first assignment on
+  # the descriptor (or socket) its settings name.
+  defp relay(%{relay: nil} = state) do
+    case Opus.Relay.Runner.start_link(relay: state.settings.relay) do
+      {:ok, relay} -> {:ok, %{state | relay: relay}}
+      {:error, reason} -> {:error, {:relay_unavailable, reason}}
+    end
+  end
+
+  defp relay(state), do: {:ok, state}
 
   defp on_cancel_child(state, execution_id) do
     case state.assignment do
@@ -346,10 +386,14 @@ defmodule Opus.Runner do
     if state.watchdog, do: Process.cancel_timer(state.watchdog)
     clear_job_state()
 
+    # A call or fetch still open on the relay would be carried into the
+    # next assignment's channel: the runner is not reused.
+    clean = state.clean and Opus.Relay.Runner.idle?(state.relay)
+
     write(state, %{
       type: :complete,
       execution_id: state.assignment.execution_id,
-      clean: state.clean
+      clean: clean
     })
 
     state = %{

@@ -12,9 +12,12 @@ defmodule Opus.Keeper.Direct do
   standard input and output (`OPUS_CONTROL_FD=0`), since a plain port
   hands a child no other descriptor; its standard error is a fifo in its
   home that a reader of its own relays to the process that spawned it, as
-  `cyfr-keeper` relays a runner's, so its log lines are this VM's log's. It
-  isolates nothing: a runner can read and signal this VM. A deployment
-  runs the image, whose keeper isolates.
+  `cyfr-keeper` relays a runner's, so its log lines are this VM's log's.
+  Its relay (`Prima.RunnerRelay`) is a unix socket in its home
+  (`OPUS_RELAY_SOCKET`) the runner connects to, carried by a process of
+  its own to the process that spawned it as `cyfr-keeper` carries stream
+  5. It isolates nothing: a runner can read and signal this VM, and has
+  this VM's network. A deployment runs the image, whose keeper isolates.
 
   This process is the janitor: it holds every runner's OS pid and home,
   monitors the process that spawned each, and kills the runner's process
@@ -37,6 +40,7 @@ defmodule Opus.Keeper.Direct do
   require Logger
 
   @stdio_fd "0"
+  @relay_socket "relay.sock"
 
   @impl Opus.Keeper
   def child_spec(opts), do: %{id: __MODULE__, start: {__MODULE__, :start_link, [opts]}}
@@ -61,9 +65,14 @@ defmodule Opus.Keeper.Direct do
 
     with :ok <- File.mkdir_p(Path.join(home, "tmp")),
          :ok <- File.chmod(home, 0o700),
-         :ok <- mkfifo(log) do
+         :ok <- mkfifo(log),
+         {:ok, relay, socket} <- relay(home) do
       environment =
-        home |> base_environment() |> Map.merge(env) |> Map.put("OPUS_CONTROL_FD", @stdio_fd)
+        home
+        |> base_environment()
+        |> Map.merge(env)
+        |> Map.put("OPUS_CONTROL_FD", @stdio_fd)
+        |> Map.put("OPUS_RELAY_SOCKET", socket)
 
       # The runner's standard error goes to the fifo, which its own reader
       # relays: the shell opens the fifo, then becomes the runner.
@@ -81,7 +90,8 @@ defmodule Opus.Keeper.Direct do
               ["/bin/sh", "-c", ~s(exec "$@" 2>"$0"), log] ++ argv
         ])
 
-      relay = Port.open({:spawn_executable, "/bin/cat"}, [:binary, :stream, :eof, args: [log]])
+      log_reader =
+        Port.open({:spawn_executable, "/bin/cat"}, [:binary, :stream, :eof, args: [log]])
 
       os_pid =
         case Port.info(port, :os_pid) do
@@ -91,13 +101,21 @@ defmodule Opus.Keeper.Direct do
 
       case watch(os_pid, home, runner) do
         :ok ->
-          {:ok, %{port: port, log: relay, os_pid: os_pid, home: home, runner: runner},
-           [{:spawned, os_pid}, :attached]}
+          {:ok,
+           %{
+             port: port,
+             log: log_reader,
+             relay: relay,
+             os_pid: os_pid,
+             home: home,
+             runner: runner
+           }, [{:spawned, os_pid}, :attached]}
 
         {:error, reason} ->
           # No janitor to reap it: the runner is ended here and now.
           signal(os_pid, "KILL")
           Port.close(port)
+          Process.exit(relay, :kill)
           remove_home(home)
           {:error, {:spawn_failed, reason}}
       end
@@ -105,6 +123,71 @@ defmodule Opus.Keeper.Direct do
       {:error, reason} ->
         File.rm_rf(home)
         {:error, {:spawn_failed, reason}}
+    end
+  end
+
+  # The runner's relay: a unix socket in its home that the runner connects
+  # to, listened on before the runner starts, and a process of the
+  # spawner's that accepts the one connection and carries its bytes both
+  # ways, as `cyfr-keeper` carries stream 5.
+  defp relay(home) do
+    path = Path.join(home, @relay_socket)
+    owner = self()
+
+    with {:ok, listener} <-
+           :gen_tcp.listen(0, [:binary, packet: :raw, active: false, ifaddr: {:local, path}]) do
+      relay = spawn_link(fn -> relay_accept(listener, owner) end)
+
+      case :gen_tcp.controlling_process(listener, relay) do
+        :ok ->
+          Kernel.send(relay, :go)
+          {:ok, relay, path}
+
+        {:error, reason} ->
+          :gen_tcp.close(listener)
+          {:error, {:relay, reason}}
+      end
+    end
+  end
+
+  defp relay_accept(listener, owner) do
+    receive do
+      :go -> :ok
+    end
+
+    # A runner connects with its first assignment, however long it waits
+    # for one; this process is linked to the runner's handle, and ends
+    # with it.
+    case :gen_tcp.accept(listener) do
+      {:ok, conn} ->
+        :gen_tcp.close(listener)
+        :ok = :inet.setopts(conn, active: true)
+        relay_loop(conn, owner)
+
+      {:error, _reason} ->
+        :gen_tcp.close(listener)
+        Kernel.send(owner, {self(), :relay_closed})
+    end
+  end
+
+  defp relay_loop(conn, owner) do
+    receive do
+      {:tcp, ^conn, data} ->
+        Kernel.send(owner, {self(), {:relay, data}})
+        relay_loop(conn, owner)
+
+      {:tcp_closed, ^conn} ->
+        Kernel.send(owner, {self(), :relay_closed})
+
+      {:tcp_error, ^conn, _reason} ->
+        Kernel.send(owner, {self(), :relay_closed})
+
+      {:write, data} ->
+        _ = :gen_tcp.send(conn, data)
+        relay_loop(conn, owner)
+
+      :close ->
+        :gen_tcp.close(conn)
     end
   end
 
@@ -136,6 +219,13 @@ defmodule Opus.Keeper.Direct do
     {:events, [{:exited, ended(status)}, :released], channel}
   end
 
+  # What the runner wrote on its relay, as it wrote it, and the relay's end.
+  def handle_message(%{relay: relay} = channel, {relay, {:relay, data}}),
+    do: {:events, [{:relay, data}], channel}
+
+  def handle_message(%{relay: relay} = channel, {relay, :relay_closed}),
+    do: {:events, [:relay_closed], channel}
+
   # What the runner wrote to its standard error, as it wrote it.
   def handle_message(%{log: log} = channel, {log, {:data, data}}),
     do: {:events, [{:log, data}], channel}
@@ -152,6 +242,18 @@ defmodule Opus.Keeper.Direct do
     if Port.command(port, data), do: :ok, else: {:error, :busy}
   rescue
     ArgumentError -> {:error, :closed}
+  end
+
+  @impl Opus.Keeper
+  def send_relay(%{relay: relay}, data) do
+    Kernel.send(relay, {:write, IO.iodata_to_binary(data)})
+    :ok
+  end
+
+  @impl Opus.Keeper
+  def close_relay(%{relay: relay}) do
+    Kernel.send(relay, :close)
+    :ok
   end
 
   # The signals go from the caller, so a runner is ended even when the

@@ -452,6 +452,66 @@ defmodule Opus.HostClientTest do
              ScriptedHost.requests(host)
   end
 
+  describe "a runner's client" do
+    test "posts nothing itself: each call leaves through its relay and the service posts it",
+         %{host: host} do
+      attempt = ScriptedHost.attempt!(host) |> Opus.Test.ScriptedKeeper.relayed!()
+
+      assert attempt.client.host_url == nil and attempt.client.relay == attempt.endpoint
+      refute inspect(attempt.client) =~ host.url
+
+      assert {:ok, %{}} = HostClient.attach(attempt.client, attempt.assignment)
+      assert [%{caller: %{runner: runner}}] = ScriptedHost.requests(host, "attach")
+      assert runner == attempt.runner
+    end
+
+    test "loses a call its relay cannot carry, and asks an idempotent one once more", %{
+      host: host
+    } do
+      attempt = ScriptedHost.attempt!(host) |> Opus.Test.ScriptedKeeper.relayed!()
+      :ok = stop_supervised_pid(attempt.endpoint)
+
+      assert {:error, :lost} = HostClient.renew(attempt.client, [attempt.attempt])
+      assert ScriptedHost.requests(host) == []
+    end
+
+    test "post_call/4 answers CYFR's status and bytes, once", %{host: host} do
+      attempt = ScriptedHost.attempt!(host)
+      fields = call_fields(attempt)
+      json = Jason.encode!(Prima.WorkerWire.request_body(:renew, %{"attempts" => []}))
+      {:ok, sealed} = Prima.WorkerAuth.seal_call(attempt.keys.seal, :body, fields, json)
+      {:ok, header} = Prima.WorkerAuth.host_call_header(attempt.keys.call, fields, sealed)
+
+      assert {:ok, 200, answer} = HostClient.post_call(host.url, :renew, header, sealed)
+      assert {:ok, _json} = Prima.WorkerAuth.open_call(attempt.keys.seal, :answer, fields, answer)
+
+      assert {:ok, 401, _refusal} = HostClient.post_call(host.url, :renew, header, "tampered")
+      assert :error = HostClient.post_call("http://127.0.0.1:9", :renew, header, sealed)
+    end
+  end
+
+  defp stop_supervised_pid(pid) do
+    ref = Process.monitor(pid)
+    Process.exit(pid, :kill)
+
+    receive do
+      {:DOWN, ^ref, :process, ^pid, _reason} -> :ok
+    end
+  end
+
+  defp call_fields(attempt) do
+    {:ok, assignment} = Assignment.read(attempt.assignment)
+
+    attempt.keys.attempt
+    |> Map.merge(%{
+      boot: attempt.boot,
+      runner: attempt.runner,
+      member: assignment.member,
+      ts: System.system_time(:millisecond),
+      nonce: Base.url_encode64(:crypto.strong_rand_bytes(12), padding: false)
+    })
+  end
+
   describe "where an attempt's calls go" do
     test "is the member its assignment names, not the address the service is configured with",
          %{host: issuer} do

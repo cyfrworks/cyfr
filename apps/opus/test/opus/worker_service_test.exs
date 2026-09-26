@@ -11,8 +11,9 @@ defmodule Opus.WorkerServiceTest do
   killed runner is reported the same way. A restarted service is a new
   boot that holds none of its predecessor's attempts, and its runners'
   processes are gone. Neither the service, nor a runner's handle holding
-  the assign it sent, nor the keeper shows a runner's attempt keys or the
-  service's own, raw or as the hex the channel carries.
+  the assign it sent, nor its relay holding the attempt's keys, nor the
+  keeper shows a runner's attempt keys or the service's own, raw or as
+  the hex the channel carries.
   """
 
   use ExUnit.Case, async: false
@@ -183,7 +184,7 @@ defmodule Opus.WorkerServiceTest do
     assert {:error, :malformed} = start(attempt)
   end
 
-  test "neither the service, nor a runner's handle, nor the keeper shows a key", %{
+  test "neither the service, nor a runner's handle or relay, nor the keeper shows a key", %{
     host: host,
     boot: boot
   } do
@@ -195,7 +196,11 @@ defmodule Opus.WorkerServiceTest do
     %Opus.Credentials{} = credentials = Opus.Credentials.current()
     handles = for %{pid: pid} <- RunnerPool.runners(RunnerPool), do: pid
 
-    for process <- [WorkerService, Opus.Keeper.Direct | handles],
+    # Each runner's relay holds the keys of the attempt it is bound to.
+    relays = for pid <- handles, relay = :sys.get_state(pid).relay, do: relay
+    assert relays != []
+
+    for process <- [WorkerService, Opus.Keeper.Direct | handles ++ relays],
         key <- [
           attempt.keys.call,
           attempt.keys.seal,

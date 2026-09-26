@@ -5,9 +5,10 @@ defmodule Crucible.HostListener do
   @moduledoc """
   The HTTP face of `Crucible.Host`: one Bandit listener of its own,
   serving the host routes `Prima.WorkerWire` declares, on the bind address
-  and port its child spec is given. A worker service's runners post their
-  host calls here, and the service posts its runner exit reports; nothing
-  else is served.
+  and port its child spec is given. A worker service posts its runners'
+  host calls here, each as the runner signed it under its attempt's keys
+  and the service verified it before posting it unchanged, and its runner
+  exit reports; nothing else is served.
 
   Every request is refused as early as its evidence allows, before any
   authorized action and, for anything the header alone decides, before
@@ -30,7 +31,15 @@ defmodule Crucible.HostListener do
        that is not the key's, another generation and another member;
     5. for a callback that is not idempotent (`Prima.HostAPI.retry/1`), the
        header's nonce has not been presented for its attempt within the
-       window before, else `401`.
+       window before, else `401`;
+    6. for every call but `attach`, which is the claim, the attempt row is
+       running at the header's fence and claimed by the runner the header
+       names (`Arca.ExecutionAttempts.held?/4`): the runner id is the worker
+       service's, the one it verified before it posted the call. A header
+       naming any other runner, or an attempt no runner holds, is answered
+       as `Host` answers it, `lost` (`unavailable` when the store cannot
+       answer), sealed for the call as any answer is, on a connection the
+       listener closes, and its body is never read.
 
   Each of those is answered on a connection the listener closes, and the
   body is never read. Then:
@@ -131,6 +140,7 @@ defmodule Crucible.HostListener do
          {:ok, header} <- auth_header(conn),
          {:ok, fields, body_hash} <- verify_header(callback, header, now),
          :ok <- fresh_nonce(conn, callback, fields, now),
+         :ok <- claimed(callback, fields),
          {:ok, body, read} <- bounded_body(conn),
          :ok <- verify_body(read, body_hash, body),
          {:ok, call} <- open(read, callback, fields, header, body),
@@ -142,6 +152,7 @@ defmodule Crucible.HostListener do
       # A refusal after the body was read answers on the conn that read it;
       # one before it, or with the body read only in part, closes the
       # connection, so nothing more of the body is read to reuse it.
+      {:answered, fields, name} -> answer_unread(close(conn), fields, name)
       {:refused, read, status, name} -> refuse(read, status, name)
       {:refused, status, name} -> refuse(close(conn), status, name)
       {:refused_unread, read, status, name} -> refuse(close(read), status, name)
@@ -237,6 +248,54 @@ defmodule Crucible.HostListener do
 
       {:refused, 401, :lost}
     end
+  end
+
+  # Every call after attach is the claiming runner's: the row must be
+  # running at the header's fence and claimed by the runner the header
+  # names, the one the worker service verified before posting. Attach is
+  # the claim itself, and a report names no attempt of its own. `Host`
+  # checks the hold again, under the attempt's grant.
+  defp claimed(callback, _fields) when callback in [:attach, :runner_exited], do: :ok
+
+  defp claimed(callback, fields) do
+    case Arca.ExecutionAttempts.held?(
+           Prima.Actor.in_athanor(fields.athanor_id),
+           fields.attempt,
+           fields.fence,
+           fields.runner
+         ) do
+      true ->
+        :ok
+
+      false ->
+        Logger.warning(
+          "[Crucible.HostListener] #{callback} refused: the attempt is not claimed by the " <>
+            "runner the header names"
+        )
+
+        {:answered, fields, :lost}
+
+      {:error, _reason} ->
+        Logger.warning(
+          "[Crucible.HostListener] #{callback} refused: the attempt's claim could not be read"
+        )
+
+        {:answered, fields, :unavailable}
+    end
+  end
+
+  # `Host`'s own answer for a call it would refuse on the same row, given
+  # before the body is read: sealed for the header's call under the
+  # attempt's seal key, so the runner reads it as the answer it is and
+  # never as a lost one.
+  defp answer_unread(conn, fields, name) do
+    {:ok, seal_key} = WorkerAuth.attempt_seal_key(Keys.root(), fields)
+    json = Jason.encode!(WorkerWire.error(name))
+    {:ok, sealed} = WorkerAuth.seal_call(seal_key, :answer, fields, json)
+
+    conn
+    |> put_resp_content_type("application/json")
+    |> send_resp(200, sealed)
   end
 
   # The body is read only after the header verified, and only up to the

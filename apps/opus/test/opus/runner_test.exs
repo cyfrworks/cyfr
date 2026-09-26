@@ -18,7 +18,7 @@ defmodule Opus.RunnerTest do
   import Opus.Test.Wait
 
   alias Prima.{Assignment, RunnerControl}
-  alias Opus.Test.ScriptedHost
+  alias Opus.Test.{ScriptedHost, ScriptedKeeper}
 
   @echo File.read!(Path.expand("../support/test_wasm/echo.wasm", __DIR__))
   @spin File.read!(Path.expand("../support/test_wasm/spin.wasm", __DIR__))
@@ -52,16 +52,22 @@ defmodule Opus.RunnerTest do
       runner_id: "runner_under_test",
       service_id: ScriptedHost.service(),
       boot: @boot,
-      host_url: host.url,
       control_fd: fd,
+      relay: {:fd, 4},
       watchdog_grace_ms: 500
     }
+
+    # The runner's relay, whose service end the test binds to each attempt
+    # it assigns, as the worker service does.
+    %{endpoint: endpoint, relay: relay} = ScriptedKeeper.relay!(settings.runner_id)
+    Process.put({__MODULE__, :relay}, {relay, host.url})
 
     # Registered as the runner, so the subtree's processes find their
     # owner here rather than in the worker service of this VM.
     start_supervised!(
       {Opus.Runner,
        settings: settings,
+       relay: endpoint,
        supervisor: supervisor,
        name: Opus.Runner,
        halt: fn reason -> send(test, {:halted, reason}) end,
@@ -72,6 +78,15 @@ defmodule Opus.RunnerTest do
   end
 
   defp assign(service, attempt) do
+    {relay, host_url} = Process.get({__MODULE__, :relay})
+
+    :ok =
+      Opus.Relay.bind(relay, %{
+        assignment: attempt.assignment,
+        keys: attempt.keys,
+        host_url: host_url
+      })
+
     :ok =
       :socket.send(
         service,

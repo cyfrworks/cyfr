@@ -30,10 +30,14 @@ defmodule Opus.WorkerService do
 
   A runner is an OS process of the pool (`Opus.RunnerPool`) the service
   never shares a VM with, and the service loads no component. `start/3`
-  takes a runner of the assignment's athanor from the pool and sends it
-  the `assign` over `Prima.RunnerControl`; the runner attaches, runs the
-  subtree with its formula children and reports `complete`, clean or
-  not, or `exit` with the attempts still open. A runner that reports
+  takes a runner of the assignment's athanor from the pool, binds the
+  runner's relay to the attempt (`Opus.Relay`) and sends it the `assign`
+  over `Prima.RunnerControl`. The runner has no network: every host call
+  it makes and every pinned fetch its guests make leave through that
+  relay, which verifies each call under the attempt's keys and posts it,
+  and performs each fetch under the attempt's bounds. The runner attaches,
+  runs the subtree with its formula children and reports `complete`,
+  clean or not, or `exit` with the attempts still open. A runner that reports
   `exit`, or whose channel closes or process ends with the subtree still
   assigned, is reported at once to the member that assigned its subtree —
   every attempt one runner holds was issued by one member, and no other
@@ -259,7 +263,7 @@ defmodule Opus.WorkerService do
     else
       case RunnerPool.take(RunnerPool, assignment.athanor_id, execution_id) do
         {:ok, pid, runner} ->
-          case assign(pid, token, input, keys) do
+          case assign(state, pid, token, input, keys) do
             :ok ->
               Process.monitor(pid)
 
@@ -304,10 +308,11 @@ defmodule Opus.WorkerService do
     end
   end
 
-  # The assign as the protocol spells it; a value the protocol refuses
-  # (the input past its bound) is the caller's, and refuses the start.
-  defp assign(pid, token, input, keys) do
-    RunnerProcess.send_message(pid, %{type: :assign, assignment: token, input: input, keys: keys})
+  # The assign as the protocol spells it, the runner's relay bound to its
+  # attempt first; a value the protocol refuses (the input past its bound)
+  # is the caller's, and refuses the start.
+  defp assign(state, pid, token, input, keys) do
+    RunnerProcess.assign(pid, token, input, keys, state.credentials.host_url)
   rescue
     ArgumentError -> {:error, :malformed}
   end

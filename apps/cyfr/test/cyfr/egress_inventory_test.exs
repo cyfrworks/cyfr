@@ -43,18 +43,20 @@ defmodule Cyfr.EgressInventoryTest do
     # The IdP OAuth device-flow sliver: GitHub/Google fixed hosts, its own
     # Finch pool, budgeted by the device-poll rate limits.
     "apps/sanctum/lib/sanctum/auth/device_flow.ex" => :idp_sliver,
-    # Guest HTTP (cyfr:http/fetch) — consented edges, pinned opts, bounded
-    # while streaming.
-    "apps/opus/lib/opus/http_handler.ex" => :guest_fetch,
-    # Guest streaming HTTP — `into: :self` with an append-time byte budget.
-    "apps/opus/lib/opus/http_stream_handler.ex" => :guest_stream,
+    # Guest HTTP (cyfr:http/fetch and cyfr:http/streaming), connected by
+    # the worker service for its runners, which have no network: a pin CYFR
+    # granted the attempt, the attempt's edge and limits checked again, the
+    # rate taken, the answer bounded while it streams and sent on under the
+    # runner's credit.
+    "apps/opus/lib/opus/relay.ex" => :guest_fetch,
     # The worker wire, CYFR's side: `Prima.WorkerAPI` requests to the
     # operator-configured worker services (CYFR_OPUS_WORKERS), signed with each
     # service's dispatch key, bounded answers (`Prima.WorkerWire`).
     "apps/cyfr/lib/crucible/worker_client.ex" => :worker_client,
-    # The worker wire, Opus's side: a runner's host calls and the service's
-    # exit reports to CYFR's host API (OPUS_HOST_URL), sealed and signed
-    # with the attempt's keys, bounded answers.
+    # The worker wire, Opus's side: the service posts its runners' host
+    # calls, sealed and signed with the attempt's keys and verified by the
+    # service before it posts them, its own rate calls and its exit reports
+    # to CYFR's host API (OPUS_HOST_URL), bounded answers.
     "apps/opus/lib/opus/host_client.ex" => :host_client,
     # The builds wire, CYFR's side: `Prima.BuilderProtocol` requests to the
     # operator-configured Locus builds service (CYFR_LOCUS_BUILDS_URL),

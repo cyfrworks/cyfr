@@ -643,6 +643,67 @@ defmodule Prima.WorkerAuthTest do
                WorkerAuth.verify_host_call_header(@root, header, @now, standing(member: @peer))
     end
 
+    test "a host call's header verifies under the call key its holder has" do
+      call = call()
+      header = call_header!(call)
+      hash = Prima.Digest.sha256_hex(@body)
+      key = keys!(call).call
+
+      assert {:ok, ^call, ^hash} = WorkerAuth.verify_host_call_header_under(key, header, @now)
+
+      # The standing is CYFR's: a worker service holding the key verifies a
+      # header at any generation and naming any member.
+      other = call(%{generation: 8, member: @peer})
+      other_key = keys!(other).call
+      other_header = call_header!(other)
+
+      assert {:ok, ^other, ^hash} =
+               WorkerAuth.verify_host_call_header_under(other_key, other_header, @now)
+
+      assert {:error, :bad_mac} =
+               WorkerAuth.verify_host_call_header_under(other_key, header, @now)
+
+      assert {:error, :bad_mac} =
+               WorkerAuth.verify_host_call_header_under(keys!(call).seal, header, @now)
+
+      forged = String.replace(header, "runner=run_4f3c2a1e", "runner=run_other")
+      assert {:error, :bad_mac} = WorkerAuth.verify_host_call_header_under(key, forged, @now)
+
+      assert {:error, :outside_window} =
+               WorkerAuth.verify_host_call_header_under(key, header, @now - 30_001)
+
+      assert {:error, :unknown_version} =
+               WorkerAuth.verify_host_call_header_under(
+                 key,
+                 String.replace_prefix(header, "v1 ", "v2 "),
+                 @now
+               )
+
+      assert {:error, :malformed} = WorkerAuth.verify_host_call_header_under(key, "v1", @now)
+      assert {:error, :malformed} = WorkerAuth.verify_host_call_header_under(key, nil, @now)
+    end
+
+    test "a host call's header is never longer than its bound" do
+      longest =
+        call(%{
+          athanor_id: String.duplicate("a", 256),
+          execution_id: String.duplicate("e", 256),
+          attempt: String.duplicate("t", 256),
+          fence: 9_007_199_254_740_991,
+          generation: 9_007_199_254_740_991,
+          service: String.duplicate("s", 256),
+          boot: String.duplicate("b", 256),
+          runner: String.duplicate("r", 256),
+          member: String.duplicate("m", 256),
+          ts: 9_007_199_254_740_991,
+          nonce: String.duplicate("n", 256)
+        })
+
+      header = call_header!(longest, :binary.copy(<<1>>, 32))
+      assert byte_size(header) == WorkerAuth.max_host_call_header_bytes()
+      assert byte_size(call_header!(call())) < WorkerAuth.max_host_call_header_bytes()
+    end
+
     test "a request and a report verify header-first under their own keys" do
       dispatch = %{service: @service, boot: @boot, ts: @now, nonce: "n_1"}
       key = WorkerAuth.dispatch_key(worker_key!())

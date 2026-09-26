@@ -6,8 +6,10 @@ defmodule Opus.KeeperChannelTest do
   The `cyfr-keeper` client against a scripted keeper on a socket the test
   holds the keeper's end of: a runner's handle asks for a spawn in the
   `runner` pool with a control channel and the runner's explicit
-  environment; the relay attaches with its token and carries the control
-  channel as stream 4, a line split across frames either way; the
+  environment; the relay attaches with its token, is sent the zero-length
+  frame that opens the relay stream (5), and carries the control channel
+  as stream 4, a line split across frames either way; an assign binds the
+  runner's relay to its attempt before it is written; the
   keeper's `exited` and `released` reach the handle; a release carries
   its grace; the pool's stats are asked and answered; and the channel's
   loss reaches every handle and ends the client.
@@ -18,6 +20,7 @@ defmodule Opus.KeeperChannelTest do
   alias Prima.{KeeperProtocol, RunnerControl}
   alias Opus.Keeper.Channel
   alias Opus.RunnerProcess
+  alias Opus.Test.ScriptedHost
 
   @stream_stdout 1
   @stream_attach 3
@@ -95,6 +98,10 @@ defmodule Opus.KeeperChannelTest do
 
   defp frame(stream, payload), do: [<<stream, byte_size(payload)::32>>, payload]
 
+  # The zero-length frame opening the relay stream, which the client sends
+  # once the runner attached, before anything else it holds.
+  defp opened!(relay), do: assert({:ok, <<5, 0::32>>} = :gen_tcp.recv(relay, 5, 5_000))
+
   # The frames the relay receives, until `bytes` of control payload are in.
   defp control_frames(relay, bytes, acc \\ []) do
     if IO.iodata_length(acc) >= bytes do
@@ -128,26 +135,34 @@ defmodule Opus.KeeperChannelTest do
     spawn_id = String.duplicate("ab", 16)
     reply(spawner, %{v: 1, type: "spawned", id: id, spawn_id: spawn_id, uid: 30_101, pid: 4242})
 
-    # The assign is held until the relay attaches, then flushed as frames.
+    # The assign is held until the relay attaches, then flushed as frames,
+    # its attempt bound on the runner's relay first.
     input = :binary.copy("x", 150_000)
-    keys = %{attempt: attempt(), call: :binary.copy(<<1>>, 32), seal: :binary.copy(<<2>>, 32)}
+    attempt = ScriptedHost.attempt!(ScriptedHost.start!())
 
     assert :ok =
-             RunnerProcess.send_message(handle, %{
-               type: :assign,
-               assignment: "token",
-               input: input,
-               keys: keys
-             })
+             RunnerProcess.assign(
+               handle,
+               attempt.assignment,
+               input,
+               attempt.keys,
+               "http://127.0.0.1:9"
+             )
 
     refute_received {RunnerProcess, ^handle, :ready}
 
     relay = attach!(dir, token)
     assert_receive {RunnerProcess, ^handle, :ready}, 5_000
+    opened!(relay)
 
     expected =
       IO.iodata_to_binary(
-        RunnerControl.encode(%{type: :assign, assignment: "token", input: input, keys: keys})
+        RunnerControl.encode(%{
+          type: :assign,
+          assignment: attempt.assignment,
+          input: input,
+          keys: attempt.keys
+        })
       )
 
     payloads = control_frames(relay, byte_size(expected))
@@ -200,13 +215,9 @@ defmodule Opus.KeeperChannelTest do
     spawner: spawner,
     name: name
   } do
-    keys = %{
-      attempt: attempt(),
-      call: :crypto.strong_rand_bytes(32),
-      seal: :crypto.strong_rand_bytes(32)
-    }
-
-    assign = %{type: :assign, assignment: "token", input: "{}", keys: keys}
+    attempt = ScriptedHost.attempt!(ScriptedHost.start!())
+    keys = attempt.keys
+    assign = %{type: :assign, assignment: attempt.assignment, input: "{}", keys: keys}
 
     # The handle holds the assign until its channel attaches.
     handle = start_handle!(name)
@@ -221,7 +232,9 @@ defmodule Opus.KeeperChannelTest do
       pid: 1
     })
 
-    assert :ok = RunnerProcess.send_message(handle, assign)
+    assert :ok =
+             RunnerProcess.assign(handle, assign.assignment, "{}", keys, "http://127.0.0.1:9")
+
     refute_received {RunnerProcess, ^handle, :ready}
 
     # The client holds bytes sent before the relay attached.
@@ -376,16 +389,5 @@ defmodule Opus.KeeperChannelTest do
     assert Exception.message(error) =~ "no keeper channel was inherited"
     assert Exception.message(error) =~ "only through cyfr-keeper"
     assert :ok = Opus.Keeper.check!(Channel, [], %{"KEEPER_CHANNEL" => "socket:[3]"})
-  end
-
-  defp attempt do
-    %{
-      athanor_id: "ath_1",
-      execution_id: "exec_1",
-      attempt: "att_1",
-      fence: 1,
-      generation: 1,
-      service: "wrk_local"
-    }
   end
 end

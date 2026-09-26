@@ -4,10 +4,10 @@
 defmodule Opus.EgressTest do
   @moduledoc """
   A guest's outbound request connects to the address CYFR pinned for it,
-  and to nothing else: the engine asks its attempt's host for the pin,
-  resolves no name itself, and builds the connection to exactly the
-  pinned address with the hostname kept for TLS and the fail-closed
-  transport policy set. A metadata address is refused even when the host
+  and to nothing else: the engine asks its attempt's host for the pin and
+  resolves no name itself, and the relay's service end builds the
+  connection to exactly the pinned address with the hostname kept for TLS
+  and the fail-closed transport policy set (`Opus.Egress.connect_options/3`). A metadata address is refused even when the host
   answers one; a pin that names another target than the URL is refused;
   the host's own refusals are answered as the guest's typed errors, marked
   as the host's. A pin is reused for the same attempt, purpose and target
@@ -25,6 +25,12 @@ defmodule Opus.EgressTest do
     {:ok, host: host, client: ScriptedHost.attempt!(host).client}
   end
 
+  # The request options the relay's service end connects with for `pinned`.
+  defp connection(pinned, opts \\ []) do
+    {:ok, connection} = Egress.connect_options(pinned.target, pinned.uri, opts)
+    connection.req_opts
+  end
+
   test "a pin is asked of the host, and the connection goes to its address with the hostname kept",
        %{host: host, client: client} do
     ScriptedHost.pins(host, %{"public.test" => "203.0.113.10"})
@@ -40,13 +46,13 @@ defmodule Opus.EgressTest do
     assert pinned.target.host == "public.test"
     assert pinned.from == nil
 
-    assert pinned.req_opts[:url] == "https://203.0.113.10:8443/path?q=1"
-    assert pinned.req_opts[:connect_options][:hostname] == "public.test"
-    assert pinned.req_opts[:redirect] == false
-    assert pinned.req_opts[:retry] == false
-    assert pinned.req_opts[:compressed] == false
-    assert pinned.req_opts[:decode_body] == false
-    assert pinned.req_opts[:receive_timeout] == 30_000
+    assert connection(pinned)[:url] == "https://203.0.113.10:8443/path?q=1"
+    assert connection(pinned)[:connect_options][:hostname] == "public.test"
+    assert connection(pinned)[:redirect] == false
+    assert connection(pinned)[:retry] == false
+    assert connection(pinned)[:compressed] == false
+    assert connection(pinned)[:decode_body] == false
+    assert connection(pinned)[:receive_timeout] == 30_000
   end
 
   test "the caller's protocols, transport options and timeout ride along", %{
@@ -55,12 +61,14 @@ defmodule Opus.EgressTest do
   } do
     ScriptedHost.pins(host, %{"public.test" => "203.0.113.10"})
 
-    assert {:ok, %{req_opts: opts}} =
-             Egress.pin(client, "http://public.test/",
-               protocols: [:http1],
-               transport_opts: [verify: :verify_none],
-               receive_timeout: 5
-             )
+    assert {:ok, pinned} = Egress.pin(client, "http://public.test/")
+
+    opts =
+      connection(pinned,
+        protocols: [:http1],
+        transport_opts: [verify: :verify_none],
+        receive_timeout: 5
+      )
 
     assert opts[:connect_options][:protocols] == [:http1]
     assert opts[:connect_options][:transport_opts] == [verify: :verify_none]
@@ -73,8 +81,10 @@ defmodule Opus.EgressTest do
   } do
     ScriptedHost.pins(host, %{"dual.test" => "203.0.113.20", "v6only.test" => "2001:db8::30"})
 
-    assert {:ok, %{ip: "203.0.113.20", target: %{family: 4}, req_opts: opts}} =
+    assert {:ok, %{ip: "203.0.113.20", target: %{family: 4}} = pinned} =
              Egress.pin(client, "https://dual.test/x")
+
+    opts = connection(pinned)
 
     assert opts[:url] == "https://203.0.113.20/x"
 
@@ -82,14 +92,14 @@ defmodule Opus.EgressTest do
              Egress.pin(client, "https://v6only.test:8080/x")
 
     assert pinned.ip_tuple == {0x2001, 0x0DB8, 0, 0, 0, 0, 0, 0x30}
-    assert pinned.req_opts[:url] == "https://[2001:db8::30]:8080/x"
-    assert pinned.req_opts[:connect_options][:hostname] == "v6only.test"
+    assert connection(pinned)[:url] == "https://[2001:db8::30]:8080/x"
+    assert connection(pinned)[:connect_options][:hostname] == "v6only.test"
 
     # An IPv6 literal URL keeps its literal for the connection's identity.
     ScriptedHost.pins(host, %{"2001:db8::40" => "2001:db8::40"})
     assert {:ok, pinned} = Egress.pin(client, "http://[2001:db8::40]:8080/x")
     assert pinned.target.host == "[2001:db8::40]"
-    assert pinned.req_opts[:url] == "http://[2001:db8::40]:8080/x"
+    assert connection(pinned)[:url] == "http://[2001:db8::40]:8080/x"
   end
 
   test "the engine sends to exactly the address the pin names, private or not", %{
@@ -100,7 +110,8 @@ defmodule Opus.EgressTest do
     # engine connects to, and to nothing it resolved itself.
     ScriptedHost.pins(host, %{"private.test" => "10.0.0.5", "localhost" => "127.0.0.1"})
 
-    assert {:ok, %{ip: "10.0.0.5", req_opts: opts}} = Egress.pin(client, "http://private.test/")
+    assert {:ok, %{ip: "10.0.0.5"} = pinned} = Egress.pin(client, "http://private.test/")
+    opts = connection(pinned)
     assert opts[:url] == "http://10.0.0.5/"
     assert opts[:connect_options][:hostname] == "private.test"
 
@@ -129,6 +140,23 @@ defmodule Opus.EgressTest do
     # Refused, the pin is not kept: the next request asks again.
     ScriptedHost.pins(host, %{"metadata.test" => "203.0.113.9"})
     assert {:ok, %{ip: "203.0.113.9"}} = Egress.pin(client, "http://metadata.test/latest")
+  end
+
+  test "the relay's connection refuses a metadata address whatever pin it is handed" do
+    pin = %Prima.PinnedTarget{
+      id: "pin_meta",
+      ip: "169.254.169.254",
+      family: 4,
+      scheme: "http",
+      port: 80,
+      host: "metadata.test",
+      expires_at: System.system_time(:millisecond) + 60_000
+    }
+
+    uri = %URI{scheme: "http", host: "metadata.test", port: 80, path: "/latest"}
+
+    assert {:error, :private_ip_blocked, message} = Egress.connect_options(pin, uri, [])
+    assert message =~ "metadata IP"
   end
 
   test "the host's refusals are the guest's typed errors, marked as the host's", %{
@@ -195,7 +223,7 @@ defmodule Opus.EgressTest do
     assert {:ok, first} = Egress.pin(client, "https://public.test/a")
     assert {:ok, second} = Egress.pin(client, "https://PUBLIC.test/b?c=d")
     assert second.target == first.target
-    assert second.req_opts[:url] == "https://203.0.113.10/b?c=d"
+    assert connection(second)[:url] == "https://203.0.113.10/b?c=d"
     assert length(ScriptedHost.requests(host, "egress_pin")) == 1
 
     # Another port, scheme, host or purpose is another target.
