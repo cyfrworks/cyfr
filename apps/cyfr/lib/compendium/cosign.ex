@@ -255,6 +255,8 @@ defmodule Compendium.Cosign do
     # The fingerprint is of the bytes at the path cosign is handed, read
     # before cosign runs; cosign's answer says nothing about which key it
     # used.
+    # arca:bypass-ok=D — the operator's cosign key file, a deployment file
+    # handed to the OS toolchain, never an athanor's tree.
     case File.read(key_path) do
       {:ok, key} when key != "" ->
         fingerprint = :sha256 |> :crypto.hash(key) |> Base.encode16(case: :lower)
