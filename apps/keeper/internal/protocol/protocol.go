@@ -5,14 +5,14 @@
 // client over the inherited socket (fd 3): one JSON object per line, each
 // carrying `"v": 1` and a `type`.
 //
-// Client to spawner:
+// Client to keeper:
 //
 //	{"v":1,"type":"spawn","id":…,"pool":…,"argv":[…],"env":{…},"rlimits":{…},"memory_bytes":…,"control":true,"attach":{"path":…,"token":…}}
 //	{"v":1,"type":"signal","spawn_id":…,"sig":"SIGTERM"}
 //	{"v":1,"type":"release","spawn_id":…,"grace_ms":…}
 //	{"v":1,"type":"pool","id":…,"pool":…}
 //
-// Spawner to client:
+// Keeper to client:
 //
 //	{"v":1,"type":"spawned","id":…,"spawn_id":…,"uid":…,"pid":…}
 //	{"v":1,"type":"error","id":…,"spawn_id":…,"code":…}   (id or spawn_id names the request)
@@ -26,29 +26,29 @@
 //
 // A spawn's `env` is the whole environment block its command receives
 // beside the variables the stage sets itself (PATH, HOME, USER, LOGNAME and
-// TMPDIR): nothing of the spawner's or the client's environment is
+// TMPDIR): nothing of the keeper's or the client's environment is
 // inherited, so the request names exactly the variables that reach the
 // command, and a reserved name (ReservedEnv, ReservedEnvPrefixes) is
 // refused.
 //
 // A spawn's `memory_bytes`, from MinMemoryBytes to MaxMemoryBytes, bounds
-// the memory of everything the spawn runs, whatever its pool: the spawner
+// the memory of everything the spawn runs, whatever its pool: the keeper
 // puts the command in a cgroup of its own (package cgroup) limited to that
 // many bytes with no swap, so its processes, the pages of what it writes to
 // a tmpfs home and the kernel memory charged to it never exceed the bound
 // together. When they cannot stay under it the kernel kills every process
 // of the spawn, and the leader's `exited` carries `"memory_exceeded": true`,
 // read from the cgroup's own counters and never inferred from the signal;
-// every other `exited` carries false. A spawner that cannot give a spawn
+// every other `exited` carries false. A keeper that cannot give a spawn
 // such a cgroup refuses the request as CodeMemoryUnavailable: a bound asked
 // for is enforced or the command does not run. A spawn without
 // `memory_bytes` has no bound of its own.
 //
-// A spawn with `"control": true` also gets a control channel: the spawner
+// A spawn with `"control": true` also gets a control channel: the keeper
 // makes an AF_UNIX stream socketpair, installs one end as the command's file
 // descriptor 3 and hands the other to the spawn's relay, which carries it
 // over the attach connection as frame.StreamControl in both directions,
-// bytes verbatim in frames of at most frame.MaxPayload; the spawner never
+// bytes verbatim in frames of at most frame.MaxPayload; the keeper never
 // reads them. A zero-length control frame from the relay reports that every
 // holder of the command's end has closed it or exited; one from the client
 // closes the command's reading side, so the command reads end of file. A
@@ -102,7 +102,7 @@ const (
 	CodeNotRunning   = "not_running"
 	CodeInternal     = "internal"
 	// CodeMemoryUnavailable refuses a spawn asking for a memory bound the
-	// spawner cannot enforce where it runs.
+	// keeper cannot enforce where it runs.
 	CodeMemoryUnavailable = "memory_unavailable"
 )
 
@@ -126,7 +126,7 @@ const (
 // Signals a `signal` request may name.
 var Signals = []string{"SIGTERM", "SIGKILL", "SIGINT", "SIGHUP", "SIGQUIT", "SIGUSR1", "SIGUSR2"}
 
-// ReservedEnv are names the spawner sets itself or that belong to CYFR and
+// ReservedEnv are names the keeper sets itself or that belong to CYFR and
 // Locus; a spawn request may not carry them.
 var ReservedEnv = []string{"PATH", "HOME", "USER", "LOGNAME", "SHELL", "TMPDIR", "PWD"}
 
@@ -240,7 +240,7 @@ type Request struct {
 }
 
 // RequestError is a refused request: the code to reply with, the request's
-// id or spawn_id when it had a valid one, and a detail for the spawner's
+// id or spawn_id when it had a valid one, and a detail for the keeper's
 // log. The detail never quotes an environment value.
 type RequestError struct {
 	Code    string

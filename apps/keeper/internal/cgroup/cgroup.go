@@ -14,20 +14,20 @@
 // file here belongs to uid 0, so no spawned process moves itself, raises
 // its bound or clears the group kill.
 //
-// Groups can be made only where the spawner's own cgroup is the root of a
+// Groups can be made only where the keeper's own cgroup is the root of a
 // cgroup namespace mounted writable, as a container started with Docker's
 // `writable-cgroups=true` security option has it; Delegate reports anything
-// else as the reason bounds are unavailable, and the spawner then refuses a
+// else as the reason bounds are unavailable, and the keeper then refuses a
 // spawn that asks for one. cgroup v2 lets a group hold processes or enable
 // controllers for its children, not both, so Delegate first moves every
-// process of the namespace root, the spawner among them, into the leaf
-// group `keeper`; what the spawner starts without a bound stays there.
+// process of the namespace root, the keeper among them, into the leaf
+// group `keeper`; what the keeper starts without a bound stays there.
 //
 // Where the host mounts cgroup2 with `nsdelegate`, as systemd does, the
 // kernel refuses a write from inside the namespace to the root's own limits,
 // so what is delegated is only the division of the container's allotment.
 // On a host without it uid 0 in the container can rewrite the container's
-// own limits; only the spawner and the container's init run as uid 0.
+// own limits; only the keeper and the container's init run as uid 0.
 package cgroup
 
 import (
@@ -65,7 +65,7 @@ var namePattern = regexp.MustCompile(`^keeper-[1-9][0-9]{0,9}$`)
 // Name is the group of the spawn running under uid.
 func Name(uid int) string { return "keeper-" + strconv.Itoa(uid) }
 
-// Manager makes groups under the root of the spawner's cgroup namespace.
+// Manager makes groups under the root of the keeper's cgroup namespace.
 type Manager struct {
 	root string
 }
@@ -77,13 +77,13 @@ type Group struct {
 }
 
 // Delegate prepares the namespace root at root for per-spawn groups. self is
-// the content of the spawner's /proc/self/cgroup. An error says why bounds
+// the content of the keeper's /proc/self/cgroup. An error says why bounds
 // are unavailable here; nothing else has failed.
 func Delegate(root string, self []byte) (*Manager, error) {
 	if path, err := Own(self); err != nil {
 		return nil, err
 	} else if path != "/" && path != "/"+keeperLeaf {
-		return nil, fmt.Errorf("the spawner's cgroup is %s, not the root of a cgroup namespace", path)
+		return nil, fmt.Errorf("the keeper's cgroup is %s, not the root of a cgroup namespace", path)
 	}
 	controllers, err := os.ReadFile(filepath.Join(root, "cgroup.controllers"))
 	if err != nil {
@@ -92,7 +92,7 @@ func Delegate(root string, self []byte) (*Manager, error) {
 	if !hasField(string(controllers), "memory") {
 		return nil, fmt.Errorf("the memory controller is not enabled for %s", root)
 	}
-	// The root cgroup of the whole machine has no memory.max: a spawner
+	// The root cgroup of the whole machine has no memory.max: a keeper
 	// there would be dividing the host, not a container's allotment.
 	if _, err := os.Stat(filepath.Join(root, "memory.max")); err != nil {
 		return nil, fmt.Errorf("%s is not a delegated cgroup: %w", root, err)

@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: Apache-2.0
 # Copyright 2026 CYFR Works Inc.
 
-defmodule Prima.VirtualToolsTest do
+defmodule Grimoire.VirtualToolsTest do
   @moduledoc """
   The virtual tools' one declaration: the four families and their
   catalysts, every action's kind, its planes (in-chain only), which reads
@@ -11,7 +11,7 @@ defmodule Prima.VirtualToolsTest do
   """
   use ExUnit.Case, async: true
 
-  alias Prima.VirtualTools
+  alias Grimoire.VirtualTools
 
   test "the four families, each on its catalyst" do
     assert VirtualTools.tools() == ["files", "http", "request_setup", "storage"]

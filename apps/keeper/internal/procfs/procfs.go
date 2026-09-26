@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright 2026 CYFR Works Inc.
 
-// Package procfs reads the parts of Linux /proc/<pid>/status the spawner
+// Package procfs reads the parts of Linux /proc/<pid>/status the keeper
 // relies on: the capability sets, the four uids and the process state.
 package procfs
 
@@ -24,9 +24,9 @@ const (
 	CapSetuid = 7
 )
 
-// SpawnerCaps is the one capability set the spawner runs with:
+// KeeperCaps is the one capability set the keeper runs with:
 // CAP_SETUID, CAP_SETGID and CAP_KILL (0xe0).
-const SpawnerCaps uint64 = 1<<CapKill | 1<<CapSetgid | 1<<CapSetuid
+const KeeperCaps uint64 = 1<<CapKill | 1<<CapSetgid | 1<<CapSetuid
 
 // Status is the parsed subset of a /proc/<pid>/status file.
 type Status struct {
@@ -132,20 +132,20 @@ func (s Status) HasUID(uid int) bool {
 // Zombie reports whether the process has exited and awaits reaping.
 func (s Status) Zombie() bool { return s.State == 'Z' || s.State == 'X' }
 
-// CheckSpawnerCaps refuses a capability state other than the spawner's:
+// CheckKeeperCaps refuses a capability state other than the keeper's:
 // the effective, permitted and bounding sets must each hold nothing outside
-// SpawnerCaps, and the effective set must hold all of it.
-func CheckSpawnerCaps(s Status) error {
+// KeeperCaps, and the effective set must hold all of it.
+func CheckKeeperCaps(s Status) error {
 	for _, set := range []struct {
 		name string
 		mask uint64
 	}{{"CapEff", s.CapEff}, {"CapPrm", s.CapPrm}, {"CapBnd", s.CapBnd}} {
-		if extra := set.mask &^ SpawnerCaps; extra != 0 {
+		if extra := set.mask &^ KeeperCaps; extra != 0 {
 			return fmt.Errorf("%s %016x holds capabilities outside SETUID, SETGID and KILL (%016x); run with every other capability dropped", set.name, set.mask, extra)
 		}
 	}
-	if missing := SpawnerCaps &^ s.CapEff; missing != 0 {
-		return fmt.Errorf("CapEff %016x lacks %016x; the spawner needs SETUID, SETGID and KILL", s.CapEff, missing)
+	if missing := KeeperCaps &^ s.CapEff; missing != 0 {
+		return fmt.Errorf("CapEff %016x lacks %016x; the keeper needs SETUID, SETGID and KILL", s.CapEff, missing)
 	}
 	return nil
 }

@@ -7,7 +7,7 @@
 // backend's pipes; it connects to the client's attach socket, presents the
 // spawn's token and then frames the streams (package frame) over that one
 // connection. The client therefore reaches a backend's stdio without ever
-// sharing its uid, and the spawner never reads backend output.
+// sharing its uid, and the keeper never reads backend output.
 package relay
 
 import (
@@ -21,7 +21,7 @@ import (
 	"github.com/cyfr/keeper/internal/protocol"
 )
 
-// Spec is what the spawner hands a relay over its spec pipe: the attach
+// Spec is what the keeper hands a relay over its spec pipe: the attach
 // target, and whether the spawn has a control channel on ControlFD.
 type Spec struct {
 	Path    string `json:"path"`

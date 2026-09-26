@@ -29,13 +29,13 @@ defmodule Aqua.Kinds do
   loaded" read the same here, and only the second could otherwise run
   something destructive with no card. The one rule the AQUA page and the
   runtime ceiling (`Aqua.ToolGrants.effective/2`) read; the kinds it admits
-  are `Prima.VirtualTools.auto_permitted_kinds/0`.
+  are `Grimoire.VirtualTools.auto_permitted_kinds/0`.
   """
 
   @spec auto_permitted?(String.t(), String.t()) :: boolean()
 
   def auto_permitted?(tool, action),
-    do: Prima.VirtualTools.auto_permitted_kind?(kind_for(tool, action))
+    do: Grimoire.VirtualTools.auto_permitted_kind?(kind_for(tool, action))
 
   @doc """
   The action verbs a catalogued tool has — the virtual catalog's for a
@@ -51,7 +51,7 @@ defmodule Aqua.Kinds do
   @spec catalogued?(String.t()) :: boolean()
 
   def catalogued?(tool) when is_binary(tool),
-    do: Prima.VirtualTools.tool?(tool) or actions_of(tool) != []
+    do: Grimoire.VirtualTools.tool?(tool) or actions_of(tool) != []
 
   def catalogued?(_tool), do: false
 
@@ -67,7 +67,7 @@ defmodule Aqua.Kinds do
 
   def standing_for(tool, action) when is_binary(tool) and is_binary(action) do
     cond do
-      Prima.VirtualTools.tool?(tool) -> nil
+      Grimoire.VirtualTools.tool?(tool) -> nil
       String.contains?(tool, ":") -> nil
       true -> Aqua.Ops.action_standing(tool, action)
     end
@@ -91,7 +91,7 @@ defmodule Aqua.Kinds do
 
   defp auto_only?(key) do
     case String.split(key, ".", parts: 2) do
-      [tool, action] -> Prima.VirtualTools.auto_only?(tool, action)
+      [tool, action] -> Grimoire.VirtualTools.auto_only?(tool, action)
       _ -> false
     end
   end
@@ -107,8 +107,8 @@ defmodule Aqua.Kinds do
   @doc "Whether a chat would refuse `tool.action` outright."
   @spec refused?(String.t(), String.t()) :: boolean()
   def refused?(tool, action) do
-    if Prima.VirtualTools.tool?(tool) do
-      is_nil(Prima.VirtualTools.kind_for(tool, action))
+    if Grimoire.VirtualTools.tool?(tool) do
+      is_nil(Grimoire.VirtualTools.kind_for(tool, action))
     else
       Aqua.Ops.in_chain_refused?(tool, action)
     end

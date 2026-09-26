@@ -12,7 +12,7 @@ import (
 
 // A status file as a container with `cap_drop: ALL` and
 // `cap_add: [SETUID, SETGID, KILL]` shows it for its root process.
-const spawnerStatus = `Name:	cyfr-keeper
+const keeperStatus = `Name:	cyfr-keeper
 Umask:	0022
 State:	S (sleeping)
 Tgid:	7
@@ -53,7 +53,7 @@ func withField(status, key, value string) string {
 }
 
 func TestParseStatus(t *testing.T) {
-	st, err := ParseStatus([]byte(spawnerStatus))
+	st, err := ParseStatus([]byte(keeperStatus))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -67,13 +67,13 @@ func TestParseStatus(t *testing.T) {
 
 func TestParseStatusRefusesMalformedOrMissingLines(t *testing.T) {
 	for name, input := range map[string]string{
-		"no CapEff":      strings.Replace(spawnerStatus, "CapEff:", "CapXff:", 1),
-		"no Uid":         strings.Replace(spawnerStatus, "Uid:", "Uxd:", 1),
-		"three uids":     withField(spawnerStatus, "Uid", "0 0 0"),
-		"non-hex caps":   withField(spawnerStatus, "CapBnd", "zz"),
-		"oversize caps":  withField(spawnerStatus, "CapPrm", "00000000000000000e0"),
-		"negative uid":   withField(spawnerStatus, "Uid", "-1 0 0 0"),
-		"empty state":    withField(spawnerStatus, "State", ""),
+		"no CapEff":      strings.Replace(keeperStatus, "CapEff:", "CapXff:", 1),
+		"no Uid":         strings.Replace(keeperStatus, "Uid:", "Uxd:", 1),
+		"three uids":     withField(keeperStatus, "Uid", "0 0 0"),
+		"non-hex caps":   withField(keeperStatus, "CapBnd", "zz"),
+		"oversize caps":  withField(keeperStatus, "CapPrm", "00000000000000000e0"),
+		"negative uid":   withField(keeperStatus, "Uid", "-1 0 0 0"),
+		"empty state":    withField(keeperStatus, "State", ""),
 		"empty document": "",
 	} {
 		if _, err := ParseStatus([]byte(input)); err == nil {
@@ -82,33 +82,33 @@ func TestParseStatusRefusesMalformedOrMissingLines(t *testing.T) {
 	}
 }
 
-func TestSpawnerCapsAreExactlySetuidSetgidKill(t *testing.T) {
-	if SpawnerCaps != 0xe0 {
-		t.Fatalf("SpawnerCaps = %#x", SpawnerCaps)
+func TestKeeperCapsAreExactlySetuidSetgidKill(t *testing.T) {
+	if KeeperCaps != 0xe0 {
+		t.Fatalf("KeeperCaps = %#x", KeeperCaps)
 	}
-	st, _ := ParseStatus([]byte(spawnerStatus))
-	if err := CheckSpawnerCaps(st); err != nil {
+	st, _ := ParseStatus([]byte(keeperStatus))
+	if err := CheckKeeperCaps(st); err != nil {
 		t.Fatalf("the container's own set was refused: %v", err)
 	}
 
 	// Docker's default set for a root process.
-	docker := withField(withField(withField(spawnerStatus,
+	docker := withField(withField(withField(keeperStatus,
 		"CapEff", "00000000a80425fb"),
 		"CapPrm", "00000000a80425fb"),
 		"CapBnd", "00000000a80425fb")
 	for name, input := range map[string]string{
 		"docker defaults":           docker,
-		"extra bounding capability": withField(spawnerStatus, "CapBnd", "00000000000000e1"),
-		"extra permitted":           withField(spawnerStatus, "CapPrm", "00000000000001e0"),
-		"no capabilities":           withField(withField(spawnerStatus, "CapEff", "0000000000000000"), "CapPrm", "0000000000000000"),
-		"without KILL":              withField(spawnerStatus, "CapEff", "00000000000000c0"),
-		"full root":                 withField(withField(withField(spawnerStatus, "CapEff", "000001ffffffffff"), "CapPrm", "000001ffffffffff"), "CapBnd", "000001ffffffffff"),
+		"extra bounding capability": withField(keeperStatus, "CapBnd", "00000000000000e1"),
+		"extra permitted":           withField(keeperStatus, "CapPrm", "00000000000001e0"),
+		"no capabilities":           withField(withField(keeperStatus, "CapEff", "0000000000000000"), "CapPrm", "0000000000000000"),
+		"without KILL":              withField(keeperStatus, "CapEff", "00000000000000c0"),
+		"full root":                 withField(withField(withField(keeperStatus, "CapEff", "000001ffffffffff"), "CapPrm", "000001ffffffffff"), "CapBnd", "000001ffffffffff"),
 	} {
 		st, err := ParseStatus([]byte(input))
 		if err != nil {
 			t.Fatalf("%s: %v", name, err)
 		}
-		if err := CheckSpawnerCaps(st); err == nil {
+		if err := CheckKeeperCaps(st); err == nil {
 			t.Errorf("%s: accepted", name)
 		}
 	}
@@ -132,7 +132,7 @@ func writeProc(t *testing.T, root string, pid, state, uids string) {
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	status := withField(withField(spawnerStatus, "State", state), "Uid", uids)
+	status := withField(withField(keeperStatus, "State", state), "Uid", uids)
 	if err := os.WriteFile(filepath.Join(dir, "status"), []byte(status), 0o644); err != nil {
 		t.Fatal(err)
 	}

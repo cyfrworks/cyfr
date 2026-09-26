@@ -34,7 +34,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from harness import (  # noqa: E402
     HOME_ROOT, KEEPER_CAPS, MCP_VERSION, POOL_FIRST, POOL_LAST, PROJECT_PREFIX, RELEASE_UID, RELEASE_USER,
-    ROUTES, RUN_DIR, SERVICE, Controller, Stack, eventually, expect, owner_of, owner_key, post, probe,
+    ROUTES, RUN_DIR, SERVICE, Controller, Stack, eventually, expect, owner_of, owner_key, pool_user, post, probe,
     require_docker, run, wait_healthy, wire_json,
 )
 
@@ -118,6 +118,8 @@ def main():
             expect(POOL_FIRST <= who["uid"] <= POOL_LAST and who["gid"] == who["uid"]
                    and all(g == who["gid"] for g in who["groups"]),
                    f"{name} runs under a pooled uid, alone in its group", who)
+            named = stack.exec(f"getent passwd {who['uid']} | cut -d: -f1").stdout.strip()
+            expect(named == pool_user(who["uid"]), f"{name}'s uid is the image's {pool_user(who['uid'])}", named)
             expect(re.fullmatch(rf"{HOME_ROOT}/{who['uid']}-[0-9a-f]{{32}}", who["home"]) and who["home_mode"] == "700"
                    and who["marker_mode"] == "600" and who["tmpdir"] == f"{who['home']}/tmp" and who["cwd"] == who["home"],
                    f"{name}'s home is its own, 0700, and its files are its own", who)

@@ -44,7 +44,7 @@ from stack import (  # noqa: E402
     expect, output_file, run, tincture,
 )
 
-SPAWNER_CAPS = "00000000000000e0"
+KEEPER_CAPS = "00000000000000e0"
 TAG = "locus-builds-residue"
 SHARED = [f"/tmp/{TAG}", f"/var/tmp/{TAG}", f"/dev/shm/{TAG}", f"/run/{TAG}", f"/run/locus/{TAG}"]
 LEFT = [f"{HOME_ROOT}/{TAG}", f"{HOME_ROOT}/{TAG}-tree/"]
@@ -54,6 +54,7 @@ set -u
 mkdir -p dist
 {
   echo "uid=$(id -u)"
+  echo "user=$(id -un)"
   echo "gid=$(id -g)"
   echo "groups=$(id -G)"
   echo "home=$HOME"
@@ -133,15 +134,20 @@ impl Guest for Daemon {
 """
 
 
+def pool_user(uid):
+    """The name the image gives a build uid: uid 30000+N is locus-buildNN (Dockerfile.locus)."""
+    return f"locus-build{uid - 30000:02d}"
+
+
 def fields(text):
     return dict(line.split("=", 1) for line in (text or "").splitlines() if "=" in line)
 
 
 def test_process_model(stack, image):
     procs = stack.processes()
-    spawner = [p for p in procs if p["cmd"].startswith("cyfr-keeper serve")]
+    keeper = [p for p in procs if p["cmd"].startswith("cyfr-keeper serve")]
     release = [p for p in procs if "beam.smp" in p["cmd"]]
-    expect(len(spawner) == 1 and spawner[0]["uids"] == [0, 0, 0, 0] and spawner[0]["cap_eff"] == SPAWNER_CAPS,
+    expect(len(keeper) == 1 and keeper[0]["uids"] == [0, 0, 0, 0] and keeper[0]["cap_eff"] == KEEPER_CAPS,
            "cyfr-keeper runs as root holding exactly SETUID, SETGID and KILL", procs)
     expect(len(release) == 1 and release[0]["uids"] == [RELEASE_UID] * 4 and release[0]["cap_eff"] == "0000000000000000",
            "the release runs as locus with no capability", procs)
@@ -173,6 +179,7 @@ def test_build_identity(stack):
     uid = int(who["uid"])
     expect(POOL_FIRST <= uid <= POOL_LAST and who["gid"] == str(uid) and who["groups"] == str(uid),
            "a build runs under a pooled uid, alone in its group", who)
+    expect(who["user"] == pool_user(uid), f"the build's uid is the image's {pool_user(uid)}", who)
     expect(re.fullmatch(rf"{HOME_ROOT}/{uid}-[0-9a-f]{{32}}", who["home"]) and who["home_mode"] == "700"
            and who["tmpdir"] == who["home"] + "/tmp" and who["caps"] == "0000000000000000",
            "its home is a 0700 directory of its own, TMPDIR is inside it and it holds no capability", who)

@@ -91,19 +91,19 @@ defmodule CyfrWeb.Ingress.TinctureAssetsTest do
     test "blocks data.db", %{ctx: ctx, version_segs: vs} do
       conn = Plug.Test.conn(:get, "/t/local/test/data.db")
       result = TinctureAssets.serve_asset(conn, ctx, vs, ["data.db"])
-      assert result.status == 404
+      assert_not_found(result)
     end
 
     test "blocks cyfr-manifest.json", %{ctx: ctx, version_segs: vs} do
       conn = Plug.Test.conn(:get, "/t/local/test/cyfr-manifest.json")
       result = TinctureAssets.serve_asset(conn, ctx, vs, ["cyfr-manifest.json"])
-      assert result.status == 404
+      assert_not_found(result)
     end
 
     test "blocks schema.sql", %{ctx: ctx, version_segs: vs} do
       conn = Plug.Test.conn(:get, "/t/local/test/schema.sql")
       result = TinctureAssets.serve_asset(conn, ctx, vs, ["schema.sql"])
-      assert result.status == 404
+      assert_not_found(result)
     end
   end
 
@@ -111,13 +111,13 @@ defmodule CyfrWeb.Ingress.TinctureAssetsTest do
     test "blocks dotfiles in root", %{ctx: ctx, version_segs: vs} do
       conn = Plug.Test.conn(:get, "/t/local/test/.env")
       result = TinctureAssets.serve_asset(conn, ctx, vs, [".env"])
-      assert result.status == 404
+      assert_not_found(result)
     end
 
     test "blocks dotfiles in subdirectories", %{ctx: ctx, version_segs: vs} do
       conn = Plug.Test.conn(:get, "/t/local/test/assets/.hidden")
       result = TinctureAssets.serve_asset(conn, ctx, vs, ["assets", ".hidden"])
-      assert result.status == 404
+      assert_not_found(result)
     end
   end
 
@@ -125,19 +125,19 @@ defmodule CyfrWeb.Ingress.TinctureAssetsTest do
     test "blocks .. segments", %{ctx: ctx, version_segs: vs} do
       conn = Plug.Test.conn(:get, "/t/local/test/../etc/passwd")
       result = TinctureAssets.serve_asset(conn, ctx, vs, ["..", "etc", "passwd"])
-      assert result.status == 404
+      assert_not_found(result)
     end
 
     test "blocks null bytes", %{ctx: ctx, version_segs: vs} do
       conn = Plug.Test.conn(:get, "/t/local/test/index\0.html")
       result = TinctureAssets.serve_asset(conn, ctx, vs, ["index\0.html"])
-      assert result.status == 404
+      assert_not_found(result)
     end
 
     test "blocks backslashes", %{ctx: ctx, version_segs: vs} do
       conn = Plug.Test.conn(:get, "/t/local/test/..\\etc\\passwd")
       result = TinctureAssets.serve_asset(conn, ctx, vs, ["..\\etc\\passwd"])
-      assert result.status == 404
+      assert_not_found(result)
     end
   end
 
@@ -165,7 +165,7 @@ defmodule CyfrWeb.Ingress.TinctureAssetsTest do
 
       conn = Plug.Test.conn(:get, "/t/local/test/script.sh")
       result = TinctureAssets.serve_asset(conn, ctx, vs, ["script.sh"])
-      assert result.status == 404
+      assert_not_found(result)
     end
   end
 
@@ -173,14 +173,17 @@ defmodule CyfrWeb.Ingress.TinctureAssetsTest do
     test "returns 404 for nonexistent files", %{ctx: ctx, version_segs: vs} do
       conn = Plug.Test.conn(:get, "/t/local/test/missing.js")
       result = TinctureAssets.serve_asset(conn, ctx, vs, ["missing.js"])
-      assert result.status == 404
+      assert_not_found(result)
+      # The asset's own type and lifetime were set before the read found
+      # nothing; the refusal carries neither.
+      assert Plug.Conn.get_resp_header(result, "cache-control") == []
     end
 
     test "returns 404 for directory paths", %{ctx: ctx, version_segs: vs} do
       conn = Plug.Test.conn(:get, "/t/local/test/assets")
       # Directory paths fall back to extension check (no extension → 404)
       result = TinctureAssets.serve_asset(conn, ctx, vs, ["assets"])
-      assert result.status == 404
+      assert_not_found(result)
     end
   end
 
@@ -316,9 +319,7 @@ defmodule CyfrWeb.Ingress.TinctureAssetsTest do
     end
 
     test "an entry the store does not hold is a 404", %{ctx: ctx, version_segs: vs} do
-      conn = serve_index(ctx, vs, "missing.html", "/t/home/local/app/")
-      assert conn.status == 404
-      assert conn.resp_body == "Not Found"
+      assert_not_found(serve_index(ctx, vs, "missing.html", "/t/home/local/app/"))
     end
   end
 
@@ -329,11 +330,19 @@ defmodule CyfrWeb.Ingress.TinctureAssetsTest do
 
       for reserved <- rules.reserved_files do
         conn = Plug.Test.conn(:get, "/t/local/test/" <> reserved)
-        assert TinctureAssets.serve_asset(conn, ctx, vs, [reserved]).status == 404
+        assert_not_found(TinctureAssets.serve_asset(conn, ctx, vs, [reserved]))
       end
 
       assert ".js" in rules.allowed_extensions
       refute ".sh" in rules.allowed_extensions
     end
+  end
+
+  # Every miss is the JSON `not_found` refusal `CyfrWeb.ApiError` renders,
+  # never a plain-text body.
+  defp assert_not_found(conn) do
+    assert conn.status == 404
+    assert ["application/json" <> _] = Plug.Conn.get_resp_header(conn, "content-type")
+    assert %{"code" => "not_found", "message" => "Not found"} = Jason.decode!(conn.resp_body)
   end
 end

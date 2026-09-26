@@ -2,7 +2,7 @@
 // Copyright 2026 CYFR Works Inc.
 
 // Package frame is the codec of the attach connection between a relay and
-// the spawner's client. A frame is a 1-byte stream id, a 4-byte big-endian
+// the keeper's client. A frame is a 1-byte stream id, a 4-byte big-endian
 // payload length and the payload. A zero-length frame on a data stream
 // marks the end of that stream.
 package frame

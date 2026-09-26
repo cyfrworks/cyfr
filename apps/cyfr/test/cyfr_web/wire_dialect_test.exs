@@ -38,10 +38,9 @@ defmodule CyfrWeb.WireDialectTest do
     "cyfr_web/plugs/webhook_idempotency.ex" => "duplicate answer is a 200 success body",
     # The sign-in flow's no-session pages are HTML pages, not API error bodies.
     "cyfr_web/minimal_page.ex" => "renders the sign-in flow's no-session HTML pages",
-    # A missing asset answers a browser's resource fetch with the asset
-    # surface's own plain 404.
-    "cyfr_web/ingress/tincture_assets.ex" =>
-      "the asset surface's plain 404 for a browser resource fetch"
+    # The tincture's entry page is a 200 HTML body, a success; every miss
+    # there renders through ApiError.
+    "cyfr_web/ingress/tincture_assets.ex" => "the entry page's 200 HTML body"
   }
 
   test "every bare send_resp is on the roster with a reason" do
