@@ -201,6 +201,14 @@ defmodule Prima.KeeperProtocol do
   @spec streams() :: [{stream(), 0..4}]
   def streams, do: @streams
 
+  @doc "The variable names no spawn's `env` may carry."
+  @spec reserved_env_names() :: [String.t()]
+  def reserved_env_names, do: @reserved_env
+
+  @doc "The variable name prefixes no spawn's `env` may carry."
+  @spec reserved_env_prefixes() :: [String.t()]
+  def reserved_env_prefixes, do: @reserved_env_prefixes
+
   # ============================================================================
   # Frames
   # ============================================================================
