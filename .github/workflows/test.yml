@@ -615,6 +615,8 @@ jobs:
         with:
           context: .
           file: Dockerfile.locus
+          build-args: |
+            APT_REFRESH=${{ github.run_id }}
           load: true
           tags: cyfr-locus:smoke
           cache-from: type=gha,scope=locus
