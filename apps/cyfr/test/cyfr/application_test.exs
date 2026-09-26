@@ -25,6 +25,7 @@ defmodule Cyfr.ApplicationTest do
     Arca.AuditHandler => 5_000,
     Cyfr.StandingWatch => 5_000,
     Cyfr.TelemetryBridge => 5_000,
+    Cyfr.Platform.Settings => 5_000,
     Cyfr.RetentionScheduler => 5_000,
     Grimoire.RunningTasks => 5_000,
     Grimoire.TaskSupervisor => 30_000,

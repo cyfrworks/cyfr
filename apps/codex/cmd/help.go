@@ -21,7 +21,7 @@ var groupCommandOrder = map[string][]string{
 	},
 	"security": {"key", "profile", "webhook"},
 	"admin": {
-		"admin", "log", "decision", "retention", "aqua", "mcp", "registry", "report",
+		"admin", "settings", "log", "decision", "retention", "aqua", "mcp", "registry", "report",
 		"notify", "context", "call",
 	},
 }

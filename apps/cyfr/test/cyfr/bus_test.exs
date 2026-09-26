@@ -107,7 +107,8 @@ defmodule Cyfr.BusTest do
                "sanctum:memberships:<user_id>",
                "platform:notify",
                "health_check:<nonce>",
-               "cyfr:schedule_completions"
+               "cyfr:schedule_completions",
+               "cyfr:settings_changed"
              ]
 
       for {_topic, reason} <- Bus.global(), do: assert(is_binary(reason) and reason != "")
@@ -302,7 +303,7 @@ defmodule Cyfr.BusTest do
   @topic_literals ~w("tenant: "sanctum:vault "sanctum:athanor "sanctum:caller "sanctum:sessions
                      "sanctum:memberships "platform:notify "health_check: "room_feed:
                      "topbar:viewing "page: "bus: "thread: "execution:events "progress:
-                     "cyfr:schedule_completions)
+                     "cyfr:schedule_completions "cyfr:settings_changed)
 
   @retired [
     "{:execution_started,",

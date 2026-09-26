@@ -22,6 +22,7 @@ defmodule Cyfr.GenServerCatchallTest do
     {Cyfr.TelemetryBridge, "TelemetryBridge"},
     {Aqua.ScheduleNotes, "ScheduleNotes"},
     {Cyfr.StandingWatch, "StandingWatch"},
+    {Cyfr.Platform.Settings, "Platform.Settings"},
     {Arca.AuditHandler, "AuditHandler"},
     {Prism.TinctureRegistry, "TinctureRegistry"},
     {Arca.RecordSink, "RecordSink"},

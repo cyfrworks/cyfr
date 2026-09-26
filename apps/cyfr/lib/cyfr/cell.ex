@@ -347,8 +347,9 @@ defmodule Cyfr.Cell do
     state = %{me: me, slot: slot, lease_ms: lease_ms, renew_ms: renew_ms, cluster?: cluster?}
 
     case take_or_wait(state) do
-      {:ok, _won} ->
+      {:ok, won} ->
         refuse_live_peers!(state)
+        pins!(won)
         refresh_roster()
         Process.send_after(self(), :renew, renew_ms)
         {:ok, state}
@@ -451,8 +452,44 @@ defmodule Cyfr.Cell do
 
   defp reclaim(state) do
     case Arca.ControlPlane.take(state.slot, state.me, state.lease_ms) do
-      {:ok, _won} -> Logger.warning("[Cyfr.Cell] slot regained")
-      _refused -> :ok
+      {:ok, won} ->
+        Logger.warning("[Cyfr.Cell] slot regained")
+
+        # A regained slot is a new generation, and the take retires the
+        # pins this member recorded under the one it lost: it records them
+        # again under the one it holds.
+        case Cyfr.Platform.Settings.claimed(won) do
+          :ok ->
+            :ok
+
+          {:error, reason} ->
+            Logger.warning(
+              "[Cyfr.Cell] this member's settings pins were not recorded again " <>
+                "(#{inspect(reason)}); a peer's list shows none until its next boot"
+            )
+        end
+
+      _refused ->
+        :ok
+    end
+  end
+
+  # The claim that wins a slot retires the pins recorded under that slot's
+  # earlier generations and those of every member whose slot is no longer
+  # held, so a member that died without retiring its own is cleared by
+  # whoever next takes or outlives it, and then records this member's
+  # pins under `(node, generation)`. A store that cannot answer refuses
+  # the boot, releasing the slot first as every refusal here does.
+  defp pins!(won) do
+    case Cyfr.Platform.Settings.claimed(won) do
+      :ok ->
+        :ok
+
+      {:error, reason} ->
+        _ = Arca.ControlPlane.release()
+
+        raise "[Cyfr] FATAL: this member's settings pins could not be recorded " <>
+                "(#{Prima.LoggerContext.shape(reason)})."
     end
   end
 

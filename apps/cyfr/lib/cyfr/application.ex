@@ -53,6 +53,17 @@ defmodule Cyfr.Application do
       "components" => Compendium.ComponentPath
     })
 
+    # The platform settings, before the tree and so before the execution
+    # slots' pool or any other consumer reads one, whether or not this
+    # boot migrated: the roster's defaults installed into Arca's accessor,
+    # this member's environment pins checked against the live members'
+    # recorded ones (a disagreement refuses the boot naming both), and
+    # each restart-scoped row and the log level's applied once. An
+    # unreadable settings table refuses the boot.
+    Cyfr.Platform.Settings.install!()
+    Cyfr.Platform.Settings.check_pins!()
+    Cyfr.Platform.Settings.apply()
+
     # The operation table and its resource index, built from the
     # configured providers and written once into Grimoire's term — after
     # the ports its audit and its providers read, before any process that
@@ -190,10 +201,12 @@ defmodule Cyfr.Application do
     ]
   end
 
-  # Before the gate: only what the security reconcile needs and what must
-  # hear its announcements. None of these runs tenant work, projects a
-  # credential, dispatches to a provider, starts a backend or recovers
-  # anything; each only answers once something else calls it.
+  # Before the gate: only what the security reconcile needs, what must
+  # hear its announcements, and the settings every later child reads. None
+  # of these runs tenant work, projects a credential, dispatches to a
+  # provider, starts a backend or recovers anything; each only answers
+  # once something else calls it, but for the settings process's own node
+  # facts: this member's pinned values and the store revision it polls.
   defp pre_gate do
     [
       # The database is the one this release's schema built, its tenant
@@ -232,7 +245,13 @@ defmodule Cyfr.Application do
       # The host's telemetry-to-bus bridge, attached before the reconcile
       # announces a revocation, so the announcement reaches mounted views.
       # 5 s: its stop, which holds no work in flight.
-      Supervisor.child_spec(Cyfr.TelemetryBridge, shutdown: 5_000)
+      Supervisor.child_spec(Cyfr.TelemetryBridge, shutdown: 5_000),
+      # This member's settings process: after the claim, which recorded
+      # the pins it writes to the store, and the bus it hears changes on;
+      # before every consumer. It drops a cached setting on each committed
+      # change and applies the log level in store-revision order. 5 s: its
+      # stop, which holds no work in flight.
+      Supervisor.child_spec(Cyfr.Platform.Settings, shutdown: 5_000)
     ]
   end
 
