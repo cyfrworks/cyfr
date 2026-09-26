@@ -64,7 +64,9 @@ defmodule Cyfr.StackShapeTest do
 
     # The execution worker is attached to the worker network and no other,
     # which cyfr joins: cyfr reaches it there, it reaches cyfr's host API
-    # there, and the Locus services and caddy never see either port.
+    # there, and the Locus services and caddy never see either port. The
+    # network is the service's alone: its runners have none, and reach the
+    # host API and a pinned address only through the service.
     [_, opus_block | _] = Regex.split(~r/^  opus:\s*$/m, services_block)
     [opus_block | _] = Regex.split(~r/^  [a-z]/m, opus_block)
     [_, opus_networks | _] = Regex.split(~r/^    networks:\s*$/m, opus_block)
@@ -202,11 +204,11 @@ defmodule Cyfr.StackShapeTest do
 
       # cyfr-keeper bounds a spawn's memory only where the container's
       # cgroup is mounted writable; without the option every bounded spawn
-      # is refused, so the shipped services carry it.
-      assert list_entries(block, "security_opt") == [
-               "no-new-privileges:true",
-               "writable-cgroups=true"
-             ],
+      # is refused, so the shipped services carry it. The worker's runner
+      # pool is isolated, which takes the keeper's seccomp profile too.
+      assert list_entries(block, "security_opt") ==
+               ["no-new-privileges:true", "writable-cgroups=true"] ++
+                 if(service == "opus", do: ["seccomp=./keeper.seccomp.json"], else: []),
              service
 
       assert list_entries(block, "tmpfs") == [homes, run_dir], service
@@ -216,6 +218,40 @@ defmodule Cyfr.StackShapeTest do
       refute block =~ ~r/^    (privileged|pid|userns_mode|cgroup|devices|volumes):/m, service
       assert block =~ ~r/^          memory: \S+$/m, service
     end
+  end
+
+  # The worker's runner pool is isolated: cyfr-keeper clones each runner into
+  # a user and network namespace of its own, which Docker's default seccomp
+  # profile denies. The service runs under the keeper's profile, which the
+  # image carries and a scaffolded project holds beside its compose file,
+  # where compose reads it; a project without it does not start the service.
+  test "the worker runs under the keeper's seccomp profile, shipped beside the compose file" do
+    opus = service_block(read!("docker-compose.yml"), "opus")
+    assert "seccomp=./keeper.seccomp.json" in list_entries(opus, "security_opt")
+    assert opus =~ "user.max_user_namespaces"
+    assert opus =~ "kernel.apparmor_restrict_unprivileged_userns"
+
+    dockerfile = read!("Dockerfile.opus")
+    assert dockerfile =~ ~r{^COPY apps/keeper/seccomp/keeper\.json /etc/cyfr/keeper\.json$}m
+    assert dockerfile =~ ~s("--pool", "runner:30101-30108:netns")
+
+    dir = Path.join(System.tmp_dir!(), "cyfr-scaffold-#{System.unique_integer([:positive])}")
+    File.mkdir_p!(dir)
+    on_exit(fn -> File.rm_rf!(dir) end)
+    tarball = Path.join(dir, "scaffold.tar.gz")
+
+    assert {_, 0} =
+             System.cmd("bash", [Path.join(@root, "scripts/scaffold-tarball.sh"), tarball],
+               stderr_to_stdout: true
+             )
+
+    {listing, 0} = System.cmd("tar", ["-tzf", tarball])
+    entries = String.split(listing, "\n", trim: true)
+    assert "docker-compose.yml" in entries
+    assert "keeper.seccomp.json" in entries
+
+    {profile, 0} = System.cmd("tar", ["-xOzf", tarball, "keeper.seccomp.json"])
+    assert profile == read!("apps/keeper/seccomp/keeper.json")
   end
 
   # Each image names its pooled uids for the service that runs under them,

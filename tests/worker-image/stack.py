@@ -5,7 +5,8 @@
 A Stack runs docker-compose.yml's `opus` service layered with
 compose.worker.yml, which adds only the image under test, a loopback port,
 the host gateway the scripted control plane (control_plane.py, on this
-machine) is reached through and the pool settings a test chooses.
+machine) is reached through and the pool settings a test chooses; its project directory holds the keeper's seccomp
+profile the service names, as a scaffolded project does.
 Everything else — cyfr-keeper's capabilities, the security options, the
 read-only root, `ipc: none`, the tmpfs mounts, the limits, the restart
 policy — is the shipped service. A Stack made with
@@ -33,6 +34,9 @@ ROOT = os.path.abspath(os.path.join(HERE, "..", ".."))
 # network, for a host that tells one run's Docker objects from another's by
 # name.
 PROJECT_PREFIX = os.environ.get("STACK_PROJECT_PREFIX", "")
+# The keeper's seccomp profile and the name the opus service reads it by.
+PROFILE = os.path.join(ROOT, "apps", "keeper", "seccomp", "keeper.json")
+PROFILE_NAME = "keeper.seccomp.json"
 SERVICE = "wrk_image"
 POOL_FIRST, POOL_LAST = 30101, 30108
 SERVICE_UID = 10002
@@ -78,8 +82,11 @@ class Stack:
         self.watchdog_grace_ms = watchdog_grace_ms
         self.release_grace_ms = release_grace_ms
         self.project_dir = tempfile.mkdtemp(prefix=f"{self.project}-")
-        # The rest of the stack's definition names a project .env.
+        # The rest of the stack's definition names a project .env, and the
+        # opus service the keeper's seccomp profile beside it, which compose
+        # reads from the project directory, as a scaffolded project holds it.
         open(os.path.join(self.project_dir, ".env"), "w").close()
+        shutil.copyfile(PROFILE, os.path.join(self.project_dir, PROFILE_NAME))
         self.container = None
         self.base = None
         self.boot = None
@@ -210,6 +217,24 @@ class Stack:
             pid, uids, eff, cmd = line.split("|", 3)
             if uids and pid.isdigit():
                 out.append({"pid": int(pid), "uids": [int(u) for u in uids.split(",")], "cap_eff": eff, "cmd": cmd.strip()})
+        return out
+
+    def host_processes(self):
+        """Every process in the container as the host lists it (`docker top`): host pid and uids.
+
+        Nothing joins the container to list them. A `docker exec` puts
+        runc's own processes, which live in the host's pid namespace, in
+        the container's cgroup root while it enters; one that lands as the
+        container restarts in place leaves them there when the new keeper
+        drains that root, where they show as pid 0 and cannot be moved, and
+        the keeper refuses memory bounds. A case that watches processes
+        across a restart lists them here. A container that is not running
+        holds no process."""
+        out = []
+        for line in run("docker", "top", self.container, "-eo", "pid,ruid,euid,suid,fsuid,args", check=False).stdout.splitlines()[1:]:
+            fields = line.split(None, 5)
+            if len(fields) >= 5 and all(f.isdigit() for f in fields[:5]):
+                out.append({"pid": int(fields[0]), "uids": [int(u) for u in fields[1:5]], "cmd": fields[5] if len(fields) > 5 else ""})
         return out
 
     def observe(self, script):

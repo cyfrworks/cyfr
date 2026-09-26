@@ -17,10 +17,14 @@ ITEMS=(
   # One example per env file docker-compose.yml names beside .env.
   .env.locus.example .env.opus.example
 )
+# The keeper's seccomp profile, which docker-compose.yml's opus service
+# names as ./keeper.seccomp.json, ships beside it under that name.
+PROFILE=apps/keeper/seccomp/keeper.json
+PROFILE_NAME=keeper.seccomp.json
 # Every item is shipped or the script fails: a file renamed or removed
 # without this list following must not leave the tarball quietly short.
 MISSING=()
-for item in "${ITEMS[@]}"; do
+for item in "${ITEMS[@]}" "$PROFILE"; do
   [ -e "$item" ] || MISSING+=("$item")
 done
 
@@ -33,5 +37,9 @@ fi
 # codex scaffold contract) while living at seed/aqua in this repo.
 [ -d seed/aqua ] || { echo "Error: seed/aqua missing" >&2; exit 1; }
 
-tar czf "$OUTPUT" "${ITEMS[@]}" -C seed aqua
+STAGE="$(mktemp -d)"
+trap 'rm -rf "$STAGE"' EXIT
+cp "$PROFILE" "$STAGE/$PROFILE_NAME"
+
+tar czf "$OUTPUT" "${ITEMS[@]}" -C seed aqua -C "$STAGE" "$PROFILE_NAME"
 echo "Created $OUTPUT ($(du -h "$OUTPUT" | cut -f1) compressed)"

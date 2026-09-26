@@ -34,8 +34,9 @@
 # kernel.apparmor_restrict_unprivileged_userns), and the container runs
 # under the seccomp profile /etc/cyfr/keeper.json carries, Docker's default
 # with clone allowed to make a user and network namespace and unshare and
-# setns denied (`security_opt: seccomp=apps/keeper/seccomp/keeper.json`),
-# since Docker's own profile denies such a clone. Without either,
+# setns denied (docker-compose.yml's `security_opt:
+# seccomp=./keeper.seccomp.json`, apps/keeper/seccomp/keeper.json shipped
+# beside it), since Docker's own profile denies such a clone. Without either,
 # cyfr-keeper refuses to start, naming both.
 
 # ---- cyfr-keeper, the process helper: a static Go binary, pinned to the Go

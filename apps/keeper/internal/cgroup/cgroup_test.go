@@ -9,6 +9,7 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 )
 
 // namespaceRoot is a directory holding the files Delegate reads at the root
@@ -138,6 +139,100 @@ func TestDrainNamesEveryProcessItCannotMove(t *testing.T) {
 	_, err = Delegate(gone, []byte("0::/\n"))
 	if err == nil || !strings.Contains(err.Error(), "pid 999999999 (no /proc entry") {
 		t.Fatalf("a pid /proc does not know: %v", err)
+	}
+}
+
+// pausing replaces the wait between two passes over the root with then,
+// recording each wait asked for, for the rest of the test.
+func pausing(t *testing.T, then func()) *[]time.Duration {
+	t.Helper()
+	var waits []time.Duration
+	pause = func(d time.Duration) {
+		waits = append(waits, d)
+		if then != nil {
+			then()
+		}
+	}
+	t.Cleanup(func() { pause = time.Sleep })
+	return &waits
+}
+
+// cgroup.procs lists a process of another pid namespace as 0: the
+// runtime's own process entering the container for a `docker exec` as it
+// restarts in place. A write cannot name it and it is not the keeper's, so
+// the drain skips it, delegates beside it, and names in a refusal only the
+// processes it could see.
+func TestDrainSkipsWhatItCannotSee(t *testing.T) {
+	files := delegated()
+	files["cgroup.procs"] = "0\n0\n"
+	root := namespaceRoot(t, files)
+	keeperFiles(t, root, boundFiles...)
+	waits := pausing(t, nil)
+	if m, err := Delegate(root, []byte("0::/\n")); err != nil || m == nil {
+		t.Fatalf("a root holding only processes of another pid namespace: %v", err)
+	}
+	if moved, _ := os.ReadFile(filepath.Join(root, keeperLeaf, "cgroup.procs")); len(moved) != 0 {
+		t.Errorf("the drain wrote %q, naming a process it cannot see", moved)
+	}
+	if len(*waits) != 0 {
+		t.Errorf("the drain waited %v with nothing it could move", *waits)
+	}
+
+	self := strconv.Itoa(os.Getpid())
+	files["cgroup.procs"] = "0\n" + self + "\n0\n"
+	stuck := namespaceRoot(t, files)
+	waits = pausing(t, nil)
+	_, err := Delegate(stuck, []byte("0::/\n"))
+	if err == nil || !strings.Contains(err.Error(), "processes remain in "+stuck+": pid "+self+" (") ||
+		strings.Contains(err.Error(), "pid 0") {
+		t.Fatalf("the refusal names what it could see alone: %v", err)
+	}
+	if len(*waits) != drainAttempts-1 || (*waits)[0] != 50*time.Millisecond {
+		t.Errorf("the drain waited %v between its %d passes, want 50ms each", *waits, drainAttempts)
+	}
+}
+
+// A root that empties between two passes, as a process of another pid
+// namespace leaves it, is delegated after one wait.
+func TestDrainWaitsForTheRootToEmpty(t *testing.T) {
+	files := delegated()
+	files["cgroup.procs"] = strconv.Itoa(os.Getpid()) + "\n0\n"
+	root := namespaceRoot(t, files)
+	keeperFiles(t, root, boundFiles...)
+	waits := pausing(t, func() {
+		if err := os.WriteFile(filepath.Join(root, "cgroup.procs"), nil, 0o644); err != nil {
+			t.Error(err)
+		}
+	})
+	if m, err := Delegate(root, []byte("0::/\n")); err != nil || m == nil {
+		t.Fatalf("a root that empties on the second pass: %v", err)
+	}
+	if len(*waits) != 1 || (*waits)[0] != drainInterval {
+		t.Errorf("the drain waited %v, want one wait of %v", *waits, drainInterval)
+	}
+}
+
+// A root the memory controller cannot be enabled for, while processes of
+// another pid namespace stay in it, is refused after the passes, naming
+// how many it could not see.
+func TestDelegateNamesTheProcessesItCouldNotSee(t *testing.T) {
+	files := delegated()
+	files["cgroup.procs"] = "0\n"
+	root := namespaceRoot(t, files)
+	keeperFiles(t, root, boundFiles...)
+	// A directory where cgroup.subtree_control belongs: every write fails,
+	// as the kernel refuses one while the root holds a process.
+	if err := os.Mkdir(filepath.Join(root, "cgroup.subtree_control"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	waits := pausing(t, nil)
+	_, err := Delegate(root, []byte("0::/\n"))
+	if err == nil || !strings.Contains(err.Error(), "enabling the memory controller") ||
+		!strings.Contains(err.Error(), "1 processes of another pid namespace") {
+		t.Fatalf("a root the controller cannot be enabled for: %v", err)
+	}
+	if len(*waits) != drainAttempts-1 {
+		t.Errorf("Delegate waited %d times between its %d attempts", len(*waits), drainAttempts)
 	}
 }
 

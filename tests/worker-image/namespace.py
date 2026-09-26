@@ -10,8 +10,7 @@ stage in its cgroup, and only then releases it to drop every capability set
 and execute the runner. The clone needs the image's seccomp profile
 (apps/keeper/seccomp/keeper.json, /etc/cyfr/keeper.json in the image) and a
 host that allows unprivileged user namespaces; the service runs here under
-that profile, docker-compose.yml's own when it names it, else layered on
-by this suite.
+that profile, as docker-compose.yml names it.
 
 The steps, each observed from inside the container as root, which owns
 every runner's user namespace and so reads a runner's /proc entries (the
@@ -29,9 +28,8 @@ runner's own uid, outside that namespace, may not):
 - `relay`: under the profile a spawn of the isolated pool gets its relay
   on fd 4, carried as the keeper's stream 5: with a client that opens the
   stream, the runner's call on fd 4 arrives there and the answer reaches
-  it; with one that never opens it, as today's Opus client, the runner
-  writes to fd 4 and exits and the client receives no frame on stream 5,
-  its end frame included.
+  it; with one that never opens it, the runner writes to fd 4 and exits
+  and the client receives no frame on stream 5, its end frame included.
 - `spawn`: the shipped service fills its pool; every runner runs under a
   pooled uid whose user namespace maps only that uid and gid to themselves
   with setgroups denied, and holds no capability in any of the five sets,
@@ -42,8 +40,6 @@ runner's own uid, outside that namespace, may not):
 - `descriptors`: a runner's standard descriptors are pipes, its fd 3 is
   its control socket and its fd 4 its relay, another socket, and none of
   its descriptors reaches /run/opus or the service's keeper channel.
-  The service never opens stream 5, so every runner exit in the steps
-  below is a relay the client never used, and none is a relay fault.
 - `kill`: a runner killed from outside is gone with every process of its
   uid, its home scrubbed and its group removed, and the pool refills.
 - `reuse`: runners are killed until a uid is lent again; the runner that
@@ -73,10 +69,9 @@ import tempfile
 import threading
 
 from control_plane import ControlPlane
-from stack import (HOME_ROOT, POOL_FIRST, POOL_LAST, ROOT, SERVICE, SERVICE_UID, Stack, expect, run,
+from stack import (HOME_ROOT, POOL_FIRST, POOL_LAST, PROFILE, SERVICE, SERVICE_UID, Stack, expect, run,
                    wait_until)
 
-PROFILE = os.path.join(ROOT, "apps", "keeper", "seccomp", "keeper.json")
 IMAGE_PROFILE = "/etc/cyfr/keeper.json"
 STEPS = ("refusals", "connect", "relay", "spawn", "cgroup", "network", "descriptors", "kill", "reuse", "restart")
 POOL = f"runner:{POOL_FIRST}-{POOL_LAST}:netns"
@@ -104,18 +99,7 @@ def prerequisites(image):
 
 
 class IsolatedStack(Stack):
-    """The shipped opus service under the keeper's seccomp profile: compose's own when it names it, else layered here."""
-
-    def compose(self, *args, check=True):
-        files = [os.path.join(ROOT, "docker-compose.yml"), os.path.join(os.path.dirname(os.path.abspath(__file__)), "compose.worker.yml")]
-        with open(files[0]) as f:
-            if "keeper.json" not in f.read():
-                overlay = os.path.join(self.project_dir, "compose.seccomp.yml")
-                with open(overlay, "w") as out:
-                    out.write(f"services:\n  opus:\n    security_opt:\n      - seccomp={PROFILE}\n")
-                files.append(overlay)
-        return run("docker", "compose", "--project-name", self.project, "--project-directory", self.project_dir,
-                   *[arg for path in files for arg in ("-f", path)], *args, env=self.env(), check=check)
+    """The shipped opus service, under the keeper's seccomp profile compose names."""
 
     def as_uid(self, uid, script):
         """`script` run in the container as `uid`, which may read that uid's /proc entries in the container's own user namespace."""
@@ -290,15 +274,15 @@ def relay_session(image, command, opens):
 
 def test_relay(image):
     # A runner that calls on its relay (fd 4) and waits for the answer, the
-    # client opening stream 5 first, as the worker service will.
+    # client opening stream 5 first, as the worker service does.
     got, carried, ran = relay_session(image, 'printf "call\\n" >&4; IFS= read -r a <&4; echo "got:$a"', opens=True)
     expect([r["type"] for r in got] == ["spawned", "exited", "released"] and got[1].get("code") == 0,
            "relay: a spawn of the isolated pool whose client opens stream 5 runs to its exit", {"replies": got, "stderr": ran.stderr[-2000:]})
     expect(carried and carried.get("got", {}).get(5) == b"call\n" and carried["got"].get(1) == b"got:answer\n" and 5 in carried["ended"],
            "relay: once the client opened stream 5, the runner's call on fd 4 arrives there, the client's answer reaches fd 4, and the stream ends",
            carried)
-    # Today's Opus client never opens stream 5: a runner that writes to its
-    # relay and exits sends it nothing, its end frame included.
+    # A client that never opens stream 5 receives nothing on it from a
+    # runner that writes to its relay and exits, its end frame included.
     got, carried, ran = relay_session(image, 'printf "call\\n" >&4; echo done', opens=False)
     expect([r["type"] for r in got] == ["spawned", "exited", "released"] and got[1].get("code") == 0,
            "relay: a spawn of the isolated pool whose client never opens stream 5 runs to its exit", {"replies": got, "stderr": ran.stderr[-2000:]})
