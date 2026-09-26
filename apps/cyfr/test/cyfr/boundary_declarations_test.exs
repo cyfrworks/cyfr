@@ -8,7 +8,10 @@ defmodule Cyfr.BoundaryDeclarationsTest do
   exactly one boundary, each boundary's `deps` is the settled edge set,
   no boundary switches a check off, the one exception is the console's,
   and what Arca, Sanctum, the gate and each domain export is the facade
-  manifest's rows plus the additions rostered here, each with its reason.
+  roster's entries (`test/support/facade_roster.exs`) plus the additions
+  rostered here, each with its reason. Nothing under `apps`, `tests`,
+  `scripts` or `.github` reads the untracked design material beside the
+  checkout.
 
   The Boundary compiler enforces the declarations in the dev build
   (`mix compile --force --warnings-as-errors`); this test pins what they
@@ -149,6 +152,7 @@ defmodule Cyfr.BoundaryDeclarationsTest do
   }
 
   @manifest_rows ~w(Arca Sanctum Grimoire Compendium Crucible Aqua)
+  @roster_path Path.join(@root, "apps/cyfr/test/support/facade_roster.exs")
 
   defp sources(app), do: Path.wildcard(Path.join(@root, "apps/#{app}/lib/**/*.ex"))
 
@@ -343,22 +347,80 @@ defmodule Cyfr.BoundaryDeclarationsTest do
     end
   end
 
-  # The facade roster's module names under each key's own namespace.
-  defp manifest_exports do
-    facades =
-      @root
-      |> Path.join("docs/plans/interfaces.json")
-      |> File.read!()
-      |> Jason.decode!()
-      |> get_in(["facade_roster", "facades"])
+  test "a row with no roster entry fails naming the row" do
+    roster = @roster_path |> load_roster() |> Map.delete("Crucible")
 
+    assert_raise ExUnit.AssertionError, ~r/no entry for Crucible/, fn ->
+      check_roster(roster)
+    end
+  end
+
+  test "a roster entry naming a module that does not exist fails naming the module" do
+    roster = @roster_path |> load_roster() |> Map.update!("Aqua", &["Aqua.NoSuchFacade" | &1])
+
+    assert_raise ExUnit.AssertionError, ~r/Aqua\.NoSuchFacade/, fn -> check_roster(roster) end
+  end
+
+  test "an absent roster fails naming its path" do
+    path = Path.join(@root, "apps/cyfr/test/support/no_such_roster.exs")
+
+    assert_raise ExUnit.AssertionError, ~r/#{Regex.escape(path)}/, fn -> load_roster(path) end
+  end
+
+  # A path into the design material outside the checkout, anchored so a
+  # URL segment such as `/en-US/docs/` is not one; built so this file does
+  # not name it.
+  @docs_path Regex.compile!("(^|[^A-Za-z0-9_./-])" <> "docs" <> "/")
+  @scanned ~w(apps tests scripts .github)
+  @unscanned ~w(/vendor/ /priv/static/ /node_modules/ /_build/ /deps/ /.elixir_ls/)
+
+  test "no file under apps, tests, scripts or .github names a docs path outside a comment" do
+    offending =
+      for dir <- @scanned,
+          path <- Path.wildcard(Path.join([@root, dir, "**"]), match_dot: true),
+          rel = Path.relative_to(path, @root),
+          not String.ends_with?(rel, ".md"),
+          not String.contains?("/" <> rel, @unscanned),
+          File.regular?(path),
+          {line, n} <- path |> File.read!() |> String.split("\n") |> Enum.with_index(1),
+          not comment?(line),
+          Regex.match?(@docs_path, line),
+          do: "#{rel}:#{n}: #{String.trim(line)}"
+
+    assert offending == [], "a docs path outside a comment:\n" <> Enum.join(offending, "\n")
+  end
+
+  defp comment?(line) do
+    trimmed = String.trim_leading(line)
+    String.starts_with?(trimmed, "#") or String.starts_with?(trimmed, "//")
+  end
+
+  # The facade roster's module names under each key's own namespace.
+  defp manifest_exports, do: @roster_path |> load_roster() |> check_roster()
+
+  defp load_roster(path) do
+    File.regular?(path) || flunk("the facade roster #{path} is absent")
+    {roster, _binding} = Code.eval_file(path)
+    roster
+  end
+
+  defp check_roster(roster) do
     for key <- @manifest_rows, into: %{} do
+      names =
+        case Map.fetch(roster, key) do
+          {:ok, names} -> names
+          :error -> flunk("the facade roster has no entry for #{key}")
+        end
+
       modules =
-        for %{"function" => function} <- Map.fetch!(facades, key),
-            [name] <- Regex.scan(~r/\b[A-Z][A-Za-z0-9_]*(?:\.[A-Z][A-Za-z0-9_]*)*/, function),
-            String.starts_with?(name, key <> "."),
-            uniq: true,
-            do: Module.concat([name])
+        for name <- names do
+          module = Module.concat([name])
+
+          Code.ensure_loaded?(module) ||
+            flunk("the facade roster's #{key} entry names #{name}, which does not exist")
+
+          module
+        end
 
       {key, modules}
     end

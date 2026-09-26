@@ -9,7 +9,7 @@ defmodule Cyfr.Cluster.CellTest do
   death costs a successor, what a live partition costs nobody, and which
   member proposes itself for a singleton.
 
-  Every bound here is `docs/plans/cell-ownership.md` §4.1's, measured
+  Every bound here is the cell ownership design note's §4.1's, measured
   rather than assumed, and every measurement is reported with the margin
   it had.
   """

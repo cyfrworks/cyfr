@@ -4,7 +4,7 @@
 defmodule Cyfr.Cluster.Wait do
   @moduledoc """
   Bounded condition checks, and the measurements a case reports against
-  the bounds `docs/plans/cell-ownership.md` states.
+  the bounds the cell ownership design note states.
 
   There are no sleeps in this suite that stand in for an event. Where a
   case needs two members to act at one instant it makes the interleaving
