@@ -311,6 +311,18 @@ config :esbuild,
       ~w(js/app.js --bundle --target=es2017 --outdir=../priv/static/assets --external:/fonts/* --external:/images/*),
     cd: Path.expand("../apps/cyfr/assets", __DIR__),
     env: %{"NODE_PATH" => Path.expand("../deps", __DIR__)}
+  ],
+  # The tincture SDK: one self-contained script, injected into a tincture's
+  # entry page and served at /sdk/cyfr.js. `mix esbuild sdk` rebuilds it;
+  # the built file is tracked, since the entry page embeds it at compile
+  # time.
+  sdk: [
+    args:
+      ~w(js/sdk/index.js --bundle --format=iife --target=es2017 --outfile=../priv/static/sdk/cyfr.js) ++
+        [
+          "--banner:js=// SPDX-License-Identifier: Apache-2.0\n// Copyright 2026 CYFR Works Inc.\n// Built from apps/cyfr/assets/js/sdk by `mix esbuild sdk`."
+        ],
+    cd: Path.expand("../apps/cyfr/assets", __DIR__)
   ]
 
 # Prism tailwind configuration

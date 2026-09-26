@@ -1,180 +1,375 @@
-/**
- * SPDX-License-Identifier: Apache-2.0
- * Copyright 2026 CYFR Works Inc.
- *
- * Cyfr Tincture SDK — bridge for tincture iframes to communicate with the Prism shell.
- *
- * Auto-injected into every tincture's <head> at serve time (nonce-secured).
- * No <script> tag needed — window.cyfr is always available.
- *
- *   cyfr.ready()
- *   const result = await cyfr.invoke("c:local.claude", { prompt: "hello" })
- */
-(function() {
-  "use strict"
-
-  let _requestId = 0
-  const _pending = new Map()
-  const _listeners = new Map()
-  const REQUEST_TIMEOUT = 30000
-
-  // A refusal as the shell and the invoke endpoint send it — `{code,
-  // message}`, its class and its sentence — as an Error carrying both.
-  // A bare string is the shell's own answer to a message it could not route.
-  function _refusal(error, fallback) {
-    if (error && typeof error === "object") {
-      var err = new Error(typeof error.message === "string" ? error.message : fallback)
-      if (typeof error.code === "string") err.code = error.code
-      return err
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 CYFR Works Inc.
+// Built from apps/cyfr/assets/js/sdk by `mix esbuild sdk`.
+(() => {
+  // js/sdk/wire.js
+  var VERSION = 1;
+  var BEARER_HEADER = "authorization";
+  var ROUTES = Object.freeze({
+    invoke: "/_f/v1/invoke",
+    action: "/_f/v1/action",
+    stream_open: "/_f/v1/stream"
+  });
+  var VERBS = Object.freeze(["open", "close", "title", "ready", "focus"]);
+  var HANDSHAKE = "cyfr:handshake";
+  var CREDENTIAL = "cyfr:credential";
+  var FRAME_ID = /^[A-Za-z0-9_-]{8,64}$/;
+  var isObject = (value) => value !== null && typeof value === "object" && !Array.isArray(value);
+  function isFrameId(id) {
+    return typeof id === "string" && FRAME_ID.test(id);
+  }
+  function bearer(credential) {
+    if (typeof credential !== "string" || credential === "" || /\s/.test(credential)) {
+      throw new TypeError("a frame credential is a non-empty string without whitespace");
     }
-    return new Error(typeof error === "string" && error !== "" ? error : fallback)
+    return "Bearer " + credential;
   }
-
-  function _nextId() {
-    return "req_" + (++_requestId) + "_" + Math.random().toString(36).slice(2, 8)
+  function request(kind, fields, publicIdentity2 = null) {
+    let body;
+    switch (kind) {
+      case "invoke":
+        body = { v: VERSION, ref: fields.ref, operation: fields.operation, args: fields.args };
+        break;
+      case "action":
+        body = { v: VERSION, operation: fields.operation, args: fields.args };
+        break;
+      case "stream_open":
+        body = { v: VERSION, stream: fields.stream, subject: fields.subject };
+        break;
+      default:
+        throw new TypeError("unknown request kind: " + kind);
+    }
+    if (publicIdentity2) body.public = publicIdentity2;
+    return body;
   }
-
-  function _send(action, payload) {
-    return new Promise((resolve, reject) => {
-      const id = _nextId()
-
-      const timer = setTimeout(() => {
-        _pending.delete(id)
-        reject(new Error("Request timed out: " + action))
-      }, REQUEST_TIMEOUT)
-
-      _pending.set(id, { resolve, reject, timer })
-
-      // Use "*" because sandboxed iframes (no allow-same-origin) have an
-      // opaque origin ("null"), so a specific targetOrigin would never match
-      // the parent. Security is maintained by the parent's source check.
-      window.parent.postMessage({
-        type: "cyfr:request",
-        id: id,
-        action: action,
-        payload: payload
-      }, "*")
-    })
+  var ATHANOR_SEGMENT = /^@?[a-z0-9]+(-[a-z0-9]+)*$/;
+  var PUBLISHER_SEGMENT = /^[a-z0-9]([a-z0-9.-]*[a-z0-9])?$/;
+  var NAME_SEGMENT = /^[a-z0-9]([a-z0-9-]*[a-z0-9])?$/;
+  function publicIdentity(pathname) {
+    if (typeof pathname !== "string") return null;
+    const [empty, prefix, ...rest] = pathname.split("/");
+    if (empty !== "" || prefix !== "t" || rest.length < 3) return null;
+    let athanor, publisher, name;
+    try {
+      ;
+      [athanor, publisher, name] = rest.slice(0, 3).map(decodeURIComponent);
+    } catch (_error) {
+      return null;
+    }
+    return ATHANOR_SEGMENT.test(athanor) && PUBLISHER_SEGMENT.test(publisher) && NAME_SEGMENT.test(name) ? { athanor, publisher, name } : null;
   }
-
-  // Listen for responses from the shell
-  window.addEventListener("message", function(event) {
-    var msg = event.data
-    if (!msg || typeof msg !== "object") return
-
-    if (msg.type === "cyfr:response" && msg.id) {
-      var pending = _pending.get(msg.id)
-      if (pending) {
-        _pending.delete(msg.id)
-        clearTimeout(pending.timer)
-        if (msg.error) {
-          pending.reject(_refusal(msg.error, "Request failed"))
-        } else {
-          pending.resolve(msg.result)
+  var STREAM_CONTENT_TYPE = "text/event-stream";
+  function sseParser(onEvent) {
+    let buffer = "";
+    let pendingCR = false;
+    let frame = { id: null, event: "message", data: [] };
+    const dispatch = () => {
+      const { id, event, data } = frame;
+      frame = { id: null, event: "message", data: [] };
+      if (data.length === 0) return;
+      let payload;
+      try {
+        payload = JSON.parse(data.join("\n"));
+      } catch (_error) {
+        return;
+      }
+      onEvent({ id, event, data: payload });
+    };
+    const line = (text) => {
+      if (text === "") return dispatch();
+      if (text.startsWith(":")) return;
+      const colon = text.indexOf(":");
+      const field = colon === -1 ? text : text.slice(0, colon);
+      let value = colon === -1 ? "" : text.slice(colon + 1);
+      if (value.startsWith(" ")) value = value.slice(1);
+      if (field === "data") frame.data.push(value);
+      else if (field === "event") frame.event = value;
+      else if (field === "id") frame.id = /^\d+$/.test(value) ? Number(value) : null;
+    };
+    return {
+      // Lines end with LF, CRLF or CR, and a chunk may end anywhere, a CRLF
+      // pair split between two chunks included.
+      push(text) {
+        if (pendingCR && text.startsWith("\n")) text = text.slice(1);
+        pendingCR = false;
+        buffer += text;
+        let match;
+        while ((match = /\r\n|\r|\n/.exec(buffer)) !== null) {
+          if (match[0] === "\r" && match.index === buffer.length - 1) {
+            pendingCR = true;
+          }
+          line(buffer.slice(0, match.index));
+          buffer = buffer.slice(match.index + match[0].length);
         }
+      },
+      // A stream that ends mid-event dispatches nothing more: an event is
+      // complete only at its blank line.
+      end() {
+        buffer = "";
+        frame = { id: null, event: "message", data: [] };
       }
-    }
-
-    if (msg.type === "cyfr:event" && msg.event) {
-      var handlers = _listeners.get(msg.event) || []
-      handlers.forEach(function(fn) {
-        try { fn(msg.data) } catch(_e) { /* ignore */ }
-      })
-    }
-  })
-
-  // Mode detection: shell (iframe inside Prism) or public (standalone page)
-  var _mode = (window.parent !== window) ? "shell" : "public"
-
-  // Public API
-  window.cyfr = {
-    /** Current mode: "shell" or "public" */
-    mode: _mode,
-
-    /**
-     * Invoke a backend component.
-     * In shell mode: bridges via postMessage to ShellLive.
-     * In public mode: POSTs to the tincture's own invoke route, whose path
-     * carries its public address (athanor segment, publisher and name).
-     * @param {string} reference - Component reference (e.g., "c:local.claude")
-     * @param {object} input - Input data for the component
-     * @returns {Promise<{status: string, output: object, execution_id: string, duration_ms: number}>}
-     *   rejected on a refusal with an Error whose `message` is its sentence
-     *   and whose `code` is its class (e.g. "consent_required")
-     */
-    invoke: function(reference, input) {
-      if (_mode === "public") {
-        // Relative to the injected <base href> (the tincture's own path, with a
-        // trailing slash), so the SDK needs no knowledge of the URL shape.
-        return fetch("invoke", {
-          method: "POST",
-          headers: {"Content-Type": "application/json"},
-          body: JSON.stringify({reference: reference, input: input || {}})
-        }).then(function(r) {
-          if (r.ok) return r.json()
-          return r.json().then(
-            function(body) { throw _refusal(body, "Invoke failed") },
-            function() { throw new Error("Invoke failed") }
-          )
-        })
-      } else {
-        return _send("invoke", { reference: reference, input: input || {} })
-      }
-    },
-
-    /**
-     * Subscribe to shell events.
-     * @param {string} event - Event name
-     * @param {function} callback - Handler function
-     */
-    on: function(event, callback) {
-      if (!_listeners.has(event)) {
-        _listeners.set(event, [])
-      }
-      _listeners.get(event).push(callback)
-    },
-
-    /**
-     * Unsubscribe from shell events.
-     * @param {string} event - Event name
-     * @param {function} callback - Handler to remove
-     */
-    off: function(event, callback) {
-      var handlers = _listeners.get(event)
-      if (handlers) {
-        _listeners.set(event, handlers.filter(function(fn) { return fn !== callback }))
-      }
-    },
-
-    /**
-     * Update the window title.
-     * @param {string} title - New window title
-     */
-    setTitle: function(title) {
-      return _send("set_title", { title: title })
-    },
-
-    /**
-     * Close this tincture's window.
-     */
-    close: function() {
-      return _send("close", {})
-    },
-
-    /**
-     * Get context information about this tincture window.
-     * @returns {Promise<{tincture_id: string, window_id: string}>}
-     */
-    getContext: function() {
-      return _send("get_context", {})
-    },
-
-    /**
-     * Signal that the tincture is ready. Call this after initialization.
-     * @returns {Promise<{ok: true}>}
-     */
-    ready: function() {
-      return _send("ready", {})
-    }
+    };
   }
-})()
+  function decodeAnswer(kind, body) {
+    const invalid = { ok: false, invalid: true };
+    if (!isObject(body) || body.v !== VERSION || !(kind in ROUTES)) return invalid;
+    const keys = Object.keys(body);
+    if (body.ok === true && keys.length === 3) {
+      if ((kind === "invoke" || kind === "action") && "result" in body) {
+        return { ok: true, value: body.result };
+      }
+      if (kind === "stream_open" && isObject(body.stream)) return decodeGrant(body.stream);
+      return invalid;
+    }
+    if (body.ok === false && keys.length === 3 && isObject(body.error)) {
+      const { class: cls, message, stage } = body.error;
+      if (Object.keys(body.error).length === 3 && typeof cls === "string" && cls !== "" && typeof message === "string" && (stage === "admission" || stage === "execution")) {
+        return { ok: false, refusal: { class: cls, message, stage } };
+      }
+    }
+    return invalid;
+  }
+  function decodeGrant(stream) {
+    const { grant_id, stream: name, subject, projection, deadline } = stream;
+    const at = typeof deadline === "string" ? new Date(deadline) : null;
+    if (Object.keys(stream).length === 5 && typeof grant_id === "string" && typeof name === "string" && (subject === null || typeof subject === "string") && Array.isArray(projection) && projection.every((field) => typeof field === "string") && at !== null && !Number.isNaN(at.getTime())) {
+      return { ok: true, value: { grant_id, stream: name, subject, projection, deadline: at } };
+    }
+    return { ok: false, invalid: true };
+  }
+  function shellMessage(verb, frame, args = {}) {
+    if (!VERBS.includes(verb)) throw new TypeError("unknown shell verb: " + verb);
+    return { v: VERSION, verb, frame, args };
+  }
+
+  // js/sdk/client.js
+  var HANDSHAKE_TIMEOUT_MS = 3e4;
+  var MAX_QUEUED_VERBS = 32;
+  var CyfrError = class extends Error {
+    constructor(message, code, stage) {
+      super(message);
+      this.name = "CyfrError";
+      this.code = code;
+      if (stage) this.stage = stage;
+    }
+  };
+  var isPlainObject = (value) => value !== null && typeof value === "object" && !Array.isArray(value);
+  var unreadable = () => new CyfrError("The endpoint's answer could not be read.", "invalid_answer");
+  var unreachable = () => new CyfrError("The endpoint could not be reached.", "unavailable");
+  function createClient({ win, fetchFn, base, handshakeTimeoutMs = HANDSHAKE_TIMEOUT_MS }) {
+    const framed = win.parent !== win && win.parent !== null && win.parent !== void 0;
+    const standalone = framed ? null : publicIdentity(win.location && win.location.pathname);
+    let frame = null;
+    let port = null;
+    let credential = null;
+    const queued = [];
+    let settle;
+    const credentialArrived = new Promise((resolve) => {
+      settle = resolve;
+    });
+    function onWindowMessage(event) {
+      if (!framed || port !== null || event.source !== win.parent) return;
+      const data = event.data;
+      if (!isPlainObject(data) || data.v !== VERSION || data.type !== HANDSHAKE) return;
+      if (!isFrameId(data.frame) || !event.ports || event.ports.length !== 1) return;
+      frame = data.frame;
+      port = event.ports[0];
+      port.onmessage = onPortMessage;
+      for (const [verb2, args] of queued.splice(0)) post(verb2, args);
+    }
+    function onPortMessage(event) {
+      const data = event.data;
+      if (credential !== null || !isPlainObject(data)) return;
+      if (data.v !== VERSION || data.type !== CREDENTIAL || data.frame !== frame) return;
+      if (typeof data.credential !== "string" || data.credential === "") return;
+      credential = data.credential;
+      settle();
+    }
+    function post(verb2, args) {
+      port.postMessage(shellMessage(verb2, frame, args));
+    }
+    function verb(name, args = {}) {
+      if (!framed) return;
+      if (port !== null) post(name, args);
+      else if (queued.length < MAX_QUEUED_VERBS) queued.push([name, args]);
+    }
+    function identity() {
+      if (standalone) return Promise.resolve({ public: standalone });
+      if (credential !== null) return Promise.resolve({ credential });
+      if (!framed) {
+        return Promise.reject(new CyfrError("This page is not a frame the shell opened.", "no_frame"));
+      }
+      return new Promise((resolve, reject) => {
+        const timer = setTimeout(
+          () => reject(new CyfrError("The shell did not hand this frame its credential.", "no_frame")),
+          handshakeTimeoutMs
+        );
+        credentialArrived.then(() => {
+          clearTimeout(timer);
+          resolve({ credential });
+        });
+      });
+    }
+    async function postRequest(kind, fields, signal) {
+      const who = await identity();
+      const headers = { "content-type": "application/json" };
+      if (who.credential) headers[BEARER_HEADER] = bearer(who.credential);
+      try {
+        return await fetchFn(new URL(ROUTES[kind], base).toString(), {
+          method: "POST",
+          headers,
+          body: JSON.stringify(request(kind, fields, who.public || null)),
+          credentials: "omit",
+          cache: "no-store",
+          redirect: "error",
+          signal
+        });
+      } catch (_error) {
+        throw unreachable();
+      }
+    }
+    async function answer(kind, response) {
+      let body;
+      try {
+        body = await response.json();
+      } catch (_error) {
+        throw unreadable();
+      }
+      const decoded = decodeAnswer(kind, body);
+      if (decoded.ok) return decoded.value;
+      if (decoded.refusal) {
+        const { message, class: code, stage } = decoded.refusal;
+        throw new CyfrError(message, code, stage);
+      }
+      throw unreadable();
+    }
+    async function send(kind, fields) {
+      return answer(kind, await postRequest(kind, fields));
+    }
+    async function openStream(fields, onEvent) {
+      const controller = new AbortController();
+      const response = await postRequest("stream_open", fields, controller.signal);
+      const type = (response.headers.get("content-type") || "").split(";")[0].trim();
+      if (type !== STREAM_CONTENT_TYPE) {
+        try {
+          await answer("stream_open", response);
+        } finally {
+          controller.abort();
+        }
+        throw unreadable();
+      }
+      const parser = sseParser((event) => {
+        try {
+          onEvent(event);
+        } catch (_error) {
+        }
+      });
+      let closing = false;
+      const closed = (async () => {
+        const reader = response.body.getReader();
+        const decoder = new TextDecoder();
+        try {
+          for (; ; ) {
+            const { done, value } = await reader.read();
+            if (done) break;
+            parser.push(decoder.decode(value, { stream: true }));
+          }
+          parser.push(decoder.decode());
+        } catch (_error) {
+          if (!closing) throw unreachable();
+        } finally {
+          parser.end();
+        }
+      })();
+      return {
+        /** Settles when the stream ends; rejects if the connection broke. */
+        closed,
+        /** End the stream: the request is aborted and no further event is delivered. */
+        close() {
+          closing = true;
+          controller.abort();
+        }
+      };
+    }
+    const invalid = (sentence) => Promise.reject(new CyfrError(sentence, "invalid_argument"));
+    const api = {
+      /** The frame id the shell handed this frame, or null before the handshake. */
+      get frame() {
+        return frame;
+      },
+      /** The public tincture a top-level `/t/…` page names itself as, or null. */
+      get public() {
+        return standalone;
+      },
+      /**
+       * Run an operation of a component the tincture declares.
+       * @param {string} ref - a component reference, e.g. "c:local.weather:1.0.0"
+       * @param {string} operation - the operation's name
+       * @param {object} [args] - its arguments
+       * @returns {Promise<any>} the result; a refusal rejects with a CyfrError
+       */
+      invoke(ref, operation, args = {}) {
+        if (typeof ref !== "string" || ref === "") return invalid("ref must be a component reference");
+        if (typeof operation !== "string" || operation === "") return invalid("operation must be a name");
+        if (!isPlainObject(args)) return invalid("args must be an object");
+        return send("invoke", { ref, operation, args });
+      },
+      /**
+       * Run a system action the tincture declares.
+       * @param {string} name - the action, "tool.action"
+       * @param {object} [args] - its arguments
+       */
+      action(name, args = {}) {
+        if (typeof name !== "string" || name === "") return invalid("an action is tool.action");
+        if (!isPlainObject(args)) return invalid("args must be an object");
+        return send("action", { operation: name, args });
+      },
+      /**
+       * Open a stream the tincture declares and deliver its events.
+       * @param {string} name - the stream's name
+       * @param {string|null} subject - a literal subject, or null for a stream that takes none
+       * @param {function} onEvent - called with {id, event, data} per event
+       * @returns {Promise<{close: function, closed: Promise}>} once the stream is open;
+       *   a refusal rejects with a CyfrError
+       */
+      stream(name, subject, onEvent) {
+        if (typeof name !== "string" || name === "") return invalid("stream must be a stream name");
+        if (subject !== null && typeof subject !== "string") {
+          return invalid("subject must be a literal subject or null");
+        }
+        if (typeof onEvent !== "function") return invalid("onEvent must be a function");
+        return openStream({ stream: name, subject }, onEvent);
+      },
+      /** Ask the shell to open a tincture: a tincture reference, e.g. "t:local.weather". */
+      open(ref) {
+        verb("open", { ref });
+      },
+      /** Close this frame. */
+      close() {
+        verb("close");
+      },
+      /** Set this frame's title. */
+      title(title) {
+        verb("title", { title });
+      },
+      /** Tell the shell the tincture is ready. */
+      ready() {
+        verb("ready");
+      },
+      /** Ask the shell to bring this frame to the front. */
+      focus() {
+        verb("focus");
+      }
+    };
+    return { api: Object.freeze(api), onWindowMessage };
+  }
+
+  // js/sdk/index.js
+  var client = createClient({
+    win: window,
+    fetchFn: window.fetch.bind(window),
+    base: document.baseURI
+  });
+  window.addEventListener("message", client.onWindowMessage);
+  window.cyfr = client.api;
+})();

@@ -5,18 +5,44 @@ defmodule PrismWeb.ShellLive do
   use PrismWeb, :live_view
 
   @moduledoc """
-  Tincture browser for Prism shell — preview-first picker.
+  Tincture browser for Prism shell — preview-first picker, and the one
+  place a tincture's frame is created.
 
-  Large 16:9 preview stage with vertical
-  capsule navigation, compact info bar, keyboard nav (←/→ tinctures, ↑/↓
-  previews, Enter launches). When a tincture is launched the iframe overlays
-  the picker; close from inside the tincture or via the top-right capsule
-  returns to the picker.
+  Large 16:9 preview stage with vertical capsule navigation, compact info
+  bar, keyboard nav (←/→ tinctures, ↑/↓ previews, Enter launches). When a
+  tincture is launched its frame overlays the picker; close from inside
+  the tincture or via the top-right capsule returns to the picker.
 
-  Sandboxed tinctures communicate with the platform via the PostMessage bridge
-  (IframeBridge hook + cyfr.js SDK). Tinctures can invoke backend components
-  declared in their manifest dependencies via `cyfr.invoke()`.
+  ## Frames
+
+  Launching a tincture opens a frame. The shell reads the version's
+  declaration through `Compendium`, renders the frame's `sandbox` and
+  `allow` attributes from the rules for the capabilities it declares
+  (`frame_attributes/2`), and mints the frame's credential
+  (`Sanctum.TinctureAuth.mint_frame_credential/4`), bound to the person,
+  the version's release digest, the grant revision of the tincture's
+  owner profile and a fresh frame id. A private tincture's page is served
+  under an asset credential (`Prima.TinctureUrl`'s `/_s/` path), a public
+  one's at its `/t/` address; no URL carries the frame credential.
+
+  The `IframeBridge` hook hands the frame a `MessagePort` on its first
+  load, and the frame credential over that port only (`frame_handshake`,
+  answered once per frame). The frame's SDK sends data to the endpoint
+  under that bearer; the port carries the shell verbs of
+  `Prima.TinctureWire`, which reach this view as `frame_verb`. A message
+  that does not decode, or that names another frame, is dropped and
+  counted.
+
+  A frame hidden behind another is suspended unless it declares
+  `background`, and resumed when shown; discarding it revokes its
+  credential, and `terminate/2` revokes every credential this view
+  minted. A new socket is a new open: nothing minted under an earlier one
+  carries over.
   """
+
+  require Logger
+
+  alias Sanctum.TinctureAuth
 
   # ============================================================================
   # Mount
@@ -30,6 +56,9 @@ defmodule PrismWeb.ShellLive do
       |> assign(:active_nav, "tinctures")
       |> assign(:active_tincture, nil)
       |> assign(:opened_tinctures, [])
+      |> assign(:frames, %{})
+      |> assign(:minted_frames, [])
+      |> assign(:dropped_messages, 0)
       |> assign(:tinctures, [])
       |> assign(:focused_index, 0)
       |> assign(:current_preview_index, 0)
@@ -223,25 +252,41 @@ defmodule PrismWeb.ShellLive do
     end
   end
 
-  def handle_event("iframe_message", %{"window_id" => window_id, "message" => msg}, socket) do
-    handle_iframe_message(socket, window_id, msg)
+  # The bridge asks for the frame's credential once, on the frame's first
+  # load, and posts it over the port it hands the frame. The bearer leaves
+  # this process once: a second ask — a reload, a navigation inside the
+  # frame, another script on the page — is answered with nothing.
+  def handle_event("frame_handshake", %{"frame" => frame_id}, socket) when is_binary(frame_id) do
+    case find_frame(socket, frame_id) do
+      {tincture_id, %{bearer: bearer} = frame} when is_binary(bearer) ->
+        frames = Map.put(socket.assigns.frames, tincture_id, %{frame | bearer: nil})
+        {:reply, %{credential: bearer}, assign(socket, :frames, frames)}
+
+      _spent_or_unknown ->
+        {:reply, %{error: "no_credential"}, socket}
+    end
   end
 
-  def handle_event("iframe_message", _params, socket) do
-    {:noreply, socket}
+  def handle_event("frame_handshake", _params, socket),
+    do: {:reply, %{error: "no_credential"}, socket}
+
+  # A shell verb the frame posted over its port. The bridge names the frame
+  # whose port it came from, and the message must name the same one.
+  def handle_event("frame_verb", %{"frame" => frame_id, "message" => message}, socket)
+      when is_binary(frame_id) do
+    with {:ok, %{frame: ^frame_id} = decoded} <- Prima.TinctureWire.decode_shell_message(message),
+         {tincture_id, _frame} <- find_frame(socket, frame_id) do
+      {:noreply, shell_verb(socket, tincture_id, decoded)}
+    else
+      _ -> {:noreply, drop_message(socket)}
+    end
   end
+
+  def handle_event("frame_verb", _params, socket), do: {:noreply, drop_message(socket)}
 
   # ============================================================================
   # Tracking + loading
   # ============================================================================
-
-  defp maybe_track_tincture(socket, tincture_id) do
-    if tincture_id in socket.assigns.opened_tinctures do
-      socket
-    else
-      assign(socket, :opened_tinctures, socket.assigns.opened_tinctures ++ [tincture_id])
-    end
-  end
 
   defp handle_keynav(socket, "ArrowLeft"),
     do: focus_tincture(socket, socket.assigns.focused_index - 1)
@@ -299,18 +344,309 @@ defmodule PrismWeb.ShellLive do
 
   defp launch_tincture(socket, tincture_id) do
     socket
-    |> assign(:active_tincture, tincture_id)
-    |> maybe_track_tincture(tincture_id)
+    |> ensure_frame(tincture_id)
+    |> activate(tincture_id)
   end
 
   defp close_active_tincture(socket) do
-    active = socket.assigns.active_tincture
-    opened = List.delete(socket.assigns.opened_tinctures, active)
-    new_active = List.first(opened)
+    case socket.assigns.active_tincture do
+      nil -> socket
+      active -> discard_frame(socket, active)
+    end
+  end
+
+  # ============================================================================
+  # Frames
+  # ============================================================================
+
+  @doc """
+  The frame's `sandbox` and `allow` attributes for the capabilities it
+  asks for, derived by `Compendium`'s rules: `sandbox` always carries
+  `allow-scripts` and never `allow-same-origin`, and each other token or
+  permission is present only for a capability asked for. A capability the
+  declaration does not list is refused as `{:undeclared_capability,
+  names}`; one no frame has, with the rules' own refusal.
+  """
+  @spec frame_attributes(Prima.Manifest.Tincture.t(), [String.t()]) ::
+          {:ok, %{sandbox: String.t(), allow: String.t(), capabilities: [String.t()]}}
+          | {:error, {:undeclared_capability, [String.t()]} | {:invalid_tincture, String.t()}}
+  def frame_attributes(%Prima.Manifest.Tincture{frame: frame}, requested)
+      when is_list(requested) do
+    with [] <- Enum.reject(requested, &(&1 in frame.capabilities)),
+         {:ok, tokens} <- Compendium.tincture_sandbox_tokens(requested),
+         {:ok, allow} <- Compendium.tincture_allow_attribute(requested) do
+      {:ok, %{sandbox: Enum.join(tokens, " "), allow: allow, capabilities: Enum.sort(requested)}}
+    else
+      [_ | _] = undeclared -> {:error, {:undeclared_capability, Enum.uniq(undeclared)}}
+      {:error, _refusal} = refused -> refused
+    end
+  end
+
+  defp ensure_frame(socket, tincture_id) do
+    cond do
+      Map.has_key?(socket.assigns.frames, tincture_id) ->
+        socket
+
+      card = Enum.find(socket.assigns.tinctures, &(&1.id == tincture_id)) ->
+        frame = open_frame(socket.assigns.context, card)
+
+        socket
+        |> put_frame(tincture_id, frame)
+        |> assign(:opened_tinctures, socket.assigns.opened_tinctures ++ [tincture_id])
+        |> remember_mint(frame)
+
+      true ->
+        socket
+    end
+  end
+
+  # One open: the declaration, the attributes it derives, the page's
+  # address and the frame's credential. A step that refuses leaves a frame
+  # that renders its refusal and holds no credential.
+  defp open_frame(ctx, card) do
+    with {:ok, declaration} <- declaration(card),
+         {:ok, attributes} <- frame_attributes(declaration, declaration.frame.capabilities),
+         {:ok, digest} <- version_digest(ctx, card),
+         {:ok, src} <- frame_src(ctx, card, digest),
+         {:ok, revision} <- grant_revision(ctx, card),
+         frame_id = new_frame_id(),
+         {:ok, minted} <- TinctureAuth.mint_frame_credential(ctx, digest, revision, frame_id) do
+      %{
+        id: frame_id,
+        tincture_id: card.id,
+        src: src,
+        sandbox: attributes.sandbox,
+        allow: attributes.allow,
+        background: declaration.frame.background,
+        credential_id: minted.id,
+        bearer: minted.credential,
+        state: :active,
+        refusal: nil
+      }
+    else
+      {:error, reason} ->
+        %{id: nil, tincture_id: card.id, credential_id: nil, refusal: open_refusal(reason)}
+    end
+  end
+
+  defp declaration(%{manifest: manifest}), do: Compendium.tincture_declaration(manifest)
+
+  # The release digest of the exact version the registry lists: what the
+  # frame and asset credentials bind as the version's digest.
+  defp version_digest(ctx, card) do
+    ref = Prima.ComponentRef.build("tincture", card.publisher, card.name, card.version)
+
+    case Compendium.inspect_component(ctx, ref) do
+      {:ok, %{"release_digest" => "sha256:" <> _ = digest}} -> {:ok, digest}
+      {:ok, _unreleased} -> {:error, :unregistered}
+      {:error, {:not_found, _}} -> {:error, :unregistered}
+      {:error, _unreadable} -> {:error, :unavailable}
+    end
+  end
+
+  # The grant revision the frame's credential binds: the head revision of
+  # the tincture's one active owner profile, the consent the shell's
+  # invocations root on, or 0 while the tincture holds none.
+  defp grant_revision(ctx, card) do
+    ref = Prima.ComponentRef.build("tincture", card.publisher, card.name)
+
+    with {:ok, entries} <- Sanctum.Consent.profiles(ctx, ref) do
+      case Prima.Authority.RootSelect.select(entries, :default) do
+        {:ok, %{id: profile_id}} -> head_revision(ctx, profile_id)
+        {:error, _no_active_owner} -> {:ok, 0}
+      end
+    end
+  end
+
+  defp head_revision(ctx, profile_id) do
+    case Sanctum.Consent.head_consent(ctx, profile_id) do
+      {:ok, %{revision: revision}} -> {:ok, revision}
+      {:error, :not_found} -> {:ok, 0}
+      {:error, _unreadable} -> {:error, :unavailable}
+    end
+  end
+
+  # A private tincture's page, under an asset credential in its path; a
+  # public one's, at its public address. Neither URL carries a credential
+  # that opens anything but the version's files.
+  defp frame_src(_ctx, %{public: true} = card, _digest),
+    do: {:ok, Prima.TinctureUrl.path(card.athanor_segment, card.publisher, card.name)}
+
+  defp frame_src(ctx, card, digest) do
+    with {:ok, %{credential: credential}} <- TinctureAuth.mint_asset_credential(ctx, digest) do
+      {:ok, private_path(credential, card, String.split(card.entry, "/"))}
+    end
+  end
+
+  defp private_path(credential, card, segments) do
+    Prima.TinctureUrl.asset_path(credential, [
+      card.publisher,
+      card.name,
+      card.version | segments
+    ])
+  end
+
+  defp new_frame_id,
+    do: "frm_" <> Base.url_encode64(:crypto.strong_rand_bytes(15), padding: false)
+
+  defp remember_mint(socket, %{credential_id: id}) when is_binary(id),
+    do: assign(socket, :minted_frames, [id | socket.assigns.minted_frames])
+
+  defp remember_mint(socket, _refused), do: socket
+
+  defp find_frame(socket, frame_id) do
+    Enum.find_value(socket.assigns.frames, fn
+      {tincture_id, %{id: ^frame_id} = frame} -> {tincture_id, frame}
+      _other -> nil
+    end)
+  end
+
+  defp put_frame(socket, tincture_id, frame),
+    do: assign(socket, :frames, Map.put(socket.assigns.frames, tincture_id, frame))
+
+  # Show one frame and hide the one it replaces.
+  defp activate(socket, tincture_id) do
+    previous = socket.assigns.active_tincture
+
+    cond do
+      not Map.has_key?(socket.assigns.frames, tincture_id) ->
+        socket
+
+      previous == tincture_id or not Map.has_key?(socket.assigns.frames, previous) ->
+        socket |> assign(:active_tincture, tincture_id) |> show(tincture_id)
+
+      true ->
+        socket |> hide(previous) |> assign(:active_tincture, tincture_id) |> show(tincture_id)
+    end
+  end
+
+  # A hidden frame without a background grant opens nothing until it is
+  # shown again. A suspension that cannot be recorded discards the frame,
+  # so a hidden frame never keeps a credential the shell could not stop.
+  defp hide(socket, tincture_id) do
+    case socket.assigns.frames[tincture_id] do
+      %{state: :active, background: false, credential_id: id} = frame ->
+        case TinctureAuth.suspend_frame(socket.assigns.context, id) do
+          {:ok, _row} -> put_frame(socket, tincture_id, %{frame | state: :suspended})
+          {:error, _reason} -> drop_frame(socket, tincture_id)
+        end
+
+      _background_or_refused ->
+        socket
+    end
+  end
+
+  # A shown frame resumes its credential. One that cannot resume — past
+  # its deadline, revoked by a standing transition, or on a member that
+  # lost its slot — is discarded and opened again: a new open with a new
+  # credential, never a resume of what was lost.
+  defp show(socket, tincture_id) do
+    case socket.assigns.frames[tincture_id] do
+      %{state: :suspended, credential_id: id} = frame ->
+        case TinctureAuth.resume_frame(socket.assigns.context, id) do
+          {:ok, _row} ->
+            put_frame(socket, tincture_id, %{frame | state: :active})
+
+          {:error, _reason} ->
+            socket
+            |> drop_frame(tincture_id)
+            |> ensure_frame(tincture_id)
+            |> assign(:active_tincture, tincture_id)
+        end
+
+      _active_or_refused ->
+        socket
+    end
+  end
+
+  # Discard a frame: its credential is revoked, it leaves the overlay, and
+  # the next open frame, if any, is shown.
+  defp discard_frame(socket, tincture_id) do
+    was_active = socket.assigns.active_tincture == tincture_id
+    socket = drop_frame(socket, tincture_id)
+
+    case {was_active, List.first(socket.assigns.opened_tinctures)} do
+      {true, nil} -> assign(socket, :active_tincture, nil)
+      {true, next} -> socket |> assign(:active_tincture, next) |> show(next)
+      {false, _} -> socket
+    end
+  end
+
+  defp drop_frame(socket, tincture_id) do
+    revoke(socket.assigns.context, socket.assigns.frames[tincture_id])
 
     socket
-    |> assign(:opened_tinctures, opened)
-    |> assign(:active_tincture, new_active)
+    |> assign(:frames, Map.delete(socket.assigns.frames, tincture_id))
+    |> assign(:opened_tinctures, List.delete(socket.assigns.opened_tinctures, tincture_id))
+  end
+
+  defp revoke(ctx, %{credential_id: id}) when is_binary(id) do
+    case TinctureAuth.revoke_frame(ctx, id) do
+      {:ok, _row} ->
+        :ok
+
+      {:error, reason} ->
+        Logger.warning("[ShellLive] frame credential #{id} not revoked: #{inspect(reason)}")
+    end
+  end
+
+  defp revoke(_ctx, _refused), do: :ok
+
+  defp open_refusal(reason) when reason in [:unavailable, :not_owner], do: :unavailable
+  defp open_refusal({:undeclared_capability, _names}), do: :undeclared
+  defp open_refusal({:invalid_tincture, _sentence}), do: :undeclared
+  defp open_refusal(:unregistered), do: :unregistered
+  defp open_refusal(_standing), do: :refused
+
+  defp refusal_sentence(:unavailable),
+    do: "This tincture can't be opened right now. Try again shortly."
+
+  defp refusal_sentence(:undeclared),
+    do: "This tincture asks for a frame capability it does not declare, so it is not opened."
+
+  defp refusal_sentence(:unregistered),
+    do: "This tincture's version is not registered. Refresh the tinctures and try again."
+
+  defp refusal_sentence(:refused),
+    do: "Your session can no longer open this tincture. Sign in again."
+
+  # ============================================================================
+  # Shell verbs
+  # ============================================================================
+
+  defp shell_verb(socket, tincture_id, %{verb: :close}), do: discard_frame(socket, tincture_id)
+  defp shell_verb(socket, tincture_id, %{verb: :focus}), do: activate(socket, tincture_id)
+  defp shell_verb(socket, _tincture_id, %{verb: :ready}), do: socket
+
+  defp shell_verb(socket, tincture_id, %{verb: :title, args: %{"title" => title}}) do
+    tinctures =
+      Enum.map(socket.assigns.tinctures, fn
+        %{id: ^tincture_id} = card -> %{card | title: title}
+        card -> card
+      end)
+
+    assign(socket, :tinctures, tinctures)
+  end
+
+  # `open` names a tincture this shell lists, versionless or at the
+  # version it lists; anything else opens nothing.
+  defp shell_verb(socket, _tincture_id, %{verb: :open, args: %{"ref" => ref}}) do
+    with {:ok, parsed} <- Prima.ComponentRef.parse(ref),
+         %{id: id} <- Enum.find(socket.assigns.tinctures, &lists?(&1, parsed)) do
+      launch_tincture(socket, id)
+    else
+      _ -> drop_message(socket)
+    end
+  end
+
+  defp lists?(card, parsed) do
+    card.publisher == parsed.namespace and card.name == parsed.name and
+      parsed.version in [nil, card.version]
+  end
+
+  defp drop_message(socket) do
+    Logger.debug("[ShellLive] frame message dropped")
+    assign(socket, :dropped_messages, socket.assigns.dropped_messages + 1)
   end
 
   defp load_tinctures(socket) do
@@ -322,11 +658,8 @@ defmodule PrismWeb.ShellLive do
       Prism.TinctureRegistry.list_tinctures(ctx)
       |> Enum.map(fn t ->
         ref = Prima.ComponentRef.build("tincture", t.publisher, t.name)
-        access = mint_access(socket, t)
 
-        public = visibility(ctx, ref)
-
-        %{
+        card = %{
           id: "iframe_#{t.name}",
           name: t.name,
           publisher: t.publisher,
@@ -336,17 +669,19 @@ defmodule PrismWeb.ShellLive do
           title: t.title,
           tagline: t.tagline,
           icon: t.icon,
-          icon_url: build_asset_url(access, t, t.media_icon),
           icon_emoji: emoji_from_hint(t.icon),
-          preview_urls:
-            t.media_previews
-            |> Enum.map(&build_asset_url(access, t, &1))
-            |> Enum.reject(&is_nil/1),
-          url: build_tincture_url(access, t),
-          url_refusal: refusal(access),
+          entry: t.entry,
           manifest: t.manifest,
-          public: public
+          public: visibility(ctx, ref)
         }
+
+        media = media_base(ctx, card)
+
+        Map.merge(card, %{
+          icon_url: media_url(media, t.media_icon),
+          preview_urls:
+            t.media_previews |> Enum.map(&media_url(media, &1)) |> Enum.reject(&is_nil/1)
+        })
       end)
 
     # Clamp focused_index if the list shrank, reset preview cursor.
@@ -356,15 +691,18 @@ defmodule PrismWeb.ShellLive do
     |> assign(:tinctures, tinctures)
     |> assign(:focused_index, focused)
     |> assign(:current_preview_index, 0)
+    |> discard_unlisted()
   end
 
-  # One short-lived, single-purpose access token per tincture instead of
-  # the raw session token — a credential must never travel in a
-  # URL/query string — scoped to this tincture, because the sandboxed frame
-  # can read it back out of its own location and send it wherever its
-  # manifest allows. The page, its icon and its previews share it.
-  defp mint_access(socket, t),
-    do: Sanctum.TinctureAuth.issue_access_token(socket.assigns.context, t.publisher, t.name)
+  # A frame whose tincture the registry no longer lists is discarded with
+  # its credential.
+  defp discard_unlisted(socket) do
+    listed = MapSet.new(socket.assigns.tinctures, & &1.id)
+
+    socket.assigns.opened_tinctures
+    |> Enum.reject(&MapSet.member?(listed, &1))
+    |> Enum.reduce(socket, &discard_frame(&2, &1))
+  end
 
   # Public is an active public profile. A store that could not answer, or
   # a profile row that could not be decoded, is `:unknown` — never "not
@@ -383,47 +721,44 @@ defmodule PrismWeb.ShellLive do
     end
   end
 
-  # A mint that did not happen renders as a state, never as a URL.
-  defp refusal({:ok, _token}), do: nil
-  defp refusal({:error, reason}) when reason in [:unavailable, :not_owner], do: :unavailable
-  defp refusal({:error, _reason}), do: :refused
-
   defp visibility_label(true), do: "public"
   defp visibility_label(false), do: "private"
   defp visibility_label(:unknown), do: "unavailable"
 
-  # Same origin as the shell itself: a relative path, so the iframe is
-  # never cross-origin whatever hostname or proxy the browser came in through.
-  defp build_tincture_url({:ok, token}, t) do
-    base = Prima.TinctureUrl.path(t.athanor_segment, t.publisher, t.name)
-    "#{base}?_t=#{token}"
-  end
+  # Where a card's icon and previews are read from: a public tincture's
+  # public address, or a private version's files under the person's asset
+  # credential. A digest or credential that cannot be had shows no images,
+  # never a URL with anything else in it.
+  defp media_base(_ctx, %{public: true} = card),
+    do: {:public, Prima.TinctureUrl.path(card.athanor_segment, card.publisher, card.name)}
 
-  defp build_tincture_url({:error, _reason}, _t), do: nil
-
-  # Build a same-origin asset URL for icons/previews. Returns nil for missing
-  # paths or non-image extensions — server-side validators in
-  # `CyfrWeb.Ingress.TinctureAssets.serve_asset/5` re-check everything; this
-  # is a fast client-side reject so we don't emit obviously broken URLs.
-  # Derived from the serve gate: the fast client-side reject and the
-  # server-side validators answer from one rule map
-  # (`Compendium.tincture_asset_rules/0`), read where it is used.
-
-  defp build_asset_url(_access, _tincture, nil), do: nil
-  defp build_asset_url(_access, _tincture, ""), do: nil
-
-  defp build_asset_url({:ok, token}, t, path) when is_binary(path) do
-    if safe_asset_path?(path) do
-      encoded = path |> String.split("/") |> Enum.map_join("/", &URI.encode/1)
-
-      base =
-        Prima.TinctureUrl.path(t.athanor_segment, t.publisher, t.name) <> "/" <> encoded
-
-      "#{base}?_t=#{token}"
+  defp media_base(ctx, card) do
+    with {:ok, digest} <- version_digest(ctx, card),
+         {:ok, %{credential: credential}} <- TinctureAuth.mint_asset_credential(ctx, digest) do
+      {:private, credential, card}
+    else
+      {:error, _reason} -> :none
     end
   end
 
-  defp build_asset_url(_access, _tincture, _), do: nil
+  # Only image paths the serve gate would answer: the fast reject and the
+  # server-side validators read one rule map
+  # (`Compendium.tincture_asset_rules/0`).
+  defp media_url(:none, _path), do: nil
+
+  defp media_url(base, path) when is_binary(path) and path != "" do
+    if safe_asset_path?(path), do: served_url(base, String.split(path, "/"))
+  end
+
+  defp media_url(_base, _path), do: nil
+
+  defp served_url({:public, address}, segments),
+    do: address <> "/" <> Enum.map_join(segments, "/", &encode_segment/1)
+
+  defp served_url({:private, credential, card}, segments),
+    do: private_path(credential, card, segments)
+
+  defp encode_segment(segment), do: URI.encode(segment, &URI.char_unreserved?/1)
 
   defp safe_asset_path?(path) do
     ext = path |> Path.extname() |> String.downcase()
@@ -463,160 +798,6 @@ defmodule PrismWeb.ShellLive do
       nil -> "?"
       ch -> String.upcase(ch)
     end
-  end
-
-  # ============================================================================
-  # iframe message handling
-  # ============================================================================
-
-  defp handle_iframe_message(socket, window_id, %{"type" => "cyfr:request"} = msg) do
-    # Normalize untrusted iframe payloads to maps before reading fields.
-    msg = Map.put(msg, "payload", payload_map(msg["payload"]))
-
-    tincture = Enum.find(socket.assigns.tinctures, &(&1.id == window_id))
-
-    if tincture do
-      case msg["action"] do
-        "invoke" ->
-          handle_invoke(socket, window_id, tincture, msg)
-
-        "set_title" ->
-          tinctures =
-            Enum.map(socket.assigns.tinctures, fn t ->
-              if t.id == window_id,
-                do: Map.put(t, :title, msg["payload"]["title"] || t.title),
-                else: t
-            end)
-
-          response = %{type: "cyfr:response", id: msg["id"], result: %{ok: true}}
-
-          {:noreply,
-           socket
-           |> assign(:tinctures, tinctures)
-           |> push_event("iframe_response:#{window_id}", response)}
-
-        "close" ->
-          response = %{type: "cyfr:response", id: msg["id"], result: %{ok: true}}
-          socket = push_event(socket, "iframe_response:#{window_id}", response)
-
-          opened = List.delete(socket.assigns.opened_tinctures, window_id)
-
-          active =
-            if socket.assigns.active_tincture == window_id do
-              List.first(opened)
-            else
-              socket.assigns.active_tincture
-            end
-
-          {:noreply,
-           socket
-           |> assign(:opened_tinctures, opened)
-           |> assign(:active_tincture, active)}
-
-        "ready" ->
-          response = %{type: "cyfr:response", id: msg["id"], result: %{ok: true}}
-          {:noreply, push_event(socket, "iframe_response:#{window_id}", response)}
-
-        "get_context" ->
-          response = %{
-            type: "cyfr:response",
-            id: msg["id"],
-            result: %{tincture_id: tincture.id, window_id: window_id}
-          }
-
-          {:noreply, push_event(socket, "iframe_response:#{window_id}", response)}
-
-        _ ->
-          error_response = %{
-            type: "cyfr:response",
-            id: msg["id"],
-            error: "unknown_action"
-          }
-
-          {:noreply, push_event(socket, "iframe_response:#{window_id}", error_response)}
-      end
-    else
-      if msg["id"] do
-        response = %{type: "cyfr:response", id: msg["id"], error: "window_not_found"}
-        {:noreply, push_event(socket, "iframe_response:#{window_id}", response)}
-      else
-        {:noreply, socket}
-      end
-    end
-  end
-
-  defp handle_iframe_message(socket, _window_id, _msg), do: {:noreply, socket}
-
-  # A payload that is not an object carries no keys, so it reads as the empty
-  # one — the handlers then take their own "missing field" paths (keep the
-  # current title, refuse an invoke with no reference) instead of raising.
-  defp payload_map(%{} = payload), do: payload
-  defp payload_map(_other), do: %{}
-
-  # The HTTP invoke route carries TinctureRateLimit keyed by IP; this is the
-  # same capability reached from a LiveView socket, keyed by person instead.
-  # The two are deliberately separate budgets, not one shared one — the keys
-  # differ, so a signed-in person has a full budget here and there. Same
-  # limiter table, same bucket vocabulary, same config override, and the
-  # default number comes from the plug so the two cannot drift.
-  defp invoke_throttled?(ctx, tincture) do
-    max = Cyfr.RuntimeConfig.tincture_invoke_max()
-
-    key = {:rate_limit, :invoke, {:live, ctx.user_id}, tincture.publisher, tincture.name}
-
-    match?(
-      {:deny, _},
-      Prima.RateLimiter.check(key, max, Cyfr.RuntimeConfig.tincture_rate_window_ms())
-    )
-  end
-
-  defp handle_invoke(socket, window_id, tincture, msg) do
-    ctx = socket.assigns.context
-
-    response =
-      if invoke_throttled?(ctx, tincture) do
-        iframe_refusal(msg["id"], :rate_limited)
-      else
-        # The same declared operation the HTTP route and `/mcp` call,
-        # through the one gate, which authorizes, casts and logs it;
-        # `Crucible.invoke_tincture/3` reads the tincture again, so the
-        # card this socket holds is never authority. The console shell is
-        # an owner surface: the protected action roots the invocation
-        # whatever the tincture's public visibility, and there is no client
-        # IP to pass — the socket authenticated the person instead.
-        args =
-          %{
-            "action" => "invoke_protected",
-            "publisher" => tincture.publisher,
-            "tincture_name" => tincture.name,
-            "reference" => get_in(msg, ["payload", "reference"]),
-            "input" => get_in(msg, ["payload", "input"]) || %{}
-          }
-          |> Map.reject(fn {_key, value} -> is_nil(value) end)
-
-        case call_tool(ctx, "tincture", args) do
-          {:ok, result} -> %{type: "cyfr:response", id: msg["id"], result: result}
-          {:error, reason} -> iframe_refusal(msg["id"], reason)
-        end
-      end
-
-    {:noreply, push_event(socket, "iframe_response:#{window_id}", response)}
-  end
-
-  @doc """
-  The `cyfr:response` answering request `id` with a refusal, as the
-  tincture SDK reads it: `error` is the refusal's class and sentence, never
-  a term — the body the HTTP invoke route answers the same refusal with.
-  """
-  @spec iframe_refusal(term(), term()) :: map()
-  def iframe_refusal(id, reason) do
-    refusal = Grimoire.classify(reason)
-
-    %{
-      type: "cyfr:response",
-      id: id,
-      error: %{code: Atom.to_string(refusal.class), message: refusal.message}
-    }
   end
 
   # The refresh's answer, taken only under the focus it was started for.
@@ -659,6 +840,21 @@ defmodule PrismWeb.ShellLive do
     {:noreply, socket}
   end
 
+  # Every frame credential this view minted is revoked as it ends — the
+  # socket closed, the person left or navigated away, the view redirected
+  # — revoked ones included, since revoking is idempotent. A view that
+  # dies without reaching here leaves each row to its deadline.
+  @impl true
+  def terminate(_reason, socket) do
+    ctx = socket.assigns[:context]
+
+    for id <- socket.assigns[:minted_frames] || [], ctx do
+      revoke(ctx, %{credential_id: id})
+    end
+
+    :ok
+  end
+
   # ============================================================================
   # Render
   # ============================================================================
@@ -671,34 +867,36 @@ defmodule PrismWeb.ShellLive do
       class="h-full relative bg-surface-base"
       phx-window-keydown="keynav"
     >
-      <%!-- Iframe overlay — fixed to cover entire viewport including sidebar --%>
+      <%!-- Frame overlay — fixed to cover entire viewport including sidebar.
+           The sandbox and allow attributes are the rules' derivation for the
+           frame's declared capabilities, never written here. --%>
       <%= for tincture_id <- @opened_tinctures do %>
-        <% tincture = Enum.find(@tinctures, &(&1.id == tincture_id)) %>
+        <% frame = @frames[tincture_id] %>
         <div
-          :if={tincture}
+          :if={frame}
           class={[
             "fixed inset-0 z-50 flex flex-col bg-surface-base",
             if(tincture_id != @active_tincture, do: "hidden")
           ]}
         >
           <iframe
-            :if={tincture.url}
-            id={"iframe_#{tincture_id}"}
-            src={tincture.url}
-            sandbox="allow-scripts"
+            :if={frame.id}
+            id={frame.id}
+            src={frame.src}
+            sandbox={frame.sandbox}
+            allow={if frame.allow != "", do: frame.allow}
             class="w-full h-full border-0"
             phx-hook="IframeBridge"
-            data-window-id={tincture_id}
+            data-frame-id={frame.id}
+            data-frame-state={frame.state}
           />
           <div
-            :if={is_nil(tincture.url)}
+            :if={is_nil(frame.id)}
             id={"tincture_state_#{tincture_id}"}
-            data-tincture-state={tincture.url_refusal}
+            data-tincture-state={frame.refusal}
             class="flex h-full w-full items-center justify-center text-sm text-text-muted"
           >
-            {if tincture.url_refusal == :unavailable,
-              do: "This tincture can't be opened right now. Try again shortly.",
-              else: "Your session can no longer open this tincture. Sign in again."}
+            {refusal_sentence(frame.refusal)}
           </div>
           <.iframe_capsule />
         </div>
