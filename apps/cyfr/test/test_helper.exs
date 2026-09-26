@@ -19,8 +19,17 @@ end
 # :benchmark is the admission latency matrix (`Grimoire.AdmissionLatencyTest`):
 # minutes of timed samples against committed rows, run alone with
 # `--only benchmark` so nothing else competes for the pool it measures.
+# :boundary_plant is the Boundary compiler's planted violations
+# (`Cyfr.BoundariesTest.CompilerPlants`): each is a forced compile of a
+# copy of the tree, run once by the gate's static leg.
 ExUnit.configure(
-  exclude: [:cluster, :s3_integration, :public_dns, :benchmark | toolchain_excludes]
+  exclude: [
+    :cluster,
+    :s3_integration,
+    :public_dns,
+    :benchmark,
+    :boundary_plant | toolchain_excludes
+  ]
 )
 
 # The suite runs from the umbrella root, where the Opus worker service is

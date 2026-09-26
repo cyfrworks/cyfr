@@ -28,6 +28,16 @@ defmodule Crucible do
   opens gives them back at once.
   """
 
+  use Boundary,
+    deps: [Compendium, Grimoire, Cyfr, Sanctum, Arca],
+    exports: [
+      Host.Children,
+      Keys,
+      Schedules.Scheduler,
+      Supervisor
+    ],
+    check: [aliases: true]
+
   alias Prima.Authority
   alias Prima.Authority.RootSelect
 

@@ -20,6 +20,43 @@ defmodule CyfrWeb do
   those modules here.
   """
 
+  use Boundary,
+    deps: [Grimoire, Sanctum, Arca, Cyfr],
+    exports: [
+      ApiError,
+      ContextGuard,
+      ErrorJSON,
+      ErrorRenderer,
+      MetricsPlug,
+      MinimalPage,
+      PendingProbe,
+      Pipelines,
+      Plugs.ApiSecurityHeaders,
+      Plugs.AuthRateLimit,
+      Plugs.Authenticate,
+      Plugs.BrowserCSP,
+      Plugs.CORS,
+      Plugs.CallIdentity,
+      Plugs.ConfiguredUeberauth,
+      Plugs.ControlPlaneOwnership,
+      Plugs.Headless,
+      Plugs.MCPOrigin,
+      Plugs.MCPRateLimit,
+      Plugs.ParserErrors,
+      Plugs.RawBodyReader,
+      Plugs.ScrubTinctureCredentials,
+      Plugs.TinctureRateLimit,
+      Plugs.VerifyWebhookSignature,
+      Plugs.WebhookIdempotency,
+      Plugs.WebhookRateLimit,
+      SSE,
+      SSE.Registry,
+      SafeRedirect,
+      SignInResponse,
+      Telemetry
+    ],
+    check: [aliases: true]
+
   # `manifest.webmanifest` and `sw.js` are the PWA's; the service worker is
   # registered by its literal path and both are served undigested.
   def static_paths,

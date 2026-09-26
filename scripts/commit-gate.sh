@@ -6,9 +6,10 @@
 # Runs the checks a commit must pass as concurrent legs, one log per leg
 # under LOGDIR, and ends with one `_EXIT=<status>` line on stdout, which
 # scripts/await-task.sh waits for. Legs:
-#   static    SQLite test compile (warnings as errors), format, credo,
-#             ops.gen.cli --check, dialyzer, then the full SQLite suite in
-#             N partitions
+#   static    SQLite test compile and forced dev compile (warnings as
+#             errors, so every Boundary declaration is checked), format,
+#             credo, ops.gen.cli --check, dialyzer, then the full SQLite
+#             suite in N partitions
 #   postgres  PostgreSQL test compile, then the given test paths (default:
 #             the storage set) in one partition; with --close the whole
 #             suite in N partitions, started once the SQLite suite's
@@ -19,10 +20,10 @@
 #   islands   prima, arca and sanctum compiled and tested from a copy that
 #             holds only what CI gives them, once the SQLite suite's
 #             partitions have exited; opus and locus with --close
-# With --close the static leg also forces a rebuild on both adapters and
-# compiles the SQLite dev target. Image suites, the S3 suite, the Go
-# checks, the security scanners and the benchmark are not part of
-# this gate: a closing record names each of those with its own result.
+# With --close the static leg also forces the test rebuild on both
+# adapters. Image suites, the S3 suite, the Go checks, the security
+# scanners and the benchmark are not part of this gate: a closing record
+# names each of those with its own result.
 # Stopping the gate (INT, TERM) stops its legs.
 set -uo pipefail
 
@@ -60,14 +61,19 @@ step() {
 
 leg_static() {
   step static compile_sqlite_test env CYFR_DATABASE=sqlite MIX_ENV=test mix compile --warnings-as-errors || return 1
+  # Forced: incremental state can keep a Boundary declaration the tree no
+  # longer has, and a plain compile only warns.
+  step static compile_sqlite_dev env CYFR_DATABASE=sqlite MIX_ENV=dev mix compile --force --warnings-as-errors || return 1
   if $CLOSE; then
-    step static compile_sqlite_dev env CYFR_DATABASE=sqlite mix compile --warnings-as-errors || return 1
     step static compile_sqlite_force env CYFR_DATABASE=sqlite MIX_ENV=test mix compile --warnings-as-errors --force || return 1
   fi
   step static format mix format --check-formatted || return 1
   step static credo mix credo --only=warning || return 1
   step static opsgen mix ops.gen.cli --check || return 1
   step static dialyzer mix dialyzer || return 1
+  # The Boundary plants: each writes a forbidden edge into a copy of the tree
+  # and force-compiles it, so they run once here and never in the partitions.
+  step static boundary_plants env CYFR_DATABASE=sqlite MIX_ENV=test mix test apps/cyfr/test/cyfr/boundaries_test.exs --only boundary_plant || return 1
   step static sqlite_suite scripts/test-partitioned.sh -n "$PARTS" -a sqlite -- --warnings-as-errors || return 1
 }
 

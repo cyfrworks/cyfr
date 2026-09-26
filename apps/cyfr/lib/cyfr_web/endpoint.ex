@@ -10,6 +10,27 @@ defmodule CyfrWeb.Endpoint do
   second endpoint.
   """
 
+  use Boundary,
+    top_level?: true,
+    deps: [
+      Arca,
+      Sanctum,
+      Grimoire,
+      Cyfr,
+      Compendium,
+      Aqua,
+      Crucible,
+      Emissary,
+      Emissary.Web,
+      Prism,
+      PrismWeb,
+      CyfrWeb,
+      CyfrWeb.Ingress,
+      CyfrWeb.Router
+    ],
+    exports: [],
+    check: [aliases: true]
+
   use Phoenix.Endpoint, otp_app: :cyfr
 
   # The session will be stored in the cookie and signed,

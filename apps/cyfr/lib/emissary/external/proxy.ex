@@ -428,8 +428,8 @@ defmodule Emissary.External.Proxy do
     with {:ok, grant} <- inherited_grant(ctx, attrs.parent_execution_id),
          admission =
            [boot_id: Prima.Boot.id(), grant: grant, verify: &Sanctum.ExecutionStanding.verify/1]
-           |> Arca.QueryHelpers.maybe_put(:charge, Keyword.get(opts, :hold))
-           |> Arca.QueryHelpers.maybe_put(:step, Keyword.get(opts, :step)),
+           |> maybe_put(:charge, Keyword.get(opts, :hold))
+           |> maybe_put(:step, Keyword.get(opts, :step)),
          {:ok, staged} <- stage(ctx, id, "input", input, class),
          {:ok, attempt} <- admit(attrs, [{:payloads, [staged]} | admission], staged) do
       {:ok, watch} = Crucible.start_lease_watch(self(), id, attempt)
@@ -675,4 +675,8 @@ defmodule Emissary.External.Proxy do
   end
 
   defp classified(answer), do: answer
+
+  # An option is kept only when it carries a value.
+  defp maybe_put(opts, _key, nil), do: opts
+  defp maybe_put(opts, key, value), do: Keyword.put(opts, key, value)
 end

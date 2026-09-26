@@ -14,6 +14,8 @@ defmodule Mix.Tasks.Ops.Gen.Cli do
       mix ops.gen.cli --check
   """
 
+  use Boundary, classify_to: Cyfr.Mix
+
   use Mix.Task
 
   @target "apps/codex/internal/ops/catalog_gen.go"

@@ -13,4 +13,16 @@ defmodule Emissary do
   keeps the agent harness from owning a provider of its own. Shared
   primitives like `Prima.UUID7` live in the glue namespace, not here.
   """
+
+  use Boundary,
+    deps: [Grimoire, Sanctum, Arca, Cyfr, Crucible, CyfrWeb],
+    exports: [
+      External.Proxy,
+      MCP,
+      MCP.Progress,
+      MCP.Router,
+      MCP.Subscriptions,
+      Supervisor
+    ],
+    check: [aliases: true]
 end

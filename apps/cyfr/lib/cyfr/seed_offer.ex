@@ -45,15 +45,15 @@ defmodule Cyfr.SeedOffer do
   claim could not be read or the sync raised. Never raises.
 
   `opts`: `:key` (`"cell"` by default), `:owner` (this boot by default),
-  `:lease_ms`, and `:sync`, the work itself
-  (`Compendium.sync_seeds/0` by default).
+  `:lease_ms`, and `:sync`, the work itself, which the composition root
+  names (`Compendium.sync_seeds/0`): the host names no domain.
   """
   @spec run(keyword()) :: :ok | :skipped | {:error, :database_error | :exception}
   def run(opts \\ []) when is_list(opts) do
     key = Keyword.get(opts, :key, JobClaims.cell_key())
     owner = Keyword.get(opts, :owner, Prima.Boot.id())
     lease_ms = Keyword.get(opts, :lease_ms, @lease_ms)
-    sync = Keyword.get(opts, :sync, &Compendium.sync_seeds/0)
+    sync = Keyword.fetch!(opts, :sync)
 
     case JobClaims.claim("seed_release", key, owner, lease_ms) do
       {:ok, claim} ->

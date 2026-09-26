@@ -12,6 +12,12 @@ defmodule Emissary.Web do
   tier (`CyfrWeb`) keeps those for the adapters that render pages.
   """
 
+  use Boundary,
+    top_level?: true,
+    deps: [Emissary, Grimoire, Sanctum, Arca, Cyfr, Crucible, CyfrWeb],
+    exports: [MCPController, MCPError, Plugs.MCPRequestMetadata],
+    check: [aliases: true]
+
   def controller do
     quote do
       use Phoenix.Controller, formats: [:json]

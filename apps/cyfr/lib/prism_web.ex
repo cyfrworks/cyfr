@@ -15,6 +15,43 @@ defmodule PrismWeb do
 
   """
 
+  use Boundary,
+    deps: [Prism, CyfrWeb, Grimoire, Sanctum, Arca, Cyfr, Compendium, Aqua, Crucible],
+    exports: [
+      ActiveContext,
+      ActivitiesLive,
+      ApiKeysLive,
+      AquaLive,
+      AttachmentController,
+      BuildsLive,
+      ChatLive,
+      ChatRedirectLive,
+      ClaimNamespaceController,
+      ComponentDetailLive,
+      ComponentsLive,
+      EnforcementsLive,
+      ExecutionsLive,
+      FileController,
+      FilesLive,
+      Focus,
+      Layouts,
+      LegalAcceptController,
+      LegalLive,
+      LoginLive,
+      McpServersLive,
+      MembersLive,
+      MyReportsLive,
+      RegistryLive,
+      RootRedirectLive,
+      SchedulesLive,
+      SettingsLive,
+      ShellLive,
+      VaultLive,
+      WebhooksLive
+    ],
+    dirty_xrefs: [CyfrWeb.Endpoint, CyfrWeb.Router],
+    check: [aliases: true]
+
   def controller do
     quote do
       use Phoenix.Controller, formats: [:html, :json]

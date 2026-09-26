@@ -116,6 +116,91 @@ defmodule Arca do
       config :arca, Arca.Retention, executions: 10_000, mcp_log_days: 30
   """
 
+  use Boundary,
+    deps: [],
+    exports: [
+      AgentRevisions,
+      AgentStorage,
+      ApiKeyStorage,
+      Athanors,
+      AuditHandler,
+      BudgetReservations,
+      BuildRecords,
+      Cache,
+      Cache.Keys,
+      CipherRotation,
+      ComponentStorage,
+      ConsentProofStorage,
+      ConsentStorage,
+      ControlPlane,
+      CredentialBindings,
+      CronSchedule,
+      DecisionLog,
+      DecisionLog.AuditFailure,
+      Doors,
+      Execution,
+      ExecutionAttempts,
+      ExecutionEvents,
+      ExecutionPayloads,
+      ExecutionStanding,
+      Files,
+      Health,
+      JobClaims,
+      McpLog,
+      McpServerStorage,
+      Members,
+      Overlay,
+      PolicyLog,
+      ProfileStorage,
+      ProviderCredentialStorage,
+      Providers.Records,
+      ProvisioningClaims,
+      RateWindows,
+      RecordSink,
+      RegistryTokenStorage,
+      Repo.Errors,
+      Retention,
+      ScheduleOccurrences,
+      SchemaFingerprint,
+      SchemaFingerprint.Check,
+      SecurityTransitions,
+      ServerMetaStorage,
+      SessionStorage,
+      Storage,
+      Storage.UnitLocator,
+      StorageProjectionChanges,
+      StorageProjectionRoots,
+      TenantTables,
+      ThreadStorage,
+      ThreadSubscriptionStorage,
+      ToolGrantStorage,
+      TurnStorage,
+      Usage,
+      Users,
+      VaultStorage,
+      WebhookDeliveryStorage,
+      WebhookStorage
+    ],
+    check: [aliases: true]
+
+  @doc """
+  The database adapter this build was compiled against
+  (`config :arca, :repo_adapter`), read at runtime.
+  """
+  @spec repo_adapter() :: module()
+  defdelegate repo_adapter(), to: Arca.Repo, as: :adapter
+
+  @doc "The configured tenant storage adapter (`config :arca, :storage_adapter`)."
+  @spec storage_adapter() :: module()
+  defdelegate storage_adapter(), to: Arca.Storage, as: :configured_adapter
+
+  @doc """
+  Whether `adapter` keeps objects every member of a cell shares: the
+  object store does, one member's filesystem does not.
+  """
+  @spec shared_storage?(module()) :: boolean()
+  def shared_storage?(adapter), do: adapter == Arca.Adapters.S3
+
   @doc """
   Read content from storage.
 

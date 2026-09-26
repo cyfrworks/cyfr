@@ -20,6 +20,18 @@ defmodule Grimoire do
   load its table and install it as consent's port.
   """
 
+  use Boundary,
+    deps: [Sanctum, Arca],
+    exports: [
+      Catalog,
+      Error,
+      Proxy,
+      RequestLog,
+      RunningTasks,
+      Supervisor
+    ],
+    check: [aliases: true]
+
   alias Grimoire.{Annotations, Catalog, Resources, RunningTasks}
 
   @doc "Call a tool from the external plane (`Grimoire.Catalog.call_external/4`)."

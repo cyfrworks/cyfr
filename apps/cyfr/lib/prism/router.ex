@@ -14,6 +14,8 @@ defmodule Prism.Router do
   and its imports; this module imports nothing.
   """
 
+  use Boundary, top_level?: true, deps: [], exports: [], check: [aliases: true]
+
   # The root's table is the one table; `Phoenix.Router.forward/4` cannot span several prefixes.
   defmacro routes do
     quote do

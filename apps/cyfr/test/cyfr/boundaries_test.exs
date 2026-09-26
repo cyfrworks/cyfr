@@ -65,7 +65,47 @@ defmodule Cyfr.BoundariesTest do
         path <- SourceTree.files!(Path.join(root(), glob)),
         rel = Path.relative_to(path, root()),
         not MapSet.member?(skip, rel),
-        do: {rel, SourceTree.aliases(path)}
+        do: {rel, reaches(path)}
+  end
+
+  # A `use Boundary` declaration names the boundaries its edges run to and
+  # the modules it exports, classifies or excepts: declarations, not
+  # reaches. The names on the lines it spans are not read as reaches.
+  defp reaches(path) do
+    source = SourceTree.read(path)
+    named = SourceTree.aliases(path)
+
+    if String.contains?(source, "use Boundary") do
+      spans = boundary_declarations(source)
+      Enum.reject(named, fn {_name, line} -> Enum.any?(spans, &(line in &1)) end)
+    else
+      named
+    end
+  end
+
+  defp boundary_declarations(source) do
+    {_ast, spans} =
+      source
+      |> Code.string_to_quoted!(columns: true)
+      |> Macro.prewalk([], fn
+        {:use, meta, [{:__aliases__, _, [:Boundary]} | _]} = node, acc ->
+          {node, [meta[:line]..last_line(node) | acc]}
+
+        node, acc ->
+          {node, acc}
+      end)
+
+    spans
+  end
+
+  defp last_line(ast) do
+    {_ast, last} =
+      Macro.prewalk(ast, 0, fn
+        {_, meta, _} = node, last when is_list(meta) -> {node, max(last, meta[:line] || 0)}
+        node, last -> {node, last}
+      end)
+
+    last
   end
 
   # Every file an `except` glob matches, relative to the root.
@@ -2307,5 +2347,215 @@ defmodule Cyfr.BoundariesTest do
   defp body(source, marker) do
     {at, _length} = :binary.match(source, marker)
     binary_part(source, at, byte_size(source) - at)
+  end
+end
+
+defmodule Cyfr.BoundariesTest.CompilerPlants do
+  @moduledoc """
+  The layer edges the Boundary compiler holds, each shown failing: a
+  violation is written into a copy of the tree, the application it lands
+  in is compiled forced with warnings as errors in the dev environment,
+  the failure must name the boundary it crosses, and the plant is removed.
+
+  Each case is a forced compile, so the module is tagged `:boundary_plant`
+  and runs only when asked for (`--include boundary_plant`). The copy is
+  the checkout's tracked and unignored files with `deps` linked in; its
+  build is `_build/boundary_plant` of the checkout, so the first run
+  compiles the dependencies once and no other build is touched.
+  """
+
+  use ExUnit.Case, async: false
+
+  @moduletag :boundary_plant
+  @moduletag timeout: :timer.minutes(30)
+
+  @root Path.expand("../../../..", __DIR__)
+
+  setup_all do
+    copy =
+      Path.join(System.tmp_dir!(), "cyfr-boundary-plant-#{System.unique_integer([:positive])}")
+
+    copy_tree!(copy)
+    on_exit(fn -> File.rm_rf!(copy) end)
+
+    # The unplanted tree compiles clean, so a failure below is its plant's.
+    {output, status} = compile(copy, "cyfr", [])
+    status == 0 || flunk("the unplanted copy does not compile:\n#{output}")
+
+    %{copy: copy}
+  end
+
+  test "a domain naming another domain", %{copy: copy} do
+    assert_refused(
+      copy,
+      "cyfr",
+      "compendium/boundary_plant.ex",
+      """
+      defmodule Compendium.BoundaryPlant do
+        def plant, do: Aqua.Runner.recover_all()
+      end
+      """,
+      [
+        "forbidden reference to Aqua.Runner",
+        "references from Compendium to Aqua are not allowed"
+      ]
+    )
+  end
+
+  test "an alias of a surface module used in the gate", %{copy: copy} do
+    assert_refused(
+      copy,
+      "cyfr",
+      "grimoire/boundary_plant.ex",
+      """
+      defmodule Grimoire.BoundaryPlant do
+        alias Emissary.MCP.Progress
+        def plant, do: Progress
+      end
+      """,
+      [
+        "forbidden reference to Emissary.MCP.Progress",
+        "references from Grimoire to Emissary are not allowed"
+      ]
+    )
+  end
+
+  test "a struct match on a surface struct in the gate", %{copy: copy} do
+    assert_refused(
+      copy,
+      "cyfr",
+      "grimoire/boundary_plant.ex",
+      """
+      defmodule Grimoire.BoundaryPlant do
+        def plant?(%Emissary.External.Server.State{}), do: true
+        def plant?(_other), do: false
+      end
+      """,
+      [
+        "forbidden reference to Emissary.External.Server.State",
+        "references from Grimoire to Emissary are not allowed"
+      ]
+    )
+  end
+
+  # Mix prunes the code path to an application's declared dependencies, so
+  # an upward reach across applications is Elixir's undefined-module
+  # warning, which warnings as errors makes a failure.
+  test "a foundation reaching an application above it", %{copy: copy} do
+    assert_refused(
+      copy,
+      "arca",
+      "boundary_plant.ex",
+      """
+      defmodule Arca.BoundaryPlant do
+        def plant(token), do: Sanctum.Caller.establish(token, [])
+      end
+      """,
+      [
+        "Sanctum.Caller.establish/2 is undefined"
+      ]
+    )
+  end
+
+  test "Sanctum naming Ecto", %{copy: copy} do
+    assert_refused(
+      copy,
+      "sanctum",
+      "boundary_plant.ex",
+      """
+      defmodule Sanctum.BoundaryPlant do
+        def plant(struct), do: Ecto.Changeset.change(struct)
+      end
+      """,
+      [
+        "forbidden reference to Ecto.Changeset",
+        "references from Sanctum to Ecto.Changeset are not allowed"
+      ]
+    )
+  end
+
+  test "Sanctum naming a module Arca does not export", %{copy: copy} do
+    assert_refused(
+      copy,
+      "sanctum",
+      "boundary_plant.ex",
+      """
+      defmodule Sanctum.BoundaryPlant do
+        def plant, do: Arca.Repo.config()
+      end
+      """,
+      [
+        "forbidden reference to Arca.Repo",
+        "module Arca.Repo is not exported by its owner boundary Arca"
+      ]
+    )
+  end
+
+  test "an ordinary host module naming a domain", %{copy: copy} do
+    assert_refused(
+      copy,
+      "cyfr",
+      "cyfr/boundary_plant.ex",
+      """
+      defmodule Cyfr.BoundaryPlant do
+        def plant, do: Aqua.Runner.recover_all()
+      end
+      """,
+      [
+        "forbidden reference to Aqua.Runner",
+        "references from Cyfr to Aqua are not allowed"
+      ]
+    )
+  end
+
+  # Writes `source` at `lib/<path>` of `app` in the copy, compiles the
+  # application, removes the plant whatever happened, and asserts the
+  # compile failed saying each of `expected`.
+  defp assert_refused(copy, app, path, source, expected) do
+    file = Path.join([copy, "apps", app, "lib", path])
+    File.write!(file, source)
+
+    {output, status} =
+      try do
+        compile(copy, app, ["--force"])
+      after
+        File.rm!(file)
+      end
+
+    assert status != 0, "the plant compiled:\n#{output}"
+
+    for line <- expected,
+        do: assert(output =~ line, "the failure does not say #{inspect(line)}:\n#{output}")
+  end
+
+  defp compile(copy, app, flags) do
+    System.cmd("mix", ["compile", "--warnings-as-errors" | flags],
+      cd: Path.join([copy, "apps", app]),
+      stderr_to_stdout: true,
+      env: [
+        {"MIX_ENV", "dev"},
+        {"CYFR_DATABASE", "sqlite"},
+        {"MIX_BUILD_PATH", Path.join(@root, "_build/boundary_plant")}
+      ]
+    )
+  end
+
+  # The checkout as a commit of it would hold it, uncommitted changes
+  # included, with the fetched dependencies linked rather than copied.
+  defp copy_tree!(copy) do
+    {files, 0} =
+      System.cmd("git", ["ls-files", "-z", "--cached", "--others", "--exclude-standard"],
+        cd: @root
+      )
+
+    for rel <- String.split(files, <<0>>, trim: true),
+        source = Path.join(@root, rel),
+        File.regular?(source) do
+      target = Path.join(copy, rel)
+      File.mkdir_p!(Path.dirname(target))
+      File.cp!(source, target)
+    end
+
+    File.ln_s!(Path.join(@root, "deps"), Path.join(copy, "deps"))
   end
 end

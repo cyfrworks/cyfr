@@ -18,6 +18,17 @@ defmodule Compendium do
   it did not read; running a catalyst is not here.
   """
 
+  use Boundary,
+    deps: [Grimoire, Cyfr, Sanctum, Arca],
+    exports: [
+      AquaPath,
+      ComponentPath,
+      ConsentFacts,
+      Providers.Component,
+      Supervisor
+    ],
+    check: [aliases: true]
+
   alias Compendium.{
     Activation,
     AgentIndex,

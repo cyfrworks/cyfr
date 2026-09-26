@@ -48,6 +48,14 @@ defmodule Aqua do
   The functions below are the domain's door for callers outside it.
   """
 
+  use Boundary,
+    deps: [Compendium, Crucible, Grimoire, Cyfr, Sanctum, Arca],
+    exports: [
+      Supervisor,
+      Text
+    ],
+    check: [aliases: true]
+
   alias Aqua.{ApprovalScope, Attachments, ConsentStatus, Kinds, Models, Notes}
   alias Sanctum.Context
 

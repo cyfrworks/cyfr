@@ -4,6 +4,26 @@
 defmodule Cyfr.Application do
   @moduledoc false
 
+  use Boundary,
+    top_level?: true,
+    deps: [
+      Arca,
+      Sanctum,
+      Grimoire,
+      Cyfr,
+      Compendium,
+      Aqua,
+      Crucible,
+      Emissary,
+      Prism,
+      PrismWeb,
+      CyfrWeb,
+      CyfrWeb.Ingress,
+      CyfrWeb.Endpoint
+    ],
+    exports: [],
+    check: [aliases: true]
+
   require Logger
 
   use Application
@@ -280,7 +300,11 @@ defmodule Cyfr.Application do
   # sandboxed test boot omits it with the gate's runtime switch.
   defp seed_offer do
     if boot_work_enabled?(),
-      do: [Supervisor.child_spec(Cyfr.SeedOffer, restart: :temporary)],
+      do: [
+        Supervisor.child_spec({Cyfr.SeedOffer, sync: &Compendium.sync_seeds/0},
+          restart: :temporary
+        )
+      ],
       else: []
   end
 

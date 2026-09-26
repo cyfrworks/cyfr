@@ -18,6 +18,8 @@ defmodule Mix.Tasks.Cyfr.Opus.Key do
   without spaces), is refused and nothing is printed.
   """
 
+  use Boundary, classify_to: Cyfr.Mix
+
   use Mix.Task
 
   alias Prima.WorkerAuth

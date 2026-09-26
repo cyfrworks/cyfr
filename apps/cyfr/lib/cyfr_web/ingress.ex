@@ -12,6 +12,20 @@ defmodule CyfrWeb.Ingress do
   controller here takes neither verified routes nor Gettext.
   """
 
+  use Boundary,
+    top_level?: true,
+    deps: [Sanctum, Grimoire, Arca, Cyfr, CyfrWeb, Compendium, Crucible],
+    exports: [
+      AuthController,
+      ExecutionEventsController,
+      HealthController,
+      OAuthCallbackController,
+      Router,
+      TinctureController,
+      WebhookController
+    ],
+    check: [aliases: true]
+
   def controller do
     quote do
       use Phoenix.Controller, formats: [:html, :json]
