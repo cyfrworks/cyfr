@@ -100,7 +100,7 @@ defmodule Crucible.Host.EgressTest do
 
   # An authority whose edge's egress allows `domains` and grants the
   # private addresses `private_ips`.
-  defp egress(domains, private_ips \\ []) do
+  defp egress(domains, private_ips) do
     %{
       Authority.zero()
       | resources: %Edge{
