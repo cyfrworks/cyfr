@@ -22,7 +22,8 @@ defmodule Compendium.Builds.Client do
   status: each progress line is handed to `:on_progress` in the order the
   builder wrote it, and the first result or refusal ends the answer — the
   client stops reading there. The whole answer is held to
-  `Prima.BuilderProtocol.max_response_bytes/0` while it streams
+  `Prima.BuilderProtocol.max_answer_bytes/0`, the largest answer the
+  protocol's bounds allow, while it streams
   (`Prima.BoundedBody`), and every line is read strictly
   (`Prima.BuilderProtocol.read_line/1`): the builder is another trust
   domain, so a line that does not read, a path that is not a safe relative
@@ -296,7 +297,7 @@ defmodule Compendium.Builds.Client do
   # answer without a second copy of it.
   defp reader(on_progress) do
     fn {:data, data}, {req, resp} ->
-      state = resp.private[@state] || %{line: new_line(), left: max_response_bytes(), ended: nil}
+      state = resp.private[@state] || %{line: new_line(), left: max_answer_bytes(), ended: nil}
 
       case read(data, state, resp.status, on_progress) do
         {:cont, state} -> {:cont, {req, put_state(resp, state)}}
@@ -438,12 +439,12 @@ defmodule Compendium.Builds.Client do
   end
 
   defp new_line, do: %{private: %{}}
-  defp max_response_bytes, do: BuilderProtocol.max_response_bytes()
+  defp max_answer_bytes, do: BuilderProtocol.max_answer_bytes()
   defp put_state(resp, state), do: %{resp | private: Map.put(resp.private, @state, state)}
 
   # `over` is how far past the answer's bound the bytes seen had run.
   defp too_large(over),
-    do: {:malformed, {:response_too_large, max_response_bytes() + over, max_response_bytes()}}
+    do: {:malformed, {:response_too_large, max_answer_bytes() + over, max_answer_bytes()}}
 
   # ---------------------------------------------------------------------------
   # The result, verified

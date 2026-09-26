@@ -13,7 +13,9 @@ defmodule Prima.BuilderProtocolTest do
   sources before any decoding; every refusal class round-trips; a header
   for another Locus service, or under its key, never verifies as builds;
   and header-first verification refuses exactly what the one-step
-  verifier refuses.
+  verifier refuses; an output's path is bounded on its own bytes; a
+  terminal line carries encoded diagnostics as they are; and the answer's
+  bound is the vectors' number, derived term by term from the other bounds.
   """
   use ExUnit.Case, async: true
 
@@ -382,6 +384,111 @@ defmodule Prima.BuilderProtocolTest do
 
       assert {:error, {:invalid_field, "reason"}} =
                BuilderProtocol.encode_refusal({:malformed, ""}, [])
+    end
+
+    test "the answer's bound is derived, term by term, from the vectors' other bounds" do
+      b = @vectors["bounds"]
+      template = Jason.decode!(@vectors["lines"]["tincture_result"]["body"])
+
+      # The outputs as one file spells them in base64.
+      outputs = 4 * div(b["max_output_bytes"] + 2, 3)
+
+      # The progress lines, then the same lines as the terminal line's diagnostics.
+      log = 2 * b["max_log_bytes"]
+
+      # The terminal line with nothing in it, at its longest pairing, with its newline.
+      terminal =
+        @vectors["language_for"]
+        |> Enum.map(fn {type, language} ->
+          template
+          |> Map.merge(%{
+            "language" => language,
+            "target_type" => type,
+            "outputs" => [],
+            "diagnostics" => []
+          })
+          |> Jason.encode!()
+          |> byte_size()
+          |> Kernel.+(1)
+        end)
+        |> Enum.max()
+
+      # One output entry: keys, the digest, a comma; its path escaped at
+      # most twice over; one base64 quantum of padding.
+      [first | _] = template["outputs"]
+      empty = %{first | "path" => "", "base64" => ""}
+      entry = byte_size(Jason.encode!(empty)) + 1 + 2 * b["max_output_path_bytes"] + 4
+      assert byte_size(first["digest"]) == byte_size("sha256:") + 64
+
+      assert outputs + log + terminal + b["max_output_files"] * entry == b["max_answer_bytes"]
+      assert BuilderProtocol.max_answer_bytes() == b["max_answer_bytes"]
+
+      # A refusal carries no outputs: its sentence escaped six times over
+      # and its log stay below the result's bound.
+      {:ok, refusal} =
+        BuilderProtocol.encode_refusal({:failed, {:signal, String.duplicate("S", 256)}}, [])
+
+      assert byte_size(refusal) + 6 * b["max_line_bytes"] + log < b["max_answer_bytes"]
+    end
+
+    test "an output's path is bounded on its own bytes, and holds no control character" do
+      max = BuilderProtocol.max_output_path_bytes()
+      base = result("tincture_result")
+      outputs = fn path -> %{base | outputs: %{path => "x"}} end
+
+      # PathSafety counts no empty segment; the wire's bound counts every byte.
+      at_bound = "a" <> String.duplicate("/", max - 2) <> "b"
+      assert :ok = Prima.PathSafety.validate_relative_path(at_bound <> "/")
+      assert {:ok, _} = BuilderProtocol.encode_result(outputs.(at_bound))
+
+      assert {:error, {:invalid_field, "outputs[0].path"}} =
+               BuilderProtocol.encode_result(outputs.(at_bound <> "/"))
+
+      for byte <- Enum.concat(0x01..0x1F, [0x7F]) do
+        assert {:error, {:invalid_field, "outputs[0].path"}} =
+                 BuilderProtocol.encode_result(outputs.(<<"dist/a", byte, "b.js">>)),
+               "byte #{byte}"
+      end
+
+      # What is left escapes to at most two bytes a byte: a quote, since
+      # PathSafety refuses a backslash.
+      escaped = Enum.map_join(1..4, "/", fn _ -> String.duplicate(~s("), 240) end)
+
+      assert {:ok, line} = BuilderProtocol.encode_result(outputs.(escaped))
+      assert {:ok, {:result, %{outputs: %{^escaped => "x"}}}} = BuilderProtocol.read_line(line)
+      assert byte_size(Jason.encode!(escaped)) - 2 <= 2 * max
+    end
+
+    test "encoded diagnostics go out as they are, checked as the lines they spell" do
+      base = result("component_result")
+      encoded = Enum.map(base.diagnostics, &elem(BuilderProtocol.encode_diagnostic(&1), 1))
+
+      assert {:ok, line} =
+               BuilderProtocol.encode_result(%{base | diagnostics: {:encoded, encoded}})
+
+      assert line == @vectors["lines"]["component_result"]["body"]
+
+      assert {:ok, line} =
+               BuilderProtocol.encode_refusal({:failed, {:status, 1}}, {:encoded, encoded})
+
+      assert {:ok, {:refusal, _refusal, diagnostics}} = BuilderProtocol.read_line(line)
+      assert diagnostics == base.diagnostics
+
+      max_line = BuilderProtocol.max_line_bytes()
+      max_log = BuilderProtocol.max_log_bytes()
+
+      assert {:error, {:too_large, :line, _, ^max_line}} =
+               BuilderProtocol.encode_diagnostic(String.duplicate("a", max_line + 1))
+
+      empty = List.duplicate(~s(""), max_log + 1)
+
+      assert {:error, {:too_large, :diagnostics, _, ^max_log}} =
+               BuilderProtocol.encode_result(%{base | diagnostics: {:encoded, empty}})
+
+      for bad <- [["1"], ["not json"], [:line]] do
+        assert {:error, {:invalid_field, "diagnostics"}} =
+                 BuilderProtocol.encode_refusal({:failed, {:status, 1}}, {:encoded, bad})
+      end
     end
 
     test "text fields must be UTF-8" do

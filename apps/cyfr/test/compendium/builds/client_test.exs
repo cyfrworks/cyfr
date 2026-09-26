@@ -54,6 +54,52 @@ defmodule Compendium.Builds.ClientTest do
     %{language: :javascript, target_type: :tincture, outputs: outputs, diagnostics: []}
   end
 
+  # Progress lines of quotes, each escaping to twice its bytes, charged as
+  # a builder charges them until they fill the log to its last byte: the
+  # steps that stream them, the same lines as encoded diagnostics, and the
+  # bytes streamed.
+  defp full_log do
+    max_log = BuilderProtocol.max_log_bytes()
+    {:ok, empty} = BuilderProtocol.encode_progress(:output, "")
+    unit = byte_size(empty) + 1
+    long = String.duplicate(~s("), 30_000)
+    count = div(max_log, unit + 60_000)
+    last = String.duplicate("a", max_log - count * (unit + 60_000) - unit)
+    messages = List.duplicate(long, count) ++ [last]
+
+    lines =
+      Enum.map(messages, fn message ->
+        {:ok, line} = BuilderProtocol.encode_progress(:output, message)
+        line
+      end)
+
+    streamed = Enum.reduce(lines, 0, &(byte_size(&1) + 1 + &2))
+    assert streamed == max_log
+
+    diagnostics =
+      Enum.map(messages, fn message ->
+        {:ok, diagnostic} = BuilderProtocol.encode_diagnostic("output: " <> message)
+        diagnostic
+      end)
+
+    {Enum.map(lines, &{:line, &1}), diagnostics, streamed}
+  end
+
+  # `total` bytes over the protocol's most files, each named at the longest
+  # path an output may take, of quotes, which escape to two bytes each.
+  defp largest_outputs(total) do
+    files = BuilderProtocol.max_output_files()
+    path_bytes = BuilderProtocol.max_output_path_bytes()
+    quotes = String.duplicate(~s("), 240)
+
+    for index <- 0..(files - 1), into: %{} do
+      stem = Enum.join([quotes, quotes, quotes, quotes, Integer.to_string(index)], "/")
+      path = stem <> String.duplicate(~s("), path_bytes - byte_size(stem))
+      size = div(total, files) + if(index < rem(total, files), do: 1, else: 0)
+      {path, :binary.copy(<<rem(index, 256)>>, size)}
+    end
+  end
+
   describe "the request" do
     test "is signed under the service's key and carries the build as the protocol reads it" do
       ScriptedBuilder.script([{:stream, [{:result, component()}]}])
@@ -396,27 +442,88 @@ defmodule Compendium.Builds.ClientTest do
       assert {:error, {:malformed, {:too_large, :line, _bytes, ^max}}} = build()
     end
 
-    test "an answer past the response bound is ended there" do
+    test "an answer past the answer bound is ended there" do
       mebibyte = :binary.copy("x", 1_048_576)
-      times = div(BuilderProtocol.max_response_bytes(), 1_048_576) + 2
+      times = div(BuilderProtocol.max_answer_bytes(), 1_048_576) + 2
       ScriptedBuilder.script([{:stream, [{:repeat, mebibyte, times}, {:result, component()}]}])
 
-      max = BuilderProtocol.max_response_bytes()
+      max = BuilderProtocol.max_answer_bytes()
       assert {:error, {:malformed, {:response_too_large, seen, ^max}}} = build()
       assert seen > max
     end
 
-    test "the response bound holds across lines, not for each" do
+    test "the answer bound holds across lines, not for each" do
       # Progress lines that each read, together past the bound.
       message = String.duplicate("x", BuilderProtocol.max_line_bytes())
       {:ok, line} = BuilderProtocol.encode_progress(:output, message)
-      times = div(BuilderProtocol.max_response_bytes(), byte_size(line)) + 2
+      times = div(BuilderProtocol.max_answer_bytes(), byte_size(line)) + 2
 
       ScriptedBuilder.script([
         {:stream, [{:repeat, line <> "\n", times}, {:result, component()}]}
       ])
 
       assert {:error, {:malformed, {:response_too_large, _seen, _max}}} = build()
+    end
+
+    test "the largest answer the protocol allows is read whole" do
+      {progress, diagnostics, streamed} = full_log()
+      outputs = largest_outputs(BuilderProtocol.max_output_bytes())
+
+      result = %{
+        language: :javascript,
+        target_type: :tincture,
+        outputs: outputs,
+        diagnostics: {:encoded, diagnostics}
+      }
+
+      {:ok, terminal} = BuilderProtocol.encode_result(result)
+      assert streamed + byte_size(terminal) + 1 <= BuilderProtocol.max_answer_bytes()
+
+      ScriptedBuilder.script([{:stream, progress ++ [{:line, terminal}]}])
+      test = self()
+
+      assert {:ok, built} =
+               build(request(%{target_type: :tincture, sources: %{"package.json" => "{}"}}),
+                 on_progress: fn _stage, _message -> send(test, :progress) end
+               )
+
+      assert built.output_files == outputs
+      for _line <- progress, do: assert_received(:progress)
+      assert length(built.diagnostics) == length(diagnostics)
+      assert built.diagnostics == Enum.map(diagnostics, &Jason.decode!/1)
+    end
+
+    test "one byte of output past the bound is refused, bounded and typed" do
+      {progress, diagnostics, _streamed} = full_log()
+      max = BuilderProtocol.max_output_bytes()
+      outputs = largest_outputs(max + 1)
+
+      # No writer of the protocol makes this line; it is spelled here.
+      terminal =
+        Jason.encode!(%{
+          "version" => BuilderProtocol.version(),
+          "type" => "result",
+          "language" => "javascript",
+          "target_type" => "tincture",
+          "outputs" =>
+            outputs
+            |> Enum.sort()
+            |> Enum.map(fn {path, bytes} ->
+              %{
+                "path" => path,
+                "base64" => Base.encode64(bytes),
+                "digest" => Prima.Digest.sha256(bytes)
+              }
+            end),
+          "diagnostics" => Jason.Fragment.new([?[, Enum.intersperse(diagnostics, ?,), ?]])
+        })
+
+      ScriptedBuilder.script([{:stream, progress ++ [{:line, terminal}]}])
+
+      assert {:error, {:malformed, {:too_large, :outputs, over, ^max}}} =
+               build(request(%{target_type: :tincture, sources: %{"package.json" => "{}"}}))
+
+      assert over == max + 1
     end
   end
 

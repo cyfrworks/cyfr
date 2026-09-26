@@ -11,8 +11,12 @@ defmodule Locus.BuildsVectorsTest do
   request is admitted past its header and read; every rejected header is
   refused `unauthorized` with its reason; every invalid body is refused
   with the class its error names, at the vectors' status; the health body
-  is answered with a line of the vectors' shape; and a refusal the service
-  makes is, byte for byte, the vectors' line for it.
+  is answered with a line of the vectors' shape; a refusal the service
+  makes is, byte for byte, the vectors' line for it; and the largest answer
+  the service can write — its log spent through `Locus.Diagnostics`, its
+  terminal line carrying those lines as they were charged beside outputs
+  at every bound — is within the vectors' `max_answer_bytes`, while one
+  byte of output more is no result at all.
   """
 
   # Installs the vectors' key as the service's and replaces PATH.
@@ -164,6 +168,85 @@ defmodule Locus.BuildsVectorsTest do
       ours = health.toolchains[String.to_existing_atom(language)]
       assert ours.command == toolchain["command"]
       assert ours.description == toolchain["description"]
+    end
+  end
+
+  describe "the largest answer" do
+    test "the service's largest answer is within the vectors' answer bound" do
+      bounds = @vectors["bounds"]
+      {progress, diagnostics} = spent_log()
+
+      # The log is the vectors' to the last line that fits: what is left of
+      # it holds no line of the builder's own.
+      assert charged(progress) <= bounds["max_log_bytes"]
+      assert bounds["max_log_bytes"] - charged(progress) < byte_size(List.last(progress)) + 1
+
+      {:ok, terminal} =
+        BuilderProtocol.encode_result(%{
+          language: :javascript,
+          target_type: :tincture,
+          outputs: largest_outputs(bounds["max_output_bytes"]),
+          diagnostics: {:encoded, diagnostics}
+        })
+
+      answer = charged(progress) + byte_size(terminal) + 1
+      assert answer <= bounds["max_answer_bytes"]
+      assert answer > bounds["max_answer_bytes"] - bounds["max_output_files"] * 1_100
+    end
+
+    test "one byte of output past the bound is no result the service can write" do
+      bounds = @vectors["bounds"]
+      max = bounds["max_output_bytes"]
+
+      assert {:error, {:too_large, :outputs, over, ^max}} =
+               BuilderProtocol.encode_result(%{
+                 language: :javascript,
+                 target_type: :tincture,
+                 outputs: largest_outputs(max + 1),
+                 diagnostics: []
+               })
+
+      assert over == max + 1
+    end
+  end
+
+  # The build's log spent as the service spends it: the build's own lines,
+  # quoted so every byte of them escapes, until the log is cut, then the
+  # builder's until nothing more fits.
+  defp spent_log do
+    budget = Locus.Diagnostics.budget()
+    loud = String.duplicate(~s("), 60_000)
+
+    build =
+      Stream.repeatedly(fn -> Locus.Diagnostics.admit(budget, :output, loud) end)
+      |> Enum.take_while(&(&1 != []))
+      |> Enum.concat()
+
+    builder =
+      Stream.repeatedly(fn ->
+        Locus.Diagnostics.admit(budget, :validating, "the builder's own")
+      end)
+      |> Enum.take_while(&(&1 != []))
+      |> Enum.concat()
+
+    admitted = build ++ builder
+    {Enum.map(admitted, &elem(&1, 0)), Enum.map(admitted, &elem(&1, 1))}
+  end
+
+  defp charged(lines), do: Enum.reduce(lines, 0, &(byte_size(&1) + 1 + &2))
+
+  # `total` bytes over the vectors' most files, each named at the longest
+  # path the wire takes, of quotes, which escape to two bytes each.
+  defp largest_outputs(total) do
+    files = @vectors["bounds"]["max_output_files"]
+    path_bytes = @vectors["bounds"]["max_output_path_bytes"]
+    quotes = String.duplicate(~s("), 240)
+
+    for index <- 0..(files - 1), into: %{} do
+      stem = Enum.join([quotes, quotes, quotes, quotes, Integer.to_string(index)], "/")
+      path = stem <> String.duplicate(~s("), path_bytes - byte_size(stem))
+      size = div(total, files) + if(index < rem(total, files), do: 1, else: 0)
+      {path, :binary.copy(<<rem(index, 256)>>, size)}
     end
   end
 
