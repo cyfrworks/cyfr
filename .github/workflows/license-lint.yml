@@ -1,8 +1,8 @@
 name: License Lint
 
 # Check directory-based licensing: the `apps/sanctum` application uses
-# FSL-1.1-Apache-2.0; all other source uses Apache-2.0. The builder and
-# worker images are Apache-2.0 alone, so the apps they release reach no FSL
+# FSL-1.1-Apache-2.0; all other source uses Apache-2.0. The Locus and
+# Opus images are Apache-2.0 alone, so the apps they release reach no FSL
 # file.
 
 on:

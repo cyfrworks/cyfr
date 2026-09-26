@@ -220,6 +220,11 @@ jobs:
         env:
           MIX_ENV: dev
         run: mix compile --force --warnings-as-errors
+      # The Boundary plants: each writes a forbidden edge into a copy of the
+      # tree and force-compiles it, so a declaration that stopped refusing
+      # an edge fails here, once, outside the partitions.
+      - name: Boundary plants
+        run: mix test apps/cyfr/test/cyfr/boundaries_test.exs --only boundary_plant
       - name: Static analysis
         run: mix credo --only=warning
       - name: Check formatting
@@ -484,10 +489,10 @@ jobs:
           restore-keys: ${{ runner.os }}-mix-locus-${{ steps.beam.outputs.elixir-version }}-${{ steps.beam.outputs.otp-version }}-
       - name: Install dependencies
         run: mix deps.get
-      # The builder releases without the control plane: a checkout holding
-      # only the lock, the contracts, Locus, the fetched deps, the WIT tree
-      # (`Prima.WIT` embeds it), the vector files its wire and
-      # spawner tests read (tests/fixtures) and the locus release's runtime
+      # Locus releases without the control plane: a checkout holding only
+      # the lock, the contracts, Locus, the fetched deps, the WIT tree
+      # (`Prima.WIT` embeds it), the vector files its two wires' and its
+      # keeper tests read (tests/fixtures) and the locus release's runtime
       # configuration (config/locus_runtime.exs, which its config test
       # evaluates) compiles it with warnings as errors and runs its suite,
       # against no database. Its vector tests fail rather than skip
@@ -633,7 +638,7 @@ jobs:
       - name: The container's limit holds the builds and the service
         run: python3 tests/builder-image/headroom.py cyfr-locus:smoke
 
-      # The same scan docker.yml runs before publishing the builder image.
+      # The same scan docker.yml runs before publishing the Locus image.
       - name: Scan the image
         uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
         with:
@@ -712,7 +717,7 @@ jobs:
           ignore-unfixed: true
           trivyignores: .trivyignore.yaml
 
-  # D15: stdio backends isolated from each other and from the backends
+  # Stdio backends isolated from each other and from the backends
   # service, under the locus-backends service's own settings. The suites
   # run here, in the workflow the tag's `verify` calls, so the release gates
   # on them.
@@ -824,7 +829,7 @@ jobs:
           ignore-unfixed: true
           trivyignores: .trivyignore.yaml
 
-  # D15: a release boots on each database. The `cyfr` release, built as
+  # A release boots on each database. The `cyfr` release, built as
   # Dockerfile builds it (MIX_ENV=prod, the adapter chosen at compile time),
   # started against a fresh database with auto-migration on: it migrates the
   # schema itself and answers the readiness check the image's HEALTHCHECK

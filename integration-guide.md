@@ -27,6 +27,8 @@ POST /mcp  ──────────────────>  Authenticate
 
 Every CLI command (`cyfr run`, `cyfr profile grant`, etc.) uses this same endpoint. AI agents, frontends, backend services, and CI/CD pipelines all use the same interface.
 
+The server has one HTTP endpoint (`:4000`), and three sets of routes share it: `/mcp`, the MCP interface this guide describes; the ingress routes — sign-in and sign-out under `/auth`, tinctures under `/t`, the health checks under `/api/health`, an execution's event stream (`/api/executions/:id/events`) and inbound webhooks (`/hooks`); and the Prism console at `/`. Each operation, whichever route reaches it, is admitted or refused by one gate against one table of operations, and an operation the table does not declare is refused.
+
 ---
 
 ## Authentication Methods
@@ -828,7 +830,7 @@ cyfr log get <call_id>                     # Full details for a specific log ent
 cyfr log correlate <request_id>            # Find related log entries and decisions
 ```
 
-Every call the server admitted or refused is also recorded once as an admission decision under its call ID, with how the admitted work ended. Inspect decisions via the `decision` tool or `cyfr decision` CLI commands; a platform admin reads every athanor's decisions and the host's own with `--global`:
+Every call the server admitted or refused is also recorded once as an admission decision under its call ID, with how the admitted work ended — whichever route it arrived by: `/mcp`, a tincture's routes, a webhook, an execution's event stream, a schedule's fire, or a running component's call to a tool, and a refusal made before the gate (an unknown tool, a bad credential, a rate limit) as much as one the gate makes. Recording never changes a call's outcome: a decision the server could not write is counted (the `cyfr_grimoire_decision_lost_total` metric), never retried, and a decision with no recorded end has an unknown outcome, not a success. Inspect decisions via the `decision` tool or `cyfr decision` CLI commands; a platform admin reads every athanor's decisions and the host's own with `--global`:
 
 ```bash
 cyfr decision list --admission refused     # Recent refusals
@@ -1258,6 +1260,26 @@ value, it refuses to boot. `.env.locus.example` documents the builder's own
 | `CYFR_LOCUS_BUILDS_KEY` | — | The builds key, 32 random bytes as 64 hex digits (`cyfr init` mints it; by hand, `openssl rand -hex 32`); compose hands the same value to the builder as `LOCUS_BUILDS_KEY` |
 | `LOCUS_BUILDS_MEMORY_LIMIT` / `LOCUS_BUILDS_CPU_LIMIT` | `4G` / `2` | The `locus-builds` container's limits, read by compose from `.env`: the memory limit holds `LOCUS_BUILDS_MAX_CONCURRENT` builds at their bound and the service (2 × (1 GiB + 1 GiB)) |
 
+### Stdio MCP servers
+
+Stdio MCP servers run on the Locus backends service (the `locus-backends`
+compose service), which CYFR reaches over a signed wire; every compose
+deploy starts it. Each backend runs under a pooled uid of its own, started
+by `cyfr-keeper`, with a private home, an environment built only from its
+server's definition and a memory bound of its own; the service keeps no
+state, and CYFR sends each server's definition again when the service
+restarts. With the URL or the key unset CYFR refuses stdio servers; with a
+malformed value it refuses to boot. Stdio servers are not available in a
+cell. `.env.locus.example` documents the service's own `LOCUS_BACKENDS_*`
+side.
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `CYFR_LOCUS_BACKENDS_URL` | — | The base URL of the backends service's listener (compose: `http://locus-backends:4101`). A service elsewhere is also named in `CYFR_PRIVATE_EGRESS_TARGETS` |
+| `CYFR_LOCUS_BACKENDS_KEY` | — | The backends key, 32 random bytes as 64 hex digits (`cyfr init` mints it; by hand, `openssl rand -hex 32`); compose hands the same value to the service as `LOCUS_BACKENDS_KEY`. It signs every control message and tool call and seals every backend's environment; the builds key cannot stand in for it, nor it for the builds key |
+| `CYFR_LOCUS_BACKENDS_LEASE_MS` | `30000` | How long the service runs a server's backends without a renewal from CYFR (1000–60000); CYFR renews every third of it |
+| `CYFR_LOCUS_BACKENDS_IDLE_MS` | `900000` | How long a backend runs with no tool call before the service stops it (1000–86400000); its tools stay listed and its next call starts it again |
+
 ### Running a worker outside Compose
 
 The `cyfr-opus` and `cyfr-locus` images also run without the shipped
@@ -1289,21 +1311,33 @@ listener.
 |----------|---------|-------------|
 | `LOCUS_BUILDS_KEY` | — | The builds key, 64 hex digits: the same value as `CYFR_LOCUS_BUILDS_KEY`. Required: the builder refuses to start without it |
 
+The backends service takes the key compose passes it from `.env`'s
+`CYFR_LOCUS_BACKENDS_KEY`, and runs under the keeper's `backends` pool,
+which compose's `entrypoint:` names (`cyfr-keeper serve --pool
+backends:20001-20032 …`) in place of the image's build pool; CYFR's
+`CYFR_LOCUS_BACKENDS_URL` names the service's listener.
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `LOCUS_BACKENDS_KEY` | — | The backends key, 64 hex digits: the same value as `CYFR_LOCUS_BACKENDS_KEY`. A node with neither this nor `LOCUS_BUILDS_KEY` refuses to start |
+
 ### Docker requirement
 
-The `opus` and `locus-builds` containers hold every runner and every build
-to a memory bound of its own, a cgroup `cyfr-keeper` makes for it. That
-needs **Docker Engine 28 or later on a cgroup v2 host** and the containers'
-`security_opt: writable-cgroups=true`, which the shipped
-`docker-compose.yml` sets and which adds no capability. Without it nothing
-runs unbounded and nothing runs: `opus` starts no runner and logs, naming
-`writable-cgroups=true`, that it cannot bound one, so no component runs;
-and every build is refused as `unavailable`, naming the option.
+The `opus`, `locus-builds` and `locus-backends` containers hold every
+runner, build and backend to a memory bound of its own, a cgroup
+`cyfr-keeper` makes for it. That needs **Docker Engine 28 or later on a
+cgroup v2 host** and the containers' `security_opt: writable-cgroups=true`,
+which the shipped `docker-compose.yml` sets and which adds no capability.
+Without it nothing runs unbounded and nothing runs: `opus` starts no runner
+and logs, naming `writable-cgroups=true`, that it cannot bound one, so no
+component runs; every build is refused as `unavailable`, naming the option;
+and every backend reports the keeper's refusal as its error.
 
-Docker marks either container `OOMKilled` whenever a runner or a build is
-ended at its own bound, though neither the container nor its release was
-touched. Read it as a runner or a build that passed its bound (the
-service's log says which), not as the container running out of memory.
+Docker marks a container `OOMKilled` whenever a runner, a build or a
+backend is ended at its own bound, though neither the container nor its
+release was touched. Read it as a runner, a build or a backend that passed
+its bound (the service's log says which), not as the container running out
+of memory.
 
 ### Registry and signing
 

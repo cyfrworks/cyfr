@@ -3,8 +3,8 @@
 
 defmodule Cyfr.DocsDriftTest do
   @moduledoc """
-  Checks documented storage roots and manifest fields against their
-  runtime definitions.
+  Checks the README's glossary, the guides and the env examples against
+  the tree and the runtime definitions they document.
 
   README and guide checks use tracked files and run in every checkout.
   """
@@ -26,8 +26,18 @@ defmodule Cyfr.DocsDriftTest do
 
   # The glossary names each part once, with the environment prefixes it
   # owns. The prefixes are this roster, each named by one row.
-  @env_prefixes ~w(CYFR_ CYFR_OPUS_ CYFR_CRUCIBLE_ CYFR_HOST_API_ OPUS_ LOCUS_BUILDS_ LOCUS_BACKENDS_ KEEPER_)
+  @env_prefixes ~w(CYFR_ CYFR_OPUS_ CYFR_CRUCIBLE_ CYFR_HOST_API_ CYFR_LOCUS_BUILDS_
+                   CYFR_LOCUS_BACKENDS_ OPUS_ LOCUS_BUILDS_ LOCUS_BACKENDS_ KEEPER_)
   @glossary_names ~w(Prima Arca Sanctum Grimoire Cyfr Compendium Aqua Crucible Emissary Prism Codex Opus Locus keeper)
+
+  # The files that read the releases' environment: the control plane's
+  # configuration (the `CYFR_*` variables `config/runtime.exs` reads into
+  # the operator keys of `Cyfr.Boundaries.config_key_classes/0`, and the
+  # resolvers it calls), the Opus release's `OPUS_*` rows in the same
+  # file, the Locus release's `Locus.Config`, and the keeper channel the
+  # Opus settings inherit.
+  @env_readers ~w(config/runtime.exs apps/cyfr/lib/cyfr/runtime_config.ex
+                  apps/locus/lib/locus/config.ex apps/opus/lib/opus/settings.ex)
 
   defp glossary do
     [_, section] = Regex.run(~r/^## Glossary\n(.*?)(?=^## )/ms, File.read!(@readme))
@@ -38,6 +48,19 @@ defmodule Cyfr.DocsDriftTest do
           do: line |> String.trim("|") |> String.split("|") |> Enum.map(&String.trim/1)
 
     {header, rows}
+  end
+
+  # The backquoted names in one column of the glossary, every row's.
+  defp glossary_column(title, pattern \\ ~r/`([^`]+)`/) do
+    {header, rows} = glossary()
+    column = Enum.find_index(header, &(&1 == title))
+    assert column, "the glossary has no #{title} column"
+
+    for row <- rows,
+        captures <- Regex.scan(pattern, Enum.at(row, column), capture: :all_but_first),
+        name <- captures,
+        name != "",
+        do: name
   end
 
   test "README's glossary names every part, and its prefix column is the environment roster" do
@@ -63,6 +86,119 @@ defmodule Cyfr.DocsDriftTest do
     assert Enum.sort(prefixes) == Enum.sort(@env_prefixes),
            "the glossary's environment prefixes #{inspect(prefixes)} are not the roster " <>
              "#{inspect(@env_prefixes)}, each once"
+  end
+
+  defp read_variables do
+    for file <- @env_readers,
+        [name] <-
+          Regex.scan(
+            ~r/"((?:CYFR|OPUS|LOCUS|KEEPER)_[A-Z0-9_]*[A-Z0-9])"/,
+            File.read!(Path.join(@repo_root, file)),
+            capture: :all_but_first
+          ),
+        uniq: true,
+        do: name
+  end
+
+  # A variable belongs to the longest prefix of the roster it begins with.
+  defp owning_prefix(variable) do
+    @env_prefixes
+    |> Enum.filter(&String.starts_with?(variable, &1))
+    |> Enum.max_by(&String.length/1, fn -> nil end)
+  end
+
+  test "the environment prefixes are the ones the releases' readers name, each in use" do
+    read = read_variables()
+
+    # Guards against the scan quietly matching nothing.
+    assert "CYFR_LOCUS_BACKENDS_KEY" in read and "LOCUS_BACKENDS_KEY" in read
+    assert "OPUS_SERVICE_KEY" in read and "KEEPER_CHANNEL" in read
+    assert length(read) >= 100, "the scan found only #{length(read)} variables"
+
+    unowned = Enum.filter(read, &is_nil(owning_prefix(&1)))
+
+    assert unowned == [],
+           "these variables are read under a prefix the glossary does not name: " <>
+             inspect(unowned)
+
+    unused = @env_prefixes -- Enum.map(read, &owning_prefix/1)
+
+    assert unused == [],
+           "the glossary names these prefixes, and no reader reads a variable under them: " <>
+             inspect(unused)
+  end
+
+  # The scans tell this repository's modules from the rest by their root
+  # namespace: each capitalised part the glossary gives a directory, and
+  # the web tier of each part whose directory has one.
+  test "the boundary catalog's product roots are the glossary's parts" do
+    {header, rows} = glossary()
+    column = Enum.find_index(header, &(&1 == "Directory"))
+
+    parts =
+      for [name | _] = row <- rows,
+          name =~ ~r/^[A-Z]/,
+          Enum.at(row, column) != "—",
+          do: name
+
+    web =
+      for dir <- glossary_column("Directory"),
+          String.ends_with?(dir, "_web"),
+          do: dir |> Path.basename() |> Macro.camelize()
+
+    assert Enum.sort(Cyfr.Boundaries.product_roots()) == Enum.sort(parts ++ web),
+           "Cyfr.Boundaries' product roots are not the glossary's parts and their web tiers"
+  end
+
+  test "the glossary's directories, compose services and images are the tree's" do
+    for dir <- glossary_column("Directory") do
+      assert File.dir?(Path.join(@repo_root, dir)),
+             "the glossary names #{dir}, which is not a directory"
+    end
+
+    compose = File.read!(Path.join(@repo_root, "docker-compose.yml"))
+    services = compose_services(compose)
+
+    assert Enum.sort(glossary_column("Compose service")) == Enum.sort(Map.keys(services)),
+           "the glossary's compose services are not docker-compose.yml's"
+
+    # The images the release workflow builds, each from its Dockerfile.
+    built =
+      ~r/- image: ([a-z][a-z0-9-]*)\n\s+file: (\S+)/
+      |> Regex.scan(File.read!(Path.join(@repo_root, ".github/workflows/docker.yml")),
+        capture: :all_but_first
+      )
+      |> Map.new(fn [image, file] -> {image, file} end)
+
+    for {image, file} <- built do
+      assert File.regular?(Path.join(@repo_root, file)),
+             "docker.yml builds #{image} from #{file}, which is missing"
+    end
+
+    images =
+      glossary_column(
+        "Binary or image",
+        ~r/image `([a-z][a-z0-9-]*)`|`([a-z][a-z0-9-]*)` and `([a-z][a-z0-9-]*)` images/
+      )
+
+    assert Enum.sort(Enum.uniq(images)) == Enum.sort(Map.keys(built)),
+           "the glossary's images #{inspect(images)} are not the ones docker.yml builds"
+
+    # Every image of ours compose runs is one the workflow publishes, built
+    # from the Dockerfile the workflow builds it from.
+    for {name, service} <- services,
+        image = service.image,
+        String.starts_with?(image, "ghcr.io/cyfrworks/") do
+      published = image |> String.trim_leading("ghcr.io/cyfrworks/") |> String.split(":") |> hd()
+
+      assert Map.has_key?(built, published),
+             "compose's #{name} runs #{image}, which docker.yml does not build"
+
+      if service.dockerfile do
+        assert service.dockerfile == built[published],
+               "compose builds #{name} from #{service.dockerfile}, docker.yml from #{built[published]}"
+      end
+    end
   end
 
   # Check storage trees in the three compile-embedded operator guides.
@@ -284,7 +420,8 @@ defmodule Cyfr.DocsDriftTest do
 
   # The variables the opus and locus releases read from their operator:
   # config/runtime.exs's OPUS_* (OPUS_ROLE is the keeper's, set on a
-  # runner, not an operator's) and Locus.Config's LOCUS_BUILDS_*.
+  # runner, not an operator's) and Locus.Config's LOCUS_BUILDS_* and
+  # LOCUS_BACKENDS_*.
   defp release_variables(runtime, locus_config) do
     opus =
       Regex.scan(~r/"(OPUS_[A-Z0-9_]+)"/, runtime, capture: :all_but_first)
@@ -292,7 +429,9 @@ defmodule Cyfr.DocsDriftTest do
       |> Enum.reject(&(&1 == "OPUS_ROLE"))
 
     locus =
-      Regex.scan(~r/"(LOCUS_BUILDS_[A-Z0-9_]+)"/, locus_config, capture: :all_but_first)
+      Regex.scan(~r/"(LOCUS_(?:BUILDS|BACKENDS)_[A-Z0-9_]+)"/, locus_config,
+        capture: :all_but_first
+      )
       |> List.flatten()
 
     Enum.uniq(opus ++ locus)
@@ -324,7 +463,10 @@ defmodule Cyfr.DocsDriftTest do
               ),
             do: var
 
-      {name, %{env_files: env_files, environment: set}}
+      image = with [_, image] <- Regex.run(~r/^    image: (\S+)$/m, block), do: image
+      dockerfile = with [_, file] <- Regex.run(~r/^      dockerfile: (\S+)$/m, block), do: file
+
+      {name, %{env_files: env_files, environment: set, image: image, dockerfile: dockerfile}}
     end
   end
 
@@ -378,7 +520,7 @@ defmodule Cyfr.DocsDriftTest do
       ~r/\$\{([A-Z][A-Z0-9_]*)/ |> Regex.scan(compose, capture: :all_but_first) |> List.flatten()
 
     for variable <- documented(homes[".env.example"]),
-        String.starts_with?(variable, ["OPUS_", "LOCUS_BUILDS_"]),
+        String.starts_with?(variable, ["OPUS_", "LOCUS_BUILDS_", "LOCUS_BACKENDS_"]),
         variable not in interpolated,
         do: variable
   end
@@ -401,10 +543,13 @@ defmodule Cyfr.DocsDriftTest do
     # Guards against the scans quietly matching nothing.
     assert "OPUS_SERVICE_KEY" in variables and "OPUS_BIND" in variables
     assert "LOCUS_BUILDS_KEY" in variables and "LOCUS_BUILDS_MEMORY_BYTES" in variables
-    assert length(variables) >= 20, "the scan found only #{inspect(variables)}"
+    assert "LOCUS_BACKENDS_KEY" in variables and "LOCUS_BACKENDS_MEMORY_BYTES" in variables
+    assert length(variables) >= 27, "the scan found only #{inspect(variables)}"
     assert services["opus"].env_files == [".env.opus"]
     assert "OPUS_BIND" in services["opus"].environment
     assert services["locus-builds"].environment == ["LOCUS_BUILDS_KEY"]
+    assert services["locus-backends"].environment == ["LOCUS_BACKENDS_KEY"]
+    assert services["locus-backends"].env_files == [".env.locus"]
 
     for {_service, %{env_files: files}} <- services, file <- files do
       assert Map.has_key?(homes, file <> ".example"),
@@ -462,6 +607,26 @@ defmodule Cyfr.DocsDriftTest do
     # The builder's key in its own file, which compose overrides.
     planted = plant.(".env.locus.example", "# LOCUS_BUILDS_KEY=")
     assert {".env.locus.example", "LOCUS_BUILDS_KEY"} in overridden(services, planted)
+
+    # The backends key likewise, which compose hands the backends service.
+    planted = plant.(".env.locus.example", "# LOCUS_BACKENDS_KEY=")
+    assert {".env.locus.example", "LOCUS_BACKENDS_KEY"} in overridden(services, planted)
+
+    assert {"LOCUS_BACKENDS_KEY", [".env.locus.example", "integration-guide.md"]} in misplaced(
+             variables,
+             planted
+           )
+
+    # A backends setting documented in the project .env as well: there
+    # twice, and read from .env by nothing.
+    planted = plant.(".env.example", "# LOCUS_BACKENDS_PORT=4101")
+
+    assert {"LOCUS_BACKENDS_PORT", [".env.example", ".env.locus.example"]} in misplaced(
+             variables,
+             planted
+           )
+
+    assert "LOCUS_BACKENDS_PORT" in stranded(compose, planted)
 
     # A setting documented nowhere.
     unplanted =
@@ -544,6 +709,36 @@ defmodule Cyfr.DocsDriftTest do
     end
 
     assert project =~ "# CYFR_LOCUS_BUILDS_URL=http://locus-builds:4100"
+  end
+
+  # The backends service is four variables of the control plane's, read by
+  # `config/runtime.exs`, documented where an operator sets them.
+  test "the backends service's variables are documented in .env.example and the integration guide" do
+    read =
+      @repo_root
+      |> Path.join("config/runtime.exs")
+      |> File.read!()
+      |> then(&Regex.scan(~r/"(CYFR_LOCUS_BACKENDS_[A-Z0-9_]+)"/, &1, capture: :all_but_first))
+      |> List.flatten()
+      |> Enum.uniq()
+      |> Enum.sort()
+
+    assert read == [
+             "CYFR_LOCUS_BACKENDS_IDLE_MS",
+             "CYFR_LOCUS_BACKENDS_KEY",
+             "CYFR_LOCUS_BACKENDS_LEASE_MS",
+             "CYFR_LOCUS_BACKENDS_URL"
+           ]
+
+    project = File.read!(Path.join(@repo_root, ".env.example"))
+    guide = File.read!(Path.join(@repo_root, "integration-guide.md"))
+
+    for name <- read do
+      assert project =~ ~r/^# #{name}=/m, "#{name} is not documented in .env.example"
+      assert guide =~ "`#{name}`", "#{name} is not in integration-guide.md's reference"
+    end
+
+    assert project =~ "# CYFR_LOCUS_BACKENDS_URL=http://locus-backends:4101"
   end
 
   # Every build and every runner is bounded by a cgroup of its own, which

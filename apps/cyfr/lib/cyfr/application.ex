@@ -220,7 +220,7 @@ defmodule Cyfr.Application do
         {Arca.AuditHandler, events: Cyfr.Telemetry.Catalog.consumed_by(:audit)},
         shutdown: 5_000
       ),
-      # Emissary web layer
+      # The web tier's metrics and poller
       CyfrWeb.Telemetry,
       # The bus's server (`Cyfr.Bus`): nothing else names it.
       {Phoenix.PubSub, name: Cyfr.PubSub},
