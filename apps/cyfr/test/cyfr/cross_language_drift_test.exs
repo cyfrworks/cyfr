@@ -19,6 +19,8 @@ defmodule Cyfr.CrossLanguageDriftTest do
 
   defp read!(rel), do: File.read!(Path.join(@root, rel))
 
+  defp fixture!(name), do: "tests/fixtures/#{name}" |> read!() |> Jason.decode!()
+
   test "the Go ref grammar matches Prima.ComponentRef" do
     elixir = read!("apps/prima/lib/prima/component_ref.ex")
     go = read!("apps/codex/internal/ref/ref.go")
@@ -103,6 +105,29 @@ defmodule Cyfr.CrossLanguageDriftTest do
     end
   end
 
+  test "the component path grammar is the ref grammar the Go side reads, through one parser" do
+    # A version directory's segments are validated by the same rules a ref
+    # is (`Prima.ComponentRef`), which ref_fixture_test.go holds the Go CLI
+    # to: every valid ref of the shared fixture names a directory the one
+    # parser reads back to the same parts.
+    valid = for %{"valid" => true} = case_ <- fixture!("component_refs.json")["cases"], do: case_
+    assert valid != []
+
+    for %{"type" => type, "namespace" => ns, "name" => name, "version" => version} <- valid do
+      segments = Compendium.ComponentPath.version_dir(type, ns, name, version)
+
+      assert {:ok, %{type: ^type, publisher: ^ns, name: ^name, version: ^version, rest: []}} =
+               Compendium.ComponentPath.parse(segments),
+             "#{Enum.join(segments, "/")} does not parse back to its ref's parts"
+    end
+
+    # The source tool reads a path through that parser and restates no
+    # shape of its own.
+    source = read!("apps/cyfr/lib/compendium/providers/source.ex")
+    assert source =~ "Compendium.ComponentPath.parse("
+    refute source =~ ~s(["components", ), "source.ex matches the component layout by hand"
+  end
+
   test "the Go ref constants match Prima.ComponentRef's" do
     elixir = read!("apps/prima/lib/prima/component_ref.ex")
     go = read!("apps/codex/internal/ref/ref.go")
@@ -148,12 +173,28 @@ defmodule Cyfr.CrossLanguageDriftTest do
     # this pins every roster.
     consent = read!("apps/sanctum/lib/sanctum/consent.ex")
     execution_mcp = read!("apps/cyfr/lib/crucible/provider.ex")
+    profile = read!("apps/sanctum/lib/sanctum/providers/profile.ex")
     signal = read!("apps/prima/lib/prima/consent_signal.ex")
     message = read!("apps/prima/lib/prima/mcp/message.ex")
     root_go = read!("apps/codex/cmd/root.go")
     client_go = read!("apps/codex/internal/mcp/client.go")
 
-    tags = ~w(setup_required consent_required consent_conflict restart_required)
+    # The roster is Prima.Refusal's, read from Prima.ConsentSignal; every
+    # other side is held to it, so a fifth tag fails here until each side
+    # names it.
+    assert Prima.Refusal.signal_tags() == Prima.ConsentSignal.tags()
+    tags = Enum.map(Prima.Refusal.signal_tags(), &Atom.to_string/1)
+    assert length(tags) == 4
+
+    go_tags = Regex.scan(~r/-335\d\d: "(\w+)"/, client_go, capture: :all_but_first)
+
+    assert Enum.sort(List.flatten(go_tags)) == Enum.sort(tags),
+           "client.go's consentTagByCode is not the roster"
+
+    # The profile tool keeps a signal typed through the roster's guard and
+    # spells no tag list of its own.
+    assert profile =~ "Prima.Refusal.is_consent_signal(tag, payload)"
+    refute profile =~ "tag in [:setup_required", "profile.ex spells the consent tags itself"
 
     codes = %{
       "setup_required" => "-33501",
@@ -194,6 +235,87 @@ defmodule Cyfr.CrossLanguageDriftTest do
     for key <- ~w(node_ref need current_revision cause actual_revision new_revision) do
       assert consent =~ key, "payload key #{key} missing from Sanctum.Consent"
       assert root_go =~ ~s(payload["#{key}"]), "payload key #{key} not read by root.go"
+    end
+  end
+
+  # ==========================================================================
+  # The MAC names: domains, service labels and the auth header
+  # ==========================================================================
+
+  test "the MAC names are Prima.MacEnvelope's in every vector file and on every side" do
+    alias Prima.MacEnvelope
+
+    # The Locus services, as the vector files the builds and backends image
+    # harnesses read them from, and as the protocol modules answer them.
+    for {file, service, protocol} <- [
+          {"locus_builds.json", :builds, Prima.BuilderProtocol},
+          {"locus_backends.json", :backends, Prima.LocusBackends}
+        ] do
+      wire = fixture!(file)
+      assert wire["domain"] == MacEnvelope.domain(:locus), file
+      assert wire["service"] == MacEnvelope.service(service), file
+      assert wire["label"] == MacEnvelope.label(service), file
+      assert wire["auth_header"] == MacEnvelope.auth_header(), file
+      assert protocol.domain() == MacEnvelope.domain(:locus)
+      assert protocol.service() == MacEnvelope.service(service)
+      assert protocol.auth_header() == MacEnvelope.auth_header()
+    end
+
+    assert Prima.LocusBackends.label() == MacEnvelope.label(:backends)
+
+    # The worker wire's header, as its vector file and the worker image's
+    # harness and control plane spell it.
+    assert fixture!("host_api.json")["auth_header"] == MacEnvelope.auth_header()
+    assert Prima.WorkerWire.auth_header() == MacEnvelope.auth_header()
+
+    worker_auth_py = read!("tests/worker-image/worker_auth.py")
+    control_plane_py = read!("tests/worker-image/control_plane.py")
+    assert worker_auth_py =~ ~s(["auth_header"] == "#{MacEnvelope.auth_header()}")
+    assert control_plane_py =~ ~s("#{MacEnvelope.auth_header()}")
+
+    # Opus: every canonical string of the worker vector file is under the
+    # domain, and the worker key the Go CLI mints reproduces the file's
+    # over the worker label.
+    vectors = fixture!("worker_auth.json")
+
+    canonicals =
+      for {_section, %{"canonical" => canonical}} <- vectors, do: canonical
+
+    assert canonicals != []
+
+    for canonical <- canonicals do
+      assert String.starts_with?(canonical, MacEnvelope.domain(:opus) <> "/"), canonical
+    end
+
+    assert worker_auth_py =~ ~s(PREFIX = "#{MacEnvelope.domain(:opus)}")
+
+    {:ok, root} = MacEnvelope.decode_root(vectors["root_hex"])
+
+    {:ok, worker_key} =
+      MacEnvelope.derive(root, MacEnvelope.label(:worker), [service: :string], %{
+        service: vectors["service"]
+      })
+
+    assert Base.encode16(worker_key, case: :lower) == vectors["keys"]["worker_hex"]
+    assert Prima.WorkerAuth.worker_key(root, vectors["service"]) == {:ok, worker_key}
+
+    for side <- ["apps/codex/cmd/lifecycle.go", "config/test.exs"] do
+      assert read!(side) =~ ~s("#{MacEnvelope.label(:worker)}\\n),
+             "#{side} derives the worker key over another label"
+    end
+
+    # The protocol modules hold no spelling of their own.
+    for module <- ~w(builder_protocol locus_backends worker_wire) do
+      source = read!("apps/prima/lib/prima/#{module}.ex")
+
+      for literal <- [
+            ~s(@domain "),
+            ~s(@service "),
+            ~s(@label "),
+            ~s(@auth_header ")
+          ] do
+        refute source =~ literal, "#{module}.ex spells #{literal}… itself"
+      end
     end
   end
 

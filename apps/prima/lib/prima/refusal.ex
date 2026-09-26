@@ -79,7 +79,17 @@ defmodule Prima.Refusal do
 
   @unconfirmed "The outcome could not be confirmed."
 
-  @signal_tags [:setup_required, :consent_required, :consent_conflict, :restart_required]
+  # The consent remediation signals' tags, read from their owner rather
+  # than spelled: this table, `is_consent_signal/2` and every surface that
+  # keeps a signal typed through it recognise the same tags.
+  @signal_tags Prima.ConsentSignal.tags()
+
+  @doc """
+  Whether `{tag, payload}` is a consent remediation signal
+  (`Prima.ConsentSignal`): a tag of `signal_tags/0` with a map payload.
+  Usable in guards.
+  """
+  defguard is_consent_signal(tag, payload) when tag in @signal_tags and is_map(payload)
 
   # The class a guest error's `type` reads as on the worker wire.
   @guest_error_classes %{
@@ -197,6 +207,10 @@ defmodule Prima.Refusal do
         %__MODULE__{class: :internal, reason: reason, message: @unconfirmed}
     end
   end
+
+  @doc "The tags of the consent remediation signals, the roster `is_consent_signal/2` reads."
+  @spec signal_tags() :: [Prima.ConsentSignal.tag()]
+  def signal_tags, do: @signal_tags
 
   @doc "The sentence an unknown reason reads as."
   @spec unconfirmed() :: String.t()
@@ -465,7 +479,7 @@ defmodule Prima.Refusal do
   end
 
   # The consent remediation signals (`Prima.ConsentSignal`).
-  defp row({tag, payload} = signal) when tag in @signal_tags and is_map(payload),
+  defp row({tag, payload} = signal) when is_consent_signal(tag, payload),
     do: {signal_class(tag), Prima.ConsentSignal.message(signal)}
 
   defp row(:rate_limited), do: {:rate_limited, "Too many requests — slow down and retry"}

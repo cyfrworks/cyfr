@@ -34,10 +34,19 @@ defmodule Cyfr.DocsDriftTest do
   # configuration (the `CYFR_*` variables `config/runtime.exs` reads into
   # the operator keys of `Cyfr.Boundaries.config_key_classes/0`, and the
   # resolvers it calls), the Opus release's `OPUS_*` rows in the same
-  # file, the Locus release's `Locus.Config`, and the keeper channel the
-  # Opus settings inherit.
+  # file, the Locus release's `Locus.Config`, the Opus settings, and the
+  # keeper's own sources (`keeper_sources/0`).
   @env_readers ~w(config/runtime.exs apps/cyfr/lib/cyfr/runtime_config.ex
                   apps/locus/lib/locus/config.ex apps/opus/lib/opus/settings.ex)
+
+  # The keeper's Go sources other than its tests, relative to the root.
+  defp keeper_sources do
+    @repo_root
+    |> Path.join("apps/keeper/**/*.go")
+    |> Path.wildcard()
+    |> Enum.reject(&String.ends_with?(&1, "_test.go"))
+    |> Enum.map(&Path.relative_to(&1, @repo_root))
+  end
 
   defp glossary do
     [_, section] = Regex.run(~r/^## Glossary\n(.*?)(?=^## )/ms, File.read!(@readme))
@@ -89,7 +98,7 @@ defmodule Cyfr.DocsDriftTest do
   end
 
   defp read_variables do
-    for file <- @env_readers,
+    for file <- @env_readers ++ keeper_sources(),
         [name] <-
           Regex.scan(
             ~r/"((?:CYFR|OPUS|LOCUS|KEEPER)_[A-Z0-9_]*[A-Z0-9])"/,
@@ -819,6 +828,321 @@ defmodule Cyfr.DocsDriftTest do
 
       refute source =~ "`#{key}` |",
              "#{guide} documents tincture.#{key} as a field, but nothing reads it"
+    end
+  end
+
+  # ==========================================================================
+  # Every variable the releases read has one home, and every documented
+  # name is read
+  #
+  # The rules above place the worker and builder variables; this holds the
+  # whole set, every `CYFR_*`, `OPUS_*`, `LOCUS_*` and `KEEPER_*` name the
+  # releases' readers and the keeper read, to the shipped examples, and
+  # each example to what something reads.
+  # ==========================================================================
+
+  # Read by a release, set by no operator: the process that starts the
+  # reader hands each over, so no example documents it.
+  @set_by_the_starter %{
+    # The keeper sets it for the client it starts; an inherited value is
+    # replaced, never read.
+    "KEEPER_CHANNEL" => :keeper,
+    # The worker service hands each runner its role and identities
+    # (`Opus.Settings.runner_environment/1`), and the keeper adds the
+    # control descriptor.
+    "OPUS_ROLE" => :worker_service,
+    "OPUS_RUNNER_ID" => :worker_service,
+    "OPUS_BOOT_ID" => :worker_service,
+    "OPUS_CONTROL_FD" => :keeper,
+    # Retired: `Opus.Settings` reads it only to refuse a service that sets it.
+    "OPUS_KEEPER" => :retired
+  }
+
+  # A name two releases read, each from its own env file, is documented in
+  # each: cyfr reads it from .env, the opus service from .env.opus.
+  @read_by_two %{"CYFR_LOG_LEVEL" => [".env.example", ".env.opus.example"]}
+
+  # Every quoted upper-case name the releases' readers spell: what a
+  # documented name must be read as, whatever its prefix.
+  defp spelled_by_readers do
+    for file <- @env_readers ++ keeper_sources(),
+        [name] <-
+          Regex.scan(~r/"([A-Z][A-Z0-9_]*[A-Z0-9])"/, File.read!(Path.join(@repo_root, file)),
+            capture: :all_but_first
+          ),
+        into: MapSet.new(),
+        do: name
+  end
+
+  test "every variable the releases read is documented in exactly one home" do
+    read = read_variables()
+    homes = homes()
+
+    for {name, _starter} <- @set_by_the_starter do
+      assert name in read, "#{name} is on the set-by-the-starter roster, and nothing reads it"
+
+      for {home, text} <- homes, home != "integration-guide.md" do
+        refute name in documented(text), "#{home} documents #{name}, which no operator sets"
+      end
+    end
+
+    violations =
+      read
+      |> Enum.reject(&Map.has_key?(@set_by_the_starter, &1))
+      |> misplaced(homes)
+      |> Enum.reject(fn {name, found} -> Map.get(@read_by_two, name) == found end)
+
+    assert violations == [],
+           """
+           Each of these is read by a release and documented in no home or in \
+           more than one ({variable, homes}):
+
+           #{inspect(violations)}
+           """
+
+    for {name, examples} <- @read_by_two do
+      assert name in read, "#{name} is on the read-by-two roster, and nothing reads it"
+      assert {name, examples} in misplaced([name], homes)
+    end
+  end
+
+  test "every name a shipped example documents is read by a release or by compose" do
+    compose = File.read!(Path.join(@repo_root, "docker-compose.yml"))
+
+    interpolated =
+      ~r/\$\{([A-Z][A-Z0-9_]*)/ |> Regex.scan(compose, capture: :all_but_first) |> List.flatten()
+
+    read = MapSet.union(spelled_by_readers(), MapSet.new(interpolated))
+
+    unread =
+      for example <- ~w(.env.example .env.opus.example .env.locus.example),
+          name <- documented(File.read!(Path.join(@repo_root, example))),
+          not MapSet.member?(read, name),
+          do: {example, name}
+
+    assert unread == [],
+           "these examples document names no release reads and compose does not " <>
+             "interpolate: #{inspect(unread)}"
+  end
+
+  # ==========================================================================
+  # integration-guide's scope, key-type, vault and consent-walk tables
+  # ==========================================================================
+
+  # The rows of the first table under `heading`, up to the next heading,
+  # each as its trimmed cells.
+  defp guide_table(heading) do
+    guide = File.read!(@integration_guide)
+
+    [_, section] =
+      Regex.run(~r/^#{Regex.escape(heading)}\n(.*?)(?=^#)/ms, guide) ||
+        flunk("integration-guide.md has no section #{inspect(heading)}")
+
+    rows =
+      for line <- String.split(section, "\n"),
+          String.starts_with?(line, "|"),
+          not (line =~ ~r/^\|[\s|:-]+\|$/),
+          do: line |> String.trim("|") |> String.split(~r/(?<!\\)\|/) |> Enum.map(&String.trim/1)
+
+    [_header | body] = rows
+    assert body != [], "the table under #{heading} has no rows"
+    body
+  end
+
+  defp backquoted(cell),
+    do: ~r/`([^`]+)`/ |> Regex.scan(cell, capture: :all_but_first) |> List.flatten()
+
+  test "the guide's scope table is Sanctum's permission roster" do
+    documented = for [scope | _] <- guide_table("### Available Scopes"), do: hd(backquoted(scope))
+
+    assert Enum.sort(documented) == Enum.sort(Sanctum.Atoms.known_permissions()),
+           "integration-guide.md's scopes #{inspect(documented)} are not " <>
+             "Sanctum.Atoms.known_permissions/0"
+  end
+
+  test "the guide's key-type table is Sanctum.ApiKey's defaults and ceilings" do
+    rows = guide_table("#### Key Type Defaults and Ceilings")
+
+    documented =
+      Map.new(rows, fn [type, defaults, ceiling] ->
+        [_, name] = Regex.run(~r/\*\*(\w+)\*\*/, type)
+
+        {String.to_existing_atom(String.downcase(name)),
+         {Jason.decode!(hd(backquoted(defaults))), Jason.decode!(hd(backquoted(ceiling)))}}
+      end)
+
+    expected =
+      Map.new(Sanctum.ApiKey.type_defaults(), fn {type, defaults} ->
+        {type, {defaults, Map.fetch!(Sanctum.ApiKey.type_ceilings(), type)}}
+      end)
+
+    assert documented == expected,
+           "integration-guide.md's key-type defaults and ceilings are not Sanctum.ApiKey's"
+  end
+
+  # The operations of the configured tool named `tool`, by action.
+  defp operations(tool) do
+    definition =
+      Enum.find_value(Grimoire.configured_providers(), fn provider ->
+        Enum.find(provider.tools(), &(&1.name == tool))
+      end)
+
+    assert definition, "no configured provider serves #{tool}"
+    Map.new(definition.operations, &{&1.action, &1})
+  end
+
+  # A tool's action table: the actions are the tool's, each once, and every
+  # name the key-args column backquotes is an argument of that action or a
+  # value one of its arguments enumerates.
+  defp assert_action_table(heading, tool) do
+    rows = guide_table(heading)
+    operations = operations(tool)
+    documented = for [action | _] <- rows, do: hd(backquoted(action))
+
+    assert Enum.sort(documented) == Enum.sort(Map.keys(operations)),
+           "integration-guide.md's #{tool} actions #{inspect(documented)} are not the " <>
+             "operations #{tool} declares, #{inspect(Enum.sort(Map.keys(operations)))}"
+
+    for [action, args | _] <- rows,
+        action = hd(backquoted(action)),
+        %Prima.Operation{args: declared} <- [operations[action]] do
+      known = Enum.flat_map(declared, &[&1.name | &1.enum || []])
+
+      for name <- backquoted(args) do
+        assert name in known,
+               "integration-guide.md names `#{name}` for #{tool}.#{action}, which declares " <>
+                 inspect(Enum.map(declared, & &1.name))
+      end
+    end
+  end
+
+  test "the guide's vault table is the vault tool's operations" do
+    assert_action_table("### The vault (`vault` tool)", "vault")
+  end
+
+  test "the guide's consent-walk table is the profile tool's operations" do
+    assert_action_table("### The consent walk (`profile` tool)", "profile")
+  end
+
+  # ==========================================================================
+  # component-guide's WIT blocks
+  # ==========================================================================
+
+  # A WIT text's package, its interfaces as name to the sorted function
+  # lines, and its worlds as name to {exports, imports}, comments dropped
+  # and whitespace collapsed.
+  defp wit(text) do
+    text =
+      text
+      |> String.replace(~r{//[^\n]*}, "")
+      |> String.replace(~r/\s+/, " ")
+
+    [_, package] = Regex.run(~r/package ([^;]+);/, text)
+
+    interfaces =
+      for [_, name, body] <- Regex.scan(~r/interface ([\w-]+) \{(.*?)\}/, text), into: %{} do
+        functions =
+          body
+          |> String.split(";", trim: true)
+          |> Enum.map(&String.trim/1)
+          |> Enum.reject(&(&1 == ""))
+
+        {name, Enum.sort(functions)}
+      end
+
+    worlds =
+      for [_, name, body] <- Regex.scan(~r/world ([\w-]+) \{(.*?)\}/, text), into: %{} do
+        items = body |> String.split(";", trim: true) |> Enum.map(&String.trim/1)
+        exports = for "export " <> item <- items, do: item
+        imports = for "import " <> item <- items, do: item
+        {name, {Enum.sort(exports), Enum.sort(imports)}}
+      end
+
+    %{package: package, interfaces: interfaces, worlds: worlds}
+  end
+
+  # The canonical world of each component type, by package.
+  defp canonical_wits do
+    for path <- Path.wildcard(Path.join(@repo_root, "wit/*/world.wit")), into: %{} do
+      wit = wit(File.read!(path))
+      {wit.package, wit}
+    end
+  end
+
+  test "component-guide's WIT blocks are the canonical worlds, a catalyst's imports a subset" do
+    guide = File.read!(Path.join(@repo_root, "component-guide.md"))
+    canonical = canonical_wits()
+    blocks = Regex.scan(~r/^```wit\n(.*?)^```/ms, guide, capture: :all_but_first)
+
+    assert length(blocks) >= 3, "component-guide.md shows only #{length(blocks)} WIT blocks"
+
+    for [block] <- blocks do
+      shown = wit(block)
+
+      canon =
+        Map.get(canonical, shown.package) ||
+          flunk("component-guide.md shows package #{shown.package}, which wit/ does not declare")
+
+      for {name, functions} <- shown.interfaces do
+        assert Map.get(canon.interfaces, name) == functions,
+               "component-guide.md's #{shown.package} interface #{name} is #{inspect(functions)}; " <>
+                 "wit/ declares #{inspect(canon.interfaces[name])}"
+      end
+
+      for {name, {exports, imports}} <- shown.worlds do
+        {canon_exports, canon_imports} =
+          Map.get(canon.worlds, name) ||
+            flunk(
+              "component-guide.md shows world #{name}, which #{shown.package} does not declare"
+            )
+
+        assert exports == canon_exports, "world #{name} exports #{inspect(exports)}"
+
+        assert imports -- canon_imports == [],
+               "world #{name} imports #{inspect(imports -- canon_imports)}, which wit/ does not"
+
+        # Only a catalyst chooses its imports; every other world is shown whole.
+        unless shown.package =~ "catalyst",
+          do: assert(imports == canon_imports, "world #{name} is not shown whole")
+      end
+    end
+
+    # Every canonical world is shown at least once.
+    shown_packages = for [block] <- blocks, into: MapSet.new(), do: wit(block).package
+    assert MapSet.new(Map.keys(canonical)) == shown_packages
+  end
+
+  test "component-guide names every function of the invoke interface and of each host interface heading" do
+    guide = File.read!(Path.join(@repo_root, "component-guide.md"))
+    formula = canonical_wits() |> Map.values() |> Enum.find(&(&1.package =~ "formula"))
+
+    invoke =
+      for function <- formula.interfaces["invoke"],
+          do: function |> String.split(":", parts: 2) |> hd()
+
+    [_, listed] = Regex.run(~r/The full `invoke` interface \(with (.*?)\)/, guide)
+    assert Enum.sort(backquoted(listed)) == Enum.sort(invoke)
+
+    # Each `### `cyfr:<package>/<interface>` — `<function>(…` heading names
+    # a function its interface declares.
+    deps =
+      for path <- Path.wildcard(Path.join(@repo_root, "wit/*/deps/*/*.wit")),
+          wit = wit(File.read!(path)),
+          [package | _] = String.split(wit.package, "@"),
+          {interface, functions} <- wit.interfaces,
+          into: %{},
+          do: {"#{package}/#{interface}", Enum.map(functions, &hd(String.split(&1, ":")))}
+
+    headings =
+      Regex.scan(~r/^### `(cyfr:[a-z]+\/[a-z-]+)` — `([a-z-]+)\(/m, guide,
+        capture: :all_but_first
+      )
+
+    assert headings != []
+
+    for [interface, function] <- headings do
+      assert function in Map.get(deps, interface, []),
+             "component-guide.md heads #{interface} with #{function}, which it does not declare"
     end
   end
 end

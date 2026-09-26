@@ -23,9 +23,11 @@ defmodule Compendium.Providers.Source do
       a build writes.
 
   `scoped/2` is the one decision. It validates the segments with
-  `Prima.PathSafety` and compares names after Unicode compatibility
-  normalisation and case folding, so no spelling a case-insensitive
-  filesystem resolves to a refused file reaches `Arca.Files`.
+  `Prima.PathSafety`, reads the component they name with the layout's one
+  parser (`Compendium.ComponentPath.parse/1`), and compares names below
+  the version directory after Unicode compatibility normalisation and case
+  folding, so no spelling a case-insensitive filesystem resolves to a
+  refused file reaches `Arca.Files`.
 
   The tool is in-chain only; a person edits through Files. Its actions are
   their own policy keys, so a grant for `files.write` on `data/` never
@@ -44,6 +46,9 @@ defmodule Compendium.Providers.Source do
   @mutations ~w(write edit delete)
   @manifest Compendium.ComponentPath.manifest_name()
   @dist "dist"
+  # The one spelling of what `scoped/2` accepts, as the tool's description,
+  # its argument and its refusal say it.
+  @grammar "components/{type}s/local/{name}/{version}/"
 
   @impl true
   def service, do: "compendium"
@@ -55,6 +60,14 @@ defmodule Compendium.Providers.Source do
   def definition do
     alias Prima.{Arg, Operation}
 
+    # Every action names its file or folder by the one argument, in the
+    # grammar `scoped/2` reads.
+    path =
+      Arg.new("path", :string,
+        required: true,
+        description: "#{@grammar}… — a file, or a folder for tree"
+      )
+
     Operation.tool(
       [
         Operation.new(
@@ -62,11 +75,7 @@ defmodule Compendium.Providers.Source do
           "tree",
           "Tree source",
           [
-            Arg.new("path", :string,
-              required: true,
-              description:
-                "components/{type}s/local/{name}/{version}/… — a file, or a folder for tree"
-            )
+            path
           ],
           kind: :read,
           planes: [:in_chain],
@@ -78,11 +87,7 @@ defmodule Compendium.Providers.Source do
           "read",
           "Read source",
           [
-            Arg.new("path", :string,
-              required: true,
-              description:
-                "components/{type}s/local/{name}/{version}/… — a file, or a folder for tree"
-            )
+            path
           ],
           kind: :read,
           planes: [:in_chain],
@@ -94,11 +99,7 @@ defmodule Compendium.Providers.Source do
           "grep",
           "Grep source",
           [
-            Arg.new("path", :string,
-              required: true,
-              description:
-                "components/{type}s/local/{name}/{version}/… — a file, or a folder for tree"
-            ),
+            path,
             Arg.new("pattern", :string,
               required: true,
               description: "grep: a regular expression"
@@ -117,11 +118,7 @@ defmodule Compendium.Providers.Source do
           "write",
           "Write source",
           [
-            Arg.new("path", :string,
-              required: true,
-              description:
-                "components/{type}s/local/{name}/{version}/… — a file, or a folder for tree"
-            ),
+            path,
             Arg.new("content", :string,
               required: true,
               description: "write: the file's new content"
@@ -136,11 +133,7 @@ defmodule Compendium.Providers.Source do
           "edit",
           "Edit source",
           [
-            Arg.new("path", :string,
-              required: true,
-              description:
-                "components/{type}s/local/{name}/{version}/… — a file, or a folder for tree"
-            ),
+            path,
             Arg.new(
               "edits",
               {:array,
@@ -172,11 +165,7 @@ defmodule Compendium.Providers.Source do
           "delete",
           "Delete source",
           [
-            Arg.new("path", :string,
-              required: true,
-              description:
-                "components/{type}s/local/{name}/{version}/… — a file, or a folder for tree"
-            )
+            path
           ],
           kind: :destructive,
           planes: [:in_chain],
@@ -184,7 +173,7 @@ defmodule Compendium.Providers.Source do
         )
       ],
       description:
-        "The source of a component you are authoring, under components/{type}s/local/{name}/{version}/. Read, search and edit it; the compiled artifact is written by a build, not here.",
+        "The source of a component you are authoring, under #{@grammar}. Read, search and edit it; the compiled artifact is written by a build, not here.",
       title: "Component source"
     )
   end
@@ -209,28 +198,43 @@ defmodule Compendium.Providers.Source do
   defp scoped(path, action) when is_binary(path) do
     segments = String.split(path, "/", trim: true)
 
-    with :ok <- safe(segments) do
-      case segments do
-        ["components", plural, publisher, _name, _version | rest] ->
-          with :ok <- local_publisher(publisher),
-               :ok <- source_file(plural, Enum.map(rest, &fold/1), action) do
-            {:ok, Enum.join(segments, "/")}
-          end
-
-        ["components", _plural, publisher, _name] when action == "tree" ->
-          with :ok <- local_publisher(publisher), do: {:ok, Enum.join(segments, "/")}
-
-        _ ->
-          {:error,
-           {:invalid_argument,
-            "source works inside components/{type}s/local/{name}/{version}/ — " <>
-              "'#{path}' is not a component version's own source"}}
-      end
+    with :ok <- safe(segments),
+         {:ok, parts} <- component(segments, action, path),
+         :ok <- local_publisher(parts.publisher),
+         :ok <- source_file(parts.type, Enum.map(parts.rest, &fold/1), action) do
+      {:ok, Enum.join(segments, "/")}
     end
   end
 
   defp scoped(_path, _action),
     do: {:error, {:invalid_argument, "source needs a path"}}
+
+  # The component a path names, read by the one parser of the layout
+  # (`Compendium.ComponentPath.parse/1`), so this tool reaches exactly the
+  # version directories registration and the overlay recognise. `tree` also
+  # lists a component's name directory, the parent of its versions: the
+  # path the parser reads as the parent of a version it would accept.
+  defp component(segments, action, path) do
+    case Compendium.ComponentPath.parse(segments) do
+      {:ok, parts} ->
+        {:ok, parts}
+
+      :error when action == "tree" and length(segments) == 4 ->
+        case Compendium.ComponentPath.parse(segments ++ ["0.0.0"]) do
+          {:ok, parts} -> {:ok, parts}
+          :error -> outside(path)
+        end
+
+      :error ->
+        outside(path)
+    end
+  end
+
+  defp outside(path) do
+    {:error,
+     {:invalid_argument,
+      "source works inside #{@grammar} — '#{path}' is not a component version's own source"}}
+  end
 
   # `.`, `..`, empty and encoded segments never reach a name comparison.
   defp safe(segments) do
@@ -259,16 +263,15 @@ defmodule Compendium.Providers.Source do
   end
 
   # `rest` is folded (`fold/1`): every name below compares folded.
-  defp source_file(_plural, [], action) when action in @mutations,
+  defp source_file(_type, [], action) when action in @mutations,
     do:
       {:error,
        {:invalid_argument,
         "a component version is created and deleted whole, not through its source — " <>
           "name a file inside it"}}
 
-  defp source_file(plural, rest, action) do
-    artifact =
-      plural |> fold() |> String.trim_trailing("s") |> Compendium.ComponentPath.wasm_name()
+  defp source_file(type, rest, action) do
+    artifact = Compendium.ComponentPath.wasm_name(type)
 
     cond do
       rest == [artifact] ->

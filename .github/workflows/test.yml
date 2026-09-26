@@ -229,6 +229,10 @@ jobs:
         run: mix credo --only=warning
       - name: Check formatting
         run: mix format --check-formatted
+      # The CLI's operation constants are generated from the server's
+      # operation table: a catalog that no longer matches it fails here.
+      - name: The CLI catalog is the operation table's
+        run: mix ops.gen.cli --check
       # --warnings-as-errors covers the .exs files `mix test` loads, which a
       # forced compile never reads: a warning in a test fails the build as
       # one in the application does.

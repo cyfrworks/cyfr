@@ -39,6 +39,17 @@ defmodule Prima.MacEnvelope do
   An envelope (`t:t/0`) describes one message type: its `prefix`, its `kind`
   and its ordered `fields`. A field's header name is its atom's name unless
   `header_names` gives another.
+
+  ## Names
+
+  Every protocol built on the envelope signs under one spelling of each
+  name, held here and nowhere else: the MAC domain of each island
+  (`domain/1`), each service's name within it (`service/1`) and the label
+  its keys derive over (`label/1`), and the HTTP header a signature travels
+  in (`auth_header/0`). `Prima.BuilderProtocol`, `Prima.LocusBackends` and
+  `Prima.WorkerWire` read them; the vector files under `tests/fixtures/`
+  carry them to the Go and Python sides, and `Cyfr.CrossLanguageDriftTest`
+  holds each value to every file that spells it.
   """
 
   @enforce_keys [:prefix, :kind, :fields]
@@ -55,6 +66,12 @@ defmodule Prima.MacEnvelope do
           body_hash_in_header: boolean()
         }
 
+  @typedoc "An island whose protocols sign under a MAC domain of their own."
+  @type island :: :opus | :locus
+
+  @typedoc "A service signing under its island's domain."
+  @type service :: :builds | :backends | :worker
+
   @typedoc "A message's fields by name: strings and non-negative integers."
   @type message :: %{optional(atom()) => String.t() | non_neg_integer()}
 
@@ -68,6 +85,37 @@ defmodule Prima.MacEnvelope do
   # 2^53 − 1: every integer up to it is exact in an IEEE 754 double.
   @max_integer 9_007_199_254_740_991
   @body_hash ~r/\A[0-9a-f]{64}\z/
+
+  # A domain names an island and the version of its protocols, so no key or
+  # header of one island verifies on the other; a service's label,
+  # `<domain>/<service>`, keeps each service's keys apart within its island.
+  @domains %{opus: "cyfr-opus/v1", locus: "cyfr-locus/v1"}
+  @services %{
+    builds: {:locus, "builds"},
+    backends: {:locus, "backends"},
+    worker: {:opus, "worker"}
+  }
+  @auth_header "x-cyfr-auth"
+
+  @doc "The MAC domain `island`'s protocols sign under."
+  @spec domain(island()) :: String.t()
+  def domain(island) when is_map_key(@domains, island), do: Map.fetch!(@domains, island)
+
+  @doc "The name of `service` within its island's domain."
+  @spec service(service()) :: String.t()
+  def service(service) when is_map_key(@services, service),
+    do: @services |> Map.fetch!(service) |> elem(1)
+
+  @doc "The label `service`'s keys derive over: its island's domain and its name, `<domain>/<service>`."
+  @spec label(service()) :: String.t()
+  def label(service) when is_map_key(@services, service) do
+    {island, name} = Map.fetch!(@services, service)
+    domain(island) <> "/" <> name
+  end
+
+  @doc "The HTTP header a signature travels in on every wire of either island, lowercase."
+  @spec auth_header() :: String.t()
+  def auth_header, do: @auth_header
 
   @doc """
   A root secret as it is configured: exactly 64 hexadecimal digits, in

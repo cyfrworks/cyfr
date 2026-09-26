@@ -950,6 +950,7 @@ A vault entry holds credential material — sealed at rest, never returned by an
 |--------|----------|--------------|
 | `list` | — | Enumerate entries (names + status, never material) |
 | `create` | `name`, `kind` (`api_key` \| `oauth` \| `bundle`), `fields` | Mint an entry with sealed material |
+| `rename` | `id`, `name` | Relabel an entry — a label is unique among the athanor's living entries |
 | `rotate` | `id`, `fields`, `expected_payload_rev` | Replace material, same field schema — CAS-guarded, **no re-consent needed** |
 | `rebind` | `id` + binding fields (`field_names`, `oauth_endpoints`, `oauth_scopes`) | Change what the credential *talks to* — dependent consents stop being ready until re-approved |
 | `authorize` | `id` (re-auth) or `name` + `provider_hint` (+ `oauth_scopes`) | Start a browser OAuth grant; the callback completes it into the entry |
@@ -980,6 +981,8 @@ commit   {decisions, plan_token, proof,
 | `plan` | `ref` | needs, caps ask, candidate vault entries, `plan_token` |
 | `preview` | `decisions` | rendered summary, `commit_digest` |
 | `commit` | `decisions`, `plan_token`, `proof`, `commit_digest`, `expected_consent_revision` | the new consent revision |
+| `grant` | `profile_id`, `bindings`, `expected_consent_revision` | the new consent revision — binds vault entries to needs on an active owner profile whose component has not changed shape, CAS-checked like `commit`; a moved shape needs the walk again |
+| `publish` | `profile_id`, `need_ids`, `durable_storage` | a `plan_token` for `preview` and `commit` — stages a public profile from an owner profile, keeping credentials only for `need_ids` |
 | `list` | `ref` | profiles + head revisions |
 | `revoke` | `profile_id` | revoked — effective on the next run |
 
@@ -1010,6 +1013,12 @@ The committed consent is the runtime capability — `ask ∩ operator choices �
 - **Storage** — granted `storage.paths` (directory prefixes end with `/`, must start with `data/` or `components/`) and `storage.actions`; empty = hard deny.
 - **Tools (formulas)** — granted patterns (`"execution.run"`, `"component.*"`, `"*"`) expand to the concrete action list at commit; a tool added to the platform later never widens an existing consent. Discovery via `{"tool": "tools", "action": "list"}`.
 - **Limits** — `timeout`, `rate_limit`, sizes, `max_concurrent_tasks`; the manifest's suggestions as adjusted by the operator, capped by the ceiling. Defaults when unasked: catalyst `"3m"`, formula `"5m"`, reagent `"1m"`, rate limit `{"requests": 100, "window": "1m"}`, memory 64 MB, request 1 MB, response 5 MB.
+
+---
+
+## Inbound Webhooks
+
+A webhook (`webhook` tool, or the console's Webhooks page) is a `POST /hooks/:slug` a sender signs with HMAC-SHA256. The signature is verified before anything else: an unknown or disabled slug answers 404, a missing or wrong signature 401, and a webhook store that cannot answer 503. A webhook configured with an idempotency key header (GitHub's `X-GitHub-Delivery`, a Stripe event id) runs each delivery once: a request without the header answers 400, a key already seen answers 200 `{"status": "duplicate", "first_seen_at": "..."}` without running the target again, and when the replay store cannot answer the claim the delivery answers 503 `unavailable` and runs nothing, since without the claim nothing proves the delivery has not already run. A delivery that ends non-2xx gives its claim back, so the sender's retry runs as a fresh delivery.
 
 ---
 

@@ -99,10 +99,10 @@ defmodule Prima.LocusBackends do
   alias Prima.MCP.Protocol, as: MCPProtocol
 
   @version 1
-  @domain "cyfr-locus/v1"
-  @service "backends"
-  @label @domain <> "/" <> @service
-  @auth_header "x-cyfr-auth"
+  @domain MacEnvelope.domain(:locus)
+  @service MacEnvelope.service(:backends)
+  @label MacEnvelope.label(:backends)
+  @auth_header MacEnvelope.auth_header()
   @boot_header "x-cyfr-boot"
   @window_ms Prima.BuilderProtocol.window_ms()
   @routes %{
