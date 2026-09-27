@@ -54,20 +54,7 @@ defmodule Opus.WorkerListenerTest do
 
   # As `post/4`, answering the whole response, its body as sent.
   defp response(context, callback, body, opts \\ []) do
-    header =
-      Keyword.get_lazy(opts, :header, fn ->
-        request = %{
-          service: Keyword.get(opts, :service, "wrk_local"),
-          boot: Keyword.get(opts, :boot, context.boot),
-          ts: Keyword.get_lazy(opts, :ts, fn -> System.system_time(:millisecond) end),
-          nonce: Keyword.get_lazy(opts, :nonce, &nonce/0)
-        }
-
-        {:ok, header} =
-          WorkerAuth.request_header(Keyword.get(opts, :key, context.key), request, body)
-
-        header
-      end)
+    header = Keyword.get_lazy(opts, :header, fn -> signed(context, body, opts) end)
 
     headers = if header, do: [{WorkerWire.auth_header(), header}], else: []
     path = Keyword.get(opts, :path, WorkerWire.worker_route(callback))
@@ -81,6 +68,59 @@ defmodule Opus.WorkerListenerTest do
       )
 
     response
+  end
+
+  # A request header signed over `body` by `key`, with the fields
+  # `post/4` takes.
+  defp signed(context, body, opts) do
+    request = %{
+      service: Keyword.get(opts, :service, "wrk_local"),
+      boot: Keyword.get(opts, :boot, context.boot),
+      ts: Keyword.get_lazy(opts, :ts, fn -> System.system_time(:millisecond) end),
+      nonce: Keyword.get_lazy(opts, :nonce, &nonce/0)
+    }
+
+    {:ok, header} = WorkerAuth.request_header(Keyword.get(opts, :key, context.key), request, body)
+    header
+  end
+
+  # The head of a request for `body` under `header` and only the first
+  # `sent` bytes of the body: with none sent, an answer means the refusal
+  # came before the body was read. The answer is read until the listener
+  # closes the connection, which, with nothing sent left unread on it,
+  # closes cleanly after the answer instead of resetting it.
+  defp partial(context, callback, body, header, sent \\ 0) do
+    %URI{port: port} = URI.parse(context.url)
+
+    {:ok, socket} =
+      :gen_tcp.connect({127, 0, 0, 1}, port, [:binary, active: false, packet: :raw], 5_000)
+
+    :ok =
+      :gen_tcp.send(socket, [
+        "POST #{WorkerWire.worker_route(callback)} HTTP/1.1\r\nhost: 127.0.0.1\r\n",
+        "content-length: #{byte_size(body)}\r\n#{WorkerWire.auth_header()}: #{header}\r\n\r\n",
+        binary_part(body, 0, sent)
+      ])
+
+    answer = until_closed(socket, "")
+    [head, answer_body] = String.split(answer, "\r\n\r\n", parts: 2)
+    ["HTTP/1.1 " <> status_line | lines] = String.split(head, "\r\n")
+    {status, _reason} = Integer.parse(status_line)
+
+    headers =
+      Map.new(lines, fn line ->
+        [name, value] = String.split(line, ":", parts: 2)
+        {String.downcase(name), String.trim(value)}
+      end)
+
+    %{status: status, headers: headers, body: answer_body}
+  end
+
+  defp until_closed(socket, read) do
+    case :gen_tcp.recv(socket, 0, 30_000) do
+      {:ok, more} -> until_closed(socket, read <> more)
+      {:error, :closed} -> read
+    end
   end
 
   defp closed?(%Req.Response{} = response),
@@ -112,33 +152,21 @@ defmodule Opus.WorkerListenerTest do
     huge = String.duplicate("x", Prima.HostAPI.max_body_bytes() + 1)
     stranger = ScriptedHost.dispatch_key(ScriptedHost.start!(root: :crypto.strong_rand_bytes(32)))
 
-    response = response(context, :status, huge, key: stranger)
+    response = partial(context, :status, huge, signed(context, huge, key: stranger))
     assert response.status == 401
     assert response.body == ~s({"v":1,"error":"bad_mac"})
-    assert closed?(response)
+    assert response.headers["connection"] == "close"
   end
 
   test "a header at another version of the wire is refused before the body is read", context do
     huge = String.duplicate("x", Prima.HostAPI.max_body_bytes() + 1)
 
-    {:ok, header} =
-      WorkerAuth.request_header(
-        context.key,
-        %{
-          service: "wrk_local",
-          boot: context.boot,
-          ts: System.system_time(:millisecond),
-          nonce: nonce()
-        },
-        huge
-      )
-
-    "v1 " <> rest = header
-    response = response(context, :status, huge, header: "v2 " <> rest)
+    "v1 " <> rest = signed(context, huge, [])
+    response = partial(context, :status, huge, "v2 " <> rest)
 
     assert response.status == 401
     assert response.body == ~s({"v":1,"error":"unknown_version"})
-    assert closed?(response)
+    assert response.headers["connection"] == "close"
   end
 
   test "a body without the wire's version, or at another, is unknown_version before its op",
@@ -201,8 +229,15 @@ defmodule Opus.WorkerListenerTest do
   end
 
   test "a body past the listener's bound is refused once the header verifies", context do
-    huge = String.duplicate("x", Prima.HostAPI.max_body_bytes() + 1)
-    assert {413, %{"error" => "malformed"}} = post(context, :status, huge)
+    max = Prima.HostAPI.max_body_bytes()
+    huge = String.duplicate("x", max + 1)
+
+    # The bound's worth of the body is sent and read; the byte past it
+    # makes the refusal, and is never sent.
+    response = partial(context, :status, huge, signed(context, huge, []), max)
+    assert response.status == 413
+    assert response.body == ~s({"v":1,"error":"malformed"})
+    assert response.headers["connection"] == "close"
   end
 
   test "a body naming another callback than its route, or no callback, is refused", context do
