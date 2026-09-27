@@ -72,7 +72,7 @@ defmodule Cyfr.Test.SeedBundleTest do
     assert {:ok, _size} = Compendium.Tincture.check_version(desktop.manifest, files)
   end
 
-  test "the shipped vault is the default layout's icon, declares exactly the vault actions it uses, and passes the publish check" do
+  test "the shipped vault is the default layout's icon, declares only what a frame can complete, and passes the publish check" do
     vault = SeedBundle.local_unit!("tinctures", "vault")
     assert vault.ref == "tincture:local.vault"
 
@@ -82,9 +82,11 @@ defmodule Cyfr.Test.SeedBundleTest do
     assert Prima.Manifest.validate(vault.manifest, fn _ -> true end) == :ok
     assert {:ok, declaration} = Compendium.tincture_declaration(vault.manifest)
 
-    # vault.create is the credential prompt's write, which the shell honours
-    # only for a tincture that declares it; nothing else is reached.
-    assert Enum.sort(declaration.actions) == ~w(vault.create vault.delete vault.status)
+    # vault.status is its read; vault.create is the credential prompt's
+    # write, which the shell honours only for a tincture that declares it.
+    # Every other vault act needs an interactive session, which a frame
+    # never is: those are the console's vault page's.
+    assert Enum.sort(declaration.actions) == ~w(vault.create vault.status)
     assert declaration.streams == []
     assert declaration.frame.capabilities == []
     refute Map.has_key?(vault.manifest["tincture"], "connect")
@@ -106,12 +108,18 @@ defmodule Cyfr.Test.SeedBundleTest do
 
     assert {:ok, _size} = Compendium.Tincture.check_version(vault.manifest, files)
 
-    # The page reads names and standing only, and sets every text as text.
+    # The page reads names and standing, adds through the shell's prompt,
+    # changes and removes nothing, and sets every text as text.
     script = File.read!(Path.join(dir, "vault.js"))
     refute script =~ "innerHTML"
-    refute script =~ "vault.list"
     assert script =~ "cyfr.credential("
-    refute File.read!(Path.join(dir, "index.html")) =~ ~r/https?:\/\//
+
+    for act <- ~w(vault.list vault.delete vault.rotate vault.revoke vault.rename vault.rebind),
+        do: refute(script =~ act, "the page calls #{act}")
+
+    page = File.read!(Path.join(dir, "index.html"))
+    refute page =~ ~r/https?:\/\//
+    assert page =~ "Entries are changed and removed on the console's vault page."
   end
 
   test "local_unit! finds a shipped formula by name" do

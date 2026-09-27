@@ -7,8 +7,7 @@ defmodule PrismWeb.Nav do
   modes) and the command palette list, and in which mode.
 
   `lite` is the chat and a drawer off it — AQUA, files, apps, members,
-  schedules, webhooks, MCP servers, settings, legal. The vault is an app
-  on the desktop (`tincture:local.vault`), not a page. `dev` adds the
+  the Vault, schedules, webhooks, MCP servers, settings, legal. `dev` adds the
   ops surfaces, sectioned. Keys are the pages' `active_nav` values; the
   DOM id a surface renders is `<prefix>-<key>` with underscores as hyphens.
 
@@ -109,6 +108,14 @@ defmodule PrismWeb.Nav do
       icon: "globe",
       section: :components,
       modes: @dev
+    },
+    %{
+      key: "vault",
+      label: "Vault",
+      path: "/vault",
+      icon: "key",
+      section: :configuration,
+      modes: @both
     },
     %{
       key: "api_keys",

@@ -27,6 +27,7 @@ defmodule Cyfr.BusTest do
     :api_keys,
     :mcp_servers,
     :schedules,
+    :vault_changed,
     :notify
   ]
 

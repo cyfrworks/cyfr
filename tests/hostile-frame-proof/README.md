@@ -72,7 +72,7 @@ destination only to a secure origin, which the harness's is not, so
 
 | Attempt | Why |
 |---|---|
-| `grant_prompt_fullscreen` | fullscreen reacquired while a grant prompt is up: the shell draws no grant prompt until its system layer exists |
+| `grant_prompt_fullscreen` | fullscreen reacquired while a grant prompt is up: nothing in this proof opens a grant prompt, since its probe declares nothing and the shell offers a grant only to a tincture whose owner profile needs consent again |
 | `suspended_on_another_member` | an action after the frame was suspended on another member: the proof runs at one member, and makes the suspension through the shell (`suspended_invoke`) |
 
 ## Record

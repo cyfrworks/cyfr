@@ -3,7 +3,7 @@
   "type": "tincture",
   "version": "0.1.0",
   "publisher": "local",
-  "description": "Your vault: the names of your stored credentials and whether anything uses them. Values are typed into the shell's own prompt and never shown.",
+  "description": "Your vault: the names of your stored credentials and whether anything uses them, and a way to add one. Values are typed into the shell's own prompt and never shown.",
   "tags": ["vault", "credentials", "system"],
   "category": "utility",
   "tincture": {
@@ -12,8 +12,7 @@
     "tagline": "Your stored credentials, by name",
     "actions": [
       "vault.status",
-      "vault.create",
-      "vault.delete"
+      "vault.create"
     ]
   }
 }

@@ -88,7 +88,7 @@ defmodule Cyfr.TelemetryBridgeTest do
        {Membership, %{user_id: @user, change: :joined}}},
       {[:cyfr, :sanctum, :vault, :entry_changed],
        Map.merge(tenant, %{entry_id: "v1", verb: :rotate, meta: %{name: "k"}}),
-       Bus.vault_changed_global(),
+       Bus.vault_changed(@actor),
        {VaultEntryChanged, %{kind: :rotate, entry_id: "v1", name: "k"}}},
       {[:cyfr, :sanctum, :athanor, :archived], tenant, Bus.athanor_archived_global(),
        {AthanorArchived, %{athanor_id: @athanor}}},
@@ -178,7 +178,8 @@ defmodule Cyfr.TelemetryBridgeTest do
       refute_receive %Notify{}, 100
     end
 
-    test "a vault change reaches the global topic, naming its athanor" do
+    test "a vault change reaches the athanor's topic and the global one" do
+      listen(Bus.vault_changed(@actor))
       listen(Bus.vault_changed_global())
 
       :telemetry.execute([:cyfr, :sanctum, :vault, :entry_changed], %{}, %{
@@ -188,8 +189,8 @@ defmodule Cyfr.TelemetryBridgeTest do
         meta: %{name: "new", old_name: "old"}
       })
 
-      assert_receive %VaultEntryChanged{kind: :rename, old_name: "old", athanor_id: @athanor}
-      refute_receive %VaultEntryChanged{}, 50
+      assert_receive %VaultEntryChanged{kind: :rename, old_name: "old"}
+      assert_receive %VaultEntryChanged{kind: :rename, old_name: "old"}
     end
 
     test "a notify naming no athanor is the operators'" do

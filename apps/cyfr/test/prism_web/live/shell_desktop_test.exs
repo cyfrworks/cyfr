@@ -232,6 +232,43 @@ defmodule PrismWeb.ShellDesktopTest do
       assert row(id).state == "active"
     end
 
+    test "a shown full frame takes everything it covers out of reach, and only that",
+         %{conn: conn, ctx: ctx} do
+      desktop!(ctx)
+      tincture!(ctx, "app-dash")
+      view = shell!(conn)
+
+      for covered <- ~w(#chrome-top #chrome-side [data-canvas-place="desktop"]) do
+        refute has_element?(view, "#{covered}[inert]"), covered
+      end
+
+      open!(view, "app-dash")
+
+      # The chrome and every canvas layer under the full frame.
+      for covered <- ~w(#chrome-top #chrome-side [data-canvas-place="desktop"]) do
+        assert has_element?(view, "#{covered}[inert]"), covered
+      end
+
+      assert has_element?(view, "#chrome-top[inert] #topbar")
+
+      # The full frame and its capsule, the shell's own Safe mode control,
+      # the system layer and the assistant's panel stay reachable.
+      refute has_element?(view, ~s([data-canvas-place="full"][inert]))
+      refute has_element?(view, ~s([inert] button[phx-click="close_active_tincture"]))
+
+      for reachable <- ~w(#shell-safe-mode #system-layer #aqua-panel) do
+        assert has_element?(view, reachable), reachable
+        refute has_element?(view, "[inert] #{reachable}"), reachable
+        refute has_element?(view, "#{reachable}[inert]"), reachable
+      end
+
+      render_click(view, "close_active_tincture", %{})
+
+      for covered <- ~w(#chrome-top #chrome-side [data-canvas-place="desktop"]) do
+        refute has_element?(view, "#{covered}[inert]"), covered
+      end
+    end
+
     test "a layout published by another session of the same person is read again here; another person's is not",
          %{conn: conn, ctx: ctx, user: user, athanor: athanor} do
       desktop!(ctx)

@@ -62,7 +62,7 @@ A desktop that has not sent `ready` within ten seconds of its handshake, a deskt
 
 ### Secrets
 
-A frame never asks for a secret and never holds one. **`cyfr.credential(name)`** asks the shell to prompt the person for a value to store in the vault as the entry `name`; the shell honours it only for a live, visible frame whose declaration lists `vault.create`, and drops it otherwise. The value is typed into the shell's own prompt and goes to the vault; the frame is told only that the prompt closed and whether an entry was saved (`{saved: true | false}`), never the value and never why nothing was saved.
+A frame never asks for a secret and never holds one. **`cyfr.credential(name)`** asks the shell to prompt the person for a value to store in the vault as the entry `name`; the shell honours it only for a live, visible frame whose declaration lists `vault.create`, and drops it otherwise. The value is typed into the shell's own prompt and goes to the vault; the frame is told only that the prompt closed and whether an entry was saved (`{saved: true | false}`), never the value and never why nothing was saved. A frame cannot change or remove a vault entry: renaming, rotating, rebinding, revoking, deleting and OAuth authorization need an interactive session, and are the console's vault page's. The shipped vault tincture lists entries through `vault.status` and adds them through `cyfr.credential`.
 
 ---
 

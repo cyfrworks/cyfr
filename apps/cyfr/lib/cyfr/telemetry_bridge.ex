@@ -250,15 +250,19 @@ defmodule Cyfr.TelemetryBridge do
     [{:global, Bus.memberships(user_id), membership}]
   end
 
-  # The deliberately global topic the external-server reconciler reads,
-  # because it cannot know every tenant topic.
+  # Two topics, one announcement: the athanor's own, and the deliberately
+  # global one the external-server reconciler reads because it cannot know
+  # every tenant topic.
   defp messages([:cyfr, :sanctum, :vault, :entry_changed], _measurements, meta) do
     build = fn actor ->
       meta_fields = Map.take(meta[:meta] || %{}, [:name, :old_name])
       VaultEntryChanged.new(actor, meta[:verb], Map.put(meta_fields, :entry_id, meta[:entry_id]))
     end
 
-    [tenant(meta, fn _actor -> Bus.vault_changed_global() end, build, :global)]
+    [
+      tenant(meta, &Bus.vault_changed/1, build),
+      tenant(meta, fn _actor -> Bus.vault_changed_global() end, build, :global)
+    ]
   end
 
   defp messages([:cyfr, :sanctum, :athanor, :archived], _measurements, %{athanor_id: id})

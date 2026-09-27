@@ -195,6 +195,16 @@ defmodule Cyfr.Bus do
       reason: "a schedule's occurrence started or its run ended"
     },
     %{
+      key: :vault_changed,
+      scope: :tenant,
+      struct: VaultEntryChanged,
+      match: {:exact, "bus:vault_changed"},
+      template: "tenant:<athanor_id>:bus:vault_changed",
+      producers: ["Cyfr.TelemetryBridge"],
+      consumers: ["PrismWeb.VaultLive"],
+      reason: "a vault entry of the athanor changed; no material travels"
+    },
+    %{
       key: :notify,
       scope: :tenant,
       struct: Notify,
@@ -551,6 +561,13 @@ defmodule Cyfr.Bus do
   @doc "Schedule occurrences (`Cyfr.Bus.Schedules`)."
   @spec schedules(Actor.t()) :: String.t()
   def schedules(actor), do: prefix(actor) <> "bus:schedules"
+
+  @doc """
+  The athanor's vault entries (`Cyfr.Bus.VaultEntryChanged`). The
+  server-wide counterpart is `vault_changed_global/0`.
+  """
+  @spec vault_changed(Actor.t()) :: String.t()
+  def vault_changed(actor), do: prefix(actor) <> "bus:vault_changed"
 
   @doc "The athanor's tray fan-in (`Cyfr.Bus.Notify`)."
   @spec notify(Actor.t()) :: String.t()

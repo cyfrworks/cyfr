@@ -23,7 +23,7 @@ defmodule CyfrWeb.ContextGuardRosterTest do
   @routed ~w(
     RootRedirectLive ChatRedirectLive ChatLive AquaLive FilesLive ActivitiesLive
     EnforcementsLive ExecutionsLive ComponentsLive ComponentDetailLive RegistryLive
-    MyReportsLive BuildsLive ApiKeysLive MembersLive WebhooksLive
+    MyReportsLive BuildsLive VaultLive ApiKeysLive MembersLive WebhooksLive
     SchedulesLive SettingsLive McpServersLive ShellLive LegalLive
   )
 
