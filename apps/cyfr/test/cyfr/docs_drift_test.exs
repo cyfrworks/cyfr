@@ -1451,7 +1451,7 @@ defmodule Cyfr.DocsDriftTest do
     action: {"action", "name, args"},
     stream_open: {"stream", "name, subject, onEvent"}
   }
-  @sdk_verb_args %{open: "ref", title: "title"}
+  @sdk_verb_args %{open: "ref", title: "title", credential: "name"}
 
   defp tincture_list("served-types") do
     rows =

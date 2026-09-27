@@ -1,0 +1,10 @@
+{
+  "name": "canvas-full",
+  "type": "tincture",
+  "version": "1.0.0",
+  "publisher": "local",
+  "description": "Canvas full",
+  "tincture": {
+    "entry": "index.html"
+  }
+}
