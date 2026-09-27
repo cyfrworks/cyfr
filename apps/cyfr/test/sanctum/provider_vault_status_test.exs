@@ -6,8 +6,9 @@ defmodule Sanctum.ProviderVaultStatusTest do
   `vault.status`: each living entry's name, kind, status, created and
   updated times and whether a consent's head revision binds it — for every
   kind of entry the vault holds, and never a value or a field. It is a
-  read on both planes under no consent class, so a tincture frame and an
-  in-chain call reach it where `vault.list` refuses them.
+  read on the external plane under no consent class, so a tincture frame
+  reaches it where `vault.list` refuses it; a guest has no enumeration of
+  the vault.
   """
   use ExUnit.Case, async: false
 
@@ -113,7 +114,7 @@ defmodule Sanctum.ProviderVaultStatusTest do
     refute Enum.any?(entries, &(&1.id == deleted_view.id))
   end
 
-  test "is a read on both planes under no consent class; list is not" do
+  test "is a read on the external plane under no consent class; a guest reaches neither" do
     assert {:ok, {Sanctum.Provider, meta}} = Grimoire.lookup("vault")
 
     tincture = %{Sanctum.TestContext.local() | auth_method: :tincture}
@@ -125,24 +126,9 @@ defmodule Sanctum.ProviderVaultStatusTest do
     assert {:error, {:consent_class_required, _}} =
              Grimoire.Catalog.authorize_annotated_action("vault", meta, tincture, args.("list"))
 
-    guest = Sanctum.Context.enter_guest(Sanctum.TestContext.local())
-
-    assert :ok =
-             Grimoire.Catalog.authorize_annotated_action(
-               "vault",
-               meta,
-               guest,
-               args.("status"),
-               true
-             )
-
-    assert {:error, _} =
-             Grimoire.Catalog.authorize_annotated_action(
-               "vault",
-               meta,
-               guest,
-               args.("list"),
-               true
-             )
+    # No running chain reaches either: a guest has no enumeration of the
+    # vault.
+    refute Grimoire.Catalog.in_chain_reachable?("vault", "status")
+    refute Grimoire.Catalog.in_chain_reachable?("vault", "list")
   end
 end
