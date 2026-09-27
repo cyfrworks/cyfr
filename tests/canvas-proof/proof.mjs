@@ -79,9 +79,20 @@ async function context(browser, name, base, cookie, viewport) {
 }
 
 async function openShell(page, base, segment) {
-  await page.goto(`${base}/a/${encodeURIComponent(segment)}/tinctures`);
-  await page.waitForSelector(".phx-connected", { timeout: 30_000 });
-  return desktop(page);
+  // What the page said, kept for the account of a shell that never
+  // connected or never drew its desktop.
+  const said = [];
+  page.on("console", (m) => said.push(`${m.type()}: ${m.text()}`));
+  page.on("pageerror", (e) => said.push(`pageerror: ${e.message}`));
+  const response = await page.goto(`${base}/a/${encodeURIComponent(segment)}/tinctures`);
+  try {
+    await page.waitForSelector(".phx-connected", { timeout: 30_000 });
+    return await desktop(page);
+  } catch (error) {
+    const body = await page.evaluate(() => document.body && document.body.innerText.slice(0, 600)).catch(() => null);
+    console.error(`openShell: ${error.message}\n  status ${response && response.status()} at ${page.url()}\n  body: ${JSON.stringify(body)}\n  console: ${JSON.stringify(said.slice(-20))}`);
+    throw error;
+  }
 }
 
 const frameIds = (page) =>

@@ -145,6 +145,16 @@ seed_vault "$CELL" "$token"
 step "the vault's operations in the server, SQLite"
 measure_in_server "$CELL" "$token" "$OUT/server-measurements-sqlite.json"
 
+# The measurement's burst can starve the member's lease renewal on
+# SQLite, so the member loses its slot and every page answers 503 until
+# it wins the claim back: the proof starts once the release is ready again.
+step "waiting for the release to hold its control plane again"
+for _ in $(seq 1 60); do
+  curl -fsS -m 2 -o /dev/null "http://127.0.0.1:$PORT/api/health/ready" 2>/dev/null && break
+  sleep 1
+done
+curl -fsS -m 2 -o /dev/null "http://127.0.0.1:$PORT/api/health/ready" || fail "the release is not ready after the measurement"
+
 step "the canvas proof in $PLAYWRIGHT_IMAGE"
 playwright_run canvas-proof proof.mjs "http://127.0.0.1:$PORT" "$segment" "$cookie" /out \
   "${CANVAS_PROOF_BROWSERS:-}" &
