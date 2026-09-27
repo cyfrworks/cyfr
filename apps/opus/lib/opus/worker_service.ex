@@ -38,13 +38,21 @@ defmodule Opus.WorkerService do
   and performs each fetch under the attempt's bounds. The runner attaches,
   runs the subtree with its formula children and reports `complete`,
   clean or not, or `exit` with the attempts still open. A runner that reports
-  `exit`, or whose channel closes or process ends with the subtree still
-  assigned, is reported at once to the member that assigned its subtree —
+  `exit`, whose channel closes or process ends with the subtree still
+  assigned, or that completes unclean after a `cancel_child` for a child
+  it held, is reported at once to the member that assigned its subtree —
   every attempt one runner holds was issued by one member, and no other
   lapses them — naming that member and the runner, and signed with the
-  service's dispatch key (`Opus.HostClient.runner_exited/5`); a runner is
-  reported once. A report runs beside the service, which never waits on
-  CYFR, and `await_reports/1` answers once none is in flight. A
+  service's dispatch key (`Opus.HostClient.runner_exited/5`). The report
+  names every attempt the service assigned that runner: the subtree's
+  root, every child the runner said it started, and anything its `exit`
+  lists. A runner leaves a cancelled child out of its own `exit`, and a
+  child's attempt that its runner attached to is stopped only by this
+  report, so the service names it whatever the runner listed; an attempt
+  already closed is named harmlessly, since CYFR lapses only a running
+  attempt that runner still holds. A runner is reported once. A report
+  runs beside the service, which never waits on CYFR, and
+  `await_reports/1` answers once none is in flight. A
   `start` no runner can be found for answers `{:error, :unavailable}`,
   and while the keeper refuses runners `{:error, {:unavailable, sentence}}`
   with the keeper's account of why; the listener refuses either `503`,
@@ -61,7 +69,8 @@ defmodule Opus.WorkerService do
   a runner's subtree taints the runner and ends it through the keeper,
   with the grace to report its open attempts; for a child a runner said
   it holds, that runner is sent a `cancel_child`, kills the child and
-  completes unclean. Either kill is `:ok`, and `:ok` again for an
+  completes unclean, and the service reports its end naming the child.
+  Either kill is `:ok`, and `:ok` again for an
   execution a runner of this boot already ended; the ids of the last ten
   thousand roots and children ended are remembered for it. A kill of an
   execution no runner of this boot holds or held is `:not_found`, however
@@ -168,7 +177,7 @@ defmodule Opus.WorkerService do
 
       pid = holder(state, execution_id) ->
         :ok = RunnerPool.cancel_child(RunnerPool, pid, execution_id)
-        {:reply, :ok, state}
+        {:reply, :ok, cancelled(state, [pid], execution_id)}
 
       ended?(state, execution_id) ->
         {:reply, :ok, state}
@@ -179,7 +188,7 @@ defmodule Opus.WorkerService do
         if map_size(state.assigned) > 0,
           do: :ok = RunnerPool.cancel_child(RunnerPool, execution_id)
 
-        {:reply, {:error, :not_found}, state}
+        {:reply, {:error, :not_found}, cancelled(state, Map.keys(state.assigned), execution_id)}
     end
   end
 
@@ -207,10 +216,21 @@ defmodule Opus.WorkerService do
   def handle_info({:DOWN, _ref, :process, pid, reason}, state),
     do: {:noreply, gone(state, pid, {:handle_down, reason})}
 
-  def handle_info({RunnerPool, pid, {:complete, execution_id, _clean}}, state) do
+  # An unclean completion after a cancel of one of the runner's children
+  # ends the runner with that child's attempt still open at CYFR: it is
+  # reported, as an exit is.
+  def handle_info({RunnerPool, pid, {:complete, execution_id, clean}}, state) do
     case Map.get(state.assigned, pid) do
-      %{execution_id: ^execution_id} -> {:noreply, forget(state, pid)}
-      _ -> {:noreply, state}
+      %{execution_id: ^execution_id} = assignment ->
+        state =
+          if not clean and cancelled_child?(assignment),
+            do: report(state, assignment.runner, held_by(assignment), assignment),
+            else: state
+
+        {:noreply, forget(state, pid)}
+
+      _ ->
+        {:noreply, state}
     end
   end
 
@@ -220,7 +240,7 @@ defmodule Opus.WorkerService do
         {:noreply, state}
 
       assignment ->
-        state = report(state, runner, Enum.uniq([assignment.attempt | open]), assignment)
+        state = report(state, runner, Enum.uniq(held_by(assignment) ++ open), assignment)
         {:noreply, forget(state, pid)}
     end
   end
@@ -274,6 +294,7 @@ defmodule Opus.WorkerService do
                 athanor: assignment.athanor_id,
                 at: HostClient.at(assignment, state.credentials.host_url),
                 children: %{},
+                cancelled: MapSet.new(),
                 callers: caller.callers,
                 logger: caller.logger
               }
@@ -331,11 +352,7 @@ defmodule Opus.WorkerService do
 
       assignment ->
         state
-        |> report(
-          assignment.runner,
-          Enum.uniq([assignment.attempt | Map.values(assignment.children)]),
-          assignment
-        )
+        |> report(assignment.runner, held_by(assignment), assignment)
         |> forget(pid)
     end
   end
@@ -370,10 +387,30 @@ defmodule Opus.WorkerService do
   # Every attempt a runner of this boot holds: each subtree's root and the
   # children its runner said it started.
   defp held(state) do
-    for {_pid, assignment} <- state.assigned,
-        attempt <- Enum.uniq([assignment.attempt | Map.values(assignment.children)]),
-        do: attempt
+    for {_pid, assignment} <- state.assigned, attempt <- held_by(assignment), do: attempt
   end
+
+  # Every attempt the service assigned one runner: its subtree's root and
+  # the children it said it started.
+  defp held_by(assignment),
+    do: Enum.uniq([assignment.attempt | Map.values(assignment.children)])
+
+  # The runners `pids` were sent a `cancel_child` for `execution_id`. A
+  # runner that did not start it ignores the cancel; the one that did has
+  # said so, or says so before it completes, since its frames arrive in
+  # order.
+  defp cancelled(state, pids, execution_id) do
+    assigned =
+      Enum.reduce(pids, state.assigned, fn pid, assigned ->
+        Map.update!(assigned, pid, &%{&1 | cancelled: MapSet.put(&1.cancelled, execution_id)})
+      end)
+
+    %{state | assigned: assigned}
+  end
+
+  # Whether the service cancelled a child the runner said it started.
+  defp cancelled_child?(assignment),
+    do: Enum.any?(assignment.cancelled, &is_map_key(assignment.children, &1))
 
   defp remember(%{ids: ids, order: order}, execution_id) do
     if MapSet.member?(ids, execution_id) do

@@ -93,8 +93,11 @@ defmodule Crucible.Attempt do
   has no waiter: it is registered under its execution's id in
   `Crucible.Registry` as dispatched to its worker service, so
   `Crucible.Dispatch.stop/2` kills its run through that worker
-  service, and the worker service's report of the run's exit
-  (`stop_unclosed/2`) stops it.
+  service, and the worker service's report of its runner's end
+  (`stop_unclosed/2`) stops it. That report names every attempt the
+  worker service assigned the runner, a child cancelled inside it
+  included, so it is the one signal that stops an attempt whose runner
+  attached.
 
   A runner that ended on its own is the one stop the attempt closes the
   run for: the worker service reports that runner's exit
@@ -356,8 +359,8 @@ defmodule Crucible.Attempt do
   without closing it and gives back what the run held: one still queued
   for its slot leaves the queue, and one that holds its slot gives it
   back, leaving a runner its start may have reached to its waiter's kill.
-  An attempt whose runner attached is left to that runner's exit report
-  (`stop_unclosed/2`), and remembers that a caller ended its row: the kill
+  An attempt whose runner attached is left to the worker service's report
+  of that runner's end (`stop_unclosed/2`), and remembers that a caller ended its row: the kill
   that caller makes reaches native work, and is counted where the run's end
   is seen. One whose row is still live, or cannot be read, is
   left as it is; a queued one re-reads its row when its slot is granted.
