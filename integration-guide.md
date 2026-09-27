@@ -949,6 +949,7 @@ A vault entry holds credential material — sealed at rest, never returned by an
 | Action | Key args | What it does |
 |--------|----------|--------------|
 | `list` | — | Enumerate entries (names + status, never material) |
+| `status` | — | Each living entry's name, kind, status, created and updated times and whether a consent binds it — never material or a field; on both planes, under no consent class, so a tincture that declares it and an in-chain call may read it |
 | `create` | `name`, `kind` (`api_key` \| `oauth` \| `bundle`), `fields` | Mint an entry with sealed material |
 | `rename` | `id`, `name` | Relabel an entry — a label is unique among the athanor's living entries |
 | `rotate` | `id`, `fields`, `expected_payload_rev` | Replace material, same field schema — CAS-guarded, **no re-consent needed** |
@@ -957,7 +958,7 @@ A vault entry holds credential material — sealed at rest, never returned by an
 | `revoke` | `id` | Kill the material; dependent profiles report not-ready |
 | `delete` | `id` | Remove the entry |
 
-Vault mutations require an interactive session — components and guest-plane callers can never reach these verbs.
+Vault mutations require an interactive session — components, tincture frames and guest-plane callers can never reach these verbs; `list` needs a surface that could finish a consent walk. A tincture never takes a secret itself: `cyfr.credential(name)` has the shell prompt the person, and the shell's prompt makes the `create`.
 
 **OAuth is entry-keyed, not component-keyed.** Provider endpoints live on the vault entry (`google` is a built-in preset), and your OAuth app's client credentials are set once per provider with `oauth.set_client` (`provider`, `client_id`, `client_secret`) — operator configuration, not a manifest concern. The component only declares a need of type `oauth:<provider>` with the scopes it requires; at runtime it calls `get_access_token("<provider>")` and receives short-lived, auto-refreshed tokens.
 

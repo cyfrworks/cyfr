@@ -3,8 +3,9 @@
 
 defmodule Cyfr.Bus.VaultEntryChanged do
   @moduledoc """
-  A vault entry changed, on the athanor's `Cyfr.Bus.vault_changed/1` and
-  on the server-wide `Cyfr.Bus.vault_changed_global/0`. The kind is the
+  A vault entry changed, on the server-wide
+  `Cyfr.Bus.vault_changed_global/0`, carrying the athanor it changed in.
+  The kind is the
   verb. `name` names the entry for every verb, since a deleted row can no
   longer be read for it, and `old_name` the name a rename vacated, which
   is what a live server's header template still spells. No material

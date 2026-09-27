@@ -60,6 +60,7 @@ defmodule Prima.Layout do
   @max_position 10_000
 
   @default_desktop "tincture:local.desktop"
+  @default_vault "tincture:local.vault"
 
   @document_keys ~w(version postures)
   @posture_keys ~w(desktop slots floating)
@@ -120,12 +121,14 @@ defmodule Prima.Layout do
 
   @doc """
   The shipped default: every posture runs the shipped desktop
-  (`#{@default_desktop}`) with no slots and nothing floating.
+  (`#{@default_desktop}`) with the shipped vault (`#{@default_vault}`) as
+  its one icon slot, and nothing floating.
   """
   @spec default() :: t()
   def default do
-    empty = %{desktop: @default_desktop, slots: [], floating: []}
-    %__MODULE__{postures: Map.new(@postures, &{&1, empty})}
+    vault = %{id: "vault", tincture: @default_vault, size: :icon, order: 0, card: nil}
+    posture = %{desktop: @default_desktop, slots: [vault], floating: []}
+    %__MODULE__{postures: Map.new(@postures, &{&1, posture})}
   end
 
   @doc """

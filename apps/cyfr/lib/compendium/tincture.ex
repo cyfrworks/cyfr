@@ -111,7 +111,9 @@ defmodule Compendium.Tincture do
   @doc """
   The publish check a tincture version passes before it is installed: its
   declaration held to the frame's rules (`Compendium.tincture_declaration/1`),
-  every file it serves of a served type
+  each stream it declares one a provider declares, with a subject that
+  stream takes (`Compendium.tincture_check_streams/2` against
+  `Grimoire.streams/0`), every file it serves of a served type
   (`Compendium.tincture_served_types/0`), and its decompressed size within
   the registry's ceiling
   (`Compendium.Registry.tincture_max_decompressed_bytes/0`). `files` are
@@ -149,8 +151,10 @@ defmodule Compendium.Tincture do
   end
 
   defp check_declaration(manifest) do
-    case Compendium.tincture_declaration(manifest) do
-      {:ok, _declaration} -> :ok
+    with {:ok, declaration} <- Compendium.tincture_declaration(manifest),
+         :ok <- Compendium.tincture_check_streams(declaration, Grimoire.streams()) do
+      :ok
+    else
       {:error, {:invalid_tincture, sentence}} -> {:error, sentence}
     end
   end

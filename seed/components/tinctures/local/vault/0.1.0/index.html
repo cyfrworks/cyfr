@@ -1,0 +1,52 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Vault</title>
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <main class="vault">
+    <header class="head">
+      <h1>Vault</h1>
+      <p class="lede">Your stored credentials, by name. A value is typed into the shell's own prompt, goes straight to the vault and is never shown again.</p>
+    </header>
+
+    <section class="add" aria-labelledby="add-heading">
+      <h2 id="add-heading">Add an entry</h2>
+      <div class="add-row" role="group" aria-labelledby="add-heading">
+        <label for="add-name">Name</label>
+        <input id="add-name" type="text" autocomplete="off" spellcheck="false" aria-describedby="add-hint" />
+        <button id="add-button" type="button">Add entry</button>
+      </div>
+      <p id="add-hint" class="hint">Press Enter or Add entry; the shell asks for the value.</p>
+    </section>
+
+    <section class="entries" aria-labelledby="entries-heading">
+      <div class="entries-head">
+        <h2 id="entries-heading">Entries</h2>
+        <button id="refresh-button" type="button">Refresh</button>
+      </div>
+      <table id="entries" class="table" aria-labelledby="entries-heading" aria-describedby="entries-empty">
+        <thead>
+          <tr>
+            <th scope="col">Name</th>
+            <th scope="col">Kind</th>
+            <th scope="col">Status</th>
+            <th scope="col">In use</th>
+            <th scope="col">Changed</th>
+            <th scope="col"><span class="visually-hidden">Actions</span></th>
+          </tr>
+        </thead>
+        <tbody id="entries-body"></tbody>
+      </table>
+      <p id="entries-empty" class="hint"></p>
+    </section>
+
+    <p id="status" class="status" role="status" aria-live="polite"></p>
+  </main>
+
+  <script type="module" src="vault.js"></script>
+</body>
+</html>

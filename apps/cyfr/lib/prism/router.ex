@@ -166,7 +166,6 @@ defmodule Prism.Router do
             live "/registry", RegistryLive, :index, metadata: %{auth: :browser_authenticated}
             live "/reports", MyReportsLive, :index, metadata: %{auth: :browser_authenticated}
             live "/builds", BuildsLive, :index, metadata: %{auth: :browser_authenticated}
-            live "/vault", VaultLive, :index, metadata: %{auth: :browser_authenticated}
             live "/api-keys", ApiKeysLive, :index, metadata: %{auth: :browser_authenticated}
             live "/members", MembersLive, :index, metadata: %{auth: :browser_authenticated}
             live "/webhooks", WebhooksLive, :index, metadata: %{auth: :browser_authenticated}

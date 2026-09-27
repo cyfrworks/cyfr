@@ -72,6 +72,48 @@ defmodule Cyfr.Test.SeedBundleTest do
     assert {:ok, _size} = Compendium.Tincture.check_version(desktop.manifest, files)
   end
 
+  test "the shipped vault is the default layout's icon, declares exactly the vault actions it uses, and passes the publish check" do
+    vault = SeedBundle.local_unit!("tinctures", "vault")
+    assert vault.ref == "tincture:local.vault"
+
+    for {_posture, arrangement} <- Prima.Layout.default().postures,
+        do: assert([%{tincture: "tincture:local.vault", size: :icon}] = arrangement.slots)
+
+    assert Prima.Manifest.validate(vault.manifest, fn _ -> true end) == :ok
+    assert {:ok, declaration} = Compendium.tincture_declaration(vault.manifest)
+
+    # vault.create is the credential prompt's write, which the shell honours
+    # only for a tincture that declares it; nothing else is reached.
+    assert Enum.sort(declaration.actions) == ~w(vault.create vault.delete vault.status)
+    assert declaration.streams == []
+    assert declaration.frame.capabilities == []
+    refute Map.has_key?(vault.manifest["tincture"], "connect")
+    refute Map.has_key?(vault.manifest, "caps")
+    refute Map.has_key?(vault.manifest, "dependencies")
+
+    for operation <- declaration.actions do
+      [tool, action] = String.split(operation, ".")
+      assert {:ok, {_provider, definition}} = Grimoire.lookup(tool)
+      assert Map.has_key?(Grimoire.declared_actions(definition), action), operation
+    end
+
+    dir = Path.join(Path.expand("../../../../seed/components", __DIR__), vault.rel)
+
+    files =
+      for path <- Prima.Test.SourceTree.files!(Path.join(dir, "**/*")),
+          File.regular?(path),
+          do: {Path.relative_to(path, dir), File.stat!(path).size}
+
+    assert {:ok, _size} = Compendium.Tincture.check_version(vault.manifest, files)
+
+    # The page reads names and standing only, and sets every text as text.
+    script = File.read!(Path.join(dir, "vault.js"))
+    refute script =~ "innerHTML"
+    refute script =~ "vault.list"
+    assert script =~ "cyfr.credential("
+    refute File.read!(Path.join(dir, "index.html")) =~ ~r/https?:\/\//
+  end
+
   test "local_unit! finds a shipped formula by name" do
     formula = SeedBundle.local_unit!("formulas", "list-models")
     assert formula.type == "formula"

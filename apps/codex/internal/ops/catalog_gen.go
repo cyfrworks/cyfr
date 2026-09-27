@@ -244,6 +244,7 @@ const (
 	VaultRename             = "rename"
 	VaultRevoke             = "revoke"
 	VaultRotate             = "rotate"
+	VaultStatus             = "status"
 	WebhookCreate           = "create"
 	WebhookGet              = "get"
 	WebhookList             = "list"
@@ -286,7 +287,7 @@ var Actions = map[string][]string{
 	"tincture_visibility": {"get"},
 	"tools":               {"list"},
 	"turn":                {"recover", "suspend"},
-	"vault":               {"authorize", "create", "delete", "list", "rebind", "rename", "revoke", "rotate"},
+	"vault":               {"authorize", "create", "delete", "list", "rebind", "rename", "revoke", "rotate", "status"},
 	"webhook":             {"create", "get", "list", "revoke", "rotate", "update"},
 }
 
@@ -4068,6 +4069,19 @@ func (args VaultRotateArgs) MarshalJSON() ([]byte, error) {
 		Action string `json:"action"`
 		fields
 	}{Action: VaultRotate, fields: fields(args)})
+}
+
+// VaultStatusArgs carries arguments for vault.status.
+type VaultStatusArgs struct {
+}
+
+// MarshalJSON supplies the operation's fixed action discriminator.
+func (args VaultStatusArgs) MarshalJSON() ([]byte, error) {
+	type fields VaultStatusArgs
+	return json.Marshal(struct {
+		Action string `json:"action"`
+		fields
+	}{Action: VaultStatus, fields: fields(args)})
 }
 
 // WebhookCreateArgs carries arguments for webhook.create.

@@ -254,6 +254,34 @@ defmodule Arca.ConsentStorage do
   def head_profiles_referencing(%Prima.Actor{}, _vault_entry_id), do: {:error, :no_athanor}
 
   @doc """
+  The vault entries of the actor's athanor that some profile's **head**
+  revision references, each id once: `head_profiles_referencing/2` for
+  every entry in one query.
+  """
+  @spec head_referenced_entries(Prima.Actor.t()) :: {:ok, [String.t()]} | {:error, term()}
+  def head_referenced_entries(%Prima.Actor{athanor_id: athanor_id})
+      when is_binary(athanor_id) and athanor_id != "" do
+    Arca.Repo.Errors.with_db_rescue("Arca.ConsentStorage.head_referenced_entries", fn ->
+      ids =
+        from(r in ConsentVaultRef,
+          join: c in Consent,
+          on: c.id == r.consent_id and c.athanor_id == r.athanor_id,
+          join: p in Arca.Schemas.Profile,
+          on: p.head_consent_id == c.id and p.athanor_id == c.athanor_id,
+          distinct: true,
+          select: r.vault_entry_id
+        )
+        |> Arca.QueryHelpers.where_athanor(athanor_id)
+        |> Arca.Repo.all()
+
+      {:ok, ids}
+    end)
+    |> Arca.Data.project()
+  end
+
+  def head_referenced_entries(%Prima.Actor{}), do: {:error, :no_athanor}
+
+  @doc """
   Candidate profiles for a name-level source ref within the actor's tenant,
   decoded into the selection vocabulary.
 

@@ -4,8 +4,11 @@
 defmodule Sanctum.Providers.Vault do
   @moduledoc """
   Vault tool handlers for the Sanctum MCP provider — thin argument
-  mapping over `Sanctum.Vault`, which owns every rule. External plane
-  only: guests have no enumeration API and no vault verbs.
+  mapping over `Sanctum.Vault`, which owns every rule. Every verb but
+  `status` is external plane only. `status` answers each living entry's
+  name, kind, status, created and updated times and whether a consent
+  binds it, on both planes and under no consent class, and never a value
+  or a field.
 
   Material flows one way: `create` and `rotate` accept field values,
   nothing ever returns them.
@@ -30,6 +33,14 @@ defmodule Sanctum.Providers.Vault do
           kind: :read,
           planes: [:external],
           consent: :staging
+        ),
+        Operation.new(
+          "vault",
+          "status",
+          "Vault entry status",
+          [],
+          kind: :read,
+          planes: [:external, :in_chain]
         ),
         Operation.new(
           "vault",
@@ -201,6 +212,16 @@ defmodule Sanctum.Providers.Vault do
     end
   end
 
+  # Each living entry's name, kind, status, created and updated times and
+  # whether a consent binds it: a read of standing that carries no
+  # material and no field, so every plane that reaches it may.
+  def handle(%Context{} = ctx, %{"action" => "status"}) do
+    case Vault.status(ctx) do
+      {:ok, entries} -> {:ok, %{entries: Enum.map(entries, &status_json/1)}}
+      {:error, reason} -> {:error, fmt(reason)}
+    end
+  end
+
   def handle(%Context{} = ctx, %{"action" => "create", "name" => name, "kind" => kind} = args) do
     params =
       %{name: name, kind: kind, fields: Map.get(args, "fields", %{})}
@@ -326,6 +347,21 @@ defmodule Sanctum.Providers.Vault do
   end
 
   # ---------------------------------------------------------------------------
+
+  defp status_json(entry) do
+    %{
+      id: entry.id,
+      name: entry.name,
+      kind: entry.kind,
+      status: entry.status,
+      created_at: iso8601(entry.created_at),
+      updated_at: iso8601(entry.updated_at),
+      bound: entry.bound
+    }
+  end
+
+  defp iso8601(%DateTime{} = at), do: at |> DateTime.truncate(:second) |> DateTime.to_iso8601()
+  defp iso8601(_absent), do: nil
 
   defp fmt({:surface_not_permitted, method}) do
     "consent_class_required: vault mutations need an interactive (:oidc) session, got #{method}"
