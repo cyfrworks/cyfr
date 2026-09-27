@@ -14,7 +14,7 @@ const addSelect = document.getElementById("add-select")
 const addButton = document.getElementById("add-button")
 
 const state = {
-  posture: window.matchMedia("(max-width: 700px)").matches ? "hand" : "desk",
+  posture: window.matchMedia("(max-width: 767px)").matches ? "hand" : "desk",
   document: null,
   answered: null,
   revision: 0,
