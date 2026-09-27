@@ -93,8 +93,7 @@ defmodule Sanctum.Vault do
 
   @doc """
   The standing of every living entry in the caller's athanor
-  (`t:status_view/0`), by name. A read: it needs no consent class, and
-  answers the same on every plane that reaches it.
+  (`t:status_view/0`), by name. A read: it needs no consent class.
   """
   @spec status(Context.t()) :: {:ok, [status_view()]} | {:error, term()}
   def status(%Context{} = ctx) do

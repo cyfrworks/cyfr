@@ -4,11 +4,11 @@
 defmodule Sanctum.Providers.Vault do
   @moduledoc """
   Vault tool handlers for the Sanctum MCP provider — thin argument
-  mapping over `Sanctum.Vault`, which owns every rule. Every verb but
-  `status` is external plane only. `status` answers each living entry's
-  name, kind, status, created and updated times and whether a consent
-  binds it, on both planes and under no consent class, and never a value
-  or a field.
+  mapping over `Sanctum.Vault`, which owns every rule. External plane
+  only: guests have no enumeration API and no vault verbs. `status`
+  answers each living entry's name, kind, status, created and updated
+  times and whether a consent binds it, under no consent class, and never
+  a value or a field.
 
   Material flows one way: `create` and `rotate` accept field values,
   nothing ever returns them.
@@ -40,7 +40,7 @@ defmodule Sanctum.Providers.Vault do
           "Vault entry status",
           [],
           kind: :read,
-          planes: [:external, :in_chain]
+          planes: [:external]
         ),
         Operation.new(
           "vault",
@@ -214,7 +214,7 @@ defmodule Sanctum.Providers.Vault do
 
   # Each living entry's name, kind, status, created and updated times and
   # whether a consent binds it: a read of standing that carries no
-  # material and no field, so every plane that reaches it may.
+  # material and no field.
   def handle(%Context{} = ctx, %{"action" => "status"}) do
     case Vault.status(ctx) do
       {:ok, entries} -> {:ok, %{entries: Enum.map(entries, &status_json/1)}}
