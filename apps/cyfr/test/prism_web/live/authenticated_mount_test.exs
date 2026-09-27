@@ -162,11 +162,11 @@ defmodule PrismWeb.AuthenticatedMountTest do
     refute html =~ ~s(id="nav-webhooks")
 
     for key <-
-          ~w(chat aqua tinctures members vault schedules webhooks mcp-servers settings) do
+          ~w(chat aqua tinctures members schedules webhooks mcp-servers settings) do
       assert has_element?(view, "#drawer #drawer-nav-#{key}"), "lite drawer lacks #{key}"
     end
 
-    for key <- ~w(executions api-keys enforcements builds registry) do
+    for key <- ~w(executions api-keys enforcements builds registry vault) do
       refute has_element?(view, "#drawer #drawer-nav-#{key}"), "lite drawer shows #{key}"
     end
 

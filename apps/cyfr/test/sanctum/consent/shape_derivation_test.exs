@@ -368,7 +368,7 @@ defmodule Sanctum.Consent.ShapeDerivationTest do
     @frame %{
       "frame" => %{"capabilities" => ["pointer_lock"]},
       "actions" => ["execution.list"],
-      "streams" => [%{"name" => "executions.deltas", "subject" => "*"}]
+      "streams" => [%{"name" => "mcp_servers.changes"}]
     }
 
     defp tincture!(ctx, name, version, tincture) do

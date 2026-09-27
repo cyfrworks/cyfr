@@ -78,8 +78,12 @@ defmodule Prism.DesktopTest do
 
   test "the layout is read, and edited only through the gate, stale revisions refused",
        %{ctx: ctx} do
-    assert {:ok, %{revision: 0, shipped_default: true, arrangement: %{slots: []}}} =
-             Desktop.layout(ctx, "desk")
+    assert {:ok,
+            %{
+              revision: 0,
+              shipped_default: true,
+              arrangement: %{slots: [%{tincture: "tincture:local.vault", size: :icon}]}
+            }} = Desktop.layout(ctx, "desk")
 
     assert {:ok, %{revision: 1}} = Desktop.edit(ctx, document(@slots), 0)
 

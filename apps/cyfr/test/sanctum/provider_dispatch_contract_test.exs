@@ -45,7 +45,17 @@ defmodule Sanctum.ProviderDispatchContractTest do
     "key" => ["create", "get", "list", "revoke", "rotate"],
     "tincture_visibility" => ["get"],
     "webhook" => ["create", "list", "get", "update", "revoke", "rotate"],
-    "vault" => ["list", "create", "rename", "rotate", "rebind", "authorize", "revoke", "delete"],
+    "vault" => [
+      "list",
+      "status",
+      "create",
+      "rename",
+      "rotate",
+      "rebind",
+      "authorize",
+      "revoke",
+      "delete"
+    ],
     "profile" => ["plan", "preview", "commit", "grant", "publish", "list", "revoke"]
   }
 
@@ -59,7 +69,7 @@ defmodule Sanctum.ProviderDispatchContractTest do
     "tincture_visibility" => "Invalid tincture_visibility action. Use: get",
     "webhook" => "Invalid webhook action. Use: create, list, get, update, revoke, or rotate",
     "vault" =>
-      "Invalid vault action. Use: list, create, rename, rotate, rebind, authorize, revoke, or delete",
+      "Invalid vault action. Use: list, status, create, rename, rotate, rebind, authorize, revoke, or delete",
     "profile" =>
       "Invalid profile action. Use: plan, preview, commit, grant, publish, list, or revoke"
   }

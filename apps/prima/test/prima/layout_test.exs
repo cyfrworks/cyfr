@@ -95,10 +95,16 @@ defmodule Prima.LayoutTest do
       assert :error = Layout.posture(layout, "wall")
     end
 
-    test "the default runs the shipped desktop in every posture and is itself valid" do
+    test "the default runs the shipped desktop in every posture, with the vault as an icon, and is itself valid" do
       default = Layout.default()
       assert Enum.sort(Map.keys(default.postures)) == Layout.postures()
-      assert Layout.tinctures(default) == ["tincture:local.desktop"]
+      assert Layout.tinctures(default) == ["tincture:local.desktop", "tincture:local.vault"]
+
+      for name <- Layout.postures() do
+        assert {:ok, %{slots: [%{tincture: "tincture:local.vault", size: :icon}], floating: []}} =
+                 Layout.posture(default, name)
+      end
+
       assert {:ok, ^default} = Layout.validate(Layout.to_json(default))
     end
 

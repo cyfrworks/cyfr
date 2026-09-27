@@ -287,25 +287,29 @@ defmodule Sanctum.VaultTest do
   end
 
   describe "broadcasts" do
-    test "every mutation announces itself on the tenant vault topic", %{ctx: ctx} do
-      Cyfr.Bus.subscribe(
-        Sanctum.Context.actor(ctx),
-        Cyfr.Bus.vault_changed(Sanctum.Context.actor(ctx))
-      )
+    test "every mutation announces itself, naming the athanor it changed in", %{ctx: ctx} do
+      Cyfr.Bus.subscribe_global(Cyfr.Bus.vault_changed_global())
+      athanor_id = ctx.athanor_id
 
       view = create!(ctx)
-      assert_receive %Cyfr.Bus.VaultEntryChanged{kind: :create}
+      id = view.id
+
+      assert_receive %Cyfr.Bus.VaultEntryChanged{
+        kind: :create,
+        entry_id: ^id,
+        athanor_id: ^athanor_id
+      }
 
       {:ok, _} =
         Vault.rotate(ctx, %{id: view.id, fields: view_fields(ctx, view), expected_payload_rev: 0})
 
-      assert_receive %Cyfr.Bus.VaultEntryChanged{kind: :rotate}
+      assert_receive %Cyfr.Bus.VaultEntryChanged{kind: :rotate, entry_id: ^id}
 
       :ok = Vault.rename(ctx, view.id, "renamed")
-      assert_receive %Cyfr.Bus.VaultEntryChanged{kind: :rename}
+      assert_receive %Cyfr.Bus.VaultEntryChanged{kind: :rename, entry_id: ^id}
 
       {:ok, _} = Vault.revoke(ctx, view.id)
-      assert_receive %Cyfr.Bus.VaultEntryChanged{kind: :revoke}
+      assert_receive %Cyfr.Bus.VaultEntryChanged{kind: :revoke, entry_id: ^id}
     end
 
     test "every global signal names its entry, and a rename names the name it vacated too", %{

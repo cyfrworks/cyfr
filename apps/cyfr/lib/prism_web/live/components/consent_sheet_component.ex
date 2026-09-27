@@ -184,11 +184,12 @@ defmodule PrismWeb.ConsentSheetComponent do
         <section :if={warnings(@plan) != []} class="consent-sheet__warnings">
           <p :for={warning <- warnings(@plan)}>{warning}</p>
           <p :if={assigns[:athanor_route]}>
+            Add a vault entry with the Vault on
             <.link
-              navigate={PrismWeb.Focus.path(@athanor_route, "/vault")}
+              navigate={PrismWeb.Focus.path(@athanor_route, "/tinctures")}
               class="consent-sheet__link"
             >
-              Add a vault entry
+              your desktop
             </.link>
             first, then come back here.
           </p>

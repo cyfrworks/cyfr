@@ -530,15 +530,6 @@
         },
         %{
           verb: "GET",
-          path: "/a/:athanor/vault",
-          plug: "Phoenix.LiveView.Plug",
-          plug_opts: ":index",
-          auth: "browser_authenticated",
-          live_view: "PrismWeb.VaultLive",
-          pipe_through: ["browser"]
-        },
-        %{
-          verb: "GET",
           path: "/a/:athanor/webhooks",
           plug: "Phoenix.LiveView.Plug",
           plug_opts: ":index",

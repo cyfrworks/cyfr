@@ -125,6 +125,35 @@ defmodule Compendium.TinctureTest do
       declared = %{"tincture" => %{"frame" => %{"capabilities" => ["fullscreen", "gamepad"]}}}
       assert {:ok, 1} = Tincture.check_version(declared, [{"index.html", 1}])
     end
+
+    test "holds the declared streams to the providers' declarations" do
+      streams = fn streams -> %{"tincture" => %{"streams" => streams}} end
+      files = [{"index.html", 1}]
+
+      assert {:ok, 1} =
+               Tincture.check_version(
+                 streams.([%{"name" => "cards.refreshed"}, %{"name" => "mcp_servers.changes"}]),
+                 files
+               )
+
+      # A stream no provider offers.
+      assert {:error, message} =
+               Tincture.check_version(streams.([%{"name" => "vault.changes"}]), files)
+
+      assert message =~ "vault.changes, which no provider declares"
+
+      # A subject the stream does not take: none for a stream bound to its
+      # holder, none for a stream that takes no subject.
+      for {name, subject} <- [{"cards.refreshed", "usr_someone"}, {"mcp_servers.changes", "x"}] do
+        assert {:error, message} =
+                 Tincture.check_version(
+                   streams.([%{"name" => name, "subject" => subject}]),
+                   files
+                 )
+
+        assert message =~ "#{name}: the stream does not take that subject"
+      end
+    end
   end
 
   describe "the connect-domain grammar" do

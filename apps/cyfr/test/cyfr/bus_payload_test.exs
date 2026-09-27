@@ -116,12 +116,9 @@ defmodule Cyfr.BusPayloadTest do
         |> Enum.filter(fn {_struct, rows} -> length(rows) > 1 end)
         |> Map.new(fn {struct, rows} -> {struct, rows |> Enum.map(& &1.scope) |> Enum.sort()} end)
 
-      # The two announcements that are one fact said twice: to the athanor,
-      # and to the server-wide reader that cannot know every athanor.
-      assert shared == %{
-               Notify => [:global, :tenant],
-               VaultEntryChanged => [:global, :tenant]
-             }
+      # The announcement that is one fact said twice: to the athanor, and
+      # to the server-wide reader that cannot know every athanor.
+      assert shared == %{Notify => [:global, :tenant]}
 
       keys = Enum.map(Bus.topics(), & &1.key)
       assert length(Enum.uniq(keys)) == length(keys)

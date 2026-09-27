@@ -177,17 +177,17 @@ defmodule Grimoire.VisibilityTest do
   describe "consent-class actions" do
     test "an OIDC session sees the whole vault and profile surface" do
       ctx = ctx_with([], :oidc)
-      assert length(visible_actions("vault", ctx)) == 8
+      assert length(visible_actions("vault", ctx)) == 9
       assert length(visible_actions("profile", ctx)) == 7
     end
 
-    test "an API key sees only the staging arms — whatever its permissions" do
+    test "an API key sees only the staging arms and the consent-free status — whatever its permissions" do
       # An :admin key being shown vault.rotate and refused on call was the
       # drift this derivation exists to prevent: Authz admits surfaces by
       # auth_method, so :* does not short-circuit consent visibility.
       for perms <- [[], [:admin], [:*]] do
         ctx = ctx_with(perms, :api_key)
-        assert visible_actions("vault", ctx) == ["list"]
+        assert visible_actions("vault", ctx) == ["list", "status"]
 
         profile = visible_actions("profile", ctx)
         assert "plan" in profile

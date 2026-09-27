@@ -76,7 +76,9 @@ defmodule Arca.VaultStorage do
           status: String.t(),
           payload_rev: non_neg_integer(),
           sealed_payload: binary() | nil,
-          last_used_at: DateTime.t() | nil
+          last_used_at: DateTime.t() | nil,
+          inserted_at: DateTime.t() | nil,
+          updated_at: DateTime.t() | nil
         }
 
   @typedoc "The binding move and the profiles it blocks, or nothing to move."
@@ -415,7 +417,9 @@ defmodule Arca.VaultStorage do
       status: row.status,
       payload_rev: row.payload_rev,
       sealed_payload: row.sealed_payload,
-      last_used_at: row.last_used_at
+      last_used_at: row.last_used_at,
+      inserted_at: row.inserted_at,
+      updated_at: row.updated_at
     }
   end
 
