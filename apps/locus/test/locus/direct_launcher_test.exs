@@ -79,8 +79,12 @@ defmodule Locus.DirectLauncherTest do
   end
 
   test "the command sees the environment it was given and the launcher's own, and nothing of this node's" do
-    System.put_env("LOCUS_DL_SECRET", "of this node's")
-    on_exit(fn -> System.delete_env("LOCUS_DL_SECRET") end)
+    # A variable of this node's that a child must not see. Its name stays
+    # outside the `LOCUS_` family: `Locus.Config` refuses an unknown
+    # variable of that family, and its tests read the environment beside
+    # this one.
+    System.put_env("DL_NODE_SECRET", "of this node's")
+    on_exit(fn -> System.delete_env("DL_NODE_SECRET") end)
 
     assert {:ok, %{exit: {:status, 0}, stdout: env}} = run("env", env: %{"GIVEN" => "yes"})
 
@@ -89,7 +93,7 @@ defmodule Locus.DirectLauncherTest do
     assert Enum.sort(names -- ~w(PWD SHLVL _ OLDPWD)) ==
              Enum.sort(~w(COPYFILE_DISABLE GIVEN HOME LOGNAME PATH TMPDIR USER))
 
-    refute env =~ "LOCUS_DL_SECRET"
+    refute env =~ "DL_NODE_SECRET"
   end
 
   test "its home is its own and is gone when it ends" do

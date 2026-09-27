@@ -183,13 +183,25 @@ for ((i=1; i<=PARTITIONS; i++)); do
   pids[${#pids[@]}]=$!
 done
 status=0
-for pid in "${pids[@]}"; do wait "$pid" || status=1; done
+exits=()
+for pid in "${pids[@]}"; do
+  if wait "$pid"; then exits[${#exits[@]}]=0; else exits[${#exits[@]}]=$?; status=1; fi
+done
 for ((i=1; i<=PARTITIONS; i++)); do
   printf '==> partition %s/%s\n' "$i" "$PARTITIONS"
   grep -E '^(Finished in|Result:|[[:space:]]+[0-9]+\) test)' "$out_dir/p$i.log" | head -20 || :
   if ! grep -q '^Result:' "$out_dir/p$i.log"; then
     echo '    NO RESULT — partition did not report'
     status=1
+  fi
+  # A partition that ended non-zero says why here, since its log stays on
+  # the machine that ran it: every line of its last hundred that is not a
+  # progress dot, a result or a routine log line.
+  if [ "${exits[$((i-1))]}" != 0 ]; then
+    printf '    partition exited %s; its account:\n' "${exits[$((i-1))]}"
+    tail -n 100 "$out_dir/p$i.log" \
+      | grep -vE '^[[:space:]]*$|^\.+$|^Result:|^Finished in|\[(info|debug)\]' \
+      | tail -n 40 | sed 's/^/    | /' || :
   fi
 done
 echo "==> $PARTITIONS partitions, $ADAPTER, $((SECONDS - start))s wall, exit $status"
