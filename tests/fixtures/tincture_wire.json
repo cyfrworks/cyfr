@@ -195,12 +195,14 @@
       }
     },
     {
-      "verb": "focus",
+      "verb": "credential",
       "message": {
         "v": 1,
-        "verb": "focus",
+        "verb": "credential",
         "frame": "frm_01a09fee2e4f",
-        "args": {}
+        "args": {
+          "name": "weather-api"
+        }
       }
     }
   ]

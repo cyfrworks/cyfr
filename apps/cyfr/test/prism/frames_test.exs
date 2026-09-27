@@ -46,7 +46,8 @@ defmodule Prism.FramesTest do
         bearer: "bearer-" <> id,
         placement: placement,
         visible: true,
-        background: false
+        background: false,
+        actions: []
       },
       Map.new(fields)
     )
@@ -263,8 +264,47 @@ defmodule Prism.FramesTest do
       assert Frames.refusal({:undeclared_capability, ["camera"]}) == :undeclared
       assert Frames.refusal({:invalid_tincture, "no"}) == :undeclared
       assert Frames.refusal(:unregistered) == :unregistered
+      assert Frames.refusal(:ungranted) == :ungranted
+      assert Frames.refusal(:not_a_desktop) == :undeclared
       assert Frames.refusal(:revoked) == :refused
       assert Frames.refusal(:expired) == :refused
+    end
+  end
+
+  describe "the desktop" do
+    test "is held under its own key, shown with no full frame active and frozen under one" do
+      desktop = frame(:desktop, "iframe_desk")
+      slot = frame({:slot, "s1"}, "iframe_notes")
+      full = frame(:full, "iframe_app")
+      assert desktop.key == {:desktop, "iframe_desk"}
+
+      t = held([desktop, slot, full]) |> Frames.visibility()
+      assert Frames.desktop(t).visible
+      refute {:freeze, {:desktop, "iframe_desk"}} in Frames.plan(t)
+
+      t = t |> Frames.activate(full.key) |> Frames.visibility()
+      refute Frames.desktop(t).visible
+      assert {:freeze, {:desktop, "iframe_desk"}} in Frames.plan(t)
+    end
+
+    test "is none when no desktop is held" do
+      assert Frames.desktop(held([frame(:full, "iframe_app")])) == nil
+    end
+
+    test "a tincture is a desktop only when its declaration says so" do
+      assert Frames.desktop?(card("desk", %{"placement" => "desktop"}))
+      refute Frames.desktop?(card("float", %{"placement" => "float"}))
+      refute Frames.desktop?(card("plain"))
+      refute Frames.desktop?(%{manifest: nil})
+    end
+  end
+
+  describe "declared actions" do
+    test "a frame declares only the actions its version listed" do
+      keeper = frame(:full, "iframe_keeper", actions: ["vault.create", "vault.status"])
+      assert Frames.declares?(keeper, "vault.create")
+      refute Frames.declares?(frame(:full, "iframe_x", actions: []), "vault.create")
+      refute Frames.declares?(%{}, "vault.create")
     end
   end
 end

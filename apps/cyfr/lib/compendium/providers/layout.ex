@@ -12,7 +12,9 @@ defmodule Compendium.Providers.Layout do
     * `edit` takes a whole document and the revision `get` answered, holds
       it to the layout's shape and publishes it fenced (`Arca.Layouts`): a
       document published since the revision was read refuses the edit, and
-      nothing is merged.
+      nothing is merged. Once the publish commits it is announced on the
+      person's own topic (`Cyfr.Bus.layouts/2`, `Cyfr.Bus.LayoutPublished`),
+      so every shell the person has open reads the layout again.
 
   A layout can only arrange: the shape names tinctures, sizes and places
   and nothing else, so an edit never references an operation or a stream
@@ -119,6 +121,7 @@ defmodule Compendium.Providers.Layout do
          {:ok, layout} <- document(Map.get(args, "document")) do
       case Arca.Layouts.publish(Context.actor(ctx), person, layout, revision) do
         {:ok, published} ->
+          announce(ctx, person, published)
           {:ok, %{revision: published, digest: Prima.Layout.digest(layout)}}
 
         {:error, reason} ->
@@ -188,6 +191,24 @@ defmodule Compendium.Providers.Layout do
   # ---------------------------------------------------------------------------
   # Internals
   # ---------------------------------------------------------------------------
+
+  # The publish committed: the person's open shells read their layout
+  # again. A broadcast that does not go out leaves the edit made; a shell
+  # reads the layout again on its next posture or reconnect.
+  defp announce(ctx, person, revision) do
+    actor = Context.actor(ctx)
+    payload = Cyfr.Bus.LayoutPublished.new(actor, person, revision)
+
+    case Cyfr.Bus.broadcast(actor, Cyfr.Bus.layouts(actor, person), payload) do
+      :ok ->
+        :ok
+
+      {:error, reason} ->
+        Logger.warning(
+          "[Compendium.Providers.Layout] a published layout was not announced: #{inspect(reason)}"
+        )
+    end
+  end
 
   # A layout is a person's: a context that names no person (the server's
   # own principals) has none to read or arrange.

@@ -49,6 +49,7 @@ defmodule Cyfr.Bus do
     Components,
     Execution,
     ExecutionEvent,
+    LayoutPublished,
     McpServers,
     Membership,
     Notify,
@@ -258,6 +259,18 @@ defmodule Cyfr.Bus do
       reason:
         "one person's placed cards refreshed, on that person's own topic, so a refresh " <>
           "reaches no other member's grant"
+    },
+    %{
+      key: :layouts,
+      scope: :tenant,
+      struct: LayoutPublished,
+      match: {:prefix, "bus:layouts:"},
+      template: "tenant:<athanor_id>:bus:layouts:<user_id>",
+      producers: ["Compendium.Providers.Layout"],
+      consumers: ["PrismWeb.ShellLive"],
+      reason:
+        "one person's layout was published, on that person's own topic, so their open " <>
+          "shells read it again and no other member's hear it"
     },
     %{
       key: :thread,
@@ -582,6 +595,14 @@ defmodule Cyfr.Bus do
   @spec cards(Actor.t(), String.t()) :: String.t()
   def cards(actor, user_id) when is_binary(user_id) and user_id != "",
     do: prefix(actor) <> "bus:cards:" <> user_id
+
+  @doc """
+  One person's layout (`Cyfr.Bus.LayoutPublished`): `user_id` is the
+  person whose layout was published, and only that person's shells hear it.
+  """
+  @spec layouts(Actor.t(), String.t()) :: String.t()
+  def layouts(actor, user_id) when is_binary(user_id) and user_id != "",
+    do: prefix(actor) <> "bus:layouts:" <> user_id
 
   @doc "One thread's live events (`Cyfr.Bus.ThreadEvent`)."
   @spec thread(Actor.t(), String.t()) :: String.t()

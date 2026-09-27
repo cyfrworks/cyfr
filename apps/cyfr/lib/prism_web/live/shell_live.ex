@@ -5,14 +5,45 @@ defmodule PrismWeb.ShellLive do
   use PrismWeb, :live_view
 
   @moduledoc """
-  The Prism shell: the tincture picker, the canvas and the system layer.
+  The Prism shell: the desktop, the canvas, the system layer and, when no
+  desktop runs, the tincture picker.
+
+  ## The desktop
+
+  The shell opens the desktop tincture the person's layout names for the
+  posture (`tincture:local.desktop` when they never arranged one) as a
+  frame placed `:desktop`, under every slot and floating frame and filling
+  the canvas, through `Prism.Frames` like any frame. A layout published
+  anywhere for this person (`Cyfr.Bus.LayoutPublished` on their own
+  topic) is read again, and the frames follow it.
+
+  A desktop that has not sent `ready` within ten seconds of taking its
+  credential, one whose frame is refused at open, and the person's own
+  ask — the shell's `Safe mode` button or Ctrl+Alt+S on the shell's page,
+  never a frame's message — enter safe mode: every frame is discarded
+  with its credential, the system layer shows the safe mode prompt
+  (`Prism.SafeMode`), and the picker is drawn. The prompt's confirmation
+  leaves safe mode and opens the desktop from the layout as it then
+  stands. The assistant's panel is not the shell's and is untouched.
 
   The picker is preview-first: a large 16:9 preview stage with vertical
   capsule navigation, a compact info bar and keyboard navigation (←/→
-  tinctures, ↑/↓ previews, Enter launches). Launching a tincture opens its
-  frame as the active full frame above everything the canvas draws;
+  tinctures, ↑/↓ previews, Enter launches). It is drawn in safe mode and
+  when the layout's desktop is not installed. Launching a tincture opens
+  its frame as the active full frame above everything the canvas draws;
   closing it, from inside the tincture or through its capsule, shows the
-  next open one or returns to the picker.
+  next open one or returns to the desktop.
+
+  ## Prompts
+
+  A frame never asks for a secret. Its `credential` verb, honoured only
+  for a live, visible frame whose version declares `vault.create`, sends
+  the system layer a credential-entry prompt; when the prompt closes the
+  frame is told, through `frame_credential` and its bridge, whether an
+  entry was saved and nothing else. A frame refused because the person
+  has not granted what its tincture declares now is offered the grant
+  prompt, built from the consent walk's own plan and preview, and opened
+  again once it is confirmed.
 
   ## Frames
 
@@ -30,7 +61,8 @@ defmodule PrismWeb.ShellLive do
   under that bearer; the port carries the shell verbs of
   `Prima.TinctureWire`, which reach this view as `frame_verb`. A message
   that does not decode, that names a frame this view does not hold live,
-  or that would raise a hidden frame, is dropped and counted. When a
+  or that asks for what its frame may not, is dropped and counted; no
+  verb places, sizes or raises a frame. When a
   frame freezes or goes live again the view pushes `frame_state`, which
   the canvas hook relays to the frame's bridge.
 
@@ -43,7 +75,12 @@ defmodule PrismWeb.ShellLive do
   require Logger
 
   alias Prism.Frames
+  alias Prism.SafeMode
   alias Sanctum.TinctureAuth
+
+  # How long a desktop has, from its handshake, to send `ready` before the
+  # shell enters safe mode.
+  @desktop_ready_ms 10_000
 
   # ============================================================================
   # Mount
@@ -57,6 +94,12 @@ defmodule PrismWeb.ShellLive do
       |> assign(:active_nav, "tinctures")
       |> assign(:frames, Frames.new())
       |> assign(:arrangement, nil)
+      |> assign(:desktop, :pending)
+      |> assign(:desktop_ready, nil)
+      |> assign(:safe_mode, nil)
+      |> assign(:credential_prompts, %{})
+      |> assign(:grant_prompts, %{})
+      |> assign(:prompt_seq, 0)
       |> assign(:tinctures, [])
       |> assign(:focused_index, 0)
       |> assign(:current_preview_index, 0)
@@ -64,12 +107,16 @@ defmodule PrismWeb.ShellLive do
     socket =
       if connected?(socket) do
         # Subscribe to archive notifications so the shell stops using
-        # a context whose athanor is no longer active.
+        # a context whose athanor is no longer active, and to the person's
+        # own layout topic so a layout published anywhere is read again.
         ctx = socket.assigns.context
 
         if ctx.athanor_id do
           actor = Sanctum.Context.actor(ctx)
           Cyfr.Bus.subscribe(actor, Cyfr.Bus.notify(actor))
+
+          if Prima.PersonId.person?(ctx.user_id),
+            do: Cyfr.Bus.subscribe(actor, Cyfr.Bus.layouts(actor, ctx.user_id))
         end
 
         load_tinctures(socket)
@@ -125,8 +172,12 @@ defmodule PrismWeb.ShellLive do
     {:noreply, cycle_preview(socket, -1)}
   end
 
+  # A key typed into a prompt the shell opened is the prompt's: it moves
+  # no picker and closes no frame.
   def handle_event("keynav", %{"key" => key}, socket) do
-    {:noreply, handle_keynav(socket, key)}
+    if prompting?(socket.assigns),
+      do: {:noreply, socket},
+      else: {:noreply, handle_keynav(socket, key)}
   end
 
   def handle_event("close_active_tincture", _params, socket) do
@@ -256,8 +307,12 @@ defmodule PrismWeb.ShellLive do
   # frame, another script on the page — is answered with nothing.
   def handle_event("frame_handshake", %{"frame" => frame_id}, socket) do
     case Frames.hand_over(socket.assigns.frames, frame_id) do
-      {:ok, bearer, frames} -> {:reply, %{credential: bearer}, assign(socket, :frames, frames)}
-      :error -> {:reply, %{error: "no_credential"}, socket}
+      {:ok, bearer, frames} ->
+        arm_desktop_deadline(frames, frame_id)
+        {:reply, %{credential: bearer}, assign(socket, :frames, frames)}
+
+      :error ->
+        {:reply, %{error: "no_credential"}, socket}
     end
   end
 
@@ -278,6 +333,11 @@ defmodule PrismWeb.ShellLive do
 
   def handle_event("frame_verb", _params, socket), do: {:noreply, drop_message(socket)}
 
+  # The person asked for safe mode through the shell's own chrome: its
+  # button, or the chord the canvas hook hears on the shell's page.
+  def handle_event("safe_mode", _params, socket),
+    do: {:noreply, enter_safe_mode(socket, :requested)}
+
   # ============================================================================
   # Tracking + loading
   # ============================================================================
@@ -292,7 +352,7 @@ defmodule PrismWeb.ShellLive do
   defp handle_keynav(socket, "ArrowDown"), do: cycle_preview(socket, +1)
 
   defp handle_keynav(socket, "Enter") do
-    if Frames.active(socket.assigns.frames) do
+    if not picker?(socket.assigns) do
       socket
     else
       case Enum.at(socket.assigns.tinctures, socket.assigns.focused_index) do
@@ -334,6 +394,9 @@ defmodule PrismWeb.ShellLive do
     end
   end
 
+  # No tincture runs while safe mode is on.
+  defp launch_tincture(%{assigns: %{safe_mode: %{}}} = socket, _tincture_id), do: socket
+
   defp launch_tincture(socket, tincture_id) do
     case Enum.find(socket.assigns.tinctures, &(&1.id == tincture_id)) do
       nil -> socket
@@ -350,16 +413,25 @@ defmodule PrismWeb.ShellLive do
 
   # Every change to the frames goes through here, so each frame whose
   # state moved between live and frozen is signalled after the credential
-  # transition that moved it.
+  # transition that moved it, and each frame newly refused for want of a
+  # grant is offered the grant prompt.
   defp frames(socket, fun) do
     before = socket.assigns.frames
     later = fun.(before)
 
-    Enum.reduce(
-      Frames.signals(before, later),
-      assign(socket, :frames, later),
-      &push_event(&2, "frame_state", &1)
-    )
+    socket =
+      Enum.reduce(
+        Frames.signals(before, later),
+        assign(socket, :frames, later),
+        &push_event(&2, "frame_state", &1)
+      )
+
+    ungranted =
+      for %{state: :refused, refusal: :ungranted, id: id} = frame <- Frames.list(later),
+          not match?(%{id: ^id}, Frames.get(before, frame.key)),
+          do: frame
+
+    Enum.reduce(ungranted, socket, &offer_grant(&2, &1))
   end
 
   # ============================================================================
@@ -369,11 +441,38 @@ defmodule PrismWeb.ShellLive do
   defp shell_verb(socket, %{key: key}, %{verb: :close}),
     do: frames(socket, &Frames.discard(socket.assigns.context, &1, key))
 
-  # A frame never raises itself: `focus` from a frame already shown asks
-  # for nothing, and from a hidden one it is dropped.
-  defp shell_verb(socket, %{visible: true}, %{verb: :focus}), do: socket
-  defp shell_verb(socket, _frame, %{verb: :focus}), do: drop_message(socket)
+  # The desktop's `ready` is what keeps the shell out of safe mode; any
+  # other frame's asks for nothing.
+  defp shell_verb(socket, %{placement: :desktop, id: id}, %{verb: :ready}),
+    do: assign(socket, :desktop_ready, id)
+
   defp shell_verb(socket, _frame, %{verb: :ready}), do: socket
+
+  # A secret is typed into the shell's own prompt, never into a frame, and
+  # only for a frame the person can see whose version declares the vault
+  # write the prompt makes. One prompt per frame at a time.
+  defp shell_verb(socket, %{id: id, visible: true} = frame, %{
+         verb: :credential,
+         args: %{"name" => name}
+       }) do
+    if Frames.declares?(frame, "vault.create") and
+         not Enum.any?(socket.assigns.credential_prompts, &match?({_, ^id}, &1)) do
+      {prompt_id, socket} = next_prompt_id(socket, "credential")
+
+      show_prompt(%{
+        id: prompt_id,
+        kind: :credential_entry,
+        action: :credential_entry,
+        subject: %{name: name}
+      })
+
+      update(socket, :credential_prompts, &Map.put(&1, prompt_id, id))
+    else
+      drop_message(socket)
+    end
+  end
+
+  defp shell_verb(socket, _frame, %{verb: :credential}), do: drop_message(socket)
 
   defp shell_verb(socket, %{tincture_id: tincture_id}, %{
          verb: :title,
@@ -407,6 +506,203 @@ defmodule PrismWeb.ShellLive do
   defp drop_message(socket) do
     Logger.debug("[ShellLive] frame message dropped")
     assign(socket, :frames, Frames.drop_message(socket.assigns.frames))
+  end
+
+  # ============================================================================
+  # The desktop and safe mode
+  # ============================================================================
+
+  # Hold the frames the arrangement places and the desktop it names. A
+  # desktop that is not installed holds none, and the picker is drawn; one
+  # whose frame is refused at open is safe mode.
+  defp place(%{assigns: %{safe_mode: %{}}} = socket), do: socket
+  defp place(%{assigns: %{arrangement: nil}} = socket), do: socket
+
+  defp place(socket) do
+    %{context: ctx, tinctures: cards, arrangement: arrangement} = socket.assigns
+
+    case Frames.resolve(arrangement.desktop, cards) do
+      nil ->
+        socket
+        |> frames(fn frames ->
+          frames = Frames.arrange(ctx, frames, arrangement, cards)
+
+          case Frames.desktop(frames) do
+            %{key: key} -> Frames.discard(ctx, frames, key)
+            nil -> frames
+          end
+        end)
+        |> assign(:desktop, :none)
+
+      card ->
+        socket =
+          socket
+          |> frames(fn frames ->
+            Frames.open_desktop(ctx, Frames.arrange(ctx, frames, arrangement, cards), card)
+          end)
+          |> assign(:desktop, card.id)
+
+        case Frames.desktop(socket.assigns.frames) do
+          %{state: :refused} -> enter_safe_mode(socket, :not_ready)
+          _held -> socket
+        end
+    end
+  end
+
+  # The deadline starts when the desktop takes its credential, the moment
+  # its page can first speak.
+  defp arm_desktop_deadline(frames, frame_id) do
+    case Frames.desktop(frames) do
+      %{id: ^frame_id} ->
+        Process.send_after(self(), {:desktop_deadline, frame_id}, @desktop_ready_ms)
+
+      _other ->
+        :ok
+    end
+  end
+
+  # Safe mode: every frame is discarded with its credential and the system
+  # layer offers the ways out; the picker is drawn meanwhile.
+  defp enter_safe_mode(%{assigns: %{safe_mode: %{}}} = socket, _reason), do: socket
+
+  defp enter_safe_mode(socket, reason) do
+    ctx = socket.assigns.context
+    {prompt_id, socket} = next_prompt_id(socket, "safe-mode")
+
+    show_prompt(%{
+      id: prompt_id,
+      kind: :safe_mode,
+      action: nil,
+      subject: SafeMode.enter(reason, layout_as_read(ctx))
+    })
+
+    socket
+    |> assign(:frames, Frames.clear(ctx, socket.assigns.frames))
+    |> assign(:safe_mode, %{id: prompt_id, reason: reason})
+    |> assign(:desktop_ready, nil)
+    |> assign(:credential_prompts, %{})
+    |> assign(:grant_prompts, %{})
+  end
+
+  # The layout safe mode is entered over: the document and revision read
+  # now. A layout that cannot be read is entered over the shipped default
+  # at revision 0, so the default is still offered; publishing it over a
+  # layout the person has is refused as stale, and nothing is merged.
+  defp layout_as_read(ctx) do
+    case Compendium.layout(ctx, hd(Prima.Layout.postures())) do
+      {:ok, layout} -> layout
+      {:error, _refusal} -> %{document: Prima.Layout.default(), revision: 0}
+    end
+  end
+
+  # The person chose: the desktop runs again from the layout as it stands.
+  defp leave_safe_mode(socket) do
+    send_update(PrismWeb.CanvasLive, id: "canvas", reload: true)
+    assign(socket, safe_mode: nil, desktop: :pending)
+  end
+
+  # ============================================================================
+  # System layer prompts
+  # ============================================================================
+
+  defp show_prompt(prompt),
+    do: send_update(PrismWeb.SystemLayer, id: "system-layer", prompt: prompt)
+
+  defp next_prompt_id(socket, kind) do
+    seq = socket.assigns.prompt_seq + 1
+    {"#{kind}-#{seq}", assign(socket, :prompt_seq, seq)}
+  end
+
+  # A frame refused because the person has not granted what its tincture
+  # declares now: the grant prompt, when the consent walk's plan and
+  # preview can be read for it. Otherwise the frame shows its refusal.
+  defp offer_grant(socket, %{key: key, tincture_id: tincture_id, reference: reference}) do
+    ref = Prima.ComponentRef.build("tincture", reference.publisher, reference.name)
+    decisions = %{"ref" => ref, "bindings" => []}
+
+    with {:ok, plan} <- PrismWeb.Ops.call_tool(socket, "profile/plan", %{"ref" => ref}),
+         {:ok, preview} <-
+           PrismWeb.Ops.call_tool(socket, "profile/preview", %{"decisions" => decisions}) do
+      {prompt_id, socket} = next_prompt_id(socket, "grant")
+
+      show_prompt(%{
+        id: prompt_id,
+        kind: :grant,
+        action: :grant,
+        subject: %{
+          ref: ref,
+          plan: %{
+            plan_token: plan.plan_token,
+            expected_consent_revision: plan.expected_consent_revision
+          },
+          preview: %{
+            summary: preview.summary,
+            proof: preview.proof,
+            commit_digest: preview.commit_digest
+          },
+          decisions: decisions
+        }
+      })
+
+      update(socket, :grant_prompts, &Map.put(&1, prompt_id, {key, tincture_id}))
+    else
+      _unavailable -> socket
+    end
+  end
+
+  # A grant confirmed: the refused frame is opened again where it was.
+  defp granted(socket, {key, tincture_id}) do
+    %{context: ctx} = socket.assigns
+    socket = frames(socket, &Frames.discard(ctx, &1, key))
+
+    case key do
+      {:full, _} -> launch_tincture(socket, tincture_id)
+      _placed -> place(socket)
+    end
+  end
+
+  defp prompt_outcome(socket, id, outcome) do
+    %{safe_mode: safe_mode, credential_prompts: credentials, grant_prompts: grants} =
+      socket.assigns
+
+    cond do
+      match?(%{id: ^id}, safe_mode) ->
+        if outcome == :confirmed, do: leave_safe_mode(socket), else: socket
+
+      Map.has_key?(credentials, id) ->
+        credential_closed(socket, id, Map.fetch!(credentials, id), outcome)
+
+      Map.has_key?(grants, id) ->
+        grant_closed(socket, id, Map.fetch!(grants, id), outcome)
+
+      true ->
+        socket
+    end
+  end
+
+  # The frame is told only that its prompt closed and whether an entry was
+  # saved. A refused confirmation leaves the prompt open for the person to
+  # try again or dismiss, so it closes nothing; one that was never drawn
+  # closes it unsaved.
+  defp credential_closed(socket, _id, _frame_id, {:refused, reason})
+       when reason != :invalid_prompt,
+       do: socket
+
+  defp credential_closed(socket, id, frame_id, outcome) do
+    socket = update(socket, :credential_prompts, &Map.delete(&1, id))
+
+    if Enum.any?(Frames.list(socket.assigns.frames), &(&1.id == frame_id)),
+      do:
+        push_event(socket, "frame_credential", %{frame: frame_id, saved: outcome == :confirmed}),
+      else: socket
+  end
+
+  defp grant_closed(socket, _id, _frame, {:refused, reason}) when reason != :invalid_prompt,
+    do: socket
+
+  defp grant_closed(socket, id, frame, outcome) do
+    socket = update(socket, :grant_prompts, &Map.delete(&1, id))
+    if outcome == :confirmed, do: granted(socket, frame), else: socket
   end
 
   defp load_tinctures(socket) do
@@ -458,12 +754,11 @@ defmodule PrismWeb.ShellLive do
   # its credential, and the layout's entries are placed again against the
   # new listing.
   defp follow_listing(socket) do
-    %{context: ctx, tinctures: cards, arrangement: arrangement} = socket.assigns
+    %{context: ctx, tinctures: cards} = socket.assigns
 
-    frames(socket, fn frames ->
-      frames = Frames.prune(ctx, frames, cards)
-      if arrangement, do: Frames.arrange(ctx, frames, arrangement, cards), else: frames
-    end)
+    socket
+    |> frames(&Frames.prune(ctx, &1, cards))
+    |> place()
   end
 
   # Public is an active public profile. A store that could not answer, or
@@ -482,6 +777,20 @@ defmodule PrismWeb.ShellLive do
         :unknown
     end
   end
+
+  # The picker is for when no desktop runs: safe mode, or a layout whose
+  # desktop is not installed or could not be read. It is under an active
+  # full frame like everything else.
+  defp picker?(%{frames: frames, safe_mode: safe_mode, desktop: desktop}) do
+    Frames.active(frames) == nil and (not is_nil(safe_mode) or desktop == :none)
+  end
+
+  defp prompting?(%{
+         safe_mode: safe_mode,
+         credential_prompts: credentials,
+         grant_prompts: grants
+       }),
+       do: not is_nil(safe_mode) or credentials != %{} or grants != %{}
 
   defp visibility_label(true), do: "public"
   defp visibility_label(false), do: "private"
@@ -572,15 +881,52 @@ defmodule PrismWeb.ShellLive do
   end
 
   # The canvas read the layout for the posture the client reported: hold
-  # exactly the frames it places.
+  # exactly the frames it places, and the desktop it names.
   def handle_info({PrismWeb.CanvasLive, :arrangement, arrangement}, socket) do
-    %{context: ctx, tinctures: cards} = socket.assigns
-
-    {:noreply,
-     socket
-     |> assign(:arrangement, arrangement)
-     |> frames(&Frames.arrange(ctx, &1, arrangement, cards))}
+    {:noreply, socket |> assign(:arrangement, arrangement) |> place()}
   end
+
+  # The layout could not be read: no desktop is known, so the picker is
+  # drawn until a read succeeds.
+  def handle_info({PrismWeb.CanvasLive, :layout_unavailable}, socket) do
+    if socket.assigns.desktop == :pending,
+      do: {:noreply, assign(socket, :desktop, :none)},
+      else: {:noreply, socket}
+  end
+
+  # The person's layout was published — by their desktop, the assistant or
+  # safe mode's choice, in this session or another: read it again.
+  def handle_info(%Cyfr.Bus.LayoutPublished{user_id: user_id}, socket) do
+    if user_id == socket.assigns.context.user_id,
+      do: send_update(PrismWeb.CanvasLive, id: "canvas", reload: true)
+
+    {:noreply, socket}
+  end
+
+  # The desktop took its credential this long ago. Without its `ready` the
+  # shell enters safe mode; a desktop hidden meanwhile, whose bridge holds
+  # its verbs, has the time again once it is shown.
+  def handle_info({:desktop_deadline, frame_id}, socket) do
+    %{frames: frames, desktop_ready: ready, safe_mode: safe_mode} = socket.assigns
+
+    case Frames.desktop(frames) do
+      %{id: ^frame_id} when ready == frame_id or not is_nil(safe_mode) ->
+        {:noreply, socket}
+
+      %{id: ^frame_id, state: :frozen} ->
+        Process.send_after(self(), {:desktop_deadline, frame_id}, @desktop_ready_ms)
+        {:noreply, socket}
+
+      %{id: ^frame_id} ->
+        {:noreply, enter_safe_mode(socket, :not_ready)}
+
+      _another_or_none ->
+        {:noreply, socket}
+    end
+  end
+
+  def handle_info({:system_layer, id, outcome}, socket) when is_binary(id),
+    do: {:noreply, prompt_outcome(socket, id, outcome)}
 
   def handle_info(:tinctures_refreshed, socket) do
     {:noreply,
@@ -642,9 +988,11 @@ defmodule PrismWeb.ShellLive do
       class="h-full relative bg-surface-base"
       phx-window-keydown="keynav"
     >
-      <%!-- Picker (visible when no tincture is active) --%>
+      <%!-- Picker: drawn in safe mode, or when no desktop runs, while no
+           tincture is active --%>
       <div
-        :if={Frames.active(@frames) == nil}
+        :if={picker?(assigns)}
+        id="shell-picker"
         class="absolute inset-0 z-10 flex h-full flex-col"
       >
         <%= if @tinctures == [] do %>
@@ -690,7 +1038,21 @@ defmodule PrismWeb.ShellLive do
         context={@context}
         frames={@frames}
         tinctures={@tinctures}
+        safe_mode={not is_nil(@safe_mode)}
       />
+
+      <%!-- The shell's own chrome: no frame draws it or reaches it. --%>
+      <button
+        id="shell-safe-mode"
+        type="button"
+        phx-click="safe_mode"
+        disabled={not is_nil(@safe_mode)}
+        aria-keyshortcuts="Control+Alt+S"
+        title="Safe mode (Ctrl+Alt+S)"
+        class="absolute bottom-2 left-2 z-[55] rounded-md bg-black/60 px-2 py-1 text-[11px] text-white/80 hover:text-white focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-300 disabled:opacity-50"
+      >
+        Safe mode
+      </button>
 
       <.live_component module={PrismWeb.SystemLayer} id="system-layer" context={@context} />
 

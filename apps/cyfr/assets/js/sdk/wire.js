@@ -21,7 +21,7 @@ export const ROUTES = Object.freeze({
   stream_open: "/_f/v1/stream"
 })
 
-export const VERBS = Object.freeze(["open", "close", "title", "ready", "focus"])
+export const VERBS = Object.freeze(["open", "close", "title", "ready", "credential"])
 
 // Shell to frame, over `window.postMessage` with the port transferred: the
 // frame id, and nothing else.
@@ -29,6 +29,26 @@ export const HANDSHAKE = "cyfr:handshake"
 
 // Shell to frame, over the port only: the frame credential.
 export const CREDENTIAL = "cyfr:credential"
+
+// Shell to frame, over the port only: the credential prompt the frame's
+// `credential` verb asked for closed, and whether an entry was saved
+// (`saved`, a boolean). Nothing else of the prompt reaches the frame: not
+// the value, not why it was not saved.
+export const CREDENTIAL_CLOSED = "cyfr:credential-closed"
+
+// The message the bridge posts for a closed prompt.
+export function credentialClosed(frame, saved) {
+  return {v: VERSION, type: CREDENTIAL_CLOSED, frame, saved: saved === true}
+}
+
+// A closed-prompt message read back: `{ok: true, saved}` for this frame's,
+// `{ok: false}` for anything else.
+export function decodeCredentialClosed(data, frame) {
+  if (!isObject(data) || data.v !== VERSION || data.type !== CREDENTIAL_CLOSED) return {ok: false}
+  if (!only(data, ["v", "type", "frame", "saved"]) || data.frame !== frame) return {ok: false}
+  if (typeof data.saved !== "boolean") return {ok: false}
+  return {ok: true, saved: data.saved}
+}
 
 const FRAME_ID = /^[A-Za-z0-9_-]{8,64}$/
 const TINCTURE_REF = /^(t|tincture):\S+$/
@@ -255,6 +275,10 @@ function argsError(verb, args) {
         Array.from(args.title).length <= MAX_TITLE
         ? null
         : "title names a title"
+    case "credential":
+      return keys.length === 1 && typeof args.name === "string" && args.name !== ""
+        ? null
+        : "credential names a vault entry"
     default:
       return keys.length === 0 ? null : verb + " takes no arguments"
   }

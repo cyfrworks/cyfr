@@ -8,22 +8,27 @@ defmodule PrismWeb.CanvasLive do
   placement puts it.
 
   It reads the layout through `Compendium.layout/2` and draws the
-  posture's arrangement (`Prima.Layout`): the slots in order with their
-  size classes, the floating layers above them, and the active `:full`
-  frame above those. A `full` slot is its tincture's own frame; `icon` and
-  `card` slots are tiles that launch their tincture. An entry naming a
+  posture's arrangement (`Prima.Layout`): the desktop frame filling the
+  canvas at the bottom, the slots in order with their size classes above
+  it, the floating layers above them, and the active `:full` frame above
+  those. A `full` slot is its tincture's own frame. While a desktop frame
+  is held the desktop draws the `icon` and `card` slots itself; without
+  one they are tiles that launch their tincture. An entry naming a
   tincture that is not installed draws a placeholder and opens nothing.
+  In safe mode (`safe_mode`) nothing of the layout is drawn.
 
   The posture is the client's: the `Canvas` hook (`assets/js/canvas/`)
   reports `hand` or `desk` as the event `posture`, and any other value is
   ignored. Before the first report the canvas draws `desk`. Each
   arrangement read is sent to the shell as
   `{PrismWeb.CanvasLive, :arrangement, arrangement}`, and the shell opens
-  and discards frames for it (`Prism.Frames.arrange/4`); the canvas
-  itself opens no frame and holds no credential.
+  and discards frames for it (`Prism.Frames.arrange/4`); a read that
+  fails is sent as `{PrismWeb.CanvasLive, :layout_unavailable}`. The
+  canvas itself opens no frame and holds no credential. An update with
+  `reload: true` reads the layout again.
 
-  Assigns: `context`, `frames` (the shell's `Prism.Frames`) and
-  `tinctures` (the shell's tincture cards).
+  Assigns: `context`, `frames` (the shell's `Prism.Frames`), `tinctures`
+  (the shell's tincture cards) and `safe_mode`.
 
   The hook computes the slots' geometry from the slot list rendered in
   `data-slots`, relays the shell's `frame_state` signals to each frame's
@@ -48,11 +53,16 @@ defmodule PrismWeb.CanvasLive do
        arrangement: nil,
        layout_unavailable: false,
        frames: Frames.new(),
-       tinctures: []
+       tinctures: [],
+       safe_mode: false
      )}
   end
 
   @impl true
+  def update(%{reload: true} = assigns, socket) do
+    update(Map.delete(assigns, :reload), assign(socket, :loaded, nil))
+  end
+
   def update(assigns, socket) do
     socket = assign(socket, assigns)
 
@@ -89,6 +99,7 @@ defmodule PrismWeb.CanvasLive do
         assign(socket, arrangement: arrangement, loaded: posture, layout_unavailable: false)
 
       {:error, _refusal} ->
+        send(self(), {__MODULE__, :layout_unavailable})
         assign(socket, loaded: posture, layout_unavailable: true)
     end
   end
@@ -99,10 +110,17 @@ defmodule PrismWeb.CanvasLive do
 
   @impl true
   def render(assigns) do
+    # In safe mode nothing of the layout is drawn. A desktop draws the icon
+    # and card slots itself, so while one is held the canvas draws only
+    # the full slots it has not framed yet.
+    arrangement = if assigns.safe_mode, do: nil, else: assigns.arrangement
+    desktop? = Frames.desktop(assigns.frames) != nil
+
     assigns =
       assign(assigns,
-        slots: slots(assigns.arrangement),
-        floating: floating(assigns.arrangement),
+        slots: slots(arrangement),
+        tiles: Enum.reject(slots(arrangement), &(desktop? and &1.size != :full)),
+        floating: floating(arrangement),
         list: Frames.list(assigns.frames)
       )
 
@@ -136,7 +154,7 @@ defmodule PrismWeb.CanvasLive do
 
       <%!-- The apps layer: icon and card tiles, placeholders, and full slots
            whose frame is not open yet. --%>
-      <%= for slot <- @slots, not framed?(@frames, slot) do %>
+      <%= for slot <- @tiles, not framed?(@frames, slot) do %>
         <.slot_tile slot={slot} card={Frames.resolve(slot.tincture, @tinctures)} />
       <% end %>
 
@@ -287,9 +305,21 @@ defmodule PrismWeb.CanvasLive do
   defp place({:slot, id}), do: "slot:" <> id
   defp place({:floating, _position}), do: "float"
   defp place(:full), do: "full"
+  defp place(:desktop), do: "desktop"
 
   defp frame_class(%{placement: :full, visible: visible}) do
-    ["fixed inset-0 z-50 flex flex-col bg-surface-base", if(not visible, do: "hidden")]
+    [
+      "pointer-events-auto fixed inset-0 z-50 flex flex-col bg-surface-base",
+      if(not visible, do: "hidden")
+    ]
+  end
+
+  # The desktop fills the canvas under every slot and floating layer.
+  defp frame_class(%{placement: :desktop, visible: visible}) do
+    [
+      "pointer-events-auto absolute inset-0 z-0 overflow-hidden bg-surface-base",
+      if(not visible, do: "invisible")
+    ]
   end
 
   defp frame_class(%{placement: {:slot, _}, visible: visible}) do
@@ -339,6 +369,9 @@ defmodule PrismWeb.CanvasLive do
 
   defp refusal_sentence(:unregistered),
     do: "This tincture's version is not registered. Refresh the tinctures and try again."
+
+  defp refusal_sentence(:ungranted),
+    do: "This tincture asks for what you have not granted it yet, so it is not opened."
 
   defp refusal_sentence(:refused),
     do: "Your session can no longer open this tincture. Sign in again."

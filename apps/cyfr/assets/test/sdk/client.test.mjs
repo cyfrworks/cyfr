@@ -5,7 +5,7 @@ import assert from "node:assert/strict"
 import {afterEach, describe, test} from "node:test"
 
 import {CyfrError, createClient} from "../../js/sdk/client.js"
-import {CREDENTIAL, HANDSHAKE} from "../../js/sdk/wire.js"
+import {CREDENTIAL, HANDSHAKE, credentialClosed} from "../../js/sdk/wire.js"
 import {credentialOf, eventually, fixture, frameWindow, nextMessage, stubServer} from "./support.mjs"
 
 const FRAME = "frm_01a09fee2e4f"
@@ -203,9 +203,52 @@ describe("shell verbs go over the port", () => {
       const received = nextMessage(shell)
       if (verb === "open") api.open(message.args.ref)
       else if (verb === "title") api.title(message.args.title)
+      else if (verb === "credential") api.credential(message.args.name)
       else api[verb]()
       assert.deepEqual(await received, message, verb)
     }
+  })
+
+  test("there is no verb that raises the frame", async () => {
+    const {api} = await frameClient()
+    assert.equal(api.focus, undefined)
+  })
+})
+
+describe("a credential is asked for through the shell's prompt", () => {
+  test("the prompt's close resolves with whether an entry was saved, and nothing else", async () => {
+    const {api, handshake} = await frameClient()
+    const shell = handshake()
+    await eventually(() => api.frame === FRAME)
+
+    const asked = nextMessage(shell)
+    const answer = api.credential("weather-api")
+    assert.deepEqual(await asked, fixture.shell.find((vector) => vector.verb === "credential").message)
+
+    // Another frame's close, a close carrying more, and an unknown type are ignored.
+    shell.postMessage(credentialClosed("frm_someone_else", true))
+    shell.postMessage({...credentialClosed(FRAME, true), value: "s3cret"})
+    shell.postMessage({v: 1, type: "cyfr:credential-value", frame: FRAME, value: "s3cret"})
+    shell.postMessage(credentialClosed(FRAME, false))
+
+    assert.deepEqual(await answer, {saved: false})
+
+    // The next ask is its own.
+    const again = api.credential("weather-api")
+    shell.postMessage(credentialClosed(FRAME, true))
+    assert.deepEqual(await again, {saved: true})
+  })
+
+  test("one prompt at a time, a name is required, and a page that is no frame has no shell", async () => {
+    const {api, handshake} = await frameClient()
+    handshake()
+    const first = api.credential("one")
+    await assert.rejects(api.credential("two"), {code: "pending"})
+    await assert.rejects(api.credential(""), {code: "invalid_argument"})
+    assert.ok(first instanceof Promise)
+
+    const outside = await frameClient({framed: false})
+    await assert.rejects(outside.api.credential("one"), {code: "no_frame"})
   })
 
   test("verbs called before the handshake are sent once the port arrives", async () => {

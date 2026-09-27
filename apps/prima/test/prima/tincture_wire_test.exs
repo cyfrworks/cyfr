@@ -224,6 +224,17 @@ defmodule Prima.TinctureWireTest do
       })
 
     assert {:error, _} = TinctureWire.decode_shell_message(long)
+
+    for args <- [%{}, %{"name" => ""}, %{"name" => 7}, %{"name" => "api", "value" => "secret"}] do
+      credential = %{message | "verb" => "credential", "args" => args}
+      assert {:error, _} = TinctureWire.decode_shell_message(credential), inspect(args)
+    end
+  end
+
+  test "no verb raises a frame: focus is no verb" do
+    refute :focus in TinctureWire.verbs()
+    message = TinctureWire.shell_message(:ready, "frm_01a09fee2e4f")
+    assert {:error, _} = TinctureWire.decode_shell_message(%{message | "verb" => "focus"})
   end
 
   describe "the tincture URL grammar (component_refs.json)" do

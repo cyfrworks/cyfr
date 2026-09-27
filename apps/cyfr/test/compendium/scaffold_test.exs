@@ -566,7 +566,7 @@ defmodule Compendium.ScaffoldTest do
 
       react = File.read!(Path.join(tincture_base(ctx, "sdk-react"), "src/App.tsx"))
 
-      for member <- ~w(invoke action stream open close title ready focus),
+      for member <- ~w(invoke action stream open close title ready credential),
           do: assert(react =~ ~r/^\s+#{member}\(/m, "App.tsx declares no cyfr.#{member}")
     end
   end

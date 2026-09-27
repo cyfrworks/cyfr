@@ -21,6 +21,7 @@ defmodule Cyfr.BusPayloadTest do
     Components,
     Execution,
     ExecutionEvent,
+    LayoutPublished,
     McpServers,
     Membership,
     Notify,
@@ -78,6 +79,7 @@ defmodule Cyfr.BusPayloadTest do
         user_id: "usr_1",
         data: %{"name" => "runs", "title" => "Runs", "number" => 3, "list" => []}
       }),
+      LayoutPublished.new(@actor, "usr_1", 4),
       Session.new(:revoked, "u"),
       SettingsChanged.new(:changed, setting: "log_level", revision: 3, op: :put, value: "debug"),
       Membership.new(:changed, "u", "ath_payload", :joined),
@@ -346,6 +348,7 @@ defmodule Cyfr.BusPayloadTest do
             :execution_events -> Bus.execution_events(other, "e")
             :thread -> Bus.thread(other, "thr")
             :cards -> Bus.cards(other, "usr_1")
+            :layouts -> Bus.layouts(other, "usr_1")
             _ -> apply(Bus, key, [other])
           end
 

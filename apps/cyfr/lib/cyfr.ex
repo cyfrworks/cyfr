@@ -27,6 +27,7 @@ defmodule Cyfr do
       Bus.Components,
       Bus.Execution,
       Bus.ExecutionEvent,
+      Bus.LayoutPublished,
       Bus.McpServers,
       Bus.Membership,
       Bus.Notify,

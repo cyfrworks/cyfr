@@ -35,7 +35,8 @@ defmodule Cyfr.BusTest do
     execution_events: "exec_1",
     thread: "thr_1",
     progress: {:build, "b1"},
-    cards: "usr_1"
+    cards: "usr_1",
+    layouts: "usr_1"
   ]
 
   describe "the tenant prefix" do

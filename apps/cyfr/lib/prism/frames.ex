@@ -11,8 +11,11 @@ defmodule Prism.Frames do
 
   A frame opens for a tincture the shell lists (a card, as the shell's
   tincture list holds it) at a placement: `:full` (the person launched
-  it), `{:slot, slot_id}` (a `full` slot of the layout) or
-  `{:floating, position}` (a floating entry of the layout). The open
+  it), `{:slot, slot_id}` (a `full` slot of the layout),
+  `{:floating, position}` (a floating entry of the layout) or `:desktop`
+  (the posture's desktop, under every slot and floating frame, one per
+  value; only a tincture whose declaration names the placement `desktop`
+  opens there). The open
   reads the version's declaration through `Compendium`, takes its
   `sandbox` and `allow` from the rules for the capabilities it declares
   (`frame_attributes/2`), and mints the frame's credential
@@ -22,7 +25,13 @@ defmodule Prism.Frames do
   page is served under an asset credential (`Prima.TinctureUrl`'s `/_s/`
   path), a public one's at its `/t/` address; no URL carries the frame
   credential. A step that refuses leaves a frame in state `:refused`
-  that renders its refusal and holds no credential.
+  that renders its refusal and holds no credential. A tincture whose one
+  owner profile waits for the person to consent again
+  (`needs_consent`) is refused as `:ungranted`: its frame opens once the
+  person has granted what it declares now.
+
+  A frame remembers the actions its version declares (`actions`), which
+  is what the shell reads before it honours a verb that needs one.
 
   A tincture floats only when its declaration says so (`placement:
   "float"`) and only where the layout puts it; no message from a frame
@@ -31,7 +40,7 @@ defmodule Prism.Frames do
   ## Visibility
 
   With a `:full` frame active, it alone is visible; with none, every
-  slot and floating frame is. A hidden frame without a declared
+  slot and floating frame and the desktop are. A hidden frame without a declared
   `background` grant is frozen: its credential is suspended through
   Sanctum before the view signals it to stop, and a suspension that
   cannot be recorded discards the frame, so a hidden frame never keeps a
@@ -49,7 +58,8 @@ defmodule Prism.Frames do
 
   Every credential minted is remembered (`minted/1`) until it is
   revoked, and `revoke_all/2` revokes each one; the view calls it on
-  every path that ends it.
+  every path that ends it. `clear/2` revokes them all and holds no
+  frame, which is how safe mode starts.
 
   The pure transitions — placement, visibility, attribution, the
   handshake and the signals the view sends — take no context and touch
@@ -66,16 +76,20 @@ defmodule Prism.Frames do
   @type position :: %{x: non_neg_integer(), y: non_neg_integer()}
 
   @typedoc "Where a frame sits."
-  @type placement :: :full | {:slot, String.t()} | {:floating, position()}
+  @type placement :: :full | :desktop | {:slot, String.t()} | {:floating, position()}
 
   @typedoc "The key a frame is held under: one frame per key."
-  @type key :: {:full, String.t()} | {:slot, String.t()} | {:floating, String.t()}
+  @type key ::
+          {:full, String.t()}
+          | {:desktop, String.t()}
+          | {:slot, String.t()}
+          | {:floating, String.t()}
 
   @typedoc "A frame's state."
   @type state :: :live | :frozen | :refused
 
   @typedoc "Why a frame renders a refusal instead of a page."
-  @type refusal :: :unavailable | :undeclared | :unregistered | :refused
+  @type refusal :: :unavailable | :undeclared | :unregistered | :ungranted | :refused
 
   @typedoc """
   A tincture as the shell lists it: its card id, publisher, name,
@@ -108,7 +122,8 @@ defmodule Prism.Frames do
           bearer: String.t() | nil,
           placement: placement(),
           visible: boolean(),
-          background: boolean()
+          background: boolean(),
+          actions: [String.t()]
         }
 
   @typedoc "What the view signals a frame: its id and `frozen` or `live`."
@@ -163,9 +178,21 @@ defmodule Prism.Frames do
   @spec dropped(t()) :: non_neg_integer()
   def dropped(%__MODULE__{dropped: dropped}), do: dropped
 
+  @doc "The desktop frame, or nil."
+  @spec desktop(t()) :: frame() | nil
+  def desktop(%__MODULE__{} = t), do: Enum.find(list(t), &(&1.placement == :desktop))
+
+  @doc "Whether the live frame `frame` declares the action `operation` (`tool.action`)."
+  @spec declares?(frame(), String.t()) :: boolean()
+  def declares?(%{actions: actions}, operation) when is_binary(operation),
+    do: operation in actions
+
+  def declares?(_frame, _operation), do: false
+
   @doc "The key a frame of `tincture_id` at `placement` is held under."
   @spec key(placement(), String.t()) :: key()
   def key(:full, tincture_id), do: {:full, tincture_id}
+  def key(:desktop, tincture_id), do: {:desktop, tincture_id}
   def key({:slot, slot_id}, _tincture_id), do: {:slot, slot_id}
   def key({:floating, _position}, tincture_id), do: {:floating, tincture_id}
 
@@ -207,6 +234,18 @@ defmodule Prism.Frames do
   end
 
   def floats?(_card), do: false
+
+  @doc """
+  Whether the card's declaration makes it a desktop: its frame declares
+  the placement `desktop`. A declaration that does not hold to the rules
+  is no desktop.
+  """
+  @spec desktop?(card()) :: boolean()
+  def desktop?(%{manifest: manifest}) do
+    match?({:ok, %{frame: %{placement: "desktop"}}}, Compendium.tincture_declaration(manifest))
+  end
+
+  def desktop?(_card), do: false
 
   @doc """
   The listed card a versionless layout reference names, or nil when no
@@ -402,7 +441,9 @@ defmodule Prism.Frames do
   def refusal(reason) when reason in [:unavailable, :not_owner], do: :unavailable
   def refusal({:undeclared_capability, _names}), do: :undeclared
   def refusal({:invalid_tincture, _sentence}), do: :undeclared
+  def refusal(:not_a_desktop), do: :undeclared
   def refusal(:unregistered), do: :unregistered
+  def refusal(:ungranted), do: :ungranted
   def refusal(_standing), do: :refused
 
   # ============================================================================
@@ -445,11 +486,41 @@ defmodule Prism.Frames do
   end
 
   @doc """
+  Hold `card` as the desktop: a desktop of another tincture is discarded
+  first, one of the same tincture is kept, and visibility is settled. A
+  tincture whose declaration does not name the placement `desktop` is
+  held refused (`:undeclared`).
+  """
+  @spec open_desktop(Context.t(), t(), card()) :: t()
+  def open_desktop(%Context{} = ctx, %__MODULE__{} = t, card) do
+    t =
+      case desktop(t) do
+        %{tincture_id: id} when id == card.id -> t
+        %{key: key} -> drop(ctx, t, key)
+        nil -> t
+      end
+
+    settle(ctx, open(ctx, t, card, :desktop))
+  end
+
+  @doc """
+  Every credential this value minted revoked, and no frame held: the
+  answer keeps the count of dropped messages and remembers only the
+  credentials whose revocation could not be recorded.
+  """
+  @spec clear(Context.t(), t()) :: t()
+  def clear(%Context{} = ctx, %__MODULE__{} = t) do
+    %{minted: unrevoked} = revoke_all(ctx, t)
+    %{new() | minted: unrevoked, dropped: t.dropped}
+  end
+
+  @doc """
   Hold exactly the slot and floating frames `arrangement` places for the
   listed `cards` (`placements/2`): a frame the arrangement no longer
   places, or whose slot now holds another tincture, is discarded; one it
   places anew is opened; a floating frame moves to its layout position.
-  `:full` frames are left as they are. Visibility is settled.
+  `:full` frames and the desktop are left as they are. Visibility is
+  settled.
   """
   @spec arrange(Context.t(), t(), Prima.Layout.posture(), [card()]) :: t()
   def arrange(%Context{} = ctx, %__MODULE__{} = t, arrangement, cards) do
@@ -458,7 +529,7 @@ defmodule Prism.Frames do
 
     stale =
       for %{key: key, placement: placement, tincture_id: tincture_id} <- list(t),
-          placement != :full,
+          placement not in [:full, :desktop],
           Map.get(wanted, key) != tincture_id,
           do: key
 
@@ -624,10 +695,12 @@ defmodule Prism.Frames do
       bearer: nil,
       placement: placement,
       visible: false,
-      background: false
+      background: false,
+      actions: []
     }
 
     with {:ok, declaration} <- Compendium.tincture_declaration(card.manifest),
+         :ok <- placed_as_declared(declaration, placement),
          {:ok, attributes} <- frame_attributes(declaration, declaration.frame.capabilities),
          {:ok, digest} <- version_digest(ctx, card),
          {:ok, src} <- frame_src(ctx, card, digest),
@@ -640,6 +713,7 @@ defmodule Prism.Frames do
           sandbox: attributes.sandbox,
           allow: attributes.allow,
           background: declaration.frame.background,
+          actions: declaration.actions,
           credential_id: minted.id,
           bearer: minted.credential,
           state: :live,
@@ -650,15 +724,22 @@ defmodule Prism.Frames do
     end
   end
 
+  # Only a desktop opens at the desktop's placement.
+  defp placed_as_declared(%{frame: %{placement: "desktop"}}, :desktop), do: :ok
+  defp placed_as_declared(_declaration, :desktop), do: {:error, :not_a_desktop}
+  defp placed_as_declared(_declaration, _placement), do: :ok
+
   # The grant revision the frame's credential binds: the head revision of
   # the tincture's one active owner profile, the consent the shell's
-  # invocations root on, or 0 while the tincture holds none.
+  # invocations root on, or 0 while the tincture holds none. An owner
+  # profile that waits for the person to consent again opens nothing.
   defp grant_revision(ctx, card) do
     ref = Prima.ComponentRef.build("tincture", card.publisher, card.name)
 
     with {:ok, entries} <- Sanctum.Consent.profiles(ctx, ref) do
       case Prima.Authority.RootSelect.select(entries, :default) do
         {:ok, %{id: profile_id}} -> head_revision(ctx, profile_id)
+        {:error, {:profile_unavailable, :needs_consent}} -> {:error, :ungranted}
         {:error, _no_active_owner} -> {:ok, 0}
       end
     end

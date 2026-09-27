@@ -86,10 +86,15 @@ describe("what does not decode", () => {
   })
 
   test("a verb carrying data", () => {
-    for (const verb of ["ready", "close", "focus"]) {
+    for (const verb of ["ready", "close"]) {
       const decoded = decodeShellMessage({v: 1, verb, frame, args: {payload: {secret: 1}}})
       assert.equal(decoded.ok, false, verb)
     }
+
+    assert.equal(
+      decodeShellMessage({v: 1, verb: "credential", frame, args: {name: "api", value: "s3cret"}}).ok,
+      false
+    )
 
     assert.equal(
       decodeShellMessage({v: 1, verb: "title", frame, args: {title: "t", data: [1, 2]}}).ok,
@@ -115,6 +120,14 @@ describe("what does not decode", () => {
       decodeShellMessage({v: 1, verb: "title", frame, args: {title: "x".repeat(121)}}).ok,
       false
     )
+    for (const args of [{}, {name: ""}, {name: 7}]) {
+      assert.equal(decodeShellMessage({v: 1, verb: "credential", frame, args}).ok, false)
+    }
+  })
+
+  test("no verb raises a frame: focus is no verb", () => {
+    assert.equal(decodeShellMessage({v: 1, verb: "focus", frame, args: {}}).ok, false)
+    assert.throws(() => shellMessage("focus", frame))
   })
 
   test("a credential that is empty or carries whitespace is no bearer", () => {

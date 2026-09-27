@@ -58,7 +58,15 @@ defmodule Prima.TinctureWire do
 
     * `open` — open a tincture: `args.ref`, a tincture reference;
     * `title` — set the frame's title: `args.title`;
-    * `ready`, `focus`, `close` — no arguments.
+    * `credential` — ask the person for a secret through the shell's own
+      prompt: `args.name`, the vault entry name to store it under, a
+      non-empty string as the vault takes it. The value is typed into the
+      shell and goes to the vault; the frame is told only that the prompt
+      closed and whether an entry was saved;
+    * `ready`, `close` — no arguments.
+
+  No verb places, sizes or raises a frame: which frame is shown is the
+  shell's and the person's.
 
   `tests/fixtures/tincture_wire.json` holds one example of each, one
   public request, one refusal and one event stream; this module's test
@@ -74,7 +82,7 @@ defmodule Prima.TinctureWire do
     stream_open: "/_f/v1/stream"
   }
 
-  @verbs ~w(open close title ready focus)a
+  @verbs ~w(open close title ready credential)a
 
   @stream_content_type "text/event-stream"
   @refusal_event "refusal"
@@ -88,7 +96,7 @@ defmodule Prima.TinctureWire do
   @type kind :: :invoke | :action | :stream_open
 
   @typedoc "A message the frame sends the shell."
-  @type verb :: :open | :close | :title | :ready | :focus
+  @type verb :: :open | :close | :title | :ready | :credential
 
   @typedoc "The public tincture a request names in place of a bearer."
   @type public_identity :: %{athanor: String.t(), publisher: String.t(), name: String.t()}
@@ -523,6 +531,12 @@ defmodule Prima.TinctureWire do
   end
 
   defp shell_args(:title, _args), do: {:error, "title names a title"}
+
+  defp shell_args(:credential, %{"name" => name} = args)
+       when map_size(args) == 1 and is_binary(name) and name != "",
+       do: {:ok, args}
+
+  defp shell_args(:credential, _args), do: {:error, "credential names a vault entry"}
 
   defp shell_args(_verb, args) when args == %{}, do: {:ok, args}
   defp shell_args(verb, _args), do: {:error, "#{verb} takes no arguments"}

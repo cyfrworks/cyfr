@@ -42,3 +42,31 @@ export function nextStanding(standing, signal) {
 export function acting(standing) {
   return standing.state === "live" && standing.connected === true
 }
+
+// The credential prompt a frame asked for closed (`frame_credential`,
+// pushed by `PrismWeb.ShellLive`), as a DOM event on the frame's element
+// whose detail is `{saved}`.
+export const CREDENTIAL_CLOSED_EVENT = "cyfr:credential-closed"
+
+// A `frame_credential` payload read back: `{frame, saved}` for a frame id
+// and a boolean, `null` for anything else.
+export function credentialSignal(payload) {
+  if (payload === null || typeof payload !== "object") return null
+  const {frame, saved} = payload
+  return typeof frame === "string" && FRAME_ID.test(frame) && typeof saved === "boolean"
+    ? {frame, saved}
+    : null
+}
+
+// Whether a keydown is the safe mode chord, Ctrl+Alt+S: the shell's page
+// alone hears it, since a frame's keys stay in the frame's document.
+export function safeModeChord(event) {
+  return (
+    event !== null &&
+    typeof event === "object" &&
+    event.ctrlKey === true &&
+    event.altKey === true &&
+    event.metaKey !== true &&
+    (event.code === "KeyS" || event.key === "s" || event.key === "S")
+  )
+}
