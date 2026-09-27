@@ -23,13 +23,36 @@ import { connect } from "node:net";
 export const SITE = "cyfr.test";
 export const ATTACKER = "attacker.test";
 
+// The LiveView socket's long-poll transport, which the client falls back to
+// when its WebSocket is refused.
+const LONGPOLL = /^\/live\/longpoll/;
+const MAX_BODY = 256 * 1024;
+
 // The harness's proxy. `answer(req, url)` may answer a request itself by
-// returning [status, headers, body]; anything else goes to its host.
-export function startProxy(server, { receiver = null, answer = () => null } = {}) {
+// returning [status, headers, body]; anything else goes to its host. With
+// `bodies`, each request's body (its first 256 KiB, as text) is kept in its
+// account as `body`. `proxy.cut()` refuses the LiveView socket — every
+// WebSocket tunnel open or asked for, and its long-poll fallback — until
+// `proxy.restore()`; every other request still goes through.
+export function startProxy(server, { receiver = null, answer = () => null, bodies = false } = {}) {
   const target = new URL(server);
+  const tunnels = new Set();
+  let cut = false;
+  // A tunnel's two ends, so a cut closes the server's end too and the
+  // server sees the socket go, and a server that goes closes the browser's
+  // end as its own connection's close would.
+  const hold = (socket, upstream) => {
+    const pair = { socket, upstream };
+    tunnels.add(pair);
+    socket.on("close", () => {
+      tunnels.delete(pair);
+      upstream.destroy();
+    });
+    upstream.on("close", () => socket.destroy());
+  };
   const proxy = createServer((req, res) => {
     const url = new URL(req.url, `http://${req.headers.host}`);
-    proxy.seen.push({
+    const account = {
       at: Date.now(),
       method: req.method,
       url: url.href,
@@ -43,7 +66,21 @@ export function startProxy(server, { receiver = null, answer = () => null } = {}
         mode: req.headers["sec-fetch-mode"] ?? null,
       },
       conditional: !!(req.headers["if-none-match"] || req.headers["if-modified-since"]),
-    });
+    };
+    proxy.seen.push(account);
+    if (bodies) {
+      account.body = "";
+      req.on("data", (chunk) => {
+        if (account.body.length < MAX_BODY) account.body += chunk.toString("utf8");
+      });
+    }
+    if (cut && url.hostname === SITE && LONGPOLL.test(url.pathname)) {
+      account.status = 503;
+      res.writeHead(503, { "content-type": "text/plain" });
+      res.end("proxy: the socket is cut");
+      req.resume();
+      return;
+    }
     const own = answer(req, url);
     if (own) {
       const [status, headers, body] = own;
@@ -61,9 +98,18 @@ export function startProxy(server, { receiver = null, answer = () => null } = {}
         const seen = proxy.seen.findLast((r) => r.url === url.href);
         if (seen) seen.status = reply.statusCode;
         res.writeHead(reply.statusCode, reply.rawHeaders);
+        // An answer the server cut off mid-way is cut off for the browser
+        // too, as the server's own connection would be.
+        reply.on("close", () => {
+          if (!reply.complete) res.destroy();
+        });
         reply.pipe(res);
       });
     outbound.on("error", (error) => {
+      if (res.headersSent) {
+        res.destroy();
+        return;
+      }
       res.writeHead(502, { "content-type": "text/plain" });
       res.end(`proxy: ${error.message}`);
     });
@@ -72,6 +118,10 @@ export function startProxy(server, { receiver = null, answer = () => null } = {}
   // The shell's LiveView socket: the upgrade request goes to the server
   // as it came, and the two sockets are joined.
   proxy.on("upgrade", (req, socket, head) => {
+    if (cut) {
+      socket.destroy();
+      return;
+    }
     const upstream = connect(Number(target.port), target.hostname, () => {
       const lines = [`${req.method} ${new URL(req.url, `http://${req.headers.host}`).pathname +
         (new URL(req.url, `http://${req.headers.host}`).search)} HTTP/1.1`];
@@ -80,6 +130,7 @@ export function startProxy(server, { receiver = null, answer = () => null } = {}
       if (head && head.length) upstream.write(head);
       socket.pipe(upstream).pipe(socket);
     });
+    hold(socket, upstream);
     upstream.on("error", () => socket.destroy());
     socket.on("error", () => upstream.destroy());
   });
@@ -90,15 +141,31 @@ export function startProxy(server, { receiver = null, answer = () => null } = {}
     const port = host === ATTACKER && receiver ? receiver.address().port : Number(target.port);
     const address = host === ATTACKER && receiver ? "127.0.0.1" : target.hostname;
     proxy.seen.push({ at: Date.now(), method: "CONNECT", url: req.url, host, origin: null, referer: null, conditional: false });
+    if (cut && host === SITE) {
+      socket.destroy();
+      return;
+    }
     const upstream = connect(port, address, () => {
       socket.write("HTTP/1.1 200 Connection Established\r\n\r\n");
       if (head && head.length) upstream.write(head);
       socket.pipe(upstream).pipe(socket);
     });
+    if (host === SITE) hold(socket, upstream);
     upstream.on("error", () => socket.destroy());
     socket.on("error", () => upstream.destroy());
   });
   proxy.seen = [];
+  proxy.cut = () => {
+    cut = true;
+    for (const { socket, upstream } of tunnels) {
+      socket.destroy();
+      upstream.destroy();
+    }
+    tunnels.clear();
+  };
+  proxy.restore = () => {
+    cut = false;
+  };
   return new Promise((resolve) => proxy.listen(0, "127.0.0.1", () => resolve(proxy)));
 }
 

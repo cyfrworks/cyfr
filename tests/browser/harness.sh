@@ -40,6 +40,22 @@ browser_cookie() {
   printf '%s' "$cookie"
 }
 
+# Publish, for the person whose session token is `$2` on cell `$1`, the
+# layout document `$3` over revision `${4:-0}`, as the console publishes it
+# (`layout.edit` through the gate).
+browser_layout() {
+  local answer
+  answer="$(server_fixture "$1" console "$2" layout/edit "{\"document\":$3,\"revision\":${4:-0}}")"
+  printf '%s' "$answer" | grep -q '"ok"' || fail "the layout was not published: $answer"
+}
+
+# A layout whose desktop no one installed: the shell runs no desktop and
+# draws its picker, which the frame experiments launch their tinctures from.
+browser_picker_layout() {
+  local none='{"desktop":"tincture:local.no-desktop","slots":[],"floating":[]}'
+  browser_layout "$1" "$2" "{\"version\":1,\"postures\":{\"desk\":$none,\"hand\":$none}}"
+}
+
 # Run the experiment `$2` of the directory tests/`$1` in the Playwright
 # image, with `$3...` as its arguments; OUT is mounted at /out. The
 # experiment's directory is copied beside tests/browser, so it imports the

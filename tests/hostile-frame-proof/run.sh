@@ -48,6 +48,7 @@ field() { printf '%s' "$person" | python3 -c "import json, sys; print(json.load(
 user_id="$(field user_id)"
 segment="$(field segment)"
 cookie="$(browser_cookie "$CELL" "$(field token)")"
+browser_picker_layout "$CELL" "$(field token)"
 
 # The public copy is the same bundle under another name.
 cp -R "$HERE/tinctures/containment-probe" "$WORK/containment-probe-public"

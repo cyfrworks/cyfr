@@ -54,6 +54,7 @@ person="$(server_fixture "$CELL" person operator@example.com tincture-proof)"
 [ -n "$person" ] || fail "the fixture signed nobody in"
 field() { printf '%s' "$person" | python3 -c "import json, sys; print(json.load(sys.stdin)['$1'])"; }
 cookie="$(browser_cookie "$CELL" "$(field token)")"
+browser_picker_layout "$CELL" "$(field token)"
 published="$(server_fixture "$CELL" tincture "$(field user_id)" "$WORK/proof-game" proof-game private)"
 [ -n "$published" ] || fail "proof-game was not published"
 status="$(curl -s -o /dev/null -w '%{http_code}' "http://127.0.0.1:$PORT/t/$(field segment)/local/proof-game")"

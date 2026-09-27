@@ -929,7 +929,7 @@ jobs:
   # The experiment records what each browser allowed and fails only when it
   # could not observe an attempt.
   browser:
-    name: Browser harness (frame facts, the SDK and the tincture proof on Chromium, Firefox and WebKit)
+    name: Browser harness (frame facts, the SDK, the tincture, containment and canvas proofs on Chromium, Firefox and WebKit)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
@@ -962,6 +962,10 @@ jobs:
         env:
           RELEASE_BOOT_SKIP_BUILD: '1'
         run: tests/hostile-frame-proof/run.sh
+      - name: The canvas proof
+        env:
+          RELEASE_BOOT_SKIP_BUILD: '1'
+        run: tests/canvas-proof/run.sh
 
   seed-guards:
     name: Seed media (clean, immutable versions)

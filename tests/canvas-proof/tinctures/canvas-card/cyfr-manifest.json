@@ -1,0 +1,13 @@
+{
+  "name": "canvas-card",
+  "type": "tincture",
+  "version": "1.0.0",
+  "publisher": "local",
+  "description": "Canvas card",
+  "tincture": {
+    "entry": "index.html",
+    "cards": [
+      {"name": "hello", "title": "Hello card"}
+    ]
+  }
+}

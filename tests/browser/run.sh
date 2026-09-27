@@ -49,6 +49,7 @@ field() { printf '%s' "$person" | python3 -c "import json, sys; print(json.load(
 user_id="$(field user_id)"
 segment="$(field segment)"
 cookie="$(browser_cookie "$CELL" "$(field token)")"
+browser_picker_layout "$CELL" "$(field token)"
 server_fixture "$CELL" tincture "$user_id" "$HERE/tinctures/frame-neighbour" frame-neighbour public >/dev/null
 probe="$(server_fixture "$CELL" tincture "$user_id" "$HERE/tinctures/frame-probe" frame-probe public)"
 probe_path="$(printf '%s' "$probe" | python3 -c 'import json, sys; print(json.load(sys.stdin)["path"])')"

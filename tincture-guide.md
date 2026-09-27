@@ -15,9 +15,9 @@ The shell is the one place a tincture's frame is created. Launching a tincture:
 3. The shell mints a **frame credential** for this open, bound to the person, the tincture version and its release digest, the grant revision of the tincture's owner profile and a fresh frame id.
 4. On the frame's first load the shell posts it one handshake carrying a `MessagePort` and the frame id, and sends the frame credential over that port only. The SDK accepts the handshake only from its parent window, and only once.
 
-From then on the SDK sends data requests to the endpoint with the frame credential as a bearer, and the shell verbs (`open`, `close`, `title`, `ready`, `focus`) over the port. The shell listens to no window message; anything arriving on the port that is not a shell verb for that frame is dropped. A reload or a navigation inside the frame gets no second handshake: the frame is spent until the person opens the tincture again.
+From then on the SDK sends data requests to the endpoint with the frame credential as a bearer, and the shell verbs (`open`, `close`, `title`, `ready`, `credential`) over the port. The shell listens to no window message; anything arriving on the port that is not a shell verb for that frame is dropped. A reload or a navigation inside the frame gets no second handshake: the frame is spent until the person opens the tincture again.
 
-A frame hidden behind another is **suspended** unless it declares `frame.background`, and resumed when shown: a suspended frame's requests are refused (`frame_suspended`). Closing the frame, the `close` verb, the registry no longer listing the tincture and the end of the shell's session each revoke its credential. A frame credential is also refused once the tincture's version or its owner profile's grant moved since the open (`frame_moved`): open it again.
+A frame hidden behind another is **suspended** unless it declares `frame.background`, and resumed when shown: a suspended frame's requests are refused (`frame_suspended`). A resume that fails revokes the frame's credential and the frame shows the refusal in place of its page. Closing the frame, the `close` verb, the registry no longer listing the tincture and the end of the shell's session each revoke its credential. A frame credential is also refused once the tincture's version or its owner profile's grant moved since the open (`frame_moved`): open it again.
 
 ### Private and Public
 
@@ -29,6 +29,40 @@ A tincture is private unless it has an active public consent profile. Publish on
 | **Opened by** | the shell, for a member of its athanor | the shell, or anyone at its address |
 | **Data requests** | the frame credential as a bearer | in the shell, the frame credential; at its address, the page names itself as `public` and sends no bearer |
 | **Runs under** | the tincture's owner profile | the owner profile in the shell; its public profile at its address |
+
+---
+
+## The Canvas
+
+The shell draws a person's **layout** (`layout.get`, `layout.edit`): per posture — `hand` under 768 CSS pixels wide, `desk` otherwise — one desktop tincture, the app slots and the floating tinctures. The shell opens the desktop as a frame filling the canvas, under every slot and floating frame; a person who never arranged one runs the shipped `tincture:local.desktop`, with the shipped vault (`tincture:local.vault`) as its one icon. A layout published anywhere — by the desktop, the assistant or safe mode — is read again by every shell the person has open.
+
+### Sizes and placements
+
+A slot holds one tincture at one of three sizes:
+
+| Size | What is drawn |
+|---|---|
+| `icon` | the desktop draws the tincture's icon; activating it opens the tincture as a full frame |
+| `card` | the desktop draws one of the tincture's declared `cards`, as data (below) |
+| `full` | the tincture's own frame, at the slot's place |
+
+A tincture floats over the desktop only when its declaration names `frame.placement: "float"`, and only where the layout puts it. A tincture runs as a desktop only when it names `frame.placement: "desktop"`; a desktop draws other tinctures' cards and reaches nothing of its own, so it declares no `tincture.connect` origin, no `caps.egress` and no component dependency.
+
+### Cards
+
+A card is data the desktop draws, never a frame. **`card.refresh`** (a `slot` and a `posture`) runs the card's `source` under the card tincture's own grant, projects the answer through the declaration (the `number` and `list` fields of the source's answer, the declared title, image and buttons) and answers it; a static card runs nothing. Each refresh is also delivered on the stream **`cards.refreshed`**, which is bound to its holder: a frame opens it with no subject, and it carries the refreshes of that person's own cards and nobody else's. **`card.press`** (a `slot`, a `posture` and a `button` index) fires the button's declared action with its fixed `args`, through the gate, under the person's context; a button never fires the `card` tool itself. A desktop declares `card.refresh`, `card.press` and the stream `cards.refreshed` to draw cards.
+
+### Hidden, frozen and background frames
+
+The frame the person looks at is live. With a full frame shown, every other frame — the desktop among them — is hidden, and a hidden frame without `frame.background: true` is frozen: its credential is suspended before its bridge is told, its element is inert, and its requests are refused as `frame_suspended` until it is shown again. A frame that declares the background grant keeps running hidden. A frame never raises itself: no verb places, sizes or raises a frame.
+
+### Safe mode
+
+A desktop that has not sent `ready` within ten seconds of its handshake, a desktop whose frame is refused at open, and the person's own ask — the shell's **Safe mode** button, or Ctrl+Alt+S on the shell's page, which a frame never hears — enter safe mode. Every frame is discarded with its credential, the picker is drawn, and the shell's prompt offers to try the current desktop again or, while some posture runs another, to use the shipped default. Choosing opens the desktop again from the layout as it then stands. The assistant's panel stays as it was.
+
+### Secrets
+
+A frame never asks for a secret and never holds one. **`cyfr.credential(name)`** asks the shell to prompt the person for a value to store in the vault as the entry `name`; the shell honours it only for a live, visible frame whose declaration lists `vault.create`, and drops it otherwise. The value is typed into the shell's own prompt and goes to the vault; the frame is told only that the prompt closed and whether an entry was saved (`{saved: true | false}`), never the value and never why nothing was saved.
 
 ---
 
@@ -151,7 +185,7 @@ data/athanors/{athanor_id}/components/tinctures/local/my-game/0.1.0/
 <!-- /tincture:declaration -->
 
 - `frame.capabilities` names capabilities from the table below; `frame.background: true` keeps the frame active while hidden.
-- A card's `number` and `list` name fields of its `stream`'s projection, its `image` is a served image inside the version, and each button runs a declared action with fixed `args`.
+- A card's `number` and `list` name fields of its `source`'s answer, its `image` is a served image inside the version, and each button runs a declared action with fixed `args`. A card that shows a number or a list has a `source`: `component`, `operation` and `args` fixed at publish, an invoke of a component the tincture declares in `dependencies.static`, at most 4096 bytes of canonical JSON. A card without one is static.
 - A stream's `name` is a stream a provider declares (two or more dotted names, such as `mcp_servers.changes`); its `subject` is a literal, `"*"` for any subject that stream's grammar admits, or absent for a stream that takes none.
 
 ### Frame capabilities
@@ -243,13 +277,14 @@ The SDK is injected into the entry page's `<head>` under the page's nonce, so `w
 | `cyfr.close()` | the shell's port, `close` |
 | `cyfr.title(title)` | the shell's port, `title` |
 | `cyfr.ready()` | the shell's port, `ready` |
-| `cyfr.focus()` | the shell's port, `focus` |
+| `cyfr.credential(name)` | the shell's port, `credential` |
 <!-- /tincture:sdk -->
 
 - **`cyfr.invoke(ref, operation, args)`** runs a component the tincture declares in `dependencies.static`. The component runs with the input `{"operation": …, "params": …}` — `operation` the name given, `params` the `args` object — and the promise resolves with `{status, output, execution_id, duration_ms}`.
 - **`cyfr.action(name, args)`** runs a system action the declaration's `actions` lists (`"tool.action"`), with `args`, and resolves with its result.
 - **`cyfr.stream(name, subject, onEvent)`** opens a stream the declaration's `streams` lists, with a literal subject or `null` for one that takes none. It resolves, once the stream is open, with a handle: `handle.close()` ends it and `handle.closed` settles when it ends, whether the grant's deadline passed, the endpoint closed it or `close()` was called. `onEvent` is called with `{id, event, data}` per event: `id` the sequence number where the topic carries one, `event` the stream's name, `data` the payload projected to the grant's fields. A stream the endpoint closes for a reason the frame should know ends with an event named `refusal`. A reconnect is a new `cyfr.stream` call, admitted again.
-- **`cyfr.open(ref)`** asks the shell to open another tincture it lists; **`cyfr.close()`** closes this frame; **`cyfr.title(title)`** sets its title (at most 120 characters); **`cyfr.ready()`** tells the shell the tincture has loaded; **`cyfr.focus()`** asks the shell to bring the frame to the front. Shell verbs made before the handshake wait for it; outside a frame they do nothing.
+- **`cyfr.open(ref)`** asks the shell to open another tincture it lists; **`cyfr.close()`** closes this frame; **`cyfr.title(title)`** sets its title (at most 120 characters); **`cyfr.ready()`** tells the shell the tincture has loaded. No verb places, sizes or raises a frame: which frame is shown is the shell's and the person's. Shell verbs made before the handshake wait for it; outside a frame they do nothing.
+- **`cyfr.credential(name)`** asks the person for a secret through the shell's own prompt, to be stored in the vault as the entry `name`; see [Secrets](#secrets). It resolves with `{saved}` once the prompt closes.
 - `cyfr.frame` is the frame id the shell handed this frame (`null` before the handshake), and `cyfr.public` the public tincture a top-level page names itself as (`null` in a frame).
 
 A refusal rejects with a `CyfrError`: `message` is the sentence, `code` the refusal's class (`unauthenticated`, `forbidden`, `not_found`, `rate_limited`, `consent_required`, `invalid_argument`, `unavailable`, …) and `stage` whether it was refused at `admission` or during `execution`. A frame that has no credential yet waits up to 30 seconds for the shell's handshake and then rejects with `no_frame`.

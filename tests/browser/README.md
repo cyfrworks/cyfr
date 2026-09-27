@@ -5,8 +5,11 @@
 (`harness.sh`), signs a person in (`tests/release-boot/fixture.exs`),
 publishes the two tinctures under `tinctures/` publicly in that person's
 athanor, and runs `frame-facts.mjs` in the official Playwright image
-against it. `harness.sh` and `lib.mjs` are shared with the tincture
-proof (`tests/tincture-proof/`). The `browser` job of
+against it. The person's layout names a desktop nobody installed
+(`browser_picker_layout`, `harness.sh`), so the shell runs no desktop and
+draws the picker the frame experiments launch from; the desktop itself is
+the canvas proof's (`tests/canvas-proof/`). `harness.sh` and `lib.mjs` are
+shared with the tincture proof (`tests/tincture-proof/`). The `browser` job of
 `.github/workflows/test.yml` runs them.
 
 The harness is JavaScript. The Playwright images carry the browsers but not
