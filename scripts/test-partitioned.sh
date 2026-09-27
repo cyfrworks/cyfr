@@ -199,6 +199,10 @@ for ((i=1; i<=PARTITIONS; i++)); do
   # progress dot, a result or a routine log line.
   if [ "${exits[$((i-1))]}" != 0 ]; then
     printf '    partition exited %s; its account:\n' "${exits[$((i-1))]}"
+    # The ownership watch's verdict and each new line it kept, wherever
+    # they fell in the log.
+    grep -nE 'OwnershipError line\(s\) were logged|^-- NEW' "$out_dir/p$i.log" | sed 's/^/    | /' || :
+    grep -nE -A3 '^-- NEW' "$out_dir/p$i.log" | grep -vE '^--$' | sed 's/^/    | /' || :
     tail -n 100 "$out_dir/p$i.log" \
       | grep -vE '^[[:space:]]*$|^\.+$|^Result:|^Finished in|\[(info|debug)\]' \
       | tail -n 40 | sed 's/^/    | /' || :
