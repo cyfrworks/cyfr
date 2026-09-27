@@ -766,7 +766,9 @@ defmodule Crucible.HostTest do
       monitor = Process.monitor(fixture.pid)
       assert %{"ok" => true} = report(fixture)
       assert_receive {:DOWN, ^monitor, :process, _pid, :normal}, 5_000
-      assert Crucible.Attempt.whereis(fixture.execution_id) == nil
+      # The registry drops a dead process's name when it hears the exit,
+      # after the monitor's `:DOWN` may already have arrived here.
+      wait_until(fn -> Crucible.Attempt.whereis(fixture.execution_id) == nil end)
       assert {:error, _stopped} = Dispatch.await(fixture.pid, fixture.close)
 
       events = terminal_events(fixture)
