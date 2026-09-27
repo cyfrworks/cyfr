@@ -606,8 +606,12 @@ def test_service_death(stack, plane):
     t_kill = time.time()
     stack.exec(f"kill -9 {beam}")
     t_cut = plane.elapsed()
-    gone = wait_until(lambda: host_gone(runner["uid"]) and time.time(), LOST_GRACE_S + 10, "the busy runner's process to be gone")
-    expect(all(host_gone(r["uid"]) for r in others),
+    # The keeper retires its spawns one after another, so the busy runner
+    # being gone does not yet say the others are: the wait is for all.
+    uids = [runner["uid"]] + [r["uid"] for r in others]
+    gone = wait_until(lambda: all(host_gone(uid) for uid in uids) and time.time(), LOST_GRACE_S + 10,
+                      "every runner's process to be gone")
+    expect(all(host_gone(uid) for uid in uids),
            f"detection: every runner was retired {ms(gone - t_kill)} ms after the service's VM died (cyfr-keeper's lost grace is {LOST_GRACE_S} s)",
            stack.runner_processes())
 
