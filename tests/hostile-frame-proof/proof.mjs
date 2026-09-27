@@ -397,7 +397,7 @@ async function frameRequestRefused(server, path, cookie) {
 
 const NOT_DRIVEN = [
   ["grant_prompt_fullscreen",
-    "fullscreen reacquired while a grant prompt is up: the shell draws no grant prompt until the system layer exists (slice D1b)"],
+    "fullscreen reacquired while a grant prompt is up: nothing in this proof opens a grant prompt, since its probe declares nothing and the shell offers a grant only to a tincture whose owner profile needs consent again"],
   ["suspended_on_another_member",
     "an action after the frame was suspended on another member: run at one member, the suspension made through the shell (suspended_invoke)"],
 ];

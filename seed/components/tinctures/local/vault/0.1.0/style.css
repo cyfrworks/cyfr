@@ -11,7 +11,6 @@
   --text: #f4f6fb;
   --text-muted: rgba(244, 246, 251, 0.72);
   --accent: #5b8def;
-  --danger: #e5484d;
   --focus: #ffd166;
 }
 
@@ -92,11 +91,6 @@ button:disabled {
   cursor: default;
 }
 
-button.danger {
-  border-color: var(--danger);
-  color: #ffd9da;
-}
-
 :focus-visible {
   outline: 3px solid var(--focus);
   outline-offset: 2px;
@@ -126,12 +120,6 @@ button.danger {
 .table thead th {
   color: var(--text-muted);
   font-weight: 600;
-}
-
-.actions {
-  display: flex;
-  gap: 6px;
-  justify-content: flex-end;
 }
 
 .status {

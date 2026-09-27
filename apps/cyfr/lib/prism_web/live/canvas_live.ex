@@ -15,7 +15,9 @@ defmodule PrismWeb.CanvasLive do
   is held the desktop draws the `icon` and `card` slots itself; without
   one they are tiles that launch their tincture. An entry naming a
   tincture that is not installed draws a placeholder and opens nothing.
-  In safe mode (`safe_mode`) nothing of the layout is drawn.
+  In safe mode (`safe_mode`) nothing of the layout is drawn. While a full
+  frame is shown every other layer is `inert`, so no key reaches a control
+  it covers; the full frame and its capsule stay reachable.
 
   The posture is the client's: the `Canvas` hook (`assets/js/canvas/`)
   reports `hand` or `desk` as the event `posture`, and any other value is
@@ -121,7 +123,10 @@ defmodule PrismWeb.CanvasLive do
         slots: slots(arrangement),
         tiles: Enum.reject(slots(arrangement), &(desktop? and &1.size != :full)),
         floating: floating(arrangement),
-        list: Frames.list(assigns.frames)
+        list: Frames.list(assigns.frames),
+        # Under a shown full frame every other layer is covered, and taken
+        # out of reach so no key lands on a control nobody can see.
+        covering: covering(assigns.frames)
       )
 
     ~H"""
@@ -147,6 +152,7 @@ defmodule PrismWeb.CanvasLive do
       <p
         :if={@layout_unavailable}
         data-canvas-layout="unavailable"
+        inert={@covering != nil}
         class="absolute bottom-3 left-3 z-20 text-xs text-text-muted"
       >
         Your layout can't be read right now.
@@ -155,7 +161,11 @@ defmodule PrismWeb.CanvasLive do
       <%!-- The apps layer: icon and card tiles, placeholders, and full slots
            whose frame is not open yet. --%>
       <%= for slot <- @tiles, not framed?(@frames, slot) do %>
-        <.slot_tile slot={slot} card={Frames.resolve(slot.tincture, @tinctures)} />
+        <.slot_tile
+          slot={slot}
+          card={Frames.resolve(slot.tincture, @tinctures)}
+          covered={@covering != nil}
+        />
       <% end %>
 
       <%!-- Floating tinctures nobody installed. --%>
@@ -164,6 +174,7 @@ defmodule PrismWeb.CanvasLive do
         <div
           id={"#{@id}-float-#{index}"}
           data-canvas-placeholder={entry.tincture}
+          inert={@covering != nil}
           class="pointer-events-auto absolute z-30 flex items-center justify-center rounded-xl border border-dashed border-border-default bg-surface-raised/80 p-3 text-center text-xs text-text-muted"
           style={float_style(entry.position)}
         >
@@ -178,6 +189,7 @@ defmodule PrismWeb.CanvasLive do
         <div
           id={"#{@id}-frame-#{frame.id}"}
           data-canvas-frame={frame.id}
+          inert={@covering not in [nil, frame.key]}
           data-canvas-place={place(frame.placement)}
           class={frame_class(frame)}
           style={frame_style(frame.placement)}
@@ -211,12 +223,14 @@ defmodule PrismWeb.CanvasLive do
 
   attr :slot, :map, required: true
   attr :card, :map, default: nil
+  attr :covered, :boolean, default: false
 
   defp slot_tile(%{card: nil} = assigns) do
     ~H"""
     <div
       data-canvas-place={"slot:" <> @slot.id}
       data-canvas-placeholder={@slot.tincture}
+      inert={@covered}
       class={[
         "canvas-slot canvas-slot--#{@slot.size}",
         "pointer-events-auto absolute z-20 flex items-center justify-center rounded-xl border border-dashed border-border-default bg-surface-raised/80 p-2 text-center text-[11px] text-text-muted"
@@ -235,6 +249,7 @@ defmodule PrismWeb.CanvasLive do
       phx-value-tincture={@card.id}
       data-canvas-place={"slot:" <> @slot.id}
       data-canvas-tincture={@slot.tincture}
+      inert={@covered}
       class={[
         "canvas-slot canvas-slot--#{@slot.size}",
         "pointer-events-auto absolute z-20 flex flex-col items-center justify-center gap-1 overflow-hidden rounded-xl bg-surface-raised/90 p-2 text-center ring-1 ring-white/10 transition-colors hover:ring-accent-primary/60"
@@ -291,6 +306,14 @@ defmodule PrismWeb.CanvasLive do
 
   defp floating(%{floating: floating}), do: floating
   defp floating(nil), do: []
+
+  # The key of the shown full frame, which covers every other layer, or nil.
+  defp covering(frames) do
+    case Frames.active(frames) do
+      %{key: key, visible: true} -> key
+      _none -> nil
+    end
+  end
 
   defp framed?(frames, %{size: :full, id: id}), do: Frames.get(frames, {:slot, id}) != nil
   defp framed?(_frames, _slot), do: false

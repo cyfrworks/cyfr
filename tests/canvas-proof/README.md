@@ -22,8 +22,8 @@ full. `canvas-stall` is a desktop that never sends `ready`.
 | Section | What holds |
 |---|---|
 | postures | a desk viewport (1280x800) and a hand viewport (390x844, touch) of the same person each report their posture, and the desktop draws its strip in that posture's order, with the card drawn from `card.refresh` and the vault as an icon, filling the canvas |
-| full | `canvas-full`, opened from its icon on the desktop, covers the desktop; the desktop's frame is `frozen` and inert, and a call from it is refused as suspended; closing the full frame makes the desktop live and acting again |
-| vault | the vault page lists entry names; Tab alone reaches its name field; typing a name and Enter opens the shell's credential prompt, which names the entry; typing the value and Enter saves it; the prompt closes, focus returns to the vault's frame, the page is told it was saved and lists the entry; the value is in no frame's document and in no request a frame made (`/_f/`, `/_s/`, `/t/`), read with their bodies at the harness's proxy |
+| full | `canvas-full`, opened from its icon on the desktop, covers the desktop; the desktop's frame is `frozen` and inert, and a call from it is refused as suspended; forty Tabs from the full frame's close control never land on a control the full frame covers (one the page shows the full frame over at its centre), the assistant's panel, which stays reachable by design, counted apart; closing the full frame makes the desktop live and acting again |
+| vault | the vault page lists entry names, offers only Add entry and Refresh, and says entries are changed and removed on the console's vault page; Tab alone reaches its name field; typing a name and Enter opens the shell's credential prompt, which names the entry; typing the value and Enter saves it; the prompt closes, focus returns to the vault's frame, the page is told it was saved and lists the entry; the value is in no frame's document and in no request a frame made (`/_f/`, `/_s/`, `/t/`), read with their bodies at the harness's proxy |
 | safe mode, chord | Ctrl+Alt+S on the shell's page enters safe mode: every frame is gone, the picker is drawn, the prompt (`alertdialog`) takes focus; Enter on its first offer leaves safe mode and the desktop runs again |
 | safe mode, stall | the shipped desktop publishes `canvas-stall` as the layout's desktop through its own `layout.edit`; the shell reads the layout again and opens it; ten seconds after its handshake without `ready` the shell enters safe mode ("Your desktop did not start"), every frame gone; Tab to the default offer and Enter publish the default and the shipped desktop is back |
 | prompts | every prompt shown has a `role`, an accessible name (`aria-labelledby`) and a description (`aria-describedby`), holds focus when shown, and gives focus back when it closes — to the element that had it, or to the body when that element is gone |
@@ -55,11 +55,6 @@ Recorded, not gated, once, in the first browser of the run:
 
 ## Not driven
 
-- **Deleting and rotating from the vault page.** `vault.delete` is an
-  interactive-consent mutation, which the gate refuses to a tincture frame
-  (its auth method is `tincture`); the page calls it and shows the refusal.
-  A rotation takes the new value, which a frame never holds, so the page
-  offers none.
 - **`vault.list` on the page's path.** Its consent class (`staging`) refuses
   a tincture frame; the page lists through `vault.status`, and `vault.list`
   is measured inside the server.
@@ -71,7 +66,7 @@ Recorded, not gated, once, in the first browser of the run:
 Recorded on 2026-09-27 on `p1` (Ubuntu 26.04.1 LTS, kernel
 7.0.0-34-generic, 16 cores, 60 GiB, Docker 29.1.3), in
 `mcr.microsoft.com/playwright:v1.63.0-noble` pinned by digest in
-`tests/browser/harness.sh`: every one of the 178 assertions held in
+`tests/browser/harness.sh`: every one of the 184 assertions held in
 Chromium 153.0.8010.12, Firefox 155.0 and WebKit 26.6.
 `canvas-proof.json`, written by each run, holds every fact behind a row.
 
@@ -81,23 +76,27 @@ Chromium 153.0.8010.12, Firefox 155.0 and WebKit 26.6.
 | hand strip | card vault full-app | card vault full-app | card vault full-app |
 | desktop under a full frame | frozen, inert | frozen, inert | frozen, inert |
 | the covered desktop's call | refused, `forbidden` (suspended) | the same | the same |
+| 40 Tabs from the full frame's capsule: on a covered control (on the assistant's panel) | 0 (7) | 0 (0) | 0 (7) |
 | Tab presses from the shell to the vault's name field | 15 | 1 | 15 |
 | requests the frames made after the value was typed, and those carrying it | 2, none | 2, none | 1, none |
 | frames held during safe mode, by chord and by stall | 0, 0 | 0, 0 | 0, 0 |
-| safe mode for a desktop that never said ready, after | 10 073 ms | 10 106 ms | 10 046 ms |
+| safe mode for a desktop that never said ready, after | 10 075 ms | 10 100 ms | 10 049 ms |
 | a desktop's action with the socket cut | refused, `unauthenticated` | the same | the same |
 | the desktop acting after the reconnect | yes | yes | yes |
 | server gone | marked, layout kept, stream ended, action and new stream `unavailable` | the same | the same |
+
+The assistant's panel keeps its place below the full frame and in the Tab
+order, by design; the landings on it are counted, not asserted.
 
 Measurements:
 
 | Operation | Path | p50 / p95 / p99 |
 |---|---|---|
-| `card.refresh`, 50 in a row | the desktop, through the endpoint (Chromium) | 4.7 / 5.6 / 9.4 ms |
-| `vault.status`, 200 at concurrency 16 | the vault page, through the endpoint (Chromium) | 65.2 / 124.4 / 159.4 ms |
-| `vault.list`, 200 at concurrency 16 | in the server, through the gate, SQLite | 37.6 / 162.8 / 203.0 ms |
-| `vault.status`, 200 at concurrency 16 | in the server, through the gate, SQLite | 26.4 / 146.4 / 166.2 ms |
-| `vault.list`, 200 at concurrency 16 | in the server, through the gate, PostgreSQL 16 | 41.4 / 57.1 / 65.2 ms |
-| `vault.status`, 200 at concurrency 16 | in the server, through the gate, PostgreSQL 16 | 31.6 / 40.1 / 47.8 ms |
+| `card.refresh`, 50 in a row | the desktop, through the endpoint (Chromium) | 4.5 / 5.1 / 9.1 ms |
+| `vault.status`, 200 at concurrency 16 | the vault page, through the endpoint (Chromium) | 71.7 / 178.7 / 283.3 ms |
+| `vault.list`, 200 at concurrency 16 | in the server, through the gate, SQLite | 36.7 / 160.3 / 268.4 ms |
+| `vault.status`, 200 at concurrency 16 | in the server, through the gate, SQLite | 28.8 / 240.0 / 273.1 ms |
+| `vault.list`, 200 at concurrency 16 | in the server, through the gate, PostgreSQL 16 | 41.1 / 55.0 / 66.9 ms |
+| `vault.status`, 200 at concurrency 16 | in the server, through the gate, PostgreSQL 16 | 31.2 / 38.7 / 42.6 ms |
 
 Each cell's vault held eleven entries. No call was refused.

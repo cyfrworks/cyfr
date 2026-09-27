@@ -16,7 +16,8 @@
 //                icon, in that posture's order;
 //   full         canvas-full opened from the desktop and closed: the
 //                desktop frozen while covered (inert, and a call from it
-//                refused as suspended) and live again after;
+//                refused as suspended), Tab from its capsule landing on no
+//                control it covers, and live again after;
 //   vault        the vault page lists names; an entry is added through the
 //                shell's credential prompt by keyboard alone; the value is
 //                in no frame's DOM and in no request a frame made (read at
@@ -262,6 +263,31 @@ async function measure(frame, action, args, batches, concurrency) {
   return { ...percentiles(ms.map((v) => Math.round(v * 10) / 10)), refused, concurrency };
 }
 
+// Where focus lands on each of `presses` Tabs from the shown full frame's
+// close control: whether the element is under the full frame (the full
+// frame is what the page shows at its centre) without being part of it.
+async function tabFromCapsule(page, presses) {
+  await page.focus('[data-canvas-place="full"] button[phx-click="close_active_tincture"]');
+  const landings = [];
+  for (let i = 0; i < presses; i++) {
+    await page.keyboard.press("Tab");
+    landings.push(await page.evaluate(() => {
+      const full = document.querySelector('[data-canvas-place="full"]:not(.hidden)');
+      const a = document.activeElement;
+      if (!a || a === document.body || !full) return { at: "body", covered: false };
+      const label = a.id || a.getAttribute("aria-label") || a.tagName;
+      if (full.contains(a)) return { at: label, covered: false };
+      const assistant = !!a.closest("#aqua-panel");
+      const r = a.getBoundingClientRect();
+      if (r.width === 0 || r.height === 0) return { at: label, covered: false, unseen: true };
+      const top = document.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2);
+      const under = !!top && full.contains(top);
+      return { at: label, covered: under && !assistant, assistant: under && assistant };
+    }));
+  }
+  return landings;
+}
+
 async function full(page, name, record) {
   let desk = await desktop(page);
   const opened = await openFromDesktop(page, desk, "full-app");
@@ -280,6 +306,14 @@ async function full(page, name, record) {
   check(!refused.ok && /suspend/i.test(refused.message), name, "full", "desktop_suspended",
     "a call from the covered desktop is refused as suspended", refused);
 
+  // Tab from the full frame's capsule never lands on a control the full
+  // frame covers. The assistant's panel is left reachable by design and is
+  // counted apart.
+  const tabs = await tabFromCapsule(page, 40);
+  const onCovered = tabs.filter((t) => t.covered);
+  check(onCovered.length === 0, name, "full", "tab_skips_covered",
+    "Tab from the full frame's capsule never lands on a covered control", onCovered);
+
   await closeFull(page);
   const live = await waitFor(async () => {
     const s = await standing(desk.element);
@@ -292,7 +326,11 @@ async function full(page, name, record) {
     .catch(() => call(desk.frame, "action", "layout.get", { posture: "desk" }));
   check(!live.inert && live.state === "live" && again.ok, name, "full", "desktop_live",
     "closing the full frame makes the desktop live again", { live, again: again.ok });
-  record.full = { covered, refused: { code: refused.code, message: refused.message }, live };
+  record.full = {
+    covered, refused: { code: refused.code, message: refused.message }, live,
+    tab_landings: tabs.length, tab_on_covered: onCovered.length,
+    tab_on_assistant: tabs.filter((t) => t.assistant).length,
+  };
 }
 
 async function vault(page, name, proxy, record) {
@@ -305,6 +343,14 @@ async function vault(page, name, proxy, record) {
     .then((names) => (names.includes("seeded-api") ? names : null)).catch(() => null),
   { timeoutMs: 30_000, what: "the vault's names" }).catch(() => []);
   check(listed.includes("seeded-api"), name, "vault", "listing", "the vault page lists entry names", listed);
+  const offers = await frame.evaluate(() => ({
+    note: (document.getElementById("console-note") || {}).textContent || "",
+    buttons: [...document.querySelectorAll("button")].map((b) => b.textContent.trim()),
+  })).catch(() => ({ note: "", buttons: [] }));
+  check(offers.note === "Entries are changed and removed on the console's vault page." &&
+    JSON.stringify(offers.buttons.sort()) === JSON.stringify(["Add entry", "Refresh"]),
+  name, "vault", "lists_and_adds_only",
+  "the page lists and adds, and says entries are changed and removed on the console's vault page", offers);
 
   // The name field by keyboard alone: Tab until it holds focus.
   // Focus is in the frame when the shell's active element is the frame's
@@ -623,10 +669,6 @@ async function serverGone(browsers, base, proxy, segment, cookie, outDir) {
 // ---- the record --------------------------------------------------------------
 
 const NOT_DRIVEN = [
-  ["vault_delete",
-    "deleting an entry from the vault page: vault.delete is an interactive-consent mutation, which the gate refuses to a tincture frame (auth method tincture); the page shows the refusal"],
-  ["vault_rotate",
-    "rotating from the vault page: rotate takes the new value, which a frame never holds; the page offers no rotation"],
   ["vault_list_on_the_page",
     "vault.list from the vault page: its consent class (staging) refuses a tincture frame, so the page lists through vault.status; vault.list is measured in-server through the gate (run.sh)"],
   ["hand_touch_gestures",
@@ -643,6 +685,7 @@ function table(record, server) {
   line("hand strip", (r) => r.hand.strip.join(" "));
   line("desktop frozen under a full frame", (r) => `${r.full.covered.state}, inert ${r.full.covered.inert}`);
   line("covered desktop's call", (r) => r.full.refused.code);
+  line("Tab from the capsule: landings on covered controls (on the assistant)", (r) => `${r.full.tab_on_covered} of ${r.full.tab_landings} (${r.full.tab_on_assistant})`);
   line("vault: Tab presses to the name field", (r) => r.vault.tabs);
   line("vault: frame requests carrying the value", (r) => `${r.vault.leaked} of ${r.vault.frame_requests}`);
   line("safe mode by chord: frames during", (r) => r.safe_mode_chord.frames_during);

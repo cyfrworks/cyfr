@@ -3,8 +3,9 @@
 // which never answers a value. An entry is added by asking the shell for
 // it (`cyfr.credential(name)`): the person types the value into the
 // shell's own prompt, it goes to the vault, and this page learns only
-// whether an entry was saved. An entry is deleted through `vault.delete`,
-// which the gate decides. Every text the page shows is set as text.
+// whether an entry was saved. Entries are changed and removed on the
+// console's vault page, since a frame may make no vault change itself.
+// Every text the page shows is set as text.
 
 const cyfr = window.cyfr
 const nameInput = document.getElementById("add-name")
@@ -14,7 +15,7 @@ const body = document.getElementById("entries-body")
 const empty = document.getElementById("entries-empty")
 const status = document.getElementById("status")
 
-const state = {entries: [], confirming: null, busy: false}
+const state = {entries: [], busy: false}
 
 function say(text) {
   status.textContent = text || ""
@@ -78,29 +79,6 @@ async function add() {
   }
 }
 
-// ---- deleting ------------------------------------------------------------
-
-async function remove(entry) {
-  if (state.confirming !== entry.id) {
-    state.confirming = entry.id
-    render()
-    const confirm = body.querySelector(`[data-confirm="${CSS.escape(entry.id)}"]`)
-    if (confirm) confirm.focus()
-    say(`Delete ${entry.name}? Press Confirm delete to go on.`)
-    return
-  }
-
-  state.confirming = null
-  try {
-    await cyfr.action("vault.delete", {id: entry.id})
-    await load()
-    say(`Deleted ${entry.name}.`)
-  } catch (error) {
-    render()
-    say(`${entry.name} was not deleted: ${error.message}`)
-  }
-}
-
 // ---- drawing -------------------------------------------------------------
 
 function row(entry) {
@@ -114,29 +92,6 @@ function row(entry) {
   tr.append(el("td", null, entry.status))
   tr.append(el("td", null, entry.bound ? "Yes" : "No"))
   tr.append(el("td", null, changed(entry.updated_at)))
-
-  const actions = el("td", "actions")
-  const confirming = state.confirming === entry.id
-  const button = el("button", confirming ? "danger" : null, confirming ? "Confirm delete" : "Delete")
-  button.type = "button"
-  button.setAttribute("aria-label", `${confirming ? "Confirm delete of" : "Delete"} ${entry.name}`)
-  if (confirming) button.dataset.confirm = entry.id
-  button.addEventListener("click", () => remove(entry))
-  actions.append(button)
-
-  if (confirming) {
-    const cancel = el("button", null, "Keep")
-    cancel.type = "button"
-    cancel.setAttribute("aria-label", `Keep ${entry.name}`)
-    cancel.addEventListener("click", () => {
-      state.confirming = null
-      render()
-      say("")
-    })
-    actions.append(cancel)
-  }
-
-  tr.append(actions)
   return tr
 }
 

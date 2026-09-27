@@ -46,6 +46,7 @@ defmodule PrismWeb do
       SchedulesLive,
       SettingsLive,
       ShellLive,
+      VaultLive,
       WebhooksLive
     ],
     dirty_xrefs: [CyfrWeb.Endpoint, CyfrWeb.Router],

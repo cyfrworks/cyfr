@@ -66,6 +66,13 @@ defmodule PrismWeb.ShellLive do
   frame freezes or goes live again the view pushes `frame_state`, which
   the canvas hook relays to the frame's bridge.
 
+  While a full frame is shown it covers everything under it, so the
+  shell sets `covered`: the layout takes its chrome (the top bar, the
+  sidebar and the drawer) out of reach with `inert`, and the canvas does
+  the same to every layer under the full frame. The full frame and its
+  capsule, the shell's Safe mode control, the system layer and the
+  assistant's panel stay reachable.
+
   Every credential this view minted is revoked on each path that ends it:
   `terminate/2` (the socket closed, the person navigated away, the view
   redirected) and the archived-athanor notice before it redirects. A new
@@ -93,6 +100,7 @@ defmodule PrismWeb.ShellLive do
       |> assign(:page_title, "Tinctures")
       |> assign(:active_nav, "tinctures")
       |> assign(:frames, Frames.new())
+      |> assign(:covered, false)
       |> assign(:arrangement, nil)
       |> assign(:desktop, :pending)
       |> assign(:desktop_ready, nil)
@@ -422,7 +430,7 @@ defmodule PrismWeb.ShellLive do
     socket =
       Enum.reduce(
         Frames.signals(before, later),
-        assign(socket, :frames, later),
+        assign(socket, frames: later, covered: Frames.active(later) != nil),
         &push_event(&2, "frame_state", &1)
       )
 
@@ -578,6 +586,7 @@ defmodule PrismWeb.ShellLive do
 
     socket
     |> assign(:frames, Frames.clear(ctx, socket.assigns.frames))
+    |> assign(:covered, false)
     |> assign(:safe_mode, %{id: prompt_id, reason: reason})
     |> assign(:desktop_ready, nil)
     |> assign(:credential_prompts, %{})
