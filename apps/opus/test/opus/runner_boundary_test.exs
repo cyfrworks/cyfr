@@ -241,17 +241,26 @@ defmodule Opus.RunnerBoundaryTest do
       {:ok, "held"}
     end)
 
+    # The pool's one runner, taken before the attempt's deadline is set.
+    # The watchdog halts it a grace after that deadline, which on a loaded
+    # host can come before the guest's first host call: the runner is known
+    # by its process and its report, never by a poll for the busy runner
+    # or by what its guest said.
+    runner = fresh_runner!()
+    os_pid = os_pid(runner)
+    assert is_integer(os_pid)
+
     attempt = spin!(host, boot, timeout_ms: 500)
     assert :ok = start(attempt)
-    wait_until(fn -> ScriptedHost.requests(host, "attach") != [] end, @boot_ms)
-    wait_until(fn -> busy_runner() != nil end)
-    os_pid = os_pid(busy_runner())
 
-    wait_until(fn -> not alive?(os_pid) end, 10_000, "the spinning runner to be halted")
+    wait_until(fn -> not alive?(os_pid) end, @boot_ms, "the spinning runner to be halted")
     wait_until(fn -> ScriptedHost.requests(host, "runner_exited") != [] end, 5_000)
 
-    assert [%{args: %{"attempts" => [held]}}] = ScriptedHost.requests(host, "runner_exited")
+    assert [%{args: %{"attempts" => [held], "runner" => reported}}] =
+             ScriptedHost.requests(host, "runner_exited")
+
     assert held == attempt.attempt
+    assert reported == runner.id
     assert ScriptedHost.requests(host, "complete") == []
     wait_until(fn -> match?(%{busy: 0, tainted: 0}, runners()) end, 10_000)
   end

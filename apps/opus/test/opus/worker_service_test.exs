@@ -151,15 +151,17 @@ defmodule Opus.WorkerServiceTest do
     wait_until(fn -> attempts() == [attempt.attempt] end)
 
     assert :ok = WorkerService.kill(attempt.execution_id)
-    wait_until(fn -> attempts() == [] end)
-    # Again for an execution this boot ended; never for one it never ran.
-    assert :ok = WorkerService.kill(attempt.execution_id)
-    assert {:error, :not_found} = WorkerService.kill("exec_never_here")
 
+    # The runner ends within its release grace; the service forgets the
+    # attempt as it sends the report of that end.
     wait_until(fn -> ScriptedHost.requests(host, "runner_exited") != [] end, @boot_ms)
     assert [%{args: %{"attempts" => [held]}}] = ScriptedHost.requests(host, "runner_exited")
     assert held == attempt.attempt
     assert attempts() == []
+
+    # Again for an execution this boot ended; never for one it never ran.
+    assert :ok = WorkerService.kill(attempt.execution_id)
+    assert {:error, :not_found} = WorkerService.kill("exec_never_here")
   end
 
   test "a restarted service is a new boot that holds none of its predecessor's attempts", %{

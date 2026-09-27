@@ -89,6 +89,7 @@ defmodule Compendium.OCI.CacheTest do
     test "stands for five minutes and is never written to storage", %{registry: registry} do
       before = System.monotonic_time(:millisecond)
       :ok = Cache.entitle("cred_a", registry, "alice/reagents/x")
+      later = System.monotonic_time(:millisecond)
 
       assert [{_key, true, expires_at}] =
                :ets.match_object(
@@ -96,8 +97,9 @@ defmodule Compendium.OCI.CacheTest do
                  {{:oci_entitlement, registry, :_, :_}, :_, :_}
                )
 
-      assert (expires_at - before) in 1..300_000
-      assert expires_at - before > 290_000
+      # Five minutes from the write, which the two clock reads bracket:
+      # they may fall in different milliseconds.
+      assert expires_at in (before + 300_000)..(later + 300_000)
 
       refute Arca.exists?(Prima.Actor.system(), ["cache", "oci", "entitlements"])
     end
