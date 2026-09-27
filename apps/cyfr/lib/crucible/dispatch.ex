@@ -219,8 +219,9 @@ defmodule Crucible.Dispatch do
   start that set off meanwhile is the waiter's to kill, once its attempt
   has stopped. A dispatched run's runner, or the run a claimed attempt was
   handed to (`claim/4`), is killed through its worker service
-  (`Crucible.WorkerClient.kill/2`); the worker service's exit report
-  then stops an attempt its runner attached to, and its waiter, if any,
+  (`Crucible.WorkerClient.kill/2`); the worker service's report of that
+  runner's end, which names every attempt it assigned the runner, then
+  stops an attempt its runner attached to, and its waiter, if any,
   answers the row as it stands. Any other holder is a process of this
   node (a turn root's, a task that has not dispatched yet), and is
   killed.

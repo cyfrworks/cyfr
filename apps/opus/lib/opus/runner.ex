@@ -41,7 +41,10 @@ defmodule Opus.Runner do
   sends `exit` naming every attempt left open, then stops the VM
   (`Opus.Release.stop/1`). A `cancel_child` kills the named child's
   process and marks the runner unclean; one naming no child here is
-  ignored. When the channel closes with nothing assigned, the runner
+  ignored. A cancelled child is never named in an `exit`: the cancel
+  fences it, so the runner no longer speaks for it, and the service,
+  which knows every child the runner said it started, names it in its
+  report of the runner's end. When the channel closes with nothing assigned, the runner
   stops; with a subtree running, it finishes it, then stops.
   """
 
@@ -359,7 +362,8 @@ defmodule Opus.Runner do
   # An attempt process that ended other than `:normal` left its attempt
   # open: the subtree cannot be completed, so the rest is killed and the
   # runner ends once every process is gone. A cancelled child's is CYFR's
-  # already, however its process ended: the cancel is the fence.
+  # already, however its process ended: the cancel is the fence, and the
+  # service's report of this runner's end names it.
   defp attempt_ended(state, _entry, :normal), do: maybe_finish(state)
 
   defp attempt_ended(state, entry, _reason) do

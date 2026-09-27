@@ -739,6 +739,47 @@ defmodule Crucible.HostTest do
       assert %{"ok" => true} = report(fixture)
       assert row(fixture).status == "completed"
     end
+
+    @tag :capture_log
+    test "stops an attempt a caller ended, leaving its row as the caller ended it; a stale or repeated report changes nothing" do
+      fixture = AttemptFixtures.attached!(service_id: @service)
+      assert {:ok, %{cancelled: true}} = Crucible.cancel(fixture.ctx, fixture.execution_id)
+      ended = row(fixture)
+      assert ended.status == "cancelled"
+
+      attempt = fn ->
+        Arca.ExecutionAttempts.get(Prima.Actor.in_athanor(fixture.athanor_id), fixture.attempt)
+      end
+
+      held = attempt.()
+
+      # Reports that do not speak for this attempt's runner on this member
+      # stop nothing.
+      assert %{"error" => "lost"} = report(fixture, member: "#{fixture.member}_stale")
+      assert %{"ok" => true} = report(fixture, boot: "boot_stale")
+      assert %{"ok" => true} = report(fixture, runner: "runner_stale")
+      assert Process.alive?(fixture.pid)
+
+      # The report of its runner's end stops the attempt without closing
+      # its run: the waiter hears it stopped, and the row, its attempt and
+      # its events stand as the cancel wrote them.
+      monitor = Process.monitor(fixture.pid)
+      assert %{"ok" => true} = report(fixture)
+      assert_receive {:DOWN, ^monitor, :process, _pid, :normal}, 5_000
+      assert Crucible.Attempt.whereis(fixture.execution_id) == nil
+      assert {:error, _stopped} = Dispatch.await(fixture.pid, fixture.close)
+
+      events = terminal_events(fixture)
+
+      for _ <- 1..2 do
+        assert Map.take(row(fixture), [:status, :error_message, :completed_at]) ==
+                 Map.take(ended, [:status, :error_message, :completed_at])
+
+        assert attempt.() == held
+        assert terminal_events(fixture) == events
+        assert %{"ok" => true} = report(fixture)
+      end
+    end
   end
 
   describe "the vectors of tests/fixtures/host_api.json" do

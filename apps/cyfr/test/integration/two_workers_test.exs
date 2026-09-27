@@ -19,7 +19,8 @@ defmodule Cyfr.TwoWorkersTest do
   (`record_denial`, which ends uncertain) — and a run whose stream and
   completion crossed a lossy wire keeps every delta once, in order, before
   its terminal event. Cancelling a formula ends its children with it and
-  the runner they ran in; a restarted service holds none of its
+  the runner they ran in, whose end the service reports naming every
+  child, and that report stops the children's attempts; a restarted service holds none of its
   predecessor's attempts, which the worker watch lapses when it hears the
   new boot; an exit report signed with another service's key,
   naming a boot that no longer runs or a runner that holds nothing lapses
@@ -431,14 +432,16 @@ defmodule Cyfr.TwoWorkersTest do
       assert {:error, _cancelled} = Task.await(root, 30_000)
       assert %{status: "cancelled"} = row(root_id)
 
-      for id <- held do
-        wait_until(fn -> row(id).status == "failed" end, 10_000)
-        wait_until(fn -> Attempt.whereis(id) == nil end)
-      end
+      for id <- held, do: wait_until(fn -> row(id).status == "failed" end, 10_000)
 
       # The kill ended the runner the formula and its children ran in: the
-      # service reported it gone, and holds nothing.
+      # service reported it gone, naming every child, whether the runner's
+      # own exit still listed it or had already fenced it by its cancel.
+      # That report, answered before the wire records it, is what stops
+      # the children's attempts, and it holds nothing after.
       wait_until(fn -> reported_exit?(runner) end, 10_000, "the runner's exit report")
+      assert Enum.all?(held, &reported_exit?(runner, attempt_of(ctx, &1)))
+      for id <- held, do: wait_until(fn -> Attempt.whereis(id) == nil end)
       wait_until(fn -> OpusService.status().attempts == [] end, 10_000)
       wait_until(fn -> Slots.status(@slots).child_active == children_before end)
     end
@@ -579,12 +582,20 @@ defmodule Cyfr.TwoWorkersTest do
   defp runner_of(ctx, id),
     do: Arca.ExecutionAttempts.current(Sanctum.Context.actor(ctx), id).claimed_by
 
-  # Whether the Opus service reported `runner`'s exit over the wire.
-  defp reported_exit?(runner) do
-    Enum.any?(
-      TwoServices.calls(),
-      &match?(%{callback: :runner_exited, args: %{"runner" => ^runner}}, &1)
-    )
+  # The attempt of the run's current attempt row.
+  defp attempt_of(ctx, id),
+    do: Arca.ExecutionAttempts.current(Sanctum.Context.actor(ctx), id).attempt
+
+  # Whether the Opus service reported `runner`'s exit over the wire, naming
+  # `attempt` when one is given.
+  defp reported_exit?(runner, attempt \\ nil) do
+    Enum.any?(TwoServices.calls(), fn
+      %{callback: :runner_exited, args: %{"runner" => ^runner, "attempts" => attempts}} ->
+        is_nil(attempt) or attempt in attempts
+
+      _other ->
+        false
+    end)
   end
 
   defp children_of(parent_id),
