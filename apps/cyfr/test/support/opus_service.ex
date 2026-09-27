@@ -35,7 +35,7 @@ defmodule Cyfr.Test.OpusService do
 
   # The service is a sibling application, not a dependency: CYFR names it
   # here as the suite's, never in its own code.
-  @compile {:no_warn_undefined, [Opus.Credentials]}
+  @compile {:no_warn_undefined, [Opus.Credentials, Opus.WorkerService]}
 
   @service "wrk_local"
 
@@ -115,6 +115,14 @@ defmodule Cyfr.Test.OpusService do
   @doc "The boot id the running service answers."
   @spec boot() :: String.t()
   def boot, do: status().boot
+
+  @doc """
+  Answer once every runner exit the service is reporting has been
+  answered by CYFR or given up on (`Opus.WorkerService.await_reports/1`):
+  for a test outside the wiring suite that ends a runner, before its end.
+  """
+  @spec await_reports() :: :ok
+  def await_reports, do: Opus.WorkerService.await_reports()
 
   @doc """
   Restart the worker service and its runners: a new boot that holds no

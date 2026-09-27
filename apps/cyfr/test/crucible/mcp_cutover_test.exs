@@ -11,7 +11,7 @@ defmodule Crucible.MCPCutoverTest do
 
   import Prima.Test.Wait
 
-  alias Cyfr.Test.TwoServices
+  alias Cyfr.Test.{OpusService, TwoServices}
   alias Sanctum.Context
   alias Sanctum.Test.ConsentFixtures
 
@@ -186,5 +186,16 @@ defmodule Crucible.MCPCutoverTest do
 
     wait_until(fn -> TwoServices.entered(id) != nil end, 30_000, "the run's attach")
     assert %{profile_id: "prof-cutover"} = TwoServices.entered(id)
+
+    # The stream's run is not this test's to end: it closes on its own, its
+    # attempt stops, and every runner exit the service reports is answered,
+    # so none of it reaches the store after this test's owner has gone.
+    wait_until(fn -> closed?(id) end, 30_000, "the streamed run to close")
+    wait_until(fn -> Crucible.Attempt.whereis(id) == nil end, 30_000, "its attempt to stop")
+    :ok = OpusService.await_reports()
+  end
+
+  defp closed?(id) do
+    Arca.Repo.get!(Arca.Schemas.Execution, id).status in Arca.Schemas.Execution.terminal_statuses()
   end
 end

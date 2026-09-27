@@ -113,7 +113,8 @@ defmodule Sanctum.Tenancy.ArchiveTest do
   end
 
   # A run admitted in the athanor and dispatched to the scripted worker
-  # service, whose runner attached and hangs. Answers its execution id.
+  # service, whose runner attached and hangs. Answers its execution id and
+  # the process waiting on it.
   defp running!(athanor_id, user_id) do
     ctx = member_ctx(athanor_id, user_id)
 
@@ -126,12 +127,13 @@ defmodule Sanctum.Tenancy.ArchiveTest do
 
     id = Prima.UUID7.execution_id()
 
-    Task.start(fn ->
-      Crucible.Dispatch.run(ctx, @reference, %{},
-        authority: Prima.Authority.zero(),
-        execution_id: id
-      )
-    end)
+    {:ok, waiter} =
+      Task.start(fn ->
+        Crucible.Dispatch.run(ctx, @reference, %{},
+          authority: Prima.Authority.zero(),
+          execution_id: id
+        )
+      end)
 
     wait_until(
       fn -> Enum.any?(ScriptedWorker.calls(), &(&1.execution_id == id)) end,
@@ -139,7 +141,27 @@ defmodule Sanctum.Tenancy.ArchiveTest do
       "the run's start at the scripted worker service"
     )
 
-    id
+    {id, waiter}
+  end
+
+  # What the cancels set going lands while this test still owns its
+  # connection: every killed runner's exit has been reported and answered,
+  # and every run's waiter has returned.
+  defp settled!(waiters) do
+    wait_until(
+      fn -> match?({:ok, %{runners: %{busy: 0, tainted: 0}}}, ScriptedWorker.status()) end,
+      @reaction_ms,
+      "the killed runners' exits"
+    )
+
+    :ok = ScriptedWorker.await_reports()
+
+    for waiter <- waiters do
+      ref = Process.monitor(waiter)
+      assert_receive {:DOWN, ^ref, :process, ^waiter, _reason}, @reaction_ms
+    end
+
+    :ok
   end
 
   defp cancelled?(id) do
@@ -174,7 +196,7 @@ defmodule Sanctum.Tenancy.ArchiveTest do
     owner = person(n)
     {:ok, group} = Athanors.create_group(owner.id, "Arch #{n}")
     key = key_in(group.id, owner.id)
-    running = running!(group.id, owner.id)
+    {running, waiter} = running!(group.id, owner.id)
 
     Cyfr.Bus.subscribe(
       Prima.Actor.in_athanor(group.id),
@@ -188,6 +210,7 @@ defmodule Sanctum.Tenancy.ArchiveTest do
     assert :ok = wait_until(fn -> cancelled?(running) end, @reaction_ms)
     athanor_id = group.id
     assert_receive %Cyfr.Bus.Notify{athanor_id: ^athanor_id, kind: :athanor_changed}
+    :ok = settled!([waiter])
   end
 
   test "archive drops every member's established-context memo, so a cached caller is refused next call" do
@@ -241,7 +264,7 @@ defmodule Sanctum.Tenancy.ArchiveTest do
     owner = person(n)
     {:ok, group} = Athanors.create_group(owner.id, "Leave #{n}")
     key = key_in(group.id, owner.id)
-    running = running!(group.id, owner.id)
+    {running, waiter} = running!(group.id, owner.id)
 
     :ok = Members.remove_member(group, user_id: owner.id)
 
@@ -249,6 +272,7 @@ defmodule Sanctum.Tenancy.ArchiveTest do
     assert {:error, :revoked} = Sanctum.ApiKey.validate(key, [])
     assert_receive {:cancelled, ^running, "system"}, @reaction_ms
     assert :ok = wait_until(fn -> cancelled?(running) end, @reaction_ms)
+    :ok = settled!([waiter])
   end
 
   test "denying a person archives their own athanor and the groups they were the last member of, closing both" do
@@ -273,8 +297,8 @@ defmodule Sanctum.Tenancy.ArchiveTest do
     {:ok, :added} = Members.add(shared, [user_id: u.id], other.id)
     personal_key = key_in(personal.id, u.id)
     alone_key = key_in(alone.id, u.id)
-    personal_run = running!(personal.id, u.id)
-    alone_run = running!(alone.id, u.id)
+    {personal_run, personal_waiter} = running!(personal.id, u.id)
+    {alone_run, alone_waiter} = running!(alone.id, u.id)
 
     assert {:ok, %{status: "denied"}} = Users.deny(u)
 
@@ -289,5 +313,6 @@ defmodule Sanctum.Tenancy.ArchiveTest do
     assert_receive {:cancelled, ^alone_run, "system"}, @reaction_ms
     assert :ok = wait_until(fn -> cancelled?(personal_run) end, @reaction_ms)
     assert :ok = wait_until(fn -> cancelled?(alone_run) end, @reaction_ms)
+    :ok = settled!([personal_waiter, alone_waiter])
   end
 end
