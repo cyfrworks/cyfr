@@ -32,7 +32,11 @@ defmodule Cyfr.Test.ScriptedWorker do
   (`push_deltas`, masked by the attempt) and closes the run (`complete` or
   `fail`). A runner that exits leaving its attempt open is reported
   (`runner_exited`), plain, signed with this worker service's dispatch
-  key and posted to the same listener.
+  key and posted to the same listener. A report runs beside the worker
+  service and is watched until it is answered: `await_reports/1` answers
+  once none is in flight, and the worker service stops only once every
+  report it made is answered, so a report a test's end left in flight
+  lands while the test's sandbox owner still holds the connection.
 
   Its status counts its runners as every worker service does: `busy` while
   a run's process is alive, and `tainted` from a kill until the killed
@@ -99,6 +103,8 @@ defmodule Cyfr.Test.ScriptedWorker do
   @attempt_fields [:athanor_id, :execution_id, :attempt, :fence, :generation]
   @probe_wait_ms 5_000
   @attach_wait_ms 5_000
+  # A report's post is bounded by its callback's timeout; this is past it.
+  @report_wait_ms HostAPI.request_timeout_ms(:runner_exited) + 5_000
   @service "wrk_scripted"
   # A loopback port nothing listens on (as `config/test.exs` names the
   # registry): the endpoint of this worker service while it is not started.
@@ -106,7 +112,13 @@ defmodule Cyfr.Test.ScriptedWorker do
 
   @doc false
   def child_spec(opts) do
-    %{id: __MODULE__, start: {__MODULE__, :start_link, [opts]}, restart: :temporary}
+    %{
+      id: __MODULE__,
+      start: {__MODULE__, :start_link, [opts]},
+      restart: :temporary,
+      # Long enough for `terminate/2` to see every report in flight answered.
+      shutdown: @report_wait_ms + 1_000
+    }
   end
 
   @doc "This worker service's configured id."
@@ -180,6 +192,14 @@ defmodule Cyfr.Test.ScriptedWorker do
 
   @doc "Every execution id this worker service was asked to kill, oldest first."
   def kills, do: GenServer.call(__MODULE__, :kills)
+
+  @doc """
+  Answer once every runner exit this worker service is reporting has been
+  answered by CYFR or given up on; at once when none is in flight.
+  """
+  @spec await_reports(timeout()) :: :ok
+  def await_reports(timeout_ms \\ @report_wait_ms),
+    do: GenServer.call(__MODULE__, :await_reports, timeout_ms)
 
   @doc """
   `ctx` moved into an athanor minted for the calling test alone: an
@@ -295,6 +315,9 @@ defmodule Cyfr.Test.ScriptedWorker do
        calls: [],
        kills: [],
        runners: %{},
+       # The reports in flight, by monitor, and who waits for none to be.
+       reports: MapSet.new(),
+       report_waiters: [],
        # The executions whose runner has ended on this boot: a kill of one
        # is `:ok` again, as a real worker service answers it.
        ended: MapSet.new(),
@@ -394,6 +417,9 @@ defmodule Cyfr.Test.ScriptedWorker do
   def handle_call(:calls, _from, state), do: {:reply, Enum.reverse(state.calls), state}
   def handle_call(:kills, _from, state), do: {:reply, Enum.reverse(state.kills), state}
 
+  def handle_call(:await_reports, from, state),
+    do: {:noreply, reported(%{state | report_waiters: [from | state.report_waiters]})}
+
   def handle_call(:settings, _from, state),
     do: {:reply, Map.take(state, [:window, :describe]), state}
 
@@ -418,7 +444,7 @@ defmodule Cyfr.Test.ScriptedWorker do
         {:noreply, state}
 
       {runner, runners} ->
-        if reason != :normal, do: report(runner)
+        state = if reason != :normal, do: report(state, runner), else: state
 
         {:noreply,
          %{
@@ -430,6 +456,13 @@ defmodule Cyfr.Test.ScriptedWorker do
     end
   end
 
+  # A report in flight has been answered, or given up on.
+  def handle_info({:DOWN, ref, :process, _pid, _reason}, state) do
+    if MapSet.member?(state.reports, ref),
+      do: {:noreply, reported(%{state | reports: MapSet.delete(state.reports, ref)})},
+      else: {:noreply, state}
+  end
+
   def handle_info(msg, state) do
     Prima.LoggerContext.unexpected(__MODULE__, msg)
     {:noreply, state}
@@ -439,6 +472,12 @@ defmodule Cyfr.Test.ScriptedWorker do
   def terminate(_reason, state) do
     for {pid, _runner} <- state.runners, do: Process.exit(pid, :kill)
 
+    # Every report made is answered before this worker service and its host
+    # listener go: stopped at a test's end, before the test's `on_exit`
+    # callbacks, it has the reports land while the sandbox owner still holds
+    # the connection.
+    await_in_flight(state.reports, System.monotonic_time(:millisecond) + @report_wait_ms)
+
     # The host listener is stopped here rather than left to the link, so
     # no call a runner had in flight is still reaching the store once this
     # worker service is gone. The worker listener, linked, goes with this
@@ -447,6 +486,29 @@ defmodule Cyfr.Test.ScriptedWorker do
     configured = Application.get_env(:cyfr, :opus_workers, [])
     Application.put_env(:cyfr, :opus_workers, Enum.reject(configured, &(&1[:id] == @service)))
     :ok
+  end
+
+  defp await_in_flight(reports, deadline) do
+    if MapSet.size(reports) == 0 do
+      :ok
+    else
+      receive do
+        {:DOWN, ref, :process, _pid, _reason} ->
+          await_in_flight(MapSet.delete(reports, ref), deadline)
+      after
+        max(deadline - System.monotonic_time(:millisecond), 0) -> :ok
+      end
+    end
+  end
+
+  # Whoever waits for the reports in flight is answered once none is.
+  defp reported(state) do
+    if MapSet.size(state.reports) == 0 do
+      for from <- state.report_waiters, do: GenServer.reply(from, :ok)
+      %{state | report_waiters: []}
+    else
+      state
+    end
   end
 
   defp stop_host_listener(listener) do
@@ -473,41 +535,44 @@ defmodule Cyfr.Test.ScriptedWorker do
 
   # A runner's exit is reported from a process of its own, over HTTP to
   # the host listener the runner reached, plain and signed with this worker
-  # service's dispatch key, as Opus's worker service reports one.
-  defp report(runner) do
-    spawn(fn ->
-      body =
-        :runner_exited
-        |> WorkerWire.request_body(%{
-          "member" => runner.member,
-          "runner" => runner.runner,
-          "attempts" => [runner.attempt]
-        })
-        |> Jason.encode!()
+  # service's dispatch key, as Opus's worker service reports one. It is
+  # watched until it ends, so `await_reports/1` and `terminate/2` can wait
+  # for it.
+  defp report(state, runner) do
+    {_pid, ref} =
+      spawn_monitor(fn ->
+        body =
+          :runner_exited
+          |> WorkerWire.request_body(%{
+            "member" => runner.member,
+            "runner" => runner.runner,
+            "attempts" => [runner.attempt]
+          })
+          |> Jason.encode!()
 
-      fields = %{
-        service: @service,
-        boot: runner.boot,
-        ts: System.system_time(:millisecond),
-        nonce: nonce()
-      }
+        fields = %{
+          service: @service,
+          boot: runner.boot,
+          ts: System.system_time(:millisecond),
+          nonce: nonce()
+        }
 
-      with {:ok, worker_key} <- Keys.opus_key(@service),
-           {:ok, header} <-
-             WorkerAuth.report_header(WorkerAuth.dispatch_key(worker_key), fields, body),
-           {:ok, 200, raw} <- post(runner.host_url, :runner_exited, header, body),
-           {:ok, true} <- read_answer(raw) do
-        :ok
-      else
-        refused ->
-          Logger.error(
-            "[Cyfr.Test.ScriptedWorker] the exit of #{runner.execution_id}'s runner was not " <>
-              "reported: #{Prima.LoggerContext.shape(refused)}"
-          )
-      end
-    end)
+        with {:ok, worker_key} <- Keys.opus_key(@service),
+             {:ok, header} <-
+               WorkerAuth.report_header(WorkerAuth.dispatch_key(worker_key), fields, body),
+             {:ok, 200, raw} <- post(runner.host_url, :runner_exited, header, body),
+             {:ok, true} <- read_answer(raw) do
+          :ok
+        else
+          refused ->
+            Logger.error(
+              "[Cyfr.Test.ScriptedWorker] the exit of #{runner.execution_id}'s runner was not " <>
+                "reported: #{Prima.LoggerContext.shape(refused)}"
+            )
+        end
+      end)
 
-    :ok
+    %{state | reports: MapSet.put(state.reports, ref)}
   end
 
   # ---------------------------------------------------------------------------
