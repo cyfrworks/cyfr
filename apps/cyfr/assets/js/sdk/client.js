@@ -10,6 +10,7 @@ import {
   VERSION,
   bearer,
   decodeAnswer,
+  decodeCredentialClosed,
   isFrameId,
   publicIdentity,
   request,
@@ -58,6 +59,9 @@ export function createClient({win, fetchFn, base, handshakeTimeoutMs = HANDSHAKE
   let frame = null
   let port = null
   let credential = null
+  // The resolver of the one credential prompt this frame has asked for and
+  // the shell has not yet closed.
+  let prompt = null
   const queued = []
 
   let settle
@@ -79,7 +83,17 @@ export function createClient({win, fetchFn, base, handshakeTimeoutMs = HANDSHAKE
 
   function onPortMessage(event) {
     const data = event.data
-    if (credential !== null || !isPlainObject(data)) return
+    if (!isPlainObject(data)) return
+
+    const closed = decodeCredentialClosed(data, frame)
+    if (closed.ok) {
+      const waiting = prompt
+      prompt = null
+      if (waiting) waiting({saved: closed.saved})
+      return
+    }
+
+    if (credential !== null) return
     if (data.v !== VERSION || data.type !== CREDENTIAL || data.frame !== frame) return
     if (typeof data.credential !== "string" || data.credential === "") return
     credential = data.credential
@@ -293,9 +307,26 @@ export function createClient({win, fetchFn, base, handshakeTimeoutMs = HANDSHAKE
       verb("ready")
     },
 
-    /** Ask the shell to bring this frame to the front. */
-    focus() {
-      verb("focus")
+    /**
+     * Ask the person for a secret through the shell's own prompt, stored in
+     * the vault as the entry `name`. The frame never sees the value.
+     * @param {string} name - the vault entry's name
+     * @returns {Promise<{saved: boolean}>} once the prompt closes: whether an
+     *   entry was saved, and nothing else. One prompt at a time: a second ask
+     *   while one is open rejects as `pending`.
+     */
+    credential(name) {
+      if (typeof name !== "string" || name === "") return invalid("a vault entry has a name")
+      if (!framed) {
+        return Promise.reject(new CyfrError("This page is not a frame the shell opened.", "no_frame"))
+      }
+      if (prompt !== null) {
+        return Promise.reject(new CyfrError("A credential prompt is already open.", "pending"))
+      }
+      return new Promise((resolve) => {
+        prompt = resolve
+        verb("credential", {name})
+      })
     }
   }
 

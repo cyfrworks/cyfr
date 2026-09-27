@@ -5,7 +5,15 @@ import assert from "node:assert/strict"
 import {afterEach, beforeEach, describe, test} from "node:test"
 
 import Canvas from "../../js/canvas/index.js"
-import {FRAME_STATE_EVENT, acting, frameSignal, nextStanding} from "../../js/canvas/signals.js"
+import {
+  CREDENTIAL_CLOSED_EVENT,
+  FRAME_STATE_EVENT,
+  acting,
+  credentialSignal,
+  frameSignal,
+  nextStanding,
+  safeModeChord
+} from "../../js/canvas/signals.js"
 import IframeBridge from "../../js/hooks/iframe_bridge.js"
 
 const FRAME = "frm_01a09fee2e4f"
@@ -211,7 +219,73 @@ describe("frame signals", () => {
   })
 })
 
+describe("a closed credential prompt", () => {
+  test("reaches only the frame it names, whose bridge tells the frame whether it was saved", async () => {
+    const frame = frameElement(FRAME)
+    const other = frameElement(OTHER)
+    const {hook: bridge} = mountBridge(frame)
+    const channel = new MessageChannel()
+    bridge._port = channel.port1
+    const told = []
+    channel.port2.onmessage = (event) => told.push(event.data)
+    const elsewhere = []
+    other.addEventListener(CREDENTIAL_CLOSED_EVENT, (event) => elsewhere.push(event.detail))
+
+    const {handlers} = mountCanvas(canvasElement({frames: [frame, other]}))
+    handlers.frame_credential({frame: FRAME, saved: true})
+    handlers.frame_credential({frame: FRAME, saved: "yes"})
+    handlers.frame_credential({frame: "short", saved: false})
+    handlers.frame_credential(null)
+
+    await new Promise((resolve) => setTimeout(resolve, 20))
+    assert.deepEqual(told, [{v: 1, type: "cyfr:credential-closed", frame: FRAME, saved: true}])
+    assert.deepEqual(elsewhere, [])
+    bridge.destroyed()
+    channel.port2.close()
+  })
+})
+
+describe("the safe mode chord", () => {
+  test("Ctrl+Alt+S on the shell's page asks the shell for safe mode; nothing else does", () => {
+    const pushed = []
+    const hook = Object.assign(Object.create(Canvas), {
+      el: canvasElement(),
+      pushEventTo: () => {},
+      pushEvent: (event, payload) => pushed.push({event, payload}),
+      handleEvent: () => {}
+    })
+    hook.mounted()
+
+    const press = (keys) => {
+      let prevented = false
+      listeners.keydown({...keys, preventDefault: () => (prevented = true)})
+      return prevented
+    }
+
+    assert.equal(press({key: "s", code: "KeyS", ctrlKey: true, altKey: false}), false)
+    assert.equal(press({key: "s", code: "KeyS", ctrlKey: false, altKey: true}), false)
+    assert.equal(press({key: "x", code: "KeyX", ctrlKey: true, altKey: true}), false)
+    assert.equal(press({key: "ß", code: "KeyS", ctrlKey: true, altKey: true}), true)
+    assert.deepEqual(pushed, [{event: "safe_mode", payload: {}}])
+
+    hook.disconnected()
+    press({key: "S", code: "KeyS", ctrlKey: true, altKey: true})
+    assert.equal(pushed.length, 1)
+
+    hook.destroyed()
+    assert.equal(listeners.keydown, undefined)
+    assert.equal(safeModeChord(null), false)
+  })
+})
+
 describe("the signal grammar", () => {
+  test("a frame_credential payload is a frame id and a boolean, and nothing else", () => {
+    assert.deepEqual(credentialSignal({frame: FRAME, saved: false}), {frame: FRAME, saved: false})
+    assert.equal(credentialSignal({frame: FRAME, saved: 1}), null)
+    assert.equal(credentialSignal({frame: FRAME}), null)
+    assert.equal(credentialSignal("saved"), null)
+  })
+
   test("a frame_state payload is a frame id and live or frozen, and nothing else", () => {
     assert.deepEqual(frameSignal({frame: FRAME, state: "live"}), {frame: FRAME, state: "live"})
     assert.equal(frameSignal({frame: FRAME, state: "disconnected"}), null)

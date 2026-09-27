@@ -2,7 +2,15 @@
 // Copyright 2026 CYFR Works Inc.
 
 import {parseSlots, postureFor, slotGeometry, stylesheet} from "./geometry.js"
-import {DISCONNECTED, FRAME_STATE_EVENT, RECONNECTED, frameSignal} from "./signals.js"
+import {
+  CREDENTIAL_CLOSED_EVENT,
+  DISCONNECTED,
+  FRAME_STATE_EVENT,
+  RECONNECTED,
+  credentialSignal,
+  frameSignal,
+  safeModeChord
+} from "./signals.js"
 
 /**
  * Canvas hook — the client's half of `PrismWeb.CanvasLive`.
@@ -11,8 +19,14 @@ import {DISCONNECTED, FRAME_STATE_EVENT, RECONNECTED, frameSignal} from "./signa
  * `desk` otherwise) to the canvas on mount, whenever it changes and when
  * the socket comes back; lays each slot out from the slot list the server
  * rendered (`data-slots`) into a stylesheet it owns, inside an element the
- * server never patches; and relays the shell's `frame_state` signals to
- * each frame's bridge as a `cyfr:frame-state` event on the frame's element.
+ * server never patches; relays the shell's `frame_state` signals to each
+ * frame's bridge as a `cyfr:frame-state` event on the frame's element; and
+ * relays its `frame_credential` signals (a credential prompt a frame asked
+ * for closed) as `cyfr:credential-closed`.
+ *
+ * The safe mode chord, Ctrl+Alt+S, is heard here, on the shell's own page,
+ * and sent to the shell as `safe_mode`; a frame's keys stay in the frame's
+ * document and never reach it.
  *
  * The last slot list read is kept for as long as the tab is open, so while
  * the socket is down the last layout stays drawn and follows the window,
@@ -29,7 +43,15 @@ const Canvas = {
     this._onResize = () => this._layout()
     globalThis.window?.addEventListener("resize", this._onResize)
 
+    this._onKeydown = (event) => {
+      if (!safeModeChord(event)) return
+      event.preventDefault()
+      if (this._connected) this.pushEvent("safe_mode", {})
+    }
+    globalThis.window?.addEventListener("keydown", this._onKeydown)
+
     this.handleEvent("frame_state", (payload) => this._relay(payload))
+    this.handleEvent("frame_credential", (payload) => this._credentialClosed(payload))
 
     this._read()
     this._layout()
@@ -57,6 +79,7 @@ const Canvas = {
 
   destroyed() {
     globalThis.window?.removeEventListener("resize", this._onResize)
+    globalThis.window?.removeEventListener("keydown", this._onKeydown)
   },
 
   // The last slot list that parses is the one drawn.
@@ -105,6 +128,13 @@ const Canvas = {
     if (!signal) return
     const frame = this._frames().find((el) => el.dataset.frameId === signal.frame)
     if (frame) frame.dispatchEvent(stateEvent(signal.state))
+  },
+
+  _credentialClosed(payload) {
+    const signal = credentialSignal(payload)
+    if (!signal) return
+    const frame = this._frames().find((el) => el.dataset.frameId === signal.frame)
+    if (frame) frame.dispatchEvent(new CustomEvent(CREDENTIAL_CLOSED_EVENT, {detail: {saved: signal.saved}}))
   },
 
   _broadcast(state) {

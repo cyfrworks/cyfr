@@ -268,7 +268,8 @@ await cyfr.action("tool.action", {});
 const feed = await cyfr.stream("mcp_servers.changes", null, ({ event, data }) => console.log(event, data));
 feed.close();
 
-// Shell verbs: title, focus, close, open another tincture; ready when loaded
+// Shell verbs: title, close, open another tincture; ready when loaded. A secret
+// is typed into the shell, never the page: cyfr.credential(name) resolves with {saved}
 cyfr.title("Stock Dashboard");
 cyfr.ready();
 ```

@@ -496,7 +496,6 @@ defmodule PrismWeb.ShellFrameTest do
       assert Enum.find(assigns(view).tinctures, &(&1.id == "iframe_verb-dash")).title == "Lisbon"
 
       verb!(view, frame, Prima.TinctureWire.shell_message(:ready, frame))
-      verb!(view, frame, Prima.TinctureWire.shell_message(:focus, frame))
       verb!(view, frame, Prima.TinctureWire.shell_message(:close, frame))
 
       assert opened(view) == []
@@ -554,7 +553,7 @@ defmodule PrismWeb.ShellFrameTest do
       assert %{placement: :full} = frame(view, "verb-dash")
     end
 
-    test "a hidden frame's focus does not raise it", %{conn: conn, ctx: ctx} do
+    test "no verb raises a frame: a hidden frame's focus is dropped", %{conn: conn, ctx: ctx} do
       tincture!(ctx, "radio-dash", %{"background" => true})
       tincture!(ctx, "front-dash")
       view = shell!(conn)
@@ -562,7 +561,7 @@ defmodule PrismWeb.ShellFrameTest do
       radio = frame_id(view, "radio-dash")
       open!(view, "front-dash")
 
-      verb!(view, radio, Prima.TinctureWire.shell_message(:focus, radio))
+      verb!(view, radio, %{"v" => 1, "verb" => "focus", "frame" => radio, "args" => %{}})
 
       assert active(view) == "iframe_front-dash"
       assert dropped(view) == 1

@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright 2026 CYFR Works Inc.
 
-import {CREDENTIAL, HANDSHAKE, VERSION, decodeShellMessage} from "../sdk/wire.js"
-import {FRAME_STATE_EVENT, acting, nextStanding} from "../canvas/signals.js"
+import {CREDENTIAL, HANDSHAKE, VERSION, credentialClosed, decodeShellMessage} from "../sdk/wire.js"
+import {CREDENTIAL_CLOSED_EVENT, FRAME_STATE_EVENT, acting, nextStanding} from "../canvas/signals.js"
 
 /**
  * IframeBridge hook — the shell's end of a tincture frame's MessagePort.
@@ -27,6 +27,11 @@ import {FRAME_STATE_EVENT, acting, nextStanding} from "../canvas/signals.js"
  * frozen frame, or any frame while the socket is down, is made inert and
  * every verb it posts is dropped and counted. Its port stays open, so the
  * frame acts again once it is live and the socket is back.
+ *
+ * When the credential prompt a frame's `credential` verb asked for closes,
+ * the canvas signals `cyfr:credential-closed` on the frame's element with
+ * whether an entry was saved, and the bridge tells the frame that over the
+ * port and nothing more.
  */
 const IframeBridge = {
   mounted() {
@@ -43,6 +48,13 @@ const IframeBridge = {
 
     this._onState = (event) => this._apply(event.detail && event.detail.state)
     this.el.addEventListener(FRAME_STATE_EVENT, this._onState)
+
+    this._onCredentialClosed = (event) => this._credentialClosed(event.detail && event.detail.saved)
+    this.el.addEventListener(CREDENTIAL_CLOSED_EVENT, this._onCredentialClosed)
+  },
+
+  _credentialClosed(saved) {
+    if (this._port) this._port.postMessage(credentialClosed(this._frameId, saved === true))
   },
 
   _apply(signal) {
@@ -103,6 +115,7 @@ const IframeBridge = {
   destroyed() {
     this.el.removeEventListener("load", this._onLoad)
     this.el.removeEventListener(FRAME_STATE_EVENT, this._onState)
+    this.el.removeEventListener(CREDENTIAL_CLOSED_EVENT, this._onCredentialClosed)
     this._closePort()
   }
 }

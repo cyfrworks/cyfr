@@ -651,7 +651,9 @@ defmodule Compendium.Scaffold do
     // cyfr.action("tool.action", {})
     // const feed = await cyfr.stream("tool.topic", null, ({ event, data }) => console.log(event, data))
     //
-    // Shell verbs: cyfr.title("…"), cyfr.focus(), cyfr.close(), cyfr.open("t:local.other").
+    // Shell verbs: cyfr.title("…"), cyfr.close(), cyfr.open("t:local.other").
+    // A secret is typed into the shell, never the page: cyfr.credential("name")
+    // resolves with {saved} once the shell's prompt closes.
     // At a public tincture's address the same calls run with no credential,
     // under its public profile.
 
@@ -808,7 +810,7 @@ defmodule Compendium.Scaffold do
       close(): void;
       title(title: string): void;
       ready(): void;
-      focus(): void;
+      credential(name: string): Promise<{ saved: boolean }>;
     };
 
     export default function App() {
@@ -904,7 +906,9 @@ defmodule Compendium.Scaffold do
     // cyfr.action("tool.action", {});
     // const feed = await cyfr.stream("tool.topic", null, ({ event, data }) => console.log(event, data));
     //
-    // Shell verbs: cyfr.title("…"), cyfr.focus(), cyfr.close(), cyfr.open("t:local.other").
+    // Shell verbs: cyfr.title("…"), cyfr.close(), cyfr.open("t:local.other").
+    // A secret is typed into the shell, never the page: cyfr.credential("name")
+    // resolves with {saved} once the shell's prompt closes.
     // At a public tincture's address the same calls run with no credential,
     // under its public profile.
 

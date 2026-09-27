@@ -10,11 +10,19 @@
     action: "/_f/v1/action",
     stream_open: "/_f/v1/stream"
   });
-  var VERBS = Object.freeze(["open", "close", "title", "ready", "focus"]);
+  var VERBS = Object.freeze(["open", "close", "title", "ready", "credential"]);
   var HANDSHAKE = "cyfr:handshake";
   var CREDENTIAL = "cyfr:credential";
+  var CREDENTIAL_CLOSED = "cyfr:credential-closed";
+  function decodeCredentialClosed(data, frame) {
+    if (!isObject(data) || data.v !== VERSION || data.type !== CREDENTIAL_CLOSED) return { ok: false };
+    if (!only(data, ["v", "type", "frame", "saved"]) || data.frame !== frame) return { ok: false };
+    if (typeof data.saved !== "boolean") return { ok: false };
+    return { ok: true, saved: data.saved };
+  }
   var FRAME_ID = /^[A-Za-z0-9_-]{8,64}$/;
   var isObject = (value) => value !== null && typeof value === "object" && !Array.isArray(value);
+  var only = (object, keys) => Object.keys(object).every((key) => keys.includes(key));
   function isFrameId(id) {
     return typeof id === "string" && FRAME_ID.test(id);
   }
@@ -162,6 +170,7 @@
     let frame = null;
     let port = null;
     let credential = null;
+    let prompt = null;
     const queued = [];
     let settle;
     const credentialArrived = new Promise((resolve) => {
@@ -179,7 +188,15 @@
     }
     function onPortMessage(event) {
       const data = event.data;
-      if (credential !== null || !isPlainObject(data)) return;
+      if (!isPlainObject(data)) return;
+      const closed = decodeCredentialClosed(data, frame);
+      if (closed.ok) {
+        const waiting = prompt;
+        prompt = null;
+        if (waiting) waiting({ saved: closed.saved });
+        return;
+      }
+      if (credential !== null) return;
       if (data.v !== VERSION || data.type !== CREDENTIAL || data.frame !== frame) return;
       if (typeof data.credential !== "string" || data.credential === "") return;
       credential = data.credential;
@@ -356,9 +373,26 @@
       ready() {
         verb("ready");
       },
-      /** Ask the shell to bring this frame to the front. */
-      focus() {
-        verb("focus");
+      /**
+       * Ask the person for a secret through the shell's own prompt, stored in
+       * the vault as the entry `name`. The frame never sees the value.
+       * @param {string} name - the vault entry's name
+       * @returns {Promise<{saved: boolean}>} once the prompt closes: whether an
+       *   entry was saved, and nothing else. One prompt at a time: a second ask
+       *   while one is open rejects as `pending`.
+       */
+      credential(name) {
+        if (typeof name !== "string" || name === "") return invalid("a vault entry has a name");
+        if (!framed) {
+          return Promise.reject(new CyfrError("This page is not a frame the shell opened.", "no_frame"));
+        }
+        if (prompt !== null) {
+          return Promise.reject(new CyfrError("A credential prompt is already open.", "pending"));
+        }
+        return new Promise((resolve) => {
+          prompt = resolve;
+          verb("credential", { name });
+        });
       }
     };
     return { api: Object.freeze(api), onWindowMessage };

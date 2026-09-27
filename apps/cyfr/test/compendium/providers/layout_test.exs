@@ -117,9 +117,11 @@ defmodule Compendium.Providers.LayoutTest do
 
     test "a posture the document does not name reads as the default's", %{ctx: ctx} do
       {:ok, _} = edit(ctx, document(), 0)
+      {:ok, default} = Prima.Layout.posture(Prima.Layout.default(), "hand")
+      default = Prima.Layout.posture_to_json(default)
 
-      assert {:ok, %{arrangement: %{"desktop" => "tincture:local.desktop", "slots" => []}}} =
-               get(ctx, %{"posture" => "hand"})
+      assert {:ok, %{arrangement: ^default}} = get(ctx, %{"posture" => "hand"})
+      assert default["desktop"] == "tincture:local.desktop"
 
       assert {:error, {:invalid_argument, _}} = get(ctx, %{"posture" => "wall"})
     end
@@ -172,6 +174,33 @@ defmodule Compendium.Providers.LayoutTest do
       assert {:error, {:invalid_argument, _}} = edit(ctx, %{"version" => 2}, 0)
       assert {:error, {:invalid_argument, _}} = edit(ctx, document(), -1)
       assert {:ok, %{shipped_default: true}} = get(ctx)
+    end
+
+    test "a published layout is announced on the person's own topic, a refused one is not",
+         %{ctx: ctx} do
+      actor = Context.actor(ctx)
+      other = person_ctx()
+      :ok = Cyfr.Bus.subscribe(actor, Cyfr.Bus.layouts(actor, ctx.user_id))
+      :ok = Cyfr.Bus.subscribe(actor, Cyfr.Bus.layouts(actor, other.user_id))
+      user_id = ctx.user_id
+      athanor_id = ctx.athanor_id
+
+      {:ok, %{revision: 1}} = edit(ctx, document(), 0)
+
+      assert_receive %Cyfr.Bus.LayoutPublished{
+        kind: :published,
+        user_id: ^user_id,
+        athanor_id: ^athanor_id,
+        revision: 1
+      }
+
+      {:error, {:conflict, _}} = edit(ctx, document("tincture:local.late"), 0)
+      refute_receive %Cyfr.Bus.LayoutPublished{}, 50
+
+      {:ok, %{revision: 1}} = edit(other, document(), 0)
+      other_id = other.user_id
+      assert_receive %Cyfr.Bus.LayoutPublished{user_id: ^other_id}
+      refute_receive %Cyfr.Bus.LayoutPublished{}, 50
     end
 
     test "each person arranges their own", %{ctx: ctx} do
