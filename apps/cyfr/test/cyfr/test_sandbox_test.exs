@@ -110,11 +110,21 @@ defmodule Cyfr.Test.SandboxTest do
       root_id = Prima.UUID7.execution_id()
       TwoServices.hold!(:tool_call, root_id, once: true)
 
-      spawn(fn ->
-        Crucible.run_root(ctx, :default, Probe.probe_ref(), Probe.held_input(),
-          execution_id: root_id
-        )
-      end)
+      # The run waits in a task of the execution domain's supervisor, not in
+      # a process of this test's, so the sweep stops it and then its attempt
+      # in their supervisors' order. The attempt traps exits so that a stop
+      # runs `terminate/2` after its reaction to its waiter; killed with the
+      # test's other descendants it could be cut off mid-write, taking the
+      # shared connection down under the report of the runner the sweep
+      # then ends.
+      {:ok, _waiter} =
+        Task.Supervisor.start_child(Crucible.TaskSupervisor, fn ->
+          Process.delete(:"$callers")
+
+          Crucible.run_root(ctx, :default, Probe.probe_ref(), Probe.held_input(),
+            execution_id: root_id
+          )
+        end)
 
       assert_receive {:held, ^root_id, _call}, 30_000
 

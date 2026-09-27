@@ -1366,6 +1366,12 @@ defmodule Aqua.RunnerTest do
     assert {:ok, %{status: "accepted", fence: 1}} = Tape.turn(ctx, queued)
     allow_turn_writes()
 
+    # The runner that stopped on the refusal starts again and runs the
+    # queued turn until its loop waits on the model's call, so the Stop
+    # stops a loop that waits and not one in the middle of a write.
+    assert %{running: true} = Runner.state(thread.id, ctx.athanor_id)
+    assert_receive {:scripted_probe, _call, _}, 60_000
+
     assert :ok = Runner.stop_turn(ctx, thread.id)
     assert {:ok, ^cancelled} = Tape.turn(ctx, first)
     assert {:ok, %{status: "cancelled"}} = Tape.turn(ctx, queued)
