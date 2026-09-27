@@ -357,7 +357,16 @@ defmodule PrismWeb.AquaPanelLiveTest do
 
     # What the hook pushes for ⌘. — to its own pane.
     render_hook(pane, "stop", %{})
-    wait_until(fn -> not Runner.turn_running?(%{me | athanor_id: mine_id}, you_thread.id) end)
+
+    # The halt cancels the turn's run through its worker service and ends
+    # the turn on the tape before the runner stops holding it: bounded as
+    # the waits on the models are.
+    wait_until(
+      fn -> not Runner.turn_running?(%{me | athanor_id: mine_id}, you_thread.id) end,
+      30_000,
+      "the panel's turn to be halted"
+    )
+
     assert Runner.turn_running?(%{me | athanor_id: room_id}, thread.id)
     assert {:ok, []} = Aqua.Tape.open_turns(me, you_thread.id)
 

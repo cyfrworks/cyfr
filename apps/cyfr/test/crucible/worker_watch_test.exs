@@ -41,12 +41,19 @@ defmodule Crucible.WorkerWatchTest do
   @slots Crucible.Slots
   @lapsed "Execution terminated: runner stopped without cleanup"
   @poll_ms 40
+  @lease_ms 10_000
+  # How long a poll, its answer and the write that records it may take on
+  # a loaded host. Every wait below ends on what the watch recorded; this
+  # only bounds one that never ends.
+  @heard_ms 10_000
   @watch :worker_watch_under_test
   @not_a_status %{"no" => "status"}
 
   # A worker service whose status answers from a script the test sets: a
   # list consumed in order whose last item answers every later request.
-  # Each request is reported to the test with what it answered.
+  # Each request is reported to the test with what it answered. An item
+  # `{:hold, answer}` holds its request until the test sends the handler
+  # `:answer`, telling the test `{:status_held, handler}` first.
   defmodule Worker do
     @moduledoc false
     @behaviour Prima.WorkerAPI
@@ -62,11 +69,26 @@ defmodule Crucible.WorkerWatchTest do
 
     @impl true
     def status do
-      {test, answer} =
+      {test, item} =
         Agent.get_and_update(__MODULE__, fn
           %{script: [answer]} = state -> {{state.test, answer}, state}
           %{script: [answer | rest]} = state -> {{state.test, answer}, %{state | script: rest}}
         end)
+
+      answer =
+        case item do
+          {:hold, answer} ->
+            send(test, {:status_held, self()})
+
+            receive do
+              :answer -> answer
+            after
+              30_000 -> answer
+            end
+
+          answer ->
+            answer
+        end
 
       send(test, {:status_asked, answer})
       {:ok, answer}
@@ -121,9 +143,26 @@ defmodule Crucible.WorkerWatchTest do
     ScriptedWorkerListener.endpoint(listener, @service)
   end
 
-  # Start a watch over `endpoint` with a fast poll; answers its name.
+  # Start a watch over `endpoint` with a fast poll; answers its name. The
+  # lease is fixed long unless a case fixes its own: the one the watch
+  # derives, two polls, is shorter than a claim and its renewal take on a
+  # loaded host, and a watch that loses its claim between them records
+  # nothing. A case about a lease running out fixes a short one.
   defp watch!(endpoint, opts \\ []) do
-    opts = Keyword.merge([workers: [endpoint], poll_ms: @poll_ms, misses: 3, name: @watch], opts)
+    poll_ms = Keyword.get(opts, :poll_ms, @poll_ms)
+
+    opts =
+      Keyword.merge(
+        [
+          workers: [endpoint],
+          poll_ms: poll_ms,
+          lease_ms: max(@lease_ms, 2 * poll_ms),
+          misses: 3,
+          name: @watch
+        ],
+        opts
+      )
+
     name = Keyword.fetch!(opts, :name)
     start_supervised!(Supervisor.child_spec({WorkerWatch, opts}, id: name))
     name
@@ -166,7 +205,7 @@ defmodule Crucible.WorkerWatchTest do
   # Wait for `count` more misses than the watch has now.
   defp misses!(watch, count) do
     misses = seen(watch).misses
-    wait_until(fn -> seen(watch).misses >= misses + count end, 2_000, "#{count} more misses")
+    wait_until(fn -> seen(watch).misses >= misses + count end, @heard_ms, "#{count} more misses")
   end
 
   describe "misses" do
@@ -177,7 +216,7 @@ defmodule Crucible.WorkerWatchTest do
       endpoint = serve!([status("boot_1", [fixture.attempt])])
       watch = watch!(endpoint)
 
-      wait_until(fn -> WorkerWatch.fresh_boot(endpoint, watch) == {:ok, "boot_1"} end)
+      wait_until(fn -> WorkerWatch.fresh_boot(endpoint, watch) == {:ok, "boot_1"} end, @heard_ms)
       assert %{boot: "boot_1", attempts: [_], misses: 0, lapsed: false} = seen(watch)
 
       Worker.script!(self(), [@not_a_status])
@@ -215,14 +254,18 @@ defmodule Crucible.WorkerWatchTest do
       endpoint = serve!([heard, @not_a_status, @not_a_status, heard])
       watch = watch!(endpoint)
 
-      assert_receive {:status_asked, ^heard}, 1_000
-      assert_receive {:status_asked, @not_a_status}, 1_000
-      assert_receive {:status_asked, @not_a_status}, 1_000
-      assert_receive {:status_asked, ^heard}, 1_000
-      wait_until(fn -> match?(%{boot: "boot_1", misses: 0, lapsed: false}, seen(watch)) end)
+      assert_receive {:status_asked, ^heard}, @heard_ms
+      assert_receive {:status_asked, @not_a_status}, @heard_ms
+      assert_receive {:status_asked, @not_a_status}, @heard_ms
+      assert_receive {:status_asked, ^heard}, @heard_ms
+
+      wait_until(
+        fn -> match?(%{boot: "boot_1", misses: 0, lapsed: false}, seen(watch)) end,
+        @heard_ms
+      )
 
       # Polls go on, every one heard.
-      for _poll <- 1..3, do: assert_receive({:status_asked, ^heard}, 1_000)
+      for _poll <- 1..3, do: assert_receive({:status_asked, ^heard}, @heard_ms)
       assert %{status: "running"} = row(fixture)
       assert Process.alive?(fixture.pid)
 
@@ -230,14 +273,14 @@ defmodule Crucible.WorkerWatchTest do
       # after the request the test just saw; the window it stays fresh in
       # is one poll interval, so the condition is waited for and not read
       # off the instant the request landed.
-      wait_until(fn -> WorkerWatch.fresh_boot(endpoint, watch) == {:ok, "boot_1"} end)
+      wait_until(fn -> WorkerWatch.fresh_boot(endpoint, watch) == {:ok, "boot_1"} end, @heard_ms)
     end
 
     test "a status of another service, or of another shape, is a miss", %{ctx: ctx} do
       fixture = attached!(ctx, "boot_1")
       endpoint = serve!([status("boot_1", [fixture.attempt])])
       watch = watch!(endpoint)
-      wait_until(fn -> WorkerWatch.fresh_boot(endpoint, watch) == {:ok, "boot_1"} end)
+      wait_until(fn -> WorkerWatch.fresh_boot(endpoint, watch) == {:ok, "boot_1"} end, @heard_ms)
 
       elsewhere = status("boot_1", [fixture.attempt], %{service: "wrk_elsewhere"})
       malformed = status("boot_1", [fixture.attempt], %{runners: %{fresh: -1}})
@@ -257,7 +300,7 @@ defmodule Crucible.WorkerWatchTest do
       # because a miss never takes a watch. There is no boot to lapse and
       # no member that ever heard one, so no row is opened at all — the
       # key is this test's own, so what is measured is this test's run.
-      wait_until(fn -> WorkerWatch.seen(watch)[id].unheard >= 4 end, 2_000)
+      wait_until(fn -> WorkerWatch.seen(watch)[id].unheard >= 4 end, @heard_ms)
 
       assert %{boot: nil, attempts: [], misses: 0, lapsed: false, claimed: false} =
                WorkerWatch.seen(watch)[id]
@@ -275,14 +318,24 @@ defmodule Crucible.WorkerWatchTest do
       endpoint = serve!([status("boot_1", [fixture.attempt])])
       watch = watch!(endpoint, owner: "member_a")
 
-      wait_until(fn -> match?(%{boot: "boot_1", misses: 0, claimed: true}, seen(watch)) end)
+      wait_until(
+        fn -> match?(%{boot: "boot_1", misses: 0, claimed: true}, seen(watch)) end,
+        @heard_ms
+      )
+
+      # From here this member hears nothing from the service. The first
+      # unheard request is held: the watch polls one request at a time, so
+      # every status it heard is written, renewal and all, and nothing of
+      # the miss is, while the request waits.
+      Worker.script!(self(), [{:hold, @not_a_status}, @not_a_status])
+      assert_receive {:status_held, handler}, 10_000
       held = claim_row()
       assert held.owner == "member_a"
       assert claim_detail(held)["boot"] == "boot_1"
+      assert claim_detail(held)["misses"] == 0
 
-      # From here this member hears nothing from the service.
-      Worker.script!(self(), [@not_a_status])
-      wait_until(fn -> seen(watch).misses >= 1 end, 2_000, "a miss to be counted")
+      send(handler, :answer)
+      wait_until(fn -> seen(watch).misses >= 1 end, @heard_ms, "a miss to be counted")
 
       missed = claim_row()
       assert missed.owner == "member_a"
@@ -319,27 +372,35 @@ defmodule Crucible.WorkerWatchTest do
       blind = serve!(Worker, [heard])
       seeing = serve!(Peer, [heard])
 
-      cut_off = watch!(blind, owner: "member_a", name: :watch_member_a)
-      wait_until(fn -> match?(%{owner: "member_a"}, claim_row()) end)
+      # The case is the watch's own lease, two polls: a member that stops
+      # hearing loses the watch before its misses can reach the threshold.
+      # The polls are slower than the module's, so that a lease of two of
+      # them outlasts a claim and its renewal on a loaded host.
+      lease = [poll_ms: 200, lease_ms: 400]
+      cut_off = watch!(blind, [owner: "member_a", name: :watch_member_a] ++ lease)
+      wait_until(fn -> match?(%{owner: "member_a"}, claim_row()) end, @heard_ms)
 
       Worker.script!(self(), [@not_a_status])
-      hearing = watch!(seeing, owner: "member_b", name: :watch_member_b)
+      hearing = watch!(seeing, [owner: "member_b", name: :watch_member_b] ++ lease)
 
       # Within one lease the watch moves to the member that can hear, and
       # the count its predecessor left is reset rather than carried on.
       wait_until(
         fn -> match?(%{owner: "member_b"}, claim_row()) end,
-        2_000,
+        @heard_ms,
         "the member that hears the service to take the watch"
       )
 
       # The cut-off member goes on missing, well past the threshold of
       # three, and lapses nothing: the count is the cell's, and the member
-      # that hears the service keeps putting it back to zero.
+      # that hears the service keeps putting it back to zero. Its misses are
+      # counted from the takeover, so each of them read the peer's row.
+      unheard = WorkerWatch.seen(cut_off)[@service].unheard
+
       wait_until(
-        fn -> WorkerWatch.seen(cut_off)[@service].unheard >= 9 end,
-        2_000,
-        "nine unheard answers on the cut-off member"
+        fn -> WorkerWatch.seen(cut_off)[@service].unheard >= unheard + 9 end,
+        @heard_ms,
+        "nine more unheard answers on the cut-off member"
       )
 
       assert %{claimed: false} = WorkerWatch.seen(cut_off)[@service]
@@ -363,7 +424,7 @@ defmodule Crucible.WorkerWatchTest do
       :ok = Crucible.Events.subscribe(old.execution_id, ctx)
       endpoint = serve!([status("boot_1", [old.attempt])])
       watch = watch!(endpoint)
-      wait_until(fn -> WorkerWatch.fresh_boot(endpoint, watch) == {:ok, "boot_1"} end)
+      wait_until(fn -> WorkerWatch.fresh_boot(endpoint, watch) == {:ok, "boot_1"} end, @heard_ms)
 
       Worker.script!(self(), [status("boot_2")])
 
@@ -372,14 +433,14 @@ defmodule Crucible.WorkerWatchTest do
       assert %{state: "lapsed", outcome: "uncertain", boot_id: "boot_1"} = attempt_row(old)
       old_id = old.execution_id
       assert_receive %Cyfr.Bus.ExecutionEvent{type: "execution.lapsed", execution_id: ^old_id}
-      wait_until(fn -> WorkerWatch.fresh_boot(endpoint, watch) == {:ok, "boot_2"} end)
+      wait_until(fn -> WorkerWatch.fresh_boot(endpoint, watch) == {:ok, "boot_2"} end, @heard_ms)
       assert %{boot: "boot_2", attempts: [], misses: 0, lapsed: false} = seen(watch)
 
       # The new boot's attempts are its own, through as many identical
       # statuses as come.
       new = attached!(ctx, "boot_2")
       heard = status("boot_2")
-      for _poll <- 1..4, do: assert_receive({:status_asked, ^heard}, 1_000)
+      for _poll <- 1..4, do: assert_receive({:status_asked, ^heard}, @heard_ms)
       assert %{status: "running"} = row(new)
       assert Process.alive?(new.pid)
       assert %{boot: "boot_2", misses: 0, lapsed: false} = seen(watch)
@@ -403,7 +464,7 @@ defmodule Crucible.WorkerWatchTest do
 
       # Ownership regained, the next tick polls.
       Arca.ControlPlane.record(:unclaimed)
-      assert_receive {:status_asked, _answer}, 1_000
+      assert_receive {:status_asked, _answer}, @heard_ms
     end
   end
 
@@ -443,8 +504,14 @@ defmodule Crucible.WorkerWatchTest do
 
         # The attempt stops either way and its slot goes back once; a
         # repeated lapse finds nothing, and takes nothing back.
-        wait_until(fn -> not Process.alive?(fixture.pid) end)
-        wait_until(fn -> Slots.status(@slots).active == before end, 2_000, "the slot given back")
+        wait_until(fn -> not Process.alive?(fixture.pid) end, @heard_ms)
+
+        wait_until(
+          fn -> Slots.status(@slots).active == before end,
+          @heard_ms,
+          "the slot given back"
+        )
+
         assert {:ok, []} = Lapse.boot(@service, "boot_1", [fixture.attempt])
 
         assert :ok =
@@ -525,12 +592,12 @@ defmodule Crucible.WorkerWatchTest do
 
       # Without a watch, each selection asks the worker service.
       assert {:ok, %{service: @service, boot: "boot_1", endpoint: ^endpoint}} = Dispatch.worker()
-      assert_receive {:status_asked, _answer}, 1_000
+      assert_receive {:status_asked, _answer}, @heard_ms
 
       # With one that heard the boot, none does.
       watch!(endpoint, name: WorkerWatch, poll_ms: 60_000)
-      assert_receive {:status_asked, _answer}, 1_000
-      wait_until(fn -> WorkerWatch.fresh_boot(endpoint) == {:ok, "boot_1"} end)
+      assert_receive {:status_asked, _answer}, @heard_ms
+      wait_until(fn -> WorkerWatch.fresh_boot(endpoint) == {:ok, "boot_1"} end, @heard_ms)
       assert {:ok, %{service: @service, boot: "boot_1"}} = Dispatch.worker()
       assert {:ok, %{boot: "boot_1"}} = Dispatch.worker("reagent:local.any")
       refute_receive {:status_asked, _answer}, 100
@@ -540,9 +607,9 @@ defmodule Crucible.WorkerWatchTest do
       watch!(endpoint, name: WorkerWatch, poll_ms: 60)
       Arca.ControlPlane.record(:lost)
       on_exit(fn -> Arca.ControlPlane.record(:unclaimed) end)
-      wait_until(fn -> WorkerWatch.fresh_boot(endpoint) == :unknown end, 1_000)
+      wait_until(fn -> WorkerWatch.fresh_boot(endpoint) == :unknown end, @heard_ms)
       assert {:ok, %{boot: "boot_1"}} = Dispatch.worker()
-      assert_receive {:status_asked, _answer}, 1_000
+      assert_receive {:status_asked, _answer}, @heard_ms
     end
   end
 end

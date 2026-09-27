@@ -25,6 +25,12 @@ defmodule CyfrWeb.Ingress.TinctureDataControllerTest do
 
   @version "1.0.0"
 
+  # How long a stream may take to open (the gate's admission and the
+  # subscription) or to take an event, on a loaded host. Each wait ends on
+  # the subscription or the delivery itself; this bounds one that never
+  # ends.
+  @stream_ms 10_000
+
   setup do
     Prima.RateLimiter.reset()
     on_exit(fn -> Prima.RateLimiter.reset() end)
@@ -530,10 +536,22 @@ defmodule CyfrWeb.Ingress.TinctureDataControllerTest do
     defp subscribed?(source),
       do: Registry.lookup(Cyfr.PubSub, topic(source)) != []
 
+    # The stream process has taken every `payload` it was sent and waits in
+    # its delivery loop for the next: what it was sent is written.
+    defp delivered?(stream, payload) do
+      case Process.info(stream, [:messages, :status, :current_function]) do
+        [messages: messages, status: :waiting, current_function: {CyfrWeb.SSE, :loop, 2}] ->
+          not Enum.any?(messages, &is_struct(&1, payload))
+
+        _other ->
+          false
+      end
+    end
+
     test "is answered as the wire's event stream, and closed within the bound once its frame is suspended",
          %{source: source, frame: frame} do
       stream = open_stream(frame.bearer)
-      wait_until(fn -> subscribed?(source) end)
+      wait_until(fn -> subscribed?(source) end, @stream_ms)
 
       actor = Sanctum.Context.actor(source)
       :ok = Cyfr.Bus.broadcast(actor, topic(source), Cyfr.Bus.McpServers.new(actor, :changed))
@@ -588,8 +606,8 @@ defmodule CyfrWeb.Ingress.TinctureDataControllerTest do
       actor = Sanctum.Context.actor(source)
       my_topic = Cyfr.Bus.cards(actor, source.user_id)
       their_topic = Cyfr.Bus.cards(actor, other.user_id)
-      wait_until(fn -> Registry.lookup(Cyfr.PubSub, my_topic) != [] end)
-      wait_until(fn -> Registry.lookup(Cyfr.PubSub, their_topic) != [] end)
+      wait_until(fn -> Registry.lookup(Cyfr.PubSub, my_topic) != [] end, @stream_ms)
+      wait_until(fn -> Registry.lookup(Cyfr.PubSub, their_topic) != [] end, @stream_ms)
 
       refreshed =
         Cyfr.Bus.CardRefreshed.new(actor, %{
@@ -601,6 +619,12 @@ defmodule CyfrWeb.Ingress.TinctureDataControllerTest do
         })
 
       :ok = Cyfr.Bus.broadcast(actor, my_topic, refreshed)
+
+      # A stream re-establishes its caller before delivering once its
+      # context is past the freshness bound, so a frame revoked before the
+      # event is delivered takes the event with it. The revocation waits
+      # until the stream has taken the event and is waiting for the next.
+      wait_until(fn -> delivered?(my_stream.pid, Cyfr.Bus.CardRefreshed) end, @stream_ms)
 
       for {frame, ctx} <- [{mine, source}, {theirs, other}],
           do: {:ok, _} = TinctureAuth.revoke_frame(ctx, frame.id)
@@ -626,7 +650,7 @@ defmodule CyfrWeb.Ingress.TinctureDataControllerTest do
       Cyfr.Test.Settings.put("frame_stream_max_concurrent", 1)
 
       first = open_stream(frame.bearer)
-      wait_until(fn -> subscribed?(source) end)
+      wait_until(fn -> subscribed?(source) end, @stream_ms)
 
       body = TinctureWire.request(:stream_open, %{stream: "mcp_servers.changes", subject: nil})
       over = data(:stream_open, body, bearer: frame.bearer)
@@ -643,7 +667,7 @@ defmodule CyfrWeb.Ingress.TinctureDataControllerTest do
 
       # The closed stream released its slot: a reconnect is a new open.
       third = open_stream(frame.bearer)
-      wait_until(fn -> length(Registry.lookup(Cyfr.PubSub, topic(source))) == 2 end)
+      wait_until(fn -> length(Registry.lookup(Cyfr.PubSub, topic(source))) == 2 end, @stream_ms)
 
       for {stream, id} <- [{second, other.id}, {third, frame.id}] do
         {:ok, _} = TinctureAuth.revoke_frame(source, id)

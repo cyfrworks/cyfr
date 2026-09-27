@@ -8,6 +8,12 @@ defmodule CyfrWeb.Plugs.MCPRateLimitTest do
   alias CyfrWeb.Plugs.MCPRateLimit
 
   setup do
+    # The settings rows are written, and the plug reads them, on this
+    # test's own connection. Without one, the sandbox hands this process
+    # the connection of whichever test last set the shared mode, until it
+    # hears that test's owner exit: a row written there is rolled back
+    # with it, and a read there fails.
+    :ok = Ecto.Adapters.SQL.Sandbox.checkout(Arca.Repo)
     Prima.RateLimiter.reset()
 
     original_trust = Application.get_env(:sanctum, :trust_x_forwarded_for)

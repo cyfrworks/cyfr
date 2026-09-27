@@ -86,11 +86,25 @@ defmodule Emissary.External.ServerSseTest do
   end
 
   test "a caller gone mid-call takes its upstream round-trip with it", %{bypass: bypass, url: url} do
+    test = self()
+
+    # The upstream holds the tool call until the test lets it go, so the
+    # round-trip is still in flight when its caller dies, however slowly
+    # the machine runs.
     Bypass.stub(bypass, "POST", "/mcp", fn conn ->
       {:ok, body, conn} = Plug.Conn.read_body(conn)
       request = Jason.decode!(body)
 
-      if request["method"] == "tools/call", do: Process.sleep(1_500)
+      if request["method"] == "tools/call" do
+        send(test, {:upstream_held, self()})
+
+        receive do
+          :release -> :ok
+        after
+          30_000 -> :ok
+        end
+      end
+
       sse(conn, [result_event(request["id"], [@tool])])
     end)
 
@@ -98,13 +112,14 @@ defmodule Emissary.External.ServerSseTest do
 
     caller = spawn(fn -> Server.call_tool(pid, "probe", %{}) end)
 
-    wait_until(fn -> map_size(:sys.get_state(pid).in_flight) == 1 end, 2_000)
-    [task_pid] = Map.keys(:sys.get_state(pid).in_flight)
+    assert_receive {:upstream_held, upstream}, 10_000
+    assert [task_pid] = Map.keys(:sys.get_state(pid).in_flight)
     task_ref = Process.monitor(task_pid)
 
     Process.exit(caller, :kill)
-    assert_receive {:DOWN, ^task_ref, :process, ^task_pid, :killed}, 2_000
-    wait_until(fn -> :sys.get_state(pid).in_flight == %{} end, 2_000)
+    assert_receive {:DOWN, ^task_ref, :process, ^task_pid, :killed}, 10_000
+    wait_until(fn -> :sys.get_state(pid).in_flight == %{} end, 10_000)
+    send(upstream, :release)
     Bypass.pass(bypass)
   end
 
