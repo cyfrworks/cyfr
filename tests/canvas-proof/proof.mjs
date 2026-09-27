@@ -498,9 +498,11 @@ async function safeModeByStall(page, name, record) {
     return src && src.includes("/canvas-stall/") ? src : null;
   }, { timeoutMs: 30_000, what: "canvas-stall opened as the desktop" }).catch(() => null);
   // The shell replaces the desktop as soon as the edit lands, so the
-  // desktop's own frame may be gone before the answer reaches it: the edit
-  // is proved by the desktop the shell opens.
-  check(set.ok || (/detached/i.test(set.message) && !!stalled), name, "safe_mode_stall", "layout_set",
+  // desktop's own frame may be gone before the answer reaches it (each
+  // browser words that its own way): the edit is proved by the desktop
+  // the shell opens.
+  const frameGone = /detached|execution context was destroyed|navigation/i.test(set.message || "");
+  check(set.ok || (frameGone && !!stalled), name, "safe_mode_stall", "layout_set",
     "the desktop publishes canvas-stall as the layout's desktop", set);
   check(!!stalled, name, "safe_mode_stall", "stall_opened", "the shell reads the layout again and opens its desktop", stalled);
   const before = await activeId(page);
