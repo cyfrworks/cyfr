@@ -45,7 +45,7 @@ defmodule Locus.BuilderService do
      deadline already passed is refused `timeout` with nothing run.
   7. **The build itself** is checked and packed (`Locus.Builder.prepare/1`):
      `malformed` for sources that make no build, `unavailable` for a
-     missing toolchain or spawner.
+     missing toolchain or keeper.
   8. **The slot.** One of `Locus.BuildSlots` is taken for the request's
      `athanor_id`, never waited for: `capacity` names the total cap or the
      athanor's, whichever refused.
@@ -76,12 +76,13 @@ defmodule Locus.BuilderService do
     ended, and releases the slot. Nothing more is written.
   - **The connection's process killed** (the listener stopping, a crash):
     the link ends the build process, whose executor's own watch ends the
-    build (the spawner releases a dead caller's spawn, the direct launcher's
-    janitor kills the group), and the slots' monitor gives the slot back.
-  - **cyfr-keeper lost**: the spawner answers every run in flight and stops;
-    each build's terminal line is `unavailable`, its slot is released, and
-    the listener, which depends on the spawner, stops with it
-    (`Locus.Application`).
+    build (the keeper's client releases a dead caller's spawn, the direct
+    launcher's janitor kills the group), and the slots' monitor gives the
+    slot back.
+  - **cyfr-keeper lost**: the keeper's client answers every run in flight
+    and stops; each build's terminal line is `unavailable`, its slot is
+    released, and the listener, which depends on the keeper's client, stops
+    with it (`Locus.Application`).
 
   Nothing a request carries is logged: a refusal is logged by its class.
   """

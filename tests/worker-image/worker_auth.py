@@ -18,13 +18,16 @@ number) is `unknown_version` before the body is read; every body and answer
 carries `"v": 1` as its first member, and a body without it, or at another
 version, is `unknown_version` once opened and before its `op` is read. A
 guest's outbound target is an `egress_pin` host call answered with a
-`Prima.PinnedTarget` or refused by name (`read_pin_request`, `read_pin`).
+`Prima.PinnedTarget` or refused by name (`read_pin_request`, `read_pin`),
+under the egress policy's pure matchers as `Prima.Network` answers them
+(`domain_allowed`, `same_origin`, `credential_header`).
 
 `check_vectors` reproduces every value of `tests/fixtures/worker_auth.json`
 (the primitives) and of the message vectors `host_api.json` and
 `worker_api.json` beside it (every call, request and answer, sealed and
-signed from the fixed keys), which every side of the protocol consumes, and
-refuses to serve otherwise. `python3 worker_auth.py --self-check` runs it.
+signed from the fixed keys, and every egress policy answer derived from
+its case), which every side of the protocol consumes, and refuses to serve
+otherwise. `python3 worker_auth.py --self-check` runs it.
 """
 
 import base64
@@ -489,6 +492,66 @@ def read_pin(wire):
 
 
 # ---------------------------------------------------------------------------
+# The egress policy's pure matchers, as `Prima.Network` answers them
+# ---------------------------------------------------------------------------
+
+CREDENTIAL_HEADERS = {"authorization", "cookie", "proxy-authorization", "x-api-key", "x-auth-token",
+                      "x-access-token", "x-csrf-token"}
+CREDENTIAL_SUFFIXES = ("-token", "-key", "-secret")
+
+
+def _fold_host(host):
+    """A host case-folded with one trailing dot dropped."""
+    return (host[:-1] if host.endswith(".") else host).lower()
+
+
+def domain_allowed(host, patterns):
+    """`Prima.Network.domain_allowed?/2`: "*" matches any host,
+    "*.example.com" every name below example.com, any other pattern exactly;
+    an empty host, or no pattern, matches nothing."""
+    host = _fold_host(host or "")
+    if not host:
+        return False
+    for pattern in patterns:
+        if pattern == "*":
+            return True
+        if pattern.startswith("*."):
+            base = _fold_host(pattern[2:])
+            if base and host.endswith("." + base):
+                return True
+        elif _fold_host(pattern) == host:
+            return True
+    return False
+
+
+def origin(url):
+    """A URL's scheme, host and effective port, an IPv6 literal compared by
+    its address; None for a URL that has none."""
+    parsed = parse_url(url)
+    if parsed is None:
+        return None
+    scheme, host, port = parsed
+    host = _fold_host(host[1:-1] if host.startswith("[") else host)
+    if ":" in host:
+        try:
+            host = ipaddress.IPv6Address(host).compressed
+        except ValueError:
+            return None
+    return scheme, host, port
+
+
+def same_origin(a, b):
+    """`Prima.Network.same_origin?/2`."""
+    return origin(a) is not None and origin(a) == origin(b)
+
+
+def credential_header(name):
+    """`Prima.Network.credential_header?/1`."""
+    name = name.lower()
+    return name in CREDENTIAL_HEADERS or name.endswith(CREDENTIAL_SUFFIXES)
+
+
+# ---------------------------------------------------------------------------
 # AES-256-GCM (NIST SP 800-38D), for the sealed values
 # ---------------------------------------------------------------------------
 
@@ -804,7 +867,8 @@ def check_host_api(path, primitives):
     """Reproduce every call of the HostAPI message vectors from its fields
     under the fixed keys: its body, its seal in the body direction, its
     header over the sealed bytes, its answer's seal in the answer direction;
-    and every refusal, pre-body and after the body, by name."""
+    every egress policy answer from its case; and every refusal, pre-body
+    and after the body, by name."""
     with open(path, encoding="utf-8") as f:
         v = json.load(f)
     keys = v["keys"]
@@ -863,6 +927,45 @@ def check_host_api(path, primitives):
             assert answer[1] in PIN_REFUSALS and answer[1] == case["name"], f"{what}: refused by its name"
     names = {case["name"] for case in v["egress_pin_cases"]}
     assert {"fetch", "stream", "redirect"} | set(PIN_REFUSALS) - {"malformed"} <= names, "host_api: every pin case"
+
+    # The egress policy's cases, in the order one attempt makes them: each
+    # call reproduced as a pin case is, and each answer derived from its
+    # expect: the URL's host against domains, a redirect's URL against the
+    # URL of the pin it names as from, a pin answered only where both hold,
+    # `denied` outside domains and `redirect_credentials` on another origin;
+    # and a hop's headers_after as headers_before without every header that
+    # carries a credential.
+    pinned, outcomes = {}, set()
+    for case in v["egress_policy_cases"]:
+        what = f"host_api egress_policy {case['name']}"
+        assert case["callback"] == "egress_pin", f"{what}: an egress_pin call"
+        args = reproduce(case, what, case["callback"])
+        assert read_pin_request(args) is not None, f"{what}: the args read"
+        url, expect = args["url"], case["expect"]
+        allowed = domain_allowed(urllib.parse.urlsplit(url).hostname, case["domains"])
+        assert expect["domain_allowed"] == allowed, f"{what}: the host against the domains"
+        same = True
+        if args["purpose"] == "redirect":
+            assert args["from"] in pinned, f"{what}: from names a pin an earlier case was answered"
+            same = same_origin(url, pinned[args["from"]])
+            assert expect["same_origin"] == same, f"{what}: the origin against its pin's"
+        answer = read_answer(case["answer"])
+        if allowed and same:
+            assert answer[0] == "ok", f"{what}: pinned"
+            pin = read_pin(answer[1])
+            assert pin is not None, f"{what}: the answer is a pinned target"
+            assert (pin["scheme"], pin["host"], pin["port"]) == parse_url(url), f"{what}: the pin names the URL's origin"
+            pinned[pin["id"]] = url
+            outcomes.add("pinned")
+        else:
+            refusal = "denied" if not allowed else "redirect_credentials"
+            assert answer[0] == "error" and answer[1] == refusal, f"{what}: refused as {refusal}"
+            outcomes.add(refusal)
+        if "headers_before" in case:
+            kept = [pair for pair in case["headers_before"] if not credential_header(pair[0])]
+            assert kept == case["headers_after"], f"{what}: the headers a hop to another origin keeps"
+            outcomes.add("stripped")
+    assert outcomes == {"pinned", "denied", "redirect_credentials", "stripped"}, "host_api: every egress policy outcome"
 
     for refusal in v["pre_body_refusals"]:
         what = f"host_api pre-body {refusal['name']}"

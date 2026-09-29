@@ -193,7 +193,7 @@ defmodule Locus.Keeper do
           {:error, reason}
       end
     catch
-      :exit, reason -> {:error, {:spawn_failed, {:spawner_unavailable, reason}}}
+      :exit, reason -> {:error, {:spawn_failed, {:keeper_unavailable, reason}}}
     after
       Process.demonitor(monitor, [:flush])
     end
@@ -269,7 +269,7 @@ defmodule Locus.Keeper do
   defp await(s) do
     receive do
       {__MODULE__, ref, message} when ref == s.ref ->
-        s |> on_spawner(message) |> advance() |> await()
+        s |> on_keeper(message) |> advance() |> await()
 
       {:tcp, conn, data} when conn == s.conn ->
         s |> on_frames(data) |> reactivate() |> advance() |> await()
@@ -285,7 +285,7 @@ defmodule Locus.Keeper do
         finish(%{
           s
           | phase: :done,
-            failure: s.failure || {:spawn_failed, {:spawner_down, reason}}
+            failure: s.failure || {:spawn_failed, {:keeper_down, reason}}
         })
 
       {Locus.Executor, :cancel} ->
@@ -296,24 +296,24 @@ defmodule Locus.Keeper do
     end
   end
 
-  defp on_spawner(s, {:spawned, _uid, _pid}), do: s
+  defp on_keeper(s, {:spawned, _uid, _pid}), do: s
 
-  defp on_spawner(s, {:attached, conn}) do
+  defp on_keeper(s, {:attached, conn}) do
     feed_stdin(conn, s.stdin)
     reactivate(%{s | conn: conn, conn_open: true})
   end
 
-  defp on_spawner(s, {:exited, exit, memory_exceeded}),
+  defp on_keeper(s, {:exited, exit, memory_exceeded}),
     do: %{s | exit: exit, memory_exceeded: memory_exceeded}
 
-  defp on_spawner(s, :released), do: %{s | released: true, released_by: now() + @drain_timeout_ms}
+  defp on_keeper(s, :released), do: %{s | released: true, released_by: now() + @drain_timeout_ms}
 
-  defp on_spawner(s, {:error, "capacity"}), do: %{s | phase: :done, failure: :capacity}
+  defp on_keeper(s, {:error, "capacity"}), do: %{s | phase: :done, failure: :capacity}
 
-  defp on_spawner(s, {:error, "memory_unavailable"}),
+  defp on_keeper(s, {:error, "memory_unavailable"}),
     do: %{s | phase: :done, failure: {:unavailable, @memory_unavailable}}
 
-  defp on_spawner(s, {:error, reason}), do: %{s | phase: :done, failure: {:spawn_failed, reason}}
+  defp on_keeper(s, {:error, reason}), do: %{s | phase: :done, failure: {:spawn_failed, reason}}
 
   # Stdin is written from a process of its own, so a command slow to read
   # it never stops this one reading its output.
@@ -468,7 +468,7 @@ defmodule Locus.Keeper do
          pools: %{}
        }}
     else
-      {:error, reason} -> {:stop, {:spawner_unavailable, reason}}
+      {:error, reason} -> {:stop, {:keeper_unavailable, reason}}
     end
   end
 
@@ -683,7 +683,7 @@ defmodule Locus.Keeper do
     case KeeperProtocol.split_lines(state.buffer, data) do
       {:error, :line_too_long} ->
         Logger.error(
-          "[Locus.Keeper] FATAL: the spawner sent a line longer than " <>
+          "[Locus.Keeper] FATAL: the keeper sent a line longer than " <>
             "#{KeeperProtocol.max_line_bytes()} bytes"
         )
 
@@ -698,7 +698,7 @@ defmodule Locus.Keeper do
   # caller hears the channel lost, a long-lived spawn's owner its release.
   def handle_info({:channel_closed, reason}, state) do
     Logger.error(
-      "[Locus.Keeper] FATAL: the spawner channel closed (#{inspect(reason)}); builds stop"
+      "[Locus.Keeper] FATAL: the keeper channel closed (#{inspect(reason)}); builds stop"
     )
 
     for {ref, entry} <- state.requests do
@@ -890,7 +890,7 @@ defmodule Locus.Keeper do
 
       {:error, reason} ->
         Logger.warning(
-          "[Locus.Keeper] the spawner sent a line that is not a reply (#{inspect(reason)}); ignored"
+          "[Locus.Keeper] the keeper sent a line that is not a reply (#{inspect(reason)}); ignored"
         )
 
         state

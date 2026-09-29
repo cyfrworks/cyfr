@@ -66,7 +66,7 @@ defmodule Locus.KeeperTest do
     setup do
       {fake, channel} = FakeKeeper.start()
       attach_dir = FakeKeeper.short_tmp_dir()
-      name = :"spawner_#{System.unique_integer([:positive])}"
+      name = :"keeper_#{System.unique_integer([:positive])}"
       {:ok, client} = Keeper.start_link(channel: channel, attach_dir: attach_dir, name: name)
       Process.unlink(client)
       :ok = :socket.setopt(channel, {:otp, :controlling_process}, client)
@@ -260,8 +260,8 @@ defmodule Locus.KeeperTest do
       File.chmod!(dir, 0o755)
       {_fake, channel} = FakeKeeper.start()
 
-      assert {:error, {:spawner_unavailable, {:attach_dir_not_private, ^dir}}} =
-               Keeper.start_link(channel: channel, attach_dir: dir, name: :spawner_open_dir)
+      assert {:error, {:keeper_unavailable, {:attach_dir_not_private, ^dir}}} =
+               Keeper.start_link(channel: channel, attach_dir: dir, name: :keeper_open_dir)
 
       File.rm_rf!(dir)
     end

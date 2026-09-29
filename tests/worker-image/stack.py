@@ -41,7 +41,7 @@ SERVICE = "wrk_image"
 POOL_FIRST, POOL_LAST = 30101, 30108
 SERVICE_UID = 10002
 HOME_ROOT = "/var/lib/opus/homes"
-SPAWNER_CAPS = "00000000000000e0"
+KEEPER_CAPS = "00000000000000e0"
 
 
 def run(*args, check=True, env=None, timeout=None):

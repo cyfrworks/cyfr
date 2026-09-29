@@ -65,7 +65,7 @@ defmodule Locus.Executor do
 
   @callback run(command(), opts()) :: {:ok, outcome()} | {:error, error()}
 
-  @doc "The executors every build knows: the spawner alone."
+  @doc "The executors every build knows: the keeper's client alone."
   @spec executors() :: [module()]
   def executors, do: [Locus.Keeper]
 
@@ -90,7 +90,7 @@ defmodule Locus.Executor do
   end
 
   @doc """
-  The executor builds run with: the spawner when its client is running,
+  The executor builds run with: the keeper's client when it is running,
   the test build's direct launcher otherwise where it has one, and
   `{:error, :no_keeper}` everywhere else. A build is never run outside
   cyfr-keeper by a release.

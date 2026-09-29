@@ -68,7 +68,6 @@ Usage: tests/worker-image/runners.py IMAGE
 """
 
 import http.server
-import ipaddress
 import json
 import os
 import re
@@ -77,7 +76,6 @@ import shutil
 import sys
 import threading
 import time
-import urllib.parse
 
 sys.dont_write_bytecode = True
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -86,7 +84,7 @@ import memory  # noqa: E402
 import worker_auth as auth  # noqa: E402
 from control_plane import DROP, ZERO_AUTHORITY, ControlPlane  # noqa: E402
 from stack import (  # noqa: E402
-    HOME_ROOT, POOL_FIRST, POOL_LAST, ROOT, SERVICE, SERVICE_UID, SPAWNER_CAPS, Stack, StatusSampler, expect, run, wait_until,
+    HOME_ROOT, KEEPER_CAPS, POOL_FIRST, POOL_LAST, ROOT, SERVICE, SERVICE_UID, Stack, StatusSampler, expect, run, wait_until,
 )
 
 FIXTURES = {
@@ -156,120 +154,8 @@ def prerequisites(image):
         if not os.path.isfile(os.path.join(fixtures, name)):
             sys.exit(f"FAIL: prerequisite missing: {os.path.join(fixtures, name)}")
     auth.check_vectors(os.path.join(fixtures, "worker_auth.json"))
-    check_egress_policy(os.path.join(fixtures, "host_api.json"))
     print("ok: the control plane reproduces every vector of tests/fixtures/worker_auth.json, host_api.json "
           "(its egress_pin_cases and egress_policy_cases) and worker_api.json", flush=True)
-
-
-# The egress policy's pure matchers, as `Prima.Network` answers them.
-CREDENTIAL_HEADERS = {"authorization", "cookie", "proxy-authorization", "x-api-key", "x-auth-token",
-                      "x-access-token", "x-csrf-token"}
-CREDENTIAL_SUFFIXES = ("-token", "-key", "-secret")
-
-
-def _fold_host(host):
-    """A host case-folded with one trailing dot dropped."""
-    return (host[:-1] if host.endswith(".") else host).lower()
-
-
-def domain_allowed(host, patterns):
-    """`Prima.Network.domain_allowed?/2`: "*" matches any host,
-    "*.example.com" every name below example.com, any other pattern exactly;
-    an empty host, or no pattern, matches nothing."""
-    host = _fold_host(host or "")
-    if not host:
-        return False
-    for pattern in patterns:
-        if pattern == "*":
-            return True
-        if pattern.startswith("*."):
-            base = _fold_host(pattern[2:])
-            if base and host.endswith("." + base):
-                return True
-        elif _fold_host(pattern) == host:
-            return True
-    return False
-
-
-def origin(url):
-    """A URL's scheme, host and effective port, an IPv6 literal compared by
-    its address; None for a URL that has none."""
-    parsed = auth.parse_url(url)
-    if parsed is None:
-        return None
-    scheme, host, port = parsed
-    host = _fold_host(host[1:-1] if host.startswith("[") else host)
-    if ":" in host:
-        try:
-            host = ipaddress.IPv6Address(host).compressed
-        except ValueError:
-            return None
-    return scheme, host, port
-
-
-def same_origin(a, b):
-    """`Prima.Network.same_origin?/2`."""
-    return origin(a) is not None and origin(a) == origin(b)
-
-
-def credential_header(name):
-    """`Prima.Network.credential_header?/1`."""
-    name = name.lower()
-    return name in CREDENTIAL_HEADERS or name.endswith(CREDENTIAL_SUFFIXES)
-
-
-def check_egress_policy(path):
-    """Reproduce every egress_policy_cases call of the HostAPI vectors as an
-    egress_pin case is reproduced (its body, its seals, its header), and
-    derive each answer from its expect: the URL's host against domains, a
-    redirect's URL against the URL of the pin it names as from, a pin
-    answered only where both hold, `denied` outside domains and
-    `redirect_credentials` on another origin; and a hop's headers_after as
-    headers_before without every header that carries a credential."""
-    with open(path, encoding="utf-8") as f:
-        v = json.load(f)
-    root = auth.decode_root(v["keys"]["root_hex"])
-    generation, member = v["standing"]["generation"], v["standing"]["member"]
-    pinned = {}
-    for case in v["egress_policy_cases"]:
-        what = f"host_api egress_policy {case['name']}"
-        fields = case["fields"]
-        assert case["callback"] == "egress_pin", f"{what}: an egress_pin call"
-        assert auth.first_member(case["body"]) == "v", f"{what}: v is the body's first member"
-        args, refusal = auth.read_body("egress_pin", case["body"])
-        assert refusal is None and auth.read_pin_request(args) is not None, f"{what}: the args read ({refusal})"
-        assert case["body"] == auth.request_body("egress_pin", args), f"{what}: the body is the wire's writing"
-        ckey, skey = auth.attempt_call_key(root, fields), auth.attempt_seal_key(root, fields)
-        sealed = auth.seal_call(skey, "body", fields, case["body"].encode(), bytes.fromhex(case["body_iv_hex"]))
-        assert sealed == case["body_sealed"], f"{what}: the sealed body"
-        assert auth.host_call_header(ckey, fields, sealed.encode()) == case["header"], f"{what}: the header"
-        verified, refusal = auth.verify_host_call(root, case["header"], sealed.encode(), fields["ts"], generation, member)
-        assert refusal is None and verified == fields, f"{what}: the call verifies ({refusal})"
-        sealed_answer = auth.seal_call(skey, "answer", fields, case["answer"].encode(), bytes.fromhex(case["answer_iv_hex"]))
-        assert sealed_answer == case["answer_sealed"], f"{what}: the sealed answer"
-        assert auth.first_member(case["answer"]) == "v", f"{what}: v is the answer's first member"
-
-        url, expect = args["url"], case["expect"]
-        allowed = domain_allowed(urllib.parse.urlsplit(url).hostname, case["domains"])
-        assert expect["domain_allowed"] == allowed, f"{what}: the host against the domains"
-        same = True
-        if args["purpose"] == "redirect":
-            assert args["from"] in pinned, f"{what}: from names a pin an earlier case was answered"
-            same = same_origin(url, pinned[args["from"]])
-            assert expect["same_origin"] == same, f"{what}: the origin against its pin's"
-        answer = auth.read_answer(case["answer"])
-        if allowed and same:
-            assert answer[0] == "ok", f"{what}: pinned"
-            pin = auth.read_pin(answer[1])
-            assert pin is not None, f"{what}: the answer is a pinned target"
-            assert (pin["scheme"], pin["host"], pin["port"]) == auth.parse_url(url), f"{what}: the pin names the URL's origin"
-            pinned[pin["id"]] = url
-        else:
-            refusal = "denied" if not allowed else "redirect_credentials"
-            assert answer[0] == "error" and answer[1] == refusal, f"{what}: refused as {refusal}"
-        if "headers_before" in case:
-            kept = [pair for pair in case["headers_before"] if not credential_header(pair[0])]
-            assert kept == case["headers_after"], f"{what}: the headers a hop to another origin keeps"
 
 
 def ms(seconds):
@@ -386,7 +272,7 @@ def test_process_model(stack):
     keeper = [p for p in procs if p["cmd"].startswith("cyfr-keeper serve")]
     service = [p for p in procs if p["uids"][0] == SERVICE_UID and "beam.smp" in p["cmd"]]
     runners = stack.runner_processes()
-    expect(len(keeper) == 1 and keeper[0]["uids"] == [0, 0, 0, 0] and keeper[0]["cap_eff"] == SPAWNER_CAPS,
+    expect(len(keeper) == 1 and keeper[0]["uids"] == [0, 0, 0, 0] and keeper[0]["cap_eff"] == KEEPER_CAPS,
            "cyfr-keeper runs as root holding exactly SETUID, SETGID and KILL", procs)
     expect(len(service) == 1 and [p for p in procs if p["pid"] == service[0]["pid"]][0]["cap_eff"] == "0000000000000000",
            "the service runs as opus with no capability", procs)

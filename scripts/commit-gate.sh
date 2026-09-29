@@ -8,8 +8,8 @@
 # scripts/await-task.sh waits for. Legs:
 #   static    SQLite test compile and forced dev compile (warnings as
 #             errors, so every Boundary declaration is checked), format,
-#             credo, ops.gen.cli --check, dialyzer, then the full SQLite
-#             suite in N partitions
+#             credo, ops.gen.cli --check, cyfr.gen.configuration_guide
+#             --check, dialyzer, then the full SQLite suite in N partitions
 #   postgres  PostgreSQL test compile, then the given test paths (default:
 #             the storage set) in one partition; with --close the whole
 #             suite in N partitions, started once the SQLite suite's
@@ -70,6 +70,7 @@ leg_static() {
   step static format mix format --check-formatted || return 1
   step static credo mix credo --only=warning || return 1
   step static opsgen mix ops.gen.cli --check || return 1
+  step static confguide mix cyfr.gen.configuration_guide --check || return 1
   step static dialyzer mix dialyzer || return 1
   # The Boundary plants: each writes a forbidden edge into a copy of the tree
   # and force-compiles it, so they run once here and never in the partitions.

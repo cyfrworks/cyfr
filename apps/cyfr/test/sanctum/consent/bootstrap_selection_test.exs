@@ -254,9 +254,15 @@ defmodule Sanctum.Consent.BootstrapSelectionTest do
     File.write!(Path.join(dest, "cyfr-manifest.json"), Jason.encode!(manifest))
   end
 
+  # The newest shipped version: a release may ship a new version beside the
+  # one it keeps.
   defp shipped_version(plural, name) do
-    [dir] = Path.wildcard(Path.join([@bundle, plural, "local", name, "*"]))
-    Path.basename(dir)
+    [@bundle, plural, "local", name, "*"]
+    |> Path.join()
+    |> Path.wildcard()
+    |> Enum.map(&Path.basename/1)
+    |> Compendium.Semver.sort_desc()
+    |> hd()
   end
 
   defp copy_bundle!(dest) do

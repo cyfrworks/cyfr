@@ -127,8 +127,8 @@ defmodule Opus.Keeper.Direct do
   end
 
   # The runner's relay: a unix socket in its home that the runner connects
-  # to, listened on before the runner starts, and a process of the
-  # spawner's that accepts the one connection and carries its bytes both
+  # to, listened on before the runner starts, and a process of this
+  # keeper's that accepts the one connection and carries its bytes both
   # ways, as `cyfr-keeper` carries stream 5.
   defp relay(home) do
     path = Path.join(home, @relay_socket)

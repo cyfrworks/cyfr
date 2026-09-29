@@ -12,9 +12,10 @@ defmodule Locus.KeeperVectorsTest do
   attach target; every reply category the vectors hold is understood as
   they say, an unsolicited `pool` reply ignored; a reply of the wrong
   shape is ignored; every stream a relay never sends this client (stdin,
-  the attach stream past the handshake and the control stream of a spawn
-  that asked for none), an oversized frame and one on no stream end the
-  run as a relay fault; and an attach frame of the wrong shape is closed.
+  the attach stream past the handshake, the control stream of a spawn
+  that asked for none and the relay stream (5), which this client never
+  opens), an oversized frame and one on no stream end the run as a relay
+  fault; and an attach frame of the wrong shape is closed.
   """
 
   use ExUnit.Case, async: false
@@ -48,7 +49,7 @@ defmodule Locus.KeeperVectorsTest do
   setup do
     {peer, channel} = channel_pair()
     attach_dir = FakeKeeper.short_tmp_dir()
-    name = :"spawner_vectors_#{System.unique_integer([:positive])}"
+    name = :"keeper_vectors_#{System.unique_integer([:positive])}"
     {:ok, client} = Keeper.start_link(channel: channel, attach_dir: attach_dir, name: name)
     Process.unlink(client)
     :ok = :socket.setopt(channel, {:otp, :controlling_process}, client)
@@ -265,9 +266,11 @@ defmodule Locus.KeeperVectorsTest do
     refused = [frame_vector(v, "frames", 0), frame_vector(v, "frames", 3) | v["control_frames"]]
     assert Enum.map(refused, & &1["stream"]) == [0, 3, 4, 4]
 
+    # Stream 5 is the relay, which this client never opens; stream 6 is no
+    # stream of the protocol's.
     faults =
       Enum.map(refused, &encoded/1) ++
-        [<<1, KeeperProtocol.max_frame_bytes() + 1::32>>, <<5, 0::32>>]
+        [<<5, 0::32>>, <<1, KeeperProtocol.max_frame_bytes() + 1::32>>, <<6, 0::32>>]
 
     for bytes <- faults do
       task = Task.async(fn -> run(name) end)

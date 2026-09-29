@@ -1159,9 +1159,10 @@ jobs:
       # The tenancy unit is the athanor and a conversation is a thread. This
       # asserts the old vocabularies — org/project, the athanor's retired
       # second name, conversation/topic subscription, the prism: PubSub
-      # prefix — cannot creep back into code, config, or operator-facing docs.
-      # The retired name is matched as a word or inside an identifier, never
-      # inside an English word that merely contains its letters.
+      # prefix, the keeper's retired role name — cannot creep back into code,
+      # config, or operator-facing docs. Each retired name is matched as a
+      # word or inside an identifier, never inside an English word that
+      # merely contains its letters.
       # Free-word "org"/"project" is deliberately not gated (OCI annotations,
       # Mix.Project, Go module paths, "project directory" prose are legitimate).
       - name: Tier A/B fossil patterns must be absent
@@ -1225,6 +1226,7 @@ jobs:
             'cyfr\.worker\.key' \
             'Locus\.Spawner\b' \
             'Locus\.Test\.FakeSpawner\b' \
+            '(^|[^A-Za-z])([Ss]pawners?([^a-z]|$)|SPAWNERS?([^A-Z]|$))|[a-z]Spawner' \
             'Opus\.Keeper\.Spawn\b' \
             'CYFR_WORKER_KEY' \
             'CYFR_WORKERS\b' \

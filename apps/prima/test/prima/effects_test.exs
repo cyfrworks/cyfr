@@ -307,6 +307,19 @@ defmodule Prima.EffectsTest do
       assert [{^module, [:rand], []}] = beam_violations([module], @roster, %{module => beam})
     end
 
+    test "a seedless :crypto.generate_key/2 is entropy in both views, a seeded one is not" do
+      {module, beam, found} =
+        plant(Plant.Keypair, """
+        def fresh, do: :crypto.generate_key(:eddsa, :ed25519)
+        def derived(seed), do: :crypto.generate_key(:eddsa, :ed25519, seed)
+        """)
+
+      assert {module, {:fresh, 0}, :entropy, {:crypto, :generate_key, 2}} in found
+      assert pinned(found, :entropy) == [{module, {:fresh, 0}}]
+      assert source_violations(found, @roster) != []
+      assert [{^module, [:entropy], []}] = beam_violations([module], @roster, %{module => beam})
+    end
+
     test "an aliased call is caught" do
       {module, beam, found} =
         plant(Plant.Aliased, """
@@ -649,6 +662,9 @@ defmodule Prima.EffectsTest do
       {m, f} in [{Application, :spec}, {:application, :get_key}] -> :app_spec
       m in [Application, :application] or {m, f} == {:os, :getenv} -> :app_env
       m == :crypto and f in [:strong_rand_bytes, :rand_bytes, :rand_uniform] -> :entropy
+      # A key pair made without a seed draws its private key from the
+      # machine; one made from a seed (`generate_key/3`) is derived.
+      m == :crypto and f == :generate_key and a == 2 -> :entropy
       m in [:rand, :random] -> :rand
       m == System -> :system
       m == :erlang and f in [:unique_integer, :monotonic_time] -> :system
