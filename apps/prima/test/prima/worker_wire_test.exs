@@ -9,14 +9,17 @@ defmodule Prima.WorkerWireTest do
   at no version or another is refused before its op is read and an
   answer at none is lost; a request body names its callback and reads
   back only as a callback of the behaviour it is read for; answers spell
-  success and refusal one way. Every body and answer of
+  success and refusal one way. A runner's exit report at its bound fits
+  the body bound when every identifier in it is the longest the protocol
+  carries, escaped at every byte, and one attempt more does not. Every
+  body and answer of
   `tests/fixtures/host_api.json` and `tests/fixtures/worker_api.json`
   reads and writes back to its bytes.
   """
 
   use ExUnit.Case, async: true
 
-  alias Prima.{HostAPI, WorkerAPI, WorkerWire}
+  alias Prima.{HostAPI, RunnerControl, WorkerAPI, WorkerWire}
 
   test "the auth header is one lowercase HTTP header name" do
     assert WorkerWire.auth_header() == "x-cyfr-auth"
@@ -246,6 +249,72 @@ defmodule Prima.WorkerWireTest do
         assert :lost = WorkerWire.read_answer(unversioned)
         assert :lost = WorkerWire.read_answer(Map.put(unversioned, "v", 2))
       end
+    end
+  end
+
+  describe "a runner's exit report" do
+    # `n` distinct identifiers, each the longest the worker protocol
+    # carries and every byte of it one JSON escapes to two.
+    defp worst_ids(n) do
+      for i <- 1..n//1 do
+        bits =
+          i
+          |> Integer.to_string(2)
+          |> String.pad_leading(12, "0")
+          |> String.replace("0", "\"")
+          |> String.replace("1", "\\")
+
+        String.duplicate("\\", 256 - byte_size(bits)) <> bits
+      end
+    end
+
+    # The report of `n` attempts, its member and runner at the worst too,
+    # as a worker service encodes it.
+    defp report(n) do
+      [member, runner | attempts] = worst_ids(n + 2)
+
+      Jason.encode!(
+        WorkerWire.request_body(:runner_exited, %{
+          "member" => member,
+          "runner" => runner,
+          "attempts" => attempts
+        })
+      )
+    end
+
+    test "the worst identifier is the longest the protocol carries, and escapes to twice its bytes" do
+      [id] = worst_ids(1)
+      assert byte_size(id) == 256
+      assert byte_size(Jason.encode!(id)) == 2 * 256 + 2
+
+      # A runner's frame carries it, and one byte more is refused both
+      # ways.
+      frame = %{type: :child, execution_id: "exec_1", attempt: id}
+      line = frame |> RunnerControl.encode() |> IO.iodata_to_binary()
+      assert {:ok, ^frame} = RunnerControl.decode(line)
+
+      longer = "\\" <> id
+      assert_raise ArgumentError, fn -> RunnerControl.encode(%{frame | attempt: longer}) end
+
+      assert {:error, _reason} =
+               line
+               |> String.replace(Jason.encode!(id), Jason.encode!(longer))
+               |> RunnerControl.decode()
+    end
+
+    test "names at most as many attempts as fit the body bound at their worst: 2 033" do
+      max = WorkerWire.max_report_attempts()
+      assert max == 2_033
+
+      at_bound = report(max)
+      assert byte_size(at_bound) <= HostAPI.max_body_bytes()
+      assert byte_size(report(max + 1)) > HostAPI.max_body_bytes()
+
+      assert {:ok, :runner_exited, %{"attempts" => attempts}} =
+               WorkerWire.read_request_body(HostAPI, Jason.decode!(at_bound))
+
+      assert length(attempts) == max
+      assert length(Enum.uniq(attempts)) == max
     end
   end
 

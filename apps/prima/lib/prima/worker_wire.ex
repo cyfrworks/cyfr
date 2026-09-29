@@ -27,7 +27,10 @@ defmodule Prima.WorkerWire do
       lands on another member is refused whatever it asked for. A worker
       service's exit report carries the same member in its `args` and is
       posted the same way, since every attempt one runner holds was
-      issued by one member.
+      issued by one member. A report names at most
+      `max_report_attempts/0` attempts, so it fits the body bound
+      whatever its identifiers; the bound counts every child one
+      assignment started over its lifetime, not concurrently.
     * Every request body and every answer carries the wire's version as
       its first member, `v` (`version/0`). A request body is the JSON
       `{"v": 1, "op": <callback>, "args": {...}}` (`request_body/2`,
@@ -70,12 +73,56 @@ defmodule Prima.WorkerWire do
   @host_routes Map.new(@host_callbacks, &{&1, @host_prefix <> Atom.to_string(&1)})
   @worker_routes Map.new(@worker_callbacks, &{&1, @worker_prefix <> Atom.to_string(&1)})
 
+  # The longest identifier the worker protocol carries (`Prima.Assignment`,
+  # `Prima.RunnerControl`): 256 printable ASCII bytes, every one of which
+  # may be `"` or `\`, which JSON escapes to two.
+  @worst_id String.duplicate(~S("), 256)
+
+  # One attempt in a report's list: the worst identifier, quoted and
+  # escaped, and the comma that separates it from the next.
+  @report_entry_bytes byte_size(Jason.encode!(@worst_id)) + 1
+
+  # A report naming no attempt, its member and runner at the worst
+  # identifier: everything a report carries besides its list's entries,
+  # encoded as `request_body/2` encodes it.
+  @empty_report_bytes Jason.OrderedObject.new([
+                        {"v", @version},
+                        {"op", "runner_exited"},
+                        {"args",
+                         %{"attempts" => [], "member" => @worst_id, "runner" => @worst_id}}
+                      ])
+                      |> Jason.encode!()
+                      |> byte_size()
+
+  # A list of n entries is n entries less the comma its last one lacks.
+  @max_report_attempts div(
+                         Prima.HostAPI.max_body_bytes() - @empty_report_bytes + 1,
+                         @report_entry_bytes
+                       )
+
   @typedoc "A callback of either behaviour, as the route names it."
   @type callback :: atom()
 
   @doc "The wire's version, which every request body and answer carries as `v`."
   @spec version() :: pos_integer()
   def version, do: @version
+
+  @doc """
+  The most attempts one `runner_exited` report names, its subtree's root
+  included: as many as fit `Prima.HostAPI.max_body_bytes/0` when every
+  identifier the report carries, its member and runner too, is the longest
+  the worker protocol allows and every byte of it is escaped. A worker
+  service holds no more for one runner, and names no more in the report
+  of that runner's end.
+
+  It counts every child one runner assignment started over the
+  assignment's lifetime, not the children running at once: no frame tells
+  the service a child ended, so the report names each child the runner
+  started, ended or not. It is a bound of the report's own meaning, beside
+  a run's limits, ceilings and budgets.
+  """
+  @spec max_report_attempts() :: pos_integer()
+  def max_report_attempts, do: @max_report_attempts
 
   @doc "The HTTP header a `Prima.WorkerAuth` header travels in, lowercase."
   @spec auth_header() :: String.t()
