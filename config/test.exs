@@ -177,6 +177,22 @@ config :cyfr, worker_watch_enabled: false
 # holds.
 config :arca, control_plane_claim_enabled: false
 
+# The control plane's own pool is off under the SQL sandbox: a second
+# connection neither sees nor rolls back a test's rows, and on SQLite it
+# waits behind a test's open write. So the control plane writes on the
+# sandboxed repo here; the tests of the pool start one of their own,
+# outside the sandbox, and the cluster members turn it on.
+config :arca, control_plane_pool: false
+
+# SQLite's writers take no turns under the SQL sandbox
+# (`Arca.WriteTurn.enabled?/0`): an async test's connection holds the
+# write lock until the test ends and its own audit writer runs on it, so a
+# writer of another sandbox holding the turn while it waits for that lock,
+# and this writer waiting for the turn, would wait on each other until a
+# deadline. The tests of the turn turn it on outside the sandbox, and the
+# cluster members and the canvas proof's release run it.
+config :arca, write_turn: false
+
 # The boot's database checks (schema fingerprint, tenant roster, keyring
 # fingerprint) read and write server rows outside any sandbox; the suite
 # verifies the schema before it starts and exercises each check directly.

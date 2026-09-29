@@ -498,7 +498,12 @@ defmodule Cyfr.Cluster.Cell do
         {:auto_migrate, false},
         {:storage_adapter, Arca.Adapters.S3},
         {:s3, Store.s3_config()},
-        {:control_plane_claim_enabled, true}
+        {:control_plane_claim_enabled, true},
+        # The control plane writes on its own connection, and writers take
+        # turns at the write lock where the store has one, as a
+        # deployment's do; `config/test.exs` turns both off for the sandbox.
+        {:control_plane_pool, true},
+        {:write_turn, true}
       ],
       cyfr: [
         {:cluster, true},

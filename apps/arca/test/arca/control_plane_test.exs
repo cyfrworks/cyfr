@@ -573,3 +573,596 @@ defmodule Arca.ControlPlaneLockTest do
     assert {:ok, :lost} = Task.await(verifier, 25_000)
   end
 end
+
+defmodule Arca.ControlPlaneOwnPoolTest do
+  @moduledoc """
+  The control plane's writes on a pool of their own, outside the sandbox
+  and on node rows of the case's own: an exhausted ordinary pool delays no
+  renewal; an own pool configured and not running fails the write and
+  never falls back; a failure after the update and before the commit
+  publishes nothing. On SQLite a writer the arbiter does not order delays
+  a renewal only while it holds the lock, and under the recorded audit
+  burst every renewal lands. The renewal latencies under the burst and
+  under a sustained non-audit burst are printed as measured.
+  """
+
+  use ExUnit.Case, async: false
+
+  import Ecto.Query, only: [from: 2]
+  import ExUnit.CaptureLog
+
+  alias Arca.ControlPlane
+  alias Arca.Schemas.CellLease
+  alias Ecto.Adapters.SQL.Sandbox
+
+  @sqlite? Arca.Repo.adapter() == Ecto.Adapters.SQLite3
+
+  @keys [
+    {Arca.ControlPlane, :standing},
+    {Arca.ControlPlane, :generation},
+    {Arca.ControlPlane, :slot}
+  ]
+
+  setup do
+    saved = standing()
+    pool = Application.get_env(:arca, :control_plane_pool)
+    turn = Application.get_env(:arca, :write_turn)
+    node = "node-own-#{System.unique_integer([:positive])}"
+
+    # Every process takes a real connection of its own, as a deployment's
+    # does; the suite's mode is put back after.
+    Sandbox.mode(Arca.Repo, :auto)
+
+    on_exit(fn ->
+      Application.put_env(:arca, :control_plane_pool, pool)
+      Application.put_env(:arca, :write_turn, turn)
+      run(fn -> Arca.Repo.delete_all(from(l in CellLease, where: l.node == ^node)) end)
+      Sandbox.mode(Arca.Repo, :manual)
+
+      for {key, value} <- saved do
+        if value == :absent,
+          do: :persistent_term.erase(key),
+          else: :persistent_term.put(key, value)
+      end
+    end)
+
+    # The control plane on its own pool, and on SQLite the writers taking
+    # turns at the write lock, as a deployment's do.
+    Application.put_env(:arca, :control_plane_pool, true)
+    Application.put_env(:arca, :write_turn, true)
+    {:ok, node: node}
+  end
+
+  test "an exhausted ordinary pool delays no renewal: the writes have their own connection", %{
+    node: node
+  } do
+    own_pool!()
+    {:ok, _} = ControlPlane.take(node, "boot_a", 60_000)
+    test = self()
+
+    holders =
+      for _ <- 1..Arca.Repo.config()[:pool_size] do
+        pid =
+          spawn(fn ->
+            Arca.Repo.checkout(
+              fn ->
+                send(test, :out)
+                receive do: (:go -> :ok)
+              end,
+              timeout: :infinity
+            )
+          end)
+
+        on_exit(fn -> Process.exit(pid, :kill) end)
+        pid
+      end
+
+    for _ <- holders, do: assert_receive(:out, 10_000)
+
+    # Every ordinary connection is out and stays out until the renewal has
+    # answered: one waiting for the ordinary pool could not answer at all.
+    assert {:ok, _slot} = ControlPlane.renew(60_000)
+    assert {:ok, _slot} = ControlPlane.member_slot()
+
+    for pid <- holders, do: send(pid, :go)
+  end
+
+  test "an own pool configured and not running fails the write, and nothing falls back", %{
+    node: node
+  } do
+    :ok = ControlPlane.forget()
+
+    log =
+      capture_log(fn ->
+        assert {:error, :database_error} = ControlPlane.take(node, "boot_a", 60_000)
+      end)
+
+    assert log =~ "own pool is not running"
+    assert ControlPlane.held() == :none
+    assert {:error, :not_found} = run(fn -> ControlPlane.slot(node) end)
+
+    # A member already holding a slot keeps its standing: the failed renew
+    # publishes nothing and the countdown runs on.
+    slot = %{
+      node: node,
+      owner: "boot_a",
+      generation: 1,
+      fence: 1,
+      lease_until: DateTime.utc_now()
+    }
+
+    :ok = ControlPlane.record_slot(slot)
+    :ok = ControlPlane.record({:held, 60_000})
+    before = standing()
+
+    capture_log(fn -> assert {:error, :database_error} = ControlPlane.renew(60_000) end)
+    assert standing() == before
+    assert {:error, :not_found} = run(fn -> ControlPlane.slot(node) end)
+
+    # A name that is taken but names no started repo fails the same way.
+    squatter = start_supervised!({Agent, fn -> :not_a_pool end})
+    true = Process.register(squatter, ControlPlane.pool_spec().id)
+
+    capture_log(fn -> assert {:error, :database_error} = ControlPlane.renew(60_000) end)
+    assert standing() == before
+  end
+
+  @tag capture_log: true
+  test "an own pool that stops while a write waits for its connection fails the write", %{
+    node: node
+  } do
+    own_pool!()
+    {:ok, _} = ControlPlane.take(node, "boot_a", 60_000)
+    before = standing()
+    pool = ControlPlane.pool_spec().id
+    test = self()
+
+    # The pool's one connection is out, so the renewal waits for it.
+    holder =
+      spawn(fn ->
+        Arca.Repo.put_dynamic_repo(pool)
+
+        Arca.Repo.checkout(
+          fn ->
+            send(test, :holding)
+            receive do: (:never -> :ok)
+          end,
+          timeout: :infinity
+        )
+      end)
+
+    on_exit(fn -> Process.exit(holder, :kill) end)
+    assert_receive :holding, 5_000
+    renewal = Task.async(fn -> ControlPlane.renew(60_000) end)
+    await(fn -> checking_out?(renewal.pid) end)
+
+    :ok = stop_supervised(pool)
+    assert {:error, :database_error} = Task.await(renewal, 10_000)
+    assert standing() == before
+  end
+
+  test "a write failing after its update and before its commit publishes nothing", %{
+    node: node
+  } do
+    own_pool!()
+    {:ok, _} = ControlPlane.take(node, "boot_a", 60_000)
+    {:ok, row} = run(fn -> ControlPlane.slot(node) end)
+    before = standing()
+
+    # SQLite raises in the update's own statement, after the row changed;
+    # PostgreSQL raises at the commit, from a trigger deferred to it.
+    fail_after_update!(node)
+
+    capture_log(fn ->
+      assert {:error, :database_error} = ControlPlane.renew(60_000)
+      assert {:error, :database_error} = ControlPlane.take(node, "boot_a", 60_000)
+    end)
+
+    assert standing() == before
+    assert {:ok, %{fence: fence, generation: generation}} = run(fn -> ControlPlane.slot(node) end)
+    assert {fence, generation} == {row.fence, row.generation}
+  end
+
+  test "a writer killed after its update and before its commit publishes nothing", %{
+    node: node
+  } do
+    own_pool!()
+    {:ok, _} = ControlPlane.take(node, "boot_a", 60_000)
+    {:ok, row} = run(fn -> ControlPlane.slot(node) end)
+    before = standing()
+    test = self()
+
+    renewer =
+      spawn(fn ->
+        receive do: (:go -> ControlPlane.renew(60_000))
+        send(test, :returned)
+      end)
+
+    handler = {__MODULE__, renewer}
+
+    :ok =
+      :telemetry.attach(handler, [:arca, :repo, :query], &__MODULE__.kill_after_update/4, renewer)
+
+    on_exit(fn -> :telemetry.detach(handler) end)
+    ref = Process.monitor(renewer)
+    send(renewer, :go)
+
+    assert_receive {:DOWN, ^ref, :process, ^renewer, :killed}, 10_000
+    refute_received :returned
+    assert standing() == before
+    assert {:ok, %{fence: fence}} = run(fn -> ControlPlane.slot(node) end)
+    assert fence == row.fence
+
+    # The pool's connection comes back, and the next renewal lands.
+    :telemetry.detach(handler)
+    assert {:ok, %{fence: renewed}} = ControlPlane.renew(60_000)
+    assert renewed == row.fence + 1
+  end
+
+  @doc false
+  # Kills `target` as its lease update returns, inside its transaction.
+  def kill_after_update(_event, _measurements, %{query: query}, target) do
+    if self() == target and String.starts_with?(query, ~s(UPDATE "cell_leases")),
+      do: Process.exit(self(), :kill)
+  end
+
+  @tag timeout: 180_000
+  test "under the recorded audit burst, 200 calls at concurrency 16, every renewal lands", %{
+    node: node
+  } do
+    own_pool!()
+    {:ok, _} = ControlPlane.take(node, "boot_a", 60_000)
+    prefix = "call_burst_#{System.unique_integer([:positive])}_"
+
+    on_exit(fn ->
+      run(fn ->
+        Arca.Repo.delete_all(from(r in "decision_logs", where: like(r.call_id, ^"#{prefix}%")))
+      end)
+    end)
+
+    sampler = sample(&Arca.DecisionLog.writers/0)
+    # Back to back, so the burst never passes between two renewals.
+    renewer = renew_every(10)
+    actor = Prima.Actor.in_athanor("ath_test")
+    started = System.monotonic_time(:millisecond)
+
+    answers =
+      1..200
+      |> Task.async_stream(fn i -> audited_call(actor, prefix <> "#{i}") end,
+        max_concurrency: 16,
+        timeout: 60_000
+      )
+      |> Enum.map(fn {:ok, answer} -> answer end)
+
+    burst_ms = System.monotonic_time(:millisecond) - started
+    renewals = stop(renewer)
+    writers = stop(sampler)
+
+    assert renewals != []
+    assert Enum.all?(renewals, &match?({{:ok, _slot}, _ms}, &1)), inspect(renewals)
+    latencies = renewals |> Enum.map(&elem(&1, 1)) |> Enum.sort()
+    assert Enum.max(writers) <= Arca.DecisionLog.max_writers()
+    assert ControlPlane.held?()
+
+    lost = for {a, f} <- answers, answer <- [a, f], answer != :ok, do: elem(answer, 1).kind
+
+    IO.puts(
+      "control plane: under the audit burst (#{burst_ms} ms, #{adapter()}) #{length(latencies)} " <>
+        "renewals, p50/p95/max #{percentile(latencies, 50)}/#{percentile(latencies, 95)}/" <>
+        "#{List.last(latencies)} ms; at most #{Enum.max(writers)} audit writers; lost " <>
+        inspect(Enum.frequencies(lost))
+    )
+  end
+
+  if @sqlite? do
+    test "a writer the arbiter does not order delays a renewal only while it holds the lock", %{
+      node: node
+    } do
+      own_pool!()
+      {:ok, _} = ControlPlane.take(node, "boot_a", 60_000)
+      blocker = hold_write_lock()
+
+      # The renewal holds its turn and steps its lock attempt inside the
+      # driver before the lock goes: it waits only for the lock's holder,
+      # and then at most a lock quantum.
+      renewal = Task.async(fn -> timed(fn -> ControlPlane.renew(60_000) end) end)
+      await(fn -> match?(%{holder: %{kind: :control_plane}}, Arca.WriteTurn.status()) end)
+      await(fn -> stepping?(renewal.pid) end)
+      released = unlock(blocker)
+
+      assert {{:ok, _slot}, _ms, done} = Task.await(renewal, 15_000)
+      assert done >= released
+      assert done - released < 100, "the renewal came #{done - released} ms after"
+    end
+
+    # Inside the driver running a statement: stepping it, not preparing it.
+    defp stepping?(pid) do
+      case Process.info(pid, :current_function) do
+        {:current_function, {Exqlite.Sqlite3NIF, step, _arity}} -> step in [:step, :multi_step]
+        _elsewhere -> false
+      end
+    end
+
+    test "a standalone write racing a renewal delays it by that statement and a quantum", %{
+      node: node
+    } do
+      own_pool!()
+      {:ok, _} = ControlPlane.take(node, "boot_a", 60_000)
+
+      # A standalone write that holds the lock for a while, standing in for
+      # any ordinary write outside the arbiter's order
+      # (`Arca.BuildRecords`' `update_all` among them).
+      writer =
+        Task.async(fn ->
+          Arca.Repo.query!(long_statement(400), [], log: false, timeout: 15_000)
+          System.monotonic_time(:millisecond)
+        end)
+
+      await_held!()
+      {result, _ms, done} = timed(fn -> ControlPlane.renew(60_000) end)
+      ended = Task.await(writer, 15_000)
+
+      # That statement and at most a lock quantum more.
+      assert {:ok, _slot} = result
+      assert done - ended < 100, "the renewal came #{done - ended} ms after"
+    end
+
+    @tag timeout: 120_000
+    test "a sustained non-audit write burst is measured, never prioritized", %{node: node} do
+      own_pool!()
+      {:ok, _} = ControlPlane.take(node, "boot_a", 60_000)
+      noise = node <> "-noise"
+      until = System.monotonic_time(:millisecond) + 2_000
+      renewer = renew_every(100)
+
+      writers =
+        for _ <- 1..16 do
+          Task.async(fn -> standalone_writes(noise, until, []) end)
+        end
+
+      writes = writers |> Enum.flat_map(&Task.await(&1, 60_000))
+      renewals = stop(renewer)
+
+      # Outside the audit's guarantee: every renewal answered, and what it
+      # answered is recorded, not bounded. Standalone writers wait inside
+      # the driver for the whole busy timeout, each on a dirty I/O
+      # scheduler, so enough of them can keep the lock's holder from
+      # stepping until their waits end.
+      assert renewals != []
+      latencies = renewals |> Enum.map(&elem(&1, 1)) |> Enum.sort()
+      failed = Enum.count(renewals, fn {answer, _ms} -> not match?({:ok, _}, answer) end)
+      refused = for {:busy, ms} <- writes, do: ms
+
+      IO.puts(
+        "control plane: under #{length(writes)} standalone writes from 16 writers in 2 s " <>
+          "(#{length(refused)} refused busy, after at most #{Enum.max(refused, fn -> 0 end)} ms) " <>
+          "#{length(latencies)} renewals, p50/p95/max #{percentile(latencies, 50)}/" <>
+          "#{percentile(latencies, 95)}/#{List.last(latencies)} ms, #{failed} failed"
+      )
+    end
+
+    # Standalone writes until `until`, each answered or refused busy by the
+    # driver; the refusals are part of what is measured, with how long each
+    # waited first.
+    defp standalone_writes(node, until, answered) do
+      if System.monotonic_time(:millisecond) >= until do
+        answered
+      else
+        started = System.monotonic_time(:millisecond)
+
+        answer =
+          try do
+            Arca.Repo.update_all(from(l in CellLease, where: l.node == ^node),
+              set: [updated_at: DateTime.utc_now()]
+            )
+
+            :ok
+          rescue
+            _e in Exqlite.Error -> {:busy, System.monotonic_time(:millisecond) - started}
+          end
+
+        standalone_writes(node, until, [answer | answered])
+      end
+    end
+
+    defp database, do: Arca.Repo.config()[:database]
+
+    defp hold_write_lock do
+      {:ok, conn} = Exqlite.Sqlite3.open(database())
+      :ok = Exqlite.Sqlite3.execute(conn, "BEGIN IMMEDIATE")
+      conn
+    end
+
+    defp unlock(conn) do
+      :ok = Exqlite.Sqlite3.execute(conn, "ROLLBACK")
+      released = System.monotonic_time(:millisecond)
+      :ok = Exqlite.Sqlite3.close(conn)
+      released
+    end
+
+    # A write that takes the lock when it starts and then runs for about
+    # `ms`: a recursive count that inserts nothing.
+    defp long_statement(ms) do
+      {:ok, conn} = Exqlite.Sqlite3.open(database())
+
+      {us, :ok} =
+        :timer.tc(fn ->
+          Exqlite.Sqlite3.execute(
+            conn,
+            "WITH RECURSIVE c(x) AS (SELECT 1 UNION ALL SELECT x + 1 FROM c WHERE x < 500000) " <>
+              "SELECT count(*) FROM c WHERE x < 0"
+          )
+        end)
+
+      :ok = Exqlite.Sqlite3.close(conn)
+      rows = max(ms * div(500_000 * 1_000, max(us, 1)), 1_000)
+
+      "WITH RECURSIVE c(x) AS (SELECT 1 UNION ALL SELECT x + 1 FROM c WHERE x < #{rows}) " <>
+        ~s|INSERT INTO "schema_migrations" (version) SELECT x FROM c WHERE x < 0|
+    end
+
+    # Until a connection of the repo's holds the lock, a probe outside every
+    # pool takes and gives it back; then it finds it busy.
+    defp await_held!(tries \\ 3_000) do
+      {:ok, probe} = Exqlite.Sqlite3.open(database())
+      :ok = Exqlite.Sqlite3.execute(probe, "PRAGMA busy_timeout = 0")
+
+      try do
+        probe(probe, tries)
+      after
+        Exqlite.Sqlite3.close(probe)
+      end
+    end
+
+    defp probe(_probe, 0), do: flunk("no other connection took the lock")
+
+    defp probe(probe, tries) do
+      case Exqlite.Sqlite3.execute(probe, "BEGIN IMMEDIATE") do
+        :ok ->
+          :ok = Exqlite.Sqlite3.execute(probe, "ROLLBACK")
+          Process.sleep(1)
+          probe(probe, tries - 1)
+
+        {:error, _busy} ->
+          :ok
+      end
+    end
+
+    # A trigger on the own pool's one connection, gone with it.
+    defp fail_after_update!(node) do
+      pool = ControlPlane.pool_spec().id
+
+      run(fn ->
+        Arca.Repo.put_dynamic_repo(pool)
+
+        Arca.Repo.query!(
+          "CREATE TEMP TRIGGER r0_fail_after_update AFTER UPDATE ON cell_leases " <>
+            "WHEN NEW.node = '#{node}' BEGIN SELECT RAISE(ABORT, 'failed after the update'); END"
+        )
+      end)
+    end
+  else
+    # A trigger deferred to the commit, for the case's own row alone, and
+    # dropped after the case.
+    defp fail_after_update!(node) do
+      name = "r0_fail_#{System.unique_integer([:positive])}"
+
+      run(fn ->
+        Arca.Repo.query!(
+          "CREATE FUNCTION #{name}() RETURNS trigger LANGUAGE plpgsql AS " <>
+            "$$ BEGIN RAISE EXCEPTION 'failed at the commit'; END $$"
+        )
+
+        Arca.Repo.query!(
+          "CREATE CONSTRAINT TRIGGER #{name} AFTER UPDATE ON cell_leases " <>
+            "DEFERRABLE INITIALLY DEFERRED FOR EACH ROW WHEN (NEW.node = '#{node}') " <>
+            "EXECUTE FUNCTION #{name}()"
+        )
+      end)
+
+      on_exit(fn ->
+        run(fn ->
+          Arca.Repo.query!("DROP TRIGGER IF EXISTS #{name} ON cell_leases")
+          Arca.Repo.query!("DROP FUNCTION IF EXISTS #{name}()")
+        end)
+      end)
+    end
+  end
+
+  # ---- helpers ------------------------------------------------------------------
+
+  defp own_pool!,
+    do: start_supervised!(ControlPlane.pool_spec(pool: DBConnection.ConnectionPool))
+
+  # Waiting in the pool's checkout for a connection.
+  defp checking_out?(pid) do
+    match?(
+      {:current_function, {DBConnection.Holder, :checkout_call, _arity}},
+      Process.info(pid, :current_function)
+    )
+  end
+
+  defp await(fun, within_ms \\ 5_000),
+    do: await_until(fun, System.monotonic_time(:millisecond) + within_ms)
+
+  defp await_until(fun, deadline) do
+    cond do
+      fun.() ->
+        :ok
+
+      System.monotonic_time(:millisecond) >= deadline ->
+        flunk("the condition never held")
+
+      true ->
+        Process.sleep(1)
+        await_until(fun, deadline)
+    end
+  end
+
+  defp standing, do: Map.new(@keys, &{&1, :persistent_term.get(&1, :absent)})
+
+  defp run(fun), do: fun |> Task.async() |> Task.await(:infinity)
+
+  defp adapter, do: if(@sqlite?, do: "SQLite", else: "PostgreSQL")
+
+  defp timed(fun) do
+    started = System.monotonic_time(:millisecond)
+    result = fun.()
+    done = System.monotonic_time(:millisecond)
+    {result, done - started, done}
+  end
+
+  # One call as the gate records it: its decision, then its completion.
+  defp audited_call(actor, call_id) do
+    decision =
+      Prima.Decision.new(
+        call_id: call_id,
+        plane: :external,
+        tool: "vault",
+        action: "status",
+        admission: :admitted,
+        inserted_at: DateTime.utc_now()
+      )
+
+    appended = Arca.DecisionLog.append(actor, decision)
+    {appended, Arca.DecisionLog.finish(actor, call_id, %{completion: :succeeded, duration_ms: 1})}
+  end
+
+  # A process renewing this member's slot every `ms` until stopped, keeping
+  # each answer and how long it took.
+  defp renew_every(ms) do
+    spawn_link(fn -> renewing(ms, []) end)
+  end
+
+  defp renewing(ms, done) do
+    {answer, took, _} = timed(fn -> ControlPlane.renew(60_000) end)
+    done = [{answer, took} | done]
+
+    receive do
+      {:stop, from} -> send(from, {:stopped, Enum.reverse(done)})
+    after
+      ms -> renewing(ms, done)
+    end
+  end
+
+  # A process reading `fun` every 5 ms until stopped, keeping each value.
+  defp sample(fun), do: spawn_link(fn -> sampling(fun, []) end)
+
+  defp sampling(fun, seen) do
+    receive do
+      {:stop, from} -> send(from, {:stopped, [fun.() | seen]})
+    after
+      5 -> sampling(fun, [fun.() | seen])
+    end
+  end
+
+  defp stop(pid) do
+    send(pid, {:stop, self()})
+    assert_receive {:stopped, values}, 30_000
+    values
+  end
+
+  defp percentile(sorted, p) do
+    Enum.at(sorted, max(0, min(length(sorted) - 1, ceil(p / 100 * length(sorted)) - 1)))
+  end
+end

@@ -13,7 +13,10 @@
 # The vault page's operations are also measured inside the server
 # (measure.exs), on this SQLite cell and, when CANVAS_PROOF_PG_URL names an
 # existing PostgreSQL database as a role that may create databases, on a
-# PostgreSQL cell of a release built for PostgreSQL.
+# PostgreSQL cell of a release built for PostgreSQL, with what each burst
+# did to the member's lease renewals and to the audit's writers. On the
+# SQLite cell every renewal asked during a burst must renew and the member
+# keep its slot, and the browsers start on it straight after.
 #
 # Usage: tests/canvas-proof/run.sh
 # Writes canvas-proof.json and canvas-proof.md into PROOF_OUT (default: the
@@ -145,15 +148,16 @@ seed_vault "$CELL" "$token"
 step "the vault's operations in the server, SQLite"
 measure_in_server "$CELL" "$token" "$OUT/server-measurements-sqlite.json"
 
-# The measurement's burst can starve the member's lease renewal on
-# SQLite, so the member loses its slot and every page answers 503 until
-# it wins the claim back: the proof starts once the release is ready again.
-step "waiting for the release to hold its control plane again"
-for _ in $(seq 1 60); do
-  curl -fsS -m 2 -o /dev/null "http://127.0.0.1:$PORT/api/health/ready" 2>/dev/null && break
-  sleep 1
-done
-curl -fsS -m 2 -o /dev/null "http://127.0.0.1:$PORT/api/health/ready" || fail "the release is not ready after the measurement"
+# The burst's audit writes must not cost the member its lease: every
+# renewal asked during a burst renewed, the member held its slot at every
+# sample and kept its generation, and it is ready at once.
+measured="$(cat "$OUT/server-measurements-sqlite.json")"
+[ "$(field "$measured" renewals_ok)" = True ] ||
+  fail "a renewal during the measurement's burst failed ($OUT/server-measurements-sqlite.json)"
+[ "$(field "$measured" slot_kept)" = True ] ||
+  fail "the member lost its slot under the measurement's burst ($OUT/server-measurements-sqlite.json)"
+curl -fsS -m 2 -o /dev/null "http://127.0.0.1:$PORT/api/health/ready" ||
+  fail "the release is not ready after the measurement"
 
 step "the canvas proof in $PLAYWRIGHT_IMAGE"
 playwright_run canvas-proof proof.mjs "http://127.0.0.1:$PORT" "$segment" "$cookie" /out \
