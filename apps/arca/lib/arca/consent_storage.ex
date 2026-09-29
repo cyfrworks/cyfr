@@ -49,6 +49,7 @@ defmodule Arca.ConsentStorage do
           required(:blob_digest) => String.t() | nil,
           required(:resolved_policy) => String.t(),
           required(:activation) => %{String.t() => String.t()},
+          required(:admitted_origins) => [Prima.Origin.t(), ...] | nil,
           required(:vault_refs) => [
             %{vault_entry_id: String.t(), binding_digest: String.t()}
           ]
@@ -63,16 +64,23 @@ defmodule Arca.ConsentStorage do
   commit uses to re-verify binding liveness so a `vault.rebind` racing the
   commit rolls the whole revision back. It must return `:ok` or
   `{:error, reason}` and must only read.
+
+  `attrs[:admitted_origins]`, when given, is the non-empty list of origins
+  the revision admits (`Prima.Origin` atoms or their wire spellings), stored
+  as their spellings in the enum's order; an empty list, a duplicate or an
+  origin outside the enum is refused `{:error, {:invalid, %{admitted_origins:
+  …}}}` with nothing written. A revision written without it stores none.
   """
   @spec insert_revision(map(), [map()], String.t() | nil, keyword()) ::
           {:ok, map()} | {:error, term()}
   def insert_revision(attrs, vault_refs, expected_head, opts \\ []) when is_map(attrs) do
     athanor_id = Map.fetch!(attrs, :athanor_id)
-    row = revision_row(attrs, athanor_id)
 
-    Ecto.Multi.new()
-    |> revision_multi(row, vault_refs, expected_head, athanor_id, opts)
-    |> run_multi(:consent)
+    with {:ok, row} <- revision_row(attrs, athanor_id) do
+      Ecto.Multi.new()
+      |> revision_multi(row, vault_refs, expected_head, athanor_id, opts)
+      |> run_multi(:consent)
+    end
   end
 
   @doc """
@@ -84,18 +92,19 @@ defmodule Arca.ConsentStorage do
           {:ok, map()} | {:error, term()}
   def mint_profile_with_revision(profile_attrs, consent_attrs, vault_refs, opts \\ []) do
     athanor_id = Map.fetch!(profile_attrs, :athanor_id)
-    row = revision_row(consent_attrs, athanor_id)
 
-    # Through the schema's changeset, never a raw struct: the label rule
-    # and the kind/status vocabulary are the changeset's, and this is the
-    # one production mint of a profile.
-    Ecto.Multi.new()
-    |> Ecto.Multi.insert(
-      :profile,
-      Arca.Schemas.Profile.changeset(%Arca.Schemas.Profile{}, profile_attrs)
-    )
-    |> revision_multi(row, vault_refs, nil, athanor_id, opts)
-    |> run_multi(:consent)
+    with {:ok, row} <- revision_row(consent_attrs, athanor_id) do
+      # Through the schema's changeset, never a raw struct: the label rule
+      # and the kind/status vocabulary are the changeset's, and this is the
+      # one production mint of a profile.
+      Ecto.Multi.new()
+      |> Ecto.Multi.insert(
+        :profile,
+        Arca.Schemas.Profile.changeset(%Arca.Schemas.Profile{}, profile_attrs)
+      )
+      |> revision_multi(row, vault_refs, nil, athanor_id, opts)
+      |> run_multi(:consent)
+    end
   end
 
   defp revision_row(attrs, athanor_id) do
@@ -110,11 +119,43 @@ defmodule Arca.ConsentStorage do
               "consent revisions require a blob_digest, got: #{Prima.LoggerContext.shape(other)}"
     end
 
-    attrs
-    |> Map.put(:athanor_id, athanor_id)
-    |> Map.put_new(:id, Prima.UUID7.generate_id("cons"))
-    |> Map.put_new(:granted_at, DateTime.utc_now())
+    with {:ok, origins} <- admitted_origins(Map.get(attrs, :admitted_origins)) do
+      {:ok,
+       attrs
+       |> Map.put(:athanor_id, athanor_id)
+       |> Map.put(:admitted_origins, origins)
+       |> Map.put_new(:id, Prima.UUID7.generate_id("cons"))
+       |> Map.put_new(:granted_at, DateTime.utc_now())}
+    end
   end
+
+  # The origins a revision admits, as the column stores them: a JSON array
+  # of wire spellings in the enum's order, or nil for a revision written
+  # without them.
+  defp admitted_origins(nil), do: {:ok, nil}
+
+  defp admitted_origins(origins) when is_list(origins) do
+    spellings =
+      Enum.map(origins, fn
+        origin when is_atom(origin) and not is_nil(origin) and not is_boolean(origin) ->
+          if Prima.Origin.origin?(origin), do: Prima.Origin.to_wire(origin), else: origin
+
+        spelling ->
+          spelling
+      end)
+
+    case Prima.Origin.parse_list(spellings) do
+      {:ok, parsed} -> {:ok, Jason.encode!(Prima.Origin.to_wire_list(parsed))}
+      {:error, reason} -> {:error, {:invalid, %{admitted_origins: [origin_refusal(reason)]}}}
+    end
+  end
+
+  defp admitted_origins(_origins),
+    do: {:error, {:invalid, %{admitted_origins: ["is a non-empty list of origins"]}}}
+
+  defp origin_refusal(:empty_origins), do: "is a non-empty list of origins"
+  defp origin_refusal(:duplicate_origin), do: "names an origin twice"
+  defp origin_refusal({:unknown_origin, _spelling}), do: "names an origin outside the enum"
 
   defp revision_multi(multi, row, vault_refs, expected_head, athanor_id, opts) do
     ref_rows =
@@ -354,7 +395,8 @@ defmodule Arca.ConsentStorage do
              "open_inert" => :open_inert,
              "edge_only" => :edge_only
            }),
-         {:ok, activation} <- decode_activation(consent.activation) do
+         {:ok, activation} <- decode_activation(consent.activation),
+         {:ok, origins} <- decode_origins(consent.admitted_origins) do
       {:ok,
        %{
          id: consent.id,
@@ -367,6 +409,7 @@ defmodule Arca.ConsentStorage do
          blob_digest: consent.blob_digest,
          resolved_policy: consent.resolved_policy,
          activation: activation,
+         admitted_origins: origins,
          vault_refs:
            Enum.map(refs, fn r ->
              %{vault_entry_id: r.vault_entry_id, binding_digest: r.binding_digest}
@@ -397,4 +440,17 @@ defmodule Arca.ConsentStorage do
   end
 
   defp decode_activation(_), do: {:error, {:invalid_stored_value, :activation}}
+
+  # nil for a revision written without origins; a stored list that does not
+  # parse refuses the consent rather than guessing.
+  defp decode_origins(nil), do: {:ok, nil}
+
+  defp decode_origins(json) when is_binary(json) do
+    with {:ok, spellings} <- Jason.decode(json),
+         {:ok, origins} <- Prima.Origin.parse_list(spellings) do
+      {:ok, origins}
+    else
+      _ -> {:error, {:invalid_stored_value, :admitted_origins}}
+    end
+  end
 end

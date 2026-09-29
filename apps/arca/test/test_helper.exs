@@ -51,6 +51,13 @@ rescue
     Arca.Storage.UnitLocator.install!(Arca.Test.UnitLocator.locators())
 end
 
+# The installation mode every person mint reads. Sanctum's boot installs
+# it, and no Sanctum starts here, so the suite installs the ordinary mode
+# itself — only when nothing has, exactly as the ports above.
+unless Arca.InstallationClaims.installed?() do
+  Arca.InstallationClaims.install_mode!(:ordinary)
+end
+
 # A suite database built from a different schema would run stale, since
 # the baseline still reads as applied; refuse it before any test touches it.
 Ecto.Adapters.SQL.Sandbox.unboxed_run(Arca.Repo, &Arca.SchemaFingerprint.verify!/0)

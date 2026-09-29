@@ -14,7 +14,7 @@ defmodule Arca.ToolGrantStorage do
 
   import Ecto.Query
 
-  alias Arca.Schemas.ToolGrant
+  alias Arca.Schemas.{CronSchedule, Execution, ToolGrant, Turn}
 
   @doc "The scopes a grant may carry."
   @spec scopes() :: [String.t()]
@@ -53,7 +53,7 @@ defmodule Arca.ToolGrantStorage do
         :ok = delete_matching(row)
 
         case Arca.Repo.insert(changeset(row)) do
-          {:ok, stored} -> stored
+          {:ok, stored} -> decoded(stored)
           {:error, changeset} -> Arca.Repo.rollback(changeset)
         end
       end)
@@ -92,6 +92,13 @@ defmodule Arca.ToolGrantStorage do
   Every grant that could bear on one thread: this thread's
   thread-scope rows and the agent-scope rows for the agents in play.
 
+  A deny is always answered. An allow is answered only while it stands:
+  before its `expires_at` on the database's clock, and while the
+  execution, turn or schedule it was given for is still open (running or
+  paused, open, not deleted). A bounded allow whose row has ended, or is
+  gone, is not answered. A row's `constraint` is answered decoded, as
+  `%{kind, patterns}` or nil.
+
   Read whole and filtered in memory — a thread has a handful of
   grants, and one indexed read beats a query per agent per turn.
   """
@@ -104,14 +111,37 @@ defmodule Arca.ToolGrantStorage do
     # `auto` automatic, so an outage would widen what runs with no card.
     # The caller refuses the turn instead.
     Arca.Repo.Errors.with_db_rescue("Arca.ToolGrantStorage.list_for_thread", fn ->
-      {:ok,
-       from(g in ToolGrant,
-         where:
-           g.athanor_id == ^athanor_id and
-             (g.scope == ^ToolGrant.agent_scope() or g.thread_id == ^thread_id),
-         order_by: [asc: g.granted_at, asc: g.id]
-       )
-       |> Arca.Repo.all()}
+      now = Arca.ServerMetaStorage.now!()
+      open_turns = Prima.TurnState.open_statuses()
+
+      rows =
+        from(g in ToolGrant,
+          left_join: e in Execution,
+          on:
+            g.lifecycle_kind == "execution" and e.id == g.lifecycle_id and
+              e.athanor_id == g.athanor_id,
+          left_join: t in Turn,
+          on: g.lifecycle_kind == "turn" and t.id == g.lifecycle_id and t.athanor_id == g.athanor_id,
+          left_join: s in CronSchedule,
+          on:
+            g.lifecycle_kind == "schedule" and s.id == g.lifecycle_id and
+              s.athanor_id == g.athanor_id,
+          where:
+            g.athanor_id == ^athanor_id and
+              (g.scope == ^ToolGrant.agent_scope() or g.thread_id == ^thread_id),
+          where:
+            g.effect == "deny" or
+              ((is_nil(g.expires_at) or g.expires_at > ^now) and
+                 (is_nil(g.lifecycle_kind) or
+                    (g.lifecycle_kind == "execution" and e.status in ["running", "paused"]) or
+                    (g.lifecycle_kind == "turn" and t.status in ^open_turns) or
+                    (g.lifecycle_kind == "schedule" and not is_nil(s.id) and
+                       s.status != "deleted"))),
+          order_by: [asc: g.granted_at, asc: g.id]
+        )
+        |> Arca.Repo.all()
+
+      {:ok, Enum.map(rows, &decoded/1)}
     end)
     |> Arca.Data.project()
   end
@@ -121,6 +151,12 @@ defmodule Arca.ToolGrantStorage do
   # ---------------------------------------------------------------------------
   # Internal
   # ---------------------------------------------------------------------------
+
+  # A row answered with its constraint decoded. A stored constraint that
+  # does not decode is not a narrower allow to guess at: the row is
+  # answered with `constraint: :corrupt`, which no caller may admit under.
+  defp decoded(%ToolGrant{constraint: constraint} = grant),
+    do: grant |> Arca.Data.project() |> Map.put(:constraint, ToolGrant.decode_constraint(constraint))
 
   defp conflict_columns("thread"), do: [:thread_id, :agent_name, :tool, :action]
   defp conflict_columns("agent"), do: [:athanor_id, :agent_name, :tool, :action]

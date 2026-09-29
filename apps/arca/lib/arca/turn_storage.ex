@@ -114,8 +114,10 @@ defmodule Arca.TurnStorage do
   - `:message` — the row: `:author`, `:content`, `:payload`, optional
     `:id` (a caller-minted id, so attachments stored under it are found)
     and `:client_id` (the sender's retry identity).
-  - `:turn` — `%{agent, requested_by, model, options}` to open an
-    `accepted` turn keyed by the message; `nil` for room content.
+  - `:turn` — `%{agent, requested_by, model, options, origin}` to open an
+    `accepted` turn keyed by the message, `origin` the `Prima.Origin` it
+    was admitted under (a turn naming none is accepted without one), kept on the row so a turn
+    recovered after a restart resumes under it; `nil` for room content.
   - `:steer_turn_id` — attach the message to an open turn of the thread
     instead; a turn that has ended answers `{:error, :turn_over}`. The
     turn's row is locked before the message is written, so a steer and
@@ -221,6 +223,7 @@ defmodule Arca.TurnStorage do
           requested_by: Map.get(attrs, :requested_by),
           model: Map.get(attrs, :model),
           options: encode(Map.get(attrs, :options)),
+          origin: origin!(Map.get(attrs, :origin)),
           fence: 1,
           runner_id: Prima.Boot.id(),
           status: "accepted",
@@ -243,6 +246,24 @@ defmodule Arca.TurnStorage do
     |> Arca.Repo.update!()
 
     turn
+  end
+
+  # The origin a turn is accepted under (`Prima.Origin`, an atom or its
+  # wire spelling), stored as the spelling; none is admitted without one,
+  # and anything outside the enum rolls the acceptance back.
+  # arca:db-raise-ok inside the caller's transaction
+  defp origin!(nil), do: nil
+
+  defp origin!(origin) when is_atom(origin) do
+    if Prima.Origin.origin?(origin),
+      do: Prima.Origin.to_wire(origin),
+      else: Arca.Repo.rollback({:invalid, %{origin: ["is not an origin"]}})
+  end
+
+  defp origin!(origin) do
+    if origin in Prima.Origin.spellings(),
+      do: origin,
+      else: Arca.Repo.rollback({:invalid, %{origin: ["is not an origin"]}})
   end
 
   # ---------------------------------------------------------------------------
@@ -1811,6 +1832,7 @@ defmodule Arca.TurnStorage do
                 agent_revision_digest: Map.get(attrs, :agent_revision_digest),
                 agent_capability_digest: Map.get(attrs, :agent_capability_digest),
                 recovery_limit: parent.recovery_limit,
+                origin: parent.origin,
                 fence: 1,
                 runner_id: Prima.Boot.id(),
                 status: "running",

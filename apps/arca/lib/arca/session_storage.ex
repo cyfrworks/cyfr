@@ -10,6 +10,16 @@ defmodule Arca.SessionStorage do
 
   Tokens are stored as SHA-256 hashes for indexed lookups.
   Session metadata (user_id, email, provider) is stored as plaintext.
+
+  A session of a person whose identity is `remote`
+  (`Arca.PersonIdentities`) records the `identity_key_epoch` of the head
+  verified when it was minted, whichever door admitted it, and a local
+  person's session records none: the insert refuses either the other way
+  round, and refuses an epoch that is not the cached head's current one
+  (`Arca.DirectoryHeads.bindable!/2`, read under the person's lock, so an
+  advance that retires the epoch either retires this session or refuses
+  it). `revoke_key_epoch/3` ends every session carrying a `key_epoch` a
+  fresh head retired.
   """
 
   import Ecto.Query
@@ -28,16 +38,29 @@ defmodule Arca.SessionStorage do
   person or the athanor either commits first and is reread here, or waits
   for this session and then retires it.
 
+  `attrs[:identity_key_epoch]` is required for a person whose identity is
+  `remote` (`{:error, :identity_key_epoch_required}`), must be the cached
+  head's current `key_epoch` (`{:error, :stale_key_epoch}`), and is refused
+  for any other person (`{:error, :unexpected_key_epoch}`). `also:`
+  (optional) is the higher owner's closure, run in the same transaction
+  after the insert and handed the session's `%{id, user_id}`: it answers
+  `:ok`, or `{:error, reason}` to roll the session back; any other answer
+  raises `ArgumentError`, which rolls the session back too.
+
   Answers `:ok`, or the policy's refusal with nothing written.
   """
   @spec create_session(binary(), map(), keyword()) :: :ok | {:error, term()}
   def create_session(token_hash, attrs, opts) when is_binary(token_hash) and is_list(opts) do
     lock = Keyword.fetch!(opts, :lock)
     verify = Keyword.fetch!(opts, :verify)
+    also = Keyword.get(opts, :also, fn _session -> :ok end)
 
     Arca.Repo.Errors.with_db_rescue("Arca.SessionStorage.create_session", fn ->
       Arca.SecurityTransitions.Issuance.run(lock, verify, fn _locked ->
-        insert_session(token_hash, attrs)
+        with {:ok, session} <- insert_session(token_hash, attrs),
+             :ok <- also_ran(also.(session)) do
+          {:ok, :inserted}
+        end
       end)
       |> case do
         {:ok, :inserted} -> :ok
@@ -48,6 +71,7 @@ defmodule Arca.SessionStorage do
 
   defp insert_session(token_hash, attrs) do
     now = DateTime.utc_now() |> DateTime.truncate(:microsecond)
+    epoch = attrs[:identity_key_epoch]
 
     row = %{
       id: Prima.UUID7.generate_id("ses"),
@@ -60,12 +84,24 @@ defmodule Arca.SessionStorage do
       # before the caller's athanor is resolved. Membership re-resolution
       # runs on the next load; nothing is coerced.
       athanor_id: attrs[:athanor_id],
+      identity_key_epoch: epoch,
       expires_at: attrs.expires_at,
       inserted_at: Map.get(attrs, :inserted_at, now)
     }
 
-    Arca.Repo.insert_all(Session, [row])
-    {:ok, :inserted}
+    with :ok <- Arca.DirectoryHeads.bindable!(attrs.user_id, epoch) do
+      Arca.Repo.insert_all(Session, [row])
+      {:ok, %{id: row.id, user_id: row.user_id}}
+    end
+  end
+
+  defp also_ran(:ok), do: :ok
+  defp also_ran({:error, _reason} = refusal), do: refusal
+
+  defp also_ran(other) do
+    raise ArgumentError,
+          "an also: closure answers :ok or {:error, reason}, got " <>
+            Prima.LoggerContext.shape(other)
   end
 
   @doc """
@@ -90,6 +126,7 @@ defmodule Arca.SessionStorage do
             :email,
             :provider,
             :athanor_id,
+            :identity_key_epoch,
             :expires_at,
             :inserted_at
           ]
@@ -177,6 +214,44 @@ defmodule Arca.SessionStorage do
     Arca.Repo.Errors.with_db_rescue("Arca.SessionStorage.hashes_by_user", [], fn ->
       Arca.Repo.all(from(s in Session, where: s.user_id == ^user_id, select: s.token_hash))
     end)
+  end
+
+  @doc """
+  End every session of the people `user_ids` that carries `key_epoch`: a
+  fresh head retired it, and a session minted under a live key the head no
+  longer names must not outlive the refresh. The platform's own actor
+  only. Answers the token hashes it ended, for the caller to invalidate
+  after commit.
+  """
+  @spec revoke_key_epoch(Prima.Actor.t(), [String.t()], String.t()) ::
+          {:ok, [binary()]} | {:error, :cross_tenant | :database_error}
+  def revoke_key_epoch(%Prima.Actor{scope: :platform, system: true}, user_ids, key_epoch)
+      when is_list(user_ids) and is_binary(key_epoch) do
+    Arca.Repo.Errors.with_db_rescue("Arca.SessionStorage.revoke_key_epoch", fn ->
+      Arca.Repo.locking_transaction(fn -> delete_key_epoch!(user_ids, key_epoch) end)
+    end)
+  end
+
+  def revoke_key_epoch(%Prima.Actor{}, _user_ids, _key_epoch), do: {:error, :cross_tenant}
+
+  @doc false
+  # The statement behind `revoke_key_epoch/3`, run in a caller's
+  # transaction (`Arca.DirectoryHeads.advance/4`).
+  @spec delete_key_epoch!([String.t()], String.t()) :: [binary()]
+  def delete_key_epoch!([], _key_epoch), do: []
+
+  # arca:unscoped-ok sessions are person-owned; the people and the epoch are the scope.
+  # arca:db-raise-ok a transaction step: its callers rescue around the transaction.
+  def delete_key_epoch!(user_ids, key_epoch) when is_list(user_ids) and is_binary(key_epoch) do
+    {_count, hashes} =
+      Arca.Repo.delete_all(
+        from(s in Session,
+          where: s.user_id in ^user_ids and s.identity_key_epoch == ^key_epoch,
+          select: s.token_hash
+        )
+      )
+
+    hashes || []
   end
 
   @doc """

@@ -102,6 +102,9 @@ defmodule Arca.Schemas.Execution do
     # (`Arca.DecisionLog`): the calls its chain makes name it as their
     # parent call.
     field :call_id, :string
+    # How the run started (`Prima.Origin`'s wire spelling): the admission
+    # path names it for a root, and a child carries its parent's.
+    field :origin, :string
   end
 
   # Every column a start writes — the write path's half of the row shape,
@@ -131,7 +134,8 @@ defmodule Arca.Schemas.Execution do
     :schedule_id,
     :current_attempt,
     :event_seq,
-    :call_id
+    :call_id,
+    :origin
   ]
 
   @doc "The columns `start_changeset/1` casts, for the write path to pin against."
@@ -142,7 +146,7 @@ defmodule Arca.Schemas.Execution do
   """
   def start_changeset(attrs) do
     %__MODULE__{}
-    |> cast(attrs, @start_fields)
+    |> cast(wire_origin(attrs), @start_fields)
     |> validate_required([
       :id,
       :reference,
@@ -154,9 +158,21 @@ defmodule Arca.Schemas.Execution do
     ])
     |> validate_inclusion(:status, @statuses)
     |> validate_inclusion(:kind, @kinds)
+    |> validate_inclusion(:origin, Prima.Origin.spellings())
     |> validate_component_type()
     |> validate_child_key()
   end
+
+  # An origin arrives as a `Prima.Origin` atom or its wire spelling and is
+  # stored as the spelling; anything else is left for the inclusion check
+  # to refuse.
+  defp wire_origin(%{origin: origin} = attrs) when is_atom(origin) and not is_nil(origin) do
+    if Prima.Origin.origin?(origin),
+      do: %{attrs | origin: Prima.Origin.to_wire(origin)},
+      else: attrs
+  end
+
+  defp wire_origin(attrs), do: attrs
 
   # A child key is the wire's shape and belongs to a child: a root carries
   # none. The unique index decides the race between two admissions of one

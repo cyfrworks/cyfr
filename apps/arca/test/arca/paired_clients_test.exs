@@ -3,11 +3,12 @@
 
 defmodule Arca.PairedClientsTest do
   @moduledoc """
-  The paired client rows: recorded active, with a known confirmation
-  class and source, once per credential in an athanor, and only by a
-  member that owns its slot; listed and revoked in the actor's own
-  athanor, with `revoked` terminal; revoked by person, across athanors
-  only for the platform's own actor.
+  The paired client rows: recorded active, with a known source (a
+  device's carrying its public key), once per credential in an athanor,
+  and only by a member that owns its slot; listed and revoked in the
+  actor's own athanor, with `revoked` terminal; revoked by person, across
+  athanors only for the platform's own actor. Standing alone decides: no
+  row carries a rank.
   """
 
   # Takes a slot through `Arca.ControlPlane`, which writes the process-wide
@@ -56,7 +57,6 @@ defmodule Arca.PairedClientsTest do
     Map.merge(
       %{
         user_id: "usr_pcl",
-        class: "session",
         source_kind: "session",
         source_id: "src_#{System.unique_integer([:positive])}",
         label: "Firefox on the desk"
@@ -76,20 +76,43 @@ defmodule Arca.PairedClientsTest do
       refute is_struct(row)
       assert "pcl_" <> _ = row.id
       assert row.standing == "active"
-      assert row.class == "session"
+      refute Map.has_key?(row, :class)
       assert row.athanor_id == actor.athanor_id
       assert {:ok, [^row]} = PairedClients.list(actor, [])
     end
 
-    test "every class the enum spells is recorded, and nothing else", %{actor: actor} do
-      for class <- Prima.ConfirmationClass.all() do
-        assert {:ok, %{class: spelt}} =
-                 PairedClients.record(actor, attrs(%{class: Prima.ConfirmationClass.to_string(class)}))
+    test "a device client carries its key, under the id its invitation reserved", %{actor: actor} do
+      device_key = :crypto.strong_rand_bytes(32)
+      reserved = Prima.UUID7.generate_id("pcl")
 
-        assert spelt == Prima.ConfirmationClass.to_string(class)
-      end
+      assert {:ok, row} =
+               PairedClients.record(
+                 actor,
+                 attrs(%{
+                   id: reserved,
+                   source_kind: "device_cert",
+                   device_public_key: device_key
+                 })
+               )
 
-      assert {:error, {:invalid, %{class: _}}} = PairedClients.record(actor, attrs(%{class: "admin"}))
+      assert row.id == reserved
+      assert row.device_public_key == device_key
+
+      assert {:error, :conflict} =
+               PairedClients.record(
+                 actor,
+                 attrs(%{id: reserved, source_kind: "device_cert", device_public_key: device_key})
+               )
+
+      assert {:error, {:invalid, %{device_public_key: _}}} =
+               PairedClients.record(actor, attrs(%{source_kind: "device_cert"}))
+
+      assert {:error, {:invalid, %{device_public_key: _}}} =
+               PairedClients.record(actor, attrs(%{device_public_key: device_key}))
+    end
+
+    test "every source kind is recorded, and nothing else", %{actor: actor} do
+      assert {:ok, _} = PairedClients.record(actor, attrs(%{source_kind: "api_key"}))
 
       assert {:error, {:invalid, %{source_kind: _}}} =
                PairedClients.record(actor, attrs(%{source_kind: "cookie"}))

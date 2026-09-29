@@ -107,13 +107,18 @@ defmodule Arca.Members do
   seat waits for it and then reads what it committed. A seat never lands
   in an archived athanor: `{:error, :athanor_archived}`, the answer adding
   a member to one already gets.
+
+  An invitation held for a person identifier (`:person_identifier`) is
+  claimed by whoever proves that identity, so it widens who may sit here:
+  its transaction first proves this member still owns its slot on the
+  database's clock (`{:error, :not_owner}` otherwise).
   """
   @spec seat(Prima.Actor.t(), map()) ::
-          {:ok, map()} | {:error, :no_athanor | :athanor_archived} | write_refusal()
+          {:ok, map()} | {:error, :no_athanor | :athanor_archived | :not_owner} | write_refusal()
   def seat(%Prima.Actor{athanor_id: athanor_id}, attrs)
       when is_binary(athanor_id) and athanor_id != "" and is_map(attrs) do
     Arca.Repo.Errors.with_db_rescue("Arca.Members.seat", fn ->
-      fn ->
+      write = fn ->
         with :ok <- seatable(athanor_id),
              {:ok, row} <-
                attrs |> defaults() |> Map.put(:athanor_id, athanor_id) |> do_insert() do
@@ -122,7 +127,10 @@ defmodule Arca.Members do
           {:error, reason} -> Arca.Repo.rollback(reason)
         end
       end
-      |> Arca.Repo.locking_transaction()
+
+      if is_nil(Map.get(attrs, :person_identifier)),
+        do: Arca.Repo.locking_transaction(write),
+        else: fenced(write)
     end)
     |> Arca.Data.project()
   end
@@ -170,9 +178,31 @@ defmodule Arca.Members do
 
   def find_invited(%Prima.Actor{}, _email), do: {:error, :no_athanor}
 
+  @doc "The invitation this person identifier (`per_…`) holds in the actor's athanor, if any."
+  @spec find_invited_identifier(Prima.Actor.t(), String.t()) ::
+          {:ok, map()} | {:error, :not_found | :no_athanor | :database_error}
+  def find_invited_identifier(%Prima.Actor{athanor_id: athanor_id}, identifier)
+      when is_binary(athanor_id) and athanor_id != "" and is_binary(identifier) do
+    Arca.Repo.Errors.with_db_rescue("Arca.Members.find_invited_identifier", fn ->
+      found(
+        Arca.Repo.one(
+          from(m in Membership,
+            where:
+              m.person_identifier == ^identifier and m.athanor_id == ^athanor_id and
+                m.status == "invited",
+            limit: 1
+          )
+        )
+      )
+    end)
+    |> Arca.Data.project()
+  end
+
+  def find_invited_identifier(%Prima.Actor{}, _identifier), do: {:error, :no_athanor}
+
   @doc """
   The actor's athanor's members — active and invited — as display rows,
-  oldest first: `%{user_id, email, display_name, namespace, status,
+  oldest first: `%{user_id, email, person_identifier, display_name, namespace, status,
   added_by, since}`. Paged with `limit:` (default and ceiling
   `max_page/0`) and `offset:`.
   """
@@ -198,6 +228,7 @@ defmodule Arca.Members do
            select: %{
              user_id: m.user_id,
              email: coalesce(m.email, u.email),
+             person_identifier: m.person_identifier,
              display_name: u.display_name,
              namespace: u.namespace,
              status: m.status,
@@ -570,6 +601,81 @@ defmodule Arca.Members do
   def activate_invited(%Prima.Actor{}, _user_id, _email, _now), do: {:error, :cross_tenant}
 
   @doc """
+  `activate_invited/4` for the invitations held for a person identifier
+  (`per_…`): each becomes this person's active membership, the identifier
+  consumed, in one transaction, and an invitation for an athanor the
+  person already sits in is dropped. Seating a person widens what they
+  reach, so the transaction first proves this member still owns its slot
+  (`{:error, :not_owner}` otherwise).
+  """
+  @spec activate_invited_identifier(Prima.Actor.t(), String.t(), String.t(), DateTime.t()) ::
+          {:ok, [String.t()]} | {:error, :not_owner} | refusal()
+  # arca:unscoped-ok invited rows are identifier-keyed fabric, activated across athanors.
+  def activate_invited_identifier(%Prima.Actor{scope: :platform}, user_id, identifier, %DateTime{} = now)
+      when is_binary(user_id) and is_binary(identifier) do
+    Arca.Repo.Errors.with_db_rescue("Arca.Members.activate_invited_identifier", fn ->
+      invited =
+        from(m in Membership,
+          where:
+            m.person_identifier == ^identifier and m.status == "invited" and m.scope == "athanor"
+        )
+
+      superseded =
+        from(m in invited,
+          where:
+            m.athanor_id in subquery(
+              from(a in Membership,
+                where: a.user_id == ^user_id and a.scope == "athanor" and a.status == "active",
+                select: a.athanor_id
+              )
+            )
+        )
+
+      fenced(fn ->
+        Arca.Repo.delete_all(superseded)
+
+        {_count, athanor_ids} =
+          Arca.Repo.update_all(from(m in invited, select: m.athanor_id),
+            set: [user_id: user_id, status: "active", person_identifier: nil, updated_at: now]
+          )
+
+        athanor_ids || []
+      end)
+    end)
+  end
+
+  def activate_invited_identifier(%Prima.Actor{}, _user_id, _identifier, _now),
+    do: {:error, :cross_tenant}
+
+  @doc """
+  Drop every pending invitation held for a person identifier, and answer
+  the athanors that were holding one.
+  """
+  @spec withdraw_invites_for_identifier(Prima.Actor.t(), String.t()) ::
+          {:ok, [String.t()]} | refusal()
+  # arca:unscoped-ok invites are identifier-keyed fabric, withdrawn across every athanor that invited.
+  def withdraw_invites_for_identifier(%Prima.Actor{scope: :platform}, identifier)
+      when is_binary(identifier) do
+    Arca.Repo.Errors.with_db_rescue("Arca.Members.withdraw_invites_for_identifier", fn ->
+      Arca.Repo.locking_transaction(fn ->
+        {_count, athanor_ids} =
+          Arca.Repo.delete_all(
+            from(m in Membership,
+              where:
+                m.person_identifier == ^identifier and m.status == "invited" and
+                  m.scope == "athanor",
+              select: m.athanor_id
+            )
+          )
+
+        athanor_ids || []
+      end)
+    end)
+  end
+
+  def withdraw_invites_for_identifier(%Prima.Actor{}, _identifier), do: {:error, :cross_tenant}
+
+  @doc """
   Drop every pending invitation for an address, and answer the athanors
   that were holding one. An invited row names an email and no person, so
   a deny's sweep by `user_id` cannot see it.
@@ -763,6 +869,21 @@ defmodule Arca.Members do
     |> Map.put_new(:id, Prima.UUID7.generate_id("mem"))
     |> Map.put_new(:created_at, now)
     |> Map.put_new(:updated_at, now)
+  end
+
+  # An identifier invitation, written or claimed, widens who reaches an
+  # athanor, so its transaction first proves this member still owns its
+  # slot on the database's clock (`Arca.ControlPlane.verify_held/1`): a
+  # stale owner seats nobody.
+  defp fenced(write) do
+    with {:ok, slot} <- Arca.ControlPlane.member_slot() do
+      Arca.Repo.locking_transaction(fn ->
+        case Arca.ControlPlane.verify_held(slot) do
+          :ok -> write.()
+          :lost -> Arca.Repo.rollback(:not_owner)
+        end
+      end)
+    end
   end
 
   # The athanor a seat is written into, locked: an athanor being retired

@@ -32,5 +32,8 @@ defmodule Arca.Schemas.Consent do
     field :granted_via, :string
     field :granted_at, :utc_datetime_usec
     field :supersedes_id, :string
+    # The origins the revision admits: a JSON array of `Prima.Origin` wire
+    # spellings, in the enum's order, written with the revision.
+    field :admitted_origins, :string
   end
 end

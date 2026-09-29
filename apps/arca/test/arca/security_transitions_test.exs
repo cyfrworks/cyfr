@@ -188,7 +188,6 @@ defmodule Arca.SecurityTransitions.Fixtures do
           id: id,
           athanor_id: athanor_id,
           user_id: user_id,
-          class: "session",
           source_kind: "session",
           source_id: "src_#{uniq()}",
           standing: standing,
@@ -202,6 +201,127 @@ defmodule Arca.SecurityTransitions.Fixtures do
   end
 
   def paired_standing(id), do: Arca.Repo.get(Arca.Schemas.PairedClient, id).standing
+
+  # A device certificate, a pending pairing invitation, a passkey and a
+  # pending confirmation, each inserted directly for the reason a frame
+  # is: writing them is fenced by the member's slot.
+  def certificate!(athanor_id, user_id, paired_client_id) do
+    now = DateTime.utc_now()
+    id = Prima.UUID7.generate_id("dct")
+
+    {1, _} =
+      Arca.Repo.insert_all(Arca.Schemas.DeviceCertificate, [
+        %{
+          id: id,
+          athanor_id: athanor_id,
+          paired_client_id: paired_client_id,
+          user_id: user_id,
+          subject_kind: "local",
+          device_public_key: :crypto.strong_rand_bytes(32),
+          issuing_home: "https://home.example",
+          audience_home: "https://home.example",
+          not_before: now,
+          expires_at: DateTime.add(now, 3600, :second),
+          certificate: "cert-#{uniq()}",
+          digest: Prima.Digest.sha256("cert-#{uniq()}"),
+          state: "active",
+          inserted_at: now,
+          updated_at: now
+        }
+      ])
+
+    id
+  end
+
+  def certificate_state(id), do: Arca.Repo.get(Arca.Schemas.DeviceCertificate, id).state
+
+  def invitation!(athanor_id, user_id) do
+    now = DateTime.utc_now()
+    id = Prima.UUID7.generate_id("pin")
+
+    {1, _} =
+      Arca.Repo.insert_all(Arca.Schemas.PairingInvitation, [
+        %{
+          id: id,
+          athanor_id: athanor_id,
+          secret_hash: Prima.Digest.sha256("secret-#{uniq()}"),
+          user_id: user_id,
+          membership_id: "mem_#{uniq()}",
+          prospective_client_id: Prima.UUID7.generate_id("pcl"),
+          audience_home: "https://home.example",
+          expires_at: DateTime.add(now, 300, :second),
+          state: "pending",
+          inserted_at: now,
+          updated_at: now
+        }
+      ])
+
+    id
+  end
+
+  def invitation_state(id), do: Arca.Repo.get(Arca.Schemas.PairingInvitation, id).state
+
+  def passkey!(user_id) do
+    now = DateTime.utc_now()
+    id = Prima.UUID7.generate_id("psk")
+
+    {1, _} =
+      Arca.Repo.insert_all(Arca.Schemas.Passkey, [
+        %{
+          id: id,
+          user_id: user_id,
+          credential_id: "cred-#{uniq()}",
+          rp_id: "home.example",
+          relying_home: "https://home.example",
+          public_key: "cose",
+          sign_count: 0,
+          state: "active",
+          registration_digest: Prima.Digest.sha256("reg-#{uniq()}"),
+          possession_verified: true,
+          inserted_at: now,
+          updated_at: now
+        }
+      ])
+
+    id
+  end
+
+  def passkey_state(id), do: Arca.Repo.get(Arca.Schemas.Passkey, id).state
+
+  def confirmation!(athanor_id, user_id, confirmed_by \\ []) do
+    now = DateTime.utc_now()
+    id = "cnf_#{uniq()}"
+
+    {1, _} =
+      Arca.Repo.insert_all(Arca.Schemas.PendingConfirmation, [
+        %{
+          id: id,
+          athanor_id: athanor_id,
+          user_id: user_id,
+          operation: "vault.create",
+          args_digest: Prima.Digest.sha256("args-#{uniq()}"),
+          action: "credential_entry",
+          preview: "{}",
+          home: "https://home.example",
+          rp_id: "home.example",
+          challenge: :crypto.strong_rand_bytes(32),
+          digest: Prima.Digest.sha256("record-#{uniq()}"),
+          state: if(confirmed_by == [], do: "pending", else: "confirmed"),
+          proof: if(confirmed_by == [], do: nil, else: "passkey"),
+          confirmed_client_id: confirmed_by[:client],
+          confirmed_passkey_id: confirmed_by[:passkey],
+          email_code_failures: 0,
+          opened_at: now,
+          expires_at: DateTime.add(now, 300, :second),
+          inserted_at: now,
+          updated_at: now
+        }
+      ])
+
+    id
+  end
+
+  def confirmation_state(id), do: Arca.Repo.get(Arca.Schemas.PendingConfirmation, id).state
 
   # A trigger that makes one statement fail inside the transition, spelled
   # per adapter. The sandbox rolls it back with the test.
@@ -247,11 +367,12 @@ end
 
 defmodule Arca.SecurityTransitionsTest do
   @moduledoc """
-  The four standing transitions, each one transaction: what a denial
+  The five standing transitions, each one transaction: what a denial
   retires, what an allow restores and what it never does, archive and
-  reopen, the generation every real change raises, and a failed statement
-  rolling back everything — the injected session DELETE and key UPDATE
-  failures included, after which an allow revives nothing.
+  reopen, leaving one athanor, the generation every real change raises,
+  and a failed statement rolling back everything — the injected session
+  DELETE, key UPDATE and certificate UPDATE failures included, after which
+  an allow revives nothing.
   """
 
   use ExUnit.Case, async: false
@@ -733,6 +854,201 @@ defmodule Arca.SecurityTransitionsTest do
 
       assert {:ok, %{revoked_paired_client_ids: [^paired], revoked_frame_credential_ids: [^frame]}} =
                SecurityTransitions.deny_user(server(), user.id, verify: admit())
+    end
+  end
+
+  describe "device certificates, pairing invitations, passkeys and confirmations" do
+    test "a denial retires them everywhere the person stood, and in what it archives" do
+      {user, own} = owner!()
+      shared = group!()
+      peer = person!()
+      seat!(shared.id, user.id)
+      seat!(shared.id, peer.id)
+
+      client = paired!(shared.id, user.id)
+      cert = certificate!(shared.id, user.id, client)
+      guest_client = paired!(own.id, peer.id)
+      guest_cert = certificate!(own.id, peer.id, guest_client)
+      peer_client = paired!(shared.id, peer.id)
+      peer_cert = certificate!(shared.id, peer.id, peer_client)
+      invitation = invitation!(shared.id, user.id)
+      peer_invitation = invitation!(shared.id, peer.id)
+      passkey = passkey!(user.id)
+      own_confirmation = confirmation!(shared.id, user.id)
+      by_guest = confirmation!(own.id, peer.id, client: guest_client)
+      peer_confirmation = confirmation!(shared.id, peer.id, client: peer_client)
+
+      assert {:ok, change} = SecurityTransitions.deny_user(server(), user.id, verify: admit())
+
+      assert change.revoked_device_certificate_ids == Enum.sort([cert, guest_cert])
+      assert change.revoked_pairing_invitation_ids == [invitation]
+      assert change.revoked_passkey_ids == [passkey]
+      assert change.voided_confirmation_ids == Enum.sort([own_confirmation, by_guest])
+
+      for id <- [cert, guest_cert], do: assert(certificate_state(id) == "revoked")
+      assert invitation_state(invitation) == "revoked"
+      assert passkey_state(passkey) == "revoked"
+      assert confirmation_state(own_confirmation) == "voided"
+      assert confirmation_state(by_guest) == "voided"
+
+      assert certificate_state(peer_cert) == "active"
+      assert invitation_state(peer_invitation) == "pending"
+      assert confirmation_state(peer_confirmation) == "confirmed"
+
+      # An allow resurrects none of them.
+      assert {:ok, _} = SecurityTransitions.allow_user(server(), user.id, verify: admit())
+      assert invitation_state(invitation) == "revoked"
+      assert passkey_state(passkey) == "revoked"
+      assert certificate_state(cert) == "revoked"
+    end
+
+    test "an archive retires the athanor's; a reopen retires any since, and resurrects none" do
+      group = group!()
+      member = person!()
+      seat!(group.id, member.id)
+      client = paired!(group.id, member.id)
+      cert = certificate!(group.id, member.id, client)
+      invitation = invitation!(group.id, member.id)
+      confirmed = confirmation!(group.id, member.id, client: client)
+      elsewhere = invitation!(group!().id, member.id)
+
+      assert {:ok, archived} = SecurityTransitions.archive_athanor(server(), group.id, verify: admit())
+      assert archived.revoked_device_certificate_ids == [cert]
+      assert archived.revoked_pairing_invitation_ids == [invitation]
+      assert archived.voided_confirmation_ids == [confirmed]
+      assert invitation_state(elsewhere) == "pending"
+
+      straggler = invitation!(group.id, member.id)
+
+      assert {:ok, reopened} =
+               SecurityTransitions.unarchive_athanor(server(), group.id, verify: admit())
+
+      assert reopened.revoked_pairing_invitation_ids == [straggler]
+      assert invitation_state(invitation) == "revoked"
+      assert certificate_state(cert) == "revoked"
+    end
+
+    test "an injected certificate UPDATE failure rolls a denial back with every credential standing" do
+      {user, own} = owner!()
+      session = session!(user.id, own.id)
+      client = paired!(own.id, user.id)
+      cert = certificate!(own.id, user.id, client)
+      failure = fail_on!("device_certificates", "UPDATE")
+
+      assert {:error, :database_error} =
+               SecurityTransitions.deny_user(server(), user.id, verify: admit())
+
+      assert user(user.id).status == "active"
+      assert session?(session)
+      assert paired_standing(client) == "active"
+      assert certificate_state(cert) == "active"
+
+      clear_failure!(failure)
+      assert {:ok, %{revoked_device_certificate_ids: [^cert]}} =
+               SecurityTransitions.deny_user(server(), user.id, verify: admit())
+    end
+  end
+
+  describe "leave_athanor/3" do
+    test "retires that athanor's standing alone, and the person's other seats stand" do
+      stay = group!()
+      leave = group!()
+      person = person!()
+      seat!(stay.id, person.id)
+      seat!(leave.id, person.id)
+      peer = person!()
+      seat!(leave.id, peer.id)
+
+      bound = session!(person.id, leave.id)
+      unbound = session!(person.id, nil)
+      other_bound = session!(person.id, stay.id)
+      frame = frame!(leave.id, person.id)
+      client = paired!(leave.id, person.id)
+      cert = certificate!(leave.id, person.id, client)
+      invitation = invitation!(leave.id, person.id)
+      own_confirmation = confirmation!(leave.id, person.id)
+      stay_client = paired!(stay.id, person.id)
+      stay_cert = certificate!(stay.id, person.id, stay_client)
+      stay_confirmation = confirmation!(stay.id, person.id)
+      peer_client = paired!(leave.id, peer.id)
+      passkey = passkey!(person.id)
+
+      assert {:ok, change} =
+               SecurityTransitions.leave_athanor(Prima.Actor.in_athanor(leave.id), person.id,
+                 verify: admit()
+               )
+
+      assert change.transitioned
+      assert [%{athanor_id: left}] = change.removed_memberships
+      assert left == leave.id
+      assert change.revoked_session_hashes == [bound]
+      assert change.revoked_frame_credential_ids == [frame]
+      assert change.revoked_paired_client_ids == [client]
+      assert change.revoked_device_certificate_ids == [cert]
+      assert change.revoked_pairing_invitation_ids == [invitation]
+      assert change.voided_confirmation_ids == [own_confirmation]
+
+      refute session?(bound)
+      assert session?(unbound)
+      assert session?(other_bound)
+      assert Enum.map(seats(person.id), & &1.athanor_id) == [stay.id]
+      assert paired_standing(stay_client) == "active"
+      assert certificate_state(stay_cert) == "active"
+      assert confirmation_state(stay_confirmation) == "pending"
+      assert paired_standing(peer_client) == "active"
+      assert passkey_state(passkey) == "active"
+
+      # Neither standing moved: a leave is not a denial or an archive.
+      assert user(person.id).security_generation == 1
+      assert athanor(leave.id).security_generation == 1
+    end
+
+    test "a person who holds no seat there is refused, and the caller's refusal rolls back" do
+      group = group!()
+      person = person!()
+      actor = Prima.Actor.in_athanor(group.id)
+
+      assert {:error, :not_member} = SecurityTransitions.leave_athanor(actor, person.id, verify: admit())
+
+      seat!(group.id, person.id)
+      session = session!(person.id, group.id)
+
+      assert {:error, :last_member} =
+               SecurityTransitions.leave_athanor(actor, person.id,
+                 verify: fn %{transition: :leave_athanor} -> {:error, :last_member} end
+               )
+
+      assert session?(session)
+      assert length(seats(person.id)) == 1
+
+      assert {:error, :no_athanor} =
+               SecurityTransitions.leave_athanor(server(), person.id, verify: admit())
+    end
+
+    test "an injected certificate UPDATE failure rolls the whole leave back and the seat stands" do
+      group = group!()
+      person = person!()
+      seat!(group.id, person.id)
+      session = session!(person.id, group.id)
+      client = paired!(group.id, person.id)
+      cert = certificate!(group.id, person.id, client)
+      failure = fail_on!("device_certificates", "UPDATE")
+      actor = Prima.Actor.in_athanor(group.id)
+
+      assert {:error, :database_error} =
+               SecurityTransitions.leave_athanor(actor, person.id, verify: admit())
+
+      assert length(seats(person.id)) == 1
+      assert session?(session)
+      assert paired_standing(client) == "active"
+      assert certificate_state(cert) == "active"
+
+      clear_failure!(failure)
+
+      assert {:ok, %{revoked_device_certificate_ids: [^cert]}} =
+               SecurityTransitions.leave_athanor(actor, person.id, verify: admit())
+
+      assert seats(person.id) == []
     end
   end
 
