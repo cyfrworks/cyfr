@@ -154,6 +154,65 @@ defmodule Arca.ExecutionTest do
     end
   end
 
+  describe "the origin" do
+    defp admit_origin(attrs) do
+      Execution.admit(
+        Map.merge(
+          %{
+            id: "exec_origin_#{System.unique_integer([:positive])}",
+            reference: "catalyst:local.test:1.0.0",
+            user_id: "user_test",
+            athanor_id: @athanor,
+            component_type: "catalyst"
+          },
+          attrs
+        ),
+        grant: Arca.Test.Actor.grant(@athanor),
+        verify: &Arca.Test.Actor.admits/1
+      )
+    end
+
+    test "a root records the origin its caller names, and one naming none is admitted" do
+      assert {:ok, %{execution: root}} = admit_origin(%{origin: :programmatic})
+      assert root.origin == "programmatic"
+      assert Arca.Repo.get!(Row, root.id).origin == "programmatic"
+
+      assert {:ok, %{execution: bare}} = admit_origin(%{})
+      assert is_nil(bare.origin)
+
+      assert {:error, {:invalid, %{origin: _}}} = admit_origin(%{origin: "batch"})
+    end
+
+    test "a child carries its parent's origin, and one naming another is refused" do
+      {:ok, %{execution: parent}} = admit_origin(%{origin: "schedule"})
+
+      assert {:ok, %{execution: child}} =
+               admit_origin(%{parent_execution_id: parent.id, root_execution_id: parent.id})
+
+      assert child.origin == "schedule"
+
+      assert {:ok, %{execution: named}} =
+               admit_origin(%{
+                 parent_execution_id: parent.id,
+                 root_execution_id: parent.id,
+                 origin: :schedule
+               })
+
+      assert named.origin == "schedule"
+      id = "exec_origin_other_#{System.unique_integer([:positive])}"
+
+      assert {:error, :origin_mismatch} =
+               admit_origin(%{
+                 id: id,
+                 parent_execution_id: parent.id,
+                 root_execution_id: parent.id,
+                 origin: :interactive
+               })
+
+      assert is_nil(Arca.Repo.get(Row, id))
+    end
+  end
+
   describe "complete_changeset/2" do
     test "creates valid changeset for completion" do
       execution = %Row{

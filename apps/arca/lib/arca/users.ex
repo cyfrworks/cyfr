@@ -198,21 +198,66 @@ defmodule Arca.Users do
   a person with no identity could never sign in again, and an identity
   with no person names nobody.
 
+  The installation guard runs first, inside the same transaction
+  (`Arca.InstallationClaims.guard!/1`), so a first sign-in cannot race a
+  restore's claim of the node: an ordinary mint is refused
+  `:restore_reserved` while a restore claim is pending, or on a node with
+  no person while the installed mode is `:restore_reserved`, even when it
+  wins the race. A node whose boot installed no mode raises
+  `Arca.InstallationClaims.NotInstalledError` and mints nothing.
+
+  `opts`:
+
+    * `also:` — the higher owner's closure (`ARCHITECTURE.md` §4.4), run
+      inside the transaction after the person and identity rows are
+      written. It is handed the person as a plain map and answers `:ok` or
+      `{:error, reason}`, which rolls the whole mint back with that reason.
+      It writes only its owner's rows through Arca and makes no network
+      call.
+    * `restore:` — the installation claim a restore's mint names
+      (`%{request_id: …, token_digest: …}`), never a caller's argument. A
+      restore's mint may name no IdP identity (`identity_attrs` nil); it is
+      refused `:not_claimed` unless the claim is pending exactly as named,
+      and `:not_empty` on a node that holds a person.
+
   A concurrent first sign-in of the same identity wins the unique index;
   the loser rolls back and reads the person the winner minted, so both
   answer the same row rather than one of them reporting a conflict.
   """
-  @spec mint(Prima.Actor.t(), map(), map()) :: {:ok, map()} | refusal() | write_refusal()
-  def mint(%Prima.Actor{scope: :platform} = actor, user_attrs, identity_attrs)
-      when is_map(user_attrs) and is_map(identity_attrs) do
+  @spec mint(Prima.Actor.t(), map(), map() | nil, keyword()) ::
+          {:ok, map()}
+          | {:error, :restore_reserved | :not_claimed | :not_empty | term()}
+          | refusal()
+          | write_refusal()
+  def mint(actor, user_attrs, identity_attrs, opts \\ [])
+
+  def mint(%Prima.Actor{scope: :platform} = actor, user_attrs, identity_attrs, opts)
+      when is_map(user_attrs) and (is_map(identity_attrs) or is_nil(identity_attrs)) and
+             is_list(opts) do
+    restore = Keyword.get(opts, :restore)
+    also = Keyword.get(opts, :also, fn _user -> :ok end)
+
+    if is_nil(identity_attrs) and is_nil(restore) do
+      {:error, {:invalid, %{identity: ["an ordinary mint names the identity that admitted it"]}}}
+    else
+      mint_guarded(actor, user_attrs, identity_attrs, restore, also)
+    end
+  end
+
+  def mint(%Prima.Actor{}, _user_attrs, _identity_attrs, _opts), do: {:error, :cross_tenant}
+
+  defp mint_guarded(actor, user_attrs, identity_attrs, restore, also) when is_function(also, 1) do
     Arca.Repo.Errors.with_db_rescue("Arca.Users.mint", fn ->
       identity_attrs =
-        identity_attrs |> Map.new() |> Map.put_new(:id, Prima.UUID7.generate_id("ext"))
+        identity_attrs &&
+          identity_attrs |> Map.new() |> Map.put_new(:id, Prima.UUID7.generate_id("ext"))
 
-      Arca.Repo.transaction(fn ->
-        with {:ok, user} <-
+      Arca.Repo.locking_transaction(fn ->
+        with :ok <- Arca.InstallationClaims.guard!(restore),
+             {:ok, user} <-
                %User{} |> User.changeset(user_attrs) |> Arca.Repo.insert() |> settled(),
-             {:ok, _identity} <- insert_identity(identity_attrs, user.id) do
+             {:ok, _identity} <- insert_identity(identity_attrs, user.id),
+             :ok <- also_ran(also.(Arca.Data.project(user))) do
           user
         else
           {:error, reason} -> Arca.Repo.rollback(reason)
@@ -220,15 +265,24 @@ defmodule Arca.Users do
       end)
       |> case do
         {:ok, user} -> {:ok, user}
-        {:error, reason} -> lost_the_race(actor, identity_attrs[:key], reason)
+        {:error, reason} -> lost_the_race(actor, identity_attrs && identity_attrs[:key], reason)
       end
     end)
     |> Arca.Data.project()
   end
 
-  def mint(%Prima.Actor{}, _user_attrs, _identity_attrs), do: {:error, :cross_tenant}
+  defp also_ran(:ok), do: :ok
+  defp also_ran({:error, _reason} = refusal), do: refusal
+
+  defp also_ran(other) do
+    raise ArgumentError,
+          "an also: closure answers :ok or {:error, reason}, got " <>
+            Prima.LoggerContext.shape(other)
+  end
 
   # ---- internal --------------------------------------------------------------
+
+  defp insert_identity(nil, _user_id), do: {:ok, nil}
 
   defp insert_identity(attrs, user_id) do
     %ExternalIdentity{}

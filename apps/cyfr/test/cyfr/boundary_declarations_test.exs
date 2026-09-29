@@ -109,6 +109,8 @@ defmodule Cyfr.BoundaryDeclarationsTest do
           StorageProjectionRoots TenantTables ThreadStorage ThreadSubscriptionStorage
           TurnStorage Usage WebhookDeliveryStorage),
        "the storage, lease, claim and cache facades the layers above call downward"},
+      {~w(InstallationClaims),
+       "the installation mode Sanctum installs and the first-person mint reads"},
       {~w(Providers.Records), "the records door the gate's resources read through"},
       {~w(Repo.Errors), "the row plane's error convention, which callers rescue by"},
       {~w(SchemaFingerprint SchemaFingerprint.Check AuditHandler Storage.UnitLocator),

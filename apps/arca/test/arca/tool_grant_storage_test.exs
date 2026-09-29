@@ -8,6 +8,8 @@ defmodule Arca.ToolGrantStorageTest do
   # db-error rescue, never a key left with no row.
   use ExUnit.Case, async: true
 
+  import Ecto.Query, only: [from: 2]
+
   alias Arca.ToolGrantStorage
 
   setup do
@@ -93,6 +95,129 @@ defmodule Arca.ToolGrantStorageTest do
              )
 
     assert id == first.id
+  end
+
+  describe "bounded allows" do
+    defp listed(row) do
+      {:ok, rows} =
+        ToolGrantStorage.list_for_thread(Prima.Actor.in_athanor(row.athanor_id), row.thread_id)
+
+      rows
+    end
+
+    test "a deny written with a lifecycle, a deadline or a constraint is refused", %{thread: row} do
+      deny = %{row | effect: "deny"}
+
+      for {field, value} <- [
+            lifecycle_kind: "execution",
+            expires_at: DateTime.add(DateTime.utc_now(), 60, :second),
+            constraint: %{kind: "storage_path", patterns: ["data/notes/"]}
+          ] do
+        assert {:error, {:invalid, errors}} = ToolGrantStorage.put(Map.put(deny, field, value))
+        assert Map.has_key?(errors, field)
+      end
+
+      assert {:error, {:invalid, %{lifecycle_id: _}}} =
+               ToolGrantStorage.put(Map.merge(deny, %{lifecycle_kind: "turn", lifecycle_id: nil}))
+
+      assert listed(row) == []
+    end
+
+    test "a constraint is a resource kind and its patterns in that kind's grammar", %{thread: row} do
+      for constraint <- [
+            %{kind: "email", patterns: ["a"]},
+            %{kind: "storage_path", patterns: []},
+            %{kind: "storage_path", patterns: ["../escape"]},
+            %{kind: "egress_domain", patterns: ["http://api.example.com/path"]},
+            %{kind: "storage_path", patterns: ["a/", "a/"]},
+            "storage_path:data/"
+          ] do
+        assert {:error, {:invalid, %{constraint: _}}} =
+                 ToolGrantStorage.put(Map.put(row, :constraint, constraint))
+      end
+
+      assert {:ok, stored} =
+               ToolGrantStorage.put(
+                 Map.put(row, :constraint, %{kind: :egress_domain, patterns: ["*.example.com"]})
+               )
+
+      assert stored.constraint == %{kind: "egress_domain", patterns: ["*.example.com"]}
+      assert [%{constraint: %{kind: "egress_domain"}}] = listed(row)
+    end
+
+    test "an allow past its deadline is not answered; a deny always is", %{thread: row} do
+      past = DateTime.add(DateTime.utc_now(), -1, :second)
+      {:ok, _} = ToolGrantStorage.put(Map.put(row, :expires_at, past))
+      assert listed(row) == []
+
+      {:ok, _} = ToolGrantStorage.put(Map.put(row, :expires_at, DateTime.add(past, 3600, :second)))
+      assert [%{effect: "allow"}] = listed(row)
+
+      {:ok, _} = ToolGrantStorage.put(%{row | effect: "deny"})
+      assert [%{effect: "deny"}] = listed(row)
+    end
+
+    test "an allow bound to an execution is answered while it runs and not after", %{thread: row} do
+      id = "exec_tg_#{System.unique_integer([:positive])}"
+
+      {:ok, _} =
+        Arca.Execution.admit(
+          %{
+            id: id,
+            reference: "catalyst:local.test:1.0.0",
+            user_id: "user_tg",
+            athanor_id: row.athanor_id,
+            component_type: "catalyst"
+          },
+          grant: Arca.Test.Actor.grant(row.athanor_id),
+          verify: &Arca.Test.Actor.admits/1
+        )
+
+      {:ok, _} =
+        ToolGrantStorage.put(Map.merge(row, %{lifecycle_kind: "execution", lifecycle_id: id}))
+
+      assert [%{lifecycle_id: ^id}] = listed(row)
+
+      {1, _} =
+        Arca.Repo.update_all(
+          from(e in Arca.Schemas.Execution, where: e.id == ^id),
+          set: [status: "completed", completed_at: DateTime.utc_now(), duration_ms: 1]
+        )
+
+      assert listed(row) == []
+    end
+
+    test "an allow bound to a lifecycle row that does not exist is not answered", %{thread: row} do
+      for kind <- ["execution", "turn", "schedule"] do
+        {:ok, _} =
+          ToolGrantStorage.put(Map.merge(row, %{lifecycle_kind: kind, lifecycle_id: "#{kind}_gone"}))
+
+        assert listed(row) == []
+      end
+    end
+
+    test "an allow bound to a turn is answered while the turn is open", %{thread: row} do
+      actor = Prima.Actor.in_athanor(row.athanor_id) |> Map.put(:user_id, "user_tg")
+      {:ok, thread} = Arca.ThreadStorage.create(actor)
+
+      {:ok, %{turn: turn}} =
+        Arca.TurnStorage.accept_message(actor, thread.id, %{
+          message: %{author: "user_tg", content: "go"},
+          turn: %{agent: "aqua", requested_by: "user_tg"}
+        })
+
+      bound = Map.merge(row, %{lifecycle_kind: "turn", lifecycle_id: turn.id})
+      {:ok, _} = ToolGrantStorage.put(bound)
+      assert [%{lifecycle_kind: "turn"}] = listed(row)
+
+      {1, _} =
+        Arca.Repo.update_all(
+          from(t in Arca.Schemas.Turn, where: t.id == ^turn.id),
+          set: [status: "completed", ended_at: DateTime.utc_now()]
+        )
+
+      assert listed(row) == []
+    end
   end
 
   # Straight through the changeset, skipping `put/1`'s delete — the shape

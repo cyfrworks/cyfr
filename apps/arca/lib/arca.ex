@@ -148,6 +148,7 @@ defmodule Arca do
       FrameCredentials,
       Files,
       Health,
+      InstallationClaims,
       JobClaims,
       Layouts,
       McpLog,

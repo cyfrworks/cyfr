@@ -766,3 +766,217 @@ defmodule Arca.MembersLockTest do
     assert {:error, :not_found} = unboxed(fn -> Members.find_platform(server(), user.id) end)
   end
 end
+
+defmodule Arca.MembersIdentifierInvitesTest do
+  @moduledoc """
+  Invitations held for a person identifier: exactly one of an email and an
+  identifier names an invited row, and whoever proves the identity claims
+  every invitation it holds, once. Writing and claiming one widens who
+  may sit in an athanor, so each proves first that this member still owns
+  its slot, and a stale member is refused `:not_owner`.
+  """
+
+  # Takes the cell's slot, which is process-wide; each case restores it.
+  use ExUnit.Case, async: false
+
+  import Ecto.Query, only: [from: 2]
+
+  alias Arca.{Athanors, ControlPlane, Members}
+  alias Arca.Schemas.CellLease
+
+  @slot_keys [
+    {Arca.ControlPlane, :standing},
+    {Arca.ControlPlane, :generation},
+    {Arca.ControlPlane, :slot}
+  ]
+
+  setup tags do
+    Arca.Test.Sandbox.setup!(tags)
+    {:ok, slot: hold_slot!()}
+  end
+
+  # The writes under test are fenced by the member's slot: a claimant runs
+  # and this member holds its slot. The process-wide standing and the claim
+  # switch are restored after each case.
+  defp hold_slot! do
+    saved = Map.new(@slot_keys, &{&1, :persistent_term.get(&1, :absent)})
+    claim = Application.get_env(:arca, :control_plane_claim_enabled)
+
+    on_exit(fn ->
+      for {key, value} <- saved do
+        if value == :absent,
+          do: :persistent_term.erase(key),
+          else: :persistent_term.put(key, value)
+      end
+
+      if is_nil(claim),
+        do: Application.delete_env(:arca, :control_plane_claim_enabled),
+        else: Application.put_env(:arca, :control_plane_claim_enabled, claim)
+    end)
+
+    Application.put_env(:arca, :control_plane_claim_enabled, true)
+    node = "node-#{System.unique_integer([:positive])}"
+    {:ok, slot} = ControlPlane.take(node, node <> "#boot", 60_000)
+    slot
+  end
+
+  defp server, do: Prima.Actor.system()
+
+  defp in_athanor(id), do: %{Prima.Actor.system() | athanor_id: id, scope: :athanor}
+
+  defp group! do
+    n = System.unique_integer([:positive])
+
+    {:ok, athanor} =
+      Athanors.insert(server(), %{
+        kind: "group",
+        name: "G#{n}",
+        slug: "mem-id-#{n}",
+        created_by: "system"
+      })
+
+    athanor
+  end
+
+  defp person_id, do: "usr_#{System.unique_integer([:positive])}"
+
+  defp identifier, do: "per_" <> Prima.Digest.sha256_hex("g-#{System.unique_integer()}")
+
+  test "an invitation names exactly one of an email and an identifier" do
+    athanor = group!()
+    id = identifier()
+
+    assert {:error, {:invalid, %{person_identifier: _}}} =
+             Members.seat(in_athanor(athanor.id), %{
+               email: "both@example.com",
+               person_identifier: id,
+               status: "invited",
+               added_by: "x"
+             })
+
+    assert {:error, {:invalid, %{email: _}}} =
+             Members.seat(in_athanor(athanor.id), %{status: "invited", added_by: "x"})
+
+    assert {:error, {:invalid, %{person_identifier: _}}} =
+             Members.seat(in_athanor(athanor.id), %{
+               person_identifier: "usr_not_an_identifier",
+               status: "invited",
+               added_by: "x"
+             })
+
+    assert {:ok, %{person_identifier: ^id, email: nil}} =
+             Members.seat(in_athanor(athanor.id), %{
+               person_identifier: id,
+               status: "invited",
+               added_by: "x"
+             })
+
+    assert {:error, :conflict} =
+             Members.seat(in_athanor(athanor.id), %{
+               person_identifier: id,
+               status: "invited",
+               added_by: "x"
+             })
+
+    assert {:ok, %{person_identifier: ^id}} =
+             Members.find_invited_identifier(in_athanor(athanor.id), id)
+
+    assert {:ok, [%{status: "invited", person_identifier: ^id}]} =
+             Members.list(in_athanor(athanor.id))
+  end
+
+  test "an active row names its person and carries no identifier" do
+    athanor = group!()
+    user = person_id()
+
+    assert {:ok, %{person_identifier: nil}} =
+             Members.seat(in_athanor(athanor.id), %{
+               user_id: user,
+               person_identifier: identifier(),
+               added_by: "x"
+             })
+  end
+
+  test "activation claims every invitation the identifier holds, once" do
+    a = group!()
+    b = group!()
+    user = person_id()
+    id = identifier()
+
+    for athanor <- [a, b] do
+      {:ok, _} =
+        Members.seat(in_athanor(athanor.id), %{
+          person_identifier: id,
+          status: "invited",
+          added_by: "x"
+        })
+    end
+
+    assert {:ok, claimed} =
+             Members.activate_invited_identifier(server(), user, id, DateTime.utc_now())
+
+    assert Enum.sort(claimed) == Enum.sort([a.id, b.id])
+    assert {:ok, [%{status: "active", person_identifier: nil}]} = Members.list(in_athanor(a.id))
+
+    assert {:ok, []} =
+             Members.activate_invited_identifier(server(), user, id, DateTime.utc_now())
+
+    assert {:error, :cross_tenant} =
+             Members.activate_invited_identifier(in_athanor(a.id), user, id, DateTime.utc_now())
+  end
+
+  test "a withdrawn identifier invitation claims nothing" do
+    athanor = group!()
+    id = identifier()
+
+    {:ok, _} =
+      Members.seat(in_athanor(athanor.id), %{
+        person_identifier: id,
+        status: "invited",
+        added_by: "x"
+      })
+
+    assert {:ok, [withdrawn]} = Members.withdraw_invites_for_identifier(server(), id)
+    assert withdrawn == athanor.id
+
+    assert {:ok, []} =
+             Members.activate_invited_identifier(server(), person_id(), id, DateTime.utc_now())
+  end
+
+  test "a stale member writes no identifier invitation and claims none", %{slot: slot} do
+    athanor = group!()
+    id = identifier()
+
+    {:ok, _} =
+      Members.seat(in_athanor(athanor.id), %{
+        person_identifier: id,
+        status: "invited",
+        added_by: "x"
+      })
+
+    {1, _} =
+      Arca.Repo.update_all(from(l in CellLease, where: l.node == ^slot.node),
+        set: [owner: "someone-else", generation: slot.generation + 1]
+      )
+
+    assert {:error, :not_owner} =
+             Members.seat(in_athanor(group!().id), %{
+               person_identifier: identifier(),
+               status: "invited",
+               added_by: "x"
+             })
+
+    assert {:error, :not_owner} =
+             Members.activate_invited_identifier(server(), person_id(), id, DateTime.utc_now())
+
+    assert {:ok, [%{status: "invited", person_identifier: ^id}]} = Members.list(in_athanor(athanor.id))
+
+    # An email invitation and an active seat widen nothing a proof claims.
+    assert {:ok, %{email: "stale@example.com"}} =
+             Members.seat(in_athanor(athanor.id), %{
+               email: "stale@example.com",
+               status: "invited",
+               added_by: "x"
+             })
+  end
+end

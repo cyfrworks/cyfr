@@ -50,5 +50,8 @@ defmodule Arca.Schemas.Turn do
     field :paused_at, :utc_datetime_usec
     field :paused_reason, :string
     field :launch_step_id, :string
+    # How the turn was started (`Prima.Origin`'s wire spelling), written
+    # when it is accepted; a clone carries its parent's.
+    field :origin, :string
   end
 end

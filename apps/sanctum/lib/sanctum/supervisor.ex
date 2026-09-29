@@ -10,6 +10,12 @@ defmodule Sanctum.Supervisor do
   def start(_type, _args) do
     Sanctum.Network.private_egress_targets()
 
+    # Who may mint the installation's first person, installed before any
+    # child starts and so before any ingress opens: Sanctum starts before
+    # the host. No restore capability is configured, so the installation
+    # admits its first person by an ordinary door.
+    Arca.InstallationClaims.install_mode!(:ordinary)
+
     # The invoke-budget counters, owned by the application master so they
     # outlive every request that charges them.
     Sanctum.Authority.BudgetCounter.ensure_table()

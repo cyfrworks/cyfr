@@ -133,6 +133,50 @@ defmodule Arca.TurnStorageTest do
     end
   end
 
+  describe "the origin" do
+    setup do
+      :ok = Sandbox.checkout(Arca.Repo)
+      Sandbox.mode(Arca.Repo, {:shared, self()})
+      Arca.Test.Actor.athanor!()
+      actor = Arca.Test.Actor.local()
+      {:ok, thread} = Threads.create(actor)
+      {:ok, actor: actor, thread: thread}
+    end
+
+    test "an accepted turn keeps the origin it was admitted under, read back as a restart reads it",
+         %{actor: actor, thread: thread} do
+      assert {:ok, %{turn: turn}} =
+               TurnStorage.accept_message(actor, thread.id, %{
+                 message: %{author: actor.user_id, content: "@aqua go", client_id: "cli_origin"},
+                 turn: %{agent: "aqua", requested_by: actor.user_id, origin: :programmatic}
+               })
+
+      assert turn.origin == "programmatic"
+      assert Arca.Repo.get!(Turn, turn.id).origin == "programmatic"
+
+      assert {:ok, %{turn: %{origin: "programmatic"}}} =
+               TurnStorage.accepted(actor, thread.id, "cli_origin")
+
+      {:ok, started} = TurnStorage.start(actor, turn.id, %{fence: turn.fence, recovery_limit: 1})
+
+      {:ok, %{turn: clone}} =
+        TurnStorage.open_clone_turn(actor, turn.id, %{role: "helper", fence: started.fence})
+
+      assert clone.origin == "programmatic"
+    end
+
+    test "a turn naming none is accepted without one; one outside the enum is refused",
+         %{actor: actor, thread: thread} do
+      assert %{origin: nil} = accept!(actor, thread)
+
+      assert {:error, {:invalid, %{origin: _}}} =
+               TurnStorage.accept_message(actor, thread.id, %{
+                 message: %{author: actor.user_id, content: "@aqua go"},
+                 turn: %{agent: "aqua", requested_by: actor.user_id, origin: "batch"}
+               })
+    end
+  end
+
   defp accept!(actor, thread) do
     {:ok, %{turn: turn}} =
       TurnStorage.accept_message(actor, thread.id, %{

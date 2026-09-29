@@ -62,6 +62,9 @@ defmodule Arca.TenantTables do
     "sessions",
     "api_keys",
     "frame_credentials",
+    "device_certificates",
+    "pending_confirmations",
+    "pairing_invitations",
     "paired_clients",
     "storage_projection_changes",
     "storage_projection_roots",
@@ -126,13 +129,34 @@ defmodule Arca.TenantTables do
   # `platform_settings` and `settings_pins` are the cell's settings and
   # each member's environment pins of them: node facts every member reads
   # alike, which no athanor owns and no erasure of one may touch.
+  #
+  # `person_identities`, `identity_attempts`, `identity_log_entries`,
+  # `directory_heads` and `carry_actions` are a person's identity and
+  # their carries, which are not an athanor's to delete: a person's keys
+  # and identifier outlive every athanor they sit in, a directory orders
+  # identifiers, and a carry moves a person between homes.
+  #
+  # `passkeys` are a person's own credentials at this home, revoked with
+  # the person (`Arca.SecurityTransitions`), never with an athanor.
+  #
+  # `installation_claims` are the node's claims by a restore, and
+  # `request_rate_windows` the node's pre-authentication limits: no
+  # session, and so no athanor, stands behind either.
   @not_athanor_scoped [
     "registry_tokens",
     "server_meta",
     "cell_leases",
     "job_claims",
     "platform_settings",
-    "settings_pins"
+    "settings_pins",
+    "person_identities",
+    "identity_attempts",
+    "identity_log_entries",
+    "directory_heads",
+    "carry_actions",
+    "passkeys",
+    "installation_claims",
+    "request_rate_windows"
   ]
 
   @doc "The closed roster, children first."

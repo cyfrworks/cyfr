@@ -133,7 +133,11 @@ defmodule Arca.Execution do
   @doc """
   Admit an execution: the row, its first attempt and, for a root, its
   budget reservation, in one transaction. `attrs` are the start
-  changeset's; `opts`:
+  changeset's. A root records the `:origin` its caller names
+  (`Prima.Origin`, an atom or its wire spelling; a root naming none is
+  still admitted without one); a child's row carries its parent's origin,
+  read in the admitting transaction, and a child naming another is refused
+  `{:error, :origin_mismatch}` with nothing written. `opts`:
 
   - `:attempt` — the attempt id (minted when absent); `:service_id` (the
     worker service the attempt is dispatched to; nil, the default, when the
@@ -219,6 +223,7 @@ defmodule Arca.Execution do
       # is written or locked; a child's grant is its parent's stamp.
       Arca.ExecutionStanding.verify!(grant, verify)
       inherits!(athanor_id, Map.get(attrs, :parent_execution_id), grant)
+      attrs = origin!(athanor_id, attrs)
 
       execution =
         case Arca.Repo.insert(Row.start_changeset(attrs)) do
@@ -344,6 +349,38 @@ defmodule Arca.Execution do
       )
     )
   end
+
+  # A root records the origin its caller names; a child carries its
+  # parent's, read in the admitting transaction, and one naming another is
+  # refused. A root naming none is admitted without one.
+  # arca:db-raise-ok inside the caller's transaction
+  defp origin!(athanor_id, attrs) do
+    named = spelled_origin(Map.get(attrs, :origin))
+
+    case Map.get(attrs, :parent_execution_id) do
+      nil ->
+        attrs
+
+      parent_id ->
+        parent_origin =
+          Arca.Repo.one(
+            from(e in Row,
+              where: e.athanor_id == ^athanor_id and e.id == ^parent_id,
+              select: e.origin
+            )
+          )
+
+        if is_nil(named) or named == parent_origin,
+          do: Map.put(attrs, :origin, parent_origin),
+          else: Arca.Repo.rollback(:origin_mismatch)
+    end
+  end
+
+  defp spelled_origin(origin) when is_atom(origin) and not is_nil(origin) do
+    if Prima.Origin.origin?(origin), do: Prima.Origin.to_wire(origin), else: origin
+  end
+
+  defp spelled_origin(origin), do: origin
 
   # A child inherits its parent's stored grant unchanged: the stamp the
   # parent's current attempt carries, never one read from the athanor now.

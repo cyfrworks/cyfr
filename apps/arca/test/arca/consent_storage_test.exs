@@ -300,6 +300,58 @@ defmodule Arca.ConsentStorageTest do
     end
   end
 
+  describe "admitted origins" do
+    test "are written with the revision and read back with it", %{athanor: athanor} do
+      profile = profile!(athanor, "prof_origins")
+
+      attrs =
+        consent_attrs(athanor, profile.id, 1)
+        |> Map.put(:admitted_origins, ["schedule", :interactive])
+
+      assert {:ok, _} = ConsentStorage.insert_revision(attrs, [], nil)
+
+      assert {:ok, %{admitted_origins: [:interactive, :schedule]}} =
+               ConsentStorage.head_consent(Prima.Actor.in_athanor(athanor), profile.id)
+    end
+
+    test "an empty list, a duplicate or an origin outside the enum is refused", %{
+      athanor: athanor
+    } do
+      profile = profile!(athanor, "prof_bad_origins")
+
+      for origins <- [[], ["interactive", "interactive"], ["batch"], "interactive"] do
+        attrs = Map.put(consent_attrs(athanor, profile.id, 1), :admitted_origins, origins)
+
+        assert {:error, {:invalid, %{admitted_origins: [_]}}} =
+                 ConsentStorage.insert_revision(attrs, [], nil)
+      end
+
+      assert Arca.Repo.aggregate(Arca.Schemas.Consent, :count) == 0
+    end
+
+    test "a revision written without them stores none", %{athanor: athanor} do
+      profile = profile!(athanor, "prof_no_origins")
+      {:ok, _} = ConsentStorage.insert_revision(consent_attrs(athanor, profile.id, 1), [], nil)
+
+      assert {:ok, %{admitted_origins: nil}} =
+               ConsentStorage.head_consent(Prima.Actor.in_athanor(athanor), profile.id)
+    end
+
+    test "a stored list that does not parse refuses the consent", %{athanor: athanor} do
+      profile = profile!(athanor, "prof_corrupt_origins")
+      {:ok, consent} = ConsentStorage.insert_revision(consent_attrs(athanor, profile.id, 1), [], nil)
+
+      {1, _} =
+        Arca.Repo.update_all(
+          Ecto.Query.from(c in Arca.Schemas.Consent, where: c.id == ^consent.id),
+          set: [admitted_origins: ~s(["batch"])]
+        )
+
+      assert {:error, {:invalid_stored_value, :admitted_origins}} =
+               ConsentStorage.head_consent(Prima.Actor.in_athanor(athanor), profile.id)
+    end
+  end
+
   describe "insert-only surface" do
     test "the module still exports no update function" do
       exported =

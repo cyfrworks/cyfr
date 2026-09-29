@@ -187,15 +187,94 @@ defmodule Arca.CipherRotationTest do
     end
   end
 
+  describe "a person's own key rows" do
+    defp put_attempt(id, sealed) do
+      Arca.Repo.insert_all(Arca.Schemas.IdentityAttempt, [
+        Map.merge(
+          %{
+            id: id,
+            kind: "enrollment",
+            request_id: "req_#{id}",
+            user_id: "usr_#{id}",
+            phase: "accepted",
+            request_digest: Prima.Digest.sha256(id),
+            inserted_at: now(),
+            updated_at: now()
+          },
+          sealed
+        )
+      ])
+
+      id
+    end
+
+    test "an attempt's CAS column is the first sealed column it holds", %{actor: actor} do
+      put_attempt("iat_seed", %{kit_seed_sealed: bytes("seed")})
+
+      put_attempt("iat_keys", %{
+        kind: "restore",
+        staged_live_key_sealed: bytes("live"),
+        staged_operational_key_sealed: bytes("op")
+      })
+
+      put_attempt("iat_done", %{})
+
+      assert {:ok, [keys, seed]} = Rotation.page(actor, :identity_attempts, nil, 10)
+      assert keys.id == "iat_keys"
+
+      assert keys.ciphertexts == [
+               staged_live_key_sealed: bytes("live"),
+               staged_operational_key_sealed: bytes("op")
+             ]
+
+      assert seed.ciphertexts == [kit_seed_sealed: bytes("seed")]
+
+      assert {:ok, audited} = Rotation.ciphertext_page(actor, :identity_attempts, nil, 10)
+      assert Enum.map(audited, & &1.ciphertext) == [bytes("live"), bytes("seed")]
+
+      assert {:ok, :stale} =
+               Rotation.swap(actor, :identity_attempts, "iat_seed", bytes("other"), %{
+                 kit_seed_sealed: bytes("seed-2")
+               })
+
+      assert {:ok, :swapped} =
+               Rotation.swap(actor, :identity_attempts, "iat_seed", bytes("seed"), %{
+                 kit_seed_sealed: bytes("seed-2")
+               })
+
+      assert {:ok, :swapped} =
+               Rotation.swap(actor, :identity_attempts, "iat_keys", bytes("live"), %{
+                 staged_live_key_sealed: bytes("live-2"),
+                 staged_operational_key_sealed: bytes("op-2")
+               })
+
+      assert {:ok, [%{ciphertexts: [staged_live_key_sealed: live, staged_operational_key_sealed: op]}, _]} =
+               Rotation.page(actor, :identity_attempts, nil, 10)
+
+      assert {live, op} == {bytes("live-2"), bytes("op-2")}
+    end
+  end
+
   describe "the roster" do
     test "names every credential table, each with its CAS column" do
       assert Enum.sort(Rotation.tables()) ==
-               [:oauth_provider_credentials, :registry_tokens, :vault_entries, :webhooks]
+               [
+                 :identity_attempts,
+                 :oauth_provider_credentials,
+                 :person_identities,
+                 :registry_tokens,
+                 :vault_entries,
+                 :webhooks
+               ]
 
       assert Rotation.cas_column(:webhooks) == :secret_encrypted
       assert Rotation.cas_column(:vault_entries) == :sealed_payload
       assert Rotation.cas_column(:registry_tokens) == :credential_ciphertext
       assert Rotation.cas_column(:oauth_provider_credentials) == :payload_ciphertext
+      assert Rotation.cas_column(:person_identities) == :live_key_sealed
+
+      assert Rotation.cas_column(:identity_attempts) ==
+               [:staged_live_key_sealed, :kit_seed_sealed, :staged_operational_key_sealed]
     end
   end
 

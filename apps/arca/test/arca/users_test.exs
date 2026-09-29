@@ -19,6 +19,28 @@ defmodule Arca.UsersTest do
 
   defp server, do: Prima.Actor.system()
 
+  defp attrs_pair do
+    n = System.unique_integer([:positive])
+    now = DateTime.utc_now()
+
+    {%{
+       id: Prima.UUID7.generate_id(Prima.PersonId.prefix()),
+       provider: "github",
+       first_seen_at: now,
+       last_seen_at: now,
+       created_at: now,
+       updated_at: now
+     },
+     %{
+       key: "github|https://github.com|also#{n}",
+       provider: "github",
+       issuer: "https://github.com",
+       subject: "also#{n}",
+       first_seen_at: now,
+       last_seen_at: now
+     }}
+  end
+
   defp in_athanor(id), do: %{Prima.Actor.system() | athanor_id: id, scope: :athanor}
 
   defp person!(overrides \\ %{}) do
@@ -126,7 +148,7 @@ defmodule Arca.UsersTest do
     end
   end
 
-  describe "mint/3 is one transaction" do
+  describe "mint/4 is one transaction" do
     test "the person and the identity that names them land together" do
       user = person!()
 
@@ -220,6 +242,45 @@ defmodule Arca.UsersTest do
                )
 
       assert {:error, :not_found} = Users.get(server(), "system")
+    end
+  end
+
+  describe "mint/4's also: closure" do
+    test "runs inside the mint's transaction, after the person row is written" do
+      {user, identity} = attrs_pair()
+      me = self()
+
+      also = fn person ->
+        # The person row is already there for the closure to write beside.
+        {:ok, _} = Users.update(server(), person.id, %{display_name: "Written beside"})
+        send(me, {:also, person.id, Arca.Repo.in_transaction?()})
+        :ok
+      end
+
+      assert {:ok, person} = Users.mint(server(), user, identity, also: also)
+      assert_received {:also, id, true}
+      assert id == person.id
+      assert {:ok, %{display_name: "Written beside"}} = Users.get(server(), person.id)
+    end
+
+    test "a failing closure writes no person row" do
+      {user, identity} = attrs_pair()
+
+      assert {:error, :keys_unavailable} =
+               Users.mint(server(), user, identity, also: fn _person -> {:error, :keys_unavailable} end)
+
+      assert {:error, :not_found} = Users.get(server(), user.id)
+      assert {:error, :not_found} = Users.get_by_identity(server(), identity.key)
+    end
+
+    test "a closure that answers anything else raises, and writes nothing" do
+      {user, identity} = attrs_pair()
+
+      assert_raise ArgumentError, fn ->
+        Users.mint(server(), user, identity, also: fn _person -> :nope end)
+      end
+
+      assert {:error, :not_found} = Users.get(server(), user.id)
     end
   end
 
