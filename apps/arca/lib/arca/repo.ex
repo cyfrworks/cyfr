@@ -31,11 +31,14 @@ defmodule Arca.Repo do
   def adapter, do: Application.get_env(:arca, :repo_adapter, Ecto.Adapters.SQLite3)
 
   # SQLite's write lock: how long one lock-taking statement may wait inside
-  # the driver, the jitter between attempts, and the option that marks a
-  # read transaction for `prepare_transaction/2`.
+  # the driver, the jitter between attempts, the option that marks a read
+  # transaction for `prepare_transaction/2`, and the one that carries a
+  # writer's kind to the lock step (`Arca.WriteTurn`).
   @quantum_ms 100
   @pause_ms 5..25
   @read_only :arca_read_transaction
+  @write_turn :arca_write_turn
+  @turn_kinds [:audit, :control_plane]
   @pool_deadline :pool_deadline
   # What must still fit inside a pool deadline once the lock is taken: the
   # last quantum, the pause before it, the caller's writes and the commit.
@@ -54,11 +57,33 @@ defmodule Arca.Repo do
   what the first committed. PostgreSQL locks the rows one by one through
   `Arca.QueryHelpers.for_update/1`, in the order the caller's contract
   states.
+
+  `write_turn: :audit | :control_plane` names a writer `Arca.WriteTurn`
+  orders on SQLite: the lock step asks for its turn once the connection
+  is held and before the lock, within the same deadline, and the turn is
+  given back here once the transaction has committed or rolled back,
+  whatever it answered or raised. A process that already holds a turn
+  keeps it for its outer transaction. PostgreSQL asks for no turn, and
+  neither does a SQLite store where turns are off
+  (`Arca.WriteTurn.enabled?/0`).
   """
   @spec locking_transaction((-> term()) | (module() -> term()) | Ecto.Multi.t(), keyword()) ::
           {:ok, term()} | {:error, term()} | {:error, term(), term(), map()}
-  def locking_transaction(fun_or_multi, opts \\ []) when is_list(opts),
-    do: transaction(fun_or_multi, opts)
+  def locking_transaction(fun_or_multi, opts \\ []) when is_list(opts) do
+    case Keyword.pop(opts, :write_turn) do
+      {nil, opts} ->
+        transaction(fun_or_multi, opts)
+
+      {kind, opts} when kind in @turn_kinds ->
+        held? = Arca.WriteTurn.holding?()
+
+        try do
+          transaction(fun_or_multi, [{@write_turn, kind} | opts])
+        after
+          unless held?, do: Arca.WriteTurn.release()
+        end
+    end
+  end
 
   @doc """
   Run `fun` as a transaction for reads that must see one consistent state
@@ -94,50 +119,62 @@ defmodule Arca.Repo do
   work runs. An `Ecto.Multi` gets the step as its first operation,
   `:arca_lock`.
 
+  A writer `locking_transaction/2` names (`write_turn:`) first asks
+  `Arca.WriteTurn` for its turn, holding its connection and within the
+  same deadline, so its lock wait begins only once its turn is issued;
+  the turn is asked for before any statement, the step's own included.
+
   Out of time, the step raises `Arca.Repo.BusyTimeoutError` before any of
-  the caller's work, which `Arca.Repo.Errors.db_errors/0` names. A nested
-  transaction already holds the lock, and a read transaction takes none.
+  the caller's work, which `Arca.Repo.Errors.db_errors/0` names, whether
+  the time went waiting for the turn or for the lock; an audit request
+  past the turn queue's capacity raises `Arca.WriteTurn.CapacityError`. A
+  nested transaction already holds the lock, and a read transaction takes
+  none.
   """
   @impl true
   def prepare_transaction(fun_or_multi, opts) do
     case adapter() do
-      Ecto.Adapters.SQLite3 -> prepare_sqlite(fun_or_multi, opts)
-      # The lock step is SQLite's; the pool deadline it takes has no
-      # reader here and does not reach the driver.
-      _postgres -> {fun_or_multi, Keyword.delete(opts, @pool_deadline)}
+      Ecto.Adapters.SQLite3 ->
+        prepare_sqlite(fun_or_multi, opts)
+
+      # The lock step and the turn are SQLite's; the pool deadline and the
+      # writer's kind have no reader here and do not reach the driver.
+      _postgres ->
+        {fun_or_multi, Keyword.drop(opts, [@pool_deadline, @write_turn])}
     end
   end
 
   defp prepare_sqlite(fun_or_multi, opts) do
     {read_only?, opts} = Keyword.pop(opts, @read_only, false)
     {pool_deadline, opts} = Keyword.pop(opts, @pool_deadline)
+    {turn, opts} = Keyword.pop(opts, @write_turn)
 
     cond do
       in_transaction?() -> {fun_or_multi, opts}
       read_only? -> {fun_or_multi, Keyword.put(opts, :mode, :deferred)}
-      true -> {locking(fun_or_multi, pool_deadline), Keyword.put(opts, :mode, :deferred)}
+      true -> {locking(fun_or_multi, {pool_deadline, turn}), Keyword.put(opts, :mode, :deferred)}
     end
   end
 
-  defp locking(fun, pool_deadline) when is_function(fun, 0) do
+  defp locking(fun, step) when is_function(fun, 0) do
     fn ->
-      take_write_lock!(pool_deadline)
+      take_write_lock!(step)
       fun.()
     end
   end
 
-  defp locking(fun, pool_deadline) when is_function(fun, 1) do
+  defp locking(fun, step) when is_function(fun, 1) do
     fn repo ->
-      take_write_lock!(pool_deadline)
+      take_write_lock!(step)
       fun.(repo)
     end
   end
 
   # Ecto's transaction accepts a fun or a Multi and nothing else, so what is
   # not a fun is the Multi; matching its struct would break its opaque type.
-  defp locking(multi, pool_deadline) do
+  defp locking(multi, step) do
     Ecto.Multi.new()
-    |> Ecto.Multi.run(:arca_lock, fn _repo, _changes -> {:ok, take_write_lock!(pool_deadline)} end)
+    |> Ecto.Multi.run(:arca_lock, fn _repo, _changes -> {:ok, take_write_lock!(step)} end)
     |> Ecto.Multi.append(multi)
   end
 
@@ -155,22 +192,46 @@ defmodule Arca.Repo do
   # time — the step raises at once and touches no lock. The pool's deadline
   # counts from the checkout request, so no fixed margin above the busy
   # timeout could promise this on its own.
-  defp take_write_lock!(pool_deadline) do
+  #
+  # The turn and the lock share one absolute deadline: time spent waiting
+  # for the turn is time the lock wait no longer has.
+  defp take_write_lock!({pool_deadline, turn}) do
     config = config()
     deadline_ms = lock_wait_ms(busy_timeout_ms(config), pool_deadline)
 
     if deadline_ms <= 0,
       do: raise(Arca.Repo.BusyTimeoutError, deadline_ms: 0)
 
+    deadline = System.monotonic_time(:millisecond) + deadline_ms
+    take_turn!(turn, deadline, deadline_ms)
+
     source = config[:migration_source] || "schema_migrations"
     statement = ~s(UPDATE "#{source}" SET version = version WHERE 0)
-    started = System.monotonic_time(:millisecond)
     query!("PRAGMA busy_timeout = #{@quantum_ms}", [], log: false)
 
     try do
-      attempt_write_lock(statement, started, deadline_ms)
+      attempt_write_lock(statement, deadline, deadline_ms)
     after
       query!("PRAGMA busy_timeout = #{busy_timeout_ms(config)}", [], log: false)
+    end
+  end
+
+  defp take_turn!(nil, _deadline, _deadline_ms), do: :ok
+
+  defp take_turn!(kind, deadline, deadline_ms) do
+    if Arca.WriteTurn.enabled?(), do: turn!(kind, deadline, deadline_ms), else: :ok
+  end
+
+  defp turn!(kind, deadline, deadline_ms) do
+    case Arca.WriteTurn.acquire(kind, deadline) do
+      {:ok, _turn} ->
+        :ok
+
+      {:error, :timeout} ->
+        raise Arca.Repo.BusyTimeoutError, deadline_ms: deadline_ms
+
+      {:error, :capacity} ->
+        raise Arca.WriteTurn.CapacityError
     end
   end
 
@@ -180,17 +241,17 @@ defmodule Arca.Repo do
     min(busy_ms, pool_deadline - System.monotonic_time(:millisecond) - @commit_slack_ms)
   end
 
-  defp attempt_write_lock(statement, started, deadline_ms) do
+  defp attempt_write_lock(statement, deadline, deadline_ms) do
     case query(statement, [], log: false) do
       {:ok, _result} ->
         :acquired
 
       {:error, %Exqlite.Error{message: message}} when message in @busy ->
-        if System.monotonic_time(:millisecond) - started >= deadline_ms,
+        if System.monotonic_time(:millisecond) >= deadline,
           do: raise(Arca.Repo.BusyTimeoutError, deadline_ms: deadline_ms)
 
         Process.sleep(Enum.random(@pause_ms))
-        attempt_write_lock(statement, started, deadline_ms)
+        attempt_write_lock(statement, deadline, deadline_ms)
 
       {:error, error} ->
         raise error

@@ -39,7 +39,8 @@
 // Measurements, recorded and not gated: card.refresh through the endpoint
 // from the desktop, 50 in a row; vault.status through the endpoint from the
 // vault page, 200 at concurrency 16; and the in-server measurements run.sh
-// took (server-measurements-*.json in OUT_DIR).
+// took (server-measurements-*.json in OUT_DIR), with the lease renewals and
+// the audit writers of each burst.
 //
 // Usage: node proof.mjs SERVER_URL SEGMENT COOKIE OUT_DIR [BROWSERS]
 // BROWSERS, comma-separated, narrows the matrix for a local run.
@@ -729,6 +730,14 @@ function inServer(outDir) {
     for (const op of ["vault.list", "vault.status"]) {
       const s = m[op];
       lines.push(`| ${adapter} | ${op} | ${s.p50}/${s.p95}/${s.p99} ms p50/p95/p99, ${s.n} calls at concurrency ${m.concurrency}, ${s.refused} refused |`);
+      if (s.renewals) {
+        const renewals = s.renewals.length
+          ? s.renewals.map((r) => `${r.ms} ms, ${r.ok ? "renewed" : "FAILED"}`).join("; ")
+          : "none asked";
+        const lost = Object.keys(s.lost).length ? JSON.stringify(s.lost) : "none";
+        lines.push(`| ${adapter} | ${op}, the lease | renewals during the burst ${renewals}; slot held at every one of ${s.held.samples} samples: ${s.held.throughout}; generation ${s.held.generation_before} then ${s.held.generation_after} |`);
+        lines.push(`| ${adapter} | ${op}, the audit | at most ${s.writers.most} of ${s.writers.cap} writers at once; at most ${s.queue.audit} audit and ${s.queue.control_plane} control-plane requests waiting for a turn; lost ${lost} |`);
+      }
     }
   }
   return { found, lines: ["| adapter | operation | through the gate, in-server |", "|---|---|---|", ...lines] };

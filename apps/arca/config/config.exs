@@ -103,5 +103,16 @@ if config_env() == :test do
   # the test's, and every assertion reads the row right after the call.
   config :arca, record_sink_inline: true
 
+  # The control plane's own pool is off under the sandbox, as in
+  # `config/test.exs`: a second connection neither sees nor rolls back a
+  # test's rows, and on SQLite it waits behind a test's open write.
+  config :arca, control_plane_pool: false
+
+  # No write turns under the sandbox either, as in `config/test.exs`: a
+  # test's connection holds SQLite's write lock until it ends and its own
+  # audit writer runs on it, so it and another sandbox's writer holding
+  # the turn would wait on each other.
+  config :arca, write_turn: false
+
   config :logger, level: :warning
 end

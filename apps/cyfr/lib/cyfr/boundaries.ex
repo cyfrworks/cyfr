@@ -1611,6 +1611,8 @@ defmodule Cyfr.Boundaries do
     provisioning_boot_enabled: :default,
     retention_scheduler_enabled: :default,
     control_plane_claim_enabled: :default,
+    control_plane_pool: :default,
+    write_turn: :default,
     database_checks_enabled: :default,
     telemetry_console_enabled: :default,
 

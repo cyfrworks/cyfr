@@ -74,15 +74,41 @@ defmodule Arca.ControlPlane do
   `verify_held/1` writes nothing: it is how a security transaction or a
   fenced publication (`Arca.FencedPublication`) proves, under a shared
   row lock, that the slot it runs for is still this member's.
+
+  ## Its own connection
+
+  Audit traffic must not consume the capacity a renewal needs
+  (`ARCHITECTURE.md` §6.4), so each of the three writes is one
+  `Arca.Repo.locking_transaction/2` on a pool of one connection of its
+  own (`pool_spec/1`), started beside the main pool and selected for the
+  call alone: a full ordinary pool never delays it. On SQLite the
+  transaction also asks for the control plane's turn (`Arca.WriteTurn`),
+  which is issued ahead of every queued audit writer. Where the pool is
+  configured and not running, the write fails; it never falls back to
+  the ordinary pool. The reads (`check_held/1`, `roster/0`,
+  `live_member?/1`, `slot/1`) write nothing and stay on the ordinary
+  pool, and `verify_held/1` runs in its caller's transaction.
+
+  What a write won is published only once its transaction has committed:
+  a rollback, a raised commit or a store that cannot answer publishes
+  nothing, and the standing recorded before runs out on its own. A loss
+  a renewal discovers is recorded as the statement answers it, before
+  the function returns.
   """
 
   import Ecto.Query, only: [from: 2]
+
+  require Logger
 
   alias Arca.Schemas.CellLease
 
   @standing_key {__MODULE__, :standing}
   @generation_key {__MODULE__, :generation}
   @slot_key {__MODULE__, :slot}
+
+  # The name the control plane's own pool is registered under, and selected
+  # by (`Arca.Repo.put_dynamic_repo/1`).
+  @pool :arca_control_plane_pool
 
   # How much of a won lease a member gives up before it believes it holds
   # one, covering the rate difference between its monotonic clock and the
@@ -190,6 +216,33 @@ defmodule Arca.ControlPlane do
   @spec margin_ms() :: pos_integer()
   def margin_ms, do: @margin_ms
 
+  # ---- its own connection ----------------------------------------------------
+
+  @doc """
+  Whether the control plane writes on a pool of its own. The in-code
+  default is true, and no environment variable reads it; only the test
+  configuration turns it off, where under the SQL sandbox a second
+  connection would neither see nor roll back a test's rows.
+  """
+  @spec own_pool?() :: boolean()
+  def own_pool?, do: Application.get_env(:arca, :control_plane_pool, true) != false
+
+  @doc """
+  The child that is the control plane's pool: `Arca.Repo` again, one
+  connection, under its own name, with the repo's configuration and
+  `overrides` over it (a test starting one outside the sandbox names the
+  plain pool).
+  """
+  @spec pool_spec(keyword()) :: Supervisor.child_spec()
+  def pool_spec(overrides \\ []) do
+    opts = Keyword.merge([name: @pool, pool_size: 1], overrides)
+    Supervisor.child_spec({Arca.Repo, opts}, id: @pool)
+  end
+
+  @doc "The children `Arca.Supervisor` starts for the control plane: its pool, when it has one."
+  @spec children() :: [Supervisor.child_spec()]
+  def children, do: if(own_pool?(), do: [pool_spec()], else: [])
+
   # ---- the writes ------------------------------------------------------------
 
   @doc """
@@ -214,14 +267,15 @@ defmodule Arca.ControlPlane do
   def take(node, owner, lease_ms)
       when is_binary(node) and node != "" and is_binary(owner) and owner != "" and
              is_integer(lease_ms) and lease_ms > 0 do
-    Arca.Repo.Errors.with_db_rescue("Arca.ControlPlane.take", fn ->
-      started = System.monotonic_time(:millisecond)
+    # Read before the connection, the turn and the lock are waited for, so
+    # every wait shortens the countdown and none lengthens it.
+    started = System.monotonic_time(:millisecond)
 
-      case do_take(node, owner, lease_ms, @rounds) do
-        {:ok, row} -> {:ok, won(row, lease_ms, started)}
-        other -> other
-      end
-    end)
+    case write("Arca.ControlPlane.take", fn -> do_take(node, owner, lease_ms, @rounds) end) do
+      {:ok, {:ok, row}} -> {:ok, won(row, lease_ms, started)}
+      {:ok, {:busy, _row} = busy} -> busy
+      _unwritten -> {:error, :database_error}
+    end
     |> Arca.Data.project()
   end
 
@@ -243,6 +297,8 @@ defmodule Arca.ControlPlane do
 
   `{:error, :database_error}` records nothing: a member that cannot reach
   the row does not know it lost it, and its countdown runs out on its own.
+  So does a renewal that could not take the lock within its deadline, and
+  one whose transaction did not commit.
   """
   @spec renew(pos_integer()) :: {:ok, slot()} | :taken | :unclaimed | {:error, :database_error}
   def renew(lease_ms) when is_integer(lease_ms) and lease_ms > 0 do
@@ -251,37 +307,36 @@ defmodule Arca.ControlPlane do
         :unclaimed
 
       {:ok, slot} ->
-        Arca.Repo.Errors.with_db_rescue("Arca.ControlPlane.renew", fn ->
-          started = System.monotonic_time(:millisecond)
-          now = Arca.ServerMetaStorage.now!()
+        started = System.monotonic_time(:millisecond)
 
-          slot
-          |> mine()
-          |> Arca.Repo.update_all(
-            set: [
-              lease_until: lease_end(now, lease_ms),
-              fence: slot.fence + 1,
-              updated_at: now
-            ]
-          )
-          |> case do
-            {1, _} ->
-              # What the statement set, not what a later read would see:
-              # the renew keeps this member's own generation, and a
-              # successor's must never be mistaken for it.
-              renewed = %{
-                slot
-                | fence: slot.fence + 1,
-                  lease_until: lease_end(now, lease_ms)
-              }
+        case write("Arca.ControlPlane.renew", fn -> push_out(slot, lease_ms) end) do
+          {:ok, {:renewed, renewed}} -> {:ok, won(renewed, lease_ms, started)}
+          {:ok, :taken} -> :taken
+          _unwritten -> {:error, :database_error}
+        end
+    end
+  end
 
-              {:ok, won(renewed, lease_ms, started)}
+  defp push_out(slot, lease_ms) do
+    now = Arca.ServerMetaStorage.now!()
 
-            {0, _} ->
-              lost()
-              :taken
-          end
-        end)
+    slot
+    |> mine()
+    |> Arca.Repo.update_all(
+      set: [lease_until: lease_end(now, lease_ms), fence: slot.fence + 1, updated_at: now]
+    )
+    |> case do
+      {1, _} ->
+        # What the statement set, not what a later read would see: the
+        # renew keeps this member's own generation, and a successor's must
+        # never be mistaken for it.
+        {:renewed, %{slot | fence: slot.fence + 1, lease_until: lease_end(now, lease_ms)}}
+
+      {0, _} ->
+        # Recorded as the statement answers, inside the transaction: the
+        # row is a successor's whether or not this transaction commits.
+        lost()
+        :taken
     end
   end
 
@@ -301,23 +356,27 @@ defmodule Arca.ControlPlane do
         :unclaimed
 
       {:ok, slot} ->
-        result =
-          Arca.Repo.Errors.with_db_rescue("Arca.ControlPlane.release", fn ->
-            now = Arca.ServerMetaStorage.now!()
-
-            slot
-            |> mine()
-            |> Arca.Repo.update_all(
-              set: [lease_until: now, fence: slot.fence + 1, updated_at: now]
-            )
-            |> case do
-              {1, _} -> :ok
-              {0, _} -> :taken
-            end
-          end)
-
+        result = write("Arca.ControlPlane.release", fn -> give_up(slot) end)
         lost()
-        result
+
+        case result do
+          {:ok, answer} when answer in [:ok, :taken] -> answer
+          _unwritten -> {:error, :database_error}
+        end
+    end
+  end
+
+  # The row left with its lease already run out, while it is still this
+  # member's at the fence it last wrote.
+  defp give_up(slot) do
+    now = Arca.ServerMetaStorage.now!()
+
+    slot
+    |> mine()
+    |> Arca.Repo.update_all(set: [lease_until: now, fence: slot.fence + 1, updated_at: now])
+    |> case do
+      {1, _} -> :ok
+      {0, _} -> :taken
     end
   end
 
@@ -511,10 +570,68 @@ defmodule Arca.ControlPlane do
 
   # ---- internal --------------------------------------------------------------
 
+  # One of the three writes: a locking transaction on the control plane's
+  # own connection, which on SQLite asks for the control plane's turn.
+  # `{:ok, answer}` once it has committed, and `{:error, :database_error}`
+  # for everything else: a store that could not answer, a lock not taken in
+  # time, a commit that raised, a transaction rolled back, or an own pool
+  # that is not running or stopped under the call.
+  defp write(tag, fun) do
+    Arca.Repo.Errors.with_db_rescue(tag, fn ->
+      on_own_connection(tag, fn ->
+        Arca.Repo.locking_transaction(fun, write_turn: :control_plane)
+      end)
+    end)
+    |> case do
+      {:ok, _answer} = committed ->
+        committed
+
+      {:error, :database_error} = error ->
+        error
+
+      unwritten ->
+        Logger.error("[#{tag}] the write did not commit: #{Prima.LoggerContext.shape(unwritten)}")
+        {:error, :database_error}
+    end
+  end
+
+  # The pool is selected for this call alone and the caller's selection put
+  # back, whatever the call did. Where the pool should run and does not —
+  # not started, or stopped between its lookup and the call — the write
+  # fails; it never falls back to the ordinary pool.
+  defp on_own_connection(tag, fun) do
+    if own_pool?() do
+      previous = Arca.Repo.put_dynamic_repo(@pool)
+
+      try do
+        fun.()
+      rescue
+        # What the repo's lookup raises for a name that no longer names a
+        # started repo. Raised with the pool running, it is not the pool's.
+        e in [RuntimeError, ArgumentError] ->
+          if pool_running?(), do: reraise(e, __STACKTRACE__), else: pool_down(tag)
+      catch
+        # The pool went while the checkout waited on it.
+        :exit, {_reason, {DBConnection.Holder, :checkout, _args}} -> pool_down(tag)
+      after
+        Arca.Repo.put_dynamic_repo(previous)
+      end
+    else
+      fun.()
+    end
+  end
+
+  defp pool_running?, do: @pool in Ecto.Repo.all_running()
+
+  defp pool_down(tag) do
+    Logger.error("[#{tag}] the control plane's own pool is not running")
+    {:error, :database_error}
+  end
+
   # Everything a won lease leaves behind, in one place so the row and the
   # cache cannot drift: the slot the next write names, the generation
   # stamped outward, and the time left counted from the instant BEFORE the
-  # write went out.
+  # write went out. Called once the write has committed, never inside it.
   defp won(row, lease_ms, started) do
     slot = %{
       node: row.node,

@@ -5,7 +5,9 @@ defmodule Grimoire.DecisionsTest do
   @moduledoc """
   What is recorded, and what a record that cannot be written costs: the
   roster of calls that are not recorded, the loss event for an append or
-  a completion that did not land, and an answer of `:ok` either way.
+  a completion that did not land — a store that cannot answer, or every
+  writer of the node busy — and an answer of `:ok` either way, with the
+  operation's own result unchanged and nothing run again.
   """
   use ExUnit.Case, async: false
 
@@ -49,6 +51,42 @@ defmodule Grimoire.DecisionsTest do
     after
       :ok = Ecto.Adapters.SQL.Sandbox.checkout(Arca.Repo)
       Ecto.Adapters.SQL.Sandbox.mode(Arca.Repo, {:shared, self()})
+    end
+  end
+
+  # Every writer slot the node has, taken by an idle process of the case's
+  # once the writers the case started before have ended, so a write past
+  # them is refused at once whatever its store would say.
+  defp hold_every_writer do
+    await_idle_writers(1_000)
+    hold_every_writer([])
+  end
+
+  defp hold_every_writer(held) do
+    idle = fn -> receive do: (:done -> :ok) end
+
+    case Task.Supervisor.start_child(Arca.DecisionLog.Writers, idle) do
+      {:ok, pid} -> hold_every_writer([pid | held])
+      {:error, :max_children} -> held
+    end
+  end
+
+  defp await_idle_writers(0), do: flunk("the decision log's writers never went idle")
+
+  defp await_idle_writers(tries) do
+    if Arca.DecisionLog.writers() == 0 do
+      :ok
+    else
+      Process.sleep(5)
+      await_idle_writers(tries - 1)
+    end
+  end
+
+  defp release_writers(held) do
+    for pid <- held do
+      ref = Process.monitor(pid)
+      send(pid, :done)
+      assert_receive {:DOWN, ^ref, :process, ^pid, _reason}
     end
   end
 
@@ -195,6 +233,53 @@ defmodule Grimoire.DecisionsTest do
 
       assert_received {^admitted, %{count: 1}, _}
       assert_received {^lost, %{count: 1}, %{stage: :append, kind: :unavailable}}
+    end
+
+    @tag capture_log: true
+    test "a write past the writer cap is :ok, one capacity loss per write, never asked again" do
+      ctx = Sanctum.TestContext.local()
+      admitted = attach([:cyfr, :grimoire, :decision, :admitted])
+      lost = attach([:cyfr, :grimoire, :decision, :lost])
+      decision = decision(ctx)
+
+      held = hold_every_writer()
+
+      try do
+        assert :ok = Decisions.open(ctx, decision, %{input: %{}})
+
+        assert :ok =
+                 Decisions.close(ctx, decision.call_id, %{result: {:ok, %{}}, duration_ms: 1})
+      after
+        release_writers(held)
+      end
+
+      assert_received {^admitted, %{count: 1}, _}
+      assert_received {^lost, %{count: 1}, %{stage: :append, kind: :capacity}}
+      assert_received {^lost, %{count: 1}, %{stage: :finish, kind: :capacity}}
+      refute_received {^lost, _, _}
+
+      assert {:error, :not_found} =
+               Arca.DecisionLog.get(Sanctum.Context.actor(ctx), decision.call_id)
+    end
+
+    @tag capture_log: true
+    test "a call the gate admits while every writer is busy answers as it would, run once" do
+      ctx = Sanctum.TestContext.local()
+      args = %{"action" => "get"}
+      answered = Grimoire.call_external("retention", ctx, args)
+      lost = attach([:cyfr, :grimoire, :decision, :lost])
+
+      held = hold_every_writer()
+
+      try do
+        assert Grimoire.call_external("retention", ctx, args) == answered
+      after
+        release_writers(held)
+      end
+
+      assert_received {^lost, %{count: 1}, %{stage: :append, kind: :capacity}}
+      assert_received {^lost, %{count: 1}, %{stage: :finish, kind: :capacity}}
+      refute_received {^lost, _, _}
     end
 
     test "a completion under no admission is :ok and counted as lost" do

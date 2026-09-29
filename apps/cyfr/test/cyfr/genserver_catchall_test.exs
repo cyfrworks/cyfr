@@ -26,6 +26,7 @@ defmodule Cyfr.GenServerCatchallTest do
     {Arca.AuditHandler, "AuditHandler"},
     {Prism.TinctureRegistry, "TinctureRegistry"},
     {Arca.RecordSink, "RecordSink"},
+    {Arca.WriteTurn, "WriteTurn"},
     {Prima.RateLimiter, "RateLimiter"},
     {Crucible.Slots, "Slots"},
     {Crucible.Events.Sequence, "Events.Sequence"},

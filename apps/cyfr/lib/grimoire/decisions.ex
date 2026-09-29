@@ -14,15 +14,18 @@ defmodule Grimoire.Decisions do
 
   Audit never decides an operation's outcome. `open/3` and `close/3`
   always answer `:ok`: a decision or completion the log could not write
-  — the budget ran out, the store could not answer, the call id already
-  held another decision — is the loss event, and the operation's result
-  stands. Nothing here runs an operation again, and nothing waits on the
-  store past the log's own budget (`Arca.DecisionLog.budget_ms/0`).
+  — the budget ran out, the store could not answer, every writer the node
+  runs was already busy, the call id already held another decision — is
+  the loss event, and the operation's result stands. Nothing here runs an
+  operation again or asks the log a second time, and nothing waits on the
+  store past the log's own budget (`Arca.DecisionLog.budget_ms/0`); a
+  write past the node's writer cap waits for nothing at all.
 
   The loss event is the audit's alarm. A gap in the trail is visible only
   here, so it is catalogued with a metric an operator alerts on
-  (`cyfr_grimoire_decision_lost_total`, by stage and kind), not a log
-  line alone. Audit is not a reaction, so none of these reaches the bus.
+  (`cyfr_grimoire_decision_lost_total`, by stage and kind — `capacity`
+  for an overload the writer cap refused), not a log line alone. Audit is
+  not a reaction, so none of these reaches the bus.
 
   ## Unknown outcomes
 

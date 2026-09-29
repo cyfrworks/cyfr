@@ -20,7 +20,8 @@ defmodule Cyfr.Test.Sandbox do
   stopped in order: what starts work before the work it started — runners
   (whose loops die with them), then the tasks that wait on runs, then the
   runs' attempts, then the Opus service's runners, then the event buffers
-  they wrote to. Each child is stopped synchronously, so the sweep returns
+  they wrote to, then the decision log's writers, which work at every tier
+  starts. Each child is stopped synchronously, so the sweep returns
   only once every child is gone. The Opus service's runners are OS
   processes, and their handles' supervisor (`Opus.RunnerPool.Runners`) is
   swept through the pool instead (`pooled/0`): every busy runner is ended
@@ -77,7 +78,8 @@ defmodule Cyfr.Test.Sandbox do
     Emissary.External.ServerSupervisor,
     Crucible.Attempt.Supervisor,
     Opus.RunnerPool.Runners,
-    Crucible.Events.Supervisor
+    Crucible.Events.Supervisor,
+    Arca.DecisionLog.Writers
   ]
 
   # Swept through the pool whose runners' handles it supervises, never by

@@ -51,7 +51,18 @@ Recorded, not gated, once, in the first browser of the run:
   console calls them (`measure.exs`), 200 calls each at concurrency 16, on
   the SQLite cell, and on a PostgreSQL cell of a release built for
   PostgreSQL when `CANVAS_PROOF_PG_URL` names an existing database as a role
-  that may create databases.
+  that may create databases. Each burst is started just before the member's
+  next lease renewal, and with it are recorded every renewal the member's
+  claimant asked during the burst (from its call to its answer, and whether
+  it renewed), whether the member held its slot at every sample and kept
+  its generation, the most audit writers running at once against the
+  node's cap, the most audit and control-plane requests waiting for a turn
+  at SQLite's write lock, and the audit writes lost, by stage and kind.
+
+One outcome of the measurement is gated: on the SQLite cell every renewal
+asked during a burst renews, at least one per burst, the member keeps its
+slot and its generation, and the release answers ready at once; the
+browsers start on it straight after.
 
 ## Not driven
 
@@ -63,11 +74,13 @@ Recorded, not gated, once, in the first browser of the run:
 
 ## Record
 
-Recorded on 2026-09-27 on `p1` (Ubuntu 26.04.1 LTS, kernel
+Recorded on 2026-09-29 on `p1` (Ubuntu 26.04.1 LTS, kernel
 7.0.0-34-generic, 16 cores, 60 GiB, Docker 29.1.3), in
 `mcr.microsoft.com/playwright:v1.63.0-noble` pinned by digest in
-`tests/browser/harness.sh`: every one of the 184 assertions held in
-Chromium 153.0.8010.12, Firefox 155.0 and WebKit 26.6.
+`tests/browser/harness.sh`, on the SQLite cell: every assertion held in
+Chromium 153.0.8010.12, Firefox 155.0 and WebKit 26.6, the browsers
+starting straight after the in-server measurement. The PostgreSQL rows
+below are the 2026-09-27 run's, the last with `CANVAS_PROOF_PG_URL` set.
 `canvas-proof.json`, written by each run, holds every fact behind a row.
 
 | Fact | Chromium 153 | Firefox 155 | WebKit 26.6 |
@@ -80,7 +93,7 @@ Chromium 153.0.8010.12, Firefox 155.0 and WebKit 26.6.
 | Tab presses from the shell to the vault's name field | 15 | 1 | 15 |
 | requests the frames made after the value was typed, and those carrying it | 2, none | 2, none | 1, none |
 | frames held during safe mode, by chord and by stall | 0, 0 | 0, 0 | 0, 0 |
-| safe mode for a desktop that never said ready, after | 10 075 ms | 10 100 ms | 10 049 ms |
+| safe mode for a desktop that never said ready, after | 10 042 ms | 10 100 ms | 10 067 ms |
 | a desktop's action with the socket cut | refused, `unauthenticated` | the same | the same |
 | the desktop acting after the reconnect | yes | yes | yes |
 | server gone | marked, layout kept, stream ended, action and new stream `unavailable` | the same | the same |
@@ -92,11 +105,23 @@ Measurements:
 
 | Operation | Path | p50 / p95 / p99 |
 |---|---|---|
-| `card.refresh`, 50 in a row | the desktop, through the endpoint (Chromium) | 4.5 / 5.1 / 9.1 ms |
-| `vault.status`, 200 at concurrency 16 | the vault page, through the endpoint (Chromium) | 71.7 / 178.7 / 283.3 ms |
-| `vault.list`, 200 at concurrency 16 | in the server, through the gate, SQLite | 36.7 / 160.3 / 268.4 ms |
-| `vault.status`, 200 at concurrency 16 | in the server, through the gate, SQLite | 28.8 / 240.0 / 273.1 ms |
-| `vault.list`, 200 at concurrency 16 | in the server, through the gate, PostgreSQL 16 | 41.1 / 55.0 / 66.9 ms |
-| `vault.status`, 200 at concurrency 16 | in the server, through the gate, PostgreSQL 16 | 31.2 / 38.7 / 42.6 ms |
+| `card.refresh`, 50 in a row | the desktop, through the endpoint (Chromium) | 5.4 / 6.2 / 9.1 ms |
+| `vault.status`, 200 at concurrency 16 | the vault page, through the endpoint (Chromium) | 68.0 / 192.5 / 286.9 ms |
+| `vault.list`, 200 at concurrency 16 | in the server, through the gate, SQLite | 51.7 / 171.5 / 223.5 ms |
+| `vault.status`, 200 at concurrency 16 | in the server, through the gate, SQLite | 47.6 / 183.7 / 247.1 ms |
+| `vault.list`, 200 at concurrency 16 | in the server, through the gate, PostgreSQL 16 (2026-09-27) | 41.1 / 55.0 / 66.9 ms |
+| `vault.status`, 200 at concurrency 16 | in the server, through the gate, PostgreSQL 16 (2026-09-27) | 31.2 / 38.7 / 42.6 ms |
 
 Each cell's vault held eleven entries. No call was refused.
+
+What each in-server burst did to the SQLite member's lease (15 s, renewed
+every 5 s) and to the audit:
+
+| Burst | Renewals during it, call to answer | Slot held | Audit writers at once | Waiting for a turn, audit / control plane | Audit writes lost |
+|---|---|---|---|---|---|
+| `vault.list` | 1, renewed in 2 ms | at all 382 samples, generation 1 kept | 16 of 16 | 15 / 0 | none |
+| `vault.status` | 1, renewed in 40 ms | at all 398 samples, generation 1 kept | 16 of 16 | 15 / 0 | none |
+
+Both bursts filled the writer cap without a write refused: the queue at the
+write lock reached fifteen waiters beside the one holder, and the renewal
+asked during each went ahead of them.

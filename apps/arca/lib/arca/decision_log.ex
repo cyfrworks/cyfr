@@ -22,6 +22,23 @@ defmodule Arca.DecisionLog do
   on SQLite the caller's transaction holds the one write lock this would
   wait for.
 
+  ## The writers
+
+  The writing processes are supervised workers of this node's writer
+  supervisor, at most 16 at once (`max_writers/0`). A write past that
+  cap is refused at once as `:capacity` and waits for nothing, so an
+  overload never grows the number of writers or their queue. A caller's
+  timeout or death never stops its worker: the worker holds its slot
+  until its database work has returned, and traps the supervisor's stop
+  so a shutdown drains it before the repo goes. A worker that dies by a
+  fault frees its slot at its exit, though its native call may continue;
+  that surviving native work and its cleanup are bounded by the
+  connection pool, which does not lend a dead worker's connection again
+  until the driver's disconnect has finished. On SQLite each worker takes
+  its turn at the lock through `Arca.WriteTurn`, asked once it holds its
+  connection and within its deadline, so a renewal of the member's lease
+  goes ahead of every queued audit write.
+
   The writing process has a bound of its own. On PostgreSQL it is the
   caller's deadline: the pool closes a connection held past it, and the
   statement's socket goes with it. On SQLite a pool that closes a
@@ -30,12 +47,12 @@ defmodule Arca.DecisionLog do
   a wait for a connection eats into it. The writer's pool timeout is the
   lock-wait bound (`Arca.Repo.busy_timeout_ms/0`) plus a 1 s margin, and
   the transaction is told that deadline as an absolute instant: the lock
-  step in `Arca.Repo` waits only as long as still fits before the pool
-  acts, with room for the last quantum, the pause and the commit, and a
-  writer that reaches the lock with less than that left refuses at once
-  and touches nothing. A write that lands after its caller was told
-  `:timeout` is the same row a repeat would write, which idempotence
-  makes harmless.
+  step in `Arca.Repo` waits for the turn and then the lock only as long
+  as still fits before the pool acts, with room for the last quantum, the
+  pause and the commit, and a writer that reaches the lock with less than
+  that left refuses at once and touches nothing. A write that lands after
+  its caller was told `:timeout` is the same row a repeat would write,
+  which idempotence makes harmless.
 
   ## Idempotence
 
@@ -69,11 +86,24 @@ defmodule Arca.DecisionLog do
   @default_limit 50
   @max_limit 500
 
+  # The writer supervisor, and how many writers it runs at once.
+  @writers Arca.DecisionLog.Writers
+  @max_writers 16
+
+  # Above the lock-wait bound on SQLite, so that a writer that reaches the
+  # lock with its full time left can wait the bound out and still commit.
+  @sqlite_margin_ms 1_000
+
+  # Beyond a worker's own bound, what its stop at shutdown allows for the
+  # answer and the process's exit.
+  @drain_margin_ms 1_000
+
   defmodule AuditFailure do
     @moduledoc """
     Why a decision was not written: `:timeout` (the budget ran out),
-    `:unavailable` (the store could not answer), `:conflict` (the call id
-    holds a different decision or completion) or `:not_found` (no
+    `:unavailable` (the store could not answer), `:capacity` (every
+    writer this node runs was busy, so none was started), `:conflict` (the
+    call id holds a different decision or completion) or `:not_found` (no
     admission under the id in the actor's tenant, for a completion).
     `stage` is the write that failed.
     """
@@ -81,7 +111,7 @@ defmodule Arca.DecisionLog do
     @enforce_keys [:kind, :stage]
     defstruct [:kind, :stage]
 
-    @type kind :: :timeout | :unavailable | :conflict | :not_found
+    @type kind :: :timeout | :unavailable | :capacity | :conflict | :not_found
     @type stage :: :append | :finish
     @type t :: %__MODULE__{kind: kind(), stage: stage()}
   end
@@ -92,6 +122,31 @@ defmodule Arca.DecisionLog do
   @doc "The database waiting budget of one append or finish, in milliseconds."
   @spec budget_ms() :: pos_integer()
   def budget_ms, do: @budget_ms
+
+  @doc "How many writers this node runs at once; a write past them is `:capacity`."
+  @spec max_writers() :: pos_integer()
+  def max_writers, do: @max_writers
+
+  @doc """
+  The writer supervisor, a child of `Arca.Supervisor` started after
+  `Arca.WriteTurn`, so it stops, draining its writers, while the turn and
+  the pool are still up.
+  """
+  @spec child_spec(term()) :: Supervisor.child_spec()
+  def child_spec(_arg) do
+    Supervisor.child_spec({Task.Supervisor, name: @writers, max_children: @max_writers},
+      id: @writers
+    )
+  end
+
+  @doc "How many writers are running now. For measurement and tests."
+  @spec writers() :: non_neg_integer()
+  def writers do
+    case Process.whereis(@writers) do
+      nil -> 0
+      supervisor -> DynamicSupervisor.count_children(supervisor).active
+    end
+  end
 
   # ============================================================================
   # Writes
@@ -205,8 +260,12 @@ defmodule Arca.DecisionLog do
   defp completion_projection!(%Prima.Actor{athanor_id: athanor_id}, %{} = attrs)
        when is_binary(athanor_id) and athanor_id != "" do
     case Map.keys(attrs) -- @completion_columns do
-      [] -> attrs |> Map.to_list()
-      extra -> raise ArgumentError, "not completion columns of an mcp_log: #{Prima.LoggerContext.shape(extra)}"
+      [] ->
+        attrs |> Map.to_list()
+
+      extra ->
+        raise ArgumentError,
+              "not completion columns of an mcp_log: #{Prima.LoggerContext.shape(extra)}"
     end
   end
 
@@ -236,7 +295,7 @@ defmodule Arca.DecisionLog do
   defp write_admission(row, projection, deadline) do
     {pool_ms, pool_deadline} = pool_bound(deadline)
 
-    Arca.Repo.transaction(
+    Arca.Repo.locking_transaction(
       fn ->
         case Arca.Repo.insert_all(Row, [row],
                on_conflict: :nothing,
@@ -260,7 +319,8 @@ defmodule Arca.DecisionLog do
         end
       end,
       timeout: pool_ms,
-      pool_deadline: pool_deadline
+      pool_deadline: pool_deadline,
+      write_turn: :audit
     )
   end
 
@@ -269,7 +329,7 @@ defmodule Arca.DecisionLog do
   defp write_completion(tenant, call_id, record, projection, deadline) do
     {pool_ms, pool_deadline} = pool_bound(deadline)
 
-    Arca.Repo.transaction(
+    Arca.Repo.locking_transaction(
       fn ->
         case Arca.Repo.one(completion_target(tenant, call_id), timeout: db_timeout(deadline)) do
           nil ->
@@ -294,7 +354,8 @@ defmodule Arca.DecisionLog do
         end
       end,
       timeout: pool_ms,
-      pool_deadline: pool_deadline
+      pool_deadline: pool_deadline,
+      write_turn: :audit
     )
   end
 
@@ -345,40 +406,70 @@ defmodule Arca.DecisionLog do
   # The budget
   # ============================================================================
 
-  # Run `write` in a process of its own under one deadline, and wait for it
-  # no longer than that. The answer comes back on an alias that is dropped
-  # when the caller stops waiting, so an answer sent after that is never
-  # delivered; one that lands between the timeout and the unalias stays in
-  # the caller's mailbox as a single `{alias, answer}` message, which a
-  # request process tolerates. The process is not linked: the caller's
-  # death does not stop a write already under way, and the write's crash
-  # is an answer.
+  # Run `write` in a worker of the writer supervisor under one deadline, and
+  # wait for it no longer than that. The answer comes back on an alias that
+  # is dropped when the caller stops waiting, so an answer sent after that
+  # is never delivered; one that lands between the timeout and the unalias
+  # stays in the caller's mailbox as a single `{alias, answer}` message,
+  # which a request process tolerates. The worker is not linked to the
+  # caller: the caller's death does not stop a write already under way, and
+  # the write's crash is an answer. No worker free is `:capacity` at once.
   defp budgeted(stage, write) do
     deadline = System.monotonic_time(:millisecond) + @budget_ms
     reply = Process.alias([:reply])
-    callers = [self() | List.wrap(Process.get(:"$callers"))]
 
-    {pid, monitor} =
-      spawn_monitor(fn ->
-        # The sandbox finds its owner through the callers, as it does for
-        # a Task.
-        Process.put(:"$callers", callers)
-        send(reply, {reply, attempt(stage, write, deadline)})
-      end)
+    case start_writer(fn -> send(reply, {reply, attempt(stage, write, deadline)}) end) do
+      {:ok, pid} ->
+        monitor = Process.monitor(pid)
 
-    receive do
-      {^reply, answer} ->
-        Process.demonitor(monitor, [:flush])
-        answer(stage, answer)
+        receive do
+          {^reply, answer} ->
+            Process.demonitor(monitor, [:flush])
+            answer(stage, answer)
 
-      {:DOWN, ^monitor, :process, ^pid, _reason} ->
+          {:DOWN, ^monitor, :process, ^pid, _reason} ->
+            Process.unalias(reply)
+            {:error, failure(stage, :unavailable)}
+        after
+          left(deadline) ->
+            Process.unalias(reply)
+            Process.demonitor(monitor, [:flush])
+            {:error, failure(stage, :timeout)}
+        end
+
+      {:error, kind} ->
         Process.unalias(reply)
-        {:error, failure(stage, :unavailable)}
-    after
-      left(deadline) ->
-        Process.unalias(reply)
-        Process.demonitor(monitor, [:flush])
-        {:error, failure(stage, :timeout)}
+        {:error, failure(stage, kind)}
+    end
+  end
+
+  # The task supervisor gives the worker the caller's `$callers`, through
+  # which the sandbox finds its owner. The worker traps exits so that the
+  # supervisor's stop at shutdown waits for its write rather than cutting
+  # it off mid-statement; the stop's bound covers the writer's own.
+  defp start_writer(fun) do
+    worker = fn ->
+      Process.flag(:trap_exit, true)
+      fun.()
+    end
+
+    case Task.Supervisor.start_child(@writers, worker, restart: :temporary, shutdown: drain_ms()) do
+      {:ok, pid} -> {:ok, pid}
+      {:error, :max_children} -> {:error, :capacity}
+      {:error, _reason} -> {:error, :unavailable}
+    end
+  catch
+    # No supervisor to ask: the node is starting or stopping.
+    :exit, _reason -> {:error, :unavailable}
+  end
+
+  # How long a worker is given to finish at shutdown: its pool timeout, which
+  # bounds its wait for a connection, its turn, the lock and the commit,
+  # with a margin for the answer.
+  defp drain_ms do
+    case Arca.Repo.adapter() do
+      Ecto.Adapters.SQLite3 -> Arca.Repo.busy_timeout_ms() + @sqlite_margin_ms + @drain_margin_ms
+      _postgres -> @budget_ms + @drain_margin_ms
     end
   end
 
@@ -402,6 +493,9 @@ defmodule Arca.DecisionLog do
 
     e in Arca.Repo.BusyTimeoutError ->
       logged(stage, :timeout, e)
+
+    e in Arca.WriteTurn.CapacityError ->
+      logged(stage, :capacity, e)
 
     e in Arca.Repo.Errors.db_errors() ->
       logged(stage, :unavailable, e)
@@ -429,10 +523,6 @@ defmodule Arca.DecisionLog do
   defp failure(stage, kind), do: %AuditFailure{kind: kind, stage: stage}
 
   defp left(deadline), do: max(deadline - System.monotonic_time(:millisecond), 0)
-
-  # Above the lock-wait bound on SQLite, so that a writer that reaches the
-  # lock with its full time left can wait the bound out and still commit.
-  @sqlite_margin_ms 1_000
 
   # The writer's pool timeout. On PostgreSQL it is the caller's deadline:
   # the pool closes a connection held past it, and the statement's socket
