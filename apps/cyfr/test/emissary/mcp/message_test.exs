@@ -67,6 +67,26 @@ defmodule Emissary.MCP.MessageTest do
       assert code({:consent_conflict, %{}}) == -33503
       assert code({:restart_required, %{}}) == -33504
       assert code({:setup_required, %{}}) == -33501
+
+      assert code({:confirmation_required, %{id: "confirmation-7f3a", operation: "vault/create"}}) ==
+               -33505
+    end
+
+    test "a pending confirmation is neither a denial nor a consent to give" do
+      signal = {:confirmation_required, %{id: "confirmation-7f3a"}}
+
+      refute code(signal) in [
+               code({:missing_permission, :execute}),
+               code({:consent_required, %{}})
+             ]
+
+      assert Grimoire.classify(signal).class == :confirmation_required
+    end
+
+    test "a confirmation signal that names no confirmation is refused by shape" do
+      ExUnit.CaptureLog.capture_log(fn ->
+        assert code({:confirmation_required, %{operation: "vault/create"}}) == -33100
+      end)
     end
   end
 end

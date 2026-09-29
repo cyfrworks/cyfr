@@ -47,17 +47,21 @@ defmodule Sanctum.Consent do
 
   ## Errors
 
-  These four cross the WIT boundary, the MCP boundary, the console, the PWA
-  and the CLI, so their payloads are normative rather than incidental.
+  These cross the MCP boundary, the console, the PWA and the CLI, and the
+  first four the WIT boundary too, so their payloads are normative rather
+  than incidental.
 
-      setup_required     {profile_id, node_ref, need, reason}
-      consent_required   {profile_id, current_revision, shape_diff}
-      consent_conflict   {expected_revision, actual_revision, cause}
-      restart_required   {profile_id, new_revision, missing}
+      setup_required         {profile_id, node_ref, need, reason}
+      consent_required       {profile_id, current_revision, shape_diff}
+      consent_conflict       {expected_revision, actual_revision, cause}
+      restart_required       {profile_id, new_revision, missing}
+      confirmation_required  {id, operation, expires_at}
 
   `consent_conflict`'s cause distinguishes a stale plan from a digest that
   changed under the operator from a genuine race — different remedies:
-  re-plan, re-preview, or retry.
+  re-plan, re-preview, or retry. `confirmation_required` is no denial: the
+  change stands and waits for a fresh confirmation of the pending
+  confirmation `id` names.
   """
 
   @type scope :: :versionless | :pinned
@@ -100,11 +104,18 @@ defmodule Sanctum.Consent do
           missing: %{chain: [String.t()], edge: String.t(), activation: String.t()}
         }
 
+  @type confirmation_required :: %{
+          id: String.t(),
+          operation: String.t(),
+          expires_at: DateTime.t()
+        }
+
   @type error ::
           {:setup_required, setup_required()}
           | {:consent_required, consent_required()}
           | {:consent_conflict, consent_conflict()}
           | {:restart_required, restart_required()}
+          | {:confirmation_required, confirmation_required()}
 
   @doc """
   The scopes a consent may take.

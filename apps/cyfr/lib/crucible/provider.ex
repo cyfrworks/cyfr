@@ -810,8 +810,13 @@ defmodule Crucible.Provider do
 
   # Keep consent signals typed for protocol codes, structured data and shared rendering.
   defp format_root_result({:error, {tag, payload}})
-       when tag in [:setup_required, :consent_required, :consent_conflict, :restart_required] and
-              is_map(payload) do
+       when tag in [
+              :setup_required,
+              :consent_required,
+              :consent_conflict,
+              :restart_required,
+              :confirmation_required
+            ] and is_map(payload) do
     {:error, {tag, payload}}
   end
 

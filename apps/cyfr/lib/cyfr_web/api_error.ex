@@ -28,6 +28,9 @@ defmodule CyfrWeb.ApiError do
     unauthenticated: 401,
     forbidden: 403,
     consent_required: 403,
+    # RFC 6585 §3: the request stands and needs its confirmation first —
+    # neither a denial (403) nor a conflict (409).
+    confirmation_required: 428,
     not_found: 404,
     conflict: 409,
     not_owner: 409,

@@ -170,8 +170,8 @@ func renderResult(result map[string]any) error {
 	return nil
 }
 
-// Render typed consent errors (codes -33501..-33504) using the
-// remediation payload in error.data.
+// Render typed consent errors (codes -33501..-33505) using the
+// payload in error.data.
 func explainConsentError(err error) (string, bool) {
 	var ce *mcp.ConsentError
 	if !errors.As(err, &ce) {
@@ -202,6 +202,23 @@ func formatConsentError(tag string, payload map[string]any) string {
 	case "restart_required":
 		rev, _ := payload["new_revision"].(float64)
 		return fmt.Sprintf("Approved (consent rev %.0f) — re-run the command to continue.\n  The run that was in flight was stopped rather than re-bound mid-execution.", rev)
+
+	case "confirmation_required":
+		// Never a success: nothing was changed. The command line carries no
+		// confirmation, so the change is confirmed and completed in Prism.
+		operation, _ := payload["operation"].(string)
+		if operation == "" {
+			operation = "this change"
+		}
+		confirmation := ""
+		if id, _ := payload["id"].(string); id != "" {
+			confirmation = fmt.Sprintf(" (confirmation %s)", id)
+		}
+		expiry := ""
+		if expiresAt, _ := payload["expires_at"].(string); expiresAt != "" {
+			expiry = fmt.Sprintf(" before %s", expiresAt)
+		}
+		return fmt.Sprintf("Confirmation required: %s needs a fresh confirmation%s; nothing was changed.\n  Confirm and complete it in Prism%s.", operation, confirmation, expiry)
 	}
 
 	return ""

@@ -313,6 +313,13 @@ defmodule Prima.MCP.MessageTest do
       for {_name, code} <- Message.cyfr_error_codes(),
           do: assert(code in -33_999..-33_000//1)
     end
+
+    test "each consent signal has its own code in the -335xx band" do
+      codes = for tag <- Prima.ConsentSignal.tags(), do: Message.error_code(tag)
+
+      assert codes == [-33_501, -33_502, -33_503, -33_504, -33_505]
+      assert Message.error_code(:confirmation_required) == -33_505
+    end
   end
 
   describe "refusal_code/3 over data" do
@@ -341,9 +348,37 @@ defmodule Prima.MCP.MessageTest do
 
     test "a consent signal answers with its own tag" do
       for tag <- Prima.ConsentSignal.tags() do
-        assert Message.refusal_code(refusal(:consent_required, {tag, %{}}), :tools_call, nil) ==
-                 tag
+        signal = {tag, %{"id" => "confirmation-7f3a"}}
+        assert Message.refusal_code(refusal(:consent_required, signal), :tools_call, nil) == tag
       end
+    end
+
+    test "a pending confirmation answers -33505 by its signal and by its class" do
+      signal = {:confirmation_required, %{id: "confirmation-7f3a", operation: "vault/create"}}
+      refusal = Prima.Refusal.classify(signal)
+
+      for where <- [:tools_call, :resources_read, :transport] do
+        assert Message.class_code(:confirmation_required, where) == :confirmation_required
+        assert Message.refusal_code(refusal, where, nil) == :confirmation_required
+      end
+
+      encoded =
+        Message.encode_error(
+          7,
+          Message.refusal_code(refusal, :tools_call, nil),
+          refusal.message,
+          Prima.ConsentSignal.data(signal)
+        )
+
+      assert %{
+               "error" => %{
+                 "code" => -33_505,
+                 "data" => %{
+                   "tag" => "confirmation_required",
+                   "payload" => %{"id" => "confirmation-7f3a"}
+                 }
+               }
+             } = encoded |> Jason.encode!() |> Jason.decode!()
     end
 
     test "without an override the class answers" do

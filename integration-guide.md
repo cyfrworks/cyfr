@@ -390,9 +390,10 @@ on the wire.
 | -33502 | `consent_required` | The caller has no consent for this component |
 | -33503 | `consent_conflict` | Consent exists but does not cover what was asked |
 | -33504 | `restart_required` | Consent changed under a running execution |
+| -33505 | `confirmation_required` | A sensitive change waits for the person's fresh confirmation and nothing was changed; `error.data.payload.id` names the confirmation — confirm and complete the change in Prism ([Readiness and typed errors](#readiness-and-typed-errors)) |
 
 `-33304` is the one to branch on for backoff; the `-335xx` band is the
-remediation vocabulary, whose `error.data` payload is described under
+consent signals, whose `error.data` payload is described under
 [Readiness and typed errors](#readiness-and-typed-errors). The `-331xx`
 band answers a `resources/read` by the class of its refusal; a store that
 cannot answer is `-33103`, never a missing resource.
@@ -993,7 +994,7 @@ Interactive sessions and consent-capable API keys may commit; a key's consent ca
 
 `component.setup_plan` answers "can this run?" before you invoke: its `consent` section lists the profile and one row per need (`satisfied` + a human-readable `detail`), and top-level `ready` is true only when the profile is active and every need is bound to a live, digest-matching vault entry.
 
-Four typed errors cross every surface (MCP, CLI, consoles) with normative payloads:
+Five typed errors cross every surface (MCP, HTTP, CLI, consoles) with normative payloads:
 
 | Error | Payload | Meaning / next step |
 |-------|---------|---------------------|
@@ -1001,8 +1002,9 @@ Four typed errors cross every surface (MCP, CLI, consoles) with normative payloa
 | `consent_required` | `{profile_id, current_revision, shape_diff}` | The component's ask changed since approval — the shape diff shows exactly what; review and re-approve |
 | `consent_conflict` | `{expected_revision, actual_revision, cause}` | `stale_plan` → re-run plan; `digest_changed` → re-run preview; `race` → retry commit |
 | `restart_required` | `{profile_id, new_revision, missing}` | A new revision landed under a running execution — restart to pick it up |
+| `confirmation_required` | `{id, operation, expires_at}` | A sensitive change needs the person's fresh confirmation of the pending confirmation `id` names, before `expires_at`; nothing was changed, and it is no denial. Confirm and complete the change in Prism |
 
-On the MCP wire each arrives as a protocol-level JSON-RPC error — codes `-33501` (`setup_required`), `-33502` (`consent_required`), `-33503` (`consent_conflict`), `-33504` (`restart_required`) — with `error.data` carrying `{"tag": …, "payload": {…}}` and a one-line human summary in `error.message`. Branch on the code (or `data.tag`); the payload is the table above.
+On the MCP wire each arrives as a protocol-level JSON-RPC error — codes `-33501` (`setup_required`), `-33502` (`consent_required`), `-33503` (`consent_conflict`), `-33504` (`restart_required`), `-33505` (`confirmation_required`) — with `error.data` carrying `{"tag": …, "payload": {…}}` and a one-line human summary in `error.message`. A plain HTTP endpoint answers the same `data` beside its `code` and `message`, `confirmation_required` at `428 Precondition Required`. Branch on the code (or `data.tag`); the payload is the table above.
 
 ### What a grant enforces
 

@@ -19,6 +19,7 @@ defmodule CyfrWeb.ApiErrorTest do
     unauthenticated: 401,
     forbidden: 403,
     consent_required: 403,
+    confirmation_required: 428,
     not_found: 404,
     conflict: 409,
     not_owner: 409,
@@ -101,6 +102,45 @@ defmodule CyfrWeb.ApiErrorTest do
              "message" => "Consent required: scope widened",
              "data" => %{"tag" => "consent_required", "payload" => %{"detail" => "scope widened"}}
            }
+  end
+
+  test "a pending confirmation answers 428 with its signal, naming its confirmation" do
+    signal =
+      {:confirmation_required,
+       %{
+         id: "confirmation-7f3a",
+         operation: "vault/create",
+         expires_at: ~U[2026-09-29 12:05:00Z]
+       }}
+
+    conn = ApiError.refuse(conn(:post, "/"), signal)
+
+    # The request stands and waits for its confirmation: neither a denial
+    # (403) nor a conflict (409).
+    assert conn.status == 428
+    assert Plug.Conn.get_resp_header(conn, "www-authenticate") == []
+
+    assert body(conn) == %{
+             "code" => "confirmation_required",
+             "message" => Prima.ConsentSignal.message(signal),
+             "data" => %{
+               "tag" => "confirmation_required",
+               "payload" => %{
+                 "id" => "confirmation-7f3a",
+                 "operation" => "vault/create",
+                 "expires_at" => "2026-09-29T12:05:00Z"
+               }
+             }
+           }
+  end
+
+  test "a confirmation signal that names no confirmation is internal, not 428" do
+    ExUnit.CaptureLog.capture_log(fn ->
+      conn = ApiError.refuse(conn(:post, "/"), {:confirmation_required, %{operation: "x/y"}})
+
+      assert conn.status == 500
+      assert body(conn) == %{"code" => "internal", "message" => Prima.Refusal.unconfirmed()}
+    end)
   end
 
   test "an unknown term is internal and never spelled" do

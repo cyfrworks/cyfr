@@ -3,8 +3,22 @@
 
 defmodule Prima.ConsentSignal do
   @moduledoc """
-  The four consent remediation signals: `{tag, payload}` with a map
-  payload, the shape the consent owner produces and every surface reads.
+  The five consent signals: `{tag, payload}` with a map payload, the shape
+  the deciding owner produces and every surface reads.
+
+  Four are remediation: `setup_required`, `consent_required`,
+  `consent_conflict` and `restart_required` say what to grant, approve or
+  run again. The fifth, `confirmation_required`, is neither a denial nor a
+  remediation: the change stands and waits for the person's fresh
+  confirmation. Its payload is the pending confirmation's `id`, `operation`
+  and `expires_at`, and a payload without a non-empty string `id` is no
+  signal, since the id is what the person confirms and what the asking
+  surface repeats the change under. The payload's keys are atoms as a
+  producer builds it, or strings as it reads back from JSON, and one
+  payload holds `id` under exactly one of the two: a payload naming it
+  both ways is no signal, so no reader can check one id and render
+  another. Its `error.data` carries those three fields alone, so nothing
+  else a producer put in the payload reaches a wire.
 
   Each signal has a sentence, a refusal class (`Prima.Refusal`) and
   `error.data` shaped as `{"tag": ..., "payload": ...}`; the MCP wire
@@ -15,16 +29,38 @@ defmodule Prima.ConsentSignal do
   documents it), and the tincture iframe bridge keeps its own protocol.
   """
 
-  @tags [:setup_required, :consent_required, :consent_conflict, :restart_required]
+  @remediation_tags [:setup_required, :consent_required, :consent_conflict, :restart_required]
+  @tags @remediation_tags ++ [:confirmation_required]
 
-  @type tag :: :setup_required | :consent_required | :consent_conflict | :restart_required
+  @type tag ::
+          :setup_required
+          | :consent_required
+          | :consent_conflict
+          | :restart_required
+          | :confirmation_required
 
-  @doc "Whether a term is a consent signal — `{tag, payload}` with a map payload."
+  @doc """
+  Whether `{tag, payload}` is a consent signal: a remediation tag with a
+  map payload, or `confirmation_required` with a map payload whose `id`
+  is a non-empty string. Usable in guards.
+  """
+  defguard is_signal(tag, payload)
+           when is_map(payload) and
+                  (tag in @remediation_tags or
+                     (tag == :confirmation_required and
+                        ((is_map_key(payload, :id) and not is_map_key(payload, "id") and
+                            is_binary(:erlang.map_get(:id, payload)) and
+                            :erlang.map_get(:id, payload) != "") or
+                           (is_map_key(payload, "id") and not is_map_key(payload, :id) and
+                              is_binary(:erlang.map_get("id", payload)) and
+                              :erlang.map_get("id", payload) != ""))))
+
+  @doc "Whether a term is a consent signal (`is_signal/2`)."
   @spec signal?(term()) :: boolean()
-  def signal?({tag, payload}) when tag in @tags and is_map(payload), do: true
+  def signal?({tag, payload}) when is_signal(tag, payload), do: true
   def signal?(_), do: false
 
-  @doc "The four tag atoms, for rosters and drift tests."
+  @doc "The five tag atoms, for rosters and drift tests."
   @spec tags() :: [tag()]
   def tags, do: @tags
 
@@ -62,8 +98,44 @@ defmodule Prima.ConsentSignal do
   def message({:restart_required, _payload}),
     do: "Approved — re-run the command to continue (the in-flight run was stopped)"
 
-  @doc ~S(The `error.data` object: `{"tag": tag, "payload": payload}`.)
+  def message({:confirmation_required, payload})
+      when is_signal(:confirmation_required, payload) do
+    confirmation = confirmation(payload)
+
+    change =
+      case confirmation["operation"] do
+        operation when is_binary(operation) and operation != "" -> operation
+        _ -> "this change"
+      end
+
+    "Confirmation required: #{change} needs a fresh confirmation — " <>
+      "confirm it in Prism (confirmation #{confirmation["id"]})"
+  end
+
+  @doc ~S"""
+  The `error.data` object: `{"tag": tag, "payload": payload}`. A
+  `confirmation_required` payload is carried as its `id`, `operation` and
+  `expires_at` alone, under string keys.
+  """
   @spec data({tag(), map()}) :: map()
-  def data({tag, payload}) when tag in @tags and is_map(payload),
+  def data({:confirmation_required, payload} = signal)
+      when is_signal(:confirmation_required, payload),
+      do: %{"tag" => "confirmation_required", "payload" => confirmation(elem(signal, 1))}
+
+  def data({tag, payload}) when is_signal(tag, payload),
     do: %{"tag" => Atom.to_string(tag), "payload" => payload}
+
+  # The confirmation's three fields, read under the one key form its `id`
+  # uses (`is_signal/2` admits no payload that names it both ways), with
+  # an absent field left out.
+  defp confirmation(payload) do
+    keys =
+      if is_map_key(payload, :id),
+        do: [:id, :operation, :expires_at],
+        else: ~w(id operation expires_at)
+
+    for key <- keys, (value = Map.get(payload, key)) not in [nil, ""], into: %{} do
+      {to_string(key), value}
+    end
+  end
 end

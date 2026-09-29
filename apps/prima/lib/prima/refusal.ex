@@ -9,9 +9,13 @@ defmodule Prima.Refusal do
   A producer returns its own reason term; `classify/1` turns it into
   `%Prima.Refusal{class, reason, message}`, the normalized form every edge
   reads — the wire, the console, stored rows, bus payloads. The class is
-  one of fifteen (`classes/0`) and decides status and code at each
+  one of sixteen (`classes/0`) and decides status and code at each
   surface; the message is a sentence with no internal field name, no
   Elixir syntax and no `inspect/1` of a term.
+
+  `confirmation_required` is a class of its own: the change stands and
+  waits for the person's fresh confirmation, so it is neither a denial
+  (`forbidden`) nor a consent to give (`consent_required`).
 
   The authorization vocabulary is `Sanctum.Unauthorized`'s, which
   classifies its own reasons; `Grimoire.Error.classify/1` tries it first
@@ -37,6 +41,7 @@ defmodule Prima.Refusal do
           :unauthenticated
           | :forbidden
           | :consent_required
+          | :confirmation_required
           | :setup_required
           | :invalid_argument
           | :not_found
@@ -63,6 +68,7 @@ defmodule Prima.Refusal do
     :unauthenticated,
     :forbidden,
     :consent_required,
+    :confirmation_required,
     :setup_required,
     :invalid_argument,
     :not_found,
@@ -79,17 +85,20 @@ defmodule Prima.Refusal do
 
   @unconfirmed "The outcome could not be confirmed."
 
-  # The consent remediation signals' tags, read from their owner rather
+  # The consent signals' tags and shape, read from their owner rather
   # than spelled: this table, `is_consent_signal/2` and every surface that
-  # keeps a signal typed through it recognise the same tags.
+  # keeps a signal typed through it recognise the same signals.
+  require Prima.ConsentSignal
+
   @signal_tags Prima.ConsentSignal.tags()
 
   @doc """
-  Whether `{tag, payload}` is a consent remediation signal
-  (`Prima.ConsentSignal`): a tag of `signal_tags/0` with a map payload.
+  Whether `{tag, payload}` is a consent signal (`Prima.ConsentSignal`):
+  a tag of `signal_tags/0` with a map payload, and for
+  `confirmation_required` a payload naming its confirmation's `id`.
   Usable in guards.
   """
-  defguard is_consent_signal(tag, payload) when tag in @signal_tags and is_map(payload)
+  defguard is_consent_signal(tag, payload) when Prima.ConsentSignal.is_signal(tag, payload)
 
   # The class a guest error's `type` reads as on the worker wire.
   @guest_error_classes %{
@@ -185,7 +194,7 @@ defmodule Prima.Refusal do
     exception: {:internal, "Start-up failed unexpectedly"}
   }
 
-  @doc "The fifteen refusal classes."
+  @doc "The sixteen refusal classes."
   @spec classes() :: [class()]
   def classes, do: @classes
 
@@ -208,7 +217,7 @@ defmodule Prima.Refusal do
     end
   end
 
-  @doc "The tags of the consent remediation signals, the roster `is_consent_signal/2` reads."
+  @doc "The tags of the consent signals, the roster `is_consent_signal/2` reads."
   @spec signal_tags() :: [Prima.ConsentSignal.tag()]
   def signal_tags, do: @signal_tags
 
@@ -478,7 +487,7 @@ defmodule Prima.Refusal do
       do: {:forbidden, Prima.Authority.Transition.deny_message(refusal)}
   end
 
-  # The consent remediation signals (`Prima.ConsentSignal`).
+  # The consent signals (`Prima.ConsentSignal`).
   defp row({tag, payload} = signal) when is_consent_signal(tag, payload),
     do: {signal_class(tag), Prima.ConsentSignal.message(signal)}
 
@@ -663,4 +672,5 @@ defmodule Prima.Refusal do
   defp signal_class(:consent_required), do: :consent_required
   defp signal_class(:consent_conflict), do: :conflict
   defp signal_class(:restart_required), do: :cancelled
+  defp signal_class(:confirmation_required), do: :confirmation_required
 end

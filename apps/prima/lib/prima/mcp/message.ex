@@ -87,13 +87,14 @@ defmodule Prima.MCP.Message do
     uncertain: -33106
   }
 
-  # Consent remediation signals use codes -33500 to -33599.
+  # Consent signals use codes -33500 to -33599.
   # Clients read their structured payloads from error.data.
   @cyfr_consent_codes %{
     setup_required: -33501,
     consent_required: -33502,
     consent_conflict: -33503,
-    restart_required: -33504
+    restart_required: -33504,
+    confirmation_required: -33505
   }
 
   # Combined CYFR error codes for lookup.
@@ -154,6 +155,7 @@ defmodule Prima.MCP.Message do
   def class_code(:forbidden, _where), do: :insufficient_permissions
   def class_code(:setup_required, _where), do: :setup_required
   def class_code(:consent_required, _where), do: :consent_required
+  def class_code(:confirmation_required, _where), do: :confirmation_required
   def class_code(:rate_limited, _where), do: :rate_limited
   def class_code(:cancelled, _where), do: :request_cancelled
 
