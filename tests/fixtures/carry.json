@@ -1,0 +1,653 @@
+{
+  "comment": "The vectors pinning Prima.Carry: every side re-signs each envelope whose signer is named and reproduces its sig (signer null: altered after signing), walks the identity entries to each head, checks each envelope under the named head against the expected destination, action and payload digest with the given clock (Unix milliseconds; skew and max_age in milliseconds), reaching the named result or refusal, answers each replay from what was recorded for the action id (the digest over the accepted envelope's JCS bytes and its acknowledgment), reproduces the valid fragment and parses it back, holds payloads to 8 KiB of JCS bytes and fragments to 16 KiB before decoding, and reads, refuses and replays each return. A filler_length case is the payload {\"filler\": that many 'a'}; a repeat case is that many copies of char.",
+  "envelopes": {
+    "destination_substituted": {
+      "envelope": {
+        "action_id": "cry_01a09fee-5e6f-7a8b-9c0d-1e2f3a4b5c6d",
+        "destination": "https://carol.example",
+        "identifier": "per_252020f8258a5ac273ad001a2e428bab70e784bef6676bbdb314956e986a1446",
+        "issued_at": 1790000000000,
+        "key_epoch": "sha256:252020f8258a5ac273ad001a2e428bab70e784bef6676bbdb314956e986a1446",
+        "operation": "join",
+        "payload_digest": "sha256:d444b4370d812b79c53fb639cde7aaadc0920898dd89afb142f35d7f7306cb98",
+        "protocol": "cyfr-carry/v1",
+        "return_url": "https://alice.example/carry",
+        "sig": "t-ZLyX91XbpmvXedQDSk5j1ZyQ2lVrekMQLKiv4mpR6M_9Lv7PwULOSuuM3KoL3odf3i3qOzuK0xVfTNYXLBCw",
+        "source": "https://alice.example"
+      },
+      "signer": null
+    },
+    "forged": {
+      "envelope": {
+        "action_id": "cry_01a09fee-5e6f-7a8b-9c0d-1e2f3a4b5c6d",
+        "destination": "https://hub.example",
+        "identifier": "per_252020f8258a5ac273ad001a2e428bab70e784bef6676bbdb314956e986a1446",
+        "issued_at": 1790000000000,
+        "key_epoch": "sha256:252020f8258a5ac273ad001a2e428bab70e784bef6676bbdb314956e986a1446",
+        "operation": "join",
+        "payload_digest": "sha256:d444b4370d812b79c53fb639cde7aaadc0920898dd89afb142f35d7f7306cb98",
+        "protocol": "cyfr-carry/v1",
+        "return_url": "https://alice.example/carry",
+        "sig": "wZB996CoESvrnwwuAr8_spfnIcpb1wP-bZbipC4nE8fxhvXB_yf4xHJX1ZrmTThpFgaqk5u3WpRYd-CMibSTAg",
+        "source": "https://alice.example"
+      },
+      "signer": "stranger"
+    },
+    "issued_later": {
+      "envelope": {
+        "action_id": "cry_01a09fee-5e6f-7a8b-9c0d-1e2f3a4b5c6d",
+        "destination": "https://hub.example",
+        "identifier": "per_252020f8258a5ac273ad001a2e428bab70e784bef6676bbdb314956e986a1446",
+        "issued_at": 1790000005000,
+        "key_epoch": "sha256:252020f8258a5ac273ad001a2e428bab70e784bef6676bbdb314956e986a1446",
+        "operation": "join",
+        "payload_digest": "sha256:d444b4370d812b79c53fb639cde7aaadc0920898dd89afb142f35d7f7306cb98",
+        "protocol": "cyfr-carry/v1",
+        "return_url": "https://alice.example/carry",
+        "sig": "4pBCpEphZE7p3079m47r4lTyi7GSnXCJAAdjt0NE6m9XmyOUqR5CHzXKnB_sWK0zu9YxqOIiSOGgYYajWpNjCA",
+        "source": "https://alice.example"
+      },
+      "signer": "alice_live_1"
+    },
+    "new_epoch": {
+      "envelope": {
+        "action_id": "cry_01a09fee-5e6f-7a8b-9c0d-1e2f3a4b5c6d",
+        "destination": "https://hub.example",
+        "identifier": "per_252020f8258a5ac273ad001a2e428bab70e784bef6676bbdb314956e986a1446",
+        "issued_at": 1790000000000,
+        "key_epoch": "sha256:73a092d783b24ce64c8d2704cc971fe9b4fc3a4ad769eb5393b2de3a15c9625b",
+        "operation": "join",
+        "payload_digest": "sha256:d444b4370d812b79c53fb639cde7aaadc0920898dd89afb142f35d7f7306cb98",
+        "protocol": "cyfr-carry/v1",
+        "return_url": "https://alice.example/carry",
+        "sig": "3Y0XSViTcHOi4oYoQDcmIlQFqPjbx31ktwA1OHnUX9HYJHS3MYSYN5GDVINOghUaK1wjgfXD2pxy4_TT8Q9bBQ",
+        "source": "https://alice.example"
+      },
+      "signer": "alice_live_2"
+    },
+    "new_key_old_epoch": {
+      "envelope": {
+        "action_id": "cry_01a09fee-5e6f-7a8b-9c0d-1e2f3a4b5c6d",
+        "destination": "https://hub.example",
+        "identifier": "per_252020f8258a5ac273ad001a2e428bab70e784bef6676bbdb314956e986a1446",
+        "issued_at": 1790000000000,
+        "key_epoch": "sha256:252020f8258a5ac273ad001a2e428bab70e784bef6676bbdb314956e986a1446",
+        "operation": "join",
+        "payload_digest": "sha256:d444b4370d812b79c53fb639cde7aaadc0920898dd89afb142f35d7f7306cb98",
+        "protocol": "cyfr-carry/v1",
+        "return_url": "https://alice.example/carry",
+        "sig": "uyCXbgHHCWnJ8WqpmeV9sD14CXAp6l7B1E9ncAa8dA32u2yTLl_6ST8ccRmDsWcuA4UF0FBJ9iI9ZV66DhmHAA",
+        "source": "https://alice.example"
+      },
+      "signer": "alice_live_2"
+    },
+    "other_operation": {
+      "envelope": {
+        "action_id": "cry_01a09fee-5e6f-7a8b-9c0d-1e2f3a4b5c6d",
+        "destination": "https://hub.example",
+        "identifier": "per_252020f8258a5ac273ad001a2e428bab70e784bef6676bbdb314956e986a1446",
+        "issued_at": 1790000000000,
+        "key_epoch": "sha256:252020f8258a5ac273ad001a2e428bab70e784bef6676bbdb314956e986a1446",
+        "operation": "leave",
+        "payload_digest": "sha256:d444b4370d812b79c53fb639cde7aaadc0920898dd89afb142f35d7f7306cb98",
+        "protocol": "cyfr-carry/v1",
+        "return_url": "https://alice.example/carry",
+        "sig": "TuVAQieZK-OPrWBgee-9IGmxaAk4D3jZ14K5xOYhE4K4-bho7s3oaXI8hBuqfziiHr4W29prJ-9VB_BSQQhpBw",
+        "source": "https://alice.example"
+      },
+      "signer": "alice_live_1"
+    },
+    "return_other_path": {
+      "envelope": {
+        "action_id": "cry_01a09fee-5e6f-7a8b-9c0d-1e2f3a4b5c6d",
+        "destination": "https://hub.example",
+        "identifier": "per_252020f8258a5ac273ad001a2e428bab70e784bef6676bbdb314956e986a1446",
+        "issued_at": 1790000000000,
+        "key_epoch": "sha256:252020f8258a5ac273ad001a2e428bab70e784bef6676bbdb314956e986a1446",
+        "operation": "join",
+        "payload_digest": "sha256:d444b4370d812b79c53fb639cde7aaadc0920898dd89afb142f35d7f7306cb98",
+        "protocol": "cyfr-carry/v1",
+        "return_url": "https://alice.example/elsewhere",
+        "sig": "qfbpa5zhIc5uiUCYR2nErAQWr0urg3Nw1u9XT8zJG4B0--WQ0Q_xjAX9t-kYwNAhffiRTmG_jRUJPWe57SLcBw",
+        "source": "https://alice.example"
+      },
+      "signer": "alice_live_1"
+    },
+    "return_substituted": {
+      "envelope": {
+        "action_id": "cry_01a09fee-5e6f-7a8b-9c0d-1e2f3a4b5c6d",
+        "destination": "https://hub.example",
+        "identifier": "per_252020f8258a5ac273ad001a2e428bab70e784bef6676bbdb314956e986a1446",
+        "issued_at": 1790000000000,
+        "key_epoch": "sha256:252020f8258a5ac273ad001a2e428bab70e784bef6676bbdb314956e986a1446",
+        "operation": "join",
+        "payload_digest": "sha256:d444b4370d812b79c53fb639cde7aaadc0920898dd89afb142f35d7f7306cb98",
+        "protocol": "cyfr-carry/v1",
+        "return_url": "https://evil.example/carry",
+        "sig": "ejDrYz3ajtkjID_29E4-hMe7O9_hrzwypGpA__a6fGR_-oEdRP2i8hF97QaCPtXHU-EZz7oQBQ-A-Ky6TqKfDA",
+        "source": "https://alice.example"
+      },
+      "signer": "alice_live_1"
+    },
+    "source_substituted": {
+      "envelope": {
+        "action_id": "cry_01a09fee-5e6f-7a8b-9c0d-1e2f3a4b5c6d",
+        "destination": "https://hub.example",
+        "identifier": "per_252020f8258a5ac273ad001a2e428bab70e784bef6676bbdb314956e986a1446",
+        "issued_at": 1790000000000,
+        "key_epoch": "sha256:252020f8258a5ac273ad001a2e428bab70e784bef6676bbdb314956e986a1446",
+        "operation": "join",
+        "payload_digest": "sha256:d444b4370d812b79c53fb639cde7aaadc0920898dd89afb142f35d7f7306cb98",
+        "protocol": "cyfr-carry/v1",
+        "return_url": "https://carol.example/carry",
+        "sig": "t-ZLyX91XbpmvXedQDSk5j1ZyQ2lVrekMQLKiv4mpR6M_9Lv7PwULOSuuM3KoL3odf3i3qOzuK0xVfTNYXLBCw",
+        "source": "https://carol.example"
+      },
+      "signer": null
+    },
+    "valid": {
+      "envelope": {
+        "action_id": "cry_01a09fee-5e6f-7a8b-9c0d-1e2f3a4b5c6d",
+        "destination": "https://hub.example",
+        "identifier": "per_252020f8258a5ac273ad001a2e428bab70e784bef6676bbdb314956e986a1446",
+        "issued_at": 1790000000000,
+        "key_epoch": "sha256:252020f8258a5ac273ad001a2e428bab70e784bef6676bbdb314956e986a1446",
+        "operation": "join",
+        "payload_digest": "sha256:d444b4370d812b79c53fb639cde7aaadc0920898dd89afb142f35d7f7306cb98",
+        "protocol": "cyfr-carry/v1",
+        "return_url": "https://alice.example/carry",
+        "sig": "t-ZLyX91XbpmvXedQDSk5j1ZyQ2lVrekMQLKiv4mpR6M_9Lv7PwULOSuuM3KoL3odf3i3qOzuK0xVfTNYXLBCw",
+        "source": "https://alice.example"
+      },
+      "signer": "alice_live_1"
+    }
+  },
+  "fragments": {
+    "parse": [
+      {
+        "error": "carry_too_large",
+        "name": "a fragment one byte over 16 KiB, refused before it is decoded",
+        "repeat": {
+          "char": "A",
+          "length": 16385
+        }
+      },
+      {
+        "error": "invalid_fragment",
+        "name": "16 KiB that is not a fragment",
+        "repeat": {
+          "char": "A",
+          "length": 16384
+        }
+      },
+      {
+        "error": "invalid_fragment",
+        "fragment": "not*a*fragment",
+        "name": "characters outside base64url"
+      },
+      {
+        "error": "invalid_fragment",
+        "fragment": "eyJlbnZlbG9wZSI6eyJhY3Rpb25faWQiOiJjcnlfMDFhMDlmZWUtNWU2Zi03YThiLTljMGQtMWUyZjNhNGI1YzZkIiwiZGVzdGluYXRpb24iOiJodHRwczovL2h1Yi5leGFtcGxlIiwiaWRlbnRpZmllciI6InBlcl8yNTIwMjBmODI1OGE1YWMyNzNhZDAwMWEyZTQyOGJhYjcwZTc4NGJlZjY2NzZiYmRiMzE0OTU2ZTk4NmExNDQ2IiwiaXNzdWVkX2F0IjoxNzkwMDAwMDAwMDAwLCJrZXlfZXBvY2giOiJzaGEyNTY6MjUyMDIwZjgyNThhNWFjMjczYWQwMDFhMmU0MjhiYWI3MGU3ODRiZWY2Njc2YmJkYjMxNDk1NmU5ODZhMTQ0NiIsIm9wZXJhdGlvbiI6ImpvaW4iLCJwYXlsb2FkX2RpZ2VzdCI6InNoYTI1NjpkNDQ0YjQzNzBkODEyYjc5YzUzZmI2MzljZGU3YWFhZGMwOTIwODk4ZGQ4OWFmYjE0MmYzNWQ3ZjczMDZjYjk4IiwicHJvdG9jb2wiOiJjeWZyLWNhcnJ5L3YxIiwicmV0dXJuX3VybCI6Imh0dHBzOi8vYWxpY2UuZXhhbXBsZS9jYXJyeSIsInNpZyI6InQtWkx5WDkxWGJwbXZYZWRRRFNrNWoxWnlRMmxWcmVrTVFMS2l2NG1wUjZNXzlMdjdQd1VMT1N1dU0zS29MM29kZjNpM3FPenVLMHhWZlROWVhMQkN3Iiwic291cmNlIjoiaHR0cHM6Ly9hbGljZS5leGFtcGxlIn0sInBheWxvYWQiOnsiYXVkaWVuY2UiOiJodHRwczovL2h1Yi5leGFtcGxlIiwiY2hhbGxlbmdlIjoid3J4ZU1KUnM1RHdBZWRiUE5CSF9iSElkWGhTdUFkYlYzQ1dPWDlLLUtoYyJ9fQ==",
+        "name": "a padded fragment"
+      },
+      {
+        "error": "invalid_fragment",
+        "fragment": "eyJlbnZlbG9wZSI6eyJhY3Rpb25faWQiOiJjcnlfMDFhMDlmZWUtNWU2Zi03YThiLTljMGQtMWUyZjNhNGI1YzZkIiwiZGVzdGluYXRpb24iOiJodHRwczovL2h1Yi5leGFtcGxlIiwiaWRlbnRpZmllciI6InBlcl8yNTIwMjBmODI1OGE1YWMyNzNhZDAwMWEyZTQyOGJhYjcwZTc4NGJlZjY2NzZiYmRiMzE0OTU2ZTk4NmExNDQ2IiwiaXNzdWVkX2F0IjoxNzkwMDAwMDAwMDAwLCJrZXlfZXBvY2giOiJzaGEyNTY6MjUyMDIwZjgyNThhNWFjMjczYWQwMDFhMmU0MjhiYWI3MGU3ODRiZWY2Njc2YmJkYjMxNDk1NmU5ODZhMTQ0NiIsIm9wZXJhdGlvbiI6ImpvaW4iLCJwYXlsb2FkX2RpZ2VzdCI6InNoYTI1NjpkNDQ0YjQzNzBkODEyYjc5YzUzZmI2MzljZGU3YWFhZGMwOTIwODk4ZGQ4OWFmYjE0MmYzNWQ3ZjczMDZjYjk4IiwicHJvdG9jb2wiOiJjeWZyLWNhcnJ5L3YxIiwicmV0dXJuX3VybCI6Imh0dHBzOi8vYWxpY2UuZXhhbXBsZS9jYXJyeSIsInNpZyI6InQtWkx5WDkxWGJwbXZYZWRRRFNrNWoxWnlRMmxWcmVrTVFMS2l2NG1wUjZNXzlMdjdQd1VMT1N1dU0zS29MM29kZjNpM3FPenVLMHhWZlROWVhMQkN3Iiwic291cmNlIjoiaHR0cHM6Ly9hbGljZS5leGFtcGxlIn0sImV4dHJhIjoxLCJwYXlsb2FkIjp7ImF1ZGllbmNlIjoiaHR0cHM6Ly9odWIuZXhhbXBsZSIsImNoYWxsZW5nZSI6IndyeGVNSlJzNUR3QWVkYlBOQkhfYkhJZFhoU3VBZGJWM0NXT1g5Sy1LaGMifX0",
+        "name": "a fragment with a third member"
+      }
+    ],
+    "payload_bound": [
+      {
+        "filler_length": 8179,
+        "name": "a payload of exactly 8 KiB",
+        "result": "ok"
+      },
+      {
+        "error": "carry_too_large",
+        "filler_length": 8180,
+        "name": "a payload one byte over 8 KiB"
+      }
+    ],
+    "valid": {
+      "envelope": "valid",
+      "fragment": "eyJlbnZlbG9wZSI6eyJhY3Rpb25faWQiOiJjcnlfMDFhMDlmZWUtNWU2Zi03YThiLTljMGQtMWUyZjNhNGI1YzZkIiwiZGVzdGluYXRpb24iOiJodHRwczovL2h1Yi5leGFtcGxlIiwiaWRlbnRpZmllciI6InBlcl8yNTIwMjBmODI1OGE1YWMyNzNhZDAwMWEyZTQyOGJhYjcwZTc4NGJlZjY2NzZiYmRiMzE0OTU2ZTk4NmExNDQ2IiwiaXNzdWVkX2F0IjoxNzkwMDAwMDAwMDAwLCJrZXlfZXBvY2giOiJzaGEyNTY6MjUyMDIwZjgyNThhNWFjMjczYWQwMDFhMmU0MjhiYWI3MGU3ODRiZWY2Njc2YmJkYjMxNDk1NmU5ODZhMTQ0NiIsIm9wZXJhdGlvbiI6ImpvaW4iLCJwYXlsb2FkX2RpZ2VzdCI6InNoYTI1NjpkNDQ0YjQzNzBkODEyYjc5YzUzZmI2MzljZGU3YWFhZGMwOTIwODk4ZGQ4OWFmYjE0MmYzNWQ3ZjczMDZjYjk4IiwicHJvdG9jb2wiOiJjeWZyLWNhcnJ5L3YxIiwicmV0dXJuX3VybCI6Imh0dHBzOi8vYWxpY2UuZXhhbXBsZS9jYXJyeSIsInNpZyI6InQtWkx5WDkxWGJwbXZYZWRRRFNrNWoxWnlRMmxWcmVrTVFMS2l2NG1wUjZNXzlMdjdQd1VMT1N1dU0zS29MM29kZjNpM3FPenVLMHhWZlROWVhMQkN3Iiwic291cmNlIjoiaHR0cHM6Ly9hbGljZS5leGFtcGxlIn0sInBheWxvYWQiOnsiYXVkaWVuY2UiOiJodHRwczovL2h1Yi5leGFtcGxlIiwiY2hhbGxlbmdlIjoid3J4ZU1KUnM1RHdBZWRiUE5CSF9iSElkWGhTdUFkYlYzQ1dPWDlLLUtoYyJ9fQ",
+      "payload": {
+        "audience": "https://hub.example",
+        "challenge": "wrxeMJRs5DwAedbPNBH_bHIdXhSuAdbV3CWOX9K-Khc"
+      }
+    }
+  },
+  "identity": {
+    "entries": {
+      "genesis": {
+        "directory": "https://directory.example",
+        "kind": "genesis",
+        "live_key": "z4SbNwACH3EJP0catDkfCNQWpQNdsYAUCTHlKOcyrGU",
+        "operational_key": "eeutcBO3svGffX_iz5AhBmlHb_sKTBBh1ftMjsgQU5o",
+        "protocol": "cyfr-identity/v1",
+        "recovery_keys": [
+          "0OxTidkGKIVD1DjlN78M2Lu5h8USUYAbnaqqniXRcNc"
+        ],
+        "revision": 0,
+        "sig": "lvyhljWNyAjlIV8EKg3FDjMcbCJPf9QPrPieYRm60rey_XxEtXmlDXKLv45nLb_pfid5ozCG1gEBfbQkx7xmDQ"
+      },
+      "rotate": {
+        "kind": "rotate",
+        "live_key": "Wc8SfHJKHZOrNh0Qtc7YtRAUCUS82P-Gt8-1horAyAo",
+        "prev": "sha256:252020f8258a5ac273ad001a2e428bab70e784bef6676bbdb314956e986a1446",
+        "protocol": "cyfr-identity/v1",
+        "sig": "lhw0CzOMJbp7wolzNdMbXHwhmHIot00peCDY_XHx7pUfoJuE0PHniBEbnkjwfIzikqT6LSvOj89Ay77IRWEcBw"
+      }
+    },
+    "heads": {
+      "after_rotation": {
+        "entries": [
+          "genesis",
+          "rotate"
+        ],
+        "key_epoch": "sha256:73a092d783b24ce64c8d2704cc971fe9b4fc3a4ad769eb5393b2de3a15c9625b"
+      },
+      "before_rotation": {
+        "entries": [
+          "genesis"
+        ],
+        "key_epoch": "sha256:252020f8258a5ac273ad001a2e428bab70e784bef6676bbdb314956e986a1446"
+      }
+    }
+  },
+  "keys": {
+    "alice_live_1": {
+      "public": "z4SbNwACH3EJP0catDkfCNQWpQNdsYAUCTHlKOcyrGU",
+      "seed": "4vIF-wGusnX6R8S7SdjJjBxW6dBj3EU4QcOQUbcbIe4"
+    },
+    "alice_live_2": {
+      "public": "Wc8SfHJKHZOrNh0Qtc7YtRAUCUS82P-Gt8-1horAyAo",
+      "seed": "3Qr8Wgo0gayyfmVRyc1AnQvPy6Sm-IO3J5IJr4PLBUk"
+    },
+    "stranger": {
+      "public": "uVBfMdqGCeReZTvOumX3dKEkwpJ1DvjpXrIbcwZCnrM",
+      "seed": "ldiVKG7kxLyNRN_VHEKHfueVbbSQg6yAFDXkOpRuj8I"
+    }
+  },
+  "max_fragment_bytes": 16384,
+  "max_payload_bytes": 8192,
+  "operations": [
+    "join"
+  ],
+  "outcomes": [
+    "admitted",
+    "refused"
+  ],
+  "payload": {
+    "audience": "https://hub.example",
+    "challenge": "wrxeMJRs5DwAedbPNBH_bHIdXhSuAdbV3CWOX9K-Khc"
+  },
+  "payload_digest": "sha256:d444b4370d812b79c53fb639cde7aaadc0920898dd89afb142f35d7f7306cb98",
+  "protocol": "cyfr-carry/v1",
+  "replay": [
+    {
+      "envelope": "valid",
+      "name": "an action id answered for the first time",
+      "recorded": null,
+      "result": "fresh"
+    },
+    {
+      "ack": {
+        "action_id": "cry_01a09fee-5e6f-7a8b-9c0d-1e2f3a4b5c6d",
+        "outcome": "admitted",
+        "protocol": "cyfr-carry/v1"
+      },
+      "envelope": "valid",
+      "name": "the exact envelope again",
+      "recorded": {
+        "ack": {
+          "action_id": "cry_01a09fee-5e6f-7a8b-9c0d-1e2f3a4b5c6d",
+          "outcome": "admitted",
+          "protocol": "cyfr-carry/v1"
+        },
+        "digest": "sha256:ecfa7b0c488475c62f449cd5351eacdcf1b39a7bb2d9f1a9f772438ce2dc19a3",
+        "envelope": "valid"
+      },
+      "result": "duplicate"
+    },
+    {
+      "envelope": "issued_later",
+      "error": "action_reused",
+      "name": "a reused action id with different bytes",
+      "recorded": {
+        "ack": {
+          "action_id": "cry_01a09fee-5e6f-7a8b-9c0d-1e2f3a4b5c6d",
+          "outcome": "admitted",
+          "protocol": "cyfr-carry/v1"
+        },
+        "digest": "sha256:ecfa7b0c488475c62f449cd5351eacdcf1b39a7bb2d9f1a9f772438ce2dc19a3",
+        "envelope": "valid"
+      }
+    }
+  ],
+  "returns": {
+    "admitted": {
+      "fragment": "eyJhY3Rpb25faWQiOiJjcnlfMDFhMDlmZWUtNWU2Zi03YThiLTljMGQtMWUyZjNhNGI1YzZkIiwib3V0Y29tZSI6ImFkbWl0dGVkIiwicHJvdG9jb2wiOiJjeWZyLWNhcnJ5L3YxIn0",
+      "return": {
+        "action_id": "cry_01a09fee-5e6f-7a8b-9c0d-1e2f3a4b5c6d",
+        "outcome": "admitted",
+        "protocol": "cyfr-carry/v1"
+      }
+    },
+    "refusals": [
+      {
+        "error": "invalid_field",
+        "name": "an outcome outside admitted and refused",
+        "return": {
+          "action_id": "cry_01a09fee-5e6f-7a8b-9c0d-1e2f3a4b5c6d",
+          "outcome": "joined",
+          "protocol": "cyfr-carry/v1"
+        }
+      },
+      {
+        "error": "unknown_field",
+        "name": "a return that carries a session",
+        "return": {
+          "action_id": "cry_01a09fee-5e6f-7a8b-9c0d-1e2f3a4b5c6d",
+          "outcome": "admitted",
+          "protocol": "cyfr-carry/v1",
+          "session": "abc"
+        }
+      },
+      {
+        "error": "missing_field",
+        "name": "a return without its action",
+        "return": {
+          "outcome": "admitted",
+          "protocol": "cyfr-carry/v1"
+        }
+      }
+    ],
+    "refused": {
+      "fragment": "eyJhY3Rpb25faWQiOiJjcnlfMDFhMDlmZWUtNWU2Zi03YThiLTljMGQtMWUyZjNhNGI1YzZkIiwib3V0Y29tZSI6InJlZnVzZWQiLCJwcm90b2NvbCI6ImN5ZnItY2FycnkvdjEifQ",
+      "return": {
+        "action_id": "cry_01a09fee-5e6f-7a8b-9c0d-1e2f3a4b5c6d",
+        "outcome": "refused",
+        "protocol": "cyfr-carry/v1"
+      }
+    },
+    "replay": [
+      {
+        "name": "a first return",
+        "recorded": null,
+        "result": "fresh",
+        "return": "admitted"
+      },
+      {
+        "name": "the same return again",
+        "recorded": "admitted",
+        "result": "duplicate",
+        "return": "admitted"
+      },
+      {
+        "error": "outcome_changed",
+        "name": "a changed outcome under the same action",
+        "recorded": "admitted",
+        "return": "refused"
+      }
+    ]
+  },
+  "verify": [
+    {
+      "clock": {
+        "max_age": 300000,
+        "now": 1790000010000,
+        "skew": 60000
+      },
+      "envelope": "valid",
+      "expected": {
+        "action_id": "cry_01a09fee-5e6f-7a8b-9c0d-1e2f3a4b5c6d",
+        "destination": "https://hub.example",
+        "payload_digest": "sha256:d444b4370d812b79c53fb639cde7aaadc0920898dd89afb142f35d7f7306cb98"
+      },
+      "head": "before_rotation",
+      "name": "an envelope at its destination",
+      "result": "ok"
+    },
+    {
+      "clock": {
+        "max_age": 300000,
+        "now": 1790000010000,
+        "skew": 60000
+      },
+      "envelope": "forged",
+      "error": "bad_signature",
+      "expected": {
+        "action_id": "cry_01a09fee-5e6f-7a8b-9c0d-1e2f3a4b5c6d",
+        "destination": "https://hub.example",
+        "payload_digest": "sha256:d444b4370d812b79c53fb639cde7aaadc0920898dd89afb142f35d7f7306cb98"
+      },
+      "head": "before_rotation",
+      "name": "an envelope signed by another key"
+    },
+    {
+      "clock": {
+        "max_age": 300000,
+        "now": 1790000010000,
+        "skew": 60000
+      },
+      "envelope": "source_substituted",
+      "error": "bad_signature",
+      "expected": {
+        "action_id": "cry_01a09fee-5e6f-7a8b-9c0d-1e2f3a4b5c6d",
+        "destination": "https://hub.example",
+        "payload_digest": "sha256:d444b4370d812b79c53fb639cde7aaadc0920898dd89afb142f35d7f7306cb98"
+      },
+      "head": "before_rotation",
+      "name": "a source substituted after signing"
+    },
+    {
+      "clock": {
+        "max_age": 300000,
+        "now": 1790000010000,
+        "skew": 60000
+      },
+      "envelope": "destination_substituted",
+      "error": "bad_signature",
+      "expected": {
+        "action_id": "cry_01a09fee-5e6f-7a8b-9c0d-1e2f3a4b5c6d",
+        "destination": "https://hub.example",
+        "payload_digest": "sha256:d444b4370d812b79c53fb639cde7aaadc0920898dd89afb142f35d7f7306cb98"
+      },
+      "head": "before_rotation",
+      "name": "a destination substituted after signing"
+    },
+    {
+      "clock": {
+        "max_age": 300000,
+        "now": 1790000010000,
+        "skew": 60000
+      },
+      "envelope": "valid",
+      "error": "wrong_destination",
+      "expected": {
+        "action_id": "cry_01a09fee-5e6f-7a8b-9c0d-1e2f3a4b5c6d",
+        "destination": "https://carol.example",
+        "payload_digest": "sha256:d444b4370d812b79c53fb639cde7aaadc0920898dd89afb142f35d7f7306cb98"
+      },
+      "head": "before_rotation",
+      "name": "an envelope taken at another destination"
+    },
+    {
+      "clock": {
+        "max_age": 300000,
+        "now": 1790000010000,
+        "skew": 60000
+      },
+      "envelope": "return_substituted",
+      "error": "invalid_return_url",
+      "expected": {
+        "action_id": "cry_01a09fee-5e6f-7a8b-9c0d-1e2f3a4b5c6d",
+        "destination": "https://hub.example",
+        "payload_digest": "sha256:d444b4370d812b79c53fb639cde7aaadc0920898dd89afb142f35d7f7306cb98"
+      },
+      "head": "before_rotation",
+      "name": "a return URL on another home, even signed"
+    },
+    {
+      "clock": {
+        "max_age": 300000,
+        "now": 1790000010000,
+        "skew": 60000
+      },
+      "envelope": "return_other_path",
+      "error": "invalid_return_url",
+      "expected": {
+        "action_id": "cry_01a09fee-5e6f-7a8b-9c0d-1e2f3a4b5c6d",
+        "destination": "https://hub.example",
+        "payload_digest": "sha256:d444b4370d812b79c53fb639cde7aaadc0920898dd89afb142f35d7f7306cb98"
+      },
+      "head": "before_rotation",
+      "name": "a return URL on another path, even signed"
+    },
+    {
+      "clock": {
+        "max_age": 300000,
+        "now": 1790000010000,
+        "skew": 60000
+      },
+      "envelope": "valid",
+      "error": "wrong_action",
+      "expected": {
+        "action_id": "cry_01a09fee-0000-7000-8000-000000000000",
+        "destination": "https://hub.example",
+        "payload_digest": "sha256:d444b4370d812b79c53fb639cde7aaadc0920898dd89afb142f35d7f7306cb98"
+      },
+      "head": "before_rotation",
+      "name": "an envelope for another action"
+    },
+    {
+      "clock": {
+        "max_age": 300000,
+        "now": 1790000010000,
+        "skew": 60000
+      },
+      "envelope": "valid",
+      "error": "wrong_payload",
+      "expected": {
+        "action_id": "cry_01a09fee-5e6f-7a8b-9c0d-1e2f3a4b5c6d",
+        "destination": "https://hub.example",
+        "payload_digest": "sha256:b3ceccd4312910664adbe08539975ae132d33d41839352288f3c5a4ac2998807"
+      },
+      "head": "before_rotation",
+      "name": "an envelope for other payload bytes"
+    },
+    {
+      "clock": {
+        "max_age": 300000,
+        "now": 1790000360000,
+        "skew": 60000
+      },
+      "envelope": "valid",
+      "expected": {
+        "action_id": "cry_01a09fee-5e6f-7a8b-9c0d-1e2f3a4b5c6d",
+        "destination": "https://hub.example",
+        "payload_digest": "sha256:d444b4370d812b79c53fb639cde7aaadc0920898dd89afb142f35d7f7306cb98"
+      },
+      "head": "before_rotation",
+      "name": "the last moment within max_age and skew",
+      "result": "ok"
+    },
+    {
+      "clock": {
+        "max_age": 300000,
+        "now": 1790000360001,
+        "skew": 60000
+      },
+      "envelope": "valid",
+      "error": "stale",
+      "expected": {
+        "action_id": "cry_01a09fee-5e6f-7a8b-9c0d-1e2f3a4b5c6d",
+        "destination": "https://hub.example",
+        "payload_digest": "sha256:d444b4370d812b79c53fb639cde7aaadc0920898dd89afb142f35d7f7306cb98"
+      },
+      "head": "before_rotation",
+      "name": "a stale timestamp"
+    },
+    {
+      "clock": {
+        "max_age": 300000,
+        "now": 1789999939999,
+        "skew": 60000
+      },
+      "envelope": "valid",
+      "error": "not_yet_valid",
+      "expected": {
+        "action_id": "cry_01a09fee-5e6f-7a8b-9c0d-1e2f3a4b5c6d",
+        "destination": "https://hub.example",
+        "payload_digest": "sha256:d444b4370d812b79c53fb639cde7aaadc0920898dd89afb142f35d7f7306cb98"
+      },
+      "head": "before_rotation",
+      "name": "a timestamp beyond the skew ahead"
+    },
+    {
+      "clock": {
+        "max_age": 300000,
+        "now": 1790000010000,
+        "skew": 60000
+      },
+      "envelope": "valid",
+      "error": "stale_key_epoch",
+      "expected": {
+        "action_id": "cry_01a09fee-5e6f-7a8b-9c0d-1e2f3a4b5c6d",
+        "destination": "https://hub.example",
+        "payload_digest": "sha256:d444b4370d812b79c53fb639cde7aaadc0920898dd89afb142f35d7f7306cb98"
+      },
+      "head": "after_rotation",
+      "name": "an envelope from an old key_epoch"
+    },
+    {
+      "clock": {
+        "max_age": 300000,
+        "now": 1790000010000,
+        "skew": 60000
+      },
+      "envelope": "new_epoch",
+      "expected": {
+        "action_id": "cry_01a09fee-5e6f-7a8b-9c0d-1e2f3a4b5c6d",
+        "destination": "https://hub.example",
+        "payload_digest": "sha256:d444b4370d812b79c53fb639cde7aaadc0920898dd89afb142f35d7f7306cb98"
+      },
+      "head": "after_rotation",
+      "name": "an envelope under the new key_epoch",
+      "result": "ok"
+    },
+    {
+      "clock": {
+        "max_age": 300000,
+        "now": 1790000010000,
+        "skew": 60000
+      },
+      "envelope": "new_key_old_epoch",
+      "error": "bad_signature",
+      "expected": {
+        "action_id": "cry_01a09fee-5e6f-7a8b-9c0d-1e2f3a4b5c6d",
+        "destination": "https://hub.example",
+        "payload_digest": "sha256:d444b4370d812b79c53fb639cde7aaadc0920898dd89afb142f35d7f7306cb98"
+      },
+      "head": "before_rotation",
+      "name": "the new key claiming the old key_epoch"
+    },
+    {
+      "clock": {
+        "max_age": 300000,
+        "now": 1790000010000,
+        "skew": 60000
+      },
+      "envelope": "other_operation",
+      "error": "invalid_field",
+      "expected": {
+        "action_id": "cry_01a09fee-5e6f-7a8b-9c0d-1e2f3a4b5c6d",
+        "destination": "https://hub.example",
+        "payload_digest": "sha256:d444b4370d812b79c53fb639cde7aaadc0920898dd89afb142f35d7f7306cb98"
+      },
+      "head": "before_rotation",
+      "name": "an operation other than join"
+    }
+  ]
+}
