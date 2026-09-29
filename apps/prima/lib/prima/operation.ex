@@ -14,6 +14,15 @@ defmodule Prima.Operation do
   absent from the annotation view and from discovery. A resource read is
   an external, consent-free, replay-safe read taking exactly one required
   string argument, `uri`.
+
+  `resource` names the argument that names the resource an action touches
+  and that resource's kind, `{"path", :storage_path}` or
+  `{"domain", :egress_domain}` (`resource_kinds/0`). It is validated at
+  declaration: the argument must be one of the action's own string
+  arguments. A standing approval may be constrained to resources of that
+  kind only for an action that declares one; an action that declares none
+  takes no standing constraint. Like `resource_schemes`, it is metadata for
+  the gate, absent from the annotation view and from discovery.
   """
 
   alias Prima.Arg
@@ -32,6 +41,7 @@ defmodule Prima.Operation do
     :standing,
     :recovery,
     :host,
+    :resource,
     auth: :required,
     resource_schemes: []
   ]
@@ -50,10 +60,19 @@ defmodule Prima.Operation do
           standing: :thread | false | nil,
           recovery: :replay_safe | nil,
           host: :intercepted | nil,
+          resource: {String.t(), resource_kind()} | nil,
           resource_schemes: [String.t()]
         }
 
+  @typedoc "The kinds of resource an action's argument may name."
+  @type resource_kind :: :storage_path | :egress_domain
+
   @valid_planes [:external, :in_chain]
+  @resource_kinds [:storage_path, :egress_domain]
+
+  @doc "The kinds of resource a `resource:` declaration may name."
+  @spec resource_kinds() :: [resource_kind()]
+  def resource_kinds, do: @resource_kinds
 
   @doc "The supported authorization planes."
   @spec valid_planes() :: [atom()]
@@ -74,7 +93,7 @@ defmodule Prima.Operation do
   @doc "Declare an action, refusing invalid or contradictory declarations."
   @spec new(String.t(), String.t(), String.t(), [Arg.t()], keyword()) :: t()
   def new(tool, action, description, args, opts) do
-    unknown = Keyword.keys(opts) -- [:resource_schemes | @annotation_fields]
+    unknown = Keyword.keys(opts) -- [:resource, :resource_schemes | @annotation_fields]
     if unknown != [], do: raise(ArgumentError, "unknown operation annotations")
 
     op =
@@ -119,7 +138,22 @@ defmodule Prima.Operation do
       do: raise(ArgumentError, "platform actions must be external")
 
     validate_resource_schemes!(op)
+    validate_resource!(op)
   end
+
+  defp validate_resource!(%__MODULE__{resource: nil}), do: :ok
+
+  defp validate_resource!(%__MODULE__{resource: {name, kind}, args: args})
+       when is_binary(name) and kind in @resource_kinds do
+    case Enum.find(args, &(&1.name == name)) do
+      %Arg{type: :string} -> :ok
+      %Arg{} -> raise ArgumentError, "the resource argument #{name} must be a string"
+      nil -> raise ArgumentError, "the resource names an argument the action lacks: #{name}"
+    end
+  end
+
+  defp validate_resource!(%__MODULE__{}),
+    do: raise(ArgumentError, "a resource is {argument, :storage_path | :egress_domain}")
 
   # A URI scheme as RFC 3986 spells it, lowercase only, so one scheme has
   # one spelling in the index the resource adapter derives.

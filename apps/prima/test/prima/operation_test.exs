@@ -246,6 +246,83 @@ defmodule Prima.OperationTest do
     end
   end
 
+  defp write_file(opts) do
+    Operation.new(
+      "file",
+      "write",
+      "Write a file",
+      Keyword.get(opts, :args, [
+        Arg.new("path", :string, required: true),
+        Arg.new("content", :string, required: true),
+        Arg.new("overwrite", :boolean)
+      ]),
+      Keyword.merge([kind: :write, planes: [:external, :in_chain]], Keyword.delete(opts, :args))
+    )
+  end
+
+  describe "resource" do
+    test "defaults to none: an action that declares none takes no standing constraint" do
+      assert write_file([]).resource == nil
+      assert Operation.resource_kinds() == [:storage_path, :egress_domain]
+    end
+
+    test "names one of the action's string arguments and its kind" do
+      assert write_file(resource: {"path", :storage_path}).resource == {"path", :storage_path}
+
+      fetch =
+        Operation.new("http", "get", "Fetch a URL", [Arg.new("domain", :string)],
+          kind: :external,
+          planes: [:external],
+          resource: {"domain", :egress_domain}
+        )
+
+      assert fetch.resource == {"domain", :egress_domain}
+    end
+
+    test "naming an argument the action lacks is refused at declaration" do
+      assert_raise ArgumentError, ~r/lacks: target/, fn ->
+        write_file(resource: {"target", :storage_path})
+      end
+
+      assert_raise ArgumentError, ~r/lacks: path/, fn ->
+        write_file(args: [], resource: {"path", :storage_path})
+      end
+    end
+
+    test "a non-string argument, an unknown kind or another shape is refused at declaration" do
+      assert_raise ArgumentError, ~r/must be a string/, fn ->
+        write_file(resource: {"overwrite", :storage_path})
+      end
+
+      for bad <- [
+            {"path", :vault_entry},
+            {:path, :storage_path},
+            "path",
+            {"path"},
+            [{"path", :storage_path}]
+          ] do
+        assert_raise ArgumentError, fn -> write_file(resource: bad) end
+      end
+
+      op = write_file(resource: {"path", :storage_path})
+
+      assert_raise ArgumentError, fn ->
+        Operation.validate!(%{op | resource: {"missing", :storage_path}})
+      end
+
+      assert_raise ArgumentError, fn -> Operation.tool([%{op | resource: {"path", :unknown}}]) end
+    end
+
+    test "stays out of the annotation and discovery views" do
+      op = write_file(resource: {"path", :storage_path})
+      definition = Operation.tool([op])
+      refute Map.has_key?(Operation.annotations(op), :resource)
+      refute Map.has_key?(definition.annotations.actions["write"], :resource)
+      refute inspect(definition.input_schema) =~ "storage_path"
+      assert definition.input_schema == Operation.tool([write_file([])]).input_schema
+    end
+  end
+
   test "wire restriction narrows the action enum and keeps everything else" do
     original = Map.put(tool().input_schema, "description", "Unchanged")
     restricted = Operation.restrict_schema(original, ["list", "unknown"])

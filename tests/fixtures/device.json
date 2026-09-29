@@ -1,0 +1,650 @@
+{
+  "comment": "The vectors pinning Prima.Device, the device protocol: every side reads each message as its sender sent it and writes it back to the same map, and refuses each refusal with the named reason. Certificates, challenges and proofs are tests/fixtures/device_cert.json's. An intent is one discrete operation; one carrying a stream, frames, chunks, samples or a continuous field is refused by its shape. The too_large case is the valid intent with args {\"blob\": args_filler_length 'a' characters}.",
+  "continuous_fields": [
+    "stream",
+    "frames",
+    "chunks",
+    "samples",
+    "continuous"
+  ],
+  "messages": [
+    {
+      "message": {
+        "device_key": "VuvwnjcI5bKkUvYLeH7B7Y-xHIrpKvaDLettMxKZg2c",
+        "invitation_secret": "UjcQhGOiIAu_9xjWI7A-Fw",
+        "protocol": "cyfr-device/v1",
+        "type": "pair_request"
+      },
+      "name": "a pairing request",
+      "sender": "glass"
+    },
+    {
+      "message": {
+        "certificate": {
+          "athanor": "ath_01a09fee-045b-770b-b745-a62792bb8798",
+          "audience": "https://alice.example",
+          "client_id": "pcl_01a09fee-7c1d-7e2f-8a3b-4c5d6e7f8091",
+          "device_key": "VuvwnjcI5bKkUvYLeH7B7Y-xHIrpKvaDLettMxKZg2c",
+          "expires_at": 1790003600000,
+          "issuer": "https://alice.example",
+          "not_before": 1790000000000,
+          "protocol": "cyfr-device-cert/v1",
+          "sig": "JWWTggv_3m0VqtDt_eH-Va_ohf3-ER2aXS7aU2e4PPV8pRZuEuYP5-S_h5-auXSAl4ASLBQjlkV2vlvs2wneDg",
+          "subject": {
+            "kind": "local",
+            "user_id": "usr_01a09fee-0000-7000-8000-000000000001"
+          }
+        },
+        "client_id": "pcl_01a09fee-7c1d-7e2f-8a3b-4c5d6e7f8091",
+        "protocol": "cyfr-device/v1",
+        "type": "pair_answer"
+      },
+      "name": "a pairing answer",
+      "sender": "home"
+    },
+    {
+      "message": {
+        "certificate": {
+          "athanor": "ath_01a09fee-045b-770b-b745-a62792bb8798",
+          "audience": "https://alice.example",
+          "client_id": "pcl_01a09fee-7c1d-7e2f-8a3b-4c5d6e7f8091",
+          "device_key": "VuvwnjcI5bKkUvYLeH7B7Y-xHIrpKvaDLettMxKZg2c",
+          "expires_at": 1790003600000,
+          "issuer": "https://alice.example",
+          "not_before": 1790000000000,
+          "protocol": "cyfr-device-cert/v1",
+          "sig": "JWWTggv_3m0VqtDt_eH-Va_ohf3-ER2aXS7aU2e4PPV8pRZuEuYP5-S_h5-auXSAl4ASLBQjlkV2vlvs2wneDg",
+          "subject": {
+            "kind": "local",
+            "user_id": "usr_01a09fee-0000-7000-8000-000000000001"
+          }
+        },
+        "client_id": "pcl_01a09fee-7c1d-7e2f-8a3b-4c5d6e7f8091",
+        "protocol": "cyfr-device/v1",
+        "type": "connect"
+      },
+      "name": "a connect",
+      "sender": "glass"
+    },
+    {
+      "message": {
+        "challenge": {
+          "athanor": "ath_01a09fee-045b-770b-b745-a62792bb8798",
+          "client_id": "pcl_01a09fee-7c1d-7e2f-8a3b-4c5d6e7f8091",
+          "device_key": "VuvwnjcI5bKkUvYLeH7B7Y-xHIrpKvaDLettMxKZg2c",
+          "expires_at": 1790000060000,
+          "home": "https://alice.example",
+          "nonce": "g9tdrYsvfV_XpNBoC88FOGIfg7Zo6sCk5uBMlQwW7a0",
+          "protocol": "cyfr-device-proof/v1",
+          "purpose": "connect"
+        },
+        "protocol": "cyfr-device/v1",
+        "type": "challenge"
+      },
+      "name": "the connect challenge",
+      "sender": "home"
+    },
+    {
+      "message": {
+        "proof": {
+          "athanor": "ath_01a09fee-045b-770b-b745-a62792bb8798",
+          "client_id": "pcl_01a09fee-7c1d-7e2f-8a3b-4c5d6e7f8091",
+          "device_key": "VuvwnjcI5bKkUvYLeH7B7Y-xHIrpKvaDLettMxKZg2c",
+          "expires_at": 1790000060000,
+          "home": "https://alice.example",
+          "nonce": "g9tdrYsvfV_XpNBoC88FOGIfg7Zo6sCk5uBMlQwW7a0",
+          "protocol": "cyfr-device-proof/v1",
+          "purpose": "connect",
+          "sig": "g3lBIhGJx_7PvDD00JFehPPYrvu9bv7z5mryErWr-qkf7nlkf4WX0n7zcGqeED5KB3sa1J3QbYe1as3TMCfFCg"
+        },
+        "protocol": "cyfr-device/v1",
+        "type": "proof"
+      },
+      "name": "its proof",
+      "sender": "glass"
+    },
+    {
+      "message": {
+        "athanor": "ath_01a09fee-045b-770b-b745-a62792bb8798",
+        "client_id": "pcl_01a09fee-7c1d-7e2f-8a3b-4c5d6e7f8091",
+        "expires_at": 1790003600000,
+        "protocol": "cyfr-device/v1",
+        "type": "standing"
+      },
+      "name": "a standing announcement",
+      "sender": "home"
+    },
+    {
+      "message": {
+        "capabilities": [
+          "display",
+          "touch",
+          "camera"
+        ],
+        "protocol": "cyfr-device/v1",
+        "type": "capabilities"
+      },
+      "name": "a capability announcement",
+      "sender": "glass"
+    },
+    {
+      "message": {
+        "client_id": "pcl_01a09fee-7c1d-7e2f-8a3b-4c5d6e7f8091",
+        "protocol": "cyfr-device/v1",
+        "type": "renew"
+      },
+      "name": "a renewal, locating by client",
+      "sender": "glass"
+    },
+    {
+      "message": {
+        "certificate": {
+          "athanor": "ath_01a09fee-045b-770b-b745-a62792bb8798",
+          "audience": "https://alice.example",
+          "client_id": "pcl_01a09fee-7c1d-7e2f-8a3b-4c5d6e7f8091",
+          "device_key": "VuvwnjcI5bKkUvYLeH7B7Y-xHIrpKvaDLettMxKZg2c",
+          "expires_at": 1790003600000,
+          "issuer": "https://alice.example",
+          "not_before": 1790000000000,
+          "protocol": "cyfr-device-cert/v1",
+          "sig": "JWWTggv_3m0VqtDt_eH-Va_ohf3-ER2aXS7aU2e4PPV8pRZuEuYP5-S_h5-auXSAl4ASLBQjlkV2vlvs2wneDg",
+          "subject": {
+            "kind": "local",
+            "user_id": "usr_01a09fee-0000-7000-8000-000000000001"
+          }
+        },
+        "client_id": "pcl_01a09fee-7c1d-7e2f-8a3b-4c5d6e7f8091",
+        "protocol": "cyfr-device/v1",
+        "type": "renew"
+      },
+      "name": "a renewal carrying the old certificate as a locator",
+      "sender": "glass"
+    },
+    {
+      "message": {
+        "certificate": {
+          "athanor": "ath_01a09fee-045b-770b-b745-a62792bb8798",
+          "audience": "https://alice.example",
+          "client_id": "pcl_01a09fee-7c1d-7e2f-8a3b-4c5d6e7f8091",
+          "device_key": "VuvwnjcI5bKkUvYLeH7B7Y-xHIrpKvaDLettMxKZg2c",
+          "expires_at": 1790003600000,
+          "issuer": "https://alice.example",
+          "not_before": 1790000000000,
+          "protocol": "cyfr-device-cert/v1",
+          "sig": "JWWTggv_3m0VqtDt_eH-Va_ohf3-ER2aXS7aU2e4PPV8pRZuEuYP5-S_h5-auXSAl4ASLBQjlkV2vlvs2wneDg",
+          "subject": {
+            "kind": "local",
+            "user_id": "usr_01a09fee-0000-7000-8000-000000000001"
+          }
+        },
+        "protocol": "cyfr-device/v1",
+        "type": "certificate"
+      },
+      "name": "a renewed certificate",
+      "sender": "home"
+    },
+    {
+      "message": {
+        "args": {
+          "fields": {
+            "token": "redacted"
+          },
+          "name": "github"
+        },
+        "id": "int_1",
+        "operation": "vault.create",
+        "protocol": "cyfr-device/v1",
+        "type": "intent"
+      },
+      "name": "a discrete intent",
+      "sender": "glass"
+    },
+    {
+      "message": {
+        "args": {
+          "fields": {
+            "token": "redacted"
+          },
+          "name": "github"
+        },
+        "confirmation_id": "cnf_01a09fee-1111-7000-8000-000000000001",
+        "id": "int_1",
+        "operation": "vault.create",
+        "protocol": "cyfr-device/v1",
+        "type": "intent"
+      },
+      "name": "an intent repeated under its confirmation",
+      "sender": "glass"
+    },
+    {
+      "message": {
+        "id": "int_1",
+        "protocol": "cyfr-device/v1",
+        "result": {
+          "ok": true
+        },
+        "type": "answer"
+      },
+      "name": "an answer with its result",
+      "sender": "home"
+    },
+    {
+      "message": {
+        "error": {
+          "payload": {
+            "expires_at": "2026-09-29T12:05:00Z",
+            "id": "cnf_01a09fee-1111-7000-8000-000000000001",
+            "operation": "vault.create"
+          },
+          "tag": "confirmation_required"
+        },
+        "id": "int_1",
+        "protocol": "cyfr-device/v1",
+        "type": "answer"
+      },
+      "name": "an answer with its error",
+      "sender": "home"
+    },
+    {
+      "message": {
+        "expires_at": 1790000600000,
+        "grant_id": "sgr_1",
+        "projection": [
+          "status",
+          "seq"
+        ],
+        "protocol": "cyfr-device/v1",
+        "stream": "executions.deltas",
+        "subject": "exec_01a09fee-2e4f-7a5b-9c6d-7e8f9a0b1c2d",
+        "type": "grant"
+      },
+      "name": "a stream grant",
+      "sender": "home"
+    },
+    {
+      "message": {
+        "expires_at": 1790000600000,
+        "grant_id": "sgr_2",
+        "projection": [
+          "body"
+        ],
+        "protocol": "cyfr-device/v1",
+        "stream": "threads.messages",
+        "type": "grant"
+      },
+      "name": "a stream grant with no subject",
+      "sender": "home"
+    },
+    {
+      "message": {
+        "grant_id": "sgr_1",
+        "payload": {
+          "seq": 3,
+          "status": "running"
+        },
+        "protocol": "cyfr-device/v1",
+        "type": "event"
+      },
+      "name": "a fact of a granted stream",
+      "sender": "home"
+    },
+    {
+      "message": {
+        "client_id": "pcl_01a09fee-7c1d-7e2f-8a3b-4c5d6e7f8091",
+        "grant_id": "sgr_1",
+        "protocol": "cyfr-device/v1",
+        "type": "revoke"
+      },
+      "name": "a revoked grant",
+      "sender": "home"
+    },
+    {
+      "message": {
+        "client_id": "pcl_01a09fee-7c1d-7e2f-8a3b-4c5d6e7f8091",
+        "protocol": "cyfr-device/v1",
+        "type": "revoke"
+      },
+      "name": "a revoked pairing",
+      "sender": "home"
+    }
+  ],
+  "protocol": "cyfr-device/v1",
+  "refusals": [
+    {
+      "error": "unknown_type",
+      "message": {
+        "frame": "AAAA",
+        "protocol": "cyfr-device/v1",
+        "type": "stream_frame"
+      },
+      "name": "an unknown type",
+      "sender": "glass"
+    },
+    {
+      "error": "wrong_protocol",
+      "message": {
+        "args": {
+          "fields": {
+            "token": "redacted"
+          },
+          "name": "github"
+        },
+        "id": "int_1",
+        "operation": "vault.create",
+        "protocol": "cyfr-device/v2",
+        "type": "intent"
+      },
+      "name": "another protocol version",
+      "sender": "glass"
+    },
+    {
+      "error": "missing_field",
+      "message": {
+        "args": {
+          "fields": {
+            "token": "redacted"
+          },
+          "name": "github"
+        },
+        "id": "int_1",
+        "operation": "vault.create",
+        "type": "intent"
+      },
+      "name": "no protocol",
+      "sender": "glass"
+    },
+    {
+      "error": "missing_field",
+      "message": {
+        "args": {
+          "fields": {
+            "token": "redacted"
+          },
+          "name": "github"
+        },
+        "id": "int_1",
+        "operation": "vault.create",
+        "protocol": "cyfr-device/v1"
+      },
+      "name": "no type",
+      "sender": "glass"
+    },
+    {
+      "error": "continuous_payload",
+      "message": {
+        "args": {
+          "fields": {
+            "token": "redacted"
+          },
+          "name": "github"
+        },
+        "id": "int_1",
+        "operation": "vault.create",
+        "protocol": "cyfr-device/v1",
+        "stream": {
+          "kind": "audio"
+        },
+        "type": "intent"
+      },
+      "name": "an intent carrying a stream",
+      "sender": "glass"
+    },
+    {
+      "error": "continuous_payload",
+      "message": {
+        "args": {
+          "fields": {
+            "token": "redacted"
+          },
+          "name": "github"
+        },
+        "frames": [
+          "AAAA",
+          "BBBB"
+        ],
+        "id": "int_1",
+        "operation": "vault.create",
+        "protocol": "cyfr-device/v1",
+        "type": "intent"
+      },
+      "name": "an intent carrying frames",
+      "sender": "glass"
+    },
+    {
+      "error": "continuous_payload",
+      "message": {
+        "args": {
+          "fields": {
+            "token": "redacted"
+          },
+          "name": "github"
+        },
+        "id": "int_1",
+        "operation": "vault.create",
+        "protocol": "cyfr-device/v1",
+        "samples": [
+          1,
+          2,
+          3
+        ],
+        "type": "intent"
+      },
+      "name": "an intent carrying samples",
+      "sender": "glass"
+    },
+    {
+      "error": "continuous_payload",
+      "message": {
+        "args": {
+          "fields": {
+            "token": "redacted"
+          },
+          "name": "github"
+        },
+        "continuous": true,
+        "id": "int_1",
+        "operation": "vault.create",
+        "protocol": "cyfr-device/v1",
+        "type": "intent"
+      },
+      "name": "an intent marked continuous",
+      "sender": "glass"
+    },
+    {
+      "error": "unknown_field",
+      "message": {
+        "args": {
+          "fields": {
+            "token": "redacted"
+          },
+          "name": "github"
+        },
+        "id": "int_1",
+        "operation": "vault.create",
+        "priority": "high",
+        "protocol": "cyfr-device/v1",
+        "type": "intent"
+      },
+      "name": "an intent with a field it does not carry",
+      "sender": "glass"
+    },
+    {
+      "error": "invalid_field",
+      "message": {
+        "args": [
+          "github"
+        ],
+        "id": "int_1",
+        "operation": "vault.create",
+        "protocol": "cyfr-device/v1",
+        "type": "intent"
+      },
+      "name": "an intent whose args are not an object",
+      "sender": "glass"
+    },
+    {
+      "error": "invalid_field",
+      "message": {
+        "args": {
+          "fields": {
+            "token": "redacted"
+          },
+          "name": "github"
+        },
+        "id": "int_1",
+        "operation": "vault",
+        "protocol": "cyfr-device/v1",
+        "type": "intent"
+      },
+      "name": "an intent naming no tool.action",
+      "sender": "glass"
+    },
+    {
+      "error": "wrong_sender",
+      "message": {
+        "challenge": {
+          "athanor": "ath_01a09fee-045b-770b-b745-a62792bb8798",
+          "client_id": "pcl_01a09fee-7c1d-7e2f-8a3b-4c5d6e7f8091",
+          "device_key": "VuvwnjcI5bKkUvYLeH7B7Y-xHIrpKvaDLettMxKZg2c",
+          "expires_at": 1790000060000,
+          "home": "https://alice.example",
+          "nonce": "g9tdrYsvfV_XpNBoC88FOGIfg7Zo6sCk5uBMlQwW7a0",
+          "protocol": "cyfr-device-proof/v1",
+          "purpose": "connect"
+        },
+        "protocol": "cyfr-device/v1",
+        "type": "challenge"
+      },
+      "name": "a home's message sent by a glass",
+      "sender": "glass"
+    },
+    {
+      "error": "wrong_sender",
+      "message": {
+        "args": {
+          "fields": {
+            "token": "redacted"
+          },
+          "name": "github"
+        },
+        "id": "int_1",
+        "operation": "vault.create",
+        "protocol": "cyfr-device/v1",
+        "type": "intent"
+      },
+      "name": "a glass's message sent by a home",
+      "sender": "home"
+    },
+    {
+      "error": "invalid_field",
+      "message": {
+        "error": {},
+        "id": "int_1",
+        "protocol": "cyfr-device/v1",
+        "result": 1,
+        "type": "answer"
+      },
+      "name": "an answer with both a result and an error",
+      "sender": "home"
+    },
+    {
+      "error": "invalid_field",
+      "message": {
+        "id": "int_1",
+        "protocol": "cyfr-device/v1",
+        "type": "answer"
+      },
+      "name": "an answer with neither",
+      "sender": "home"
+    },
+    {
+      "error": "invalid_field",
+      "message": {
+        "device_key": "VuvwnjcI5bKkUvYLeH7B7Y-xHIrpKvaDLettMxKZg2c",
+        "invitation_secret": "oCNvVXi2nEs",
+        "protocol": "cyfr-device/v1",
+        "type": "pair_request"
+      },
+      "name": "an invitation of 8 bytes",
+      "sender": "glass"
+    },
+    {
+      "error": "invalid_field",
+      "message": {
+        "certificate": {
+          "athanor": "ath_01a09fee-045b-770b-b745-a62792bb8798",
+          "audience": "https://alice.example",
+          "client_id": "pcl_01a09fee-7c1d-7e2f-8a3b-4c5d6e7f8091",
+          "device_key": "VuvwnjcI5bKkUvYLeH7B7Y-xHIrpKvaDLettMxKZg2c",
+          "expires_at": 1790003600000,
+          "issuer": "https://alice.example",
+          "not_before": 1790000000000,
+          "protocol": "cyfr-device-cert/v1",
+          "subject": {
+            "kind": "local",
+            "user_id": "usr_01a09fee-0000-7000-8000-000000000001"
+          }
+        },
+        "client_id": "pcl_01a09fee-7c1d-7e2f-8a3b-4c5d6e7f8091",
+        "protocol": "cyfr-device/v1",
+        "type": "connect"
+      },
+      "name": "a connect with a malformed certificate",
+      "sender": "glass"
+    },
+    {
+      "error": "invalid_field",
+      "message": {
+        "capabilities": [
+          "display",
+          "display"
+        ],
+        "protocol": "cyfr-device/v1",
+        "type": "capabilities"
+      },
+      "name": "a capability named twice",
+      "sender": "glass"
+    },
+    {
+      "error": "invalid_field",
+      "message": {
+        "expires_at": 1790000000000,
+        "grant_id": "sgr_1",
+        "projection": [
+          "status"
+        ],
+        "protocol": "cyfr-device/v1",
+        "stream": "executions.deltas",
+        "subject": "*",
+        "type": "grant"
+      },
+      "name": "a grant with a wildcard subject",
+      "sender": "home"
+    },
+    {
+      "args_filler_length": 65537,
+      "error": "too_large",
+      "name": "intent args over 64 KiB"
+    }
+  ],
+  "types": {
+    "glass": [
+      "capabilities",
+      "connect",
+      "intent",
+      "pair_request",
+      "proof",
+      "renew"
+    ],
+    "home": [
+      "answer",
+      "certificate",
+      "challenge",
+      "event",
+      "grant",
+      "pair_answer",
+      "revoke",
+      "standing"
+    ]
+  }
+}

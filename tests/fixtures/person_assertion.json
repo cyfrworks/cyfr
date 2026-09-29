@@ -1,0 +1,385 @@
+{
+  "assertions": {
+    "after_rotation": {
+      "assertion": {
+        "action_id": "cry_01a09fee-5e6f-7a8b-9c0d-1e2f3a4b5c6d",
+        "audience": "https://hub.example",
+        "challenge": "wrxeMJRs5DwAedbPNBH_bHIdXhSuAdbV3CWOX9K-Khc",
+        "expires_at": 1790000120000,
+        "identifier": "per_252020f8258a5ac273ad001a2e428bab70e784bef6676bbdb314956e986a1446",
+        "key_epoch": "sha256:73a092d783b24ce64c8d2704cc971fe9b4fc3a4ad769eb5393b2de3a15c9625b",
+        "protocol": "cyfr-person-assertion/v1",
+        "sig": "YNCm6TIuMMJJGmFzdKjAqq7QIbMcQYr8Lsc9Y-YOuMfvf3GFH2-_L4WyvpM85-HvOw6jgrFAbJp8uapa13LxDw"
+      },
+      "signer": "alice_live_2"
+    },
+    "for_bob": {
+      "assertion": {
+        "action_id": "cry_01a09fee-5e6f-7a8b-9c0d-1e2f3a4b5c6d",
+        "audience": "https://hub.example",
+        "challenge": "wrxeMJRs5DwAedbPNBH_bHIdXhSuAdbV3CWOX9K-Khc",
+        "expires_at": 1790000120000,
+        "identifier": "per_6cbe1d70f3b818fe0c44503b601b6cd2c8c94feca30540093498706a4465a9d9",
+        "key_epoch": "sha256:252020f8258a5ac273ad001a2e428bab70e784bef6676bbdb314956e986a1446",
+        "protocol": "cyfr-person-assertion/v1",
+        "sig": "tK3NTz4U8B9NbomaU6cLRJcOm4IRs6uYJH8Nu66GmHsTed8TVVFsZCPtnnBv5CIHViMd6nbhxj63PVSmUL34CA"
+      },
+      "signer": "alice_live_1"
+    },
+    "forged": {
+      "assertion": {
+        "action_id": "cry_01a09fee-5e6f-7a8b-9c0d-1e2f3a4b5c6d",
+        "audience": "https://hub.example",
+        "challenge": "wrxeMJRs5DwAedbPNBH_bHIdXhSuAdbV3CWOX9K-Khc",
+        "expires_at": 1790000120000,
+        "identifier": "per_252020f8258a5ac273ad001a2e428bab70e784bef6676bbdb314956e986a1446",
+        "key_epoch": "sha256:252020f8258a5ac273ad001a2e428bab70e784bef6676bbdb314956e986a1446",
+        "protocol": "cyfr-person-assertion/v1",
+        "sig": "mwfGdpj56Y5IpKJepv_JX-z6-XfXhU4vEjBLKtVkuH2VQBlI4Bj-ely7QuUxcach5iUMKR4G9e-glCtmrAgWCA"
+      },
+      "signer": "stranger"
+    },
+    "old_epoch_new_key": {
+      "assertion": {
+        "action_id": "cry_01a09fee-5e6f-7a8b-9c0d-1e2f3a4b5c6d",
+        "audience": "https://hub.example",
+        "challenge": "wrxeMJRs5DwAedbPNBH_bHIdXhSuAdbV3CWOX9K-Khc",
+        "expires_at": 1790000120000,
+        "identifier": "per_252020f8258a5ac273ad001a2e428bab70e784bef6676bbdb314956e986a1446",
+        "key_epoch": "sha256:252020f8258a5ac273ad001a2e428bab70e784bef6676bbdb314956e986a1446",
+        "protocol": "cyfr-person-assertion/v1",
+        "sig": "xTpsNX7pYgFNNjSgX-aMG1RWoD_W5P8k5HsUPawQsa9ZPKBTwnHGjpiFhCwHKzRpJPvcEkYp-g74NVKGPRfEAA"
+      },
+      "signer": "alice_live_2"
+    },
+    "valid": {
+      "assertion": {
+        "action_id": "cry_01a09fee-5e6f-7a8b-9c0d-1e2f3a4b5c6d",
+        "audience": "https://hub.example",
+        "challenge": "wrxeMJRs5DwAedbPNBH_bHIdXhSuAdbV3CWOX9K-Khc",
+        "expires_at": 1790000120000,
+        "identifier": "per_252020f8258a5ac273ad001a2e428bab70e784bef6676bbdb314956e986a1446",
+        "key_epoch": "sha256:252020f8258a5ac273ad001a2e428bab70e784bef6676bbdb314956e986a1446",
+        "protocol": "cyfr-person-assertion/v1",
+        "sig": "-V08QUeUH6LbNKTVyJRxjBkx5Os-HXvajy5f5WxA0hM4wDGkIIHFwcojXcU-rv4T1Yjpj2bl33vliM4GxujOBw"
+      },
+      "signer": "alice_live_1"
+    }
+  },
+  "comment": "The vectors pinning Prima.PersonAssertion: every side re-signs each assertion under its named signer and reproduces its sig, walks the identity entries to each head, checks each assertion under the named head against the expected audience, challenge, carry action and clock (Unix milliseconds), reaching the named result or refusal, refuses each malformed assertion, and opens each transport, holding its genesis to the assertion's identifier before any use of its directory. A genesis given with_padding is the person's genesis with a field padding of that many 'a' characters, over the 16 KiB bound. Refusals are checked in the order identifier, key_epoch, signature, audience, challenge, carry action, expiry.",
+  "identity": {
+    "entries": {
+      "genesis": {
+        "directory": "https://directory.example",
+        "kind": "genesis",
+        "live_key": "z4SbNwACH3EJP0catDkfCNQWpQNdsYAUCTHlKOcyrGU",
+        "operational_key": "eeutcBO3svGffX_iz5AhBmlHb_sKTBBh1ftMjsgQU5o",
+        "protocol": "cyfr-identity/v1",
+        "recovery_keys": [
+          "0OxTidkGKIVD1DjlN78M2Lu5h8USUYAbnaqqniXRcNc"
+        ],
+        "revision": 0,
+        "sig": "lvyhljWNyAjlIV8EKg3FDjMcbCJPf9QPrPieYRm60rey_XxEtXmlDXKLv45nLb_pfid5ozCG1gEBfbQkx7xmDQ"
+      },
+      "rotate": {
+        "kind": "rotate",
+        "live_key": "Wc8SfHJKHZOrNh0Qtc7YtRAUCUS82P-Gt8-1horAyAo",
+        "prev": "sha256:252020f8258a5ac273ad001a2e428bab70e784bef6676bbdb314956e986a1446",
+        "protocol": "cyfr-identity/v1",
+        "sig": "lhw0CzOMJbp7wolzNdMbXHwhmHIot00peCDY_XHx7pUfoJuE0PHniBEbnkjwfIzikqT6LSvOj89Ay77IRWEcBw"
+      }
+    },
+    "heads": {
+      "after_rotation": {
+        "entries": [
+          "genesis",
+          "rotate"
+        ],
+        "key_epoch": "sha256:73a092d783b24ce64c8d2704cc971fe9b4fc3a4ad769eb5393b2de3a15c9625b"
+      },
+      "before_rotation": {
+        "entries": [
+          "genesis"
+        ],
+        "key_epoch": "sha256:252020f8258a5ac273ad001a2e428bab70e784bef6676bbdb314956e986a1446"
+      }
+    }
+  },
+  "keys": {
+    "alice_live_1": {
+      "public": "z4SbNwACH3EJP0catDkfCNQWpQNdsYAUCTHlKOcyrGU",
+      "seed": "4vIF-wGusnX6R8S7SdjJjBxW6dBj3EU4QcOQUbcbIe4"
+    },
+    "alice_live_2": {
+      "public": "Wc8SfHJKHZOrNh0Qtc7YtRAUCUS82P-Gt8-1horAyAo",
+      "seed": "3Qr8Wgo0gayyfmVRyc1AnQvPy6Sm-IO3J5IJr4PLBUk"
+    },
+    "stranger": {
+      "public": "uVBfMdqGCeReZTvOumX3dKEkwpJ1DvjpXrIbcwZCnrM",
+      "seed": "ldiVKG7kxLyNRN_VHEKHfueVbbSQg6yAFDXkOpRuj8I"
+    }
+  },
+  "protocol": "cyfr-person-assertion/v1",
+  "refusals": [
+    {
+      "assertion": {
+        "action_id": "cry_01a09fee-5e6f-7a8b-9c0d-1e2f3a4b5c6d",
+        "audience": "https://hub.example",
+        "challenge": "279UNC8AaEna5-6f87Ah4A",
+        "expires_at": 1790000120000,
+        "identifier": "per_252020f8258a5ac273ad001a2e428bab70e784bef6676bbdb314956e986a1446",
+        "key_epoch": "sha256:252020f8258a5ac273ad001a2e428bab70e784bef6676bbdb314956e986a1446",
+        "protocol": "cyfr-person-assertion/v1",
+        "sig": "-V08QUeUH6LbNKTVyJRxjBkx5Os-HXvajy5f5WxA0hM4wDGkIIHFwcojXcU-rv4T1Yjpj2bl33vliM4GxujOBw"
+      },
+      "error": "invalid_field",
+      "name": "a challenge of 16 bytes"
+    },
+    {
+      "assertion": {
+        "action_id": "cry_01a09fee-5e6f-7a8b-9c0d-1e2f3a4b5c6d",
+        "audience": "https://hub.example",
+        "challenge": "wrxeMJRs5DwAedbPNBH_bHIdXhSuAdbV3CWOX9K-Khc",
+        "expires_at": 1790000120000,
+        "identifier": "per_252020f8258a5ac273ad001a2e428bab70e784bef6676bbdb314956e986a1446",
+        "key_epoch": "sha256:252020f8258a5ac273ad001a2e428bab70e784bef6676bbdb314956e986a1446",
+        "protocol": "cyfr-person-assertion/v1",
+        "session": "abc",
+        "sig": "-V08QUeUH6LbNKTVyJRxjBkx5Os-HXvajy5f5WxA0hM4wDGkIIHFwcojXcU-rv4T1Yjpj2bl33vliM4GxujOBw"
+      },
+      "error": "unknown_field",
+      "name": "an unknown field"
+    },
+    {
+      "assertion": {
+        "action_id": "cry_01a09fee-5e6f-7a8b-9c0d-1e2f3a4b5c6d",
+        "audience": "https://hub.example",
+        "challenge": "wrxeMJRs5DwAedbPNBH_bHIdXhSuAdbV3CWOX9K-Khc",
+        "expires_at": 1790000120000,
+        "identifier": "per_252020f8258a5ac273ad001a2e428bab70e784bef6676bbdb314956e986a1446",
+        "key_epoch": "sha256:252020f8258a5ac273ad001a2e428bab70e784bef6676bbdb314956e986a1446",
+        "protocol": "cyfr-carry/v1",
+        "sig": "-V08QUeUH6LbNKTVyJRxjBkx5Os-HXvajy5f5WxA0hM4wDGkIIHFwcojXcU-rv4T1Yjpj2bl33vliM4GxujOBw"
+      },
+      "error": "wrong_protocol",
+      "name": "another protocol"
+    },
+    {
+      "assertion": {
+        "action_id": "cry_01a09fee-5e6f-7a8b-9c0d-1e2f3a4b5c6d",
+        "audience": "https://hub.example",
+        "challenge": "wrxeMJRs5DwAedbPNBH_bHIdXhSuAdbV3CWOX9K-Khc",
+        "expires_at": 1790000120000,
+        "identifier": "per_252020f8258a5ac273ad001a2e428bab70e784bef6676bbdb314956e986a1446",
+        "key_epoch": "epoch-1",
+        "protocol": "cyfr-person-assertion/v1",
+        "sig": "-V08QUeUH6LbNKTVyJRxjBkx5Os-HXvajy5f5WxA0hM4wDGkIIHFwcojXcU-rv4T1Yjpj2bl33vliM4GxujOBw"
+      },
+      "error": "invalid_field",
+      "name": "a key_epoch that is not a digest"
+    },
+    {
+      "assertion": {
+        "action_id": "cry_01a09fee-5e6f-7a8b-9c0d-1e2f3a4b5c6d",
+        "audience": "https://hub.example",
+        "challenge": "wrxeMJRs5DwAedbPNBH_bHIdXhSuAdbV3CWOX9K-Khc",
+        "expires_at": 1790000120000,
+        "identifier": "per_252020f8258a5ac273ad001a2e428bab70e784bef6676bbdb314956e986a1446",
+        "key_epoch": "sha256:252020f8258a5ac273ad001a2e428bab70e784bef6676bbdb314956e986a1446",
+        "protocol": "cyfr-person-assertion/v1"
+      },
+      "error": "missing_field",
+      "name": "no signature"
+    }
+  ],
+  "transport": [
+    {
+      "assertion": "valid",
+      "directory": "https://directory.example",
+      "genesis": {
+        "entry": {
+          "directory": "https://directory.example",
+          "kind": "genesis",
+          "live_key": "z4SbNwACH3EJP0catDkfCNQWpQNdsYAUCTHlKOcyrGU",
+          "operational_key": "eeutcBO3svGffX_iz5AhBmlHb_sKTBBh1ftMjsgQU5o",
+          "protocol": "cyfr-identity/v1",
+          "recovery_keys": [
+            "0OxTidkGKIVD1DjlN78M2Lu5h8USUYAbnaqqniXRcNc"
+          ],
+          "revision": 0,
+          "sig": "lvyhljWNyAjlIV8EKg3FDjMcbCJPf9QPrPieYRm60rey_XxEtXmlDXKLv45nLb_pfid5ozCG1gEBfbQkx7xmDQ"
+        }
+      },
+      "name": "the person's own genesis",
+      "result": "ok"
+    },
+    {
+      "assertion": "valid",
+      "error": "identifier_mismatch",
+      "genesis": {
+        "entry": {
+          "directory": "https://directory.example",
+          "kind": "genesis",
+          "live_key": "izvwid1gv2gjLcroLbURU8WRYLQV6jU6nI71c3jXmKY",
+          "operational_key": "Ot4hSbOmkyKmJr85hpYOg8yScrb7zA26D8BePjBLrjw",
+          "protocol": "cyfr-identity/v1",
+          "recovery_keys": [
+            "0OxTidkGKIVD1DjlN78M2Lu5h8USUYAbnaqqniXRcNc"
+          ],
+          "revision": 0,
+          "sig": "vwLl1IlNSg3fPc5RHbWzv2osciq7udxIF1utIokYMI960o3zXBl69edDepkfJQ_v0NHaVqDrrsSTUBOow3F-CQ"
+        }
+      },
+      "name": "an unrelated genesis"
+    },
+    {
+      "assertion": "valid",
+      "error": "identifier_mismatch",
+      "genesis": {
+        "entry": {
+          "directory": "https://other-directory.example",
+          "kind": "genesis",
+          "live_key": "z4SbNwACH3EJP0catDkfCNQWpQNdsYAUCTHlKOcyrGU",
+          "operational_key": "eeutcBO3svGffX_iz5AhBmlHb_sKTBBh1ftMjsgQU5o",
+          "protocol": "cyfr-identity/v1",
+          "recovery_keys": [
+            "0OxTidkGKIVD1DjlN78M2Lu5h8USUYAbnaqqniXRcNc"
+          ],
+          "revision": 0,
+          "sig": "lvyhljWNyAjlIV8EKg3FDjMcbCJPf9QPrPieYRm60rey_XxEtXmlDXKLv45nLb_pfid5ozCG1gEBfbQkx7xmDQ"
+        }
+      },
+      "name": "the genesis with its directory changed"
+    },
+    {
+      "assertion": "valid",
+      "error": "too_large",
+      "genesis": {
+        "with_padding": 16400
+      },
+      "name": "a genesis over 16 KiB"
+    }
+  ],
+  "verify": [
+    {
+      "assertion": "valid",
+      "expect": {
+        "action_id": "cry_01a09fee-5e6f-7a8b-9c0d-1e2f3a4b5c6d",
+        "audience": "https://hub.example",
+        "challenge": "wrxeMJRs5DwAedbPNBH_bHIdXhSuAdbV3CWOX9K-Khc",
+        "now": 1790000001000
+      },
+      "head": "before_rotation",
+      "name": "an assertion for its audience, challenge and carry",
+      "result": "ok"
+    },
+    {
+      "assertion": "valid",
+      "error": "wrong_audience",
+      "expect": {
+        "action_id": "cry_01a09fee-5e6f-7a8b-9c0d-1e2f3a4b5c6d",
+        "audience": "https://carol.example",
+        "challenge": "wrxeMJRs5DwAedbPNBH_bHIdXhSuAdbV3CWOX9K-Khc",
+        "now": 1790000001000
+      },
+      "head": "before_rotation",
+      "name": "an assertion for another audience"
+    },
+    {
+      "assertion": "valid",
+      "error": "wrong_challenge",
+      "expect": {
+        "action_id": "cry_01a09fee-5e6f-7a8b-9c0d-1e2f3a4b5c6d",
+        "audience": "https://hub.example",
+        "challenge": "Inde6BYBPFOnBRIE8DEnDMmoQ9NfTwMOX4jbJkNHSBU",
+        "now": 1790000001000
+      },
+      "head": "before_rotation",
+      "name": "an assertion over another challenge"
+    },
+    {
+      "assertion": "valid",
+      "error": "wrong_action",
+      "expect": {
+        "action_id": "cry_01a09fee-0000-7000-8000-000000000000",
+        "audience": "https://hub.example",
+        "challenge": "wrxeMJRs5DwAedbPNBH_bHIdXhSuAdbV3CWOX9K-Khc",
+        "now": 1790000001000
+      },
+      "head": "before_rotation",
+      "name": "an assertion for another carry action"
+    },
+    {
+      "assertion": "valid",
+      "error": "expired",
+      "expect": {
+        "action_id": "cry_01a09fee-5e6f-7a8b-9c0d-1e2f3a4b5c6d",
+        "audience": "https://hub.example",
+        "challenge": "wrxeMJRs5DwAedbPNBH_bHIdXhSuAdbV3CWOX9K-Khc",
+        "now": 1790000120000
+      },
+      "head": "before_rotation",
+      "name": "an assertion at its expiry"
+    },
+    {
+      "assertion": "valid",
+      "error": "stale_key_epoch",
+      "expect": {
+        "action_id": "cry_01a09fee-5e6f-7a8b-9c0d-1e2f3a4b5c6d",
+        "audience": "https://hub.example",
+        "challenge": "wrxeMJRs5DwAedbPNBH_bHIdXhSuAdbV3CWOX9K-Khc",
+        "now": 1790000001000
+      },
+      "head": "after_rotation",
+      "name": "an assertion from another key_epoch"
+    },
+    {
+      "assertion": "after_rotation",
+      "expect": {
+        "action_id": "cry_01a09fee-5e6f-7a8b-9c0d-1e2f3a4b5c6d",
+        "audience": "https://hub.example",
+        "challenge": "wrxeMJRs5DwAedbPNBH_bHIdXhSuAdbV3CWOX9K-Khc",
+        "now": 1790000001000
+      },
+      "head": "after_rotation",
+      "name": "an assertion under the new epoch after rotation",
+      "result": "ok"
+    },
+    {
+      "assertion": "old_epoch_new_key",
+      "error": "bad_signature",
+      "expect": {
+        "action_id": "cry_01a09fee-5e6f-7a8b-9c0d-1e2f3a4b5c6d",
+        "audience": "https://hub.example",
+        "challenge": "wrxeMJRs5DwAedbPNBH_bHIdXhSuAdbV3CWOX9K-Khc",
+        "now": 1790000001000
+      },
+      "head": "before_rotation",
+      "name": "the new key claiming the old epoch"
+    },
+    {
+      "assertion": "forged",
+      "error": "bad_signature",
+      "expect": {
+        "action_id": "cry_01a09fee-5e6f-7a8b-9c0d-1e2f3a4b5c6d",
+        "audience": "https://hub.example",
+        "challenge": "wrxeMJRs5DwAedbPNBH_bHIdXhSuAdbV3CWOX9K-Khc",
+        "now": 1790000001000
+      },
+      "head": "before_rotation",
+      "name": "an assertion signed by another key"
+    },
+    {
+      "assertion": "for_bob",
+      "error": "wrong_identifier",
+      "expect": {
+        "action_id": "cry_01a09fee-5e6f-7a8b-9c0d-1e2f3a4b5c6d",
+        "audience": "https://hub.example",
+        "challenge": "wrxeMJRs5DwAedbPNBH_bHIdXhSuAdbV3CWOX9K-Khc",
+        "now": 1790000001000
+      },
+      "head": "before_rotation",
+      "name": "an assertion for another identifier"
+    }
+  ]
+}

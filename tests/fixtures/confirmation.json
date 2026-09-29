@@ -1,0 +1,630 @@
+{
+  "comment": "The vectors pinning Prima.Confirmation: every side reads each record, writes it back to the same map and reproduces its digest, sha256:<hex> over the JCS bytes of the whole record with the protocol string, home, rp_id and preview included, and a record changed in any one field digests differently; and refuses each refusal with the named reason. A preview is secret-free: a detail named as a secret is refused. The rp_id is the home's host or a parent domain of it.",
+  "digest": "sha256:0cfcb0d67e25c15ef8c44955b33b353e1c0964d5f2c700c0d6d74ac4a1537ea1",
+  "protocol": "cyfr-confirmation/v1",
+  "record": {
+    "action": "credential_entry",
+    "args_digest": "sha256:090772cf4068973daad3f715eb788d39fe2c02be42efd86de81f0e59198d6237",
+    "athanor": "ath_01a09fee-045b-770b-b745-a62792bb8798",
+    "challenge": "9O5RvaQwkTvttp04xqxi9aTx4R2YmVyX72Wle8vis9Q",
+    "expires_at": 1790000300000,
+    "home": "https://alice.example",
+    "id": "cnf_01a09fee-1111-7000-8000-000000000001",
+    "operation": "vault.create",
+    "person": "usr_01a09fee-0000-7000-8000-000000000001",
+    "preview": {
+      "athanor": "Household",
+      "home": "https://alice.example",
+      "operation": "vault.create",
+      "resource": "github"
+    },
+    "protocol": "cyfr-confirmation/v1",
+    "rp_id": "alice.example"
+  },
+  "refusals": [
+    {
+      "error": "secret_in_preview",
+      "name": "a preview carrying a recovery secret",
+      "record": {
+        "action": "credential_entry",
+        "args_digest": "sha256:090772cf4068973daad3f715eb788d39fe2c02be42efd86de81f0e59198d6237",
+        "athanor": "ath_01a09fee-045b-770b-b745-a62792bb8798",
+        "challenge": "9O5RvaQwkTvttp04xqxi9aTx4R2YmVyX72Wle8vis9Q",
+        "expires_at": 1790000300000,
+        "home": "https://alice.example",
+        "id": "cnf_01a09fee-1111-7000-8000-000000000001",
+        "operation": "vault.create",
+        "person": "usr_01a09fee-0000-7000-8000-000000000001",
+        "preview": {
+          "athanor": "Household",
+          "details": {
+            "recovery_secret": "AAAA"
+          },
+          "home": "https://alice.example",
+          "operation": "vault.create",
+          "resource": "github"
+        },
+        "protocol": "cyfr-confirmation/v1",
+        "rp_id": "alice.example"
+      }
+    },
+    {
+      "error": "secret_in_preview",
+      "name": "a preview carrying a token",
+      "record": {
+        "action": "credential_entry",
+        "args_digest": "sha256:090772cf4068973daad3f715eb788d39fe2c02be42efd86de81f0e59198d6237",
+        "athanor": "ath_01a09fee-045b-770b-b745-a62792bb8798",
+        "challenge": "9O5RvaQwkTvttp04xqxi9aTx4R2YmVyX72Wle8vis9Q",
+        "expires_at": 1790000300000,
+        "home": "https://alice.example",
+        "id": "cnf_01a09fee-1111-7000-8000-000000000001",
+        "operation": "vault.create",
+        "person": "usr_01a09fee-0000-7000-8000-000000000001",
+        "preview": {
+          "athanor": "Household",
+          "details": {
+            "token": "AAAA"
+          },
+          "home": "https://alice.example",
+          "operation": "vault.create",
+          "resource": "github"
+        },
+        "protocol": "cyfr-confirmation/v1",
+        "rp_id": "alice.example"
+      }
+    },
+    {
+      "error": "preview_mismatch",
+      "name": "a preview of another home",
+      "record": {
+        "action": "credential_entry",
+        "args_digest": "sha256:090772cf4068973daad3f715eb788d39fe2c02be42efd86de81f0e59198d6237",
+        "athanor": "ath_01a09fee-045b-770b-b745-a62792bb8798",
+        "challenge": "9O5RvaQwkTvttp04xqxi9aTx4R2YmVyX72Wle8vis9Q",
+        "expires_at": 1790000300000,
+        "home": "https://alice.example",
+        "id": "cnf_01a09fee-1111-7000-8000-000000000001",
+        "operation": "vault.create",
+        "person": "usr_01a09fee-0000-7000-8000-000000000001",
+        "preview": {
+          "athanor": "Household",
+          "home": "https://hub.example",
+          "operation": "vault.create",
+          "resource": "github"
+        },
+        "protocol": "cyfr-confirmation/v1",
+        "rp_id": "alice.example"
+      }
+    },
+    {
+      "error": "preview_mismatch",
+      "name": "a preview of another operation",
+      "record": {
+        "action": "credential_entry",
+        "args_digest": "sha256:090772cf4068973daad3f715eb788d39fe2c02be42efd86de81f0e59198d6237",
+        "athanor": "ath_01a09fee-045b-770b-b745-a62792bb8798",
+        "challenge": "9O5RvaQwkTvttp04xqxi9aTx4R2YmVyX72Wle8vis9Q",
+        "expires_at": 1790000300000,
+        "home": "https://alice.example",
+        "id": "cnf_01a09fee-1111-7000-8000-000000000001",
+        "operation": "vault.create",
+        "person": "usr_01a09fee-0000-7000-8000-000000000001",
+        "preview": {
+          "athanor": "Household",
+          "home": "https://alice.example",
+          "operation": "vault.delete",
+          "resource": "github"
+        },
+        "protocol": "cyfr-confirmation/v1",
+        "rp_id": "alice.example"
+      }
+    },
+    {
+      "error": "invalid_rp_id",
+      "name": "an rp_id that is not the home's",
+      "record": {
+        "action": "credential_entry",
+        "args_digest": "sha256:090772cf4068973daad3f715eb788d39fe2c02be42efd86de81f0e59198d6237",
+        "athanor": "ath_01a09fee-045b-770b-b745-a62792bb8798",
+        "challenge": "9O5RvaQwkTvttp04xqxi9aTx4R2YmVyX72Wle8vis9Q",
+        "expires_at": 1790000300000,
+        "home": "https://alice.example",
+        "id": "cnf_01a09fee-1111-7000-8000-000000000001",
+        "operation": "vault.create",
+        "person": "usr_01a09fee-0000-7000-8000-000000000001",
+        "preview": {
+          "athanor": "Household",
+          "home": "https://alice.example",
+          "operation": "vault.create",
+          "resource": "github"
+        },
+        "protocol": "cyfr-confirmation/v1",
+        "rp_id": "hub.example"
+      }
+    },
+    {
+      "error": "invalid_rp_id",
+      "name": "an rp_id below the home's host",
+      "record": {
+        "action": "credential_entry",
+        "args_digest": "sha256:090772cf4068973daad3f715eb788d39fe2c02be42efd86de81f0e59198d6237",
+        "athanor": "ath_01a09fee-045b-770b-b745-a62792bb8798",
+        "challenge": "9O5RvaQwkTvttp04xqxi9aTx4R2YmVyX72Wle8vis9Q",
+        "expires_at": 1790000300000,
+        "home": "https://alice.example",
+        "id": "cnf_01a09fee-1111-7000-8000-000000000001",
+        "operation": "vault.create",
+        "person": "usr_01a09fee-0000-7000-8000-000000000001",
+        "preview": {
+          "athanor": "Household",
+          "home": "https://alice.example",
+          "operation": "vault.create",
+          "resource": "github"
+        },
+        "protocol": "cyfr-confirmation/v1",
+        "rp_id": "login.alice.example"
+      }
+    },
+    {
+      "error": "invalid_rp_id",
+      "name": "an rp_id with a port",
+      "record": {
+        "action": "credential_entry",
+        "args_digest": "sha256:090772cf4068973daad3f715eb788d39fe2c02be42efd86de81f0e59198d6237",
+        "athanor": "ath_01a09fee-045b-770b-b745-a62792bb8798",
+        "challenge": "9O5RvaQwkTvttp04xqxi9aTx4R2YmVyX72Wle8vis9Q",
+        "expires_at": 1790000300000,
+        "home": "https://alice.example",
+        "id": "cnf_01a09fee-1111-7000-8000-000000000001",
+        "operation": "vault.create",
+        "person": "usr_01a09fee-0000-7000-8000-000000000001",
+        "preview": {
+          "athanor": "Household",
+          "home": "https://alice.example",
+          "operation": "vault.create",
+          "resource": "github"
+        },
+        "protocol": "cyfr-confirmation/v1",
+        "rp_id": "alice.example:443"
+      }
+    },
+    {
+      "error": "invalid_field",
+      "name": "a person who is not a person",
+      "record": {
+        "action": "credential_entry",
+        "args_digest": "sha256:090772cf4068973daad3f715eb788d39fe2c02be42efd86de81f0e59198d6237",
+        "athanor": "ath_01a09fee-045b-770b-b745-a62792bb8798",
+        "challenge": "9O5RvaQwkTvttp04xqxi9aTx4R2YmVyX72Wle8vis9Q",
+        "expires_at": 1790000300000,
+        "home": "https://alice.example",
+        "id": "cnf_01a09fee-1111-7000-8000-000000000001",
+        "operation": "vault.create",
+        "person": "system",
+        "preview": {
+          "athanor": "Household",
+          "home": "https://alice.example",
+          "operation": "vault.create",
+          "resource": "github"
+        },
+        "protocol": "cyfr-confirmation/v1",
+        "rp_id": "alice.example"
+      }
+    },
+    {
+      "error": "invalid_field",
+      "name": "a challenge of 16 bytes",
+      "record": {
+        "action": "credential_entry",
+        "args_digest": "sha256:090772cf4068973daad3f715eb788d39fe2c02be42efd86de81f0e59198d6237",
+        "athanor": "ath_01a09fee-045b-770b-b745-a62792bb8798",
+        "challenge": "279UNC8AaEna5-6f87Ah4A",
+        "expires_at": 1790000300000,
+        "home": "https://alice.example",
+        "id": "cnf_01a09fee-1111-7000-8000-000000000001",
+        "operation": "vault.create",
+        "person": "usr_01a09fee-0000-7000-8000-000000000001",
+        "preview": {
+          "athanor": "Household",
+          "home": "https://alice.example",
+          "operation": "vault.create",
+          "resource": "github"
+        },
+        "protocol": "cyfr-confirmation/v1",
+        "rp_id": "alice.example"
+      }
+    },
+    {
+      "error": "invalid_field",
+      "name": "an operation that is not tool.action",
+      "record": {
+        "action": "credential_entry",
+        "args_digest": "sha256:090772cf4068973daad3f715eb788d39fe2c02be42efd86de81f0e59198d6237",
+        "athanor": "ath_01a09fee-045b-770b-b745-a62792bb8798",
+        "challenge": "9O5RvaQwkTvttp04xqxi9aTx4R2YmVyX72Wle8vis9Q",
+        "expires_at": 1790000300000,
+        "home": "https://alice.example",
+        "id": "cnf_01a09fee-1111-7000-8000-000000000001",
+        "operation": "vault",
+        "person": "usr_01a09fee-0000-7000-8000-000000000001",
+        "preview": {
+          "athanor": "Household",
+          "home": "https://alice.example",
+          "operation": "vault.create",
+          "resource": "github"
+        },
+        "protocol": "cyfr-confirmation/v1",
+        "rp_id": "alice.example"
+      }
+    },
+    {
+      "error": "unknown_field",
+      "name": "an unknown field",
+      "record": {
+        "action": "credential_entry",
+        "args_digest": "sha256:090772cf4068973daad3f715eb788d39fe2c02be42efd86de81f0e59198d6237",
+        "athanor": "ath_01a09fee-045b-770b-b745-a62792bb8798",
+        "challenge": "9O5RvaQwkTvttp04xqxi9aTx4R2YmVyX72Wle8vis9Q",
+        "expires_at": 1790000300000,
+        "home": "https://alice.example",
+        "id": "cnf_01a09fee-1111-7000-8000-000000000001",
+        "operation": "vault.create",
+        "person": "usr_01a09fee-0000-7000-8000-000000000001",
+        "preview": {
+          "athanor": "Household",
+          "home": "https://alice.example",
+          "operation": "vault.create",
+          "resource": "github"
+        },
+        "protocol": "cyfr-confirmation/v1",
+        "rp_id": "alice.example",
+        "summary": "Enter a credential"
+      }
+    },
+    {
+      "error": "wrong_protocol",
+      "name": "another protocol",
+      "record": {
+        "action": "credential_entry",
+        "args_digest": "sha256:090772cf4068973daad3f715eb788d39fe2c02be42efd86de81f0e59198d6237",
+        "athanor": "ath_01a09fee-045b-770b-b745-a62792bb8798",
+        "challenge": "9O5RvaQwkTvttp04xqxi9aTx4R2YmVyX72Wle8vis9Q",
+        "expires_at": 1790000300000,
+        "home": "https://alice.example",
+        "id": "cnf_01a09fee-1111-7000-8000-000000000001",
+        "operation": "vault.create",
+        "person": "usr_01a09fee-0000-7000-8000-000000000001",
+        "preview": {
+          "athanor": "Household",
+          "home": "https://alice.example",
+          "operation": "vault.create",
+          "resource": "github"
+        },
+        "protocol": "cyfr-confirmation/v2",
+        "rp_id": "alice.example"
+      }
+    },
+    {
+      "error": "missing_field",
+      "name": "no preview",
+      "record": {
+        "action": "credential_entry",
+        "args_digest": "sha256:090772cf4068973daad3f715eb788d39fe2c02be42efd86de81f0e59198d6237",
+        "athanor": "ath_01a09fee-045b-770b-b745-a62792bb8798",
+        "challenge": "9O5RvaQwkTvttp04xqxi9aTx4R2YmVyX72Wle8vis9Q",
+        "expires_at": 1790000300000,
+        "home": "https://alice.example",
+        "id": "cnf_01a09fee-1111-7000-8000-000000000001",
+        "operation": "vault.create",
+        "person": "usr_01a09fee-0000-7000-8000-000000000001",
+        "protocol": "cyfr-confirmation/v1",
+        "rp_id": "alice.example"
+      }
+    }
+  ],
+  "variations": [
+    {
+      "digest": "sha256:4bbcf8daee70c7592f9f9f4cb0eda42a8cfbb361fed8a34a18f7cb911cddb921",
+      "name": "another id",
+      "record": {
+        "action": "credential_entry",
+        "args_digest": "sha256:090772cf4068973daad3f715eb788d39fe2c02be42efd86de81f0e59198d6237",
+        "athanor": "ath_01a09fee-045b-770b-b745-a62792bb8798",
+        "challenge": "9O5RvaQwkTvttp04xqxi9aTx4R2YmVyX72Wle8vis9Q",
+        "expires_at": 1790000300000,
+        "home": "https://alice.example",
+        "id": "cnf_01a09fee-1111-7000-8000-000000000002",
+        "operation": "vault.create",
+        "person": "usr_01a09fee-0000-7000-8000-000000000001",
+        "preview": {
+          "athanor": "Household",
+          "home": "https://alice.example",
+          "operation": "vault.create",
+          "resource": "github"
+        },
+        "protocol": "cyfr-confirmation/v1",
+        "rp_id": "alice.example"
+      }
+    },
+    {
+      "digest": "sha256:a47452ef0d4e21114e8ff0d651d55b97882d0d4b2ab2d6f719f4338619e5cbe4",
+      "name": "another home",
+      "record": {
+        "action": "credential_entry",
+        "args_digest": "sha256:090772cf4068973daad3f715eb788d39fe2c02be42efd86de81f0e59198d6237",
+        "athanor": "ath_01a09fee-045b-770b-b745-a62792bb8798",
+        "challenge": "9O5RvaQwkTvttp04xqxi9aTx4R2YmVyX72Wle8vis9Q",
+        "expires_at": 1790000300000,
+        "home": "https://hub.example",
+        "id": "cnf_01a09fee-1111-7000-8000-000000000001",
+        "operation": "vault.create",
+        "person": "usr_01a09fee-0000-7000-8000-000000000001",
+        "preview": {
+          "athanor": "Household",
+          "home": "https://hub.example",
+          "operation": "vault.create",
+          "resource": "github"
+        },
+        "protocol": "cyfr-confirmation/v1",
+        "rp_id": "hub.example"
+      }
+    },
+    {
+      "digest": "sha256:7e504b8f2b90def50936b51c841dab32c8256f78678f9d8f852940ff095847fd",
+      "name": "another rp_id, a parent domain of the home",
+      "record": {
+        "action": "credential_entry",
+        "args_digest": "sha256:090772cf4068973daad3f715eb788d39fe2c02be42efd86de81f0e59198d6237",
+        "athanor": "ath_01a09fee-045b-770b-b745-a62792bb8798",
+        "challenge": "9O5RvaQwkTvttp04xqxi9aTx4R2YmVyX72Wle8vis9Q",
+        "expires_at": 1790000300000,
+        "home": "https://alice.example",
+        "id": "cnf_01a09fee-1111-7000-8000-000000000001",
+        "operation": "vault.create",
+        "person": "usr_01a09fee-0000-7000-8000-000000000001",
+        "preview": {
+          "athanor": "Household",
+          "home": "https://alice.example",
+          "operation": "vault.create",
+          "resource": "github"
+        },
+        "protocol": "cyfr-confirmation/v1",
+        "rp_id": "example"
+      }
+    },
+    {
+      "digest": "sha256:2c539666cc7b4467ffd3b064aaa2096791fa9b515965a0ce6f1f8e70a03cfefc",
+      "name": "another athanor",
+      "record": {
+        "action": "credential_entry",
+        "args_digest": "sha256:090772cf4068973daad3f715eb788d39fe2c02be42efd86de81f0e59198d6237",
+        "athanor": "ath_01a09fee-0000-7000-8000-00000000beef",
+        "challenge": "9O5RvaQwkTvttp04xqxi9aTx4R2YmVyX72Wle8vis9Q",
+        "expires_at": 1790000300000,
+        "home": "https://alice.example",
+        "id": "cnf_01a09fee-1111-7000-8000-000000000001",
+        "operation": "vault.create",
+        "person": "usr_01a09fee-0000-7000-8000-000000000001",
+        "preview": {
+          "athanor": "Household",
+          "home": "https://alice.example",
+          "operation": "vault.create",
+          "resource": "github"
+        },
+        "protocol": "cyfr-confirmation/v1",
+        "rp_id": "alice.example"
+      }
+    },
+    {
+      "digest": "sha256:69d6f5b60accc8f0204b246fb2875d861d14701870958847c4c019e9a98d9eaa",
+      "name": "another person",
+      "record": {
+        "action": "credential_entry",
+        "args_digest": "sha256:090772cf4068973daad3f715eb788d39fe2c02be42efd86de81f0e59198d6237",
+        "athanor": "ath_01a09fee-045b-770b-b745-a62792bb8798",
+        "challenge": "9O5RvaQwkTvttp04xqxi9aTx4R2YmVyX72Wle8vis9Q",
+        "expires_at": 1790000300000,
+        "home": "https://alice.example",
+        "id": "cnf_01a09fee-1111-7000-8000-000000000001",
+        "operation": "vault.create",
+        "person": "usr_01a09fee-0000-7000-8000-000000000002",
+        "preview": {
+          "athanor": "Household",
+          "home": "https://alice.example",
+          "operation": "vault.create",
+          "resource": "github"
+        },
+        "protocol": "cyfr-confirmation/v1",
+        "rp_id": "alice.example"
+      }
+    },
+    {
+      "digest": "sha256:ec888cdc0f75031ae550c44ffb2ff534492a69e297b7ed47a9c2d3172090621d",
+      "name": "other arguments",
+      "record": {
+        "action": "credential_entry",
+        "args_digest": "sha256:d1d421fe8ebaeef8f2301b2e9925ae2202892803fa1f7de02a6c3b999015dcb2",
+        "athanor": "ath_01a09fee-045b-770b-b745-a62792bb8798",
+        "challenge": "9O5RvaQwkTvttp04xqxi9aTx4R2YmVyX72Wle8vis9Q",
+        "expires_at": 1790000300000,
+        "home": "https://alice.example",
+        "id": "cnf_01a09fee-1111-7000-8000-000000000001",
+        "operation": "vault.create",
+        "person": "usr_01a09fee-0000-7000-8000-000000000001",
+        "preview": {
+          "athanor": "Household",
+          "home": "https://alice.example",
+          "operation": "vault.create",
+          "resource": "github"
+        },
+        "protocol": "cyfr-confirmation/v1",
+        "rp_id": "alice.example"
+      }
+    },
+    {
+      "digest": "sha256:b79469b4df15ea10b528f2090f536fe029bdfd9544b50ed5f3e81c0b1ab9f028",
+      "name": "another action",
+      "record": {
+        "action": "credential_issuance",
+        "args_digest": "sha256:090772cf4068973daad3f715eb788d39fe2c02be42efd86de81f0e59198d6237",
+        "athanor": "ath_01a09fee-045b-770b-b745-a62792bb8798",
+        "challenge": "9O5RvaQwkTvttp04xqxi9aTx4R2YmVyX72Wle8vis9Q",
+        "expires_at": 1790000300000,
+        "home": "https://alice.example",
+        "id": "cnf_01a09fee-1111-7000-8000-000000000001",
+        "operation": "vault.create",
+        "person": "usr_01a09fee-0000-7000-8000-000000000001",
+        "preview": {
+          "athanor": "Household",
+          "home": "https://alice.example",
+          "operation": "vault.create",
+          "resource": "github"
+        },
+        "protocol": "cyfr-confirmation/v1",
+        "rp_id": "alice.example"
+      }
+    },
+    {
+      "digest": "sha256:486387d8030bb400e0f1007bdcf9febcfe2cef28c4824e399ca61d0294e51882",
+      "name": "another operation",
+      "record": {
+        "action": "credential_entry",
+        "args_digest": "sha256:090772cf4068973daad3f715eb788d39fe2c02be42efd86de81f0e59198d6237",
+        "athanor": "ath_01a09fee-045b-770b-b745-a62792bb8798",
+        "challenge": "9O5RvaQwkTvttp04xqxi9aTx4R2YmVyX72Wle8vis9Q",
+        "expires_at": 1790000300000,
+        "home": "https://alice.example",
+        "id": "cnf_01a09fee-1111-7000-8000-000000000001",
+        "operation": "vault.rotate",
+        "person": "usr_01a09fee-0000-7000-8000-000000000001",
+        "preview": {
+          "athanor": "Household",
+          "home": "https://alice.example",
+          "operation": "vault.rotate",
+          "resource": "github"
+        },
+        "protocol": "cyfr-confirmation/v1",
+        "rp_id": "alice.example"
+      }
+    },
+    {
+      "digest": "sha256:f5bf1a3cc4764d9b3fed9fa96d6b60467760df2f346d3d0fecb03748a3694c0b",
+      "name": "another resource in the preview",
+      "record": {
+        "action": "credential_entry",
+        "args_digest": "sha256:090772cf4068973daad3f715eb788d39fe2c02be42efd86de81f0e59198d6237",
+        "athanor": "ath_01a09fee-045b-770b-b745-a62792bb8798",
+        "challenge": "9O5RvaQwkTvttp04xqxi9aTx4R2YmVyX72Wle8vis9Q",
+        "expires_at": 1790000300000,
+        "home": "https://alice.example",
+        "id": "cnf_01a09fee-1111-7000-8000-000000000001",
+        "operation": "vault.create",
+        "person": "usr_01a09fee-0000-7000-8000-000000000001",
+        "preview": {
+          "athanor": "Household",
+          "home": "https://alice.example",
+          "operation": "vault.create",
+          "resource": "gitlab"
+        },
+        "protocol": "cyfr-confirmation/v1",
+        "rp_id": "alice.example"
+      }
+    },
+    {
+      "digest": "sha256:aae50940962d29faf96cf298c7a1e5d2103121ea666047123c8ddfc445521a90",
+      "name": "another athanor name in the preview",
+      "record": {
+        "action": "credential_entry",
+        "args_digest": "sha256:090772cf4068973daad3f715eb788d39fe2c02be42efd86de81f0e59198d6237",
+        "athanor": "ath_01a09fee-045b-770b-b745-a62792bb8798",
+        "challenge": "9O5RvaQwkTvttp04xqxi9aTx4R2YmVyX72Wle8vis9Q",
+        "expires_at": 1790000300000,
+        "home": "https://alice.example",
+        "id": "cnf_01a09fee-1111-7000-8000-000000000001",
+        "operation": "vault.create",
+        "person": "usr_01a09fee-0000-7000-8000-000000000001",
+        "preview": {
+          "athanor": "Work",
+          "home": "https://alice.example",
+          "operation": "vault.create",
+          "resource": "github"
+        },
+        "protocol": "cyfr-confirmation/v1",
+        "rp_id": "alice.example"
+      }
+    },
+    {
+      "digest": "sha256:42641e6bedb7eacadba5e7cf844ec4b084c6305af7c3540a54e5bef7066261c8",
+      "name": "a detail in the preview",
+      "record": {
+        "action": "credential_entry",
+        "args_digest": "sha256:090772cf4068973daad3f715eb788d39fe2c02be42efd86de81f0e59198d6237",
+        "athanor": "ath_01a09fee-045b-770b-b745-a62792bb8798",
+        "challenge": "9O5RvaQwkTvttp04xqxi9aTx4R2YmVyX72Wle8vis9Q",
+        "expires_at": 1790000300000,
+        "home": "https://alice.example",
+        "id": "cnf_01a09fee-1111-7000-8000-000000000001",
+        "operation": "vault.create",
+        "person": "usr_01a09fee-0000-7000-8000-000000000001",
+        "preview": {
+          "athanor": "Household",
+          "details": {
+            "entry_kind": "api key"
+          },
+          "home": "https://alice.example",
+          "operation": "vault.create",
+          "resource": "github"
+        },
+        "protocol": "cyfr-confirmation/v1",
+        "rp_id": "alice.example"
+      }
+    },
+    {
+      "digest": "sha256:93484d7ee7090e21d802d2c4f8fbccc5ffcce81028a40bf1c02ac4b651a4e630",
+      "name": "another challenge",
+      "record": {
+        "action": "credential_entry",
+        "args_digest": "sha256:090772cf4068973daad3f715eb788d39fe2c02be42efd86de81f0e59198d6237",
+        "athanor": "ath_01a09fee-045b-770b-b745-a62792bb8798",
+        "challenge": "Inde6BYBPFOnBRIE8DEnDMmoQ9NfTwMOX4jbJkNHSBU",
+        "expires_at": 1790000300000,
+        "home": "https://alice.example",
+        "id": "cnf_01a09fee-1111-7000-8000-000000000001",
+        "operation": "vault.create",
+        "person": "usr_01a09fee-0000-7000-8000-000000000001",
+        "preview": {
+          "athanor": "Household",
+          "home": "https://alice.example",
+          "operation": "vault.create",
+          "resource": "github"
+        },
+        "protocol": "cyfr-confirmation/v1",
+        "rp_id": "alice.example"
+      }
+    },
+    {
+      "digest": "sha256:20cd93a25cbef7a53c808394350aaa2a2ba99474f4b3a632fb58ebc587482e5d",
+      "name": "another expiry",
+      "record": {
+        "action": "credential_entry",
+        "args_digest": "sha256:090772cf4068973daad3f715eb788d39fe2c02be42efd86de81f0e59198d6237",
+        "athanor": "ath_01a09fee-045b-770b-b745-a62792bb8798",
+        "challenge": "9O5RvaQwkTvttp04xqxi9aTx4R2YmVyX72Wle8vis9Q",
+        "expires_at": 1790000300001,
+        "home": "https://alice.example",
+        "id": "cnf_01a09fee-1111-7000-8000-000000000001",
+        "operation": "vault.create",
+        "person": "usr_01a09fee-0000-7000-8000-000000000001",
+        "preview": {
+          "athanor": "Household",
+          "home": "https://alice.example",
+          "operation": "vault.create",
+          "resource": "github"
+        },
+        "protocol": "cyfr-confirmation/v1",
+        "rp_id": "alice.example"
+      }
+    }
+  ]
+}
