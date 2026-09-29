@@ -170,7 +170,7 @@ PROOF_PID=$!
 # a tab may join again during the drain and be drawn anew by a server that
 # is about to go, which is not the case this section proves.
 server_kill() {
-  pkill -9 -f "sname $NODE" 2>/dev/null || true
+  pkill -9 -f "sname $NODE( |\$)" 2>/dev/null || true
   for _ in $(seq 1 30); do
     curl -fsS -m 1 -o /dev/null "http://127.0.0.1:$PORT/api/health" 2>/dev/null || return 0
     sleep 1
