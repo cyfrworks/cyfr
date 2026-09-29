@@ -102,6 +102,7 @@ defmodule Cyfr.VocabularyDriftTest do
     "seed/aqua/**/*.md",
     "apps/codex/**/*.go",
     "README.md",
+    "ARCHITECTURE.md",
     "component-guide.md",
     "integration-guide.md",
     "tincture-guide.md"

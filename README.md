@@ -887,7 +887,7 @@ CLI environment variables: `CYFR_TOKEN` (credential), `CYFR_NO_INTERACTIVE=1` (n
 
 ## Glossary
 
-Each part of CYFR has one name, and the name is its directory, its binary or image, its compose service, its environment variable prefix, its MAC domain, its provider's service label and its log label. Words for a role inside a part stay English.
+Each part of CYFR has one name, and the name is its directory, its binary or image, its compose service, its environment variable prefix, its MAC domain, its provider's service label and its log label. Words for a role inside a part stay English. What each part is responsible for, how the parts talk to each other and what must always hold are in [ARCHITECTURE.md](ARCHITECTURE.md).
 
 | Name | Is | Directory | Binary or image | Compose service | Environment prefix | MAC domain | Service label | Log label |
 |------|----|-----------|-----------------|-----------------|--------------------|------------|---------------|-----------|
@@ -899,7 +899,7 @@ Each part of CYFR has one name, and the name is its directory, its binary or ima
 | Compendium | components: kinds, manifests, registry, activation, provenance, builds over Locus, the tincture rules | `apps/cyfr/lib/compendium` | the `cyfr` release | — | — | — | `compendium` | `[Compendium…]` |
 | Aqua | the assistant: threads, rooms, turns, approvals, notes, attachments, memory, its providers | `apps/cyfr/lib/aqua` | the `cyfr` release | — | — | — | `aqua` | `[Aqua…]` |
 | Crucible | execution: admission, attempts, HostAPI, WorkerAPI, guest egress, schedules | `apps/cyfr/lib/crucible` | the `cyfr` release | — | `CYFR_CRUCIBLE_`, `CYFR_HOST_API_` | — | `crucible` | `[Crucible…]` |
-| Emissary | MCP ingress and external MCP servers over HTTP or through Locus | `apps/cyfr/lib/emissary`, `apps/cyfr/lib/emissary/web` | the `cyfr` release | — | — | — | `emissary` | `[Emissary…]` |
+| Emissary | external application protocol adapters (MCP ingress and external MCP servers over HTTP or through Locus today) | `apps/cyfr/lib/emissary`, `apps/cyfr/lib/emissary/web` | the `cyfr` release | — | — | — | `emissary` | `[Emissary…]` |
 | Prism | the screen (the console today) | `apps/cyfr/lib/prism`, `apps/cyfr/lib/prism_web` | the `cyfr` release | — | — | — | — | `[Prism…]` |
 | Codex | the CLI | `apps/codex` | the `cyfr` binary | — | — | — | — | — |
 | Opus | the WASM engine: a service BEAM and its OS runners under the keeper | `apps/opus` | the `opus` release, image `cyfr-opus` | `opus` | `OPUS_`, `CYFR_OPUS_` | `cyfr-opus/v1` | — | `[Opus…]` |
@@ -927,6 +927,7 @@ Every setting of the control plane is a `CYFR_` variable; a part named with a pr
 | [Integration Guide](integration-guide.md) | How to use CYFR as your application backend |
 | [Component Guide](component-guide.md) | Practical guide to building catalysts, reagents, and formulas |
 | [Tincture Guide](tincture-guide.md) | Practical guide to building tinctures |
+| [Architecture](ARCHITECTURE.md) | What each part of CYFR owns, how the parts talk to each other, and why |
 
 ## Verifying Releases
 

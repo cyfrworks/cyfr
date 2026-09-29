@@ -112,6 +112,45 @@ defmodule Cyfr.DocsDriftTest do
              "#{inspect(@env_prefixes)}, each once"
   end
 
+  # ARCHITECTURE.md owns what each part is responsible for and the glossary
+  # names the same parts, so the two cannot describe different sets.
+  @architecture Path.join(@repo_root, "ARCHITECTURE.md")
+  @part_names @glossary_names -- ~w(actor athanor)
+
+  test "ARCHITECTURE.md describes exactly the parts the glossary names" do
+    described =
+      Regex.scan(~r/^### (\w+)(?: \([^)]*\))?: /m, File.read!(@architecture),
+        capture: :all_but_first
+      )
+      |> List.flatten()
+
+    assert Enum.sort(described) == Enum.sort(@part_names),
+           "ARCHITECTURE.md's module sections #{inspect(described)} are not the glossary's " <>
+             "parts #{inspect(@part_names)}"
+  end
+
+  test "ARCHITECTURE.md's five ports are the port roster" do
+    [section] =
+      Regex.run(~r/^### 4\.2 The five ports\n(.*?)(?=^### )/ms, File.read!(@architecture),
+        capture: :all_but_first
+      )
+
+    documented =
+      for line <- String.split(section, "\n"),
+          String.starts_with?(line, "| "),
+          [behaviour] <-
+            Regex.scan(~r/^\| [^|]*\(`([A-Za-z.]+)`\)/, line, capture: :all_but_first),
+          do: behaviour
+
+    rostered = Enum.map(Cyfr.Boundaries.ports(), & &1.behaviour)
+
+    assert length(documented) == 5
+
+    assert Enum.sort(documented) == Enum.sort(rostered),
+           "ARCHITECTURE.md documents the ports #{inspect(documented)}; " <>
+             "Cyfr.Boundaries.ports/0 rosters #{inspect(rostered)}"
+  end
+
   defp read_variables do
     not_read = spelled_not_read()
 

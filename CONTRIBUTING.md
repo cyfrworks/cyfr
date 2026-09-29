@@ -37,6 +37,9 @@ missing or wrong header fails CI.
 
 ## Before opening a PR
 
+- Read [`ARCHITECTURE.md`](ARCHITECTURE.md) first. A change to a principle, a
+  layer edge, a port or an invariant changes that document in the same pull
+  request.
 - Keep changes focused and match the surrounding code style.
 - Run the tests for what you touched as operating-system partitions:
   `scripts/test-partitioned.sh <test paths>` on SQLite, and
