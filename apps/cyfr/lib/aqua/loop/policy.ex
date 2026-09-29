@@ -145,8 +145,10 @@ defmodule Aqua.Loop.Policy do
   @doc """
   The component references the turn's closed write, destructive and
   execute calls reached, from their `tool_call` payloads: an argument
-  named `reference` or `ref`, and a file path under `components/`. Name
-  level, so any version of a touched component counts.
+  named `reference` or `ref`, and a `path` at or below a component version
+  directory as the component path grammar reads one
+  (`Compendium.parse_component_path/1`). Name level,
+  so any version of a touched component counts.
   """
   @spec touched_refs([map()]) :: MapSet.t()
   def touched_refs(calls) when is_list(calls) do
@@ -210,14 +212,17 @@ defmodule Aqua.Loop.Policy do
 
   defp name_level(reference), do: Aqua.Hands.name_level(reference)
 
-  # `components/<types>/<publisher>/<name>/<version>/…` names a component.
+  # A path names a component when the layout's one parser reads a version
+  # directory in it, the same parser the unit locator and the `source` tool
+  # read it with; any other path names none. Its segments are split as
+  # every door that writes it splits them, empty ones dropped, so
+  # `components//…` and `/components/…` name the unit the write lands in.
   defp path_refs(path) when is_binary(path) do
-    case String.split(path, "/") do
-      ["components", plural, publisher, name | _] ->
-        type = String.trim_trailing(plural, "s")
-        ["#{type}:#{publisher}.#{name}"]
+    case Compendium.parse_component_path(String.split(path, "/", trim: true)) do
+      {:ok, %{type: type, publisher: publisher, name: name}} ->
+        [Prima.ComponentRef.build(type, publisher, name)]
 
-      _ ->
+      :error ->
         []
     end
   end

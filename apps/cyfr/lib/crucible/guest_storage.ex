@@ -29,8 +29,8 @@ defmodule Crucible.GuestStorage do
        `data/` or `components/`, or `""` for the scope listing).
     4. A write, append or delete names a file inside a scope; inside an
        overlaid scope it lands inside a unit (`Arca.Storage.locate/1`), and
-       under a component publisher only `local/`
-       (`Prima.ComponentNamespace.require_local_guest_write/1`).
+       under a component publisher (`Prima.ComponentPath.publisher/1`) only
+       `local/` (`Prima.ComponentNamespace.require_local_guest_write/1`).
     5. The path is relative, with no traversal (`Prima.PathSafety`).
     6. The edge's `storage.paths` allow the path: `"*"` allows every path,
        an entry ending in `/` a prefix, anything else that exact path. An
@@ -260,7 +260,17 @@ defmodule Crucible.GuestStorage do
     end
   end
 
-  defp unit_publisher(["components", _plural, publisher | _]) do
+  # A unit's publisher is read the way the athanor's files read it
+  # (`Arca.Files`), so both doors refuse the same writes. A unit outside
+  # the component tree has no publisher.
+  defp unit_publisher(unit) do
+    case Prima.ComponentPath.publisher(unit) do
+      {:ok, publisher} -> local_publisher(publisher)
+      :error -> :ok
+    end
+  end
+
+  defp local_publisher(publisher) do
     case Prima.ComponentNamespace.require_local_guest_write(publisher) do
       :ok ->
         :ok
@@ -269,8 +279,6 @@ defmodule Crucible.GuestStorage do
         guest_error(:storage_path_denied, Prima.ComponentNamespace.message(reason, publisher))
     end
   end
-
-  defp unit_publisher(_unit), do: :ok
 
   defp path_safe(path) do
     case Prima.PathSafety.validate_relative_path(path) do

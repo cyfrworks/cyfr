@@ -14,7 +14,8 @@ defmodule Prima.ComponentPath do
   `Compendium.ComponentPath`, which adds the parsing, the artifact names
   and the unit locator and delegates the shape here; the identity domain
   reads it here to say which directory a consent or a tincture grant
-  covers.
+  covers, and the storage layer to read the publisher of a unit the
+  grammar located.
 
   Vocabulary note: paths and the components table say `publisher`;
   references and identity (`Prima.ComponentRef`) say `namespace` — the
@@ -122,4 +123,32 @@ defmodule Prima.ComponentPath do
   def version_dir(type, publisher, name, version) do
     base_prefix() ++ [type_plural(type), normalize_publisher(publisher), name, version]
   end
+
+  @doc """
+  The publisher segment of a path in the component tree, at or below a
+  publisher directory: the segment `version_dir/4` lays out after the
+  type plural. `:error` for a path outside the tree or above that depth.
+
+  This reads the layout's positions and nothing more. Whether the type,
+  publisher, name and version are ones the layout accepts is the
+  component domain's grammar (`Compendium.ComponentPath.parse/1`); a
+  layer below it reads the publisher of a unit that grammar located
+  (`Arca.Storage.locate/1`), as both storage doors' fork-to-modify rule
+  (`Prima.ComponentNamespace`) does.
+
+  ## Examples
+
+      iex> Prima.ComponentPath.publisher(["components", "catalysts", "acme", "tool", "1.0.0"])
+      {:ok, "acme"}
+
+      iex> Prima.ComponentPath.publisher(["components", "catalysts"])
+      :error
+
+      iex> Prima.ComponentPath.publisher(["aqua", "skills", "tidy"])
+      :error
+
+  """
+  @spec publisher([String.t()]) :: {:ok, String.t()} | :error
+  def publisher([@components_root, _type_plural, publisher | _rest]), do: {:ok, publisher}
+  def publisher(_segments), do: :error
 end
