@@ -34,6 +34,7 @@ on:
       - 'scripts/**'
       - 'tests/**'
       - 'README.md'
+      - 'ARCHITECTURE.md'
       - 'CONTRIBUTING.md'
       - '.gitignore'
       - '.dockerignore'
@@ -70,6 +71,7 @@ on:
       - 'scripts/**'
       - 'tests/**'
       - 'README.md'
+      - 'ARCHITECTURE.md'
       - 'CONTRIBUTING.md'
       - '.gitignore'
       - '.dockerignore'
@@ -1165,7 +1167,7 @@ jobs:
       - name: Tier A/B fossil patterns must be absent
         run: |
           set -uo pipefail
-          paths='apps config wit scripts tests Caddyfile docker-compose.yml Dockerfile Dockerfile.locus Dockerfile.opus docker-entrypoint.sh .env.example .env.locus.example .env.opus.example .gitignore .dockerignore README.md CONTRIBUTING.md component-guide.md configuration-guide.md integration-guide.md tincture-guide.md'
+          paths='apps config wit scripts tests Caddyfile docker-compose.yml Dockerfile Dockerfile.locus Dockerfile.opus docker-entrypoint.sh .env.example .env.locus.example .env.opus.example .gitignore .dockerignore README.md ARCHITECTURE.md CONTRIBUTING.md component-guide.md configuration-guide.md integration-guide.md tincture-guide.md'
           excl=':(exclude)**/node_modules/** :(exclude)**/package-lock.json :(exclude)**/priv/static/**'
           fail=0
           for p in \

@@ -1595,7 +1595,7 @@ defmodule Cyfr.BoundariesTest do
              #{inspect(Boundaries.sanctum_behaviours())}.
 
              A behaviour the identity domain declares is either one of the five
-             ports of `AGENTS.md` — something above it implements and the boot
+             ports of `ARCHITECTURE.md` — something above it implements and the boot
              writes in — or a named internal strategy, declared and implemented
              inside Sanctum and selected by configuration. Anything else is a
              sixth port, which is an architecture change.

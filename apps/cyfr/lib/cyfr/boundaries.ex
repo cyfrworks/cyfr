@@ -59,7 +59,7 @@ defmodule Cyfr.Boundaries do
   And the registers:
 
     * `ports/0` and `internal_strategies/0` — the five ports of
-      `AGENTS.md`, and the two behaviours Sanctum declares that are not
+      `ARCHITECTURE.md`, and the two behaviours Sanctum declares that are not
       ports.
     * `actor_paths/0` — every way a `%Prima.Actor{}` is constructed, with
       the reason for each. Four is how you get six.
@@ -1888,7 +1888,7 @@ defmodule Cyfr.Boundaries do
   ]
 
   @doc """
-  The five ports of `AGENTS.md`, and only these. A sixth is an
+  The five ports of `ARCHITECTURE.md`, and only these. A sixth is an
   architecture change. A port's implementation is written at boot and read
   from `:persistent_term`, so Boundary sees no edge from the declaring
   module to it.
