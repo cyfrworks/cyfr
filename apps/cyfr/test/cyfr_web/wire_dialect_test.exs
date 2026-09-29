@@ -13,7 +13,7 @@ defmodule CyfrWeb.WireDialectTest do
   signed-asset route collapsed five distinct refusals into one untyped 404.
 
   The HTTP surface is two trees, the host's web tier (`apps/cyfr/lib/cyfr_web`)
-  and the MCP adapter's (`apps/cyfr/lib/emissary/web`); nothing else renders
+  and Emissary's adapters (`apps/cyfr/lib/emissary/web`); nothing else renders
   an HTTP body. The roster below names every deliberate `send_resp` in them
   with its reason. A new one fails here until it is routed through a
   renderer or written down.
@@ -40,7 +40,7 @@ defmodule CyfrWeb.WireDialectTest do
     "cyfr_web/minimal_page.ex" => "renders the sign-in flow's no-session HTML pages",
     # The tincture's entry page is a 200 HTML body, a success; every miss
     # there renders through ApiError.
-    "cyfr_web/ingress/tincture_assets.ex" => "the entry page's 200 HTML body"
+    "emissary/web/tincture_assets.ex" => "the entry page's 200 HTML body"
   }
 
   test "every bare send_resp is on the roster with a reason" do

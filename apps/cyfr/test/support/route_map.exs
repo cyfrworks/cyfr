@@ -7,21 +7,11 @@
 # cannot move or vanish without this file changing with it.
 %{
   providers: %{
-    "CyfrWeb.Ingress.Router" => %{
-      file: "apps/cyfr/lib/cyfr_web/ingress/router.ex",
+    "Emissary.Router" => %{
+      file: "apps/cyfr/lib/emissary/router.ex",
       pipelines: %{
         "api" => [":accepts", "CyfrWeb.Plugs.ApiSecurityHeaders"],
         "auth_api_throttle" => ["CyfrWeb.Plugs.AuthRateLimit"],
-        "auth_browser" => [
-          "CyfrWeb.Plugs.Headless",
-          "CyfrWeb.Plugs.FrameRequest",
-          ":accepts",
-          ":fetch_session",
-          ":fetch_live_flash",
-          ":protect_from_forgery",
-          ":put_secure_browser_headers",
-          "CyfrWeb.Plugs.BrowserCSP"
-        ],
         "authenticated_api" => [
           "CyfrWeb.Plugs.CallIdentity",
           ":accepts",
@@ -32,14 +22,28 @@
           "CyfrWeb.Plugs.MCPRateLimit",
           "CyfrWeb.Plugs.Authenticate"
         ],
-        "device_complete_throttle" => ["CyfrWeb.Plugs.AuthRateLimit"],
         "health_throttle" => ["CyfrWeb.Plugs.AuthRateLimit"],
+        "mcp" => [
+          "CyfrWeb.Plugs.CallIdentity",
+          ":accepts",
+          "CyfrWeb.Plugs.ApiSecurityHeaders",
+          "CyfrWeb.Plugs.CORS",
+          "CyfrWeb.Plugs.FrameRequest",
+          "CyfrWeb.Plugs.MCPOrigin",
+          "CyfrWeb.Plugs.MCPRateLimit",
+          "CyfrWeb.Plugs.Authenticate",
+          "Emissary.Web.Plugs.MCPRequestMetadata"
+        ],
         "oauth_callback" => [":accepts", "CyfrWeb.Plugs.ApiSecurityHeaders"],
         "oauth_callback_throttle" => ["CyfrWeb.Plugs.AuthRateLimit"],
-        "oauth_start_throttle" => ["CyfrWeb.Plugs.AuthRateLimit"],
         "tincture" => [
           "CyfrWeb.Plugs.CallIdentity",
           ":accepts",
+          "CyfrWeb.Plugs.ApiSecurityHeaders",
+          "CyfrWeb.Plugs.ScrubTinctureCredentials",
+          "CyfrWeb.Plugs.TinctureRateLimit"
+        ],
+        "tincture_asset" => [
           "CyfrWeb.Plugs.ApiSecurityHeaders",
           "CyfrWeb.Plugs.ScrubTinctureCredentials",
           "CyfrWeb.Plugs.TinctureRateLimit"
@@ -49,11 +53,6 @@
           ":accepts",
           "CyfrWeb.Plugs.ApiSecurityHeaders",
           "CyfrWeb.Plugs.CORS",
-          "CyfrWeb.Plugs.ScrubTinctureCredentials",
-          "CyfrWeb.Plugs.TinctureRateLimit"
-        ],
-        "tincture_asset" => [
-          "CyfrWeb.Plugs.ApiSecurityHeaders",
           "CyfrWeb.Plugs.ScrubTinctureCredentials",
           "CyfrWeb.Plugs.TinctureRateLimit"
         ],
@@ -70,7 +69,7 @@
         %{
           verb: "OPTIONS",
           path: "/_f/v1/action",
-          plug: "CyfrWeb.Ingress.TinctureDataController",
+          plug: "Emissary.Web.TinctureDataController",
           plug_opts: ":system_action",
           auth: "frame_credential",
           live_view: nil,
@@ -79,7 +78,7 @@
         %{
           verb: "POST",
           path: "/_f/v1/action",
-          plug: "CyfrWeb.Ingress.TinctureDataController",
+          plug: "Emissary.Web.TinctureDataController",
           plug_opts: ":system_action",
           auth: "frame_credential",
           live_view: nil,
@@ -88,7 +87,7 @@
         %{
           verb: "OPTIONS",
           path: "/_f/v1/invoke",
-          plug: "CyfrWeb.Ingress.TinctureDataController",
+          plug: "Emissary.Web.TinctureDataController",
           plug_opts: ":invoke",
           auth: "frame_credential",
           live_view: nil,
@@ -97,7 +96,7 @@
         %{
           verb: "POST",
           path: "/_f/v1/invoke",
-          plug: "CyfrWeb.Ingress.TinctureDataController",
+          plug: "Emissary.Web.TinctureDataController",
           plug_opts: ":invoke",
           auth: "frame_credential",
           live_view: nil,
@@ -106,7 +105,7 @@
         %{
           verb: "OPTIONS",
           path: "/_f/v1/stream",
-          plug: "CyfrWeb.Ingress.TinctureDataController",
+          plug: "Emissary.Web.TinctureDataController",
           plug_opts: ":stream",
           auth: "frame_credential",
           live_view: nil,
@@ -115,7 +114,7 @@
         %{
           verb: "POST",
           path: "/_f/v1/stream",
-          plug: "CyfrWeb.Ingress.TinctureDataController",
+          plug: "Emissary.Web.TinctureDataController",
           plug_opts: ":stream",
           auth: "frame_credential",
           live_view: nil,
@@ -124,7 +123,7 @@
         %{
           verb: "GET",
           path: "/_s/*path",
-          plug: "CyfrWeb.Ingress.TinctureController",
+          plug: "Emissary.Web.TinctureController",
           plug_opts: ":served",
           auth: "tincture_handler_auth",
           live_view: nil,
@@ -133,7 +132,7 @@
         %{
           verb: "GET",
           path: "/api/executions/:id/events",
-          plug: "CyfrWeb.Ingress.ExecutionEventsController",
+          plug: "Emissary.Web.ExecutionEventsController",
           plug_opts: ":stream",
           auth: "authenticate_plug",
           live_view: nil,
@@ -142,7 +141,7 @@
         %{
           verb: "GET",
           path: "/api/health",
-          plug: "CyfrWeb.Ingress.HealthController",
+          plug: "Emissary.Web.HealthController",
           plug_opts: ":check",
           auth: "public_health",
           live_view: nil,
@@ -151,61 +150,25 @@
         %{
           verb: "GET",
           path: "/api/health/ready",
-          plug: "CyfrWeb.Ingress.HealthController",
+          plug: "Emissary.Web.HealthController",
           plug_opts: ":ready",
           auth: "public_health",
           live_view: nil,
           pipe_through: ["api", "health_throttle"]
         },
         %{
-          verb: "GET",
-          path: "/auth/:provider",
-          plug: "CyfrWeb.Ingress.AuthController",
-          plug_opts: ":request",
-          auth: "browser_oauth_start",
-          live_view: nil,
-          pipe_through: ["auth_browser", "oauth_start_throttle"]
-        },
-        %{
-          verb: "GET",
-          path: "/auth/:provider/callback",
-          plug: "CyfrWeb.Ingress.AuthController",
-          plug_opts: ":callback",
-          auth: "browser_oauth_callback",
-          live_view: nil,
-          pipe_through: ["auth_browser", "oauth_callback_throttle"]
-        },
-        %{
-          verb: "GET",
-          path: "/auth/device/complete/:ticket",
-          plug: "CyfrWeb.Ingress.AuthController",
-          plug_opts: ":device_complete",
-          auth: "browser_oauth_flow",
-          live_view: nil,
-          pipe_through: ["auth_browser", "device_complete_throttle"]
-        },
-        %{
           verb: "DELETE",
           path: "/auth/logout",
-          plug: "CyfrWeb.Ingress.AuthController",
+          plug: "Emissary.Web.SessionController",
           plug_opts: ":logout",
           auth: "handler_auth",
           live_view: nil,
           pipe_through: ["api", "auth_api_throttle"]
         },
         %{
-          verb: "POST",
-          path: "/auth/logout",
-          plug: "CyfrWeb.Ingress.AuthController",
-          plug_opts: ":browser_logout",
-          auth: "browser_public_auth",
-          live_view: nil,
-          pipe_through: ["auth_browser"]
-        },
-        %{
           verb: "GET",
           path: "/auth/oauth/callback",
-          plug: "CyfrWeb.Ingress.OAuthCallbackController",
+          plug: "Emissary.Web.OAuthCallbackController",
           plug_opts: ":callback",
           auth: "public_oauth_state",
           live_view: nil,
@@ -213,17 +176,8 @@
         },
         %{
           verb: "GET",
-          path: "/auth/post-legal-accept",
-          plug: "CyfrWeb.Ingress.AuthController",
-          plug_opts: ":post_legal_accept",
-          auth: "browser_oauth_flow",
-          live_view: nil,
-          pipe_through: ["auth_browser"]
-        },
-        %{
-          verb: "GET",
           path: "/auth/whoami",
-          plug: "CyfrWeb.Ingress.AuthController",
+          plug: "Emissary.Web.SessionController",
           plug_opts: ":whoami",
           auth: "handler_auth",
           live_view: nil,
@@ -232,48 +186,12 @@
         %{
           verb: "POST",
           path: "/hooks/:slug",
-          plug: "CyfrWeb.Ingress.WebhookController",
+          plug: "Emissary.Web.WebhookController",
           plug_opts: ":invoke",
           auth: "webhook_hmac",
           live_view: nil,
           pipe_through: ["webhook"]
         },
-        %{
-          verb: "GET",
-          path: "/t/:athanor/:publisher/:tincture_name",
-          plug: "CyfrWeb.Ingress.TinctureController",
-          plug_opts: ":index",
-          auth: "tincture_handler_auth",
-          live_view: nil,
-          pipe_through: ["tincture"]
-        },
-        %{
-          verb: "GET",
-          path: "/t/:athanor/:publisher/:tincture_name/*path",
-          plug: "CyfrWeb.Ingress.TinctureController",
-          plug_opts: ":asset",
-          auth: "tincture_handler_auth",
-          live_view: nil,
-          pipe_through: ["tincture_asset"]
-        }
-      ]
-    },
-    "Emissary.Router" => %{
-      file: "apps/cyfr/lib/emissary/router.ex",
-      pipelines: %{
-        "mcp" => [
-          "CyfrWeb.Plugs.CallIdentity",
-          ":accepts",
-          "CyfrWeb.Plugs.ApiSecurityHeaders",
-          "CyfrWeb.Plugs.CORS",
-          "CyfrWeb.Plugs.FrameRequest",
-          "CyfrWeb.Plugs.MCPOrigin",
-          "CyfrWeb.Plugs.MCPRateLimit",
-          "CyfrWeb.Plugs.Authenticate",
-          "Emissary.Web.Plugs.MCPRequestMetadata"
-        ]
-      },
-      routes: [
         %{
           verb: "DELETE",
           path: "/mcp",
@@ -300,6 +218,24 @@
           auth: "authenticate_plug",
           live_view: nil,
           pipe_through: ["mcp"]
+        },
+        %{
+          verb: "GET",
+          path: "/t/:athanor/:publisher/:tincture_name",
+          plug: "Emissary.Web.TinctureController",
+          plug_opts: ":index",
+          auth: "tincture_handler_auth",
+          live_view: nil,
+          pipe_through: ["tincture"]
+        },
+        %{
+          verb: "GET",
+          path: "/t/:athanor/:publisher/:tincture_name/*path",
+          plug: "Emissary.Web.TinctureController",
+          plug_opts: ":asset",
+          auth: "tincture_handler_auth",
+          live_view: nil,
+          pipe_through: ["tincture_asset"]
         }
       ]
     },
@@ -315,6 +251,16 @@
           "CyfrWeb.Plugs.ApiSecurityHeaders"
         ],
         "attachment_throttle" => ["CyfrWeb.Plugs.AuthRateLimit"],
+        "auth_browser" => [
+          "CyfrWeb.Plugs.Headless",
+          "CyfrWeb.Plugs.FrameRequest",
+          ":accepts",
+          ":fetch_session",
+          ":fetch_live_flash",
+          ":protect_from_forgery",
+          ":put_secure_browser_headers",
+          "CyfrWeb.Plugs.BrowserCSP"
+        ],
         "browser" => [
           "CyfrWeb.Plugs.Headless",
           "CyfrWeb.Plugs.FrameRequest",
@@ -327,7 +273,10 @@
           "CyfrWeb.Plugs.BrowserCSP"
         ],
         "claim_submit_throttle" => ["CyfrWeb.Plugs.AuthRateLimit"],
-        "legal_accept_throttle" => ["CyfrWeb.Plugs.AuthRateLimit"]
+        "device_complete_throttle" => ["CyfrWeb.Plugs.AuthRateLimit"],
+        "legal_accept_throttle" => ["CyfrWeb.Plugs.AuthRateLimit"],
+        "oauth_callback_throttle" => ["CyfrWeb.Plugs.AuthRateLimit"],
+        "oauth_start_throttle" => ["CyfrWeb.Plugs.AuthRateLimit"]
       },
       routes: [
         %{
@@ -545,6 +494,51 @@
           auth: "browser_authenticated",
           live_view: "PrismWeb.WebhooksLive",
           pipe_through: ["browser"]
+        },
+        %{
+          verb: "GET",
+          path: "/auth/:provider",
+          plug: "PrismWeb.AuthController",
+          plug_opts: ":request",
+          auth: "browser_oauth_start",
+          live_view: nil,
+          pipe_through: ["auth_browser", "oauth_start_throttle"]
+        },
+        %{
+          verb: "GET",
+          path: "/auth/:provider/callback",
+          plug: "PrismWeb.AuthController",
+          plug_opts: ":callback",
+          auth: "browser_oauth_callback",
+          live_view: nil,
+          pipe_through: ["auth_browser", "oauth_callback_throttle"]
+        },
+        %{
+          verb: "GET",
+          path: "/auth/device/complete/:ticket",
+          plug: "PrismWeb.AuthController",
+          plug_opts: ":device_complete",
+          auth: "browser_oauth_flow",
+          live_view: nil,
+          pipe_through: ["auth_browser", "device_complete_throttle"]
+        },
+        %{
+          verb: "POST",
+          path: "/auth/logout",
+          plug: "PrismWeb.AuthController",
+          plug_opts: ":browser_logout",
+          auth: "browser_public_auth",
+          live_view: nil,
+          pipe_through: ["auth_browser"]
+        },
+        %{
+          verb: "GET",
+          path: "/auth/post-legal-accept",
+          plug: "PrismWeb.AuthController",
+          plug_opts: ":post_legal_accept",
+          auth: "browser_oauth_flow",
+          live_view: nil,
+          pipe_through: ["auth_browser"]
         },
         %{
           verb: "GET",

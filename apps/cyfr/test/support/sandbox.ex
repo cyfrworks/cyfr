@@ -65,7 +65,7 @@ defmodule Cyfr.Test.Sandbox do
     Aqua.TaskSupervisor,
     Prism.TaskSupervisor,
     Emissary.TaskSupervisor,
-    CyfrWeb.Ingress.TaskSupervisor,
+    Emissary.Web.TaskSupervisor,
     Grimoire.TaskSupervisor,
     Sanctum.ProvisioningSupervisor,
     Compendium.ProvisioningSupervisor,

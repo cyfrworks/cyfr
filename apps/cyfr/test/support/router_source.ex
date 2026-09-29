@@ -27,7 +27,10 @@ defmodule Cyfr.Test.RouterSource do
   A `CyfrWeb.Pipelines.browser(name, opts)` statement is the pipeline
   `name` whose plugs are `CyfrWeb.Pipelines.browser_plugs(opts)`, rendered
   the same way: the shared definition is the one the macro expands. Its
-  `opts` must be a literal.
+  `opts` must be a literal. A `CyfrWeb.Pipelines.oauth_callback_throttle()`
+  statement is the pipeline `oauth_callback_throttle` whose plugs are
+  `CyfrWeb.Pipelines.oauth_callback_throttle_plugs/0`: each provider that
+  expands it declares it, though the router holds one definition.
   """
   @spec pipelines(Path.t()) :: %{String.t() => [String.t()]}
   def pipelines(file) do
@@ -48,7 +51,20 @@ defmodule Cyfr.Test.RouterSource do
       else: []
   end
 
+  defp pipeline(
+         {{:., _, [{:__aliases__, _, _} = module, :oauth_callback_throttle]}, _, []},
+         aliases
+       ) do
+    if render(module, aliases) == "CyfrWeb.Pipelines",
+      do: [{:oauth_callback_throttle, shared_throttle_plugs()}],
+      else: []
+  end
+
   defp pipeline(_statement, _aliases), do: []
+
+  defp shared_throttle_plugs do
+    for {plug, _plug_opts} <- CyfrWeb.Pipelines.oauth_callback_throttle_plugs(), do: inspect(plug)
+  end
 
   defp shared_browser_plugs([]), do: shared_browser_plugs([[]])
 

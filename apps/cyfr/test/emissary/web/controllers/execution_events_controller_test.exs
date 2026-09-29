@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: Apache-2.0
 # Copyright 2026 CYFR Works Inc.
 
-defmodule CyfrWeb.Ingress.ExecutionEventsControllerTest do
+defmodule Emissary.Web.ExecutionEventsControllerTest do
   use CyfrWeb.ConnCase, async: false
 
   # Execution-event access requires authentication and an ownership check.

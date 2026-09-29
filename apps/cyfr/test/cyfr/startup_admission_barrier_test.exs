@@ -136,7 +136,7 @@ defmodule Cyfr.StartupAdmissionBarrierTest do
     Emissary.External.ServerTree => {:rest_for_one, {10, 60}}
   }
 
-  @web [CyfrWeb.Ingress.TaskSupervisor, CyfrWeb.Endpoint]
+  @web [Emissary.Web.TaskSupervisor, CyfrWeb.Endpoint]
 
   # The order a stop of the whole tree stops every lasting child in: the
   # web tier, the console, the schedule pair, then the domains in reverse
@@ -144,7 +144,7 @@ defmodule Cyfr.StartupAdmissionBarrierTest do
   # foundations down to the cell.
   @stop_order [
     CyfrWeb.Endpoint,
-    CyfrWeb.Ingress.TaskSupervisor,
+    Emissary.Web.TaskSupervisor,
     Prism.TaskSupervisor,
     Prism.TinctureRegistry,
     Crucible.Schedules.Scheduler,

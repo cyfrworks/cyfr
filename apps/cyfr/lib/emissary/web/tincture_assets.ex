@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: Apache-2.0
 # Copyright 2026 CYFR Works Inc.
 
-defmodule CyfrWeb.Ingress.TinctureAssets do
+defmodule Emissary.Web.TinctureAssets do
   @moduledoc """
   Tincture bytes over HTTP: one file of a tincture version — its entry
   page with the SDK and a `<base>` injected into its head, another page,

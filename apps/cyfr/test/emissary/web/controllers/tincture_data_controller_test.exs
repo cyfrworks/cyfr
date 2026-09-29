@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: Apache-2.0
 # Copyright 2026 CYFR Works Inc.
 
-defmodule CyfrWeb.Ingress.TinctureDataControllerTest do
+defmodule Emissary.Web.TinctureDataControllerTest do
   @moduledoc """
   The tincture data routes (`/_f/v1/invoke`, `/_f/v1/action`,
   `/_f/v1/stream`): a frame's per-open credential as a bearer and nothing

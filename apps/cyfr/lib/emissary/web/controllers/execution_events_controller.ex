@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: Apache-2.0
 # Copyright 2026 CYFR Works Inc.
 
-defmodule CyfrWeb.Ingress.ExecutionEventsController do
+defmodule Emissary.Web.ExecutionEventsController do
   @moduledoc """
   SSE endpoint for streaming execution events.
 
@@ -24,7 +24,7 @@ defmodule CyfrWeb.Ingress.ExecutionEventsController do
   reconnect is then answered by the authentication plug.
   """
 
-  use CyfrWeb.Ingress, :controller
+  use Emissary.Web, :controller
 
   require CyfrWeb.ContextGuard
 

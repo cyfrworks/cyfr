@@ -19,7 +19,7 @@ defmodule Sanctum.Auth.OIDC do
 
   ## Usage
 
-  This provider proves an identity for `CyfrWeb.Ingress.AuthController.callback/2`,
+  This provider proves an identity for `PrismWeb.AuthController.callback/2`,
   which then asks the door (`Sanctum.Door.admit_identity/2`) and only on
   admission mints the session. The provider itself never creates one.
   """

@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: Apache-2.0
 # Copyright 2026 CYFR Works Inc.
 
-defmodule CyfrWeb.Ingress.HealthController do
+defmodule Emissary.Web.HealthController do
   @moduledoc """
   Health check endpoints for load balancers and monitoring.
 
@@ -9,7 +9,7 @@ defmodule CyfrWeb.Ingress.HealthController do
   - `/api/health/ready` — readiness probe (checks DB + cache)
   """
 
-  use CyfrWeb.Ingress, :controller
+  use Emissary.Web, :controller
 
   require Logger
 

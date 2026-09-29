@@ -36,7 +36,6 @@ defmodule Cyfr.BoundaryDeclarationsTest do
     Prism,
     PrismWeb,
     CyfrWeb,
-    CyfrWeb.Ingress,
     CyfrWeb.Endpoint
   ]
 
@@ -55,12 +54,11 @@ defmodule Cyfr.BoundaryDeclarationsTest do
     CyfrWeb.Router =>
       (@composition -- [CyfrWeb.Endpoint]) ++ [Emissary.Router, Emissary.Web, Prism.Router],
     CyfrWeb => [Grimoire, Sanctum, Arca, Cyfr],
-    CyfrWeb.Ingress => [Sanctum, Grimoire, Arca, Cyfr, CyfrWeb, Compendium, Crucible],
     Compendium => [Grimoire, Cyfr, Sanctum, Arca],
     Crucible => [Compendium, Grimoire, Cyfr, Sanctum, Arca],
     Aqua => [Compendium, Crucible, Grimoire, Cyfr, Sanctum, Arca],
     Emissary => [Grimoire, Sanctum, Arca, Cyfr, Crucible, CyfrWeb],
-    Emissary.Web => [Emissary, Grimoire, Sanctum, Arca, Cyfr, Crucible, CyfrWeb],
+    Emissary.Web => [Emissary, Grimoire, Sanctum, Arca, Cyfr, Compendium, Crucible, CyfrWeb],
     Emissary.Router => [],
     Prism => [Grimoire, Sanctum, Arca, Cyfr, Compendium, Aqua, Crucible, CyfrWeb],
     Prism.Router => [],
@@ -74,7 +72,6 @@ defmodule Cyfr.BoundaryDeclarationsTest do
       Emissary.Web,
       Prism.Router,
       CyfrWeb,
-      CyfrWeb.Ingress,
       CyfrWeb.Router
     ]
   }
@@ -83,7 +80,6 @@ defmodule Cyfr.BoundaryDeclarationsTest do
     Cyfr.Application,
     CyfrWeb.Endpoint,
     CyfrWeb.Router,
-    CyfrWeb.Ingress,
     Emissary.Web,
     Emissary.Router,
     Prism.Router,

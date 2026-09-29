@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: Apache-2.0
 # Copyright 2026 CYFR Works Inc.
 
-defmodule CyfrWeb.Ingress.TinctureControllerTest do
+defmodule Emissary.Web.TinctureControllerTest do
   use CyfrWeb.ConnCase, async: false
 
   import Prima.Test.Wait
@@ -275,7 +275,7 @@ defmodule CyfrWeb.Ingress.TinctureControllerTest do
       # The hand-written policy is gone: connect-src names the endpoint's
       # origin and the declared domains, never `'self'`, and the document
       # is sandboxed.
-      assert csp == CyfrWeb.Ingress.TinctureAssets.csp(manifest, nonce)
+      assert csp == Emissary.Web.TinctureAssets.csp(manifest, nonce)
       assert csp =~ ~r/connect-src https?:\/\/\S+ https:\/\/\*\.supabase\.co;/
       refute csp =~ "connect-src 'self'"
       assert String.ends_with?(csp, "; sandbox allow-scripts")
@@ -451,7 +451,7 @@ defmodule CyfrWeb.Ingress.TinctureControllerTest do
       {:ok, component} = Compendium.inspect_component(ctx, "tincture:local.auth-dash:1.0.0")
       manifest = component["manifest"]
 
-      assert csp == CyfrWeb.Ingress.TinctureAssets.csp(manifest, nonce)
+      assert csp == Emissary.Web.TinctureAssets.csp(manifest, nonce)
       assert String.ends_with?(csp, "; sandbox allow-scripts")
       assert get_resp_header(page, "referrer-policy") == ["no-referrer"]
     end

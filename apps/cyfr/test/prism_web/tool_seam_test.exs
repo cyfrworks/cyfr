@@ -74,6 +74,10 @@ defmodule PrismWeb.ToolSeamTest do
     # it mints the person's OWN session, before any console exists for
     # them. Door placement is pinned by Sanctum.DoorPlacementTest.
     {"apps/cyfr/lib/cyfr_web/sign_in_response.ex", "Sanctum.Session.create"},
+    # The browser's own sign-out: it retires the session its cookie names and
+    # nothing else. It reads only that cookie and runs before any caller
+    # context exists, so it cannot pass the gate as `session/logout` does.
+    {"apps/cyfr/lib/prism_web/controllers/auth_controller.ex", "Sanctum.Session.destroy"},
     # Recording the registry push token the claim flow just obtained. Part of
     # minting the person's identity, before any athanor exists to run a tool
     # in; `Compendium.Providers.Shared.namespace_bearer/2` reads it afterwards.

@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: Apache-2.0
 # Copyright 2026 CYFR Works Inc.
 
-defmodule CyfrWeb.Ingress.WebhookControllerTest do
+defmodule Emissary.Web.WebhookControllerTest do
   use CyfrWeb.ConnCase, async: false
 
   require Arca.Repo.Errors

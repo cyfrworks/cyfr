@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: Apache-2.0
 # Copyright 2026 CYFR Works Inc.
 
-defmodule CyfrWeb.Ingress.TinctureAssetsTest do
+defmodule Emissary.Web.TinctureAssetsTest do
   @moduledoc """
   Tincture bytes over HTTP: a file is served only when its path is safe,
   unreserved and of a served type, with the same headers on every response
@@ -16,7 +16,7 @@ defmodule CyfrWeb.Ingress.TinctureAssetsTest do
 
   use ExUnit.Case, async: false
 
-  alias CyfrWeb.Ingress.TinctureAssets
+  alias Emissary.Web.TinctureAssets
 
   @sdk File.read!(Path.join(:code.priv_dir(:cyfr), "static/sdk/cyfr.js"))
 

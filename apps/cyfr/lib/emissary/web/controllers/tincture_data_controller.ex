@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: Apache-2.0
 # Copyright 2026 CYFR Works Inc.
 
-defmodule CyfrWeb.Ingress.TinctureDataController do
+defmodule Emissary.Web.TinctureDataController do
   @moduledoc """
   The tincture data routes, `Prima.TinctureWire`'s endpoint side:
 
@@ -59,7 +59,7 @@ defmodule CyfrWeb.Ingress.TinctureDataController do
   gate's.
   """
 
-  use CyfrWeb.Ingress, :controller
+  use Emissary.Web, :controller
 
   @behaviour CyfrWeb.ErrorRenderer
 
