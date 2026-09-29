@@ -142,7 +142,7 @@ defmodule Crucible.CredentialedIngressGateTest do
     @ingresses [
       {:mcp, "apps/cyfr/lib/crucible/provider.ex", :falls_back},
       {:cron, "apps/cyfr/lib/crucible/schedules/scheduler.ex", :no_fallback_when_bound},
-      {:webhook, "apps/cyfr/lib/cyfr_web/ingress/controllers/webhook_controller.ex",
+      {:webhook, "apps/cyfr/lib/emissary/web/controllers/webhook_controller.ex",
        :no_fallback_when_bound},
       {:tincture, "apps/cyfr/lib/crucible/tincture.ex", :falls_back}
     ]

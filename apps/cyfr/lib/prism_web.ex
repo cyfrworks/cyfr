@@ -23,6 +23,7 @@ defmodule PrismWeb do
       ApiKeysLive,
       AquaLive,
       AttachmentController,
+      AuthController,
       BuildsLive,
       ChatLive,
       ChatRedirectLive,

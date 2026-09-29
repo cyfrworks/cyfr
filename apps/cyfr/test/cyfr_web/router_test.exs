@@ -179,6 +179,31 @@ defmodule CyfrWeb.RouterTest do
              "the root router declares pipelines of its own: " <>
                Enum.join(Map.keys(RouterSource.pipelines(root)), ", ")
     end
+
+    test "the shared callback throttle refuses a pipeline of its name declared any other way" do
+      # A hand-written copy with another budget, expanded before the shared
+      # declaration, would otherwise stand in for it: the map records plug
+      # names, not their options.
+      planted = ~S'''
+      defmodule CyfrWeb.RouterTest.PlantedThrottle do
+        use Phoenix.Router
+        require CyfrWeb.Pipelines
+
+        pipeline :oauth_callback_throttle do
+          plug CyfrWeb.Plugs.AuthRateLimit,
+            bucket: :oauth_callback,
+            max_requests: 1_000_000,
+            window_ms: 1
+        end
+
+        CyfrWeb.Pipelines.oauth_callback_throttle()
+      end
+      '''
+
+      assert_raise ArgumentError, ~r/declares the :oauth_callback_throttle pipeline itself/, fn ->
+        Code.compile_string(planted)
+      end
+    end
   end
 
   describe "the invariants the map must keep" do

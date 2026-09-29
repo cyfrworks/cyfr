@@ -25,7 +25,6 @@ defmodule CyfrWeb.Endpoint do
       Prism,
       PrismWeb,
       CyfrWeb,
-      CyfrWeb.Ingress,
       CyfrWeb.Router
     ],
     exports: [],

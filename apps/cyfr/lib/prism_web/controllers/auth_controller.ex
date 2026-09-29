@@ -1,11 +1,11 @@
 # SPDX-License-Identifier: Apache-2.0
 # Copyright 2026 CYFR Works Inc.
 
-defmodule CyfrWeb.Ingress.AuthController do
+defmodule PrismWeb.AuthController do
   @moduledoc """
-  OAuth authentication controller for CYFR.
+  Browser sign-in and sign-out for CYFR.
 
-  Handles OAuth/OIDC authentication flows.
+  Handles the browser's OAuth/OIDC authentication flows.
 
   GitHub and Google browser sign-in is device flow on `/login`
   (`PrismWeb.LoginLive`). This controller finishes that flow
@@ -19,11 +19,13 @@ defmodule CyfrWeb.Ingress.AuthController do
     session token lives in the cookie, never in a body)
   - `GET /auth/device/complete/:ticket` - Sets the cookie after device flow
   - `GET /auth/post-legal-accept` - Re-probes after policy acceptance
-  - `DELETE /auth/logout` - Destroys session (API callers, bearer token)
   - `POST /auth/logout` - Browser sign-out (cookie session, forgery-guarded)
+
+  An API caller's sign-out and session read, by bearer token, are the
+  HTTP API's, not the browser's.
   """
 
-  use CyfrWeb.Ingress, :controller
+  use PrismWeb, :controller
 
   require Logger
 
@@ -235,7 +237,7 @@ defmodule CyfrWeb.Ingress.AuthController do
       {_missing, conn} ->
         # Cookie expired (10 min TTL) or never set. Force fresh OAuth.
         Logger.info(
-          "[CyfrWeb.Ingress.AuthController] post_legal_accept: missing probe cookie; " <>
+          "[PrismWeb.AuthController] post_legal_accept: missing probe cookie; " <>
             "redirecting to login"
         )
 
@@ -284,30 +286,6 @@ defmodule CyfrWeb.Ingress.AuthController do
   defp extract_access_token(_), do: nil
 
   @doc """
-  Logout - destroys the session, for API callers (`DELETE /auth/logout`).
-
-  Accepts the credential only from the `Authorization: Bearer` header.
-  The browser signs out through `browser_logout/2`.
-  """
-  def logout(conn, _params) do
-    token = get_bearer_token(conn)
-
-    if token && token != "" do
-      case Session.destroy(token) do
-        :ok ->
-          conn
-          |> SignInResponse.safe_drop_session()
-          |> json(%{ok: true, message: "Logged out successfully"})
-
-        {:error, reason} ->
-          CyfrWeb.ApiError.refuse(conn, reason)
-      end
-    else
-      CyfrWeb.ApiError.refuse(conn, :missing_token)
-    end
-  end
-
-  @doc """
   The browser's sign-out (`POST /auth/logout`): retires the Sanctum
   session the cookie names, drops the cookie session, and lands on the
   sign-in page.
@@ -326,42 +304,9 @@ defmodule CyfrWeb.Ingress.AuthController do
     |> redirect(to: "/login?error=signed_out")
   end
 
-  @doc """
-  Returns current session info.
-
-  Requires Authorization: Bearer {token} header.
-  """
-  def whoami(conn, _params) do
-    case get_bearer_token(conn) do
-      nil ->
-        CyfrWeb.ApiError.refuse(conn, :missing_token)
-
-      token ->
-        case Session.get(token) do
-          {:ok, session} ->
-            conn
-            |> json(%{
-              ok: true,
-              session: %{
-                user_id: session.user_id,
-                email: session.email,
-                provider: session.provider,
-                created_at: session.created_at,
-                expires_at: session.expires_at
-              }
-            })
-
-          {:error, _} ->
-            CyfrWeb.ApiError.send(conn, 401, :invalid_session, nil)
-        end
-    end
-  end
-
   # ============================================================================
   # Private Helpers
   # ============================================================================
-
-  defp get_bearer_token(conn), do: Sanctum.BearerToken.read(conn)
 
   # The door, then what sign-in records — before any session exists and
   # before cyfr.run hears of the identity. It runs here, at the one place the

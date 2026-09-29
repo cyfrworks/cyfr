@@ -18,7 +18,6 @@ defmodule Cyfr.Application do
       Prism,
       PrismWeb,
       CyfrWeb,
-      CyfrWeb.Ingress,
       CyfrWeb.Endpoint
     ],
     exports: [],
@@ -192,15 +191,15 @@ defmodule Cyfr.Application do
     ]
   end
 
-  # The ingress's task supervisor (an inbound webhook's delivery) starts
-  # before the endpoint and so stops after it: a shutdown closes the
+  # Emissary's webhook task supervisor (an inbound webhook's delivery)
+  # starts before the endpoint and so stops after it: a shutdown closes the
   # listener first, and a delivery already in flight is ended after it.
   # The endpoint drains its open connections for the
   # `thousand_island_options` `shutdown_timeout` in `config/config.exs`.
   defp web do
     [
       # 30 s: the longest webhook delivery it lets finish.
-      Supervisor.child_spec({Task.Supervisor, name: CyfrWeb.Ingress.TaskSupervisor},
+      Supervisor.child_spec({Task.Supervisor, name: Emissary.Web.TaskSupervisor},
         shutdown: 30_000
       ),
       CyfrWeb.Endpoint

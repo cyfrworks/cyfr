@@ -1,12 +1,12 @@
 # SPDX-License-Identifier: Apache-2.0
 # Copyright 2026 CYFR Works Inc.
 
-defmodule CyfrWeb.Ingress.ExecutionEventsStreamTest do
+defmodule Emissary.Web.ExecutionEventsStreamTest do
   use CyfrWeb.ConnCase, async: false
 
   import Ecto.Query, only: [from: 2]
 
-  alias CyfrWeb.Ingress.ExecutionEventsController
+  alias Emissary.Web.ExecutionEventsController
   alias Crucible.Events
 
   setup %{conn: conn} do

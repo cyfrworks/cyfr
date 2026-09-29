@@ -12,7 +12,7 @@ defmodule Compendium.Tincture do
   validators and the scaffolder call the functions here and keep their
   sentences; outside it, the `Compendium` facade answers
   `tincture_entry/1` as a typed refusal and `tincture_asset_rules/0` as one
-  immutable map, and the HTTP adapter (`CyfrWeb.Ingress.TinctureAssets`)
+  immutable map, and the HTTP adapter (`Emissary.Web.TinctureAssets`)
   serves by that map.
 
   The served types and the declaration grammar are the frame's rules

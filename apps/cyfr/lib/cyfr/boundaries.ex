@@ -91,7 +91,6 @@ defmodule Cyfr.Boundaries do
       Emissary.Web,
       Prism.Router,
       CyfrWeb,
-      CyfrWeb.Ingress,
       CyfrWeb.Router
     ],
     exports: [],
@@ -402,18 +401,27 @@ defmodule Cyfr.Boundaries do
     %{
       from: ["apps/cyfr/lib/emissary/**/*.ex", "apps/cyfr/lib/emissary.ex"],
       into: "Sanctum",
+      depth: 3,
       allow: ~w(
+        Sanctum Sanctum.BearerToken Sanctum.Caller Sanctum.ClientIp Sanctum.Consent
         Sanctum.Context Sanctum.Egress Sanctum.ExecutionStanding Sanctum.Network
-        Sanctum.ToolServerDigest Sanctum.Unauthorized Sanctum.UnauthorizedError
-        Sanctum.VaultReader
+        Sanctum.Session Sanctum.TinctureAccess Sanctum.TinctureAuth Sanctum.ToolServerDigest
+        Sanctum.Unauthorized Sanctum.UnauthorizedError Sanctum.Vault.OAuthGrant
+        Sanctum.VaultReader Sanctum.Webhook
       ),
       reason:
-        "the MCP transport carries tenancy, reads a server's vault edge, and uses " <>
-          "Sanctum.Network/Egress for external servers and the backends service. " <>
+        "the auth fabric's own front door, where a wide roster is the front door doing " <>
+          "its job. The MCP transport carries tenancy, reads a server's vault edge, and " <>
+          "uses Sanctum.Network/Egress for external servers and the backends service. " <>
           "An outbound call's row runs under its caller's grant, checked through " <>
           "Sanctum.ExecutionStanding as it is admitted and closed, and the MCP " <>
           "controller answers a `Sanctum.UnauthorizedError` raised in the request " <>
-          "process as a JSON-RPC refusal. " <>
+          "process as a JSON-RPC refusal. The HTTP adapters read the bearer token, " <>
+          "the caller and the session, the tincture credentials and access policy, the " <>
+          "vault's OAuth grant and a webhook's row. `Sanctum.Consent` is the tincture " <>
+          "data routes' read of the grant revision a frame credential names " <>
+          "(`Sanctum.Consent.profiles/2`, `head_consent/2`), read as the shell reads it " <>
+          "when it mints. " <>
           "Boundary's exports are global, and `Sanctum` exports more than this roster to " <>
           "every boundary that lists it, so no declaration can say it."
     },
@@ -433,33 +441,11 @@ defmodule Cyfr.Boundaries do
     },
     %{
       from: [
-        "apps/cyfr/lib/cyfr_web/ingress/**/*.ex",
-        "apps/cyfr/lib/cyfr_web/ingress.ex"
-      ],
-      into: "Sanctum",
-      depth: 3,
-      allow: ~w(
-        Sanctum Sanctum.Auth.EmailVerification Sanctum.BearerToken
-        Sanctum.Caller Sanctum.ClientIp Sanctum.Consent Sanctum.Context Sanctum.Door
-        Sanctum.Session Sanctum.SignIn Sanctum.Tenancy Sanctum.Tenancy.Users
-        Sanctum.TinctureAccess Sanctum.TinctureAuth Sanctum.Vault.OAuthGrant Sanctum.Webhook
-      ),
-      reason:
-        "the auth fabric's own ingress — a wide roster is the front door doing its job. " <>
-          "`Sanctum.Consent` is the tincture data routes' read of the grant revision a " <>
-          "frame credential names (`Sanctum.Consent.profiles/2`, `head_consent/2`), read " <>
-          "as the shell reads it when it mints. " <>
-          "Boundary's exports are global, and `Sanctum` exports more than this roster to " <>
-          "every boundary that lists it, so no declaration can say it."
-    },
-    %{
-      from: [
         "apps/cyfr/lib/prism_web/**/*.ex",
         "apps/cyfr/lib/prism_web.ex",
         "apps/cyfr/lib/cyfr_web/**/*.ex",
         "apps/cyfr/lib/cyfr_web.ex"
       ],
-      except: ["apps/cyfr/lib/cyfr_web/ingress/**/*.ex", "apps/cyfr/lib/cyfr_web/ingress.ex"],
       into: "Sanctum",
       allow: ~w(
         Sanctum.ApiKey Sanctum.Auth Sanctum.BearerToken Sanctum.Caller Sanctum.ClientIp
@@ -468,7 +454,9 @@ defmodule Cyfr.Boundaries do
         Sanctum.Webhook
       ),
       reason:
-        "the console, its context guard (`CyfrWeb.ContextGuard`, which names " <>
+        "the console, its browser sign-in (`PrismWeb.AuthController`, which asks the " <>
+          "door before the sign-in response mints a session), its context guard " <>
+          "(`CyfrWeb.ContextGuard`, which names " <>
           "`Sanctum.Caller` and `Sanctum.Context` alone) and the web tier's shared " <>
           "ingress plugs (`CyfrWeb.Plugs.*`), which are the auth fabric's own " <>
           "ingress — a wide roster is the front door doing its job. " <>
@@ -609,7 +597,7 @@ defmodule Cyfr.Boundaries do
       into: "Aqua",
       allow: [],
       reason:
-        "the MCP surface reaches the assistant only as operations through the gate " <>
+        "Emissary reaches the assistant only as operations through the gate " <>
           "(the `aqua` and thread tools); it names no function of the domain. " <>
           "Boundary traces a quote only where it expands, and `Emissary.Router.routes/0` " <>
           "expands in the composition router, whose deps admit `Aqua`: only this row reads " <>
@@ -623,7 +611,7 @@ defmodule Cyfr.Boundaries do
       into: "Crucible",
       allow: ~w(Crucible),
       reason:
-        "the MCP surface follows executions, serves webhooks, keeps an outbound call's " <>
+        "Emissary follows executions, serves webhooks, keeps an outbound call's " <>
           "lease and reports health through the execution domain's root facade. " <>
           "Boundary's exports are global, and `Crucible` exports `Host.Children`, `Keys`, " <>
           "`Schedules.Scheduler` and `Supervisor` beside its root to every boundary that " <>
@@ -652,13 +640,19 @@ defmodule Cyfr.Boundaries do
         "apps/cyfr/lib/emissary.ex"
       ],
       into: "Compendium",
-      allow: [],
+      allow: ~w(Compendium),
       reason:
-        "the MCP surface names nothing of the component domain: every component " <>
-          "operation it serves is a gate operation, reached through the operation table. " <>
-          "Boundary traces a quote only where it expands, and `Emissary.Router.routes/0` " <>
-          "expands in the composition router, whose deps admit `Compendium`: only this row " <>
-          "reads the quoted names."
+        "Emissary reaches the component domain's root facade alone: tinctures' files " <>
+          "and data routes are its adapters, and they read a tincture's entry and " <>
+          "declaration, what it invokes, the version an asset credential names, the " <>
+          "served types and a document's policy and sandbox through it " <>
+          "(`Compendium.tincture_asset_rules/0`, " <>
+          "`Compendium.inspect_component/2`, `Compendium.tincture_csp/2`, " <>
+          "`Compendium.tincture_sandbox_tokens/1`). Every component operation MCP serves " <>
+          "is a gate operation, reached through the operation table. " <>
+          "Boundary's exports are global, and `Compendium` exports its two paths, " <>
+          "`ConsentFacts`, `Providers.Component` and `Supervisor` beside its root to every " <>
+          "boundary that lists it, so no declaration can say it."
     },
     %{
       from: [
@@ -720,21 +714,14 @@ defmodule Cyfr.Boundaries do
       ],
       except: ["apps/cyfr/lib/cyfr/application.ex"],
       into: "Compendium",
-      allow: ~w(Compendium),
+      allow: [],
       reason:
-        "the host reaches the component domain's root facade alone: the seed offer " <>
-          "(`Cyfr.SeedOffer`, `Compendium.sync_seeds/0`), the tincture asset " <>
-          "ingress (`CyfrWeb.Ingress.TinctureAssets`, " <>
-          "`Compendium.tincture_asset_rules/0`), the sign-in probe " <>
-          "(`CyfrWeb.Ingress.AuthController`, `Compendium.complete_sign_in/4`) and the " <>
-          "tincture controller's reads of a tincture's entry, the version an asset " <>
-          "credential names (`Compendium.inspect_component/2`), the served types and a " <>
-          "document's policy and sandbox, derived from its declaration by the frame's " <>
-          "rules (`Compendium.tincture_csp/2`, `Compendium.tincture_sandbox_tokens/1`). The " <>
-          "composition root is excepted. " <>
-          "Boundary's exports are global, and `Compendium` exports its two paths, " <>
-          "`ConsentFacts`, `Providers.Component` and `Supervisor` beside its root to every " <>
-          "boundary that lists it, so no declaration can say it."
+        "the host names nothing of the component domain: the seed offer " <>
+          "(`Cyfr.SeedOffer`) runs the work the composition root hands it " <>
+          "(`Compendium.sync_seeds/0`), and the composition root is excepted. " <>
+          "The composition router and the endpoint this row reads are boundaries whose deps " <>
+          "admit `Compendium`, and the shared tier's router macros expand in the first, so " <>
+          "the compiler admits what this row refuses."
     },
     %{
       from: [
@@ -744,15 +731,14 @@ defmodule Cyfr.Boundaries do
       ],
       except: ["apps/cyfr/lib/cyfr/application.ex"],
       into: "Crucible",
-      allow: ~w(Crucible),
+      allow: [],
       reason:
-        "the host names nothing of execution's internals: the member slot, the bus " <>
-          "and the web tier's glue sit below it, and the HTTP ingress follows, invokes " <>
-          "and probes executions through the root facade alone. The composition root " <>
-          "(`Cyfr.Application`) starts execution's trees, and is excepted. " <>
-          "Boundary's exports are global, and `Crucible` exports `Host.Children`, `Keys`, " <>
-          "`Schedules.Scheduler` and `Supervisor` beside its root to every boundary that " <>
-          "lists it, so no declaration can say it."
+        "the host names nothing of execution: the member slot, the bus and the web " <>
+          "tier's glue sit below it. The composition root (`Cyfr.Application`) starts " <>
+          "execution's trees, and is excepted. " <>
+          "The composition router and the endpoint this row reads are boundaries whose deps " <>
+          "admit `Crucible`, and the shared tier's router macros expand in the first, so " <>
+          "the compiler admits what this row refuses."
     },
     %{
       from: [
@@ -775,10 +761,9 @@ defmodule Cyfr.Boundaries do
           "and the endpoint (`CyfrWeb.Endpoint`, whose parser wrapper answers `/mcp` " <>
           "in `Emissary.Web.MCPError`) are composition boundaries beside it, and are " <>
           "excepted too. " <>
-          "Boundary traces a quote only where it expands, and `use CyfrWeb, :router`, " <>
-          "`CyfrWeb.Pipelines.browser/2` and `CyfrWeb.Ingress.Router.routes/0` expand in the " <>
-          "composition router, whose deps admit `Emissary`: only this row reads the quoted " <>
-          "names."
+          "Boundary traces a quote only where it expands, and `use CyfrWeb, :router` and " <>
+          "`CyfrWeb.Pipelines`' macros expand in the composition router, whose deps admit " <>
+          "`Emissary`: only this row reads the quoted names."
     },
     %{
       from: ["apps/cyfr/lib/compendium/**/*.ex"],
@@ -824,14 +809,17 @@ defmodule Cyfr.Boundaries do
       into: "CyfrWeb",
       depth: 3,
       allow: ~w(
-        CyfrWeb CyfrWeb.ContextGuard CyfrWeb.Endpoint CyfrWeb.PendingProbe
+        CyfrWeb CyfrWeb.ContextGuard CyfrWeb.Endpoint CyfrWeb.MinimalPage CyfrWeb.PendingProbe
         CyfrWeb.Pipelines CyfrWeb.Plugs.ApiSecurityHeaders CyfrWeb.Plugs.AuthRateLimit
-        CyfrWeb.Plugs.FrameRequest CyfrWeb.Plugs.Headless CyfrWeb.Router CyfrWeb.SafeRedirect
-        CyfrWeb.SignInResponse
+        CyfrWeb.Plugs.ConfiguredUeberauth CyfrWeb.Plugs.FrameRequest CyfrWeb.Plugs.Headless
+        CyfrWeb.Router CyfrWeb.SafeRedirect CyfrWeb.SignInResponse
       ),
       reason:
         "the console reads the host's shared web tier and the composition triple its " <>
-          "verified routes need, and never another adapter. Building a copy-link's " <>
+          "verified routes need, and never another adapter. Browser sign-in answers its " <>
+          "refusals on the no-session page (`CyfrWeb.MinimalPage`) and runs the " <>
+          "configured providers' strategy (`CyfrWeb.Plugs.ConfiguredUeberauth`). " <>
+          "Building a copy-link's " <>
           "public URL reads a global fact off the endpoint, `PrismWeb.verified_routes/0` " <>
           "names the endpoint and the router beside `CyfrWeb.static_paths/0`, because " <>
           "that is the triple `use Phoenix.VerifiedRoutes` takes, and `Prism.Router` " <>
@@ -849,27 +837,13 @@ defmodule Cyfr.Boundaries do
       into: "Emissary",
       allow: [],
       reason:
-        "an adapter names no other surface: the console and the MCP adapter meet " <>
-          "only below them, in the host's shared web tier and the domains. " <>
+        "an adapter names no other surface: the console and Emissary's adapters meet " <>
+          "only below them, in the host's shared web tier and the domains. The browser's " <>
+          "sign-in callbacks share the OAuth callback throttle through the shared " <>
+          "pipelines (`CyfrWeb.Pipelines`), not through Emissary's router. " <>
           "Boundary traces a quote only where it expands, and `Prism.Router.routes/0` expands " <>
           "in the composition router, whose deps admit `Emissary`: only this row reads the " <>
           "quoted names."
-    },
-    %{
-      from: [
-        "apps/cyfr/lib/prism/**/*.ex",
-        "apps/cyfr/lib/prism.ex",
-        "apps/cyfr/lib/prism_web/**/*.ex",
-        "apps/cyfr/lib/prism_web.ex"
-      ],
-      into: "CyfrWeb.Ingress",
-      allow: [],
-      reason:
-        "an adapter names no other surface: the console and the host's HTTP ingress " <>
-          "meet only below them, in the shared web tier and the domains. " <>
-          "Boundary traces a quote only where it expands, and `Prism.Router.routes/0` expands " <>
-          "in the composition router, whose deps admit `CyfrWeb.Ingress`: only this row reads " <>
-          "the quoted names."
     },
     %{
       from: [
@@ -929,8 +903,9 @@ defmodule Cyfr.Boundaries do
       into: "CyfrWeb",
       allow: [],
       reason:
-        "`CyfrWeb` is the web tier's own: the context guard and the ingress adapters " <>
-          "that turn a domain's answer into an HTTP response. A domain hands a " <>
+        "`CyfrWeb` is the web tier's own: the context guard, the plugs and the " <>
+          "renderers the surfaces' adapters turn a domain's answer into an HTTP " <>
+          "response with. A domain hands a " <>
           "surface plain data and a typed refusal and never names the adapter " <>
           "that renders it. " <>
           "Prima and the islands run no Boundary compiler, and a foundation's build does not " <>
@@ -942,58 +917,36 @@ defmodule Cyfr.Boundaries do
       into: "PrismWeb",
       allow: [],
       reason:
-        "an adapter names no other surface: the MCP adapter and the console meet " <>
-          "only below them, in the host's shared web tier and the domains. " <>
+        "an adapter names no other surface: Emissary's adapters and the console meet " <>
+          "only below them, in the host's shared web tier and the domains. The OAuth " <>
+          "grant callback renders its own no-session page (`CyfrWeb.MinimalPage`) and " <>
+          "the API's sign-out drops the cookie session through the shared sign-in " <>
+          "response, so neither names the console's browser sign-in. " <>
           "Boundary traces a quote only where it expands, and `Emissary.Router.routes/0` " <>
           "expands in the composition router, whose deps admit `PrismWeb`: only this row " <>
           "reads the quoted names."
     },
     %{
       from: ["apps/cyfr/lib/emissary/**/*.ex", "apps/cyfr/lib/emissary.ex"],
-      into: "CyfrWeb.Ingress",
-      allow: [],
-      reason:
-        "an adapter names no other surface: the MCP adapter and the host's HTTP " <>
-          "ingress meet only below them, in the shared web tier and the domains. " <>
-          "Boundary traces a quote only where it expands, and `Emissary.Router.routes/0` " <>
-          "expands in the composition router, whose deps admit `CyfrWeb.Ingress`: only this " <>
-          "row reads the quoted names."
-    },
-    %{
-      from: ["apps/cyfr/lib/cyfr_web/ingress/**/*.ex", "apps/cyfr/lib/cyfr_web/ingress.ex"],
-      into: "PrismWeb",
-      allow: [],
-      reason:
-        "an adapter names no other surface: the host's HTTP ingress renders its own " <>
-          "no-session pages (`CyfrWeb.MinimalPage`) and names nothing of the console. " <>
-          "Boundary traces a quote only where it expands, and " <>
-          "`CyfrWeb.Ingress.Router.routes/0` expands in the composition router, whose deps " <>
-          "admit `PrismWeb`: only this row reads the quoted names."
-    },
-    %{
-      from: ["apps/cyfr/lib/cyfr_web/ingress/**/*.ex", "apps/cyfr/lib/cyfr_web/ingress.ex"],
-      into: "Emissary",
-      allow: [],
-      reason:
-        "an adapter names no other surface: an inbound webhook's delivery runs on the " <>
-          "ingress's own task supervisor, never the MCP adapter's. " <>
-          "Boundary traces a quote only where it expands, and " <>
-          "`CyfrWeb.Ingress.Router.routes/0` expands in the composition router, whose deps " <>
-          "admit `Emissary`: only this row reads the quoted names."
-    },
-    %{
-      from: ["apps/cyfr/lib/emissary/**/*.ex", "apps/cyfr/lib/emissary.ex"],
       into: "CyfrWeb",
       depth: 3,
       allow: ~w(
-        CyfrWeb.ContextGuard CyfrWeb.ErrorRenderer CyfrWeb.Plugs.ApiSecurityHeaders
+        CyfrWeb.ApiError CyfrWeb.ContextGuard CyfrWeb.ErrorRenderer CyfrWeb.MinimalPage
+        CyfrWeb.Pipelines CyfrWeb.Plugs.ApiSecurityHeaders CyfrWeb.Plugs.AuthRateLimit
         CyfrWeb.Plugs.Authenticate CyfrWeb.Plugs.CORS CyfrWeb.Plugs.CallIdentity
         CyfrWeb.Plugs.FrameRequest CyfrWeb.Plugs.MCPOrigin CyfrWeb.Plugs.MCPRateLimit
-        CyfrWeb.SSE
+        CyfrWeb.Plugs.ScrubTinctureCredentials CyfrWeb.Plugs.TinctureRateLimit
+        CyfrWeb.Plugs.VerifyWebhookSignature CyfrWeb.Plugs.WebhookIdempotency
+        CyfrWeb.Plugs.WebhookRateLimit CyfrWeb.SSE CyfrWeb.SignInResponse
       ),
       reason:
-        "the MCP adapter reads the host's shared web tier and never its root router, " <>
-          "its endpoint or another adapter. " <>
+        "Emissary's adapters read the host's shared web tier and never its root router, " <>
+          "its endpoint or another adapter: the HTTP API renders its refusals " <>
+          "(`CyfrWeb.ApiError`) and the OAuth grant callback its no-session page " <>
+          "(`CyfrWeb.MinimalPage`), the API's sign-out drops the cookie session through " <>
+          "the sign-in response (`CyfrWeb.SignInResponse`), and `Emissary.Router` " <>
+          "declares the OAuth callback throttle from the shared pipelines " <>
+          "(`CyfrWeb.Pipelines`). " <>
           "Boundary's exports are global, and `CyfrWeb` exports more of the shared tier than " <>
           "this roster to every surface that lists it, so no declaration can say it."
     },
@@ -1582,7 +1535,7 @@ defmodule Cyfr.Boundaries do
 
   # The route providers the composition router invokes, so another cannot
   # appear silently: each hands its routes to the root by macro.
-  @routers [Emissary.Router, CyfrWeb.Ingress.Router, Prism.Router]
+  @routers [Emissary.Router, Prism.Router]
 
   @doc "The route providers whose routes the composition router's table holds."
   @spec routers() :: [module()]
@@ -1928,23 +1881,23 @@ defmodule Cyfr.Boundaries do
     %{module: CyfrWeb.Plugs.ControlPlaneOwnership, site: :call, plane: :external},
     # The tincture routes: a tincture the address does not resolve, and the
     # routes' rate limit.
-    %{module: CyfrWeb.Ingress.TinctureController, site: :index, plane: :external},
+    %{module: Emissary.Web.TinctureController, site: :index, plane: :external},
     %{module: CyfrWeb.Plugs.TinctureRateLimit, site: :call, plane: :external},
     # The tincture data routes: a request with no frame credential and no
     # public tincture, a credential that no longer stands, an undeclared
     # operation or stream, and the per-frame limits.
-    %{module: CyfrWeb.Ingress.TinctureDataController, site: :invoke, plane: :external},
-    %{module: CyfrWeb.Ingress.TinctureDataController, site: :system_action, plane: :external},
-    %{module: CyfrWeb.Ingress.TinctureDataController, site: :stream, plane: :external},
+    %{module: Emissary.Web.TinctureDataController, site: :invoke, plane: :external},
+    %{module: Emissary.Web.TinctureDataController, site: :system_action, plane: :external},
+    %{module: Emissary.Web.TinctureDataController, site: :stream, plane: :external},
     # The webhook route: the caller the row establishes, its signature,
     # its idempotency key and its rate limit.
-    %{module: CyfrWeb.Ingress.WebhookController, site: :invoke, plane: :external},
+    %{module: Emissary.Web.WebhookController, site: :invoke, plane: :external},
     %{module: CyfrWeb.Plugs.VerifyWebhookSignature, site: :call, plane: :external},
     %{module: CyfrWeb.Plugs.WebhookIdempotency, site: :call, plane: :external},
     %{module: CyfrWeb.Plugs.WebhookRateLimit, site: :call, plane: :external},
     # The execution-events stream: an execution the caller may not read (or
     # that does not exist), an unauthenticated caller, and the stream limit.
-    %{module: CyfrWeb.Ingress.ExecutionEventsController, site: :stream, plane: :external},
+    %{module: Emissary.Web.ExecutionEventsController, site: :stream, plane: :external},
     # The scheduler's fire: its own admission is the occurrence claimed
     # under a held generation, and a run admission refusal is that fire's
     # failed completion.
@@ -2078,13 +2031,13 @@ defmodule Cyfr.Boundaries do
     },
     %{
       responsibility: "probe that storage still takes a write, before any caller is known",
-      modules: ~w(CyfrWeb.Ingress.HealthController Arca),
+      modules: ~w(Emissary.Web.HealthController Arca),
       check: "Arca.Storage.authorize_path/2",
       reason:
         "the readiness probe is anonymous and asks whether the store still takes a " <>
           "write, so it runs before any caller is known and in no athanor: `ready/2` " <>
           "puts one fixed key under the global `system/` root " <>
-          "(`CyfrWeb.Ingress.HealthController.probe_dir/0`) and deletes it again, under " <>
+          "(`Emissary.Web.HealthController.probe_dir/0`) and deletes it again, under " <>
           "the platform's internal context, whose system actor is the only kind " <>
           "`Arca.Storage.authorize_path/2` opens a global root to. `Arca` runs that " <>
           "check on every put and delete. The probe names no tenant path and reads " <>

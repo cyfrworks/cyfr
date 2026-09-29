@@ -155,7 +155,7 @@ defmodule Compendium.Registry.Client do
   Exchanges an IdP access_token for a fresh set of push tokens — one for the
   user's personal namespace (if claimed) and one per publisher membership.
   Called automatically by `Sanctum.Auth.DeviceFlow.poll_for_session/3` and
-  `CyfrWeb.Ingress.AuthController.callback/2` after `Session.create/1`.
+  `PrismWeb.AuthController.callback/2` after `Session.create/1`.
 
   The `access_token` is passed in the request body, NOT in the Authorization
   header — probe is a bootstrap call for users who don't have a push token yet.

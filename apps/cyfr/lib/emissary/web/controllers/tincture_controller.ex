@@ -1,9 +1,9 @@
 # SPDX-License-Identifier: Apache-2.0
 # Copyright 2026 CYFR Works Inc.
 
-defmodule CyfrWeb.Ingress.TinctureController do
+defmodule Emissary.Web.TinctureController do
   @moduledoc """
-  Tincture HTTP serving on the host's ingress (the platform API surface).
+  Tincture HTTP serving, Emissary's adapter for tinctures' served files.
 
   A public tincture is served at its address, to anyone; a private
   tincture version's files only under an asset credential in their path
@@ -16,14 +16,14 @@ defmodule CyfrWeb.Ingress.TinctureController do
   GET  /t/:athanor/:publisher/:tincture_name/*path     — a public tincture's files
   GET  /_s/:credential/:publisher/:name/:version/*file — a private tincture version's files
 
-  The bytes and their headers are `CyfrWeb.Ingress.TinctureAssets`'. A
+  The bytes and their headers are `Emissary.Web.TinctureAssets`'. A
   tincture's data — its invocations, actions and streams — is
-  `CyfrWeb.Ingress.TinctureDataController`'s.
+  `Emissary.Web.TinctureDataController`'s.
   """
 
-  use CyfrWeb.Ingress, :controller
+  use Emissary.Web, :controller
 
-  alias CyfrWeb.Ingress.TinctureAssets
+  alias Emissary.Web.TinctureAssets
   alias Sanctum.TinctureAccess
 
   # A public tincture's files may be cached for this long; its address,

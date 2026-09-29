@@ -677,7 +677,7 @@ defmodule Cyfr.BoundariesTest do
       assert Boundaries.http_violations(scanned) == [],
              """
              A domain names a Plug connection or response. The request and the
-             response are the surface adapter's (`CyfrWeb.Ingress.*`, a
+             response are the surface adapter's (`Emissary.Web.*`, a
              controller); the domain answers plain data and a typed refusal.
 
              #{Enum.join(Boundaries.http_violations(scanned), "\n")}
@@ -687,7 +687,7 @@ defmodule Cyfr.BoundariesTest do
     test "the surface adapter is the one that does name them" do
       # A scan that finds nothing in the domains finds nothing because they
       # name nothing, not because the pattern cannot see a connection.
-      adapter = scan("apps/cyfr/lib/cyfr_web/ingress/tincture_assets.ex")
+      adapter = scan("apps/cyfr/lib/emissary/web/tincture_assets.ex")
       assert Boundaries.http_violations(adapter) != []
     end
   end
@@ -1075,7 +1075,13 @@ defmodule Cyfr.BoundariesTest do
     end
 
     test "a surface that widens is reported against its row" do
-      row = Enum.find(Boundaries.surfaces(), &(&1.into == "Compendium" and &1.allow == []))
+      row =
+        Enum.find(
+          Boundaries.surfaces(),
+          &(&1.into == "Compendium" and "apps/sanctum/lib/**/*.ex" in &1.from)
+        ) || flunk("no surface row fences the identity domain out of the component domain")
+
+      assert row.allow == []
 
       planted = [
         {"apps/sanctum/lib/sanctum/planted.ex",
@@ -1341,7 +1347,7 @@ defmodule Cyfr.BoundariesTest do
       assert Boundaries.surface_violations(row, planted) == ["Aqua", "Aqua.Notes", "Aqua.Runner"]
     end
 
-    test "the console and the host name only the component domain's root; MCP names none" do
+    test "every surface names only the component domain's root, and the host names none" do
       find = fn tree ->
         Enum.find(
           Boundaries.surfaces(),
@@ -1349,7 +1355,7 @@ defmodule Cyfr.BoundariesTest do
         ) || flunk("no surface row fences #{tree} into the component domain's root")
       end
 
-      rows = Enum.map(["cyfr_web", "prism", "prism_web"], find)
+      rows = Enum.map(["emissary", "prism", "prism_web"], find)
 
       planted = [
         {"apps/cyfr/lib/planted.ex",
@@ -1374,10 +1380,10 @@ defmodule Cyfr.BoundariesTest do
                  ["Compendium.OCI", "Compendium.Registry", "Compendium.SignInSync"]
       end
 
-      mcp = find.("emissary")
-      assert mcp.allow == []
+      host = find.("cyfr_web")
+      assert host.allow == []
 
-      assert Boundaries.surface_violations(mcp, planted) ==
+      assert Boundaries.surface_violations(host, planted) ==
                ["Compendium", "Compendium.OCI", "Compendium.Registry", "Compendium.SignInSync"]
     end
 
@@ -1410,7 +1416,7 @@ defmodule Cyfr.BoundariesTest do
                ["Aqua.Kinds", "Aqua.Loop", "Aqua.Runner", "Aqua.TaskSupervisor"]
     end
 
-    test "the host names no domain but the component and execution domains' roots" do
+    test "the host names no domain" do
       rows =
         for into <- ~w(Aqua Compendium Crucible Emissary),
             do:
@@ -1456,8 +1462,8 @@ defmodule Cyfr.BoundariesTest do
 
       expected = %{
         "Aqua" => ["Aqua"],
-        "Compendium" => ["Compendium.Provisioning"],
-        "Crucible" => ["Crucible.Admission"],
+        "Compendium" => ["Compendium", "Compendium.Provisioning"],
+        "Crucible" => ["Crucible", "Crucible.Admission"],
         "Emissary" => ["Emissary.External"]
       }
 
@@ -1564,12 +1570,12 @@ defmodule Cyfr.BoundariesTest do
   defmodule PlantedRouter do
     use Phoenix.Router
 
-    get "/planted/unclassified", CyfrWeb.Ingress.HealthController, :check
+    get "/planted/unclassified", Emissary.Web.HealthController, :check
 
-    get "/planted/unknown-posture", CyfrWeb.Ingress.HealthController, :check,
+    get "/planted/unknown-posture", Emissary.Web.HealthController, :check,
       metadata: %{auth: :made_up}
 
-    get "/planted/unrostered-public", CyfrWeb.Ingress.HealthController, :check,
+    get "/planted/unrostered-public", Emissary.Web.HealthController, :check,
       metadata: %{auth: :public_health}
   end
 

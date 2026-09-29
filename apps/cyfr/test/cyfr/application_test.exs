@@ -49,7 +49,7 @@ defmodule Cyfr.ApplicationTest do
     Crucible.Schedules.Scheduler => 10_000,
     Prism.TinctureRegistry => 5_000,
     Prism.TaskSupervisor => 30_000,
-    CyfrWeb.Ingress.TaskSupervisor => 30_000
+    Emissary.Web.TaskSupervisor => 30_000
   }
 
   # A wildcard CORS origin once authentication is configured must fail closed

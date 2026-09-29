@@ -4,9 +4,10 @@
 defmodule Prism.Router do
   @moduledoc """
   The console's routes: the browser pipeline under the console's root
-  layout, the claim, legal-acceptance and attachment pipelines, the
-  claim and legal pages, sign-in, the attachment and file downloads and
-  the `:athanor` LiveView session.
+  layout, the browser sign-in pipelines and their throttles, the claim,
+  legal-acceptance and attachment pipelines, browser sign-in and
+  sign-out with their callbacks, the claim and legal pages, the
+  attachment and file downloads and the `:athanor` LiveView session.
 
   The composition router invokes `routes/0` where these routes stand, so
   its `__routes__/0` stays the total table. The quoted calls resolve where
@@ -24,6 +25,32 @@ defmodule Prism.Router do
       # LiveView socket is handled by the endpoint before the router and never
       # passes through here.
       CyfrWeb.Pipelines.browser(:browser, root_layout: {PrismWeb.Layouts, :root})
+
+      # Sign-in and sign-out render through `CyfrWeb.MinimalPage`, so their
+      # browser pipeline sets no root layout.
+      CyfrWeb.Pipelines.browser(:auth_browser)
+
+      # OAuth kickoff gets a conservative per-IP throttle; callbacks get the
+      # generous :oauth_callback_throttle below.
+      pipeline :oauth_start_throttle do
+        plug CyfrWeb.Plugs.AuthRateLimit,
+          bucket: :oauth_start,
+          max_requests: 30,
+          window_ms: 60_000
+      end
+
+      # The sign-in callbacks' throttle, which the vault's OAuth grant
+      # callback shares: one definition in the host's shared pipelines.
+      CyfrWeb.Pipelines.oauth_callback_throttle()
+
+      # Meter ticket adoption before authentication. Looking up a ticket
+      # consumes it, so attempts need their own request budget.
+      pipeline :device_complete_throttle do
+        plug CyfrWeb.Plugs.AuthRateLimit,
+          bucket: :device_complete,
+          max_requests: 30,
+          window_ms: 60_000
+      end
 
       # Submit path on the claim page: defends against username enumeration
       # (cyfr.run's 409 distinguishes SLUG_TAKEN / ALREADY_CLAIMED) and
@@ -73,6 +100,43 @@ defmodule Prism.Router do
           window_ms: 60_000
       end
 
+      # Sign-in routes. GitHub/Google sign in by device flow on `/login`;
+      # `/auth/:provider` is the OIDC kickoff. Static paths
+      # sit above `/:provider` so they cannot be captured as a provider name;
+      # the API's `/auth` paths and the OAuth grant callback are expanded
+      # before this scope by the composition router.
+      scope "/auth", PrismWeb do
+        pipe_through :auth_browser
+
+        # POST, never GET: signing someone out must not be one <img src> away
+        # — the browser pipeline's CSRF token guards the state change. The
+        # API callers' sign-out is `DELETE /auth/logout`, by bearer token.
+        post "/logout", AuthController, :browser_logout, metadata: %{auth: :browser_public_auth}
+
+        get "/post-legal-accept", AuthController, :post_legal_accept,
+          metadata: %{auth: :browser_oauth_flow}
+
+        scope "/" do
+          pipe_through :device_complete_throttle
+
+          get "/device/complete/:ticket", AuthController, :device_complete,
+            metadata: %{auth: :browser_oauth_flow}
+        end
+
+        scope "/" do
+          pipe_through :oauth_start_throttle
+
+          get "/:provider", AuthController, :request, metadata: %{auth: :browser_oauth_start}
+        end
+
+        scope "/" do
+          pipe_through :oauth_callback_throttle
+
+          get "/:provider/callback", AuthController, :callback,
+            metadata: %{auth: :browser_oauth_callback}
+        end
+      end
+
       # The publisher-namespace claim (web flow): a person who wants to publish
       # to cyfr.run claims their namespace here, whenever they choose. Signing
       # in never depends on it.
@@ -105,8 +169,8 @@ defmodule Prism.Router do
       # ==========================================================================
 
       # Sign in from the browser. `/login` starts GitHub/Google device flow
-      # (or links to `/auth/oidcc`); signing out is the ingress's
-      # `POST /auth/logout`.
+      # (or links to `/auth/oidcc`); signing out is `POST /auth/logout`
+      # above.
       scope "/", PrismWeb do
         pipe_through :browser
 

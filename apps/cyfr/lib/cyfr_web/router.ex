@@ -8,8 +8,10 @@ defmodule CyfrWeb.Router do
 
   It declares no route and no pipeline of its own. Each adapter's route
   provider hands its pipelines and routes in by macro, so the table stays
-  one table and each adapter's routes stay in its own file. The providers'
-  prefixes are disjoint, so their order here does not change matching.
+  one table and each adapter's routes stay in its own file. Both
+  providers hold `/auth` paths, so their order here is part of matching:
+  Emissary's static `/auth` paths expand before Prism's `/auth/:provider`
+  wildcards.
   """
 
   use Boundary,
@@ -28,27 +30,25 @@ defmodule CyfrWeb.Router do
       Prism,
       Prism.Router,
       PrismWeb,
-      CyfrWeb,
-      CyfrWeb.Ingress
+      CyfrWeb
     ],
     exports: [],
     check: [aliases: true]
 
   use CyfrWeb, :router
 
-  require CyfrWeb.Ingress.Router
-  # The console's and the ingress's browser pipelines expand from this macro.
+  # The shared pipelines both providers declare expand from these macros.
   require CyfrWeb.Pipelines
   require Emissary.Router
   require Prism.Router
 
-  # The MCP adapter: the `:mcp` pipeline and the `/mcp` scope.
+  # Emissary: MCP, the HTTP API's sign-out and session read, the OAuth
+  # grant callback, tincture serving, health, the execution-events stream
+  # and webhooks. Before the console, so its static `/auth` paths precede
+  # the browser's `/auth/:provider` wildcards.
   Emissary.Router.routes()
 
-  # The host's ingress: sign-in and sign-out, the OAuth grant callback,
-  # tincture serving, health, the execution-events stream and webhooks.
-  CyfrWeb.Ingress.Router.routes()
-
-  # The console: the claim and legal pages, sign-in, attachments and the LiveViews.
+  # The console: browser sign-in and sign-out, the claim and legal pages,
+  # attachments and the LiveViews.
   Prism.Router.routes()
 end

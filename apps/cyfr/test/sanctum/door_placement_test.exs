@@ -18,7 +18,7 @@ defmodule Sanctum.DoorPlacementTest do
   # The CLI device flow mints for itself; the browser flows mint through
   # the shared sign-in responder.
   @device_flow "apps/sanctum/lib/sanctum/auth/device_flow.ex"
-  @browser_callback "apps/cyfr/lib/cyfr_web/ingress/controllers/auth_controller.ex"
+  @browser_callback "apps/cyfr/lib/prism_web/controllers/auth_controller.ex"
   @minters ["apps/cyfr/lib/cyfr_web/sign_in_response.ex", @device_flow]
 
   defp lib_files do

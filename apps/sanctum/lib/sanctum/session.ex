@@ -12,7 +12,7 @@ defmodule Sanctum.Session do
   ## Usage
 
       # Create a session — only after the door admitted the identity
-      # (`CyfrWeb.Ingress.AuthController.callback/2`, `Sanctum.Auth.DeviceFlow`)
+      # (`PrismWeb.AuthController.callback/2`, `Sanctum.Auth.DeviceFlow`)
       {:ok, session} = Sanctum.Session.create(ctx)
 
       # Load context from session token
