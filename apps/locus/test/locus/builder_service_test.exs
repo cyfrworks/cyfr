@@ -76,7 +76,7 @@ defmodule Locus.BuilderServiceTest do
 
   # The application's keeper for the test: `Locus.Keeper` under its own
   # name, which is how the service finds it, against a fake cyfr-keeper.
-  defp spawner!(mode) do
+  defp keeper!(mode) do
     {fake, channel} = FakeKeeper.start()
     :ok = FakeKeeper.mode(fake, mode)
     attach_dir = FakeKeeper.short_tmp_dir()
@@ -144,7 +144,7 @@ defmodule Locus.BuilderServiceTest do
   describe "a build refused before its stream, nothing spawned" do
     setup do
       # Whatever reaches the keeper shows here; nothing may.
-      fake = spawner!(:normal)
+      fake = keeper!(:normal)
 
       on_exit(fn ->
         assert %{active: 0} = Slots.status(@slots)
@@ -510,7 +510,7 @@ defmodule Locus.BuilderServiceTest do
     test "a build ended at its memory bound answers memory with the configured limit", %{
       port: port
     } do
-      fake = spawner!({:exit, %{code: nil, signal: "SIGKILL", memory_exceeded: true}})
+      fake = keeper!({:exit, %{code: nil, signal: "SIGKILL", memory_exceeded: true}})
 
       assert {200, lines} = Wire.build(port, Wire.request("true"))
       assert {:refusal, {:memory, 268_435_456}, diagnostics} = List.last(lines)
@@ -522,7 +522,7 @@ defmodule Locus.BuilderServiceTest do
     end
 
     test "a build killed for any other reason is failed with its signal", %{port: port} do
-      _fake = spawner!({:exit, %{code: nil, signal: "SIGKILL", memory_exceeded: false}})
+      _fake = keeper!({:exit, %{code: nil, signal: "SIGKILL", memory_exceeded: false}})
 
       assert {200, lines} = Wire.build(port, Wire.request("true"))
       assert {:refusal, {:failed, {:signal, "SIGKILL"}}, _diagnostics} = List.last(lines)
@@ -531,7 +531,7 @@ defmodule Locus.BuilderServiceTest do
     test "a keeper that cannot bound a build runs none: unavailable, naming the option", %{
       port: port
     } do
-      fake = spawner!(:memory_unavailable)
+      fake = keeper!(:memory_unavailable)
 
       assert {200, lines} = Wire.build(port, Wire.request("true"))
       assert {:refusal, {:unavailable, sentence}, _diagnostics} = List.last(lines)
@@ -545,7 +545,7 @@ defmodule Locus.BuilderServiceTest do
     end
 
     test "a pool with no uid free answers capacity", %{port: port} do
-      _fake = spawner!(:capacity)
+      _fake = keeper!(:capacity)
 
       assert {200, lines} = Wire.build(port, Wire.request("true"))
       assert {:refusal, {:capacity, max}, _} = List.last(lines)
@@ -553,7 +553,7 @@ defmodule Locus.BuilderServiceTest do
     end
 
     test "cyfr-keeper lost mid-build answers unavailable and gives the slot back", %{port: port} do
-      fake = spawner!(:normal)
+      fake = keeper!(:normal)
       body = Wire.body(Wire.request("sleep 3"))
 
       conn = Wire.open(port, @build, body, [{"x-cyfr-auth", Wire.header(body)}])

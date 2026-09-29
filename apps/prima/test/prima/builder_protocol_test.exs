@@ -521,7 +521,7 @@ defmodule Prima.BuilderProtocolTest do
         {:timeout, 0},
         {:memory, 1},
         {:memory, 1_073_741_824},
-        {:unavailable, "spawner"},
+        {:unavailable, "keeper"},
         {:failed, {:status, 0}},
         {:failed, {:status, -1}},
         {:failed, {:signal, "TERM"}},

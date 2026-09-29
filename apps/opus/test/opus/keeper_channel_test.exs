@@ -47,26 +47,26 @@ defmodule Opus.KeeperChannelTest do
     {:ok, listener} = :socket.open(:local, :stream)
     :ok = :socket.bind(listener, %{family: :local, path: path})
     :ok = :socket.listen(listener)
-    {:ok, keeper_end} = :socket.open(:local, :stream)
-    :ok = :socket.connect(keeper_end, %{family: :local, path: path})
-    {:ok, spawner} = :socket.accept(listener)
+    {:ok, client_end} = :socket.open(:local, :stream)
+    :ok = :socket.connect(client_end, %{family: :local, path: path})
+    {:ok, keeper} = :socket.accept(listener)
 
     name = :"spawn_keeper_#{unique}"
 
     start_supervised!(
-      Supervisor.child_spec({Channel, channel: keeper_end, attach_dir: dir, name: name},
+      Supervisor.child_spec({Channel, channel: client_end, attach_dir: dir, name: name},
         restart: :temporary
       )
     )
 
     on_exit(fn ->
-      :socket.close(spawner)
+      :socket.close(keeper)
       :socket.close(listener)
       File.rm(path)
       File.rm_rf(dir)
     end)
 
-    {:ok, spawner: spawner, name: name, dir: dir}
+    {:ok, keeper: keeper, name: name, dir: dir}
   end
 
   defp start_handle!(name, id \\ "runner_1") do
@@ -75,18 +75,18 @@ defmodule Opus.KeeperChannelTest do
   end
 
   # The next line the client sent the keeper.
-  defp request(spawner, buffer \\ "") do
+  defp request(keeper, buffer \\ "") do
     case :binary.split(buffer, "\n") do
       [line, _rest] ->
         Jason.decode!(line)
 
       [partial] ->
-        {:ok, data} = :socket.recv(spawner, 0, 5_000)
-        request(spawner, partial <> data)
+        {:ok, data} = :socket.recv(keeper, 0, 5_000)
+        request(keeper, partial <> data)
     end
   end
 
-  defp reply(spawner, message), do: :ok = :socket.send(spawner, [Jason.encode!(message), ?\n])
+  defp reply(keeper, message), do: :ok = :socket.send(keeper, [Jason.encode!(message), ?\n])
 
   defp attach!(dir, token) do
     {:ok, relay} =
@@ -115,7 +115,7 @@ defmodule Opus.KeeperChannelTest do
   end
 
   test "a handle spawns a runner with a control channel and its explicit environment, in the runner pool",
-       %{spawner: spawner, name: name, dir: dir} do
+       %{keeper: keeper, name: name, dir: dir} do
     handle = start_handle!(name)
 
     assert %{
@@ -127,13 +127,13 @@ defmodule Opus.KeeperChannelTest do
              "argv" => ["/app/bin/opus", "start"],
              "env" => @spec_env,
              "attach" => %{"path" => attach_path, "token" => token}
-           } = request(spawner)
+           } = request(keeper)
 
     assert attach_path == Path.join(dir, "attach.sock")
     assert String.match?(token, ~r/\A[0-9a-f]{64}\z/)
 
     spawn_id = String.duplicate("ab", 16)
-    reply(spawner, %{v: 1, type: "spawned", id: id, spawn_id: spawn_id, uid: 30_101, pid: 4242})
+    reply(keeper, %{v: 1, type: "spawned", id: id, spawn_id: spawn_id, uid: 30_101, pid: 4242})
 
     # The assign is held until the relay attaches, then flushed as frames,
     # its attempt bound on the runner's relay first.
@@ -196,7 +196,7 @@ defmodule Opus.KeeperChannelTest do
     :ok = :gen_tcp.send(relay, frame(@stream_control, ""))
     assert_receive {RunnerProcess, ^handle, :closed}, 5_000
 
-    reply(spawner, %{
+    reply(keeper, %{
       v: 1,
       type: "exited",
       spawn_id: spawn_id,
@@ -206,13 +206,13 @@ defmodule Opus.KeeperChannelTest do
     })
 
     assert_receive {RunnerProcess, ^handle, {:exited, {:status, 0}}}, 5_000
-    reply(spawner, %{v: 1, type: "released", spawn_id: spawn_id})
+    reply(keeper, %{v: 1, type: "released", spawn_id: spawn_id})
     assert_receive {RunnerProcess, ^handle, :released}, 5_000
     :gen_tcp.close(relay)
   end
 
   test "an assign held for a relay that has not attached shows no key in either status", %{
-    spawner: spawner,
+    keeper: keeper,
     name: name
   } do
     attempt = ScriptedHost.attempt!(ScriptedHost.start!())
@@ -221,9 +221,9 @@ defmodule Opus.KeeperChannelTest do
 
     # The handle holds the assign until its channel attaches.
     handle = start_handle!(name)
-    %{"id" => id} = request(spawner)
+    %{"id" => id} = request(keeper)
 
-    reply(spawner, %{
+    reply(keeper, %{
       v: 1,
       type: "spawned",
       id: id,
@@ -240,7 +240,7 @@ defmodule Opus.KeeperChannelTest do
     # The client holds bytes sent before the relay attached.
     spec = %{runner: "runner_2", argv: ["/app/bin/opus", "start"], env: @spec_env, server: name}
     {:ok, channel, []} = Channel.spawn(spec)
-    _ = request(spawner)
+    _ = request(keeper)
     assert :ok = Channel.send(channel, RunnerControl.encode(assign))
 
     for process <- [handle, name], key <- [keys.call, keys.seal] do
@@ -251,23 +251,23 @@ defmodule Opus.KeeperChannelTest do
   end
 
   test "a release carries its grace, and a signal-ended runner is reported so", %{
-    spawner: spawner,
+    keeper: keeper,
     name: name,
     dir: dir
   } do
     handle = start_handle!(name)
-    %{"id" => id, "attach" => %{"token" => token}} = request(spawner)
+    %{"id" => id, "attach" => %{"token" => token}} = request(keeper)
     spawn_id = String.duplicate("cd", 16)
-    reply(spawner, %{v: 1, type: "spawned", id: id, spawn_id: spawn_id, uid: 30_102, pid: 4243})
+    reply(keeper, %{v: 1, type: "spawned", id: id, spawn_id: spawn_id, uid: 30_102, pid: 4243})
     relay = attach!(dir, token)
     assert_receive {RunnerProcess, ^handle, :ready}, 5_000
 
     RunnerProcess.release(handle, 750)
 
     assert %{"v" => 1, "type" => "release", "spawn_id" => ^spawn_id, "grace_ms" => 750} =
-             request(spawner)
+             request(keeper)
 
-    reply(spawner, %{
+    reply(keeper, %{
       v: 1,
       type: "exited",
       spawn_id: spawn_id,
@@ -282,47 +282,47 @@ defmodule Opus.KeeperChannelTest do
   end
 
   test "a release asked before the keeper answered the spawn follows the spawned reply", %{
-    spawner: spawner,
+    keeper: keeper,
     name: name
   } do
     handle = start_handle!(name)
-    %{"id" => id} = request(spawner)
+    %{"id" => id} = request(keeper)
     RunnerProcess.release(handle, 0)
     spawn_id = String.duplicate("ef", 16)
-    reply(spawner, %{v: 1, type: "spawned", id: id, spawn_id: spawn_id, uid: 30_103, pid: 4244})
-    assert %{"type" => "release", "spawn_id" => ^spawn_id, "grace_ms" => 0} = request(spawner)
+    reply(keeper, %{v: 1, type: "spawned", id: id, spawn_id: spawn_id, uid: 30_103, pid: 4244})
+    assert %{"type" => "release", "spawn_id" => ^spawn_id, "grace_ms" => 0} = request(keeper)
   end
 
   test "a spawn the keeper refuses reaches the handle as a refusal: no process of it ran", %{
-    spawner: spawner,
+    keeper: keeper,
     name: name
   } do
     handle = start_handle!(name)
-    %{"id" => id} = request(spawner)
-    reply(spawner, %{v: 1, type: "error", id: id, code: "capacity"})
+    %{"id" => id} = request(keeper)
+    reply(keeper, %{v: 1, type: "error", id: id, code: "capacity"})
     assert_receive {RunnerProcess, ^handle, {:refused, "capacity"}}, 5_000
   end
 
-  test "the pool's stats are asked of the keeper and answered", %{spawner: spawner, name: name} do
+  test "the pool's stats are asked of the keeper and answered", %{keeper: keeper, name: name} do
     test = self()
     spawn_link(fn -> send(test, {:stats, Channel.stats(name)}) end)
-    assert %{"v" => 1, "type" => "pool", "id" => id, "pool" => "runner"} = request(spawner)
+    assert %{"v" => 1, "type" => "pool", "id" => id, "pool" => "runner"} = request(keeper)
 
-    reply(spawner, %{v: 1, type: "pool", id: id, pool: "runner", size: 8, free: 7, quarantined: 0})
+    reply(keeper, %{v: 1, type: "pool", id: id, pool: "runner", size: 8, free: 7, quarantined: 0})
 
     assert_receive {:stats, {:ok, %{size: 8, free: 7, quarantined: 0}}}, 5_000
   end
 
   test "the channel's loss reaches every handle and ends the client", %{
-    spawner: spawner,
+    keeper: keeper,
     name: name
   } do
     handle = start_handle!(name)
-    _ = request(spawner)
+    _ = request(keeper)
     client = Process.whereis(name)
     ref = Process.monitor(client)
 
-    :socket.close(spawner)
+    :socket.close(keeper)
 
     assert_receive {RunnerProcess, ^handle, {:error, :channel_lost}}, 5_000
     assert_receive {:DOWN, ^ref, :process, ^client, {:shutdown, :channel_lost}}, 5_000
@@ -345,7 +345,7 @@ defmodule Opus.KeeperChannelTest do
   # every `exited` carries is understood, and the runner's end reaches its
   # handle as its signal.
   test "the keeper's memory vectors: a runner spawn may carry a bound, and an exit reported at one is understood",
-       %{spawner: spawner, name: name, dir: dir} do
+       %{keeper: keeper, name: name, dir: dir} do
     assert %{"memory_bytes" => bound, "control" => true, "argv" => ["/app/bin/opus", "start"]} =
              Enum.find(
                @vectors["valid_requests"],
@@ -363,13 +363,13 @@ defmodule Opus.KeeperChannelTest do
     assert %{"code" => nil, "signal" => "SIGKILL", "spawn_id" => spawn_id} = exited
 
     handle = start_handle!(name)
-    %{"id" => id, "attach" => %{"token" => token}} = sent = request(spawner)
+    %{"id" => id, "attach" => %{"token" => token}} = sent = request(keeper)
     assert {:ok, sent["memory_bytes"]} == Opus.Settings.runner_memory_bytes([])
-    reply(spawner, %{v: 1, type: "spawned", id: id, spawn_id: spawn_id, uid: 30_103, pid: 4244})
+    reply(keeper, %{v: 1, type: "spawned", id: id, spawn_id: spawn_id, uid: 30_103, pid: 4244})
     relay = attach!(dir, token)
     assert_receive {RunnerProcess, ^handle, :ready}, 5_000
 
-    reply(spawner, exited)
+    reply(keeper, exited)
     assert_receive {RunnerProcess, ^handle, {:exited, {:signal, "SIGKILL"}}}, 5_000
     :gen_tcp.close(relay)
     assert_receive {RunnerProcess, ^handle, :closed}, 5_000

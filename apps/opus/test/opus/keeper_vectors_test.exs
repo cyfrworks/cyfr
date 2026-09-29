@@ -53,27 +53,27 @@ defmodule Opus.KeeperVectorsTest do
     {:ok, listener} = :socket.open(:local, :stream)
     :ok = :socket.bind(listener, %{family: :local, path: path})
     :ok = :socket.listen(listener)
-    {:ok, keeper_end} = :socket.open(:local, :stream)
-    :ok = :socket.connect(keeper_end, %{family: :local, path: path})
-    {:ok, spawner} = :socket.accept(listener)
+    {:ok, client_end} = :socket.open(:local, :stream)
+    :ok = :socket.connect(client_end, %{family: :local, path: path})
+    {:ok, keeper} = :socket.accept(listener)
     name = :"opus_vectors_#{unique}_#{n}"
 
     start_supervised!(
       Supervisor.child_spec(
-        {Channel, channel: keeper_end, attach_dir: dir, name: name, memory_bytes: memory_bytes},
+        {Channel, channel: client_end, attach_dir: dir, name: name, memory_bytes: memory_bytes},
         id: name,
         restart: :temporary
       )
     )
 
     on_exit(fn ->
-      :socket.close(spawner)
+      :socket.close(keeper)
       :socket.close(listener)
       File.rm(path)
       File.rm_rf(dir)
     end)
 
-    %{name: name, spawner: spawner, dir: dir}
+    %{name: name, keeper: keeper, dir: dir}
   end
 
   # Asks the client for a runner as the pool does; the test process owns
@@ -81,24 +81,24 @@ defmodule Opus.KeeperVectorsTest do
   defp spawn!(client, argv \\ ["/app/bin/opus", "start"], env \\ %{"OPUS_ROLE" => "runner"}) do
     spec = %{runner: "runner_vectors", argv: argv, env: env, server: client.name}
     {:ok, %{ref: ref}, []} = Channel.spawn(spec)
-    {line, ""} = raw_request(client.spawner)
+    {line, ""} = raw_request(client.keeper)
     {ref, line}
   end
 
   # The next line the client wrote the keeper, raw, and what followed it.
-  defp raw_request(spawner, buffer \\ "") do
+  defp raw_request(keeper, buffer \\ "") do
     case :binary.split(buffer, "\n") do
       [line, rest] ->
         {line <> "\n", rest}
 
       [partial] ->
-        {:ok, data} = :socket.recv(spawner, 0, 5_000)
-        raw_request(spawner, partial <> data)
+        {:ok, data} = :socket.recv(keeper, 0, 5_000)
+        raw_request(keeper, partial <> data)
     end
   end
 
   defp reply(client, message),
-    do: :ok = :socket.send(client.spawner, [Jason.encode!(message), ?\n])
+    do: :ok = :socket.send(client.keeper, [Jason.encode!(message), ?\n])
 
   defp reply_vector(type, match) do
     Enum.find(@vectors["replies"], &(&1["type"] == type and match.(&1))) ||
@@ -207,7 +207,7 @@ defmodule Opus.KeeperVectorsTest do
         %{"type" => "pool"} ->
           test = self()
           spawn_link(fn -> send(test, {:stats, Channel.stats(client.name)}) end)
-          {line, ""} = raw_request(client.spawner)
+          {line, ""} = raw_request(client.keeper)
           assert %{"type" => "pool", "pool" => "runner", "id" => id} = Jason.decode!(line)
           reply(client, %{vector | "id" => id})
 

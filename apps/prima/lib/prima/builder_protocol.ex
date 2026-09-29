@@ -81,14 +81,14 @@ defmodule Prima.BuilderProtocol do
   | `capacity` | `{max}` | every slot of the cap is taken |
   | `timeout` | `{budget_ms}` | the build passed its budget |
   | `memory` | `{limit_bytes}` | the build reached its memory bound and was ended there |
-  | `unavailable` | a sentence naming what | a toolchain or the spawner is missing |
+  | `unavailable` | a sentence naming what | a toolchain or the keeper is missing |
   | `failed` | `{status}` or `{signal}` | the build ran and did not produce its output |
   | `protocol_mismatch` | `{builder, client}` | the request's version is not `version/0` |
 
   `memory` is the builder's report that the build's sandbox reached the
   bound the builder runs every build under, `limit_bytes`: its processes,
   what it wrote to its home and the kernel memory charged to it, together.
-  The builder answers it only when its spawner read that end from the
+  The builder answers it only when its keeper read that end from the
   kernel's counters for the sandbox; a build killed for any other reason,
   the container's own memory limit among them, is `failed` with its signal.
 

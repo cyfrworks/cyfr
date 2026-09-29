@@ -481,7 +481,7 @@ defmodule Locus.Builder do
       {:error, :capacity} ->
         {:error, {:capacity, Locus.Config.max_concurrent()}}
 
-      # The spawner's own reading of the wire: a build ended at its bound,
+      # The keeper client's own reading of the wire: a build ended at its bound,
       # and a bound this deployment cannot enforce.
       {:error, {:memory, _limit_bytes} = refusal} ->
         {:error, refusal}
