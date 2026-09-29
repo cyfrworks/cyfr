@@ -180,11 +180,11 @@ defmodule Cyfr.CrossLanguageDriftTest do
     client_go = read!("apps/codex/internal/mcp/client.go")
 
     # The roster is Prima.Refusal's, read from Prima.ConsentSignal; every
-    # other side is held to it, so a fifth tag fails here until each side
+    # other side is held to it, so a sixth tag fails here until each side
     # names it.
     assert Prima.Refusal.signal_tags() == Prima.ConsentSignal.tags()
     tags = Enum.map(Prima.Refusal.signal_tags(), &Atom.to_string/1)
-    assert length(tags) == 4
+    assert length(tags) == 5
 
     go_tags = Regex.scan(~r/-335\d\d: "(\w+)"/, client_go, capture: :all_but_first)
 
@@ -200,7 +200,8 @@ defmodule Cyfr.CrossLanguageDriftTest do
       "setup_required" => "-33501",
       "consent_required" => "-33502",
       "consent_conflict" => "-33503",
-      "restart_required" => "-33504"
+      "restart_required" => "-33504",
+      "confirmation_required" => "-33505"
     }
 
     for tag <- tags do
@@ -225,9 +226,18 @@ defmodule Cyfr.CrossLanguageDriftTest do
     assert client_go =~ ~s(data["tag"]) and client_go =~ ~s(data["payload"])
 
     # Crucible.Provider spells the roster once, as the guard on format_root_result/1.
-    assert execution_mcp =~
-             "tag in [:setup_required, :consent_required, :consent_conflict, :restart_required]",
-           "crucible/provider.ex guard roster must include the four consent signal tags"
+    [guard] =
+      Regex.run(
+        ~r/defp format_root_result\(\{:error, \{tag, payload\}\}\)\s+when tag in \[([^\]]*)\]/,
+        execution_mcp,
+        capture: :all_but_first
+      )
+
+    guard_tags =
+      guard |> String.split(",", trim: true) |> Enum.map(&(&1 |> String.trim() |> trim_colon()))
+
+    assert Enum.sort(guard_tags) == Enum.sort(tags),
+           "crucible/provider.ex guard roster must be the five consent signal tags"
 
     # The payload keys Consent documents as normative are the ones the CLI
     # formatter reads — a renamed key degrades every explanation to the
@@ -236,7 +246,37 @@ defmodule Cyfr.CrossLanguageDriftTest do
       assert consent =~ key, "payload key #{key} missing from Sanctum.Consent"
       assert root_go =~ ~s(payload["#{key}"]), "payload key #{key} not read by root.go"
     end
+
+    # A pending confirmation's payload is its id, operation and expiry; the
+    # CLI renders the id and sends the person to Prism to confirm, since the
+    # command line carries no confirmation.
+    [confirmation_go] =
+      Regex.run(~r/case "confirmation_required":(.*?)\n\t(?:case |\})/s, root_go,
+        capture: :all_but_first
+      )
+
+    # The keys are read inside the type itself: `profile_id: ` elsewhere in
+    # the module must not stand in for a missing `id: `.
+    [confirmation_type] =
+      Regex.run(~r/@type confirmation_required :: %\{(.*?)\}/s, consent, capture: :all_but_first)
+
+    type_keys =
+      ~r/^\s*(\w+):/m
+      |> Regex.scan(confirmation_type, capture: :all_but_first)
+      |> List.flatten()
+
+    assert type_keys == ~w(id operation expires_at),
+           "Sanctum.Consent's confirmation_required type must be exactly id, operation, expires_at"
+
+    for key <- ~w(id operation expires_at) do
+      assert confirmation_go =~ ~s(payload["#{key}"]),
+             "payload key #{key} not read by root.go's confirmation_required case"
+    end
+
+    assert confirmation_go =~ "Prism", "root.go does not send the person to Prism to confirm"
   end
+
+  defp trim_colon(":" <> tag), do: tag
 
   # ==========================================================================
   # The MAC names: domains, service labels and the auth header

@@ -86,6 +86,9 @@ defmodule Prima.RefusalTest do
     {{:consent_required, %{}}, :consent_required},
     {{:consent_conflict, %{}}, :conflict},
     {{:restart_required, %{}}, :cancelled},
+    {{:confirmation_required, %{id: "confirmation-7f3a", operation: "vault/create"}},
+     :confirmation_required},
+    {{:confirmation_required, %{"id" => "confirmation-7f3a"}}, :confirmation_required},
     {:rate_limited, :rate_limited},
     {:stream_limit, :rate_limited},
     {{:limit_reached, :athanors, 3}, :rate_limited},
@@ -242,8 +245,8 @@ defmodule Prima.RefusalTest do
       end
     end
 
-    test "every class has a sentence, and the table reaches all fifteen" do
-      assert length(Refusal.classes()) == 15
+    test "every class has a sentence, and the table reaches all sixteen" do
+      assert length(Refusal.classes()) == 16
 
       reached = @rostered |> Enum.map(&elem(&1, 1)) |> MapSet.new()
       assert reached == MapSet.new(Refusal.classes())
@@ -400,6 +403,24 @@ defmodule Prima.RefusalTest do
         refute refusal.message =~ "some_internal_state"
       end)
     end
+
+    test "includes a confirmation signal that names no confirmation" do
+      capture_log(fn ->
+        for payload <- [%{}, %{operation: "vault/create"}, %{id: ""}] do
+          assert %Refusal{class: :internal} = Refusal.classify({:confirmation_required, payload})
+          refute Refusal.reason?({:confirmation_required, payload})
+        end
+      end)
+    end
+  end
+
+  test "a pending confirmation is its own class: neither a denial nor a consent to give" do
+    signal = {:confirmation_required, %{id: "confirmation-7f3a", operation: "vault/create"}}
+
+    assert %Refusal{class: :confirmation_required} = Refusal.classify(signal)
+    assert :confirmation_required in Refusal.classes()
+    assert :confirmation_required in Refusal.signal_tags()
+    refute Refusal.classify(signal).class in [:forbidden, :consent_required]
   end
 
   test "a refusal classifies as itself" do

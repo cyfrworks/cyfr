@@ -1,6 +1,42 @@
 # SPDX-License-Identifier: Apache-2.0
 # Copyright 2026 CYFR Works Inc.
 
+defmodule Emissary.MCP.RouterTest.Confirming do
+  @moduledoc false
+  # A handler that answers what a sensitive change answers until its
+  # confirmation is given: the `confirmation_required` signal naming the
+  # pending confirmation, never a result.
+  @behaviour Prima.Provider
+
+  alias Prima.Operation
+
+  @impl true
+  def service, do: "probe"
+
+  @impl true
+  def tools do
+    [
+      Operation.tool([
+        Operation.new("confirming_probe", "change", "Ask for a fresh confirmation", [],
+          kind: :read,
+          planes: [:external]
+        )
+      ])
+    ]
+  end
+
+  @impl true
+  def handle(_tool, _ctx, %{"action" => "change"}) do
+    {:error,
+     {:confirmation_required,
+      %{
+        id: "confirmation-7f3a",
+        operation: "confirming_probe/change",
+        expires_at: ~U[2026-09-29 12:05:00Z]
+      }}}
+  end
+end
+
 defmodule Emissary.MCP.RouterTest do
   use ExUnit.Case, async: false
 
@@ -210,6 +246,37 @@ defmodule Emissary.MCP.RouterTest do
 
         assert {:error, :insufficient_permissions, _message} =
                  call(ctx, "refusing_probe", %{"action" => "forbidden"})
+      end)
+    end
+
+    test "a pending confirmation is a protocol error, -33505, naming its confirmation",
+         %{context: ctx} do
+      Grimoire.Catalog.with_providers([Emissary.MCP.RouterTest.Confirming], fn ->
+        assert {:error, :confirmation_required, message, data} =
+                 call(ctx, "confirming_probe", %{"action" => "change"})
+
+        assert message =~ "confirmation-7f3a"
+        assert message =~ "Prism"
+
+        # As the wire carries it.
+        assert %{
+                 "error" => %{
+                   "code" => -33_505,
+                   "message" => ^message,
+                   "data" => %{
+                     "tag" => "confirmation_required",
+                     "payload" => %{
+                       "id" => "confirmation-7f3a",
+                       "operation" => "confirming_probe/change",
+                       "expires_at" => "2026-09-29T12:05:00Z"
+                     }
+                   }
+                 }
+               } =
+                 7
+                 |> Message.encode_error(:confirmation_required, message, data)
+                 |> Jason.encode!()
+                 |> Jason.decode!()
       end)
     end
   end

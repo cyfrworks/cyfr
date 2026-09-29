@@ -248,6 +248,88 @@ func TestCallTool_AuthRequired(t *testing.T) {
 	}
 }
 
+// A sensitive change answers -33505: never a success, and the pending
+// confirmation's id survives to the command that renders it. The body is
+// the one the server writes, a JSON-RPC error at HTTP 400.
+func TestCallTool_ConfirmationRequired(t *testing.T) {
+	const id = "confirmation-7f3a"
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusBadRequest)
+		io.WriteString(w, `{"jsonrpc":"2.0","id":1,"error":{"code":-33505,`+
+			`"message":"Confirmation required: vault/create needs a fresh confirmation — confirm it in Prism (confirmation `+id+`)",`+
+			`"data":{"tag":"confirmation_required","payload":{"id":"`+id+`","operation":"vault/create","expires_at":"2026-09-29T12:05:00Z"}}}}`)
+	}))
+	defer srv.Close()
+
+	c := NewClient(srv.URL)
+	result, err := c.CallTool(t.Context(), "vault", map[string]any{"action": "create"})
+	if err == nil {
+		t.Fatalf("a confirmation_required answer must not read as success, got %v", result)
+	}
+	if result != nil {
+		t.Errorf("expected no result, got %v", result)
+	}
+	if errors.Is(err, ErrAuthRequired) {
+		t.Errorf("a pending confirmation is not an auth problem, got %v", err)
+	}
+
+	var ce *ConsentError
+	if !errors.As(err, &ce) {
+		t.Fatalf("expected a ConsentError, got %T: %v", err, err)
+	}
+	if ce.Tag != "confirmation_required" {
+		t.Errorf("expected tag confirmation_required, got %q", ce.Tag)
+	}
+	if got, _ := ce.Payload["id"].(string); got != id {
+		t.Errorf("expected the confirmation id %q in the payload, got %q", id, got)
+	}
+	if got, _ := ce.Payload["operation"].(string); got != "vault/create" {
+		t.Errorf("expected the operation in the payload, got %q", got)
+	}
+	if !strings.Contains(err.Error(), id) {
+		t.Errorf("expected the server's sentence, which names the id, got %q", err.Error())
+	}
+}
+
+// Every consent code is typed, and names its tag even when a proxy stripped
+// error.data.
+func TestCallTool_ConsentCodesNameTheirTag(t *testing.T) {
+	want := map[int]string{
+		-33501: "setup_required",
+		-33502: "consent_required",
+		-33503: "consent_conflict",
+		-33504: "restart_required",
+		-33505: "confirmation_required",
+	}
+	if len(consentTagByCode) != len(want) {
+		t.Fatalf("consentTagByCode has %d codes, want %d", len(consentTagByCode), len(want))
+	}
+
+	for code, tag := range want {
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.WriteHeader(http.StatusBadRequest)
+			json.NewEncoder(w).Encode(JSONRPCResponse{
+				JSONRPC: "2.0",
+				ID:      1,
+				Error:   &JSONRPCError{Code: code, Message: "signal"},
+			})
+		}))
+
+		_, err := NewClient(srv.URL).CallTool(t.Context(), "test-tool", nil)
+		srv.Close()
+
+		var ce *ConsentError
+		if !errors.As(err, &ce) {
+			t.Errorf("%d: expected a ConsentError, got %T: %v", code, err, err)
+			continue
+		}
+		if ce.Tag != tag {
+			t.Errorf("%d: expected tag %q, got %q", code, tag, ce.Tag)
+		}
+	}
+}
+
 func TestCallTool_Bare404(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusNotFound)
