@@ -53,6 +53,10 @@ defmodule Arca.Files do
 
   # Folders whose files are fenced documents keyed by their path here.
   @document_roots ["notes"]
+
+  # The component tree's root, as the contracts lay it out.
+  @components_root hd(Prima.ComponentPath.base_prefix())
+
   @type entry :: %{name: String.t(), kind: :dir | :file, size: non_neg_integer() | nil}
   @type folder :: %{name: String.t(), tier: tier()}
 
@@ -306,8 +310,17 @@ defmodule Arca.Files do
     do: {:error, {:invalid_argument, read_only_message(segments)}}
 
   # A pulled component is fork-to-modify, never rewritten in place — the
-  # same rule the guest boundary applies.
-  defp local_unit(["components", _plural, publisher | _], segments) do
+  # same rule the guest boundary applies, reading the unit's publisher the
+  # way it does. A unit outside the component tree, an aqua unit, has no
+  # publisher.
+  defp local_unit(unit, segments) do
+    case Prima.ComponentPath.publisher(unit) do
+      {:ok, publisher} -> local_publisher(publisher, segments)
+      :error -> :ok
+    end
+  end
+
+  defp local_publisher(publisher, segments) do
     case Prima.ComponentNamespace.require_local_guest_write(publisher) do
       :ok ->
         :ok
@@ -319,9 +332,7 @@ defmodule Arca.Files do
     end
   end
 
-  defp local_unit(_aqua_unit, _segments), do: :ok
-
-  defp above_unit_message(["components" | _], segments) do
+  defp above_unit_message([@components_root | _], segments) do
     "'#{join(segments)}' is outside any component: component files live inside a version " <>
       "directory (components/{type}s/local/{name}/{version}/…) — scaffold or pull one from " <>
       "the Components page"
@@ -572,7 +583,7 @@ defmodule Arca.Files do
   # be one.
   defp valid_content(physical, bytes) do
     case Arca.Storage.locate(physical) do
-      {:dir, ["components" | _] = unit, sentinel} ->
+      {:dir, [@components_root | _] = unit, sentinel} ->
         if physical == unit ++ [sentinel], do: valid_manifest(bytes, sentinel), else: :ok
 
       _not_a_component ->
