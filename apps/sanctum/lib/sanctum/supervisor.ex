@@ -10,11 +10,18 @@ defmodule Sanctum.Supervisor do
   def start(_type, _args) do
     Sanctum.Network.private_egress_targets()
 
+    # The deployment's pinned enrollment directory, refused here whichever
+    # configuration wrote it.
+    directory_url!(Application.get_env(:sanctum, :directory_url))
+
     # Who may mint the installation's first person, installed before any
     # child starts and so before any ingress opens: Sanctum starts before
-    # the host. No restore capability is configured, so the installation
-    # admits its first person by an ordinary door.
-    Arca.InstallationClaims.install_mode!(:ordinary)
+    # the host. A configured restore token reserves the first person for
+    # the restore path; without one, the installation admits its first
+    # person by an ordinary door.
+    Arca.InstallationClaims.install_mode!(
+      installation_mode!(Application.get_env(:sanctum, :restore_token))
+    )
 
     # The invoke-budget counters, owned by the application master so they
     # outlive every request that charges them.
@@ -60,6 +67,36 @@ defmodule Sanctum.Supervisor do
       max_restarts: 10,
       max_seconds: 60
     )
+  end
+
+  # A malformed value refuses the boot naming the key and never the value:
+  # the token is a secret, and a URL may carry what an operator did not
+  # mean to print.
+  @doc false
+  @spec installation_mode!(String.t() | nil) :: :ordinary | :restore_reserved
+  def installation_mode!(nil), do: :ordinary
+
+  def installation_mode!(token) do
+    if Sanctum.restore_token?(token),
+      do: :restore_reserved,
+      else:
+        raise(
+          "[Sanctum] FATAL: the restore token (:sanctum, :restore_token, from " <>
+            "CYFR_RESTORE_TOKEN) must be exactly 64 lowercase hexadecimal characters"
+        )
+  end
+
+  defp directory_url!(nil), do: :ok
+
+  defp directory_url!(url) do
+    if Sanctum.enrollment_directory?(url),
+      do: :ok,
+      else:
+        raise(
+          "[Sanctum] FATAL: the enrollment directory (:sanctum, :directory_url, from " <>
+            "CYFR_DIRECTORY_URL) must be an https directory URL: an origin and an " <>
+            "optional path, with no user, query or fragment"
+        )
   end
 
   defp maybe_proof_memory do

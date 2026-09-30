@@ -59,13 +59,14 @@ end
 
 defmodule PrismWeb.SystemLayerTest do
   @moduledoc """
-  The system layer presents a prompt and never decides it: it names the
-  class the prompt needs and whether this client holds it, shows no
-  confirm control to a client below it, dispatches the same operations the
-  consent sheet and the vault page dispatch through the gate, reports each
-  outcome to its parent, queues a second prompt behind the open one, keeps
-  a typed credential out of the page, the socket and the logs, and offers
-  safe mode's ways out with no dismissal.
+  The system layer presents a prompt and never decides it: it shows no
+  confirm control to a client with no person behind it, dispatches the
+  same operations the consent sheet and the vault page dispatch through
+  the gate, so the operation decides every confirmation that arrives,
+  reports each outcome to its parent, a refusal and the confirmation
+  signal as their sentences, queues a second prompt behind the open one,
+  keeps a typed credential out of the page, the socket and the logs, and
+  offers safe mode's ways out with no dismissal.
 
   Each test mounts the layer the way the shell does, in a small host view
   that forwards what the layer tells its parent to the test.
@@ -103,7 +104,8 @@ defmodule PrismWeb.SystemLayerTest do
     %{view: view, ctx: ctx, user: user}
   end
 
-  # A tincture's context entered onto the guest plane: a `none` client.
+  # A tincture's context entered onto the guest plane: a client with no
+  # person behind it who can give a proof.
   defp none_client(%{conn: conn}) do
     ctx =
       [
@@ -117,7 +119,7 @@ defmodule PrismWeb.SystemLayerTest do
       |> Context.build()
       |> Context.enter_guest()
 
-    assert Sanctum.Pairing.class_of(ctx) == :none
+    refute Sanctum.Pairing.can_confirm?(ctx)
 
     {:ok, view, _html} =
       live_isolated(conn, BareHost, session: %{"context" => ctx, "test" => self()})
@@ -200,9 +202,10 @@ defmodule PrismWeb.SystemLayerTest do
       assert html =~ ~s(data-dismissable="true")
       assert html =~ "Talks to api.example.com"
 
-      # The needed class is named in words, and so is this client's standing.
-      assert html =~ ~s(data-needs="session")
-      assert html =~ "This client can confirm it."
+      # A person's session can confirm: it is told nothing about standing,
+      # and no client is shown a rank.
+      refute html =~ ~s(data-standing="none")
+      refute html =~ ~s(data-needs=)
 
       assert has_element?(view, ~s(button[type="button"][phx-click="confirm"]), "Grant")
       assert has_element?(view, ~s(button[type="button"][phx-click="dismiss"]), "Dismiss")
@@ -227,63 +230,106 @@ defmodule PrismWeb.SystemLayerTest do
   end
 
   # ---------------------------------------------------------------------------
-  # Classes
+  # Standing
   # ---------------------------------------------------------------------------
 
-  describe "a class this client lacks" do
+  describe "a person's session" do
     setup :signed_in
 
-    test "shows no confirm control, names the class, and dismisses as :dismissed", %{view: view} do
-      html = prompt(view, grant("strong-1", %{action: :home_transfer}))
+    test "is offered the control for every action of the table; no action names a rank", %{
+      view: view
+    } do
+      for action <- Sanctum.Pairing.actions() do
+        id = "act-#{action}"
+        html = prompt(view, grant(id, %{action: action}))
 
-      refute has_element?(view, ~s([phx-click="confirm"]))
-      assert html =~ ~s(data-needs="strong")
-      assert html =~ "a paired device holding a verified security key"
-      assert html =~ "This client is a session client and cannot confirm it"
+        assert has_element?(view, ~s(button[phx-click="confirm"]), "Grant"), inspect(action)
+        refute html =~ ~s(data-standing="none")
 
-      view |> element(~s(button[phx-click="dismiss"])) |> render_click()
-      assert outcome("strong-1") == :dismissed
-      assert open_prompt(view) == nil
+        view |> element(~s(button[phx-click="dismiss"])) |> render_click()
+        assert outcome(id) == :dismissed
+      end
     end
 
-    test "a confirmation sent anyway is refused before anything is dispatched", %{view: view} do
-      prompt(view, grant("strong-2", %{action: :home_transfer}))
+    test "a confirmation is decided by the operation it dispatches, not by the layer", %{
+      view: view
+    } do
+      # A sensitive action: the layer dispatches it like any other, and
+      # the commit, not the layer, refuses the stale plan token.
+      prompt(view, grant("sensitive", %{action: :home_transfer}))
 
-      html = view |> layer() |> render_click("confirm", %{"id" => "strong-2"})
+      html = view |> element(~s(button[phx-click="confirm"])) |> render_click()
 
-      assert outcome("strong-2") == {:refused, :class_too_low}
-      assert html =~ "This client cannot confirm this. It needs a strong client"
-      assert open_prompt(view) == "strong-2"
+      assert {:refused, reason} = outcome("sensitive")
+      sentence = reason |> PrismWeb.Ops.error_message() |> Phoenix.HTML.html_escape()
+      assert html =~ Phoenix.HTML.safe_to_string(sentence)
+      assert open_prompt(view) == "sensitive"
     end
   end
 
-  describe "a none client" do
+  describe "a client with no person behind it" do
     setup :none_client
 
-    test "confirms nothing: no confirm control, and a sent confirmation is refused", %{
-      view: view
-    } do
+    test "is shown no confirm control and told where to confirm", %{view: view} do
       html = prompt(view, grant("n1"))
 
       refute has_element?(view, ~s([phx-click="confirm"]))
-      assert html =~ "This client is a none client and cannot confirm it"
-      assert html =~ "a signed-in browser or API key"
-
-      view |> layer() |> render_click("confirm", %{"id" => "n1"})
-      assert outcome("n1") == {:refused, :class_too_low}
+      assert html =~ ~s(data-standing="none")
+      assert html =~ "Confirm it from a"
+      assert html =~ "signed-in browser."
     end
 
-    test "is offered no credential input, and a sent credential is refused", %{view: view} do
-      prompt(view, credential("n2", "none-client-entry"))
+    test "a confirmation sent anyway is dispatched, and the operation refuses it", %{view: view} do
+      prompt(view, grant("n2"))
+
+      html = view |> layer() |> render_click("confirm", %{"id" => "n2"})
+
+      assert {:refused, reason} = outcome("n2")
+      sentence = reason |> PrismWeb.Ops.error_message() |> Phoenix.HTML.html_escape()
+      assert html =~ Phoenix.HTML.safe_to_string(sentence)
+      assert open_prompt(view) == "n2"
+    end
+
+    test "is offered no credential input, and a sent credential is refused by the vault", %{
+      view: view,
+      ctx: ctx
+    } do
+      name = "none-client-entry-#{System.unique_integer([:positive])}"
+      prompt(view, credential("n3", name))
 
       refute has_element?(view, ~s(input[type="password"]))
 
       view
       |> layer()
-      |> render_submit("enter_credential", %{"prompt_id" => "n2", "secret" => "sk-none"})
+      |> render_submit("enter_credential", %{"prompt_id" => "n3", "secret" => "sk-none"})
 
-      assert outcome("n2") == {:refused, :class_too_low}
+      assert {:refused, _reason} = outcome("n3")
       refute render(view) =~ "sk-none"
+
+      # Nothing reached the vault under the person the context names.
+      person = %{ctx | plane: :external, auth_method: :oidc}
+      {:ok, entries} = Sanctum.Vault.list(person)
+      refute Enum.any?(entries, &(&1.name == name))
+    end
+  end
+
+  describe "the confirmation signal" do
+    test "a confirmation the operation answers with it reads as its sentence, naming its id" do
+      # What a refused dispatch shows (`PrismWeb.Ops.error_message/1`): the
+      # signal is neither a denial nor an unknown term, and names the
+      # confirmation the person gives in Prism.
+      signal =
+        {:confirmation_required,
+         %{
+           id: "confirmation-7f3a",
+           operation: "vault.create",
+           expires_at: ~U[2026-09-30 12:05:00Z]
+         }}
+
+      sentence = PrismWeb.Ops.error_message(signal)
+      assert sentence =~ "confirmation-7f3a"
+      assert sentence =~ "vault.create"
+      assert sentence == Prima.ConsentSignal.message(signal)
     end
   end
 

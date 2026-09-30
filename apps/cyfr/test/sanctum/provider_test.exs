@@ -32,9 +32,9 @@ defmodule Sanctum.ProviderTest do
   # ============================================================================
 
   describe "tools/0" do
-    test "returns 10 action-based tools" do
+    test "returns 14 action-based tools" do
       tools = Provider.tools()
-      assert length(tools) == 10
+      assert length(tools) == 14
 
       tool_names = Enum.map(tools, & &1.name)
       assert "session" in tool_names

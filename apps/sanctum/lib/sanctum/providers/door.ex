@@ -6,7 +6,10 @@ defmodule Sanctum.Providers.Door do
   The `door` tool: the server allowlist — who may sign in here. Platform
   admins only (`scope: :platform` on every action).
 
-  `allow` writes an entry (email, user_id, or `*`); `deny` writes a sticky
+  `allow` writes an entry (email, user_id, or `*`); an `identifier` entry
+  (a person identifier, `per_…`) is declared and answers
+  `{:error, :not_built}`, since nothing admits by identifier yet. `deny`
+  writes a sticky
   exclusion, ejects the person when they are already known
   (`Sanctum.Tenancy.Users.deny/1`) and withdraws the group invitations the
   address was holding either way; `remove` deletes an entry — and, when it was
@@ -50,11 +53,11 @@ defmodule Sanctum.Providers.Door do
           [
             Arg.new("value", :string,
               required: true,
-              description: "An email, an IdP subject, or * (allow, deny)"
+              description: "An email, an IdP subject, a person identifier, or * (allow, deny)"
             ),
             Arg.new("kind", :string,
               description: "How to read value; inferred from its shape when absent",
-              enum: ["email", "user_id"]
+              enum: ["email", "user_id", "identifier"]
             ),
             Arg.new("note", :string, nullable: true, description: "Why (allow, deny)")
           ],
@@ -69,11 +72,11 @@ defmodule Sanctum.Providers.Door do
           [
             Arg.new("value", :string,
               required: true,
-              description: "An email, an IdP subject, or * (allow, deny)"
+              description: "An email, an IdP subject, a person identifier, or * (allow, deny)"
             ),
             Arg.new("kind", :string,
               description: "How to read value; inferred from its shape when absent",
-              enum: ["email", "user_id"]
+              enum: ["email", "user_id", "identifier"]
             ),
             Arg.new("note", :string, nullable: true, description: "Why (allow, deny)")
           ],
@@ -298,6 +301,7 @@ defmodule Sanctum.Providers.Door do
   # provider's terms — it judges a person before any row of theirs exists
   # — so a person's own id here is not an entry it can act on.
   defp kind_for("*", _), do: {:ok, "wildcard"}
+  defp kind_for(_value, "identifier"), do: {:error, :not_built}
   defp kind_for(value, kind) when kind in ["email", "user_id"], do: identity_kind(value, kind)
 
   defp kind_for(value, nil) do
@@ -305,7 +309,7 @@ defmodule Sanctum.Providers.Door do
   end
 
   defp kind_for(_value, kind),
-    do: {:error, {:invalid_argument, "Invalid kind: #{kind} (email | user_id)"}}
+    do: {:error, {:invalid_argument, "Invalid kind: #{kind} (email | user_id | identifier)"}}
 
   defp identity_kind(value, "user_id") do
     if Sanctum.Auth.Identity.key?(value),

@@ -3,8 +3,10 @@
 
 defmodule Sanctum.Providers.Member do
   @moduledoc """
-  The `member` tool: who is in an athanor — list, add (by email or by
-  user id), remove, leave.
+  The `member` tool: who is in an athanor — list, add (by email, by user
+  id, or by a person identifier), remove, leave. Adding by identifier is
+  declared and answers `{:error, :not_built}`: no person identifier is
+  admitted here yet.
 
   Any member may add or remove; there are no roles. Adding an email the
   server does not know leaves an invited row that activates on that
@@ -60,6 +62,10 @@ defmodule Sanctum.Providers.Member do
             Arg.new("email", :string, description: "The person's email (add, remove)"),
             Arg.new("user_id", :string,
               description: "The person's user id, when already on this server (add, remove)"
+            ),
+            Arg.new("identifier", :string,
+              description:
+                "add: the person's identifier (per_…), in place of an email or a user id"
             )
           ],
           kind: :write,
@@ -120,6 +126,16 @@ defmodule Sanctum.Providers.Member do
       {:error, :database_error} -> {:error, {:unavailable, "Storage"}}
       other -> other
     end
+  end
+
+  # An identifier names a person by their identity, which nothing admits
+  # here yet. It stands alone: beside an email or a user id, which of them
+  # meant the person is not the handler's to guess.
+  def handle(%Context{}, %{"action" => "add", "identifier" => identifier} = args)
+      when is_binary(identifier) do
+    if Map.has_key?(args, "email") or Map.has_key?(args, "user_id"),
+      do: {:error, {:invalid_argument, "Name one of email, user_id or identifier, not several"}},
+      else: {:error, :not_built}
   end
 
   def handle(%Context{} = ctx, %{"action" => "add"} = args) do

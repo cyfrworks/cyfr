@@ -492,10 +492,15 @@ defmodule Cyfr.Platform.Settings do
   caller `ctx`, recording who and when.
 
   The value passes the roster's validator first, `{:error, {:invalid,
-  key, form}}` naming the form and range it must take. A key a deployment
-  pins is `{:error, :pinned}`. `opts[:revision]` is the store revision the
-  change was made against, as `list/0` answered it; without it, the
-  revision is read now. A write since that revision is `{:error,
+  key, form}}` naming the form and range it must take, and then the bound
+  another setting sets on it (`Roster.below/0`: the directory's recovery
+  reserve below its log quota), refused the same way; `reset/3` holds the
+  default to it. The other setting is read from the store in the one read
+  whose revision the write is conditioned on, so a write the check did not
+  see makes this one stale rather than letting both land. A key a
+  deployment pins is `{:error, :pinned}`. `opts[:revision]` is the store
+  revision the change was made against, as `list/0` answered it; without
+  it, the revision is read now. A write since that revision is `{:error,
   :stale}`, and a store that cannot write is `{:error, :unavailable}`:
   either way nothing changed. A live setting reaches new and refreshed
   work on every member within the cache's bound; a restart-scoped one is
@@ -509,8 +514,9 @@ defmodule Cyfr.Platform.Settings do
     with {:ok, entry} <- fetch(key),
          :ok <- unpinned(key),
          {:ok, value} <- validate(entry, raw),
-         {:ok, revision} <- base_revision(opts),
-         {:ok, next} <- written(Store.put(key, value, revision, writer(ctx))) do
+         {:ok, snapshot} <- snapshot(opts),
+         :ok <- bounded(key, value, snapshot),
+         {:ok, next} <- written(Store.put(key, value, snapshot.revision, writer(ctx))) do
       Logger.info("[Cyfr.Platform.Settings] #{key} set by #{writer(ctx)} at revision #{next}")
 
       announce(
@@ -534,8 +540,9 @@ defmodule Cyfr.Platform.Settings do
   def reset(%Sanctum.Context{} = ctx, key, opts \\ []) when is_binary(key) and is_list(opts) do
     with {:ok, entry} <- fetch(key),
          :ok <- unpinned(key),
-         {:ok, revision} <- base_revision(opts),
-         {:ok, next} <- written(Store.delete(key, revision)) do
+         {:ok, snapshot} <- snapshot(opts),
+         :ok <- bounded(key, entry.default, snapshot),
+         {:ok, next} <- written(Store.delete(key, snapshot.revision)) do
       Logger.info("[Cyfr.Platform.Settings] #{key} reset by #{writer(ctx)} at revision #{next}")
       announce(SettingsChanged.new(:changed, setting: key, revision: next, op: :delete))
 
@@ -571,16 +578,61 @@ defmodule Cyfr.Platform.Settings do
     end
   end
 
-  defp base_revision(opts) do
-    case Keyword.get(opts, :revision) do
-      revision when is_integer(revision) and revision >= 0 ->
-        {:ok, revision}
+  # The store the write is conditioned on: one read of every row and the
+  # revision, which the write's compare-and-set names. A revision the
+  # caller read must be the one this read answers: an older one is stale
+  # now, and the bound below would be checked against a state the write
+  # does not replace. Never the node's cache, which may be a TTL behind.
+  defp snapshot(opts) do
+    named = Keyword.get(opts, :revision)
 
-      nil ->
-        case Store.all() do
-          {:ok, %{revision: revision}} -> {:ok, revision}
-          {:error, _reason} -> {:error, :unavailable}
-        end
+    unless is_nil(named) or (is_integer(named) and named >= 0),
+      do: raise(ArgumentError, "a revision is a non-negative integer")
+
+    case Store.all() do
+      {:ok, %{revision: revision} = snapshot} when is_nil(named) or named == revision ->
+        {:ok, snapshot}
+
+      {:ok, _moved} ->
+        {:error, :stale}
+
+      {:error, _reason} ->
+        {:error, :unavailable}
+    end
+  end
+
+  # A value held to the settings it bounds or is bounded by
+  # (`Roster.below/0`), each other one read as `snapshot` holds it.
+  defp bounded(key, value, %{settings: rows}) do
+    case Roster.check_below(key, Map.put(bound_values(rows), key, value)) do
+      :ok -> :ok
+      {:error, form} -> {:error, {:invalid, key, form}}
+    end
+  end
+
+  # Each setting of a `Roster.below/0` pair as `rows` leaves it: its row,
+  # else its default.
+  defp bound_values(rows) do
+    stored = Map.new(rows, &{&1.key, &1.value})
+
+    for {low, high} <- Roster.below(), key <- [low, high], into: %{} do
+      {:ok, %Entry{default: default}} = Roster.fetch(key)
+      {key, Map.get(stored, key, default)}
+    end
+  end
+
+  # Every bound between settings held against the store as this member's
+  # settlement will leave it: `rows` without the deployment rows it still
+  # removes (`deletes`), each pinned value in place of its row. A pair
+  # neither side pins is held too, so removing a deployment row cannot
+  # leave a stored value beyond the default it exposes. A pair out of
+  # bound refuses the boot, naming the variable at fault.
+  defp settled_bounded!(rows, deletes) do
+    kept = Enum.reject(rows, &(&1.key in deletes))
+
+    case Roster.check_pinned(Map.new(pinned()), bound_values(kept)) do
+      :ok -> :ok
+      {:error, sentence} -> raise "[Cyfr] FATAL: #{sentence}."
     end
   end
 
@@ -802,23 +854,24 @@ defmodule Cyfr.Platform.Settings do
   # each value its environment pins is written as the deployment's row, so
   # every member reads it, and a deployment's row that no live pin holds
   # any more is removed, so the key reads its default again. A store that
-  # cannot settle them refuses the boot.
+  # cannot settle, or a bound the settlement would break, refuses the boot.
   defp settle_pins(state) do
     mine = pinned()
 
-    with {:ok, %{settings: rows}} <- Store.all(),
+    with {:ok, %{settings: stored}} <- Store.all(),
          {:ok, live} <- live_pins() do
-      rows = Map.new(rows, &{&1.key, &1})
+      rows = Map.new(stored, &{&1.key, &1})
       held = MapSet.new(Enum.map(mine, &elem(&1, 0)) ++ Enum.map(live, & &1.key))
 
       puts =
         for {key, value} <- mine, not match?(%{value: ^value}, rows[key]), do: {key, value}
 
       deletes =
-        for {key, %{set_by: @deployment}} <- rows, not MapSet.member?(held, key), do: key
+        for {key, %{set_by: @deployment}} <- rows,
+            not MapSet.member?(held, key),
+            do: {key, :delete}
 
-      state = Enum.reduce(puts, state, fn {key, value}, acc -> settle(acc, key, value) end)
-      Enum.reduce(deletes, state, fn key, acc -> settle(acc, key, :delete) end)
+      settle(state, puts ++ deletes, @write_rounds)
     else
       _unavailable ->
         raise "[Cyfr] FATAL: the platform settings could not be read to settle this " <>
@@ -826,38 +879,93 @@ defmodule Cyfr.Platform.Settings do
     end
   end
 
-  defp settle(state, key, value), do: settle(state, key, value, @write_rounds)
-
-  defp settle(_state, key, _value, 0) do
+  # The settlement's writes, one at a time, each conditioned on the
+  # revision of the snapshot it was chosen against. Against each snapshot:
+  # a write the store already holds is dropped, and so is a delete whose
+  # row an operator has written since; the store as the remaining writes
+  # will leave it must hold every bound, or the boot is refused before the
+  # write; and the write made is the first that breaks no bound the
+  # snapshot holds. Each write is announced as it commits, so no member
+  # reads a store the settlement put out of bound, wherever a failure
+  # stops it. The store is read and held to the bounds once more when no
+  # write is left, so a boot with nothing to write still refuses a store
+  # out of bound.
+  defp settle(_state, [{key, _value} | _pending], 0) do
     raise "[Cyfr] FATAL: the platform settings kept moving while this member wrote " <>
             "its pinned #{key}."
   end
 
-  defp settle(state, key, value, rounds) do
+  defp settle(state, pending, rounds) do
+    case Store.all() do
+      {:ok, %{revision: revision, settings: rows}} ->
+        pending = Enum.reject(pending, &settled?(&1, rows))
+        :ok = settled_bounded!(rows, for({key, :delete} <- pending, do: key))
+        write(state, pending, rows, revision, rounds)
+
+      {:error, _unavailable} ->
+        raise "[Cyfr] FATAL: the platform settings could not be read to settle this " <>
+                "member's pinned values."
+    end
+  end
+
+  defp write(state, [], _rows, _revision, _rounds), do: state
+
+  defp write(state, pending, rows, revision, rounds) do
+    {key, value} = next = next_write!(rows, pending)
+
     result =
-      with {:ok, %{revision: revision}} <- Store.all() do
-        if value == :delete,
-          do: Store.delete(key, revision),
-          else: Store.put(key, value, revision, @deployment)
-      end
+      if value == :delete,
+        do: Store.delete(key, revision),
+        else: Store.put(key, value, revision, @deployment)
 
     case result do
-      {:ok, next} ->
+      {:ok, next_revision} ->
         change =
           if value == :delete,
-            do: SettingsChanged.new(:changed, setting: key, revision: next, op: :delete),
+            do: SettingsChanged.new(:changed, setting: key, revision: next_revision, op: :delete),
             else:
-              SettingsChanged.new(:changed, setting: key, revision: next, op: :put, value: value)
+              SettingsChanged.new(:changed,
+                setting: key,
+                revision: next_revision,
+                op: :put,
+                value: value
+              )
 
         Cyfr.Bus.broadcast_global(Cyfr.Bus.settings_changed(), change)
-        observe(change, state)
+        settle(observe(change, state), List.delete(pending, next), @write_rounds)
 
       {:error, :stale} ->
-        settle(state, key, value, rounds - 1)
+        settle(state, pending, rounds - 1)
 
       {:error, _unavailable} ->
         raise "[Cyfr] FATAL: the platform settings could not be written to settle " <>
                 "this member's pinned #{key}."
     end
   end
+
+  defp settled?({key, :delete}, rows),
+    do: not Enum.any?(rows, &match?(%{key: ^key, set_by: @deployment}, &1))
+
+  defp settled?({key, value}, rows), do: Enum.any?(rows, &match?(%{key: ^key, value: ^value}, &1))
+
+  # The first of `pending` whose write breaks no bound `rows` holds. With
+  # the store as the writes will leave it in bound, one exists for a pair
+  # that holds now: were both its writes to break it, the final lower value
+  # would be at least the old upper one, which exceeds the old lower one,
+  # which is at least the final upper one, so the final pair would be out
+  # of bound as well.
+  defp next_write!(rows, pending) do
+    broken = Roster.out_of_bound(bound_values(rows))
+
+    Enum.find(pending, fn write ->
+      Roster.out_of_bound(bound_values(after_write(rows, write))) -- broken == []
+    end) ||
+      raise "[Cyfr] FATAL: this member's pinned values cannot be written one at a time " <>
+              "within the bounds between settings."
+  end
+
+  defp after_write(rows, {key, :delete}), do: Enum.reject(rows, &(&1.key == key))
+
+  defp after_write(rows, {key, value}),
+    do: [%{key: key, value: value} | Enum.reject(rows, &(&1.key == key))]
 end

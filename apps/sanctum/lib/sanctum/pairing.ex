@@ -3,99 +3,153 @@
 
 defmodule Sanctum.Pairing do
   @moduledoc """
-  Confirmation authority: which confirmation class (`Prima.ConfirmationClass`)
-  a client holds, and which class an action requires.
+  Which changes need a fresh confirmation, and which clients can give one.
 
-  Display authority, pointer input and confirmation authority are three
-  contracts. A client that draws a prompt, or that the person points at,
-  confirms nothing by doing so: what it may confirm is the class assigned
-  here from its standing, and the consent decision for a confirming intent
-  checks that class (`confirm?/2`) and nothing else does. The system layer
-  presents a prompt and never decides it.
+  Three facts stay apart: who a person is, established by their session;
+  which devices they have connected; and whether a change needs a fresh
+  confirmation. None of them is a rank, and the rule is the same for every
+  person: members stay equals.
 
-  ## The classes a client holds
+  ## The action table
 
-  Every authenticated browser session and API key on the external plane
-  is a `session` client; anything else — a guest body, an anonymous or
-  unauthenticated caller, a tincture, webhook, schedule or system context
-  — is `none` and confirms nothing. The pairing ceremony that makes a
-  `paired` client and the enrolment that makes a `strong` one are not
-  here yet, so no client holds either.
+  Each action a confirmation can concern, and what it needs:
 
-  ## The class an action requires
-
-  | Action | Minimum class |
+  | Action | Needs |
   |---|---|
-  | `:grant` | `session` |
-  | `:approval` | `session` |
-  | `:credential_entry` | `session` |
-  | `:vault_unlock` | `session` |
-  | `:home_transfer` | `strong` |
-  | `:pairing_revocation` | `strong` |
+  | `:grant` | the session |
+  | `:approval` | the session |
+  | `:credential_entry` | a fresh confirmation |
+  | `:credential_issuance` | a fresh confirmation |
+  | `:vault_unlock` | a fresh confirmation |
+  | `:home_transfer` | a fresh confirmation |
+  | `:pairing_revocation` | a fresh confirmation |
+  | `:recovery_material` | a fresh confirmation |
+  | `:device_pairing` | a fresh confirmation |
+  | `:passkey_registration` | a fresh confirmation |
+  | `:remote_sign_in` | a fresh confirmation |
+  | `:key_rotation` | a fresh confirmation |
+  | `:sign_in_methods` | a fresh confirmation |
 
-  Credential entry and the vault unlock require `session` until a
-  `strong` client is enrolled for the athanor, and `strong` once one is;
-  with no enrolment yet, they work from a browser exactly as they always
-  have. An action whose minimum class no client of the athanor holds
-  waits for one: its requirement never degrades to the class that is
-  present.
+  `sensitive?/1` answers the table. `vault_unlock` and `home_transfer`
+  have no operation until their features land, and stay sensitive.
+  `action_for/1` maps each operation that confirms something to its
+  action.
+
+  `fresh_required?/2` is what the deciding sites ask
+  (`Sanctum.Consent.Authz.confirm/3`). It answers `false` for every
+  action until a proof can be given — a passkey assertion or a fresh
+  re-authentication over a pending confirmation — so no change asks for a
+  proof before one exists.
+
+  ## Who can confirm
+
+  `can_confirm?/1` answers whether the context has a person behind it who
+  can give a proof: a signed-in browser session (`:oidc`). A paired
+  device (`:device`) confirms once its paired client's standing is read
+  here; until then it confirms nothing. A key, a guest body, a tincture, a
+  webhook, a schedule, the system and an anonymous caller confirm nothing.
+  The system layer reads it to hide a control and never decides by it: the
+  operation a confirmation dispatches is decided where the change is.
   """
 
-  alias Prima.ConfirmationClass
   alias Sanctum.Context
 
-  @required %{
+  @table %{
     grant: :session,
     approval: :session,
-    credential_entry: :session,
-    vault_unlock: :session,
-    home_transfer: :strong,
-    pairing_revocation: :strong
+    credential_entry: :fresh,
+    credential_issuance: :fresh,
+    vault_unlock: :fresh,
+    home_transfer: :fresh,
+    pairing_revocation: :fresh,
+    recovery_material: :fresh,
+    device_pairing: :fresh,
+    passkey_registration: :fresh,
+    remote_sign_in: :fresh,
+    key_rotation: :fresh,
+    sign_in_methods: :fresh
   }
 
-  @typedoc "An action that needs a confirmation."
+  # Each operation that confirms something, as `tool.action`, the spelling
+  # a pending confirmation records (`Prima.Confirmation`).
+  @operations %{
+    "vault.create" => :credential_entry,
+    "vault.rotate" => :credential_entry,
+    "vault.authorize" => :credential_entry,
+    "oauth.set_client" => :credential_entry,
+    "key.create" => :credential_issuance,
+    "key.rotate" => :credential_issuance,
+    "webhook.create" => :credential_issuance,
+    "webhook.rotate" => :credential_issuance,
+    "pairing.revoke" => :pairing_revocation,
+    "person.enroll" => :recovery_material,
+    "person.kit" => :recovery_material,
+    "person.enroll_holder" => :recovery_material,
+    "passkey.register" => :passkey_registration,
+    "passkey.revoke" => :passkey_registration,
+    "passkey.recover_admin" => :passkey_registration,
+    "pairing.begin" => :device_pairing,
+    "person.certify" => :device_pairing,
+    "person.assert" => :remote_sign_in,
+    "person.rotate" => :key_rotation,
+    "person.link_door" => :sign_in_methods,
+    "person.unlink_door" => :sign_in_methods
+  }
+
+  @typedoc "An action the table names."
   @type action ::
           :grant
           | :approval
           | :credential_entry
+          | :credential_issuance
           | :vault_unlock
           | :home_transfer
           | :pairing_revocation
+          | :recovery_material
+          | :device_pairing
+          | :passkey_registration
+          | :remote_sign_in
+          | :key_rotation
+          | :sign_in_methods
 
-  @doc "Every action the class table names."
+  @doc "Every action the table names, sorted."
   @spec actions() :: [action()]
-  def actions, do: @required |> Map.keys() |> Enum.sort()
+  def actions, do: @table |> Map.keys() |> Enum.sort()
 
   @doc """
-  The confirmation class the client behind `ctx` holds: `:session` for an
-  authenticated, non-anonymous session (`:oidc`) or API key context on
-  the external plane, `:none` for every other context.
+  Whether the table names `action` a sensitive change, one that needs a
+  fresh confirmation for every person, rather than the session alone.
   """
-  @spec class_of(Context.t()) :: ConfirmationClass.t()
-  def class_of(%Context{plane: :external, anonymous: false, auth_method: method} = ctx)
-      when method in [:oidc, :api_key] do
-    if ctx.authenticated == true and is_binary(ctx.user_id) and ctx.user_id != "",
-      do: :session,
-      else: :none
-  end
-
-  def class_of(%Context{}), do: :none
-
-  @doc "The minimum class `action` requires (see the module doc's table)."
-  @spec required_class(action()) :: ConfirmationClass.t()
-  def required_class(action) when is_map_key(@required, action), do: Map.fetch!(@required, action)
+  @spec sensitive?(action()) :: boolean()
+  def sensitive?(action) when is_map_key(@table, action), do: Map.fetch!(@table, action) == :fresh
 
   @doc """
-  Whether the client behind `ctx` may confirm `action`: `:ok` when its
-  class is at least the action's minimum, `{:error, :class_too_low}`
-  otherwise. An action the table does not name is never confirmed.
+  The action the operation `operation` (`tool.action`) confirms, or `nil`
+  for an operation that confirms nothing.
   """
-  @spec confirm?(Context.t(), action()) :: :ok | {:error, :class_too_low}
-  def confirm?(%Context{} = ctx, action) when is_map_key(@required, action) do
-    if ConfirmationClass.at_least?(class_of(ctx), required_class(action)),
-      do: :ok,
-      else: {:error, :class_too_low}
-  end
+  @spec action_for(String.t()) :: action() | nil
+  def action_for(operation) when is_binary(operation), do: Map.get(@operations, operation)
 
-  def confirm?(%Context{}, _action), do: {:error, :class_too_low}
+  @doc """
+  Whether `action`, asked for under `ctx`, needs a fresh confirmation
+  before it is decided. `false` for every action until a proof can be
+  given (see the module doc).
+  """
+  @spec fresh_required?(action(), Context.t()) :: false
+  def fresh_required?(action, %Context{}) when is_map_key(@table, action), do: false
+
+  @doc """
+  Whether the client behind `ctx` has a person behind it who can give a
+  proof: an authenticated, non-anonymous browser session (`:oidc`) on the
+  external plane that names its person and no paired client. Every other
+  context — a paired device until its standing is read here, a key, a
+  guest body, a tincture, a webhook, a schedule, the system — `false`.
+  """
+  @spec can_confirm?(Context.t()) :: boolean()
+  def can_confirm?(%Context{plane: :external, authenticated: true, anonymous: false} = ctx),
+    do: ctx.auth_method == :oidc and is_nil(ctx.client_id) and person?(ctx.user_id)
+
+  def can_confirm?(%Context{}), do: false
+
+  defp person?(user_id), do: is_binary(user_id) and user_id != ""
 end

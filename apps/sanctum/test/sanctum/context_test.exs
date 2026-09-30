@@ -664,6 +664,7 @@ defmodule Sanctum.ContextTest do
       scheduled = Context.for_scheduled("user_1", athanor_id: "ath_o")
 
       assert scheduled.auth_method == :scheduled
+      assert scheduled.origin == :schedule
 
       delegated =
         Context.internal(
@@ -671,13 +672,43 @@ defmodule Sanctum.ContextTest do
           namespace: scheduled.namespace,
           athanor_id: "ath_o",
           scope: :athanor,
-          auth_method: :scheduled
+          auth_method: :scheduled,
+          origin: :schedule
         )
 
       # Single construction path: for_scheduled/2 is byte-identical to the
-      # equivalent internal/1 call (only the provenance tag differs from
-      # internal/1's :system default).
+      # equivalent internal/1 call (only the provenance tag and the origin
+      # differ from internal/1's :system default).
       assert scheduled == delegated
+    end
+
+    test "a paired client, a repeated confirmation and an origin are built, and nothing else is" do
+      ctx =
+        Context.build(
+          user_id: "usr_1",
+          auth_method: :device,
+          client_id: "pcl_1",
+          confirmation_id: "cnf_1",
+          origin: :interactive,
+          authenticated: true
+        )
+
+      assert {ctx.auth_method, ctx.client_id, ctx.confirmation_id, ctx.origin} ==
+               {:device, "pcl_1", "cnf_1", :interactive}
+
+      plain = Context.build(user_id: "usr_1", auth_method: :oidc, authenticated: true)
+      assert {plain.client_id, plain.confirmation_id, plain.origin} == {nil, nil, nil}
+
+      assert_raise ArgumentError, ~r/origin must be a Prima.Origin/, fn ->
+        Context.build(user_id: "usr_1", origin: "interactive")
+      end
+
+      assert_raise ArgumentError, ~r/client_id must be a string/, fn ->
+        Context.build(user_id: "usr_1", client_id: 1)
+      end
+
+      # An internal context names an origin only when its caller does.
+      assert Context.internal().origin == nil
     end
 
     test "TestContext.local/0 impersonates a logged-in user (:oidc)" do

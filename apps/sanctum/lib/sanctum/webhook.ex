@@ -63,7 +63,9 @@ defmodule Sanctum.Webhook do
   # ============================================================================
 
   @doc """
-  Create a new webhook. Returns the plaintext secret exactly once.
+  Create a new webhook. Returns the plaintext secret exactly once. Its
+  secret outlives the session that mints it, so issuing one is a
+  sensitive change (`credential_issuance`), decided here.
 
   Required: `name`, `target_ref`, `profile_id` (deliveries fire under the
   bound profile's consent). Optional: `input_template` (map; default
@@ -83,6 +85,12 @@ defmodule Sanctum.Webhook do
          :ok <- validate_target_ref(ctx, target_ref),
          :ok <- authorize_profile_binding(ctx, target_ref, Map.get(opts, :profile_id)),
          {:ok, input_template_json} <- encode_input_template(Map.get(opts, :input_template, %{})),
+         :ok <-
+           Sanctum.Consent.Authz.confirm(ctx, :credential_issuance, %{
+             operation: "webhook.create",
+             arguments: opts,
+             resource: name
+           }),
          {:ok, secret} <- generate_secret(),
          {:ok, secret_encrypted} <-
            Sanctum.Cipher.encrypt(secret, Sanctum.CipherAAD.webhook_secret(athanor_id, name)),
@@ -401,7 +409,8 @@ defmodule Sanctum.Webhook do
 
   @doc """
   Rotate the HMAC secret for a webhook. Returns the new plaintext secret
-  exactly once.
+  exactly once. A sensitive change (`credential_issuance`), as at
+  `create/2`.
 
   Not a hard cutover: the outgoing secret stays valid for
   `#{@previous_secret_grace_seconds}` seconds (`verify_with_grace/4` accepts
@@ -417,6 +426,12 @@ defmodule Sanctum.Webhook do
       DateTime.add(DateTime.utc_now(), @previous_secret_grace_seconds, :second)
 
     with {:ok, existing} <- get(ctx, name),
+         :ok <-
+           Sanctum.Consent.Authz.confirm(ctx, :credential_issuance, %{
+             operation: "webhook.rotate",
+             arguments: %{name: name},
+             resource: name
+           }),
          {:ok, new_secret} <- generate_secret(),
          {:ok, new_secret_encrypted} <-
            Sanctum.Cipher.encrypt(new_secret, Sanctum.CipherAAD.webhook_secret(athanor_id, name)),

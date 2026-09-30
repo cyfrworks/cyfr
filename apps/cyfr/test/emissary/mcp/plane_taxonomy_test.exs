@@ -207,7 +207,10 @@ defmodule Emissary.MCP.PlaneTaxonomyTest do
                  {"system", "status"},
                  # A published tincture is public by definition; the action
                  # runs under its public profile and nothing else.
-                 {"tincture", "invoke_public"}
+                 {"tincture", "invoke_public"},
+                 # A new device holds no credential: the single-use pairing
+                 # invitation names the person and athanor.
+                 {"pairing", "complete"}
                ])
              )
     end

@@ -728,14 +728,18 @@ defmodule Sanctum.Caller do
   end
 
   # What the caller brought that the stored session does not say: its
-  # request correlation and the admission it is inside, its address, a
-  # guest plane it cannot leave, and no permission it did not already
-  # hold.
+  # request correlation and the admission it is inside, the origin that
+  # admission stamped, the paired client and the pending confirmation it
+  # names, its address, a guest plane it cannot leave, and no permission
+  # it did not already hold.
   defp carried(%Context{} = fresh, %Context{} = held) do
     fresh = %{
       fresh
       | request_id: held.request_id,
         call_id: held.call_id,
+        origin: held.origin,
+        client_id: held.client_id,
+        confirmation_id: held.confirmation_id,
         client_ip: held.client_ip,
         permissions: narrowed(fresh.permissions, held.permissions),
         validated_at: now()

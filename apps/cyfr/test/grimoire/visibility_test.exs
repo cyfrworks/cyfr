@@ -178,7 +178,7 @@ defmodule Grimoire.VisibilityTest do
     test "an OIDC session sees the whole vault and profile surface" do
       ctx = ctx_with([], :oidc)
       assert length(visible_actions("vault", ctx)) == 9
-      assert length(visible_actions("profile", ctx)) == 7
+      assert length(visible_actions("profile", ctx)) == 8
     end
 
     test "an API key sees only the staging arms and the consent-free status — whatever its permissions" do
@@ -296,7 +296,7 @@ defmodule Grimoire.VisibilityTest do
       end
     end
 
-    test "the anonymous set is exactly session, the health check and a public tincture" do
+    test "the anonymous set is exactly session, the health check, a public tincture and a pairing's completion" do
       anonymous =
         for tool_def <- live_tools(),
             name = tool_def["name"],
@@ -310,7 +310,7 @@ defmodule Grimoire.VisibilityTest do
         MapSet.new(~w(
           session.login session.logout session.whoami
           session.device_init session.device_poll session.read_resource
-          system.status tincture.invoke_public
+          system.status tincture.invoke_public pairing.complete
         ))
 
       assert anonymous == expected

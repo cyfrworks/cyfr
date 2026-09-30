@@ -6,7 +6,7 @@ import {createHash} from "node:crypto"
 import {readFileSync} from "node:fs"
 import {describe, test} from "node:test"
 
-// The vectors `Prima.Layout`'s and `Prima.ConfirmationClass`'s tests read too.
+// The vectors `Prima.Layout`'s test reads too.
 const fixture = JSON.parse(
   readFileSync(new URL("../../../../../tests/fixtures/layout.json", import.meta.url), "utf8")
 )
@@ -36,9 +36,5 @@ describe("the layout document agrees with the fixture", () => {
       assert.equal(typeof why, "string")
       assert.equal(typeof document, "object")
     }
-  })
-
-  test("the confirmation classes are the four, least first", () => {
-    assert.deepEqual(fixture.confirmation_classes, ["none", "session", "paired", "strong"])
   })
 })

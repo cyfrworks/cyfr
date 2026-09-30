@@ -18,6 +18,7 @@ const (
 	Build              = "build"
 	Card               = "card"
 	Component          = "component"
+	Confirmation       = "confirmation"
 	Decision           = "decision"
 	Door               = "door"
 	Execution          = "execution"
@@ -29,6 +30,9 @@ const (
 	Member             = "member"
 	Notes              = "notes"
 	Oauth              = "oauth"
+	Pairing            = "pairing"
+	Passkey            = "passkey"
+	Person             = "person"
 	PolicyLog          = "policy_log"
 	Profile            = "profile"
 	Record             = "record"
@@ -100,6 +104,10 @@ const (
 	ComponentSetupPlan      = "setup_plan"
 	ComponentStatus         = "status"
 	ComponentYank           = "yank"
+	ConfirmationCancel      = "cancel"
+	ConfirmationConfirm     = "confirm"
+	ConfirmationPending     = "pending"
+	ConfirmationReauth      = "reauth"
 	DecisionCorrelate       = "correlate"
 	DecisionGet             = "get"
 	DecisionGetGlobal       = "get_global"
@@ -119,6 +127,7 @@ const (
 	ExecutionRun            = "run"
 	ExecutionRunStream      = "run_stream"
 	ExecutionStatus         = "status"
+	ExecutionUsage          = "usage"
 	FileDelete              = "delete"
 	FileList                = "list"
 	FileRead                = "read"
@@ -158,11 +167,32 @@ const (
 	OauthDeleteClient       = "delete_client"
 	OauthList               = "list"
 	OauthSetClient          = "set_client"
+	PairingBegin            = "begin"
+	PairingComplete         = "complete"
+	PairingList             = "list"
+	PairingRenew            = "renew"
+	PairingRevoke           = "revoke"
+	PasskeyList             = "list"
+	PasskeyRecoverAdmin     = "recover_admin"
+	PasskeyRegister         = "register"
+	PasskeyRevoke           = "revoke"
+	PersonAssert            = "assert"
+	PersonCarryBegin        = "carry_begin"
+	PersonCarryComplete     = "carry_complete"
+	PersonCertify           = "certify"
+	PersonEnroll            = "enroll"
+	PersonEnrollHolder      = "enroll_holder"
+	PersonKit               = "kit"
+	PersonKitAck            = "kit_ack"
+	PersonLinkDoor          = "link_door"
+	PersonRotate            = "rotate"
+	PersonUnlinkDoor        = "unlink_door"
 	PolicyLogCorrelate      = "correlate"
 	PolicyLogGet            = "get"
 	PolicyLogList           = "list"
 	ProfileCommit           = "commit"
 	ProfileGrant            = "grant"
+	ProfileGrants           = "grants"
 	ProfileList             = "list"
 	ProfilePlan             = "plan"
 	ProfilePreview          = "preview"
@@ -261,9 +291,10 @@ var Actions = map[string][]string{
 	"build":               {"compile", "status", "toolchains", "validate"},
 	"card":                {"press", "refresh"},
 	"component":           {"categories", "create", "delete", "deprecate", "discover", "fork", "get_blob", "inspect", "list", "pull", "push", "read_resource", "register", "reset", "search", "setup_plan", "status", "yank"},
+	"confirmation":        {"cancel", "confirm", "pending", "reauth"},
 	"decision":            {"correlate", "get", "get_global", "list", "list_global"},
 	"door":                {"allow", "deny", "list", "remove", "requests", "resolve"},
-	"execution":           {"cancel", "force_release", "list", "logs", "read_resource", "run", "run_stream", "status"},
+	"execution":           {"cancel", "force_release", "list", "logs", "read_resource", "run", "run_stream", "status", "usage"},
 	"file":                {"delete", "list", "read", "write"},
 	"key":                 {"create", "get", "list", "revoke", "rotate"},
 	"layout":              {"edit", "get"},
@@ -272,8 +303,11 @@ var Actions = map[string][]string{
 	"member":              {"add", "leave", "list", "remove"},
 	"notes":               {"forget", "keep", "list", "pin", "read", "search"},
 	"oauth":               {"delete_client", "list", "set_client"},
+	"pairing":             {"begin", "complete", "list", "renew", "revoke"},
+	"passkey":             {"list", "recover_admin", "register", "revoke"},
+	"person":              {"assert", "carry_begin", "carry_complete", "certify", "enroll", "enroll_holder", "kit", "kit_ack", "link_door", "rotate", "unlink_door"},
 	"policy_log":          {"correlate", "get", "list"},
-	"profile":             {"commit", "grant", "list", "plan", "preview", "publish", "revoke"},
+	"profile":             {"commit", "grant", "grants", "list", "plan", "preview", "publish", "revoke"},
 	"record":              {"get", "list", "payload"},
 	"registry":            {"appeal", "claim_personal", "claim_publisher", "get_namespace", "legal_accept", "legal_page", "legal_version", "list_my_reports", "members_add", "members_list", "members_remove", "members_update", "probe", "report", "tokens_issue", "tokens_list", "tokens_revoke", "verify_publisher", "whoami"},
 	"resource":            {"read"},
@@ -316,6 +350,12 @@ type ApprovalResolveArgs struct {
 	Scope Field[string] `json:"scope,omitzero"`
 	// resolve: why (decline)
 	Reason Field[string] `json:"reason,omitzero"`
+	// resolve: the run a standing approval ends with — its execution, turn or schedule
+	Lifecycle Field[string] `json:"lifecycle,omitzero"`
+	// resolve: an ISO 8601 UTC time a standing approval ends at, a bound beside its lifecycle
+	Until Field[string] `json:"until,omitzero"`
+	// resolve: the resources a standing approval covers, for an action that declares which argument names one
+	Constraint Field[ApprovalResolveArgsConstraint] `json:"constraint,omitzero"`
 }
 
 // MarshalJSON supplies the operation's fixed action discriminator.
@@ -325,6 +365,22 @@ func (args ApprovalResolveArgs) MarshalJSON() ([]byte, error) {
 		Action string `json:"action"`
 		fields
 	}{Action: ApprovalResolve, fields: fields(args)})
+}
+
+type ApprovalResolveArgsConstraint struct {
+	Kind     string   `json:"kind"`
+	Patterns []string `json:"patterns"`
+}
+
+// UnmarshalJSON refuses unknown fields and preserves required presence.
+func (args *ApprovalResolveArgsConstraint) UnmarshalJSON(data []byte) error {
+	type fields ApprovalResolveArgsConstraint
+	var value fields
+	if err := decodeRecord(data, &value); err != nil {
+		return err
+	}
+	*args = ApprovalResolveArgsConstraint(value)
+	return nil
 }
 
 // AquaCreateArgs carries arguments for aqua.create.
@@ -1137,6 +1193,72 @@ func (args ComponentYankArgs) MarshalJSON() ([]byte, error) {
 	}{Action: ComponentYank, fields: fields(args)})
 }
 
+// ConfirmationCancelArgs carries arguments for confirmation.cancel.
+type ConfirmationCancelArgs struct {
+	// The pending confirmation, as the confirmation_required signal named it
+	Id string `json:"id"`
+}
+
+// MarshalJSON supplies the operation's fixed action discriminator.
+func (args ConfirmationCancelArgs) MarshalJSON() ([]byte, error) {
+	type fields ConfirmationCancelArgs
+	return json.Marshal(struct {
+		Action string `json:"action"`
+		fields
+	}{Action: ConfirmationCancel, fields: fields(args)})
+}
+
+// ConfirmationConfirmArgs carries arguments for confirmation.confirm.
+type ConfirmationConfirmArgs struct {
+	// The pending confirmation, as the confirmation_required signal named it
+	Id string `json:"id"`
+	// confirm: a WebAuthn assertion over the confirmation's digest, from a passkey registered here
+	Assertion Field[any] `json:"assertion,omitzero"`
+	// confirm: the one-time code sent to your verified email for it
+	Code Field[string] `json:"code,omitzero"`
+	// confirm: the single-use ticket a completed OpenID Connect re-authentication for it answered
+	Ticket Field[string] `json:"ticket,omitzero"`
+}
+
+// MarshalJSON supplies the operation's fixed action discriminator.
+func (args ConfirmationConfirmArgs) MarshalJSON() ([]byte, error) {
+	type fields ConfirmationConfirmArgs
+	return json.Marshal(struct {
+		Action string `json:"action"`
+		fields
+	}{Action: ConfirmationConfirm, fields: fields(args)})
+}
+
+// ConfirmationPendingArgs carries arguments for confirmation.pending.
+type ConfirmationPendingArgs struct {
+}
+
+// MarshalJSON supplies the operation's fixed action discriminator.
+func (args ConfirmationPendingArgs) MarshalJSON() ([]byte, error) {
+	type fields ConfirmationPendingArgs
+	return json.Marshal(struct {
+		Action string `json:"action"`
+		fields
+	}{Action: ConfirmationPending, fields: fields(args)})
+}
+
+// ConfirmationReauthArgs carries arguments for confirmation.reauth.
+type ConfirmationReauthArgs struct {
+	// The pending confirmation, as the confirmation_required signal named it
+	Id string `json:"id"`
+	// reauth: a fresh OpenID Connect sign-in, or a one-time code to your verified email
+	Method string `json:"method"`
+}
+
+// MarshalJSON supplies the operation's fixed action discriminator.
+func (args ConfirmationReauthArgs) MarshalJSON() ([]byte, error) {
+	type fields ConfirmationReauthArgs
+	return json.Marshal(struct {
+		Action string `json:"action"`
+		fields
+	}{Action: ConfirmationReauth, fields: fields(args)})
+}
+
 // DecisionCorrelateArgs carries arguments for decision.correlate.
 type DecisionCorrelateArgs struct {
 	// The ingress request. Groups a whole chain: the call an ingress received and every tool a running component reached beneath it.
@@ -1236,7 +1358,7 @@ func (args DecisionListGlobalArgs) MarshalJSON() ([]byte, error) {
 
 // DoorAllowArgs carries arguments for door.allow.
 type DoorAllowArgs struct {
-	// An email, an IdP subject, or * (allow, deny)
+	// An email, an IdP subject, a person identifier, or * (allow, deny)
 	Value string `json:"value"`
 	// How to read value; inferred from its shape when absent
 	Kind Field[string] `json:"kind,omitzero"`
@@ -1255,7 +1377,7 @@ func (args DoorAllowArgs) MarshalJSON() ([]byte, error) {
 
 // DoorDenyArgs carries arguments for door.deny.
 type DoorDenyArgs struct {
-	// An email, an IdP subject, or * (allow, deny)
+	// An email, an IdP subject, a person identifier, or * (allow, deny)
 	Value string `json:"value"`
 	// How to read value; inferred from its shape when absent
 	Kind Field[string] `json:"kind,omitzero"`
@@ -1498,6 +1620,23 @@ func (args ExecutionStatusArgs) MarshalJSON() ([]byte, error) {
 		Action string `json:"action"`
 		fields
 	}{Action: ExecutionStatus, fields: fields(args)})
+}
+
+// ExecutionUsageArgs carries arguments for execution.usage.
+type ExecutionUsageArgs struct {
+	// usage: the profile whose runs to show, with each run's origin
+	ProfileId string `json:"profile_id"`
+	// Maximum results to return (list action)
+	Limit Field[int] `json:"limit,omitzero"`
+}
+
+// MarshalJSON supplies the operation's fixed action discriminator.
+func (args ExecutionUsageArgs) MarshalJSON() ([]byte, error) {
+	type fields ExecutionUsageArgs
+	return json.Marshal(struct {
+		Action string `json:"action"`
+		fields
+	}{Action: ExecutionUsage, fields: fields(args)})
 }
 
 // FileDeleteArgs carries arguments for file.delete.
@@ -2014,6 +2153,8 @@ type MemberAddArgs struct {
 	Email Field[string] `json:"email,omitzero"`
 	// The person's user id, when already on this server (add, remove)
 	UserId Field[string] `json:"user_id,omitzero"`
+	// add: the person's identifier (per_…), in place of an email or a user id
+	Identifier Field[string] `json:"identifier,omitzero"`
 }
 
 // MarshalJSON supplies the operation's fixed action discriminator.
@@ -2241,6 +2382,400 @@ func (args OauthSetClientArgs) MarshalJSON() ([]byte, error) {
 	}{Action: OauthSetClient, fields: fields(args)})
 }
 
+// PairingBeginArgs carries arguments for pairing.begin.
+type PairingBeginArgs struct {
+}
+
+// MarshalJSON supplies the operation's fixed action discriminator.
+func (args PairingBeginArgs) MarshalJSON() ([]byte, error) {
+	type fields PairingBeginArgs
+	return json.Marshal(struct {
+		Action string `json:"action"`
+		fields
+	}{Action: PairingBegin, fields: fields(args)})
+}
+
+// PairingCompleteArgs carries arguments for pairing.complete.
+type PairingCompleteArgs struct {
+	// complete: the invitation's secret, from the pairing code's fragment
+	InvitationSecret string `json:"invitation_secret"`
+	// The device's public key, unpadded base64url (complete, renew)
+	DeviceKey string `json:"device_key"`
+	// complete: the device key's signature over the pair challenge; absent, the answer is the challenge to sign
+	Proof Field[PairingCompleteArgsProof] `json:"proof,omitzero"`
+}
+
+// MarshalJSON supplies the operation's fixed action discriminator.
+func (args PairingCompleteArgs) MarshalJSON() ([]byte, error) {
+	type fields PairingCompleteArgs
+	return json.Marshal(struct {
+		Action string `json:"action"`
+		fields
+	}{Action: PairingComplete, fields: fields(args)})
+}
+
+type PairingCompleteArgsProof struct {
+	Protocol  string `json:"protocol"`
+	Purpose   string `json:"purpose"`
+	Home      string `json:"home"`
+	Athanor   string `json:"athanor"`
+	ClientId  string `json:"client_id"`
+	DeviceKey string `json:"device_key"`
+	Nonce     string `json:"nonce"`
+	ExpiresAt int    `json:"expires_at"`
+	Sig       string `json:"sig"`
+}
+
+// UnmarshalJSON refuses unknown fields and preserves required presence.
+func (args *PairingCompleteArgsProof) UnmarshalJSON(data []byte) error {
+	type fields PairingCompleteArgsProof
+	var value fields
+	if err := decodeRecord(data, &value); err != nil {
+		return err
+	}
+	*args = PairingCompleteArgsProof(value)
+	return nil
+}
+
+// PairingListArgs carries arguments for pairing.list.
+type PairingListArgs struct {
+}
+
+// MarshalJSON supplies the operation's fixed action discriminator.
+func (args PairingListArgs) MarshalJSON() ([]byte, error) {
+	type fields PairingListArgs
+	return json.Marshal(struct {
+		Action string `json:"action"`
+		fields
+	}{Action: PairingList, fields: fields(args)})
+}
+
+// PairingRenewArgs carries arguments for pairing.renew.
+type PairingRenewArgs struct {
+	// The paired client (pcl_…) (renew, revoke)
+	ClientId string `json:"client_id"`
+	// The device's public key, unpadded base64url (complete, renew)
+	DeviceKey string `json:"device_key"`
+	// renew: the device key's signature over the renew challenge
+	Proof PairingRenewArgsProof `json:"proof"`
+}
+
+// MarshalJSON supplies the operation's fixed action discriminator.
+func (args PairingRenewArgs) MarshalJSON() ([]byte, error) {
+	type fields PairingRenewArgs
+	return json.Marshal(struct {
+		Action string `json:"action"`
+		fields
+	}{Action: PairingRenew, fields: fields(args)})
+}
+
+type PairingRenewArgsProof struct {
+	Protocol  string `json:"protocol"`
+	Purpose   string `json:"purpose"`
+	Home      string `json:"home"`
+	Athanor   string `json:"athanor"`
+	ClientId  string `json:"client_id"`
+	DeviceKey string `json:"device_key"`
+	Nonce     string `json:"nonce"`
+	ExpiresAt int    `json:"expires_at"`
+	Sig       string `json:"sig"`
+}
+
+// UnmarshalJSON refuses unknown fields and preserves required presence.
+func (args *PairingRenewArgsProof) UnmarshalJSON(data []byte) error {
+	type fields PairingRenewArgsProof
+	var value fields
+	if err := decodeRecord(data, &value); err != nil {
+		return err
+	}
+	*args = PairingRenewArgsProof(value)
+	return nil
+}
+
+// PairingRevokeArgs carries arguments for pairing.revoke.
+type PairingRevokeArgs struct {
+	// The paired client (pcl_…) (renew, revoke)
+	ClientId string `json:"client_id"`
+}
+
+// MarshalJSON supplies the operation's fixed action discriminator.
+func (args PairingRevokeArgs) MarshalJSON() ([]byte, error) {
+	type fields PairingRevokeArgs
+	return json.Marshal(struct {
+		Action string `json:"action"`
+		fields
+	}{Action: PairingRevoke, fields: fields(args)})
+}
+
+// PasskeyListArgs carries arguments for passkey.list.
+type PasskeyListArgs struct {
+}
+
+// MarshalJSON supplies the operation's fixed action discriminator.
+func (args PasskeyListArgs) MarshalJSON() ([]byte, error) {
+	type fields PasskeyListArgs
+	return json.Marshal(struct {
+		Action string `json:"action"`
+		fields
+	}{Action: PasskeyList, fields: fields(args)})
+}
+
+// PasskeyRecoverAdminArgs carries arguments for passkey.recover_admin.
+type PasskeyRecoverAdminArgs struct {
+	// recover_admin: the person whose pending registration is authorized
+	UserId string `json:"user_id"`
+	// The passkey, or the pending registration (revoke, recover_admin)
+	PasskeyId string `json:"passkey_id"`
+	// recover_admin: the digest (sha256:<hex>) of the exact pending registration authorized
+	RegistrationDigest string `json:"registration_digest"`
+}
+
+// MarshalJSON supplies the operation's fixed action discriminator.
+func (args PasskeyRecoverAdminArgs) MarshalJSON() ([]byte, error) {
+	type fields PasskeyRecoverAdminArgs
+	return json.Marshal(struct {
+		Action string `json:"action"`
+		fields
+	}{Action: PasskeyRecoverAdmin, fields: fields(args)})
+}
+
+// PasskeyRegisterArgs carries arguments for passkey.register.
+type PasskeyRegisterArgs struct {
+	// register: the WebAuthn registration the browser's ceremony answered; absent, the answer is the options to begin one with
+	Credential Field[any] `json:"credential,omitzero"`
+}
+
+// MarshalJSON supplies the operation's fixed action discriminator.
+func (args PasskeyRegisterArgs) MarshalJSON() ([]byte, error) {
+	type fields PasskeyRegisterArgs
+	return json.Marshal(struct {
+		Action string `json:"action"`
+		fields
+	}{Action: PasskeyRegister, fields: fields(args)})
+}
+
+// PasskeyRevokeArgs carries arguments for passkey.revoke.
+type PasskeyRevokeArgs struct {
+	// The passkey, or the pending registration (revoke, recover_admin)
+	PasskeyId string `json:"passkey_id"`
+}
+
+// MarshalJSON supplies the operation's fixed action discriminator.
+func (args PasskeyRevokeArgs) MarshalJSON() ([]byte, error) {
+	type fields PasskeyRevokeArgs
+	return json.Marshal(struct {
+		Action string `json:"action"`
+		fields
+	}{Action: PasskeyRevoke, fields: fields(args)})
+}
+
+// PersonAssertArgs carries arguments for person.assert.
+type PersonAssertArgs struct {
+	// The other home, as its origin: the assertion's audience, or the home a certificate is presented to
+	Audience string `json:"audience"`
+	// assert: the challenge that home issued for this sign-in
+	Challenge string `json:"challenge"`
+	// The pending sign-in carry, by its action id
+	ActionId string `json:"action_id"`
+	// assert: the key_epoch (sha256:<hex>) of the identity head the assertion is signed under
+	KeyEpoch string `json:"key_epoch"`
+}
+
+// MarshalJSON supplies the operation's fixed action discriminator.
+func (args PersonAssertArgs) MarshalJSON() ([]byte, error) {
+	type fields PersonAssertArgs
+	return json.Marshal(struct {
+		Action string `json:"action"`
+		fields
+	}{Action: PersonAssert, fields: fields(args)})
+}
+
+// PersonCarryBeginArgs carries arguments for person.carry_begin.
+type PersonCarryBeginArgs struct {
+	// carry_begin: the home to sign in at, as its origin
+	Destination string `json:"destination"`
+	// carry_begin: what the carry is for; join is the one operation
+	Operation Field[string] `json:"operation,omitzero"`
+}
+
+// MarshalJSON supplies the operation's fixed action discriminator.
+func (args PersonCarryBeginArgs) MarshalJSON() ([]byte, error) {
+	type fields PersonCarryBeginArgs
+	return json.Marshal(struct {
+		Action string `json:"action"`
+		fields
+	}{Action: PersonCarryBegin, fields: fields(args)})
+}
+
+// PersonCarryCompleteArgs carries arguments for person.carry_complete.
+type PersonCarryCompleteArgs struct {
+	// The pending sign-in carry, by its action id
+	ActionId string `json:"action_id"`
+	// carry_complete: the navigation outcome the destination returned
+	Outcome string `json:"outcome"`
+}
+
+// MarshalJSON supplies the operation's fixed action discriminator.
+func (args PersonCarryCompleteArgs) MarshalJSON() ([]byte, error) {
+	type fields PersonCarryCompleteArgs
+	return json.Marshal(struct {
+		Action string `json:"action"`
+		fields
+	}{Action: PersonCarryComplete, fields: fields(args)})
+}
+
+// PersonCertifyArgs carries arguments for person.certify.
+type PersonCertifyArgs struct {
+	// certify: the device's public key, unpadded base64url
+	DeviceKey string `json:"device_key"`
+	// The other home, as its origin: the assertion's audience, or the home a certificate is presented to
+	Audience string `json:"audience"`
+	// certify: the athanor at that home the device joins
+	Athanor string `json:"athanor"`
+	// certify: the paired-client id that home reserved for the device (pcl_…)
+	ClientId string `json:"client_id"`
+}
+
+// MarshalJSON supplies the operation's fixed action discriminator.
+func (args PersonCertifyArgs) MarshalJSON() ([]byte, error) {
+	type fields PersonCertifyArgs
+	return json.Marshal(struct {
+		Action string `json:"action"`
+		fields
+	}{Action: PersonCertify, fields: fields(args)})
+}
+
+// PersonEnrollArgs carries arguments for person.enroll.
+type PersonEnrollArgs struct {
+	// enroll: the new kit's recovery seed, drawn by the trusted form (32 bytes, unpadded base64url)
+	RecoverySecret string `json:"recovery_secret"`
+	// The attempt's request id: a retry under the same id resumes the same attempt (enroll, rotate, enroll_holder)
+	RequestId string `json:"request_id"`
+}
+
+// MarshalJSON supplies the operation's fixed action discriminator.
+func (args PersonEnrollArgs) MarshalJSON() ([]byte, error) {
+	type fields PersonEnrollArgs
+	return json.Marshal(struct {
+		Action string `json:"action"`
+		fields
+	}{Action: PersonEnroll, fields: fields(args)})
+}
+
+// PersonEnrollHolderArgs carries arguments for person.enroll_holder.
+type PersonEnrollHolderArgs struct {
+	// enroll_holder: an existing kit's recovery seed, which signs the change (32 bytes, unpadded base64url)
+	RecoverySecret string `json:"recovery_secret"`
+	// enroll_holder: the recovery holder to add
+	Holder PersonEnrollHolderArgsHolder `json:"holder"`
+	// The attempt's request id: a retry under the same id resumes the same attempt (enroll, rotate, enroll_holder)
+	RequestId string `json:"request_id"`
+}
+
+// MarshalJSON supplies the operation's fixed action discriminator.
+func (args PersonEnrollHolderArgs) MarshalJSON() ([]byte, error) {
+	type fields PersonEnrollHolderArgs
+	return json.Marshal(struct {
+		Action string `json:"action"`
+		fields
+	}{Action: PersonEnrollHolder, fields: fields(args)})
+}
+
+type PersonEnrollHolderArgsHolder struct {
+	// The kind of recovery holder added; a printed kit is the one kind
+	Kind string `json:"kind"`
+	// The added kit's recovery seed, drawn by the trusted form (32 bytes, unpadded base64url)
+	RecoverySecret string `json:"recovery_secret"`
+}
+
+// UnmarshalJSON refuses unknown fields and preserves required presence.
+func (args *PersonEnrollHolderArgsHolder) UnmarshalJSON(data []byte) error {
+	type fields PersonEnrollHolderArgsHolder
+	var value fields
+	if err := decodeRecord(data, &value); err != nil {
+		return err
+	}
+	*args = PersonEnrollHolderArgsHolder(value)
+	return nil
+}
+
+// PersonKitArgs carries arguments for person.kit.
+type PersonKitArgs struct {
+	// The enrollment or added-kit attempt whose kit this is (kit, kit_ack)
+	AttemptId string `json:"attempt_id"`
+}
+
+// MarshalJSON supplies the operation's fixed action discriminator.
+func (args PersonKitArgs) MarshalJSON() ([]byte, error) {
+	type fields PersonKitArgs
+	return json.Marshal(struct {
+		Action string `json:"action"`
+		fields
+	}{Action: PersonKit, fields: fields(args)})
+}
+
+// PersonKitAckArgs carries arguments for person.kit_ack.
+type PersonKitAckArgs struct {
+	// The enrollment or added-kit attempt whose kit this is (kit, kit_ack)
+	AttemptId string `json:"attempt_id"`
+}
+
+// MarshalJSON supplies the operation's fixed action discriminator.
+func (args PersonKitAckArgs) MarshalJSON() ([]byte, error) {
+	type fields PersonKitAckArgs
+	return json.Marshal(struct {
+		Action string `json:"action"`
+		fields
+	}{Action: PersonKitAck, fields: fields(args)})
+}
+
+// PersonLinkDoorArgs carries arguments for person.link_door.
+type PersonLinkDoorArgs struct {
+	// link_door: the door to link, as its provider name
+	Provider string `json:"provider"`
+	// link_door: the single-use ticket a completed sign-in with that door answered, proving control of its subject
+	Ticket string `json:"ticket"`
+}
+
+// MarshalJSON supplies the operation's fixed action discriminator.
+func (args PersonLinkDoorArgs) MarshalJSON() ([]byte, error) {
+	type fields PersonLinkDoorArgs
+	return json.Marshal(struct {
+		Action string `json:"action"`
+		fields
+	}{Action: PersonLinkDoor, fields: fields(args)})
+}
+
+// PersonRotateArgs carries arguments for person.rotate.
+type PersonRotateArgs struct {
+	// The attempt's request id: a retry under the same id resumes the same attempt (enroll, rotate, enroll_holder)
+	RequestId string `json:"request_id"`
+}
+
+// MarshalJSON supplies the operation's fixed action discriminator.
+func (args PersonRotateArgs) MarshalJSON() ([]byte, error) {
+	type fields PersonRotateArgs
+	return json.Marshal(struct {
+		Action string `json:"action"`
+		fields
+	}{Action: PersonRotate, fields: fields(args)})
+}
+
+// PersonUnlinkDoorArgs carries arguments for person.unlink_door.
+type PersonUnlinkDoorArgs struct {
+	// unlink_door: the linked door's identity key (provider|issuer|subject)
+	Door string `json:"door"`
+}
+
+// MarshalJSON supplies the operation's fixed action discriminator.
+func (args PersonUnlinkDoorArgs) MarshalJSON() ([]byte, error) {
+	type fields PersonUnlinkDoorArgs
+	return json.Marshal(struct {
+		Action string `json:"action"`
+		fields
+	}{Action: PersonUnlinkDoor, fields: fields(args)})
+}
+
 // PolicyLogCorrelateArgs carries arguments for policy_log.correlate.
 type PolicyLogCorrelateArgs struct {
 	// Filter by request ID
@@ -2331,6 +2866,10 @@ type ProfileCommitArgsDecisions struct {
 	PublishFrom    Field[string]                                      `json:"publish_from,omitzero"`
 	NeedIds        Field[[]string]                                    `json:"need_ids,omitzero"`
 	DurableStorage Field[bool]                                        `json:"durable_storage,omitzero"`
+	// The origins the grant admits; absent, interactive alone
+	Origins Field[[]string] `json:"origins,omitzero"`
+	// Per consent-graph node, the part of the ask granted; a missing kind or field keeps its ask, an empty set grants none
+	Subset Field[map[string]ProfileCommitArgsDecisionsSubsetItem] `json:"subset,omitzero"`
 }
 
 // UnmarshalJSON refuses unknown fields and preserves required presence.
@@ -2396,6 +2935,95 @@ func (args *ProfileCommitArgsDecisionsToolServersItem) UnmarshalJSON(data []byte
 	return nil
 }
 
+type ProfileCommitArgsDecisionsSubsetItem struct {
+	Egress  Field[ProfileCommitArgsDecisionsSubsetItemEgress]  `json:"egress,omitzero"`
+	Storage Field[ProfileCommitArgsDecisionsSubsetItemStorage] `json:"storage,omitzero"`
+	Tools   Field[[]string]                                    `json:"tools,omitzero"`
+	Limits  Field[ProfileCommitArgsDecisionsSubsetItemLimits]  `json:"limits,omitzero"`
+}
+
+// UnmarshalJSON refuses unknown fields and preserves required presence.
+func (args *ProfileCommitArgsDecisionsSubsetItem) UnmarshalJSON(data []byte) error {
+	type fields ProfileCommitArgsDecisionsSubsetItem
+	var value fields
+	if err := decodeRecord(data, &value); err != nil {
+		return err
+	}
+	*args = ProfileCommitArgsDecisionsSubsetItem(value)
+	return nil
+}
+
+type ProfileCommitArgsDecisionsSubsetItemEgress struct {
+	Domains    Field[[]string] `json:"domains,omitzero"`
+	Methods    Field[[]string] `json:"methods,omitzero"`
+	Schemes    Field[[]string] `json:"schemes,omitzero"`
+	PrivateIps Field[[]string] `json:"private_ips,omitzero"`
+}
+
+// UnmarshalJSON refuses unknown fields and preserves required presence.
+func (args *ProfileCommitArgsDecisionsSubsetItemEgress) UnmarshalJSON(data []byte) error {
+	type fields ProfileCommitArgsDecisionsSubsetItemEgress
+	var value fields
+	if err := decodeRecord(data, &value); err != nil {
+		return err
+	}
+	*args = ProfileCommitArgsDecisionsSubsetItemEgress(value)
+	return nil
+}
+
+type ProfileCommitArgsDecisionsSubsetItemStorage struct {
+	Paths   Field[[]string] `json:"paths,omitzero"`
+	Actions Field[[]string] `json:"actions,omitzero"`
+}
+
+// UnmarshalJSON refuses unknown fields and preserves required presence.
+func (args *ProfileCommitArgsDecisionsSubsetItemStorage) UnmarshalJSON(data []byte) error {
+	type fields ProfileCommitArgsDecisionsSubsetItemStorage
+	var value fields
+	if err := decodeRecord(data, &value); err != nil {
+		return err
+	}
+	*args = ProfileCommitArgsDecisionsSubsetItemStorage(value)
+	return nil
+}
+
+type ProfileCommitArgsDecisionsSubsetItemLimits struct {
+	BatchTimeout       Field[string]                                              `json:"batch_timeout,omitzero"`
+	MaxConcurrentTasks Field[int]                                                 `json:"max_concurrent_tasks,omitzero"`
+	MaxMemoryBytes     Field[int]                                                 `json:"max_memory_bytes,omitzero"`
+	MaxRequestSize     Field[int]                                                 `json:"max_request_size,omitzero"`
+	MaxResponseSize    Field[int]                                                 `json:"max_response_size,omitzero"`
+	RateLimit          Field[ProfileCommitArgsDecisionsSubsetItemLimitsRateLimit] `json:"rate_limit,omitzero"`
+	Timeout            Field[string]                                              `json:"timeout,omitzero"`
+}
+
+// UnmarshalJSON refuses unknown fields and preserves required presence.
+func (args *ProfileCommitArgsDecisionsSubsetItemLimits) UnmarshalJSON(data []byte) error {
+	type fields ProfileCommitArgsDecisionsSubsetItemLimits
+	var value fields
+	if err := decodeRecord(data, &value); err != nil {
+		return err
+	}
+	*args = ProfileCommitArgsDecisionsSubsetItemLimits(value)
+	return nil
+}
+
+type ProfileCommitArgsDecisionsSubsetItemLimitsRateLimit struct {
+	Requests Field[int]    `json:"requests,omitzero"`
+	Window   Field[string] `json:"window,omitzero"`
+}
+
+// UnmarshalJSON refuses unknown fields and preserves required presence.
+func (args *ProfileCommitArgsDecisionsSubsetItemLimitsRateLimit) UnmarshalJSON(data []byte) error {
+	type fields ProfileCommitArgsDecisionsSubsetItemLimitsRateLimit
+	var value fields
+	if err := decodeRecord(data, &value); err != nil {
+		return err
+	}
+	*args = ProfileCommitArgsDecisionsSubsetItemLimitsRateLimit(value)
+	return nil
+}
+
 // ProfileGrantArgs carries arguments for profile.grant.
 type ProfileGrantArgs struct {
 	// Profile id (grant/list/revoke)
@@ -2431,6 +3059,25 @@ func (args *ProfileGrantArgsBindingsItem) UnmarshalJSON(data []byte) error {
 	}
 	*args = ProfileGrantArgsBindingsItem(value)
 	return nil
+}
+
+// ProfileGrantsArgs carries arguments for profile.grants.
+type ProfileGrantsArgs struct {
+	// grants: an egress domain; name exactly one of domain, path, entry_id
+	Domain Field[string] `json:"domain,omitzero"`
+	// grants: a storage path; name exactly one of domain, path, entry_id
+	Path Field[string] `json:"path,omitzero"`
+	// grants: a vault entry (vlt_…); name exactly one of domain, path, entry_id
+	EntryId Field[string] `json:"entry_id,omitzero"`
+}
+
+// MarshalJSON supplies the operation's fixed action discriminator.
+func (args ProfileGrantsArgs) MarshalJSON() ([]byte, error) {
+	type fields ProfileGrantsArgs
+	return json.Marshal(struct {
+		Action string `json:"action"`
+		fields
+	}{Action: ProfileGrants, fields: fields(args)})
 }
 
 // ProfileListArgs carries arguments for profile.list.
@@ -2495,6 +3142,10 @@ type ProfilePreviewArgsDecisions struct {
 	PublishFrom    Field[string]                                       `json:"publish_from,omitzero"`
 	NeedIds        Field[[]string]                                     `json:"need_ids,omitzero"`
 	DurableStorage Field[bool]                                         `json:"durable_storage,omitzero"`
+	// The origins the grant admits; absent, interactive alone
+	Origins Field[[]string] `json:"origins,omitzero"`
+	// Per consent-graph node, the part of the ask granted; a missing kind or field keeps its ask, an empty set grants none
+	Subset Field[map[string]ProfilePreviewArgsDecisionsSubsetItem] `json:"subset,omitzero"`
 }
 
 // UnmarshalJSON refuses unknown fields and preserves required presence.
@@ -2557,6 +3208,95 @@ func (args *ProfilePreviewArgsDecisionsToolServersItem) UnmarshalJSON(data []byt
 		return err
 	}
 	*args = ProfilePreviewArgsDecisionsToolServersItem(value)
+	return nil
+}
+
+type ProfilePreviewArgsDecisionsSubsetItem struct {
+	Egress  Field[ProfilePreviewArgsDecisionsSubsetItemEgress]  `json:"egress,omitzero"`
+	Storage Field[ProfilePreviewArgsDecisionsSubsetItemStorage] `json:"storage,omitzero"`
+	Tools   Field[[]string]                                     `json:"tools,omitzero"`
+	Limits  Field[ProfilePreviewArgsDecisionsSubsetItemLimits]  `json:"limits,omitzero"`
+}
+
+// UnmarshalJSON refuses unknown fields and preserves required presence.
+func (args *ProfilePreviewArgsDecisionsSubsetItem) UnmarshalJSON(data []byte) error {
+	type fields ProfilePreviewArgsDecisionsSubsetItem
+	var value fields
+	if err := decodeRecord(data, &value); err != nil {
+		return err
+	}
+	*args = ProfilePreviewArgsDecisionsSubsetItem(value)
+	return nil
+}
+
+type ProfilePreviewArgsDecisionsSubsetItemEgress struct {
+	Domains    Field[[]string] `json:"domains,omitzero"`
+	Methods    Field[[]string] `json:"methods,omitzero"`
+	Schemes    Field[[]string] `json:"schemes,omitzero"`
+	PrivateIps Field[[]string] `json:"private_ips,omitzero"`
+}
+
+// UnmarshalJSON refuses unknown fields and preserves required presence.
+func (args *ProfilePreviewArgsDecisionsSubsetItemEgress) UnmarshalJSON(data []byte) error {
+	type fields ProfilePreviewArgsDecisionsSubsetItemEgress
+	var value fields
+	if err := decodeRecord(data, &value); err != nil {
+		return err
+	}
+	*args = ProfilePreviewArgsDecisionsSubsetItemEgress(value)
+	return nil
+}
+
+type ProfilePreviewArgsDecisionsSubsetItemStorage struct {
+	Paths   Field[[]string] `json:"paths,omitzero"`
+	Actions Field[[]string] `json:"actions,omitzero"`
+}
+
+// UnmarshalJSON refuses unknown fields and preserves required presence.
+func (args *ProfilePreviewArgsDecisionsSubsetItemStorage) UnmarshalJSON(data []byte) error {
+	type fields ProfilePreviewArgsDecisionsSubsetItemStorage
+	var value fields
+	if err := decodeRecord(data, &value); err != nil {
+		return err
+	}
+	*args = ProfilePreviewArgsDecisionsSubsetItemStorage(value)
+	return nil
+}
+
+type ProfilePreviewArgsDecisionsSubsetItemLimits struct {
+	BatchTimeout       Field[string]                                               `json:"batch_timeout,omitzero"`
+	MaxConcurrentTasks Field[int]                                                  `json:"max_concurrent_tasks,omitzero"`
+	MaxMemoryBytes     Field[int]                                                  `json:"max_memory_bytes,omitzero"`
+	MaxRequestSize     Field[int]                                                  `json:"max_request_size,omitzero"`
+	MaxResponseSize    Field[int]                                                  `json:"max_response_size,omitzero"`
+	RateLimit          Field[ProfilePreviewArgsDecisionsSubsetItemLimitsRateLimit] `json:"rate_limit,omitzero"`
+	Timeout            Field[string]                                               `json:"timeout,omitzero"`
+}
+
+// UnmarshalJSON refuses unknown fields and preserves required presence.
+func (args *ProfilePreviewArgsDecisionsSubsetItemLimits) UnmarshalJSON(data []byte) error {
+	type fields ProfilePreviewArgsDecisionsSubsetItemLimits
+	var value fields
+	if err := decodeRecord(data, &value); err != nil {
+		return err
+	}
+	*args = ProfilePreviewArgsDecisionsSubsetItemLimits(value)
+	return nil
+}
+
+type ProfilePreviewArgsDecisionsSubsetItemLimitsRateLimit struct {
+	Requests Field[int]    `json:"requests,omitzero"`
+	Window   Field[string] `json:"window,omitzero"`
+}
+
+// UnmarshalJSON refuses unknown fields and preserves required presence.
+func (args *ProfilePreviewArgsDecisionsSubsetItemLimitsRateLimit) UnmarshalJSON(data []byte) error {
+	type fields ProfilePreviewArgsDecisionsSubsetItemLimitsRateLimit
+	var value fields
+	if err := decodeRecord(data, &value); err != nil {
+		return err
+	}
+	*args = ProfilePreviewArgsDecisionsSubsetItemLimitsRateLimit(value)
 	return nil
 }
 

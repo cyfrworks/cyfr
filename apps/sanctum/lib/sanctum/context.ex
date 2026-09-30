@@ -57,7 +57,15 @@ defmodule Sanctum.Context do
   # stored membership row read it too.
   @type scope :: Prima.TenancyScope.t()
   @type auth_method ::
-          :oidc | :api_key | :scheduled | :webhook | :tincture | :system | :session | nil
+          :oidc
+          | :device
+          | :api_key
+          | :scheduled
+          | :webhook
+          | :tincture
+          | :system
+          | :session
+          | nil
   @type api_key_type :: :application | :service | :admin | nil
   @type plane :: :external | :guest
 
@@ -116,6 +124,9 @@ defmodule Sanctum.Context do
           credential_deadline: DateTime.t() | nil,
           validated_at: DateTime.t() | nil,
           frame: frame() | nil,
+          client_id: String.t() | nil,
+          confirmation_id: String.t() | nil,
+          origin: Prima.Origin.t() | nil,
           authenticated: boolean(),
           anonymous: boolean(),
           platform_admin: boolean(),
@@ -167,6 +178,19 @@ defmodule Sanctum.Context do
     # transport's shared 120/min bucket, so several addresses could still
     # exhaust the global sign-in ceiling between them.
     :client_ip,
+    # The paired client the device channel authenticated this request
+    # through (`auth_method: :device`), or nil for every other ingress.
+    # Only that channel sets it; nothing a caller sends can name one.
+    :client_id,
+    # The pending confirmation a surface repeats a sensitive change under
+    # (`Sanctum.Consent.Authz.confirm/3`), or nil. It names the record to
+    # consume and proves nothing by itself: the record is checked, and its
+    # person's standing, where the change is decided.
+    :confirmation_id,
+    # How the run this context starts began (`Prima.Origin`): set by the
+    # admission entry that builds the context, never from a caller's
+    # argument, or nil where no entry named one.
+    :origin,
     authenticated: false,
     # True when the ORIGINATING caller presented no credentials (public
     # tincture invocation). Ingress adapters may still mint an authenticated
@@ -190,13 +214,15 @@ defmodule Sanctum.Context do
   Context for scheduled (cron) executions.
 
   Grants execute and storage permissions inside the schedule's athanor,
-  attributed to the originating user. `:athanor_id` is required.
+  attributed to the originating user, with the origin `schedule`.
+  `:athanor_id` is required.
   """
   def for_scheduled(user_id, opts \\ []) do
-    # Delegates to the single builder; cron's only divergence from the
-    # `:system` default is the `:scheduled` provenance tag. namespace is pure
-    # identity (not path-bearing), so an absent one is fine — the schedule's
-    # athanor determines where its files land.
+    # Delegates to the single builder; cron's divergences from the
+    # `:system` default are the `:scheduled` provenance tag and the
+    # `schedule` origin. namespace is pure identity (not path-bearing), so
+    # an absent one is fine — the schedule's athanor determines where its
+    # files land.
     #
     # Permissions are stated explicitly rather than inherited from
     # internal/1's defaults, so what a schedule runs with is visible here
@@ -207,6 +233,8 @@ defmodule Sanctum.Context do
       athanor_id: Keyword.fetch!(opts, :athanor_id),
       scope: :athanor,
       auth_method: :scheduled,
+      # A schedule's fire is the admission path that starts the run.
+      origin: :schedule,
       permissions: [:execute, :storage_read, :storage_write]
     )
   end
@@ -234,6 +262,9 @@ defmodule Sanctum.Context do
   - `:session_token_hash` - session row key (SHA-256 of the session token)
   - `:request_id` - MCP request ID
   - `:call_id` - the admission the context is inside (`call_<uuid7>`)
+  - `:client_id` - the paired client the device channel authenticated
+  - `:confirmation_id` - the pending confirmation a repeated change names
+  - `:origin` - how the run began (`Prima.Origin`), set by the admission entry
   - `:authenticated` - Boolean (default: false)
 
   ## Examples
@@ -249,7 +280,17 @@ defmodule Sanctum.Context do
   @valid_scopes Sanctum.Atoms.scope_atoms()
 
   # Validate auth_method against its declared vocabulary at context construction.
-  @valid_auth_methods [:oidc, :api_key, :scheduled, :webhook, :tincture, :system, :session, nil]
+  @valid_auth_methods [
+    :oidc,
+    :device,
+    :api_key,
+    :scheduled,
+    :webhook,
+    :tincture,
+    :system,
+    :session,
+    nil
+  ]
 
   # Mirrors the `plane()` type, guarded for the same reason.
   @valid_planes [:external, :guest]
@@ -286,7 +327,9 @@ defmodule Sanctum.Context do
           :request_id,
           :call_id,
           :api_key_id,
-          :client_ip
+          :client_ip,
+          :client_id,
+          :confirmation_id
         ] do
       val = Map.get(attrs, field)
 
@@ -352,6 +395,9 @@ defmodule Sanctum.Context do
       validated_at: validated_at!(Map.get(attrs, :validated_at)),
       frame: frame!(Map.get(attrs, :frame)),
       client_ip: Map.get(attrs, :client_ip),
+      client_id: Map.get(attrs, :client_id),
+      confirmation_id: Map.get(attrs, :confirmation_id),
+      origin: origin!(Map.get(attrs, :origin)),
       authenticated: Map.get(attrs, :authenticated, false),
       anonymous: Map.get(attrs, :anonymous, false) == true,
       platform_admin: Map.get(attrs, :platform_admin, false) == true,
@@ -422,6 +468,18 @@ defmodule Sanctum.Context do
   defp frame!(other),
     do: raise(ArgumentError, "frame is malformed: #{Prima.LoggerContext.shape(other)}")
 
+  defp origin!(nil), do: nil
+
+  defp origin!(origin) do
+    if Prima.Origin.origin?(origin),
+      do: origin,
+      else:
+        raise(
+          ArgumentError,
+          "origin must be a Prima.Origin or nil, got: #{Prima.LoggerContext.shape(origin)}"
+        )
+  end
+
   defp validated_at!(nil), do: nil
   defp validated_at!(%DateTime{} = at), do: at
 
@@ -450,6 +508,7 @@ defmodule Sanctum.Context do
     * `:permissions`    — default `[:execute, :storage_read, :storage_write]`
     * `:scope`          — default `:platform`
     * `:auth_method`    — default `:system`; cron passes `:scheduled`
+    * `:origin`         — default `nil`; cron passes `:schedule`
 
   `authenticated:` is always `true`.
 
@@ -473,6 +532,7 @@ defmodule Sanctum.Context do
         ]),
       scope: Keyword.get(opts, :scope, :platform),
       auth_method: Keyword.get(opts, :auth_method, :system),
+      origin: Keyword.get(opts, :origin),
       authenticated: true,
       # Marks this as the single sanctioned platform-construction path so the
       # audit in build/1 records it as sanctioned (no warning).

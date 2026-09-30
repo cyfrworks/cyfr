@@ -100,6 +100,11 @@ defmodule Cyfr.BoundaryDeclarationsTest do
           SessionStorage ToolGrantStorage Users VaultStorage WebhookStorage),
        "the security rows, which Sanctum reads; that no other layer reads them is " <>
          "`Cyfr.Boundaries`' security row"},
+      {~w(CarryActions DeviceCertificates DirectoryHeads IdentityAttempts IdentityLog
+          PairingInvitations Passkeys PendingConfirmations PersonIdentities RequestRateWindows),
+       "the identity, device, passkey, confirmation, carry and pre-authentication rate " <>
+         "rows Sanctum reads; that no other layer reads them is `Cyfr.Boundaries`' " <>
+         "security row"},
       {~w(AgentRevisions AgentStorage BudgetReservations BuildRecords Cache Cache.Keys
           CipherRotation ComponentStorage ControlPlane CredentialBindings CronSchedule
           DecisionLog DecisionLog.AuditFailure Execution ExecutionAttempts ExecutionEvents
@@ -130,7 +135,14 @@ defmodule Cyfr.BoundaryDeclarationsTest do
          "downward, each rostered for its callers in `Cyfr.Boundaries`' surface rows"},
       {~w(Consent.Components Grimoire Tenancy.Caps),
        "the ports the composition root installs: component facts, the operation " <>
-         "table and the storage cap"}
+         "table and the storage cap"},
+      {~w(Carry Directory.Client IdentityFreshness Person),
+       "the person's keys, the directory client, identity freshness and the sign-in " <>
+         "carry, which the identity domain composes and the host's suites drive"},
+      {~w(Providers.Assertion Providers.Confirmation Providers.Pairing Providers.Passkey
+          Providers.Person),
+       "the person, pairing, passkey and confirmation operations, declared here and " <>
+         "driven by the host's suites through their handlers"}
     ],
     Grimoire => [
       {~w(Catalog Supervisor), "the composition root loads the table and starts the gate"},

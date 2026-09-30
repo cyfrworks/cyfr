@@ -140,16 +140,16 @@ defmodule Sanctum.ApiKeyCapabilityTest do
       {:ok, preview} = Commit.preview(key_ctx, decisions)
 
       # The interactive operator mints the capability for THIS digest.
-      {:ok, _} =
+      {:ok, %{api_key: raw}} =
         ApiKey.create(ctx, %{
           name: "cap-walk-key",
           consent_capability: %{commit_digest: preview.commit_digest, expires_at: future()}
         })
 
-      {:ok, row} =
-        Arca.ApiKeyStorage.get_key(Sanctum.Context.actor(ctx), "cap-walk-key")
-
-      {:ok, capability} = ApiKey.consent_capability(ctx, row.id)
+      # The commit rereads the key that authenticated it, so it runs under
+      # the context the key itself establishes.
+      {:ok, key_ctx} = Sanctum.Caller.establish({:api_key, raw})
+      {:ok, capability} = ApiKey.consent_capability(key_ctx, key_ctx.api_key_id)
 
       assert {:ok, committed} =
                Commit.commit(

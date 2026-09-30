@@ -14,7 +14,8 @@ defmodule Sanctum.ProviderDispatchContractTest do
 
   alias Sanctum.Provider
 
-  @tool_names ~w(session athanor member door oauth key tincture_visibility webhook vault profile)
+  @tool_names ~w(session athanor member door oauth key tincture_visibility webhook vault profile
+                  person pairing passkey confirmation)
 
   @action_enums %{
     "session" => [
@@ -56,7 +57,23 @@ defmodule Sanctum.ProviderDispatchContractTest do
       "revoke",
       "delete"
     ],
-    "profile" => ["plan", "preview", "commit", "grant", "publish", "list", "revoke"]
+    "profile" => ["plan", "preview", "commit", "grant", "publish", "list", "grants", "revoke"],
+    "person" => [
+      "enroll",
+      "rotate",
+      "kit",
+      "kit_ack",
+      "link_door",
+      "unlink_door",
+      "enroll_holder",
+      "carry_begin",
+      "carry_complete",
+      "certify",
+      "assert"
+    ],
+    "pairing" => ["begin", "complete", "renew", "revoke", "list"],
+    "passkey" => ["register", "list", "revoke", "recover_admin"],
+    "confirmation" => ["confirm", "reauth", "pending", "cancel"]
   }
 
   @invalid_action_errors %{
@@ -71,11 +88,15 @@ defmodule Sanctum.ProviderDispatchContractTest do
     "vault" =>
       "Invalid vault action. Use: list, status, create, rename, rotate, rebind, authorize, revoke, or delete",
     "profile" =>
-      "Invalid profile action. Use: plan, preview, commit, grant, publish, list, or revoke"
+      "Invalid profile action. Use: plan, preview, commit, grant, publish, list, grants, or revoke",
+    "person" => "Unknown action: person.___no_such_action___",
+    "pairing" => "Unknown action: pairing.___no_such_action___",
+    "passkey" => "Unknown action: passkey.___no_such_action___",
+    "confirmation" => "Unknown action: confirmation.___no_such_action___"
   }
 
   describe "tools/0 — frozen surface" do
-    test "exactly these 10 tools, in order" do
+    test "exactly these 14 tools, in order" do
       assert Enum.map(Provider.tools(), & &1.name) == @tool_names
     end
 

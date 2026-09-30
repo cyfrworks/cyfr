@@ -5,9 +5,9 @@ defmodule PrismWeb.SystemLayer do
   @moduledoc """
   The system layer: what Prism alone draws above every frame — grant,
   unlock, sign-in and credential-entry prompts, and safe mode. It presents
-  a prompt and never decides one: whether a client may confirm is
-  Sanctum's (`Sanctum.Pairing`), inside the consent decision, and the
-  operation a confirmation dispatches is what decides it.
+  a prompt and never decides one: the operation a confirmation dispatches
+  is decided where the change is, in Sanctum, which checks the caller's
+  standing and any fresh confirmation the change needs.
 
   The shell mounts it once, as `id: "system-layer"` with the page's
   `context`. A prompt (`PrismWeb.SystemLayer.Prompt`) arrives only by
@@ -22,13 +22,13 @@ defmodule PrismWeb.SystemLayer do
   refused confirmation shows its sentence, reports `{:refused, reason}`
   and stays open, so the person can dismiss it.
 
-  The prompt names the class its action needs
-  (`Sanctum.Pairing.required_class/1`) and whether this client
-  (`Sanctum.Pairing.class_of/1`) holds it. A client whose class is too low
-  is shown no confirm control and is told which kind of client can
-  confirm; a confirmation that arrives anyway is refused before anything
-  is dispatched. Holding the class authorizes nothing: the dispatch runs
-  through the gate under the component's context.
+  A prompt that confirms an action (`Sanctum.Pairing`'s action table) is
+  shown with a confirm control only to a client with a person behind it
+  who can give a proof (`Sanctum.Pairing.can_confirm?/1`); any other
+  client is told to confirm it from a signed-in browser. That is a
+  display rule and decides nothing: a confirmation that arrives anyway is
+  dispatched like any other, and the operation answers it. No client
+  holds a rank.
 
   What a confirmation dispatches, through `PrismWeb.Ops.call_tool/3`:
 
@@ -61,7 +61,6 @@ defmodule PrismWeb.SystemLayer do
   use PrismWeb, :live_component
 
   alias Phoenix.LiveView.JS
-  alias Prima.ConfirmationClass
   alias Prism.SafeMode
   alias PrismWeb.Ops
   alias PrismWeb.SystemLayer.Prompt
@@ -197,36 +196,30 @@ defmodule PrismWeb.SystemLayer do
   end
 
   defp confirm(socket, %{kind: :grant, subject: subject} = prompt) do
-    case permitted(socket, prompt) do
-      :ok ->
-        args = %{
-          "decisions" => subject.decisions,
-          "plan_token" => subject.plan.plan_token,
-          "proof" => subject.preview.proof,
-          "commit_digest" => subject.preview.commit_digest,
-          "expected_consent_revision" => Map.get(subject.plan, :expected_consent_revision)
-        }
+    args = %{
+      "decisions" => subject.decisions,
+      "plan_token" => subject.plan.plan_token,
+      "proof" => subject.preview.proof,
+      "commit_digest" => subject.preview.commit_digest,
+      "expected_consent_revision" => Map.get(subject.plan, :expected_consent_revision)
+    }
 
-        {:noreply, dispatched(socket, prompt, Ops.call_tool(socket, "profile/commit", args))}
-
-      {:refused, socket} ->
-        {:noreply, socket}
-    end
+    {:noreply, dispatched(socket, prompt, Ops.call_tool(socket, "profile/commit", args))}
   end
 
   defp enter_credential(socket, %{subject: subject} = prompt, secret) do
-    with :ok <- permitted(socket, prompt),
-         :ok <- present(secret) do
-      args = %{
-        "name" => subject.name,
-        "kind" => "api_key",
-        "fields" => %{subject.field => secret}
-      }
+    case present(secret) do
+      :ok ->
+        args = %{
+          "name" => subject.name,
+          "kind" => "api_key",
+          "fields" => %{subject.field => secret}
+        }
 
-      dispatched(socket, prompt, Ops.call_tool(socket, "vault/create", args))
-    else
-      {:refused, socket} -> socket
-      :blank -> assign(socket, :error, "Enter the credential to save it.")
+        dispatched(socket, prompt, Ops.call_tool(socket, "vault/create", args))
+
+      :blank ->
+        assign(socket, :error, "Enter the credential to save it.")
     end
   end
 
@@ -259,22 +252,6 @@ defmodule PrismWeb.SystemLayer do
   defp dispatched(socket, prompt, {:error, reason}),
     do: refuse(socket, prompt, reason, Ops.error_message(reason))
 
-  # A client below the action's class is shown no confirm control; a
-  # confirmation that arrives anyway is refused here, before any dispatch.
-  # Passing this check authorizes nothing: the dispatched operation decides.
-  defp permitted(socket, prompt) do
-    if may_confirm?(socket.assigns.context, prompt),
-      do: :ok,
-      else:
-        {:refused,
-         refuse(
-           socket,
-           prompt,
-           :class_too_low,
-           cannot_confirm(Pairing.required_class(prompt.action))
-         )}
-  end
-
   defp present(secret) when is_binary(secret) do
     if String.trim(secret) == "", do: :blank, else: :ok
   end
@@ -282,30 +259,17 @@ defmodule PrismWeb.SystemLayer do
   defp present(_secret), do: :blank
 
   # ---------------------------------------------------------------------------
-  # Classes
+  # Who can confirm
   # ---------------------------------------------------------------------------
 
   defp dismissable?(%{kind: kind}), do: kind != :safe_mode
 
+  # A display rule: it hides a control and never decides. A prompt that
+  # confirms no action offers its control to every client; one that does,
+  # to a client with a person behind it who can give a proof.
   defp may_confirm?(_context, %{action: nil}), do: true
-
-  defp may_confirm?(%Sanctum.Context{} = context, %{action: action}),
-    do: ConfirmationClass.at_least?(Pairing.class_of(context), Pairing.required_class(action))
-
+  defp may_confirm?(%Sanctum.Context{} = context, _prompt), do: Pairing.can_confirm?(context)
   defp may_confirm?(_context, _prompt), do: false
-
-  defp held(%Sanctum.Context{} = context), do: Pairing.class_of(context)
-  defp held(_context), do: :none
-
-  defp who(:none), do: "any client"
-  defp who(:session), do: "a signed-in browser or API key"
-  defp who(:paired), do: "a device paired with your account"
-  defp who(:strong), do: "a paired device holding a verified security key"
-
-  defp cannot_confirm(needed) do
-    "This client cannot confirm this. It needs a #{ConfirmationClass.to_string(needed)} " <>
-      "client: confirm it from #{who(needed)}."
-  end
 
   # ---------------------------------------------------------------------------
   # Render
@@ -316,7 +280,6 @@ defmodule PrismWeb.SystemLayer do
     assigns =
       assign(assigns,
         may: assigns.current && may_confirm?(assigns[:context], assigns.current),
-        held: held(assigns[:context]),
         safe_mode: match?(%{kind: :safe_mode}, assigns.current)
       )
 
@@ -351,7 +314,7 @@ defmodule PrismWeb.SystemLayer do
             {description(@current)}
           </p>
 
-          <.class_line prompt={@current} may={@may} held={@held} />
+          <.standing prompt={@current} may={@may} />
 
           <.body prompt={@current} may={@may} myself={@myself} id={@id} />
 
@@ -372,21 +335,17 @@ defmodule PrismWeb.SystemLayer do
 
   attr :prompt, :map, required: true
   attr :may, :boolean, required: true
-  attr :held, :atom, required: true
 
-  defp class_line(%{prompt: %{action: nil}} = assigns), do: ~H""
+  # Said only where the control is hidden: a client with no person behind
+  # it cannot give a proof, and the person confirms from a signed-in browser.
+  defp standing(%{prompt: %{action: nil}} = assigns), do: ~H""
+  defp standing(%{may: true} = assigns), do: ~H""
 
-  defp class_line(assigns) do
-    assigns = assign(assigns, :needed, Pairing.required_class(assigns.prompt.action))
-
+  defp standing(assigns) do
     ~H"""
-    <p class="text-sm" data-needs={ConfirmationClass.to_string(@needed)}>
-      Confirming this needs a <strong>{ConfirmationClass.to_string(@needed)}</strong>
-      client ({who(@needed)}). <span :if={@may}>This client can confirm it.</span>
-      <span :if={!@may}>
-        This client is a {ConfirmationClass.to_string(@held)} client and cannot confirm it:
-        confirm it from {who(@needed)}.
-      </span>
+    <p class="text-sm" data-standing="none">
+      This client has no person behind it, so it cannot confirm this. Confirm it from a
+      signed-in browser.
     </p>
     """
   end

@@ -26,7 +26,8 @@ defmodule Sanctum.ProviderCredentials do
   alias Sanctum.Context
 
   @doc """
-  Store (or replace) a provider's client credentials for the caller's athanor.
+  Store (or replace) a provider's client credentials for the caller's
+  athanor: a sensitive change (`credential_entry`), decided here.
 
   `client_secret` may be nil — public OAuth clients have no secret.
   """
@@ -34,7 +35,13 @@ defmodule Sanctum.ProviderCredentials do
   def put(%Context{} = ctx, provider, client_id, client_secret \\ nil) do
     with {:ok, :interactive} <- Sanctum.Consent.Authz.authorize_interactive(ctx),
          :ok <- validate_provider(provider),
-         :ok <- validate_client_id(client_id) do
+         :ok <- validate_client_id(client_id),
+         :ok <-
+           Sanctum.Consent.Authz.confirm(ctx, :credential_entry, %{
+             operation: "oauth.set_client",
+             arguments: %{provider: provider, client_id: client_id, client_secret: client_secret},
+             resource: provider
+           }) do
       athanor_id = athanor!(ctx)
       payload = Jason.encode!(%{"client_id" => client_id, "client_secret" => client_secret})
 

@@ -35,6 +35,7 @@ defmodule Sanctum do
       ApiKey,
       Atoms,
       Auth,
+      Auth.CyfrDoor,
       Auth.DeviceFlow,
       Auth.EmailVerification,
       Auth.Identity,
@@ -44,6 +45,7 @@ defmodule Sanctum do
       Authority.BudgetCounter,
       BearerToken,
       Caller,
+      Carry,
       Cipher,
       Cipher.Rotation,
       ClientIp,
@@ -56,17 +58,29 @@ defmodule Sanctum do
       Consent.ShapeDerivation,
       Consent.ShapeDiff,
       Context,
+      DeviceCerts,
+      Directory,
+      Directory.Client,
       Door,
       Door.Store,
       Egress,
       ExecutionStanding,
       Grimoire,
+      IdentityFreshness,
       Namespace,
       Network,
       Notify,
       Pairing,
+      Passkeys,
+      Person,
       Policy.Enforcement,
+      Providers.Assertion,
+      Providers.Confirmation,
+      Providers.Pairing,
+      Providers.Passkey,
+      Providers.Person,
       Provisioning,
+      Recovery,
       RegistryCredentials,
       Session,
       SignIn,
@@ -140,6 +154,35 @@ defmodule Sanctum do
   def origin do
     public_url() || Application.get_env(:sanctum, :fallback_origin, "http://localhost:4000")
   end
+
+  @doc """
+  The directory this deployment enrolls its local people at
+  (`:sanctum, :directory_url`, from `CYFR_DIRECTORY_URL`), or `nil` when
+  it names none: local operation and local pairing need none, and
+  enrollment needs one. There is no hosted default, and no operation takes
+  a directory URL. `Sanctum.Supervisor` refuses the boot on a value
+  `enrollment_directory?/1` refuses.
+  """
+  @spec directory_url() :: String.t() | nil
+  def directory_url, do: Application.get_env(:sanctum, :directory_url)
+
+  @doc """
+  Whether `value` is a directory this deployment may pin for enrollment:
+  a directory URL (`Prima.Identity.Encoding.directory_url?/1`) served over
+  `https`.
+  """
+  @spec enrollment_directory?(term()) :: boolean()
+  def enrollment_directory?(value) do
+    Prima.Identity.Encoding.directory_url?(value) and String.starts_with?(value, "https://")
+  end
+
+  @doc """
+  Whether `value` is an installation's restore token: exactly 64 lowercase
+  hexadecimal characters, 32 random bytes. The token is optional (unset,
+  restore is disabled) and is never a platform setting or a log value.
+  """
+  @spec restore_token?(term()) :: boolean()
+  def restore_token?(value), do: is_binary(value) and Regex.match?(~r/\A[0-9a-f]{64}\z/, value)
 
   @doc """
   The boot's operator reconcile, under the `bootstrap` claim `claim`.

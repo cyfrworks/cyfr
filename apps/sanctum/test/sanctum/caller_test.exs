@@ -323,6 +323,47 @@ defmodule Sanctum.CallerTest do
     end
   end
 
+  describe "revalidate_session/1" do
+    # The stored session says who the caller is; the admission the caller
+    # is inside says how the run began, which paired client it came from
+    # and which pending confirmation it names. Revalidation rereads the
+    # first and must not drop the second.
+    @admission [
+      origin: :interactive,
+      client_id: "cli_revalidation",
+      confirmation_id: "conf_revalidation"
+    ]
+
+    test "a session's revalidation keeps the origin, the client and the confirmation" do
+      {user, _home} = new_user() |> claim!() |> member!()
+      session = session_for(Map.put(user, :namespace, user.slug))
+      {:ok, established} = Caller.establish(session.token)
+
+      for {field, value} <- @admission do
+        assert Map.fetch!(established, field) == nil
+        held = Map.put(established, field, value)
+
+        assert {:ok, revalidated} = Caller.revalidate_session(held)
+        assert Map.fetch!(revalidated, field) == value, "#{field} was lost on revalidation"
+      end
+
+      held = struct!(established, @admission)
+      assert {:ok, revalidated} = Caller.revalidate_session(held)
+      assert Map.take(revalidated, Keyword.keys(@admission)) == Map.new(@admission)
+    end
+
+    test "a key's revalidation keeps them too" do
+      ctx = Sanctum.TestContext.issuer!(Sanctum.TestContext.local())
+      name = "revalidation-#{System.unique_integer([:positive])}"
+      {:ok, %{api_key: raw}} = Sanctum.ApiKey.create(ctx, %{name: name})
+      {:ok, key} = Caller.establish({:api_key, raw})
+
+      held = struct!(key, @admission)
+      assert {:ok, revalidated} = Caller.revalidate_session(held)
+      assert Map.take(revalidated, Keyword.keys(@admission)) == Map.new(@admission)
+    end
+  end
+
   describe "a key whose stored allowlist does not read" do
     # A corrupt allowlist is a corrupt security row, not an absent
     # restriction: the derived source and the retained context both refuse.

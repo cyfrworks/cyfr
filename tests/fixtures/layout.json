@@ -1,5 +1,5 @@
 {
-  "about": "Vectors for Prima.Layout (apps/prima/test/prima/layout_test.exs) and the JavaScript SDK test (apps/cyfr/assets/test/sdk/layout.test.mjs). `valid` is a document in canonical order whose canonical JSON (RFC 8785) is `canonical` and whose digest is `digest`; it names a tincture nobody installed, which stays valid. Every `invalid` document is refused for the reason `why` gives. `confirmation_classes` pins Prima.ConfirmationClass's wire spellings, least first; they live here until the device protocol's own vector file holds them.",
+  "about": "Vectors for Prima.Layout (apps/prima/test/prima/layout_test.exs) and the JavaScript SDK test (apps/cyfr/assets/test/sdk/layout.test.mjs). `valid` is a document in canonical order whose canonical JSON (RFC 8785) is `canonical` and whose digest is `digest`; it names a tincture nobody installed, which stays valid. Every `invalid` document is refused for the reason `why` gives.",
   "valid": {
     "version": 1,
     "postures": {
@@ -71,6 +71,5 @@
       "why": "no posture at all",
       "document": {"version": 1, "postures": {}}
     }
-  ],
-  "confirmation_classes": ["none", "session", "paired", "strong"]
+  ]
 }

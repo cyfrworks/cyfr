@@ -7,11 +7,12 @@ defmodule PrismWeb.SystemLayer.Prompt do
 
       %{id: binary, kind: kind, action: Sanctum.Pairing.action() | nil, subject: map}
 
-  `action` names the confirmation class the prompt needs
-  (`Sanctum.Pairing.required_class/1`): a grant, an unlock and a credential
-  entry each name one; a sign-in and safe mode confirm nothing Sanctum
-  classes and carry `nil`. `subject` is what the prompt shows and what its
-  confirmation dispatches:
+  `action` names the action the prompt confirms, from Sanctum's action
+  table (`Sanctum.Pairing.actions/0`): a grant, an unlock and a credential
+  entry each name one; a sign-in and safe mode confirm no action and carry
+  `nil`. Whether the change needs a fresh confirmation is decided where
+  the change is, never by the prompt. `subject` is what the prompt shows
+  and what its confirmation dispatches:
 
     * `:grant` — the consent walk as `PrismWeb.ConsentSheetComponent` holds
       it: `ref`, the `plan` (`plan_token`, `expected_consent_revision`), the
