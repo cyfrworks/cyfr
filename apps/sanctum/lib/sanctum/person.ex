@@ -3,12 +3,400 @@
 
 defmodule Sanctum.Person do
   @moduledoc """
-  A person's online keys at their home: the live key, which signs person
-  assertions for doors and device certificates, and the operational key,
-  which rotates it. Both are sealed to the person under the `:person_key`
-  purpose on the person's own identity row, never in an athanor's vault,
-  and every use of either private key is here or in `Sanctum.Recovery`.
+  A person's online keys at their home: the live key, which signs device
+  certificates and person assertions for doors, and the operational key,
+  which signs the rotations that replace the live key and nothing else.
 
-  It holds no function yet: no key set is minted, and nothing is signed.
+  ## Where the keys are
+
+  Both are Ed25519 key pairs minted at the person's first admitted sign-in
+  (`mint_keys/1`, the `also:` closure `Sanctum.Tenancy.Users` hands
+  `Arca.Users.mint/4`), so the person row, their first door and their key
+  set commit in one transaction and no person exists without keys. The
+  public halves and the sealed private halves are columns of the person's
+  own identity row (`Arca.PersonIdentities`, provenance `local`), never an
+  athanor's vault, since a person's keys outlive every athanor. Each
+  private half is sealed with `Sanctum.Cipher` under
+  `Sanctum.CipherAAD.person_key/2`: the person's frame and the key's role,
+  so a sealed key never opens for another person or as another role.
+
+  Holding both online keys at one home is purpose separation only: they
+  share the home's compromise boundary. Recovery keys are held away from
+  the home, and no function here reads, adds or replaces one.
+
+  ## Who holds a private key
+
+  Every use of a person's private key is in this module or in
+  `Sanctum.Recovery`; the keyring's re-seal (`Sanctum.Cipher.Rotation`)
+  moves the sealed bytes to a new key and signs nothing. A private key is
+  opened, used and dropped inside one private step: it never leaves this
+  module, never reaches a log, an error term, telemetry or an inspect, and
+  a raise while one is in hand is answered `{:error, :unavailable}` with
+  only the exception's module logged, since the raise's stacktrace would
+  carry the key in its arguments. A key opens only when its public half is
+  the one the row names, so a sealed column moved to another role opens
+  nothing and signs nothing.
+
+  ## Refusals
+
+    * `:not_found` — the person has no local key set: no identity row, or
+      a remote person, whose keys live at another home.
+    * `:not_enrolled` — the request needs an identifier and the person has
+      none yet.
+    * `:wrong_audience` — a local-subject certificate for another home.
+    * `:unavailable` — the keys cannot be opened: the store or the keyring
+      cannot answer, or a sealed key does not open as its role.
+    * `:not_built` — a person assertion, which the CYFR door signs once its
+      confirmation check exists.
+
+  A malformed argument is refused as the Prima shape it would have built
+  refuses it (`{:invalid_field, name}`).
   """
+
+  require Logger
+
+  alias Prima.Identity
+  alias Prima.Identity.Entry
+  alias Sanctum.CipherAAD
+
+  @typedoc "What a device certificate is issued for: its subject's kind, the home it is presented to and the athanor."
+  @type cert_request :: %{
+          required(:subject) => :local | :identity,
+          required(:audience) => String.t(),
+          required(:athanor) => String.t()
+        }
+
+  @typedoc """
+  A staged rotation, the fields `Arca.IdentityAttempts.open/3` takes for
+  one: the signed rotate entry's JCS bytes, its hash (also the attempt's
+  request digest), and the new live key, its private half sealed to the
+  person as their live key.
+  """
+  @type staged_rotation :: %{
+          entry: binary(),
+          entry_hash: String.t(),
+          staged_live_public_key: binary(),
+          staged_live_key_sealed: binary()
+        }
+
+  @typedoc "What a person assertion is asked for: the relying home, its challenge and the carry it serves."
+  @type assertion_request :: %{
+          required(:audience) => String.t(),
+          required(:challenge) => binary(),
+          required(:action_id) => String.t()
+        }
+
+  @doc """
+  Mint the person's live and operational key set and write it on their
+  identity row, provenance `local`, unenrolled: the `also:` closure a first
+  admitted sign-in hands `Arca.Users.mint/4`, run inside the transaction
+  that writes the person row, after the installation guard admitted it.
+
+  One key set per person: a person who holds one is refused `:conflict`
+  and keeps theirs. `:unavailable` when a key cannot be sealed, and the
+  identity store's own refusals (`:not_owner` for a member that no longer
+  owns its slot, `:database_error`) otherwise; any refusal rolls the whole
+  mint back.
+  """
+  @spec mint_keys(%{required(:id) => String.t(), optional(atom()) => term()}) ::
+          :ok
+          | {:error,
+             :unavailable
+             | :conflict
+             | :cross_tenant
+             | :not_owner
+             | :database_error
+             | {:invalid, map()}}
+  def mint_keys(%{id: user_id}) when is_binary(user_id) and user_id != "" do
+    with {:ok, live} <- new_key(user_id, :live),
+         {:ok, operational} <- new_key(user_id, :operational),
+         {:ok, _row} <-
+           Arca.PersonIdentities.create(Prima.Actor.system(), %{
+             user_id: user_id,
+             provenance: "local",
+             live_public_key: live.public,
+             live_key_sealed: live.sealed,
+             operational_public_key: operational.public,
+             operational_key_sealed: operational.sealed
+           }) do
+      :ok
+    end
+  end
+
+  @doc """
+  This home as certificates and assertions name it: the origin of
+  `Sanctum.origin/0`, its scheme and host lowercased and a default port and
+  any path dropped, so a public URL served under a path or spelled with
+  capitals still names one home. Issuance and every audience check use it.
+  A value that is still no origin `Prima.Identity.Encoding.home?/1`
+  accepts fails closed where it is used, as a certificate's malformed
+  `issuer`.
+  """
+  @spec home() :: String.t()
+  def home do
+    case URI.parse(Sanctum.origin()) do
+      %URI{scheme: scheme, host: host, port: port}
+      when is_binary(scheme) and is_binary(host) and host != "" ->
+        scheme = String.downcase(scheme)
+        host = String.downcase(host)
+
+        if port in [nil, URI.default_port(scheme)],
+          do: scheme <> "://" <> host,
+          else: scheme <> "://" <> host <> ":" <> Integer.to_string(port)
+
+      _unparsed ->
+        Sanctum.origin()
+    end
+  end
+
+  @doc """
+  A device certificate for `device_key` (32 raw bytes), held by the paired
+  client `client_id`, for the home `request.audience` and the athanor
+  `request.athanor`, signed by the person's live key.
+
+  `issuer` is this home (`home/0`); `not_before` is now and
+  `expires_at` is now plus the `device_cert_seconds` setting, both Unix
+  milliseconds. The subject is one of:
+
+    * `:local` — `%{kind: :local, user_id: user_id}`, valid only here, so
+      its audience must be this home (`:wrong_audience` otherwise). It
+      needs no identifier and reads no directory: an unenrolled person
+      pairs locally.
+    * `:identity` — `%{kind: :identity, identifier: …, key_epoch: …}`, the
+      person's identifier and the `key_epoch` of the head their identity
+      row names, for any home. It needs enrollment (`:not_enrolled`).
+
+  Refusals: `:not_found`, `:not_enrolled`, `:wrong_audience`,
+  `:unavailable` (the live key cannot be opened, or the validity setting
+  cannot be read), and a malformed argument as `Prima.DeviceCert.new/1`
+  refuses it.
+  """
+  @spec issue_device_cert(String.t(), binary(), String.t(), cert_request()) ::
+          {:ok, Prima.DeviceCert.t()}
+          | {:error,
+             :not_found
+             | :not_enrolled
+             | :wrong_audience
+             | :unavailable
+             | Prima.DeviceCert.reason()}
+  def issue_device_cert(user_id, device_key, client_id, %{
+        subject: kind,
+        audience: audience,
+        athanor: athanor
+      })
+      when is_binary(user_id) and is_binary(device_key) and kind in [:local, :identity] do
+    with {:ok, row} <- key_set(user_id),
+         {:ok, subject} <- subject(kind, row, audience),
+         {:ok, seconds} <- cert_seconds(),
+         now = System.os_time(:millisecond),
+         {:ok, cert} <-
+           Prima.DeviceCert.new(
+             device_key: device_key,
+             client_id: client_id,
+             subject: subject,
+             issuer: home(),
+             audience: audience,
+             athanor: athanor,
+             not_before: now,
+             expires_at: now + seconds * 1_000
+           ) do
+      with_key(row, :live, fn live -> {:ok, Prima.DeviceCert.sign(cert, live)} end)
+    end
+  end
+
+  @doc """
+  Stage a rotation of the person's live key after the head
+  `expected_head`, and write nothing: a new live key pair, its private
+  half sealed as the person's live key, and the rotate entry naming its
+  public half (`Prima.Identity.Entry.rotate/2`), signed by the operational
+  key.
+
+  Answers the rotation fields `Arca.IdentityAttempts.open/3` takes
+  (`t:staged_rotation/0`), with `entry_hash` as the request digest too.
+  Every call makes a new key, so a caller stages once per attempt and
+  keeps the answer; the key replaces the live key only when an accepted,
+  still-current attempt activates it.
+
+  Refusals: `:not_found`, `:not_enrolled` (only an enrolled person has a
+  log to extend), `:unavailable` (the operational key cannot be opened, or
+  the new key cannot be sealed), and a malformed head as
+  `Prima.Identity.Entry.rotate/2` refuses it.
+  """
+  @spec sign_rotate(String.t(), String.t()) ::
+          {:ok, staged_rotation()}
+          | {:error, :not_found | :not_enrolled | :unavailable | Prima.Identity.Encoding.reason()}
+  def sign_rotate(user_id, expected_head) when is_binary(user_id) and is_binary(expected_head) do
+    with {:ok, row} <- key_set(user_id),
+         {:ok, row} <- enrolled(row),
+         {:ok, staged} <- new_key(user_id, :live),
+         {:ok, unsigned} <- Entry.rotate(expected_head, staged.public),
+         {:ok, entry} <-
+           with_key(row, :operational, fn operational ->
+             {:ok, Identity.sign(unsigned, operational)}
+           end) do
+      {:ok,
+       %{
+         entry: Identity.canonical(entry),
+         entry_hash: Identity.hash(entry),
+         staged_live_public_key: staged.public,
+         staged_live_key_sealed: staged.sealed
+       }}
+    end
+  end
+
+  @doc """
+  A person assertion for the CYFR door: the live key vouching to
+  `request.audience` for one sign-in, over its `challenge` and the carry
+  `action_id`.
+
+  Not signed yet: the assertion needs a fresh `remote_sign_in`
+  confirmation, which the CYFR door supplies. Until then a person with no
+  identifier is refused `:not_enrolled`, every other request `:not_built`,
+  and a store that cannot answer `:unavailable`.
+  """
+  @spec sign_assertion(Sanctum.Context.t(), assertion_request(), keyword()) ::
+          {:error, :not_enrolled | :not_built | :unavailable}
+  def sign_assertion(
+        %Sanctum.Context{user_id: user_id} = ctx,
+        %{audience: _audience, challenge: _challenge, action_id: _action_id},
+        opts
+      )
+      when is_list(opts) do
+    # The context's own person reads their own row.
+    case identity(Sanctum.Context.actor(ctx), user_id) do
+      {:ok, %{identifier: identifier}} when is_binary(identifier) -> {:error, :not_built}
+      {:ok, _unenrolled} -> {:error, :not_enrolled}
+      {:error, :not_found} -> {:error, :not_enrolled}
+      {:error, _unanswered} -> {:error, :unavailable}
+    end
+  end
+
+  # ---- the identity row ------------------------------------------------------
+
+  defp identity(actor, user_id) when is_binary(user_id),
+    do: Arca.PersonIdentities.get(actor, user_id)
+
+  defp identity(_actor, _user_id), do: {:error, :not_found}
+
+  # The person's local key set: a remote person's row holds none. Read as
+  # the server, as every read of a person's rows is (`Sanctum.Tenancy.Users`):
+  # the caller named the person, and a person is not a row inside an
+  # athanor.
+  defp key_set(user_id) do
+    case identity(Prima.Actor.system(), user_id) do
+      {:ok,
+       %{provenance: "local", live_key_sealed: live, operational_key_sealed: operational} = row}
+      when is_binary(live) and is_binary(operational) ->
+        {:ok, row}
+
+      {:ok, _no_local_keys} ->
+        {:error, :not_found}
+
+      {:error, :not_found} ->
+        {:error, :not_found}
+
+      {:error, _unanswered} ->
+        {:error, :unavailable}
+    end
+  end
+
+  defp enrolled(%{enrollment: "enrolled", identifier: identifier, head_hash: head} = row)
+       when is_binary(identifier) and is_binary(head),
+       do: {:ok, row}
+
+  defp enrolled(_row), do: {:error, :not_enrolled}
+
+  # A local subject means something only at the home that issued it.
+  defp subject(:local, row, audience) do
+    if audience == home(),
+      do: {:ok, %{kind: :local, user_id: row.user_id}},
+      else: {:error, :wrong_audience}
+  end
+
+  # Every entry of a person's log introduces their live key, so the head
+  # their row names is its `key_epoch` (`Prima.Identity.State`).
+  defp subject(:identity, row, _audience) do
+    with {:ok, row} <- enrolled(row),
+         do: {:ok, %{kind: :identity, identifier: row.identifier, key_epoch: row.head_hash}}
+  end
+
+  # A certificate's validity refuses a stale value: a store that cannot
+  # answer it issues nothing, as a session is not issued on a window this
+  # member cannot read.
+  defp cert_seconds do
+    case Arca.PlatformSettings.effective("device_cert_seconds") do
+      {:ok, seconds} when is_integer(seconds) and seconds > 0 ->
+        {:ok, seconds}
+
+      {:ok, other} ->
+        Logger.error(
+          "[Sanctum.Person] the stored device_cert_seconds #{inspect(other)} is not a " <>
+            "positive whole number of seconds; refusing until it is"
+        )
+
+        {:error, :unavailable}
+
+      {:error, :unavailable} ->
+        {:error, :unavailable}
+
+      {:error, reason} when reason in [:uninstalled, :unknown_key] ->
+        raise "[Sanctum.Person] device_cert_seconds cannot be read: the setting is #{reason}"
+    end
+  end
+
+  # ---- private keys ------------------------------------------------------------
+
+  # A fresh Ed25519 pair, its private half sealed to the frame and role at
+  # once: what leaves is the public half and ciphertext.
+  defp new_key(user_frame, role) do
+    guarded("sealing a new #{role} key", fn ->
+      {public, private} = :crypto.generate_key(:eddsa, :ed25519)
+      {:ok, sealed} = Sanctum.Cipher.encrypt(private, CipherAAD.person_key(user_frame, role))
+      {:ok, %{public: public, sealed: sealed}}
+    end)
+  end
+
+  # The one signer: open the row's `role` key, hand it to `use` and answer
+  # what `use` answers. The key opens only under the person's frame and its
+  # own role, and is used only when its public half is the one the row
+  # names; anything else is `:unavailable`, and nothing is signed.
+  defp with_key(row, role, use) do
+    {sealed, public} = role_columns(row, role)
+
+    guarded("opening the #{role} key", fn ->
+      with {:ok, private} <-
+             Sanctum.Cipher.decrypt(sealed, CipherAAD.person_key(row.user_id, role)),
+           true <- public_half?(private, public) do
+        use.(private)
+      else
+        _unopened ->
+          Logger.error("[Sanctum.Person] the #{role} key of #{row.user_id} does not open")
+          {:error, :unavailable}
+      end
+    end)
+  end
+
+  defp role_columns(row, :live), do: {row.live_key_sealed, row.live_public_key}
+
+  defp role_columns(row, :operational),
+    do: {row.operational_key_sealed, row.operational_public_key}
+
+  defp public_half?(private, public) when byte_size(private) == 32 do
+    {derived, _private} = :crypto.generate_key(:eddsa, :ed25519, private)
+    derived == public
+  end
+
+  defp public_half?(_private, _public), do: false
+
+  # Every step that holds a private key runs here. A raise inside one would
+  # carry the key into a crash report through its stacktrace's arguments,
+  # so it is answered `:unavailable` and only the exception's module is
+  # logged.
+  defp guarded(step, fun) do
+    fun.()
+  rescue
+    exception ->
+      Logger.error("[Sanctum.Person] #{step} failed (#{inspect(exception.__struct__)})")
+      {:error, :unavailable}
+  end
 end

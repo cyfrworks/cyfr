@@ -14,7 +14,8 @@ defmodule Sanctum.CipherAAD do
 
   The `athanor` frame is the owning athanor's id, bound through unchanged.
   Fields a purpose does not carry are omitted; the cipher frames a missing
-  field as an empty string.
+  field as an empty string. A purpose that belongs to a person rather than
+  an athanor fills the `user` frame instead.
   """
 
   @doc """
@@ -89,6 +90,36 @@ defmodule Sanctum.CipherAAD do
       purpose: :webhook_secret,
       athanor: athanor_id,
       name: name
+    }
+  end
+
+  @typedoc "Which of a person's private keys a sealed value holds."
+  @type person_key_role :: :live | :operational | :kit_seed
+
+  @doc """
+  AAD for one of a person's private keys (`:person_key` purpose): the live
+  key, the operational key, or a recovery kit's seed awaiting delivery.
+
+  A person's keys are theirs, not an athanor's, so the athanor frame is
+  omitted and the `user` frame binds the person; `name` binds the role, so
+  a key sealed as the live key never opens as the operational key or as a
+  seed.
+
+  `user_frame` is the person's `user_id`, on their identity row and on
+  their enrollment and rotation attempts. A restore attempt stages its keys
+  before any person exists, so its frame is `"restore:" <> request_id` for
+  the attempt's whole life, even once the restore has minted the person.
+  The frame binds the person and the role, never the row: a rotation's
+  staged live key moves onto the identity row as a byte copy.
+  """
+  @spec person_key(String.t(), person_key_role()) :: map()
+  def person_key(user_frame, role)
+      when is_binary(user_frame) and user_frame != "" and
+             role in [:live, :operational, :kit_seed] do
+    %{
+      purpose: :person_key,
+      user: user_frame,
+      name: Atom.to_string(role)
     }
   end
 end

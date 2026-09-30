@@ -32,7 +32,8 @@ defmodule Arca.CipherRotation do
   `page/4` is keyset pagination by `id`: bounded memory whatever the table
   holds, and a run that stops part-way resumes from the last id it saw
   instead of starting over. There is no unpaged read of a credential
-  table here — the audit walk (`ciphertext_page/4`) takes the same cursor.
+  table here — the audit walk (`ciphertext_page/4`) takes the same cursor,
+  and reads every sealed column of a row, not the CAS column alone.
 
   `swap/5` writes a row's re-sealed columns **only while the ciphertext
   the page read is still in the row's CAS column** — `cas_column/1`, the
@@ -52,7 +53,7 @@ defmodule Arca.CipherRotation do
   # compare-and-set-first order, and the columns a caller rebuilds the
   # row's AAD from. The CAS column is the table's primary sealed column —
   # the one a legitimate concurrent write to the row's credential must
-  # change — and it is also the column `ciphertext_page/4` audits.
+  # change.
   @tables %{
     webhooks: %{
       schema: Arca.Schemas.Webhook,
@@ -125,9 +126,8 @@ defmodule Arca.CipherRotation do
   def tables, do: Map.keys(@tables)
 
   @doc """
-  The column a `swap/5` on `table` compares against, and the one
-  `ciphertext_page/4` reads: one column, or an ordered list whose first
-  non-null column a row compares and audits.
+  The column a `swap/5` on `table` compares against: one column, or an
+  ordered list whose first non-null column a row compares.
   """
   @spec cas_column(atom()) :: atom() | [atom(), ...]
   def cas_column(table) when is_map_key(@tables, table), do: @tables[table].cas
@@ -169,23 +169,29 @@ defmodule Arca.CipherRotation do
     do: {:error, :not_platform}
 
   @doc """
-  The next page of `table`'s CAS column after `cursor`, as
-  `%{id: id, ciphertext: bytes}`.
+  The next page of `table`'s sealed columns after `cursor`, as
+  `%{id: id, ciphertexts: [{column, bytes}]}`: every non-null sealed
+  column, CAS column first, as `page/4` answers them, without the binding
+  columns.
 
   The audit reads labels off these bytes without decrypting; the labels
-  are the caller's vocabulary, not this module's.
+  are the caller's vocabulary, not this module's. It reads every sealed
+  column because a concurrent write to one column of a row (a person's
+  live key activated mid-rotation) makes that row's swap stale while its
+  other columns stay under the old key, and only a count of each column
+  shows it.
   """
   @spec ciphertext_page(Prima.Actor.t(), atom(), String.t() | nil, pos_integer()) ::
-          {:ok, [%{id: String.t(), ciphertext: binary()}]} | refusal()
+          {:ok, [%{id: String.t(), ciphertexts: [{atom(), binary()}]}]} | refusal()
   def ciphertext_page(%Prima.Actor{scope: :platform}, table, cursor, limit)
       when is_map_key(@tables, table) and is_cursor(cursor) and is_page_limit(limit) do
-    cas = List.wrap(@tables[table].cas)
+    sealed = @tables[table].sealed
 
     Arca.Repo.Errors.with_db_rescue("Arca.CipherRotation.ciphertext_page", fn ->
       rows =
         table
-        |> load([:id | cas], cursor, limit)
-        |> Enum.map(&%{id: &1.id, ciphertext: Enum.find_value(cas, fn col -> &1[col] end)})
+        |> load([:id | sealed], cursor, limit)
+        |> Enum.map(&split_ciphertexts(&1, sealed))
 
       {:ok, rows}
     end)

@@ -13,6 +13,14 @@ defmodule Sanctum.SignIn do
   provisioned (`Sanctum.Provisioning.after_sign_in/1`). Admission is
   personhood: nothing here waits on a registry.
 
+  A first admitted sign-in mints the person with their live and
+  operational key set (`Sanctum.Person.mint_keys/1`) in the one
+  transaction that writes the person row and the door that admitted them,
+  after the installation guard (`Arca.InstallationClaims`) admitted a
+  first person at all. A key set that cannot be minted refuses the
+  sign-in, and so does an installation reserved for a restore, whatever
+  the door's verdict: nothing is written, and no session follows.
+
   The platform grant or revoke answers to the identity facts this
   assertion carried, checked under the person's lock, and a grant or
   revoke that fails — or finds those facts overtaken by a later

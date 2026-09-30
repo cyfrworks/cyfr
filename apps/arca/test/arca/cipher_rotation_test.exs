@@ -229,8 +229,17 @@ defmodule Arca.CipherRotationTest do
 
       assert seed.ciphertexts == [kit_seed_sealed: bytes("seed")]
 
+      # The audit reads every sealed column, not the compare-and-set one
+      # alone: a restore's staged operational key is counted too.
       assert {:ok, audited} = Rotation.ciphertext_page(actor, :identity_attempts, nil, 10)
-      assert Enum.map(audited, & &1.ciphertext) == [bytes("live"), bytes("seed")]
+
+      assert Enum.map(audited, & &1.ciphertexts) == [
+               [
+                 staged_live_key_sealed: bytes("live"),
+                 staged_operational_key_sealed: bytes("op")
+               ],
+               [kit_seed_sealed: bytes("seed")]
+             ]
 
       assert {:ok, :stale} =
                Rotation.swap(actor, :identity_attempts, "iat_seed", bytes("other"), %{
@@ -330,6 +339,13 @@ defmodule Arca.CipherRotationTest do
 
       assert {:ok, [_, second]} = Rotation.page(actor, :webhooks, nil, 10)
       assert second.ciphertexts == [{:secret_encrypted, bytes("only")}]
+
+      # The audit's page carries the same ciphertexts and no binding column.
+      assert {:ok, [first_audited, second_audited]} =
+               Rotation.ciphertext_page(actor, :webhooks, nil, 10)
+
+      assert first_audited == %{id: row.id, ciphertexts: row.ciphertexts}
+      assert second_audited == %{id: second.id, ciphertexts: second.ciphertexts}
     end
   end
 

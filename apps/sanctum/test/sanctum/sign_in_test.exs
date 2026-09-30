@@ -4,6 +4,11 @@
 defmodule Sanctum.SignInTest do
   use ExUnit.Case, async: false
 
+  import Ecto.Query, only: [from: 2]
+  import ExUnit.CaptureLog
+
+  alias Arca.InstallationClaims
+  alias Arca.Schemas.{ExternalIdentity, PersonIdentity, User}
   alias Sanctum.SignIn
   alias Sanctum.Tenancy.{Athanors, Members, Users}
 
@@ -253,6 +258,195 @@ defmodule Sanctum.SignInTest do
     end
   end
 
+  describe "the person's keys, minted with the person" do
+    test "a first sign-in writes one local key set, and a later sign-in keeps it" do
+      i = info(20)
+      assert {:ok, user} = SignIn.admitted(i, :allowed)
+
+      row = identity_row!(user.id)
+      assert row.provenance == "local"
+      assert row.enrollment == "none"
+      assert byte_size(row.live_public_key) == 32
+      assert byte_size(row.operational_public_key) == 32
+      refute row.live_public_key == row.operational_public_key
+      assert is_binary(row.live_key_sealed) and is_binary(row.operational_key_sealed)
+
+      # The identifier is on the identity row, never on the users row, and
+      # an unenrolled person has none.
+      refute Map.has_key?(user, :identifier)
+      assert {:ok, nil} = Users.identifier(user.id)
+
+      assert {:ok, _} = SignIn.admitted(%{i | name: "Again"}, :allowed)
+      assert identity_row!(user.id) == row
+      assert identity_rows(user.id) == 1
+    end
+
+    test "Users.identifier/1 reads the identifier the identity row carries" do
+      assert {:ok, user} = SignIn.admitted(info(21), :allowed)
+
+      identifier = "per_" <> Prima.Digest.sha256_hex("identifier-#{user.id}")
+
+      {1, _} =
+        Arca.Repo.update_all(from(p in PersonIdentity, where: p.user_id == ^user.id),
+          set: [
+            identifier: identifier,
+            enrollment: "enrolled",
+            head_hash: Prima.Digest.sha256("genesis"),
+            directory_url: "https://dir.example"
+          ]
+        )
+
+      assert {:ok, ^identifier} = Users.identifier(user.id)
+      assert {:error, :not_found} = Users.identifier("usr_ghost")
+    end
+
+    test "a key set that cannot be minted refuses the sign-in, and nothing is written" do
+      keyring = Application.get_env(:sanctum, :crypto_keyring)
+      on_exit(fn -> restore_env(:sanctum, :crypto_keyring, keyring) end)
+      Application.delete_env(:sanctum, :crypto_keyring)
+
+      i = info(22)
+      before = counts()
+
+      capture_log(fn -> assert {:error, :unavailable} = SignIn.admitted(i, :admin) end)
+
+      # Not the person, not the door that admitted them, not a key, and not
+      # the platform row the operator's verdict would have granted.
+      assert {:error, :not_found} = Users.get_by_identity(i.id)
+      assert counts() == before
+    end
+
+    test "a member that lost its slot mints no person" do
+      standing = :persistent_term.get({Arca.ControlPlane, :standing}, :absent)
+      claim = Application.get_env(:arca, :control_plane_claim_enabled)
+
+      on_exit(fn ->
+        if standing == :absent,
+          do: :persistent_term.erase({Arca.ControlPlane, :standing}),
+          else: :persistent_term.put({Arca.ControlPlane, :standing}, standing)
+
+        restore_env(:arca, :control_plane_claim_enabled, claim)
+      end)
+
+      Application.put_env(:arca, :control_plane_claim_enabled, true)
+      :persistent_term.put({Arca.ControlPlane, :standing}, :lost)
+
+      i = info(23)
+      before = counts()
+
+      assert {:error, :not_owner} = SignIn.admitted(i, :allowed)
+      assert {:error, :not_found} = Users.get_by_identity(i.id)
+      assert counts() == before
+    end
+  end
+
+  describe "an installation reserved for a restore" do
+    setup do
+      mode = if InstallationClaims.installed?(), do: InstallationClaims.mode()
+
+      on_exit(fn ->
+        if mode,
+          do: InstallationClaims.install_mode!(mode),
+          else: InstallationClaims.reset()
+      end)
+
+      # The node holds no person inside this test's transaction, whatever
+      # another suite committed: the reservation is about the first one.
+      Arca.Repo.delete_all(User)
+      :ok = InstallationClaims.install_mode!(:restore_reserved)
+      :ok
+    end
+
+    test "refuses every first door, the operator's included, before a person or a key" do
+      oidc = %{
+        id: "oidc|https://idp.example|31",
+        provider: :oidc,
+        email: "ops31@example.com",
+        verified: true
+      }
+
+      before = counts()
+      assert %{people: 0, keys: 0} = before
+
+      for {assertion, verdict} <- [{info(30), :allowed}, {oidc, :admin}] do
+        assert {:error, :restore_reserved} = SignIn.admitted(assertion, verdict)
+        assert {:error, :not_found} = Users.get_by_identity(assertion.id)
+      end
+
+      assert counts() == before
+    end
+
+    test "refuses a direct mint before the key closure runs" do
+      test = self()
+      now = DateTime.utc_now()
+      before = counts()
+
+      closure = fn person ->
+        send(test, :keys_minted)
+        Sanctum.Person.mint_keys(person)
+      end
+
+      assert {:error, :restore_reserved} =
+               Arca.Users.mint(
+                 Prima.Actor.system(),
+                 %{
+                   id: Prima.UUID7.generate_id(Prima.PersonId.prefix()),
+                   provider: "github",
+                   first_seen_at: now,
+                   last_seen_at: now,
+                   created_at: now,
+                   updated_at: now
+                 },
+                 %{
+                   key: "github|https://github.com|direct",
+                   provider: "github",
+                   issuer: "https://github.com",
+                   subject: "direct",
+                   first_seen_at: now,
+                   last_seen_at: now
+                 },
+                 also: closure
+               )
+
+      refute_received :keys_minted
+      assert counts() == before
+    end
+
+    test "admits an ordinary first door again once the token is unset before any claim" do
+      :ok = InstallationClaims.install_mode!(:ordinary)
+
+      assert {:ok, user} = SignIn.admitted(info(32), :admin)
+      assert identity_row!(user.id).provenance == "local"
+    end
+
+    test "stays reserved for a pending restore once the token is unset" do
+      token = Prima.Digest.sha256("token-#{System.unique_integer([:positive])}")
+
+      {:ok, _attempt} =
+        Arca.IdentityAttempts.open(Prima.Actor.system(), %{
+          kind: "restore",
+          request_id: "req_#{System.unique_integer([:positive])}",
+          identifier: "per_" <> Prima.Digest.sha256_hex("restored"),
+          directory_url: "https://dir.example",
+          entry: "recover-request",
+          request_digest: Prima.Digest.sha256("recover"),
+          expected_revision: 0,
+          token_digest: token,
+          staged_live_public_key: :crypto.strong_rand_bytes(32),
+          staged_operational_public_key: :crypto.strong_rand_bytes(32),
+          staged_live_key_sealed: "sealed-live",
+          staged_operational_key_sealed: "sealed-operational"
+        })
+
+      :ok = InstallationClaims.install_mode!(:ordinary)
+      before = counts()
+
+      assert {:error, :restore_reserved} = SignIn.admitted(info(33), :admin)
+      assert counts() == before
+      assert before.people == 0
+    end
+  end
+
   describe "concurrent sign-ins, on connections of their own" do
     setup do
       # These race on real connections: the shared sandbox connection would
@@ -351,6 +545,29 @@ defmodule Sanctum.SignInTest do
   defp platform?(user_id) do
     {:ok, rows} = Members.list_by_user(user_id)
     Enum.any?(rows, &(&1.scope == "platform"))
+  end
+
+  defp restore_env(app, key, nil), do: Application.delete_env(app, key)
+  defp restore_env(app, key, value), do: Application.put_env(app, key, value)
+
+  defp identity_row!(user_id), do: Arca.Repo.get_by!(PersonIdentity, user_id: user_id)
+
+  defp identity_rows(user_id),
+    do: Arca.Repo.aggregate(from(p in PersonIdentity, where: p.user_id == ^user_id), :count)
+
+  # What a first sign-in writes: the person, the door that names them, their
+  # key set and, for an operator, the platform row.
+  defp counts do
+    %{
+      people: Arca.Repo.aggregate(User, :count),
+      doors: Arca.Repo.aggregate(ExternalIdentity, :count),
+      keys: Arca.Repo.aggregate(PersonIdentity, :count),
+      platform:
+        Arca.Repo.aggregate(
+          from(m in Arca.Schemas.Membership, where: m.scope == "platform"),
+          :count
+        )
+    }
   end
 
   defp rows!({:ok, rows}), do: rows
