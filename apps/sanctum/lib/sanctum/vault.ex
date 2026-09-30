@@ -19,7 +19,9 @@ defmodule Sanctum.Vault do
 
   Every mutation requires the interactive consent class (`:oidc`
   surface, external plane) — no permission wildcard and no scoped key
-  reaches these verbs. Each announces the change by entry, verb and name
+  reaches these verbs. Entering and rotating material are sensitive
+  changes (`credential_entry`), decided here by
+  `Sanctum.Consent.Authz.confirm/3`. Each announces the change by entry, verb and name
   (`Sanctum.Telemetry.vault_entry_changed/4`) so dependents (external MCP
   server processes holding resolved headers) reconcile immediately.
 
@@ -139,6 +141,12 @@ defmodule Sanctum.Vault do
     with {:ok, :interactive} <- Authz.authorize_interactive(ctx),
          {:ok, name} <- required_name(params),
          {:ok, kind} <- required_kind(params),
+         :ok <-
+           Authz.confirm(ctx, :credential_entry, %{
+             operation: "vault.create",
+             arguments: params,
+             resource: name
+           }),
          :ok <- check_name_free(ctx, name),
          {:ok, json} <- Payload.encode_material(fields, Map.get(params, :oauth)),
          id = Prima.UUID7.generate_id("vlt"),
@@ -218,6 +226,12 @@ defmodule Sanctum.Vault do
       when is_map(fields) and is_integer(expected) do
     with {:ok, :interactive} <- Authz.authorize_interactive(ctx),
          {:ok, entry} <- get_rotatable(ctx, id),
+         :ok <-
+           Authz.confirm(ctx, :credential_entry, %{
+             operation: "vault.rotate",
+             arguments: params,
+             resource: entry.name
+           }),
          :ok <- check_schema(entry, fields),
          {:ok, current} <- unseal(ctx, entry),
          {:ok, oauth} <- rotation_oauth(current, Map.get(params, :oauth)),

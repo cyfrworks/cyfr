@@ -112,6 +112,13 @@ defmodule Cyfr.Platform.Settings.Roster do
   # The Logger levels, most to least severe: the log level's closed set.
   @levels ~w(emergency alert critical error warning notice info debug)
 
+  # Whether this node serves a directory: not at all, as the one writer
+  # of the identifiers it orders, or as a mirror of their history.
+  @directory_serve %{"off" => :off, "writer" => :writer, "mirror" => :mirror}
+
+  # The largest byte count a quota takes: 1 PiB.
+  @max_bytes 1_125_899_906_842_624
+
   # The host step that applies a restart-scoped value, and the log level's
   # live apply, both run by the settings process.
   @apply_log_level {Cyfr.Platform.Settings, :apply_log_level, 1}
@@ -159,6 +166,8 @@ defmodule Cyfr.Platform.Settings.Roster do
      "The one runtime storage root: every athanor's tree, the caches and the SQLite database (default `data`; the image sets its own)."},
     {"CYFR_DB_POOL_SIZE", "The database connection pool's size (default 20)."},
     {"CYFR_DB_SSL", "TLS to the PostgreSQL server (default off)."},
+    {"CYFR_DIRECTORY_URL",
+     "The identity directory this deployment enrolls its local people at, an `https` URL chosen explicitly: there is no hosted default, and choosing one is a choice about how long an identity lasts. Unset, local work and local pairing still work and enrollment is refused; a malformed value refuses the boot."},
     {"CYFR_GITHUB_CLIENT_ID",
      "The GitHub OAuth app's client ID for the device flow; `.env.example` ships a public one, which your own app's replaces."},
     {"CYFR_GOOGLE_CLIENT_ID",
@@ -215,6 +224,8 @@ defmodule Cyfr.Platform.Settings.Roster do
      "The component registry host (default `cyfr.run`); `none` is an appliance without a registry, whose pulls and publishes refuse."},
     {"CYFR_REQUIRE_SIGNED_PULLS",
      "Refuse a component pull whose OCI signature cannot be verified (default off: the component is stored as unverified)."},
+    {"CYFR_RESTORE_TOKEN",
+     "The installation's restore capability, exactly 64 lowercase hexadecimal characters (`openssl rand -hex 32`), set in `.env` alone. Set, an empty installation's first person is reserved for a restore from a printed kit and ordinary first sign-in is refused; unset, restore is disabled. A malformed value refuses the boot, which never prints it."},
     {"CYFR_S3_ACCESS_KEY_ID", "The object store's access key ID, with `CYFR_STORAGE=s3`."},
     {"CYFR_S3_BUCKET", "The object store's bucket, with `CYFR_STORAGE=s3`."},
     {"CYFR_S3_ENDPOINT",
@@ -338,7 +349,25 @@ defmodule Cyfr.Platform.Settings.Roster do
     "frame_credential_deadline_s" =>
       "How long an unobserved frame's credential lives before it is refused, in seconds.",
     "frame_invocation_max" => "The invocations one tincture frame may make per window.",
-    "frame_invocation_window_ms" => "The frame invocation limit's window, in milliseconds."
+    "frame_invocation_window_ms" => "The frame invocation limit's window, in milliseconds.",
+    "directory_serve" =>
+      "Whether this node serves an identity directory: `off`, `writer` (the one writer of the identifiers it orders) or `mirror` (their history, accepting no write).",
+    "directory_max_identities" =>
+      "Identifiers a directory this node serves registers; at capacity a new genesis is refused, while existing registrations and recovery stay available.",
+    "directory_log_bytes" =>
+      "Bytes a directory this node serves keeps across its logs; existing history is never deleted to meet a lowered quota.",
+    "directory_recovery_reserve_bytes" =>
+      "Bytes of `directory_log_bytes` kept for recovery entries and their recorded outcomes, which rotations cannot use; below `directory_log_bytes`.",
+    "identity_freshness_seconds" =>
+      "How long this home trusts a remote person's verified identity head before reading their directory again, in seconds: how long a retired key can still act here.",
+    "device_cert_seconds" =>
+      "How long a device certificate this home issues lives, in seconds; a paired device renews at half of it.",
+    "clock_skew_seconds" =>
+      "How far a certificate's not-before or a signed message's time may sit from this home's clock, in seconds; it never extends a certificate's expiry.",
+    "confirmation_seconds" =>
+      "How long a pending confirmation of a sensitive change stays open, in seconds.",
+    "reauth_seconds" =>
+      "How recent a local person's door sign-in must be to register their first passkey with no fresh method, in seconds."
   }
 
   @doc "Every platform setting, in the order the boot reads them."
@@ -358,7 +387,7 @@ defmodule Cyfr.Platform.Settings.Roster do
         variable: "CYFR_ATHANOR_STORAGE_BYTES",
         type: :integer,
         default: nil,
-        validator: byte_count(0..1_125_899_906_842_624),
+        validator: byte_count(0..@max_bytes),
         group: :tenancy,
         scope: :live,
         stale: :refuse
@@ -598,7 +627,58 @@ defmodule Cyfr.Platform.Settings.Roster do
         :integer,
         60_000,
         window()
-      )
+      ),
+
+      # ——— identity, devices and confirmation: Sanctum's, refused stale ———
+      %Entry{
+        key: "directory_serve",
+        app: :sanctum,
+        variable: "CYFR_DIRECTORY_SERVE",
+        type: :atom,
+        default: :off,
+        validator: &directory_serve/1,
+        group: :directory,
+        scope: :live,
+        stale: :refuse
+      },
+      identity(
+        :directory_max_identities,
+        :integer,
+        100_000,
+        whole(1..1_000_000_000, "identifiers"),
+        :directory
+      ),
+      identity(
+        :directory_log_bytes,
+        :integer,
+        1_073_741_824,
+        byte_count(1..@max_bytes),
+        :directory
+      ),
+      identity(
+        :directory_recovery_reserve_bytes,
+        :integer,
+        10_485_760,
+        byte_count(1..@max_bytes),
+        :directory
+      ),
+      identity(
+        :identity_freshness_seconds,
+        :duration_s,
+        300,
+        whole(1..86_400, "seconds"),
+        :identity
+      ),
+      identity(:device_cert_seconds, :duration_s, 3_600, whole(1..86_400, "seconds"), :devices),
+      identity(:clock_skew_seconds, :duration_s, 60, whole(1..3_600, "seconds"), :devices),
+      identity(
+        :confirmation_seconds,
+        :duration_s,
+        300,
+        whole(1..3_600, "seconds"),
+        :confirmation
+      ),
+      identity(:reauth_seconds, :duration_s, 300, whole(1..3_600, "seconds"), :confirmation)
     ]
     |> Enum.map(&%{&1 | doc: Map.fetch!(@setting_docs, &1.key)})
   end
@@ -646,6 +726,24 @@ defmodule Cyfr.Platform.Settings.Roster do
     }
   end
 
+  # A security window or a directory quota Sanctum reads through
+  # `Arca.PlatformSettings.effective/1`. Each refuses a stale value, and
+  # none is zero: a window of no time or a quota of nothing is a
+  # misconfiguration, not a way to turn one off.
+  defp identity(key, type, default, validator, group) do
+    %Entry{
+      key: Atom.to_string(key),
+      app: :sanctum,
+      variable: "CYFR_" <> String.upcase(Atom.to_string(key)),
+      type: type,
+      default: default,
+      validator: validator,
+      group: group,
+      scope: :live,
+      stale: :refuse
+    }
+  end
+
   defp requests, do: whole(1..1_000_000_000, "requests")
   defp window, do: whole(1..86_400_000, "milliseconds")
 
@@ -689,6 +787,15 @@ defmodule Cyfr.Platform.Settings.Roster do
     do: {:ok, String.to_existing_atom(text)}
 
   defp level(_other), do: {:error, "must be a Logger level: #{Enum.join(@levels, ", ")}"}
+
+  defp directory_serve(value) when is_atom(value) and not is_nil(value),
+    do: directory_serve(Atom.to_string(value))
+
+  defp directory_serve(text) when is_binary(text) and is_map_key(@directory_serve, text),
+    do: {:ok, Map.fetch!(@directory_serve, text)}
+
+  defp directory_serve(_other),
+    do: {:error, "must be one of off, writer, mirror"}
 
   defp label(text) when is_binary(text) do
     trimmed = String.trim(text)
@@ -754,6 +861,101 @@ defmodule Cyfr.Platform.Settings.Roster do
   """
   @spec defaults() :: %{String.t() => %{default: term(), stale: :refuse | :serve}}
   def defaults, do: Map.new(entries(), &{&1.key, %{default: &1.default, stale: &1.stale}})
+
+  # Settings whose values bound each other: the first key's value is
+  # strictly below the second's.
+  @below [{"directory_recovery_reserve_bytes", "directory_log_bytes"}]
+
+  @doc """
+  The settings whose values bound each other, as `{key, other}`: `key`'s
+  value must be strictly below `other`'s. The recovery reserve is part of
+  the log quota, so it is below it.
+  """
+  @spec below() :: [{String.t(), String.t()}]
+  def below, do: @below
+
+  @doc """
+  `key`'s value in `values` (store key to value, each as it would take
+  effect) held to every pair of `below/0` it is in: `:ok`, or
+  `{:error, form}`, the form `key`'s value must take, naming the other
+  setting and its value. A pair `values` does not hold both of is not
+  checked.
+  """
+  @spec check_below(String.t(), %{String.t() => term()}) :: :ok | {:error, String.t()}
+  def check_below(key, values) when is_binary(key) and is_map(values) do
+    Enum.find_value(@below, :ok, fn {low, high} ->
+      with true <- key in [low, high],
+           {:ok, value} when is_integer(value) <- Map.fetch(values, low),
+           {:ok, bound} when is_integer(bound) <- Map.fetch(values, high),
+           true <- value >= bound do
+        if key == low,
+          do: {:error, "must be below #{high} (#{bound})"},
+          else: {:error, "must be above #{low} (#{value})"}
+      else
+        _holds_or_absent -> nil
+      end
+    end)
+  end
+
+  @doc """
+  The pairs of `below/0` that `values` (store key to value, each as it
+  would take effect) holds out of bound. A pair `values` does not hold
+  both keys of is not checked.
+  """
+  @spec out_of_bound(%{String.t() => term()}) :: [{String.t(), String.t()}]
+  def out_of_bound(values) when is_map(values) do
+    for {low, _high} = pair <- @below, check_below(low, values) != :ok, do: pair
+  end
+
+  @doc """
+  The environment's pins, `pinned` (store key to value), and `others`
+  held to every pair of `below/0`. Each key of a pair reads as `pinned`
+  sets it, else as `others` holds it: the stored value or the default, as
+  it takes effect; a pair that does not hold both keys is not checked.
+  Answers `:ok`, or `{:error, sentence}` naming the variable at fault,
+  which is the pinned side of the pair. When both sides are pinned it
+  names the lower one's variable and the other's; when neither is, it
+  names both settings and the variables that can restore the bound.
+  """
+  @spec check_pinned(%{String.t() => term()}, %{String.t() => term()}) ::
+          :ok | {:error, String.t()}
+  def check_pinned(pinned, others) when is_map(pinned) and is_map(others) do
+    Enum.find_value(@below, :ok, fn {low, high} ->
+      values = Map.merge(Map.take(others, [low, high]), Map.take(pinned, [low, high]))
+
+      case {Map.has_key?(pinned, low), Map.has_key?(pinned, high)} do
+        {false, false} -> unpinned_refusal(low, high, values)
+        {true, false} -> pinned_refusal(low, values, nil)
+        {false, true} -> pinned_refusal(high, values, nil)
+        {true, true} -> pinned_refusal(low, values, high)
+      end
+    end)
+  end
+
+  defp unpinned_refusal(low, high, values) do
+    case check_below(low, values) do
+      :ok ->
+        nil
+
+      {:error, form} ->
+        {:error,
+         "#{low} (#{Map.fetch!(values, low)}) #{form}; pin #{variable!(low)} or " <>
+           "#{variable!(high)} to restore the bound"}
+    end
+  end
+
+  defp pinned_refusal(key, values, also) do
+    case check_below(key, values) do
+      :ok -> nil
+      {:error, form} when is_nil(also) -> {:error, "#{variable!(key)} #{form}"}
+      {:error, form} -> {:error, "#{variable!(key)} #{form}, which #{variable!(also)} pins"}
+    end
+  end
+
+  defp variable!(key) do
+    {:ok, %Entry{variable: variable}} = fetch(key)
+    variable
+  end
 
   @doc """
   The `{application, key}` pairs the entries are written under: the head

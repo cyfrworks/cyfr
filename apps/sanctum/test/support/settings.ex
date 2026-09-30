@@ -33,7 +33,16 @@ defmodule Sanctum.Test.Settings do
     "mint_per_hour" => %{default: nil, stale: :refuse},
     "athanor_storage_bytes" => %{default: nil, stale: :refuse},
     "session_ttl_hours" => %{default: 720, stale: :refuse},
-    "webhook_max_skew_seconds" => %{default: 300, stale: :refuse}
+    "webhook_max_skew_seconds" => %{default: 300, stale: :refuse},
+    "directory_serve" => %{default: :off, stale: :refuse},
+    "directory_max_identities" => %{default: 100_000, stale: :refuse},
+    "directory_log_bytes" => %{default: 1_073_741_824, stale: :refuse},
+    "directory_recovery_reserve_bytes" => %{default: 10_485_760, stale: :refuse},
+    "identity_freshness_seconds" => %{default: 300, stale: :refuse},
+    "device_cert_seconds" => %{default: 3_600, stale: :refuse},
+    "clock_skew_seconds" => %{default: 60, stale: :refuse},
+    "confirmation_seconds" => %{default: 300, stale: :refuse},
+    "reauth_seconds" => %{default: 300, stale: :refuse}
   }
 
   @doc "The declaration of the settings Sanctum reads."

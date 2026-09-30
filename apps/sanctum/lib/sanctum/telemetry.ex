@@ -54,6 +54,16 @@ defmodule Sanctum.Telemetry do
   @api_keys_event [:cyfr, :sanctum, :api_keys, :changed]
   @webhooks_event [:cyfr, :sanctum, :webhooks, :changed]
 
+  # A pending confirmation's lifecycle, one event per kind.
+  @confirmation_events %{
+    opened: [:cyfr, :sanctum, :confirmation, :opened],
+    confirmed: [:cyfr, :sanctum, :confirmation, :confirmed],
+    consumed: [:cyfr, :sanctum, :confirmation, :consumed],
+    cancelled: [:cyfr, :sanctum, :confirmation, :cancelled],
+    voided: [:cyfr, :sanctum, :confirmation, :voided],
+    expired: [:cyfr, :sanctum, :confirmation, :expired]
+  }
+
   @doc """
   Emit an authentication event.
 
@@ -173,4 +183,38 @@ defmodule Sanctum.Telemetry do
   @spec webhooks_changed(String.t()) :: :ok
   def webhooks_changed(athanor_id) when is_binary(athanor_id),
     do: :telemetry.execute(@webhooks_event, %{count: 1}, %{athanor_id: athanor_id})
+
+  @typedoc "What happened to a pending confirmation."
+  @type confirmation_kind :: :opened | :confirmed | :consumed | :cancelled | :voided | :expired
+
+  @doc """
+  The pending-confirmation lifecycle's announcement: the confirmation `id`
+  of `user_id` in `athanor_id`, for the operation it confirms
+  (`tool.action`), was opened, confirmed, consumed, cancelled, voided or
+  expired. Emits `[:cyfr, :sanctum, :confirmation, kind]` with the
+  athanor, the person, the id, the operation and the expiry, and nothing
+  else: never the change's arguments or its preview, which a client reads
+  under its own session. The host's bridge carries it to the person's own
+  clients.
+  """
+  @spec confirmation(confirmation_kind(), String.t(), String.t(), %{
+          id: String.t(),
+          operation: String.t(),
+          expires_at: DateTime.t()
+        }) :: :ok
+  def confirmation(kind, athanor_id, user_id, %{
+        id: id,
+        operation: operation,
+        expires_at: %DateTime{} = expires_at
+      })
+      when is_map_key(@confirmation_events, kind) and is_binary(athanor_id) and
+             is_binary(user_id) and is_binary(id) and is_binary(operation) do
+    :telemetry.execute(Map.fetch!(@confirmation_events, kind), %{count: 1}, %{
+      athanor_id: athanor_id,
+      user_id: user_id,
+      id: id,
+      operation: operation,
+      expires_at: expires_at
+    })
+  end
 end

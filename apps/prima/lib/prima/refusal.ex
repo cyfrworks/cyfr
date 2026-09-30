@@ -586,6 +586,10 @@ defmodule Prima.Refusal do
   defp row(:service_unavailable),
     do: {:unavailable, "The service is unavailable — retry shortly"}
 
+  # An operation declared on the table whose handler does not do its work
+  # yet: a refusal the caller can read, not a failure of this server.
+  defp row(:not_built), do: {:unavailable, "This operation is not built yet."}
+
   defp row(:execution_failed), do: {:internal, "The execution failed"}
 
   # Webhook ingress.

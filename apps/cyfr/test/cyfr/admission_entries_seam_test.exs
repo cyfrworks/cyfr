@@ -9,7 +9,8 @@ defmodule Cyfr.AdmissionEntriesSeamTest do
   caller had been established, and no second row from the transport.
 
   One driver per roster row: a row without a driver, or a driver without
-  a row, fails the seam. HTTP entries are driven through the endpoint;
+  a row, fails the seam. A row marked `pending: true` names an entry not
+  built yet; it has no driver and is not driven until it is. HTTP entries are driven through the endpoint;
   the gate heads and the HostAPI entry by direct call; the scheduler by
   a due schedule whose run admission fails.
   """
@@ -23,6 +24,9 @@ defmodule Cyfr.AdmissionEntriesSeamTest do
   alias Cyfr.Boundaries
 
   @mcp_unknown_tool_class "not_found"
+
+  # The rows this seam drives: every entry but a pending one.
+  @entries Enum.reject(Boundaries.admission_entries(), &Map.get(&1, :pending, false))
 
   setup do
     Prima.RateLimiter.reset()
@@ -84,11 +88,17 @@ defmodule Cyfr.AdmissionEntriesSeamTest do
   }
 
   test "every roster row has one driver and every driver a row" do
-    roster = Enum.map(Boundaries.admission_entries(), &{&1.module, &1.site})
+    roster = Enum.map(@entries, &{&1.module, &1.site})
     assert Enum.sort(roster) == Enum.sort(Map.keys(@drivers))
   end
 
-  for %{module: module, site: site, plane: plane} <- Boundaries.admission_entries() do
+  test "only a pending row goes undriven" do
+    undriven = Boundaries.admission_entries() -- @entries
+    assert Enum.all?(undriven, &(&1.pending == true))
+    refute Enum.any?(undriven, &Map.has_key?(@drivers, {&1.module, &1.site}))
+  end
+
+  for %{module: module, site: site, plane: plane} <- @entries do
     @tag entry: {module, site}, plane: plane
     test "#{inspect(module)}.#{site} refuses as one recorded decision on the #{plane} plane",
          %{conn: conn, ctx: ctx, entry: entry, plane: plane} do

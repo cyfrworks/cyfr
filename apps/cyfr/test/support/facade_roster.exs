@@ -16,8 +16,13 @@
     "Arca.Retention"
   ],
   "Sanctum" => [
+    "Sanctum.Auth.CyfrDoor",
     "Sanctum.Consent",
+    "Sanctum.DeviceCerts",
+    "Sanctum.Directory",
     "Sanctum.Pairing",
+    "Sanctum.Passkeys",
+    "Sanctum.Recovery",
     "Sanctum.RegistryCredentials",
     "Sanctum.TinctureAccess",
     "Sanctum.ToolGrants",

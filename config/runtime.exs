@@ -302,6 +302,20 @@ if config_env() != :test do
            :deployment_pinned,
            Enum.sort(for({entry, value} <- settings, value != nil, do: {entry.key, value}))
 
+    # Settings that bound each other (the recovery reserve below the log
+    # quota) hold together where this environment pins both, and a refusal
+    # names the variables. A pin is held to a side it leaves unpinned only
+    # when the settings process settles the pins against the store, which
+    # this file cannot read: a stored value, not the default, may stand
+    # there (`Cyfr.Platform.Settings`). A stored value is held to the bound
+    # where it is written (`Cyfr.Platform.Settings.set/4`).
+    pinned = for {entry, value} <- settings, value != nil, into: %{}, do: {entry.key, value}
+
+    case roster.check_pinned(pinned, %{}) do
+      :ok -> :ok
+      {:error, sentence} -> raise "[Cyfr] FATAL: #{sentence}."
+    end
+
     # A restart-scoped setting (the execution slots) is read once at boot
     # from the application environment, so a set value is written there
     # too; unset, the stored row the boot applies or the roster's default
@@ -710,6 +724,33 @@ if config_env() != :test do
     # neither the bind address nor any request's Host. Unset means the console
     # and the CLI show the path and say to set this.
     config :sanctum, :public_url, env_str.("CYFR_PUBLIC_URL", nil)
+
+    # The directory this deployment enrolls its local people at: an https
+    # directory URL, with no default, so an unset one leaves local operation
+    # and local pairing working and enrollment refused. Nothing reads a
+    # directory from a request.
+    {:ok, directory_url} = Prima.EnvValue.text(getenv, "CYFR_DIRECTORY_URL")
+
+    unless is_nil(directory_url) or Sanctum.enrollment_directory?(directory_url) do
+      raise "[Cyfr] FATAL: CYFR_DIRECTORY_URL must be an https directory URL: an origin " <>
+              "and an optional path, with no user, query or fragment."
+    end
+
+    config :sanctum, :directory_url, directory_url
+
+    # The installation's restore capability: exactly 64 lowercase hexadecimal
+    # characters (32 random bytes), optional. Set, it reserves this
+    # installation's first person for the restore path, and `Sanctum`
+    # installs that mode before any ingress opens. A malformed value refuses
+    # the boot naming the variable, never the value, which is a secret.
+    {:ok, restore_token} = Prima.EnvValue.text(getenv, "CYFR_RESTORE_TOKEN")
+
+    unless is_nil(restore_token) or Sanctum.restore_token?(restore_token) do
+      raise "[Cyfr] FATAL: CYFR_RESTORE_TOKEN must be exactly 64 lowercase hexadecimal " <>
+              "characters (32 random bytes)."
+    end
+
+    config :sanctum, :restore_token, restore_token
 
     oci_registry_url_config =
       env_str.(

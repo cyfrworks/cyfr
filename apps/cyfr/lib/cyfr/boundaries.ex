@@ -56,6 +56,14 @@ defmodule Cyfr.Boundaries do
       an application's `lib` goes through `Arca.Storage` or carries the
       bypass marker that names its group.
 
+  A row a later change will reach is marked pending: a whole row
+  `pending: true`, a surface row's entries in its `pending_allow`, and the
+  pending Sanctum functions, public routes and postures in their own
+  registers beside the settled ones. A pending row admits what it names —
+  a caller without a row still fails — and the stale checks skip it,
+  because nothing reaches it yet; removing every marker is the last
+  change, after which the stale checks prove every row reached.
+
   And the registers:
 
     * `ports/0` and `internal_strategies/0` — the five ports of
@@ -297,6 +305,10 @@ defmodule Cyfr.Boundaries do
     Arca.VaultStorage Arca.SessionStorage Arca.ApiKeyStorage Arca.RegistryTokenStorage
     Arca.ProviderCredentialStorage Arca.WebhookStorage Arca.FrameCredentials
     Arca.PairedClients Arca.Users Arca.Members Arca.Athanors Arca.Doors
+    Arca.PersonIdentities Arca.IdentityAttempts Arca.IdentityLog Arca.DirectoryHeads
+    Arca.DeviceCertificates Arca.PairingInvitations Arca.Passkeys
+    Arca.PendingConfirmations Arca.CarryActions Arca.InstallationClaims
+    Arca.RequestRateWindows
   )
   @security_row_readers ["apps/sanctum/lib", "apps/arca/lib"]
 
@@ -409,6 +421,7 @@ defmodule Cyfr.Boundaries do
         Sanctum.Unauthorized Sanctum.UnauthorizedError Sanctum.Vault.OAuthGrant
         Sanctum.VaultReader Sanctum.Webhook
       ),
+      pending_allow: ~w(Sanctum.DeviceCerts Sanctum.Directory Sanctum.Recovery),
       reason:
         "the auth fabric's own front door, where a wide roster is the front door doing " <>
           "its job. The MCP transport carries tenancy, reads a server's vault edge, and " <>
@@ -421,7 +434,9 @@ defmodule Cyfr.Boundaries do
           "vault's OAuth grant and a webhook's row. `Sanctum.Consent` is the tincture " <>
           "data routes' read of the grant revision a frame credential names " <>
           "(`Sanctum.Consent.profiles/2`, `head_consent/2`), read as the shell reads it " <>
-          "when it mints. " <>
+          "when it mints. The directory's routes are `Sanctum.Directory`'s decisions, the " <>
+          "restore ingress `Sanctum.Recovery`'s, and the device channel checks each " <>
+          "certificate and proof through `Sanctum.DeviceCerts`. " <>
           "Boundary's exports are global, and `Sanctum` exports more than this roster to " <>
           "every boundary that lists it, so no declaration can say it."
     },
@@ -462,9 +477,9 @@ defmodule Cyfr.Boundaries do
           "ingress — a wide roster is the front door doing its job. " <>
           "`Sanctum.Consent` is the shell's read of whether a tincture has an active " <>
           "public profile (`Sanctum.Consent.profiles/2`). " <>
-          "`Sanctum.Pairing` is the system layer's reading of the class a prompt " <>
-          "needs and the class this client holds, which it presents and never decides " <>
-          "by: the operation a confirmation dispatches decides. " <>
+          "`Sanctum.Pairing` is the system layer's reading of the action table and of " <>
+          "whether this client has a person behind it who can confirm, which hides a " <>
+          "control and never decides: the operation a confirmation dispatches decides. " <>
           "In the console, `Sanctum.ClientIp` is `PrismWeb.AuthHelpers.socket_client_ip/1` " <>
           "alone: the `/live` socket is handled by the endpoint BEFORE the router, so " <>
           "it passes no rate-limit plug, which makes the console the only per-address " <>
@@ -951,6 +966,39 @@ defmodule Cyfr.Boundaries do
           "this roster to every surface that lists it, so no declaration can say it."
     },
 
+    # --- the admission roster is the host's ---
+    %{
+      from: [
+        "apps/prima/lib/**/*.ex",
+        "apps/arca/lib/**/*.ex",
+        "apps/sanctum/lib/**/*.ex",
+        "apps/cyfr/lib/grimoire/**/*.ex",
+        "apps/cyfr/lib/grimoire.ex",
+        "apps/cyfr/lib/compendium/**/*.ex",
+        "apps/cyfr/lib/compendium.ex",
+        "apps/cyfr/lib/aqua/**/*.ex",
+        "apps/cyfr/lib/aqua.ex",
+        "apps/cyfr/lib/crucible/**/*.ex",
+        "apps/cyfr/lib/crucible.ex",
+        "apps/cyfr/lib/emissary/**/*.ex",
+        "apps/cyfr/lib/emissary.ex",
+        "apps/cyfr/lib/prism/**/*.ex",
+        "apps/cyfr/lib/prism.ex",
+        "apps/cyfr/lib/prism_web/**/*.ex",
+        "apps/cyfr/lib/prism_web.ex"
+      ],
+      into: "Cyfr.Admission",
+      allow: [],
+      pending: true,
+      reason:
+        "the admission paths are the host's roster (`Cyfr.Admission`, beside " <>
+          "`admission_entries/0`): the composition root checks every listener against " <>
+          "it at boot, so no domain, surface or foundation names it and a listener " <>
+          "cannot admit itself. A foundation's build does not see the host's " <>
+          "boundaries, and the host's boundary admits every domain, so no compiler " <>
+          "refuses the reach."
+    },
+
     # --- the security rows: Sanctum is their only reader ---
     %{
       from:
@@ -960,10 +1008,13 @@ defmodule Cyfr.Boundaries do
       allow: [],
       reason:
         "profiles, consents and their proofs, standing tool grants, vault entries, " <>
-          "sessions, API keys, tincture frame credentials, paired clients and the " <>
-          "confirmation class each holds, registry push tokens, " <>
+          "sessions, API keys, tincture frame credentials, paired clients, their " <>
+          "pairing invitations and device certificates, registry push tokens, " <>
           "provider credentials, webhooks, " <>
-          "and the identities, memberships, athanors and doors that decide standing " <>
+          "the identities, memberships, athanors and doors that decide standing, a " <>
+          "person's identity row, keys, attempts and carries, the directory's logs " <>
+          "and cached heads, passkeys, pending confirmations, the installation claim " <>
+          "and the pre-authentication rate windows " <>
           "are security rows. A domain or a surface learns about them only " <>
           "through Sanctum's entries, which scope by the caller's context and keep an " <>
           "outage, a damaged row and an absent one apart. Arca holds the rows and " <>
@@ -1005,9 +1056,11 @@ defmodule Cyfr.Boundaries do
   has one, narrows it to those namespaces under `into`: every other reach
   into `into` is some other row's business. A row's `except`, when it has
   one, lists globs of files under `from` the row does not read — a file
-  the composition root owns, whose reaches another row decides. Every row
-  is one the Boundary compiler cannot hold, and its reason ends saying
-  why.
+  the composition root owns, whose reaches another row decides. A row's
+  `pending_allow`, when it has one, names reaches a later change makes:
+  admitted like `allow`, never reported stale. A row `pending: true` is a
+  whole row no source reaches yet. Every row is one the Boundary compiler
+  cannot hold, and its reason ends saying why.
   """
   @spec surfaces() :: [map()]
   def surfaces, do: @surfaces
@@ -1040,17 +1093,26 @@ defmodule Cyfr.Boundaries do
         do: reach
   end
 
-  @doc "The namespaces `named` reaches that the row's roster does not name."
+  @doc """
+  The namespaces `named` reaches that the row's roster names neither in
+  `allow` nor in `pending_allow`.
+  """
   @spec surface_violations(map(), named()) :: [String.t()]
   def surface_violations(row, named) do
     row
     |> surface_reaches(named)
-    |> MapSet.difference(MapSet.new(row.allow))
+    |> MapSet.difference(MapSet.new(row.allow ++ Map.get(row, :pending_allow, [])))
     |> Enum.sort()
   end
 
-  @doc "The namespaces the row's roster names and `named` no longer reaches."
+  @doc """
+  The namespaces the row's `allow` names and `named` no longer reaches. A
+  pending row, and a row's `pending_allow`, are not read: nothing reaches
+  them yet.
+  """
   @spec stale_surface_entries(map(), named()) :: [String.t()]
+  def stale_surface_entries(%{pending: true}, _named), do: []
+
   def stale_surface_entries(row, named) do
     row.allow
     |> MapSet.new()
@@ -1254,7 +1316,7 @@ defmodule Cyfr.Boundaries do
     "Sanctum.Namespace" => [lookup_status: 1],
     "Sanctum.Network" => [pin: 2, validate_redirect_url: 2],
     "Sanctum.Notify" => [broadcast: 3],
-    "Sanctum.Pairing" => [actions: 0, class_of: 1, required_class: 1],
+    "Sanctum.Pairing" => [actions: 0, can_confirm?: 1],
     "Sanctum.Policy.Enforcement" => [record: 1],
     "Sanctum.Provisioning" => [
       athanor: 1,
@@ -1348,13 +1410,30 @@ defmodule Cyfr.Boundaries do
   @spec sanctum_exports() :: %{String.t() => [{atom(), non_neg_integer()}]}
   def sanctum_exports, do: @sanctum_exports
 
+  # The Sanctum functions the host will call once the work that calls them
+  # lands, each on a module that exists and holds no function yet: the
+  # directory's routes, the restore ingress and the device channel. A call
+  # to one is admitted; one nothing calls yet is not stale.
+  @pending_sanctum_exports %{
+    "Sanctum.DeviceCerts" => [verify_connect: 3, verify_request: 3],
+    "Sanctum.Directory" => [append: 2, outcome: 1, recover: 2, register: 1, resolve: 1],
+    "Sanctum.Recovery" => [restore: 2]
+  }
+
+  @doc """
+  The Sanctum functions the host is to call, pending: admitted as
+  `sanctum_exports/0`'s are, and never reported stale.
+  """
+  @spec pending_sanctum_exports() :: %{String.t() => [{atom(), non_neg_integer()}]}
+  def pending_sanctum_exports, do: @pending_sanctum_exports
+
   @typedoc "A remote function as the compiled scan reads it: module name, function, arity."
   @type reach :: {String.t(), atom(), non_neg_integer()}
 
   @doc "The Sanctum functions `reaches` holds that the roster does not, as `Module.function/arity`."
   @spec sanctum_export_violations([reach()]) :: [String.t()]
   def sanctum_export_violations(reaches) do
-    rostered = rostered_sanctum_exports()
+    rostered = MapSet.union(rostered_sanctum_exports(), rostered(@pending_sanctum_exports))
 
     reaches
     |> Enum.filter(fn {module, _function, _arity} -> sanctum_module?(module) end)
@@ -1375,8 +1454,10 @@ defmodule Cyfr.Boundaries do
     |> Enum.sort()
   end
 
-  defp rostered_sanctum_exports do
-    for {module, functions} <- @sanctum_exports,
+  defp rostered_sanctum_exports, do: rostered(@sanctum_exports)
+
+  defp rostered(roster) do
+    for {module, functions} <- roster,
         {function, arity} <- functions,
         into: MapSet.new(),
         do: {module, function, arity}
@@ -1479,6 +1560,21 @@ defmodule Cyfr.Boundaries do
     browser_oauth_start: %{
       admits: :nothing,
       why: "starts an IdP round trip and carries nothing of the caller into it"
+    },
+    public_directory: %{
+      admits: :nothing,
+      pending: true,
+      why:
+        "the identity directory's reads and a genesis registration, which any caller may " <>
+          "make: a log is public history, and a genesis names its own keys and is its own " <>
+          "identifier. No session; every request is bounded per source and per installation"
+    },
+    directory_signed: %{
+      admits: :credential,
+      pending: true,
+      why:
+        "a directory entry or recovery, signed by a key the identifier's verified chain " <>
+          "authorizes and verified against that chain before anything is written; no session"
     }
   }
 
@@ -1488,6 +1584,16 @@ defmodule Cyfr.Boundaries do
     {:get, "/auth/:provider"},
     {:post, "/auth/logout"},
     {:get, "/login"}
+  ]
+
+  # The routes anyone will reach once the work that declares them lands:
+  # the directory's public reads and genesis registration, and the
+  # sessionless page a pairing code opens.
+  @pending_public_routes [
+    {:get, "/directory/v1/:identifier"},
+    {:get, "/directory/v1/:identifier/requests/:request_id"},
+    {:post, "/directory/v1/genesis"},
+    {:get, "/pair"}
   ]
 
   @doc """
@@ -1505,9 +1611,15 @@ defmodule Cyfr.Boundaries do
   authenticates the step and nothing else; and `:nothing`, a route
   reachable by anyone, whose routes are rostered one by one in
   `public_routes/0`. A posture is route metadata, a term no compiler
-  checks.
+  checks. A posture marked `pending: true` is one no route declares yet.
   """
-  @spec route_postures() :: %{atom() => %{admits: atom(), why: String.t()}}
+  @spec route_postures() :: %{
+          atom() => %{
+            required(:admits) => atom(),
+            required(:why) => String.t(),
+            optional(:pending) => true
+          }
+        }
   def route_postures, do: @route_postures
 
   @doc "The postures that admit a caller who presented nothing at all."
@@ -1523,6 +1635,13 @@ defmodule Cyfr.Boundaries do
   """
   @spec public_routes() :: [{atom(), String.t()}]
   def public_routes, do: @public_routes
+
+  @doc """
+  The routes anyone will reach, pending: rostered as `public_routes/0`'s
+  are once a route declares them, and never reported stale before.
+  """
+  @spec pending_public_routes() :: [{atom(), String.t()}]
+  def pending_public_routes, do: @pending_public_routes
 
   # Every posture, public-roster and `route_info` consumer reads the route
   # table through this one name, so splitting the route providers and
@@ -1560,9 +1679,10 @@ defmodule Cyfr.Boundaries do
           ["#{where}: no declared auth posture (add `metadata: %{auth: …}`)"]
 
         posture when is_map_key(@route_postures, posture) ->
-          if posture in public_postures() and {route.verb, route.path} not in @public_routes,
-            do: ["#{where}: declares the public posture #{inspect(posture)} and is not rostered"],
-            else: []
+          if posture in public_postures() and
+               {route.verb, route.path} not in (@public_routes ++ @pending_public_routes),
+             do: ["#{where}: declares the public posture #{inspect(posture)} and is not rostered"],
+             else: []
 
         other ->
           ["#{where}: auth posture #{inspect(other)} is not in the vocabulary"]
@@ -1854,68 +1974,147 @@ defmodule Cyfr.Boundaries do
   # The admission entries: every site that decides a request before, or
   # instead of, the gate, and so records the decision itself. Each row is
   # the deciding module, the function (a plug's `call/2`, a controller
-  # action, a gate head, a server's message handler) and the plane its
-  # refusals are recorded on. `CyfrWeb.Plugs.CallIdentity` is not a
-  # row: it mints the identity and decides nothing. Which function decides
-  # is behaviour, not a reference, so no compiler sees it.
+  # action, a gate head, a server's message handler), the plane its
+  # refusals are recorded on, and the origin of the context it builds
+  # (`Prima.Origin`): `:inherits` for an in-chain entry, whose context
+  # carries its root's, and `:none` for one that builds no context.
+  # `CyfrWeb.Plugs.CallIdentity` is not a row: it mints the identity and
+  # decides nothing. Which function decides is behaviour, not a reference,
+  # so no compiler sees it.
   @admission_entries [
     # The gate's heads: refusals made before its own checks and identity.
-    %{module: Grimoire, site: :call_external, plane: :external},
-    %{module: Grimoire, site: :call_in_chain, plane: :in_chain},
+    # The external head takes the context its surface built.
+    %{module: Grimoire, site: :call_external, plane: :external, origin: :none},
+    %{module: Grimoire, site: :call_in_chain, plane: :in_chain, origin: :inherits},
     # The gate's stream entry: an open is decided and recorded there, and
     # MCP `subscriptions/listen` admits through it.
-    %{module: Grimoire, site: :open_stream, plane: :external},
+    %{module: Grimoire, site: :open_stream, plane: :external, origin: :none},
     # The JSON-RPC router's pre-gate refusals: a request naming no tool or
     # an unknown one, a read naming no resource, an unknown method.
-    %{module: Emissary.MCP.Router, site: :dispatch, plane: :external},
+    %{module: Emissary.MCP.Router, site: :dispatch, plane: :external, origin: :programmatic},
     # The MCP transport: a batch, a method the endpoint does not serve, an
     # authorization refusal raised in the request process.
-    %{module: Emissary.Web.MCPController, site: :handle, plane: :external},
-    %{module: Emissary.Web.MCPController, site: :method_not_allowed, plane: :external},
-    # The MCP pipeline's plugs, after routing.
-    %{module: CyfrWeb.Plugs.Authenticate, site: :call, plane: :external},
-    %{module: CyfrWeb.Plugs.FrameRequest, site: :call, plane: :external},
-    %{module: CyfrWeb.Plugs.MCPOrigin, site: :call, plane: :external},
-    %{module: CyfrWeb.Plugs.MCPRateLimit, site: :call, plane: :external},
-    %{module: Emissary.Web.Plugs.MCPRequestMetadata, site: :call, plane: :external},
+    %{module: Emissary.Web.MCPController, site: :handle, plane: :external, origin: :none},
+    %{
+      module: Emissary.Web.MCPController,
+      site: :method_not_allowed,
+      plane: :external,
+      origin: :none
+    },
+    # The MCP pipeline's plugs, after routing. The authenticating plug
+    # builds the context of the HTTP API and MCP, whatever credential it
+    # holds.
+    %{module: CyfrWeb.Plugs.Authenticate, site: :call, plane: :external, origin: :programmatic},
+    %{module: CyfrWeb.Plugs.FrameRequest, site: :call, plane: :external, origin: :none},
+    %{module: CyfrWeb.Plugs.MCPOrigin, site: :call, plane: :external, origin: :none},
+    %{module: CyfrWeb.Plugs.MCPRateLimit, site: :call, plane: :external, origin: :none},
+    %{
+      module: Emissary.Web.Plugs.MCPRequestMetadata,
+      site: :call,
+      plane: :external,
+      origin: :none
+    },
     # The endpoint's ownership plug: a stale owner refusing is an admission
     # refusal, class not_owner.
-    %{module: CyfrWeb.Plugs.ControlPlaneOwnership, site: :call, plane: :external},
+    %{
+      module: CyfrWeb.Plugs.ControlPlaneOwnership,
+      site: :call,
+      plane: :external,
+      origin: :none
+    },
     # The tincture routes: a tincture the address does not resolve, and the
     # routes' rate limit.
-    %{module: Emissary.Web.TinctureController, site: :index, plane: :external},
-    %{module: CyfrWeb.Plugs.TinctureRateLimit, site: :call, plane: :external},
+    %{module: Emissary.Web.TinctureController, site: :index, plane: :external, origin: :none},
+    %{module: CyfrWeb.Plugs.TinctureRateLimit, site: :call, plane: :external, origin: :none},
     # The tincture data routes: a request with no frame credential and no
     # public tincture, a credential that no longer stands, an undeclared
-    # operation or stream, and the per-frame limits.
-    %{module: Emissary.Web.TinctureDataController, site: :invoke, plane: :external},
-    %{module: Emissary.Web.TinctureDataController, site: :system_action, plane: :external},
-    %{module: Emissary.Web.TinctureDataController, site: :stream, plane: :external},
+    # operation or stream, and the per-frame limits. A frame's call is an
+    # interactive admission.
+    %{
+      module: Emissary.Web.TinctureDataController,
+      site: :invoke,
+      plane: :external,
+      origin: :interactive
+    },
+    %{
+      module: Emissary.Web.TinctureDataController,
+      site: :system_action,
+      plane: :external,
+      origin: :interactive
+    },
+    %{
+      module: Emissary.Web.TinctureDataController,
+      site: :stream,
+      plane: :external,
+      origin: :interactive
+    },
     # The webhook route: the caller the row establishes, its signature,
     # its idempotency key and its rate limit.
-    %{module: Emissary.Web.WebhookController, site: :invoke, plane: :external},
-    %{module: CyfrWeb.Plugs.VerifyWebhookSignature, site: :call, plane: :external},
-    %{module: CyfrWeb.Plugs.WebhookIdempotency, site: :call, plane: :external},
-    %{module: CyfrWeb.Plugs.WebhookRateLimit, site: :call, plane: :external},
+    %{module: Emissary.Web.WebhookController, site: :invoke, plane: :external, origin: :webhook},
+    %{
+      module: CyfrWeb.Plugs.VerifyWebhookSignature,
+      site: :call,
+      plane: :external,
+      origin: :none
+    },
+    %{module: CyfrWeb.Plugs.WebhookIdempotency, site: :call, plane: :external, origin: :none},
+    %{module: CyfrWeb.Plugs.WebhookRateLimit, site: :call, plane: :external, origin: :none},
     # The execution-events stream: an execution the caller may not read (or
     # that does not exist), an unauthenticated caller, and the stream limit.
-    %{module: Emissary.Web.ExecutionEventsController, site: :stream, plane: :external},
+    %{
+      module: Emissary.Web.ExecutionEventsController,
+      site: :stream,
+      plane: :external,
+      origin: :none
+    },
     # The scheduler's fire: its own admission is the occurrence claimed
     # under a held generation, and a run admission refusal is that fire's
     # failed completion.
-    %{module: Crucible.Schedules.Scheduler, site: :handle_info, plane: :external},
+    %{
+      module: Crucible.Schedules.Scheduler,
+      site: :handle_info,
+      plane: :external,
+      origin: :schedule
+    },
     # The HostAPI's in-chain entry: a tool call whose attempt refuses it
     # before any chain exists.
-    %{module: Crucible.Host.Children, site: :call, plane: :in_chain}
+    %{module: Crucible.Host.Children, site: :call, plane: :in_chain, origin: :inherits},
+    # The device channel: a paired device's connection proof and each
+    # discrete intent it sends, a person acting on an interactive surface.
+    # Pending: the channel is not built yet.
+    %{
+      module: Emissary.Web.DeviceChannel,
+      site: :handle_in,
+      plane: :external,
+      origin: :interactive,
+      pending: true
+    }
   ]
+
+  @typedoc """
+  The origin an admission entry gives the context it builds: a
+  `Prima.Origin`, `:inherits` for an in-chain entry, whose context carries
+  its root's, or `:none` for one that builds no context.
+  """
+  @type admission_origin :: Prima.Origin.t() | :inherits | :none
 
   @doc """
   The admission entries: every site that decides a request before, or
   instead of, the gate, and records the decision itself — one
-  `%{module, site, plane}` row per entry. Host owns the roster; the seam
-  test drives each row to its refusal and finds exactly one decision.
+  `%{module, site, plane, origin}` row per entry. Host owns the roster;
+  the seam test drives each row to its refusal and finds exactly one
+  decision. A row marked `pending: true` names an entry not built yet,
+  which the seam test does not drive.
   """
-  @spec admission_entries() :: [%{module: module(), site: atom(), plane: :external | :in_chain}]
+  @spec admission_entries() :: [
+          %{
+            required(:module) => module(),
+            required(:site) => atom(),
+            required(:plane) => :external | :in_chain,
+            required(:origin) => admission_origin(),
+            optional(:pending) => true
+          }
+        ]
   def admission_entries, do: @admission_entries
 
   @doc """

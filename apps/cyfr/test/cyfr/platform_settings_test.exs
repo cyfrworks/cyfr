@@ -82,6 +82,15 @@ defmodule Cyfr.PlatformSettingsTest do
     |> Arca.Repo.update_all(set: [value: Jason.encode!(value)])
   end
 
+  # The settings changes announced so far, in order, as `{setting, op}`.
+  defp announced do
+    receive do
+      %SettingsChanged{kind: :changed, setting: setting, op: op} -> [{setting, op} | announced()]
+    after
+      0 -> []
+    end
+  end
+
   defp start_process(opts) do
     name = :"settings_#{System.unique_integer([:positive])}"
 
@@ -140,6 +149,75 @@ defmodule Cyfr.PlatformSettingsTest do
 
       assert Store.get("crucible_max_concurrent") == {:error, :not_found}
       assert revision() == before
+    end
+
+    test "the recovery reserve stays below the log quota, read as each takes effect now",
+         %{ctx: ctx} do
+      before = revision()
+
+      # Against the default quota.
+      assert Settings.set(ctx, "directory_recovery_reserve_bytes", "1073741824") ==
+               {:error,
+                {:invalid, "directory_recovery_reserve_bytes",
+                 "must be below directory_log_bytes (1073741824)"}}
+
+      assert revision() == before
+
+      # Against a stored reserve: the quota cannot fall to it or under it.
+      assert {:ok, %{value: 1_048_576}} =
+               Settings.set(ctx, "directory_recovery_reserve_bytes", "1048576")
+
+      assert Settings.set(ctx, "directory_log_bytes", "1048576") ==
+               {:error,
+                {:invalid, "directory_log_bytes",
+                 "must be above directory_recovery_reserve_bytes (1048576)"}}
+
+      assert {:ok, %{value: 1_048_577}} = Settings.set(ctx, "directory_log_bytes", "1048577")
+
+      # Resetting the reserve to its default would put it above the quota.
+      assert Settings.reset(ctx, "directory_recovery_reserve_bytes") ==
+               {:error,
+                {:invalid, "directory_recovery_reserve_bytes",
+                 "must be below directory_log_bytes (1048577)"}}
+
+      assert Store.effective("directory_recovery_reserve_bytes") == {:ok, 1_048_576}
+
+      # The quota back at its default, the reserve resets.
+      assert {:ok, _} = Settings.reset(ctx, "directory_log_bytes")
+      assert {:ok, %{value: 10_485_760}} = Settings.reset(ctx, "directory_recovery_reserve_bytes")
+    end
+
+    test "the bound reads the store the write is conditioned on, never this member's cache",
+         %{ctx: ctx} do
+      # This member caches the default quota.
+      assert Store.effective("directory_log_bytes") == {:ok, 1_073_741_824}
+
+      # A peer lowers the quota and raises the store revision; nothing here
+      # hears of it, and the cache still answers the default.
+      next = revision() + 1
+
+      Arca.Repo.insert_all(Arca.PlatformSettings.Row, [
+        %{
+          key: "directory_log_bytes",
+          value: Jason.encode!(536_870_912),
+          revision: next,
+          set_by: "peer",
+          set_at: DateTime.utc_now()
+        }
+      ])
+
+      from(r in "platform_settings", where: r.key == "$revision")
+      |> Arca.Repo.update_all(set: [revision: next])
+
+      assert Store.effective("directory_log_bytes") == {:ok, 1_073_741_824}
+
+      assert Settings.set(ctx, "directory_recovery_reserve_bytes", "900000000") ==
+               {:error,
+                {:invalid, "directory_recovery_reserve_bytes",
+                 "must be below directory_log_bytes (536870912)"}}
+
+      assert Store.get("directory_recovery_reserve_bytes") == {:error, :not_found}
+      assert revision() == next
     end
 
     test "a key the roster does not declare is refused", %{ctx: ctx} do
@@ -437,6 +515,120 @@ defmodule Cyfr.PlatformSettingsTest do
       {_pid, _name} = start_process(claimed: true)
 
       assert Store.get("max_athanors") == {:error, :not_found}
+    end
+
+    test "a pin that breaks a bound against the stored values refuses the boot, naming its variable",
+         %{ctx: ctx} do
+      assert {:ok, _} = Settings.set(ctx, "directory_recovery_reserve_bytes", "900000000")
+      Application.put_env(:cyfr, :deployment_pinned, [{"directory_log_bytes", 536_870_912}])
+
+      # The boot's start, linked as a supervisor's child is: its refusal is
+      # the start's answer, and the exit it sends is trapped here.
+      opts = [name: :"settings_#{System.unique_integer([:positive])}", member: "m@test"]
+      trapping = Process.flag(:trap_exit, true)
+
+      {result, _log} =
+        ExUnit.CaptureLog.with_log(fn ->
+          Settings.start_link(opts ++ [poll_ms: 3_600_000, claimed: true])
+        end)
+
+      Process.flag(:trap_exit, trapping)
+
+      assert {:error, {%RuntimeError{message: message}, _stacktrace}} = result
+
+      assert message ==
+               "[Cyfr] FATAL: CYFR_DIRECTORY_LOG_BYTES must be above " <>
+                 "directory_recovery_reserve_bytes (900000000)."
+
+      # Nothing was written: the quota still reads its default.
+      assert Store.get("directory_log_bytes") == {:error, :not_found}
+
+      # A reserve under the pinned quota boots, and the pin is written.
+      assert {:ok, _} = Settings.set(ctx, "directory_recovery_reserve_bytes", "1048576")
+      {_pid, _name} = start_process(claimed: true)
+      assert {:ok, %{value: 536_870_912, set_by: "deployment"}} = Store.get("directory_log_bytes")
+    end
+
+    test "removing a deployment row that would leave a stored value beyond a bound refuses the boot, naming both settings",
+         %{ctx: ctx} do
+      Application.put_env(:cyfr, :deployment_pinned, [{"directory_log_bytes", 4_294_967_296}])
+      {_pid, _name} = start_process(claimed: true)
+      assert {:ok, _} = Settings.set(ctx, "directory_recovery_reserve_bytes", "2147483648")
+      stop_supervised!(Settings)
+
+      # The quota's pin is gone: its row's removal would expose the
+      # default quota under the stored reserve.
+      Application.put_env(:cyfr, :deployment_pinned, [])
+      opts = [name: :"settings_#{System.unique_integer([:positive])}", member: "m@test"]
+      trapping = Process.flag(:trap_exit, true)
+
+      {result, _log} =
+        ExUnit.CaptureLog.with_log(fn ->
+          Settings.start_link(opts ++ [poll_ms: 3_600_000, claimed: true])
+        end)
+
+      Process.flag(:trap_exit, trapping)
+
+      assert {:error, {%RuntimeError{message: message}, _stacktrace}} = result
+
+      assert message ==
+               "[Cyfr] FATAL: directory_recovery_reserve_bytes (2147483648) must be below " <>
+                 "directory_log_bytes (1073741824); pin CYFR_DIRECTORY_RECOVERY_RESERVE_BYTES " <>
+                 "or CYFR_DIRECTORY_LOG_BYTES to restore the bound."
+
+      # Nothing was removed: the deployment's quota still stands.
+      assert {:ok, %{value: 4_294_967_296, set_by: "deployment"}} =
+               Store.get("directory_log_bytes")
+
+      # Pinning the reserve under the default quota restores the bound:
+      # the boot writes the reserve's pin and removes the quota's row.
+      Application.put_env(:cyfr, :deployment_pinned, [
+        {"directory_recovery_reserve_bytes", 1_048_576}
+      ])
+
+      {_pid, _name} = start_process(claimed: true)
+
+      assert {:ok, %{value: 1_048_576, set_by: "deployment"}} =
+               Store.get("directory_recovery_reserve_bytes")
+
+      assert Store.get("directory_log_bytes") == {:error, :not_found}
+    end
+
+    test "each settlement write leaves the bounds held, whatever way the pins move" do
+      reserve = "directory_recovery_reserve_bytes"
+      quota = "directory_log_bytes"
+      :ok = Cyfr.Bus.subscribe_global(Cyfr.Bus.settings_changed())
+
+      # {the earlier boot's pins, the next boot's, the order its writes take}
+      cases = [
+        # The quota lowered under the reserve's row, whose pin is gone.
+        {[{quota, 3_221_225_472}, {reserve, 2_147_483_648}], [{quota, 1_610_612_736}],
+         [{reserve, :delete}, {quota, :put}]},
+        # Both pins gone: the quota's default is under the reserve's row.
+        {[{quota, 3_221_225_472}, {reserve, 2_147_483_648}], [],
+         [{reserve, :delete}, {quota, :delete}]},
+        # Both lowered, the new quota under the old reserve.
+        {[{quota, 104_857_600}, {reserve, 52_428_800}],
+         [{quota, 41_943_040}, {reserve, 20_971_520}], [{reserve, :put}, {quota, :put}]},
+        # Both raised, the new reserve over the old quota.
+        {[{quota, 41_943_040}, {reserve, 20_971_520}],
+         [{quota, 104_857_600}, {reserve, 52_428_800}], [{quota, :put}, {reserve, :put}]}
+      ]
+
+      for {earlier, next, order} <- cases do
+        Application.put_env(:cyfr, :deployment_pinned, earlier)
+        {_pid, _name} = start_process(claimed: true)
+        stop_supervised!(Settings)
+        _earlier = announced()
+
+        Application.put_env(:cyfr, :deployment_pinned, next)
+        {_pid, _name} = start_process(claimed: true)
+        stop_supervised!(Settings)
+
+        # Each write is announced as it commits, so the order is what every
+        # member could read in between.
+        assert announced() == order, "from #{inspect(earlier)} to #{inspect(next)}"
+      end
     end
   end
 

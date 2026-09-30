@@ -103,7 +103,11 @@ defmodule Emissary.MCP.ActionCoverageTest do
   end
 
   # A person with every permission, signed in interactively; a platform
-  # operation's caller holds the operator capability.
+  # operation's caller holds the operator capability, and one that is also
+  # interactive is that person signed in.
+  defp external_context(%Prima.Operation{scope: :platform, consent: :interactive}),
+    do: %{Sanctum.TestContext.local() | permissions: MapSet.new([:*]), platform_admin: true}
+
   defp external_context(%Prima.Operation{scope: :platform}),
     do: Sanctum.TestContext.platform(permissions: [:*], platform_admin: true)
 

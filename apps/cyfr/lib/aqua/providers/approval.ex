@@ -49,7 +49,29 @@ defmodule Aqua.Providers.Approval do
                 "resolve: approve once | thread | always; decline once | never. Default once.",
               enum: ["once", "thread", "always", "never"]
             ),
-            Arg.new("reason", :string, description: "resolve: why (decline)")
+            Arg.new("reason", :string, description: "resolve: why (decline)"),
+            Arg.new("lifecycle", :string,
+              enum: ["execution", "turn", "schedule"],
+              description:
+                "resolve: the run a standing approval ends with — its execution, turn or schedule"
+            ),
+            Arg.new("until", :string,
+              description:
+                "resolve: an ISO 8601 UTC time a standing approval ends at, a bound beside its lifecycle"
+            ),
+            Arg.new(
+              "constraint",
+              {:record,
+               [
+                 Arg.new("kind", :string,
+                   required: true,
+                   enum: Enum.map(Prima.Operation.resource_kinds(), &Atom.to_string/1)
+                 ),
+                 Arg.new("patterns", {:array, Arg.new(nil, :string)}, required: true)
+               ]},
+              description:
+                "resolve: the resources a standing approval covers, for an action that declares which argument names one"
+            )
           ],
           kind: :write,
           planes: [:external],
@@ -79,6 +101,14 @@ defmodule Aqua.Providers.Approval do
   @impl true
   def handle("approval", %Context{} = ctx, args), do: dispatch(ctx, args)
   def handle(tool, _ctx, _args), do: {:error, {:not_found, "tool", tool}}
+
+  # A standing approval's bounds are declared and not yet decided: given,
+  # each refuses rather than being dropped, so an answer never stands
+  # wider than the one the person chose.
+  defp dispatch(_ctx, %{"action" => "resolve"} = args)
+       when is_map_key(args, "lifecycle") or is_map_key(args, "until") or
+              is_map_key(args, "constraint"),
+       do: {:error, :not_built}
 
   # The interactive-surface gate is the `consent: :interactive`
   # declaration on every action, enforced by the registry before this

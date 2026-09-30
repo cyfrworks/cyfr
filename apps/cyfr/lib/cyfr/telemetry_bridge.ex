@@ -8,10 +8,10 @@ defmodule Cyfr.TelemetryBridge do
   A foundation below the host emits `:telemetry` and never broadcasts, so
   every announcement the identity domain makes — a tray entry, a session
   minted or revoked, a dropped caller memo, a membership, a vault entry,
-  an archive, the API key and webhook rosters — and every lifecycle event
-  the console follows reaches `Cyfr.Bus` here. The events it attaches are
-  exactly `Cyfr.Telemetry.Catalog.consumed_by(:bridge)`; there is no
-  second list.
+  an archive, the API key and webhook rosters, a pending confirmation —
+  and every lifecycle event the console follows reaches `Cyfr.Bus` here.
+  The events it attaches are exactly
+  `Cyfr.Telemetry.Catalog.consumed_by(:bridge)`; there is no second list.
 
   Each event maps to one payload constructor, which takes only the
   metadata fields it names: telemetry metadata is whatever its emitter
@@ -40,6 +40,7 @@ defmodule Cyfr.TelemetryBridge do
     Build,
     CallerInvalidated,
     Components,
+    Confirmation,
     Execution,
     Membership,
     Notify,
@@ -51,6 +52,17 @@ defmodule Cyfr.TelemetryBridge do
     VaultEntryChanged,
     Webhooks
   }
+
+  # What a pending confirmation's life announces, one event per kind of
+  # `Cyfr.Bus.Confirmation`.
+  @confirmation_events [
+    [:cyfr, :sanctum, :confirmation, :opened],
+    [:cyfr, :sanctum, :confirmation, :confirmed],
+    [:cyfr, :sanctum, :confirmation, :consumed],
+    [:cyfr, :sanctum, :confirmation, :cancelled],
+    [:cyfr, :sanctum, :confirmation, :voided],
+    [:cyfr, :sanctum, :confirmation, :expired]
+  ]
 
   @doc false
   def start_link(opts \\ []), do: GenServer.start_link(__MODULE__, opts, name: __MODULE__)
@@ -268,6 +280,21 @@ defmodule Cyfr.TelemetryBridge do
   defp messages([:cyfr, :sanctum, :athanor, :archived], _measurements, %{athanor_id: id})
        when is_binary(id) and id != "",
        do: [{:global, Bus.athanor_archived_global(), AthanorArchived.new(id)}]
+
+  # A pending confirmation moved: on its person's own topic, carrying its
+  # id, operation and expiry and nothing else the emitter attached.
+  defp messages(
+         [:cyfr, :sanctum, :confirmation, stage] = event,
+         _measurements,
+         %{user_id: user_id} = meta
+       )
+       when event in @confirmation_events and is_binary(user_id) and user_id != "" do
+    fields = Map.take(meta, [:id, :operation, :expires_at])
+
+    [
+      tenant(meta, &Bus.confirmations(&1, user_id), &Confirmation.new(&1, stage, fields))
+    ]
+  end
 
   defp messages([:cyfr, :sanctum, :api_keys, :changed], _measurements, meta),
     do: [tenant(meta, &Bus.api_keys/1, &ApiKeys.new(&1, :changed))]

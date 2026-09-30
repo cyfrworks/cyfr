@@ -113,6 +113,32 @@ defmodule Cyfr.Telemetry.Catalog do
       consumers: [:bridge],
       note: "what serves an archived athanor from outside any tenant topic must stop"
     },
+    [:cyfr, :sanctum, :confirmation, :opened] => %{
+      consumers: [:bridge],
+      note:
+        "a pending confirmation of a sensitive change was opened; its person's clients " <>
+          "hear the id, the operation and the expiry, never the arguments or the preview"
+    },
+    [:cyfr, :sanctum, :confirmation, :confirmed] => %{
+      consumers: [:bridge],
+      note: "a pending confirmation was proven; the asking client repeats its change"
+    },
+    [:cyfr, :sanctum, :confirmation, :consumed] => %{
+      consumers: [:bridge],
+      note: "a confirmed change was decided, consuming its confirmation"
+    },
+    [:cyfr, :sanctum, :confirmation, :cancelled] => %{
+      consumers: [:bridge],
+      note: "a pending confirmation was cancelled by its person"
+    },
+    [:cyfr, :sanctum, :confirmation, :voided] => %{
+      consumers: [:bridge],
+      note: "a pending confirmation was voided with the client or credential that confirmed it"
+    },
+    [:cyfr, :sanctum, :confirmation, :expired] => %{
+      consumers: [:bridge],
+      note: "a pending confirmation expired unconsumed"
+    },
     [:cyfr, :sanctum, :api_keys, :changed] => %{consumers: [:bridge]},
     [:cyfr, :sanctum, :webhooks, :changed] => %{consumers: [:bridge]},
     [:cyfr, :sanctum, :provisioning, :fill_requested] => %{

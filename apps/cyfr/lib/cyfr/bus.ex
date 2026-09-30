@@ -11,7 +11,9 @@ defmodule Cyfr.Bus do
   struct under `Cyfr.Bus.*`, whose closed `kinds/0` union says what
   happened; a publisher builds it with the struct's constructor and a
   subscriber matches it. Payloads carry plain values and never a schema,
-  a context or a credential.
+  a context or a credential. A row marked `pending: true` is published
+  before the modules it names as consumers exist; they arrive with the
+  work that hears it.
 
   ## Scopes
 
@@ -47,6 +49,7 @@ defmodule Cyfr.Bus do
     CallerInvalidated,
     CardRefreshed,
     Components,
+    Confirmation,
     Execution,
     ExecutionEvent,
     LayoutPublished,
@@ -281,6 +284,20 @@ defmodule Cyfr.Bus do
       producers: ["Aqua.Tape"],
       consumers: ["Aqua.Runner", "PrismWeb.ThreadPaneLive", "PrismWeb.ChatLive"],
       reason: "one thread's committed rows and its runner's live state"
+    },
+    %{
+      key: :confirmations,
+      scope: :tenant,
+      struct: Confirmation,
+      match: {:prefix, "bus:confirmations:"},
+      template: "tenant:<athanor_id>:bus:confirmations:<user_id>",
+      producers: ["Cyfr.TelemetryBridge"],
+      consumers: ["Emissary.Web.DeviceChannel", "PrismWeb.ShellLive"],
+      pending: true,
+      reason:
+        "one person's pending confirmations moved, on that person's own topic, so no other " <>
+          "member learns of their sensitive changes; it carries the id, the operation and " <>
+          "the expiry, and a client reads the preview under its own session"
     },
     # --- global: unscoped on purpose ---
     %{
@@ -608,6 +625,15 @@ defmodule Cyfr.Bus do
   @spec thread(Actor.t(), String.t()) :: String.t()
   def thread(actor, thread_id) when is_binary(thread_id),
     do: prefix(actor) <> "thread:" <> thread_id
+
+  @doc """
+  One person's pending confirmations (`Cyfr.Bus.Confirmation`): `user_id`
+  is the person whose confirmations moved, and only that person's clients
+  hear it.
+  """
+  @spec confirmations(Actor.t(), String.t()) :: String.t()
+  def confirmations(actor, user_id) when is_binary(user_id) and user_id != "",
+    do: prefix(actor) <> "bus:confirmations:" <> user_id
 
   # ---------------------------------------------------------------------------
   # Global topics

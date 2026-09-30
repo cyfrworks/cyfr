@@ -19,6 +19,7 @@ defmodule Cyfr.BusPayloadTest do
     CallerInvalidated,
     CardRefreshed,
     Components,
+    Confirmation,
     Execution,
     ExecutionEvent,
     LayoutPublished,
@@ -80,6 +81,11 @@ defmodule Cyfr.BusPayloadTest do
         data: %{"name" => "runs", "title" => "Runs", "number" => 3, "list" => []}
       }),
       LayoutPublished.new(@actor, "usr_1", 4),
+      Confirmation.new(@actor, :opened,
+        id: "confirmation-7f3a",
+        operation: "vault.create",
+        expires_at: ~U[2026-09-30 12:05:00Z]
+      ),
       Session.new(:revoked, "u"),
       SettingsChanged.new(:changed, setting: "log_level", revision: 3, op: :put, value: "debug"),
       Membership.new(:changed, "u", "ath_payload", :joined),
@@ -159,6 +165,9 @@ defmodule Cyfr.BusPayloadTest do
       assert Enum.sort(exported) == Bus.topics() |> Enum.map(& &1.key) |> Enum.sort()
     end
 
+    # A pending row is published before the modules it names as consumers
+    # exist: its consumers are neither required nor looked for until the
+    # row stops being pending.
     test "every topic has a scope, a template, a reason, producers and consumers" do
       for row <- Bus.topics() do
         assert row.scope in [:tenant, :global, :page]
@@ -171,6 +180,17 @@ defmodule Cyfr.BusPayloadTest do
     test "a topic with no consumer, or no producer, is found" do
       row = %{key: :orphan, struct: Webhooks, producers: [], consumers: []}
       assert roster_gaps(row) == [:no_producer, :no_consumer]
+    end
+
+    test "only a pending row goes without its consumers, and the confirmations row is the one" do
+      later = %{key: :later, struct: Webhooks, producers: ["X"], consumers: [], pending: true}
+      assert roster_gaps(later) == []
+      assert roster_gaps(%{later | pending: false}) == [:no_consumer]
+
+      # A pending row still needs its producer.
+      assert roster_gaps(%{later | producers: []}) == [:no_producer]
+
+      assert for(row <- Bus.topics(), pending?(row), do: row.key) == [:confirmations]
     end
 
     test "the global rows are global/0, in order" do
@@ -193,6 +213,7 @@ defmodule Cyfr.BusPayloadTest do
       found =
         for row <- Bus.topics(),
             {role, names} <- [consumers: row.consumers, producers: row.producers],
+            not (role == :consumers and pending?(row)),
             name <- names,
             # A stream's grant holder hears the topic through the stream
             # delivery, which matches the roster's struct for the topic.
@@ -349,6 +370,7 @@ defmodule Cyfr.BusPayloadTest do
             :thread -> Bus.thread(other, "thr")
             :cards -> Bus.cards(other, "usr_1")
             :layouts -> Bus.layouts(other, "usr_1")
+            :confirmations -> Bus.confirmations(other, "usr_1")
             _ -> apply(Bus, key, [other])
           end
 
@@ -392,11 +414,13 @@ defmodule Cyfr.BusPayloadTest do
     Enum.reject(
       [
         if(row.producers == [], do: :no_producer),
-        if(row.consumers == [], do: :no_consumer)
+        if(row.consumers == [] and not pending?(row), do: :no_consumer)
       ],
       &is_nil/1
     )
   end
+
+  defp pending?(row), do: Map.get(row, :pending, false) == true
 
   defp source_of(name) do
     module = Module.concat([name])

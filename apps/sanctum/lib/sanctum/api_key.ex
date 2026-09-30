@@ -102,7 +102,9 @@ defmodule Sanctum.ApiKey do
   def default_scopes(key_type), do: Map.get(@type_defaults, key_type, [])
 
   @doc """
-  Create a new API key.
+  Create a new API key: a credential that outlives the session that
+  mints it, so its issuance is a sensitive change (`credential_issuance`),
+  decided here.
 
   ## Options
 
@@ -135,6 +137,12 @@ defmodule Sanctum.ApiKey do
   def create(%Context{} = ctx, %{name: name} = opts, issuance)
       when is_binary(name) and is_list(issuance) do
     with :ok <- tenant(ctx),
+         :ok <-
+           Sanctum.Consent.Authz.confirm(ctx, :credential_issuance, %{
+             operation: "key.create",
+             arguments: opts,
+             resource: name
+           }),
          {:ok, expectation} <- Sanctum.Issuance.expectation(ctx, issuance) do
       create_validated(ctx, name, Map.put(opts, :expectation, expectation))
     end
@@ -370,6 +378,8 @@ defmodule Sanctum.ApiKey do
 
   @doc """
   Rotate a key - issues a new secret for the same name and settings.
+  Issuing a secret that outlives the session is a sensitive change
+  (`credential_issuance`), decided here, as it is at `create/3`.
 
   A capability-bearing key is refused: rotation is `permission: :admin` and
   mints no capability of its own, so handing a fresh secret to a row that
@@ -379,7 +389,13 @@ defmodule Sanctum.ApiKey do
   def rotate(%Context{} = ctx, name, issuance \\ []) when is_binary(name) and is_list(issuance) do
     actor = actor!(ctx)
 
-    with {:ok, expectation} <- Sanctum.Issuance.expectation(ctx, issuance),
+    with :ok <-
+           Sanctum.Consent.Authz.confirm(ctx, :credential_issuance, %{
+             operation: "key.rotate",
+             arguments: %{name: name},
+             resource: name
+           }),
+         {:ok, expectation} <- Sanctum.Issuance.expectation(ctx, issuance),
          {:ok, false} <- Arca.ApiKeyStorage.capability_bearing?(actor, name) do
       rotate_plain(expectation, actor, name)
     else

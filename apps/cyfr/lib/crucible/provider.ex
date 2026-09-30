@@ -436,6 +436,26 @@ defmodule Crucible.Provider do
             permission: :storage_read,
             recovery: :replay_safe,
             resource_schemes: ["crucible"]
+          ),
+          # Which runs used a grant, with how each started: declared, and
+          # not yet answered.
+          Operation.new(
+            "execution",
+            "usage",
+            "Runs under a profile",
+            [
+              Arg.new("profile_id", :string,
+                required: true,
+                description: "usage: the profile whose runs to show, with each run's origin"
+              ),
+              Arg.new("limit", :integer,
+                description: "Maximum results to return (list action)",
+                default: 20
+              )
+            ],
+            kind: :read,
+            planes: [:external],
+            permission: :execute
           )
         ],
         description: "Execute WASM components and manage execution instances",
@@ -684,6 +704,9 @@ defmodule Crucible.Provider do
   def handle("execution", _ctx, %{"action" => "read_resource"}) do
     {:error, {:invalid_argument, "Missing required argument: uri"}}
   end
+
+  # Which runs used a grant is declared and not yet answered.
+  def handle("execution", %Context{}, %{"action" => "usage"}), do: {:error, :not_built}
 
   # Invalid action
   def handle("execution", _ctx, %{"action" => action}) do

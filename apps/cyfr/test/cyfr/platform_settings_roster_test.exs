@@ -55,11 +55,15 @@ defmodule Cyfr.PlatformSettingsRosterTest do
   defp mfa?({module, function, 1}) when is_atom(module) and is_atom(function), do: true
   defp mfa?(_other), do: false
 
-  # Caps that gate a creation and the security windows refuse a stale value;
-  # rate limits, stream limits and cache bounds serve one.
+  # Caps that gate a creation, the security windows and the directory's
+  # mode and quotas refuse a stale value; rate limits, stream limits and
+  # cache bounds serve one.
   @refuse ~w(max_athanors max_groups_per_person max_pairs_per_person max_members_per_group
              max_threads_per_athanor mint_per_hour athanor_storage_bytes session_ttl_hours
-             webhook_max_skew_seconds webhook_idempotency_ttl_seconds)
+             webhook_max_skew_seconds webhook_idempotency_ttl_seconds
+             directory_serve directory_max_identities directory_log_bytes
+             directory_recovery_reserve_bytes identity_freshness_seconds device_cert_seconds
+             clock_skew_seconds confirmation_seconds reauth_seconds)
 
   defp stale_violations(entries) do
     for %Entry{key: key, stale: stale} <- entries,
@@ -234,6 +238,9 @@ defmodule Cyfr.PlatformSettingsRosterTest do
                  locus_backends_idle_ms log_level
                  asset_credential_window_s frame_credential_deadline_s
                  frame_invocation_max frame_invocation_window_ms
+                 directory_serve directory_max_identities directory_log_bytes
+                 directory_recovery_reserve_bytes identity_freshness_seconds
+                 device_cert_seconds clock_skew_seconds confirmation_seconds reauth_seconds
                ))
 
       for key <- ~w(asset_credential_window_s frame_credential_deadline_s) do
@@ -246,6 +253,118 @@ defmodule Cyfr.PlatformSettingsRosterTest do
         {:ok, entry} = Roster.fetch(key)
         assert entry.stale == :serve and entry.config == nil
       end
+    end
+
+    test "the identity, device and confirmation settings are Sanctum's, live and read through the store" do
+      expected = %{
+        "directory_serve" => {:atom, :off},
+        "directory_max_identities" => {:integer, 100_000},
+        "directory_log_bytes" => {:integer, 1_073_741_824},
+        "directory_recovery_reserve_bytes" => {:integer, 10_485_760},
+        "identity_freshness_seconds" => {:duration_s, 300},
+        "device_cert_seconds" => {:duration_s, 3_600},
+        "clock_skew_seconds" => {:duration_s, 60},
+        "confirmation_seconds" => {:duration_s, 300},
+        "reauth_seconds" => {:duration_s, 300}
+      }
+
+      for {key, {type, default}} <- expected do
+        {:ok, entry} = Roster.fetch(key)
+        assert {entry.type, entry.default} == {type, default}, key
+
+        assert {entry.app, entry.scope, entry.stale, entry.config} ==
+                 {:sanctum, :live, :refuse, nil}
+
+        assert entry.variable == "CYFR_" <> String.upcase(key)
+      end
+    end
+
+    test "zero, a negative and a malformed value are refused; the directory mode is a closed set" do
+      for key <- ~w(directory_max_identities directory_log_bytes directory_recovery_reserve_bytes
+                    identity_freshness_seconds device_cert_seconds clock_skew_seconds
+                    confirmation_seconds reauth_seconds) do
+        {:ok, entry} = Roster.fetch(key)
+
+        for bad <- ["0", "-1", "ten", "1.5", "", 0, -5, :x] do
+          assert {:error, "must be" <> _} = entry.validator.(bad), "#{key} took #{inspect(bad)}"
+        end
+
+        assert {:ok, 1} = entry.validator.("1")
+      end
+
+      {:ok, serve} = Roster.fetch("directory_serve")
+
+      for {text, mode} <- [{"off", :off}, {"writer", :writer}, {"mirror", :mirror}] do
+        assert serve.validator.(text) == {:ok, mode}
+        assert serve.validator.(mode) == {:ok, mode}
+      end
+
+      for bad <- ["on", "Writer", "", nil, 1] do
+        assert serve.validator.(bad) == {:error, "must be one of off, writer, mirror"}
+      end
+    end
+
+    test "the recovery reserve is below the log quota, and a pair not both held is not checked" do
+      assert Roster.below() == [{"directory_recovery_reserve_bytes", "directory_log_bytes"}]
+
+      values = %{"directory_recovery_reserve_bytes" => 10, "directory_log_bytes" => 100}
+      assert Roster.check_below("directory_recovery_reserve_bytes", values) == :ok
+      assert Roster.check_below("directory_log_bytes", values) == :ok
+
+      equal = %{values | "directory_recovery_reserve_bytes" => 100}
+
+      assert Roster.check_below("directory_recovery_reserve_bytes", equal) ==
+               {:error, "must be below directory_log_bytes (100)"}
+
+      assert Roster.check_below("directory_log_bytes", equal) ==
+               {:error, "must be above directory_recovery_reserve_bytes (100)"}
+
+      assert Roster.check_below("directory_log_bytes", %{"directory_log_bytes" => 1}) == :ok
+      assert Roster.check_below("max_athanors", equal) == :ok
+
+      defaults = Map.new(Roster.entries(), &{&1.key, &1.default})
+      assert Roster.check_below("directory_recovery_reserve_bytes", defaults) == :ok
+    end
+
+    test "a pin is held to the bound against the other side as it takes effect, naming the pin" do
+      reserve = "directory_recovery_reserve_bytes"
+      quota = "directory_log_bytes"
+      stored = %{reserve => 900_000_000, quota => 1_073_741_824}
+
+      # The quota pinned under a stored reserve: the quota's variable.
+      assert Roster.check_pinned(%{quota => 536_870_912}, stored) ==
+               {:error,
+                "CYFR_DIRECTORY_LOG_BYTES must be above directory_recovery_reserve_bytes (900000000)"}
+
+      # The reserve pinned over a stored quota: the reserve's.
+      assert Roster.check_pinned(%{reserve => 2_000_000_000}, stored) ==
+               {:error,
+                "CYFR_DIRECTORY_RECOVERY_RESERVE_BYTES must be below directory_log_bytes (1073741824)"}
+
+      # Both pinned: the stored values do not enter, and both variables are named.
+      assert Roster.check_pinned(%{reserve => 5, quota => 5}, stored) ==
+               {:error,
+                "CYFR_DIRECTORY_RECOVERY_RESERVE_BYTES must be below directory_log_bytes (5), " <>
+                  "which CYFR_DIRECTORY_LOG_BYTES pins"}
+
+      assert Roster.check_pinned(%{reserve => 5, quota => 6}, %{reserve => 9, quota => 1}) == :ok
+
+      # A pin that holds passes, and so does a pair the values do not hold
+      # both sides of (the boot's configuration, which holds pins only
+      # against each other).
+      assert Roster.check_pinned(%{quota => 2_000_000_000}, stored) == :ok
+      assert Roster.check_pinned(%{"max_athanors" => 1}, stored) == :ok
+      assert Roster.check_pinned(%{reserve => 2_000_000_000}, %{}) == :ok
+      assert Roster.check_pinned(%{quota => 5}, %{}) == :ok
+
+      # Neither side pinned and out of bound (a stored reserve over the
+      # default a removed deployment row exposes): both settings, and the
+      # variables that can restore the bound.
+      assert Roster.check_pinned(%{"max_athanors" => 1}, %{reserve => 9, quota => 1}) ==
+               {:error,
+                "directory_recovery_reserve_bytes (9) must be below directory_log_bytes (1); " <>
+                  "pin CYFR_DIRECTORY_RECOVERY_RESERVE_BYTES or CYFR_DIRECTORY_LOG_BYTES " <>
+                  "to restore the bound"}
     end
 
     test "absent, only the API rate-limit pair inherits (the MCP pair's value)" do
@@ -633,6 +752,121 @@ defmodule Cyfr.PlatformSettingsRosterTest do
       with_env_file(["CYFR_TOKEN=a-session"], fn ->
         assert refusal!() =~ "CYFR_TOKEN is not a variable this server reads"
       end)
+    end
+
+    test "the directory URL and the restore token are read into Sanctum, nil when unset" do
+      unset = %{"CYFR_DIRECTORY_URL" => nil, "CYFR_RESTORE_TOKEN" => nil}
+
+      with_env(unset, fn ->
+        config = read_prod_config!()
+        assert config[:sanctum][:directory_url] == nil
+        assert config[:sanctum][:restore_token] == nil
+      end)
+
+      token = String.duplicate("0f", 32)
+
+      with_env(
+        %{
+          "CYFR_DIRECTORY_URL" => "https://directory.example.com/v1",
+          "CYFR_RESTORE_TOKEN" => token
+        },
+        fn ->
+          config = read_prod_config!()
+          assert config[:sanctum][:directory_url] == "https://directory.example.com/v1"
+          assert config[:sanctum][:restore_token] == token
+
+          # Neither is a platform setting: nothing pins them.
+          assert config[:cyfr][:deployment_pinned] == []
+        end
+      )
+    end
+
+    test "a malformed directory URL or restore token stops the boot naming the variable, never the value" do
+      for bad <- [
+            "http://directory.example.com",
+            "https://directory.example.com/",
+            "https://user@directory.example.com",
+            "https://directory.example.com?next=1",
+            "directory.example.com",
+            "https://[::1]"
+          ] do
+        with_env(%{"CYFR_DIRECTORY_URL" => bad}, fn ->
+          message = refusal!()
+          assert message =~ "[Cyfr] FATAL: CYFR_DIRECTORY_URL must be an https directory URL"
+          refute message =~ bad
+        end)
+      end
+
+      for bad <- [
+            String.duplicate("0F", 32),
+            String.duplicate("0f", 31),
+            String.duplicate("0f", 33),
+            String.duplicate("zz", 32)
+          ] do
+        with_env(%{"CYFR_RESTORE_TOKEN" => bad}, fn ->
+          message = refusal!()
+
+          assert message =~
+                   "[Cyfr] FATAL: CYFR_RESTORE_TOKEN must be exactly 64 lowercase hexadecimal"
+
+          refute message =~ bad
+        end)
+      end
+    end
+
+    test "a pinned recovery reserve at or above the log quota stops the boot" do
+      with_env(
+        %{
+          "CYFR_DIRECTORY_LOG_BYTES" => "1048576",
+          "CYFR_DIRECTORY_RECOVERY_RESERVE_BYTES" => "1048576"
+        },
+        fn ->
+          assert refusal!() ==
+                   "[Cyfr] FATAL: CYFR_DIRECTORY_RECOVERY_RESERVE_BYTES must be below " <>
+                     "directory_log_bytes (1048576), which CYFR_DIRECTORY_LOG_BYTES pins."
+        end
+      )
+
+      # One side pinned alone is recorded whatever the default across it:
+      # a stored value may stand there, so the settings process holds the
+      # pin to the store when it settles (platform_settings_test.exs).
+      with_env(%{"CYFR_DIRECTORY_RECOVERY_RESERVE_BYTES" => "2147483648"}, fn ->
+        assert {"directory_recovery_reserve_bytes", 2_147_483_648} in read_prod_config!()[:cyfr][
+                 :deployment_pinned
+               ]
+      end)
+
+      with_env(%{"CYFR_DIRECTORY_LOG_BYTES" => "5242880"}, fn ->
+        assert {"directory_log_bytes", 5_242_880} in read_prod_config!()[:cyfr][
+                 :deployment_pinned
+               ]
+      end)
+
+      with_env(%{"CYFR_DIRECTORY_RECOVERY_RESERVE_BYTES" => "1048576"}, fn ->
+        assert {"directory_recovery_reserve_bytes", 1_048_576} in read_prod_config!()[:cyfr][
+                 :deployment_pinned
+               ]
+      end)
+    end
+
+    test "Sanctum installs the restore mode the token decides, and refuses a malformed one" do
+      assert Sanctum.Supervisor.installation_mode!(nil) == :ordinary
+
+      assert Sanctum.Supervisor.installation_mode!(String.duplicate("a1", 32)) ==
+               :restore_reserved
+
+      bad = String.duplicate("A1", 32)
+
+      message =
+        Exception.message(
+          assert_raise RuntimeError, fn -> Sanctum.Supervisor.installation_mode!(bad) end
+        )
+
+      assert message =~ "must be exactly 64 lowercase hexadecimal characters"
+      refute message =~ bad
+
+      # This suite's boot configured none, so it admits a first person by a door.
+      assert Arca.InstallationClaims.mode() == :ordinary
     end
 
     test "unassigned, the CORS allowlist is the configured empty one" do

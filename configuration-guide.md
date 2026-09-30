@@ -43,6 +43,7 @@ carry the names other programs own as well.
 | `CYFR_DATA_PATH` | The one runtime storage root: every athanor's tree, the caches and the SQLite database (default `data`; the image sets its own). |
 | `CYFR_DB_POOL_SIZE` | The database connection pool's size (default 20). |
 | `CYFR_DB_SSL` | TLS to the PostgreSQL server (default off). |
+| `CYFR_DIRECTORY_URL` | The identity directory this deployment enrolls its local people at, an `https` URL chosen explicitly: there is no hosted default, and choosing one is a choice about how long an identity lasts. Unset, local work and local pairing still work and enrollment is refused; a malformed value refuses the boot. |
 | `CYFR_GITHUB_CLIENT_ID` | The GitHub OAuth app's client ID for the device flow; `.env.example` ships a public one, which your own app's replaces. |
 | `CYFR_GOOGLE_CLIENT_ID` | The Google OAuth client ID for the device flow, used with `CYFR_GOOGLE_CLIENT_SECRET`; `.env.example` ships a public one. |
 | `CYFR_GOOGLE_CLIENT_SECRET` | The Google OAuth client secret, set in `.env` alone and never in a tracked file. |
@@ -73,6 +74,7 @@ carry the names other programs own as well.
 | `CYFR_PUBLIC_URL` | The address the server is reachable at from outside, which behind a proxy or tunnel only the operator knows; webhook URLs are absolute when it is set and bare paths when it is not. |
 | `CYFR_REGISTRY_URL` | The component registry host (default `cyfr.run`); `none` is an appliance without a registry, whose pulls and publishes refuse. |
 | `CYFR_REQUIRE_SIGNED_PULLS` | Refuse a component pull whose OCI signature cannot be verified (default off: the component is stored as unverified). |
+| `CYFR_RESTORE_TOKEN` | The installation's restore capability, exactly 64 lowercase hexadecimal characters (`openssl rand -hex 32`), set in `.env` alone. Set, an empty installation's first person is reserved for a restore from a printed kit and ordinary first sign-in is refused; unset, restore is disabled. A malformed value refuses the boot, which never prints it. |
 | `CYFR_S3_ACCESS_KEY_ID` | The object store's access key ID, with `CYFR_STORAGE=s3`. |
 | `CYFR_S3_BUCKET` | The object store's bucket, with `CYFR_STORAGE=s3`. |
 | `CYFR_S3_ENDPOINT` | The endpoint of a non-AWS object store (MinIO and the like), usually with `CYFR_S3_PATH_STYLE=true`. |
@@ -147,6 +149,15 @@ refused, naming the variable or key and the form it must take.
 | `CYFR_FRAME_CREDENTIAL_DEADLINE_S` | `frame_credential_deadline_s` | `duration_s` | `3600` | `tinctures` | live | serve | How long an unobserved frame's credential lives before it is refused, in seconds. |
 | `CYFR_FRAME_INVOCATION_MAX` | `frame_invocation_max` | `integer` | `120` | `tinctures` | live | serve | The invocations one tincture frame may make per window. |
 | `CYFR_FRAME_INVOCATION_WINDOW_MS` | `frame_invocation_window_ms` | `integer` | `60000` | `tinctures` | live | serve | The frame invocation limit's window, in milliseconds. |
+| `CYFR_DIRECTORY_SERVE` | `directory_serve` | `atom` | `off` | `directory` | live | refuse | Whether this node serves an identity directory: `off`, `writer` (the one writer of the identifiers it orders) or `mirror` (their history, accepting no write). |
+| `CYFR_DIRECTORY_MAX_IDENTITIES` | `directory_max_identities` | `integer` | `100000` | `directory` | live | refuse | Identifiers a directory this node serves registers; at capacity a new genesis is refused, while existing registrations and recovery stay available. |
+| `CYFR_DIRECTORY_LOG_BYTES` | `directory_log_bytes` | `integer` | `1073741824` | `directory` | live | refuse | Bytes a directory this node serves keeps across its logs; existing history is never deleted to meet a lowered quota. |
+| `CYFR_DIRECTORY_RECOVERY_RESERVE_BYTES` | `directory_recovery_reserve_bytes` | `integer` | `10485760` | `directory` | live | refuse | Bytes of `directory_log_bytes` kept for recovery entries and their recorded outcomes, which rotations cannot use; below `directory_log_bytes`. |
+| `CYFR_IDENTITY_FRESHNESS_SECONDS` | `identity_freshness_seconds` | `duration_s` | `300` | `identity` | live | refuse | How long this home trusts a remote person's verified identity head before reading their directory again, in seconds: how long a retired key can still act here. |
+| `CYFR_DEVICE_CERT_SECONDS` | `device_cert_seconds` | `duration_s` | `3600` | `devices` | live | refuse | How long a device certificate this home issues lives, in seconds; a paired device renews at half of it. |
+| `CYFR_CLOCK_SKEW_SECONDS` | `clock_skew_seconds` | `duration_s` | `60` | `devices` | live | refuse | How far a certificate's not-before or a signed message's time may sit from this home's clock, in seconds; it never extends a certificate's expiry. |
+| `CYFR_CONFIRMATION_SECONDS` | `confirmation_seconds` | `duration_s` | `300` | `confirmation` | live | refuse | How long a pending confirmation of a sensitive change stays open, in seconds. |
+| `CYFR_REAUTH_SECONDS` | `reauth_seconds` | `duration_s` | `300` | `confirmation` | live | refuse | How recent a local person's door sign-in must be to register their first passkey with no fresh method, in seconds. |
 
 ## Compose-only variables
 

@@ -418,6 +418,7 @@ one annotation. It is short:
 
 | Tool | Actions | Why Public |
 |------|---------|------------|
+| `pairing` | `complete` | A new device holds neither a session nor a certificate: the short-lived, single-use pairing code a signed-in person's `pairing.begin` issued names the person and athanor, the device proves its key, and a session cookie the browser holds never chooses the person |
 | `session` | `login`, `logout`, `whoami`, `device_init`, `device_poll`, `read_resource` | Needed to authenticate in the first place; `read_resource` tells a caller only its own identity and permissions |
 | `system` | `status` | Health checks |
 | `tincture` | `invoke_public` | A published tincture is public by definition: named by its public address (`athanor`, the URL's `@namespace` or group slug, with `publisher` and `tincture_name`), the call runs one of its declared dependencies under its active public profile, as its public page does; the address confers no authority, and one with no active public profile answers `not_found` |
@@ -986,6 +987,7 @@ commit   {decisions, plan_token, proof,
 | `grant` | `profile_id`, `bindings`, `expected_consent_revision` | the new consent revision — binds vault entries to needs on an active owner profile whose component has not changed shape, CAS-checked like `commit`; a moved shape needs the walk again |
 | `publish` | `profile_id`, `need_ids`, `durable_storage` | a `plan_token` for `preview` and `commit` — stages a public profile from an owner profile, keeping credentials only for `need_ids` |
 | `list` | `ref` | profiles + head revisions |
+| `grants` | one of `domain`, `path`, `entry_id` | the athanor's grants whose resources reach that egress domain, storage path or vault entry — declared, and refused as not built on this server |
 | `revoke` | `profile_id` | revoked — effective on the next run |
 
 Interactive sessions and consent-capable API keys may commit; a key's consent capability comes from its own key row, never from the request.

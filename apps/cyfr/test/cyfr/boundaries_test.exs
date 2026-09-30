@@ -613,7 +613,7 @@ defmodule Cyfr.BoundariesTest do
       assert MapSet.member?(below, "Arca.Members")
     end
 
-    test "the security-row roster is exactly the sixteen stores, each a module" do
+    test "the security-row roster is exactly the twenty-seven stores, each a module" do
       assert Enum.sort(Boundaries.sanctum_only_storage()) ==
                Enum.sort(~w(
                  Arca.ConsentStorage Arca.ConsentProofStorage Arca.ProfileStorage
@@ -621,6 +621,10 @@ defmodule Cyfr.BoundariesTest do
                  Arca.ApiKeyStorage Arca.RegistryTokenStorage Arca.ProviderCredentialStorage
                  Arca.WebhookStorage Arca.FrameCredentials Arca.PairedClients Arca.Users
                  Arca.Members Arca.Athanors Arca.Doors
+                 Arca.PersonIdentities Arca.IdentityAttempts Arca.IdentityLog
+                 Arca.DirectoryHeads Arca.DeviceCertificates Arca.PairingInvitations
+                 Arca.Passkeys Arca.PendingConfirmations Arca.CarryActions
+                 Arca.InstallationClaims Arca.RequestRateWindows
                ))
 
       for name <- Boundaries.sanctum_only_storage() do
@@ -656,6 +660,41 @@ defmodule Cyfr.BoundariesTest do
                {path, _} <- names(planted.from),
                do: path
              )
+    end
+
+    test "a pending entry admits its reach and is not stale; a pending row is not read for staleness" do
+      row = %{
+        from: [],
+        into: "Sanctum",
+        allow: ~w(Sanctum.Context),
+        pending_allow: ~w(Sanctum.Directory)
+      }
+
+      reaching = [{"apps/cyfr/lib/emissary/planted.ex", [{"Sanctum.Directory", 1}]}]
+      assert Boundaries.surface_violations(row, reaching) == []
+      assert Boundaries.stale_surface_entries(row, reaching) == ["Sanctum.Context"]
+
+      # Nothing reaches the pending entry yet, and that is not stale.
+      assert Boundaries.stale_surface_entries(row, []) == ["Sanctum.Context"]
+
+      # A reach the row names neither way is still reported.
+      other = [{"apps/cyfr/lib/emissary/planted.ex", [{"Sanctum.Passkeys", 1}]}]
+      assert Boundaries.surface_violations(row, other) == ["Sanctum.Passkeys"]
+
+      assert Boundaries.stale_surface_entries(Map.put(row, :pending, true), []) == []
+    end
+
+    test "every pending entry is its row's alone, and names a Sanctum module that exists" do
+      for row <- Boundaries.surfaces(),
+          pending = Map.get(row, :pending_allow, []),
+          pending != [] do
+        assert MapSet.disjoint?(MapSet.new(pending), MapSet.new(row.allow)),
+               "#{row.into}: an entry both settled and pending"
+
+        for name <- pending do
+          assert Code.ensure_loaded?(Module.concat([name])), "#{name} is not a module"
+        end
+      end
     end
 
     test "every row says why its roster reads as it does" do
@@ -719,6 +758,39 @@ defmodule Cyfr.BoundariesTest do
 
              #{Enum.join(Boundaries.stale_sanctum_exports(reaches), "\n")}
              """
+    end
+
+    test "a pending function is on a module that exists, apart from the settled roster" do
+      pending = Boundaries.pending_sanctum_exports()
+
+      assert pending == %{
+               "Sanctum.DeviceCerts" => [verify_connect: 3, verify_request: 3],
+               "Sanctum.Directory" => [
+                 append: 2,
+                 outcome: 1,
+                 recover: 2,
+                 register: 1,
+                 resolve: 1
+               ],
+               "Sanctum.Recovery" => [restore: 2]
+             }
+
+      for {module, functions} <- pending do
+        assert String.starts_with?(module, "Sanctum.")
+        assert functions == Enum.sort(Enum.uniq(functions)), "#{module}'s list is not sorted"
+        assert Code.ensure_loaded?(Module.concat([module])), "#{module} is not a module"
+
+        for {function, arity} <- functions do
+          refute {function, arity} in Map.get(Boundaries.sanctum_exports(), module, []),
+                 "#{module}.#{function}/#{arity} is both settled and pending"
+        end
+      end
+
+      # A call the host makes to one is admitted, and one nothing calls is
+      # not stale.
+      reaches = host_sanctum_reaches()
+      assert Boundaries.sanctum_export_violations([{"Sanctum.Directory", :register, 1}]) == []
+      refute "Sanctum.Directory.register/1" in Boundaries.stale_sanctum_exports(reaches)
     end
 
     test "every rostered function is a public function of a Sanctum module, listed once in order" do
@@ -792,13 +864,40 @@ defmodule Cyfr.BoundariesTest do
         |> Enum.map(& &1.metadata[:auth])
         |> MapSet.new()
 
+      # A pending posture is one no route declares yet.
       unused =
-        Boundaries.route_postures()
-        |> Map.keys()
-        |> Enum.reject(&MapSet.member?(declared, &1))
+        for {posture, row} <- Boundaries.route_postures(),
+            not Map.get(row, :pending, false),
+            not MapSet.member?(declared, posture),
+            do: posture
 
       assert unused == [],
              "these postures are in the vocabulary and no route declares them: #{inspect(unused)}"
+    end
+
+    test "a pending public route is apart from the settled roster, and admitted once declared" do
+      pending = Boundaries.pending_public_routes()
+
+      assert pending == [
+               {:get, "/directory/v1/:identifier"},
+               {:get, "/directory/v1/:identifier/requests/:request_id"},
+               {:post, "/directory/v1/genesis"},
+               {:get, "/pair"}
+             ]
+
+      assert MapSet.disjoint?(MapSet.new(pending), MapSet.new(Boundaries.public_routes()))
+
+      declared = %{
+        verb: :get,
+        path: "/pair",
+        metadata: %{auth: :browser_public_login}
+      }
+
+      assert Boundaries.route_violations([declared]) == []
+
+      unrostered = %{declared | path: "/pair/elsewhere"}
+
+      assert [_refused] = Boundaries.route_violations([unrostered])
     end
 
     test "every posture says what admits a caller to it, and why" do
@@ -818,7 +917,13 @@ defmodule Cyfr.BoundariesTest do
         |> Enum.map(&{&1.verb, &1.path})
         |> Enum.sort()
 
-      assert anyone == Enum.sort(Boundaries.public_routes()),
+      # A pending route is held to the roster once a route declares it.
+      live = MapSet.new(Boundaries.routes(), &{&1.verb, &1.path})
+
+      declared_pending =
+        Enum.filter(Boundaries.pending_public_routes(), &MapSet.member?(live, &1))
+
+      assert anyone == Enum.sort(Boundaries.public_routes() ++ declared_pending),
              """
              The routes whose posture admits nothing are #{inspect(anyone)}; the
              roster names #{inspect(Enum.sort(Boundaries.public_routes()))}.
@@ -1718,7 +1823,8 @@ defmodule Cyfr.BoundariesTest do
 
   describe "admission entries" do
     test "every row names a loaded module exporting its site, or a plug" do
-      for %{module: module, site: site, plane: plane} <- Boundaries.admission_entries() do
+      for %{module: module, site: site, plane: plane} = row <- Boundaries.admission_entries(),
+          not Map.get(row, :pending, false) do
         assert Code.ensure_loaded?(module), "#{inspect(module)} does not load"
         assert plane in [:external, :in_chain]
 
@@ -1734,6 +1840,23 @@ defmodule Cyfr.BoundariesTest do
                Boundaries.admission_entries(),
                &(&1.module == CyfrWeb.Plugs.CallIdentity)
              )
+    end
+
+    test "every row names the origin of the context it builds" do
+      for %{plane: plane, origin: origin} = row <- Boundaries.admission_entries() do
+        assert origin in [:none, :inherits | Prima.Origin.values()], inspect(row)
+
+        # An in-chain entry's context carries its root's origin, and only
+        # an in-chain entry's does.
+        assert origin == :inherits == (plane == :in_chain), inspect(row)
+      end
+    end
+
+    test "the pending rows are the device channel's alone" do
+      pending = for row <- Boundaries.admission_entries(), Map.get(row, :pending, false), do: row
+
+      assert [%{module: Emissary.Web.DeviceChannel, plane: :external, origin: :interactive}] =
+               pending
     end
 
     test "each entry is rostered once" do

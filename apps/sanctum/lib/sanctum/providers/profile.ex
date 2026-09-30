@@ -83,7 +83,15 @@ defmodule Sanctum.Providers.Profile do
            Arg.new("override", :boolean),
            Arg.new("publish_from", :string),
            Arg.new("need_ids", {:array, Arg.new(nil, :string)}),
-           Arg.new("durable_storage", :boolean)
+           Arg.new("durable_storage", :boolean),
+           Arg.new("origins", {:array, Arg.new(nil, :string, enum: Prima.Origin.spellings())},
+             min: 1,
+             description: "The origins the grant admits; absent, interactive alone"
+           ),
+           Arg.new("subset", {:map, subset_node_arg()},
+             description:
+               "Per consent-graph node, the part of the ask granted; a missing kind or field keeps its ask, an empty set grants none"
+           )
          ]},
         required: true,
         description:
@@ -193,6 +201,26 @@ defmodule Sanctum.Providers.Profile do
         ),
         Operation.new(
           "profile",
+          "grants",
+          "Grants reaching a resource",
+          [
+            Arg.new("domain", :string,
+              description: "grants: an egress domain; name exactly one of domain, path, entry_id"
+            ),
+            Arg.new("path", :string,
+              description: "grants: a storage path; name exactly one of domain, path, entry_id"
+            ),
+            Arg.new("entry_id", :string,
+              description:
+                "grants: a vault entry (vlt_…); name exactly one of domain, path, entry_id"
+            )
+          ],
+          kind: :read,
+          planes: [:external],
+          consent: :staging
+        ),
+        Operation.new(
+          "profile",
           "revoke",
           "Revoke profile",
           [
@@ -207,9 +235,62 @@ defmodule Sanctum.Providers.Profile do
         )
       ],
       description:
-        "Grant, inspect and revoke profiles — the consent walk. plan stages the facts and candidates, preview renders exactly what would be granted and mints the proof, commit verifies the proof against a live recomputation and writes an immutable revision. Nothing is granted outside this walk.",
+        "Grant, inspect and revoke profiles — the consent walk. plan stages the facts and candidates, preview renders exactly what would be granted and mints the proof, commit verifies the proof against a live recomputation and writes an immutable revision; grants reads which grants reach a resource. Nothing is granted outside this walk.",
       title: "Profiles & Consent"
     )
+  end
+
+  # One consent-graph node's narrowing: a closed record per resource kind
+  # its enforcement point can check, and nothing for a credential, a
+  # tincture or arbitrary JSON.
+  defp subset_node_arg do
+    alias Prima.Arg
+
+    strings = fn name -> Arg.new(name, {:array, Arg.new(nil, :string)}) end
+
+    Arg.new(
+      nil,
+      {:record,
+       [
+         Arg.new(
+           "egress",
+           {:record,
+            [
+              strings.("domains"),
+              strings.("methods"),
+              strings.("schemes"),
+              strings.("private_ips")
+            ]}
+         ),
+         Arg.new("storage", {:record, [strings.("paths"), strings.("actions")]}),
+         strings.("tools"),
+         Arg.new("limits", {:record, limits_subset_fields()})
+       ]}
+    )
+  end
+
+  # The limits vocabulary (`Prima.Limits.fields/0`): the four integer
+  # limits, the two duration strings and the rate limit's record.
+  defp limits_subset_fields do
+    alias Prima.Arg
+
+    for field <- Prima.Limits.fields() do
+      name = Atom.to_string(field)
+
+      case field do
+        :rate_limit ->
+          Arg.new(
+            name,
+            {:record, [Arg.new("requests", :integer), Arg.new("window", :string)]}
+          )
+
+        duration when duration in [:timeout, :batch_timeout] ->
+          Arg.new(name, :string)
+
+        _integer ->
+          Arg.new(name, :integer)
+      end
+    end
   end
 
   def handle(%Context{} = ctx, %{"action" => "plan", "ref" => ref} = args) do
@@ -334,6 +415,9 @@ defmodule Sanctum.Providers.Profile do
     {:error, "list requires ref"}
   end
 
+  # Which grants reach a resource is declared and not yet answered.
+  def handle(%Context{}, %{"action" => "grants"}), do: {:error, :not_built}
+
   def handle(%Context{} = ctx, %{"action" => "revoke", "profile_id" => profile_id}) do
     with {:ok, :interactive} <- Sanctum.Consent.Authz.authorize_interactive(ctx),
          :ok <- Arca.ProfileStorage.set_status(Sanctum.Context.actor(ctx), profile_id, "revoked") do
@@ -356,7 +440,8 @@ defmodule Sanctum.Providers.Profile do
   # ---------------------------------------------------------------------------
 
   defp decode_decisions(raw) do
-    with :ok <- refuse_limits(raw),
+    with :ok <- refuse_undecided(raw),
+         :ok <- refuse_limits(raw),
          {:ok, kind} <- kind(raw),
          {:ok, scope} <- enum(raw, "scope", %{"versionless" => :versionless, "pinned" => :pinned}),
          {:ok, invoke_mode} <-
@@ -380,6 +465,16 @@ defmodule Sanctum.Providers.Profile do
 
       {:ok, decisions}
     end
+  end
+
+  # The admitted origins and a narrowing are declared decisions no commit
+  # decides yet: either one refuses rather than being silently dropped, so
+  # a grant never reads as narrower, or as admitting fewer origins, than
+  # the one written.
+  defp refuse_undecided(raw) do
+    if Map.has_key?(raw, "origins") or Map.has_key?(raw, "subset"),
+      do: {:error, :not_built},
+      else: :ok
   end
 
   # Reject per-consent limits overrides. Runtime limits come from manifest
@@ -499,8 +594,8 @@ defmodule Sanctum.Providers.Profile do
   defp fmt({:proof, _reason}),
     do: "proof_invalid — re-run preview to mint a fresh proof"
 
-  # The consent-class vocabulary renders through its owner — one spelling
-  # for this tool and the MCP dispatch gate alike.
+  # The consent vocabulary renders through its owner — one spelling for
+  # this tool and the MCP dispatch gate alike.
   defp fmt({:surface_not_permitted, _} = refusal), do: Sanctum.Consent.Authz.message(refusal)
 
   defp fmt(refusal)
@@ -512,7 +607,8 @@ defmodule Sanctum.Providers.Profile do
               :capability_digest_mismatch,
               :capability_expired,
               :override_requires_interactive,
-              :class_too_low
+              :not_standing,
+              :unavailable
             ],
        do: Sanctum.Consent.Authz.message(refusal)
 

@@ -21,10 +21,25 @@ defmodule Sanctum.Consent.Authz do
   | A tincture token, webhook, cron, system, or unauthenticated caller | no |
   | Anything on the guest plane | no, whatever else it carries |
 
-  Whichever arm admits the caller, the client must also hold the
-  confirmation class a grant requires (`Sanctum.Pairing.confirm?/2`,
-  `:grant`): this decision is where a confirmation's class is checked, and
-  a `none` client — a guest body, a borrowed screen — confirms nothing.
+  Whichever arm admits the caller, its standing is read again as the
+  grant is decided (`Sanctum.Caller.revalidate_session/1`): a session
+  must still exist, be unexpired and be its person's, the person not
+  denied and the focused athanor open; a key must still be unrevoked, its
+  athanor's and its creator's. A grant needs the session alone, never a
+  fresh confirmation.
+
+  ## Sensitive changes
+
+  `confirm/3`, `check/3` and `consume/2` are where a sensitive change is
+  decided (`Sanctum.Pairing`'s action table): each deciding site passes
+  the action it confirms and the request, the operation (`tool.action`)
+  and its exact arguments, with the affected resource by name and any
+  public facts for the preview. Nothing a client holds satisfies one; the
+  proof is a pending confirmation, consumed once. Until a proof can be
+  given, `Sanctum.Pairing.fresh_required?/2` answers `false` for every
+  action, and each answers `:ok` for a known action and a well-formed
+  change, adding no refusal to the site's own checks — every change
+  behaves as it did.
 
   Overrides — granting a component more than its author declared — are
   always interactive. A key cannot mint one no matter how tightly caveated,
@@ -64,6 +79,18 @@ defmodule Sanctum.Consent.Authz do
 
   @type granted_via :: :interactive | :scoped_key
 
+  @typedoc """
+  What a sensitive change is: the operation as `tool.action`, its exact
+  arguments, and, for the preview, the affected resource by name and any
+  public facts (never a secret argument's value).
+  """
+  @type change :: %{
+          required(:operation) => String.t(),
+          required(:arguments) => map(),
+          optional(:resource) => String.t(),
+          optional(:details) => %{optional(String.t()) => String.t() | [String.t()]}
+        }
+
   @type refusal ::
           :guest_plane
           | :not_authenticated
@@ -74,7 +101,8 @@ defmodule Sanctum.Consent.Authz do
           | :capability_digest_mismatch
           | :capability_expired
           | :invalid_request
-          | :class_too_low
+          | :not_standing
+          | :unavailable
 
   @doc """
   Decide whether this caller may commit this consent.
@@ -98,12 +126,50 @@ defmodule Sanctum.Consent.Authz do
     with :ok <- check_plane(ctx),
          :ok <- check_authenticated(ctx),
          {:ok, granted_via} <- by_auth_method(ctx, request, now),
-         :ok <- Sanctum.Pairing.confirm?(ctx, :grant) do
+         :ok <- standing(ctx) do
       {:ok, granted_via}
     end
   end
 
   def authorize(_ctx, _request, _now), do: {:error, :invalid_request}
+
+  @doc """
+  Decide the sensitive change `change` (`t:change/0`), which confirms
+  `action` (`Sanctum.Pairing.actions/0`), under `ctx`, where its effect is
+  one call.
+
+  `:ok` when the action needs no fresh confirmation. A change that needs
+  one is decided only by consuming the confirmation `ctx.confirmation_id`
+  names; otherwise one is opened and the answer is the consent signal
+  `{:error, {:confirmation_required, %{id, operation, expires_at}}}`.
+  Until a proof can be given no action needs one
+  (`Sanctum.Pairing.fresh_required?/2`), and the answer is `:ok` for an
+  action of the table and a well-formed change, `{:error,
+  :invalid_request}` otherwise: the site's own checks of who may act
+  decide, as they did.
+  """
+  @spec confirm(Context.t(), Sanctum.Pairing.action(), change()) ::
+          :ok | {:error, refusal() | {:confirmation_required, map()}}
+  def confirm(%Context{} = ctx, action, change), do: decide(ctx, action, change)
+
+  @doc """
+  What `confirm/3` would answer for `change`, consuming nothing: for a
+  site whose effect opens a row, which asks first and consumes in the
+  transaction that opens it (`consume/2`).
+  """
+  @spec check(Context.t(), Sanctum.Pairing.action(), change()) ::
+          :ok | {:error, refusal() | {:confirmation_required, map()}}
+  def check(%Context{} = ctx, action, change), do: decide(ctx, action, change)
+
+  @doc """
+  Consume the confirmation `change` needs, `{action, change}` as
+  `confirm/3` takes them, inside the caller's transaction: the one that
+  opens the row the change's effect writes, so the two commit or roll back
+  together. Answers as `confirm/3`.
+  """
+  @spec consume(Context.t(), {Sanctum.Pairing.action(), change()}) ::
+          :ok | {:error, refusal() | {:confirmation_required, map()}}
+  def consume(%Context{} = ctx, {action, change}), do: decide(ctx, action, change)
 
   @doc """
   The staging gate for plan and preview: authenticated, external-plane,
@@ -193,8 +259,10 @@ defmodule Sanctum.Consent.Authz do
 
   def message(:invalid_request), do: "The consent request is not valid"
 
-  def message(:class_too_low),
-    do: "This client cannot confirm a grant; confirm it from a signed-in browser or key"
+  def message(:not_standing),
+    do: "Your sign-in or key no longer stands here; sign in again to decide this"
+
+  def message(:unavailable), do: "Your standing could not be checked; try again"
 
   # This IS the vocabulary module — an unknown term here is a producer bug,
   # logged and generalized, never inspected onto the wire (the catch-all
@@ -207,6 +275,48 @@ defmodule Sanctum.Consent.Authz do
   # ============================================================================
   # Private
   # ============================================================================
+
+  # The first form of a sensitive change's decision: an action of the
+  # table and a well-formed change, and nothing the deciding site did not
+  # already decide — its own checks of who may act stand, as they did. No
+  # action needs a fresh confirmation until a proof can be given, so none
+  # is opened or consumed here; a table that asked for one before this
+  # could consume it would be a programmer error, and raises rather than
+  # deciding the change.
+  defp decide(ctx, action, change) do
+    with :ok <- known_action(action),
+         :ok <- change(change) do
+      false = Sanctum.Pairing.fresh_required?(action, ctx)
+      :ok
+    end
+  end
+
+  defp known_action(action) do
+    if action in Sanctum.Pairing.actions(), do: :ok, else: {:error, :invalid_request}
+  end
+
+  defp change(%{operation: operation, arguments: arguments} = change)
+       when is_binary(operation) and is_map(arguments) do
+    if Prima.Manifest.Tincture.operation_name?(operation) and
+         Map.keys(change) -- [:operation, :arguments, :resource, :details] == [],
+       do: :ok,
+       else: {:error, :invalid_request}
+  end
+
+  defp change(_change), do: {:error, :invalid_request}
+
+  # The caller's standing, read again as the grant is decided: whatever
+  # credential admitted it must still stand, under the standing lock order
+  # (`Sanctum.Caller.revalidate_session/1`). A context no stored credential
+  # backs keeps its establishment contract.
+  defp standing(ctx) do
+    case Sanctum.Caller.revalidate_session(ctx) do
+      {:ok, _current} -> :ok
+      {:error, :unauthenticated} -> {:error, :not_authenticated}
+      {:error, reason} when reason in [:not_standing, :not_member] -> {:error, :not_standing}
+      {:error, :unavailable} -> {:error, :unavailable}
+    end
+  end
 
   defp check_plane(%Context{plane: :guest}), do: {:error, :guest_plane}
   defp check_plane(%Context{}), do: :ok

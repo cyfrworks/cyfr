@@ -3,15 +3,14 @@
 
 defmodule Sanctum.PairingTest do
   @moduledoc """
-  Confirmation authority: the class a client holds from its standing, the
-  closed table of what each action requires, and the check the consent
-  decision makes — a `none` client confirms nothing, and an action whose
-  class no client holds waits rather than degrading.
+  Which changes need a fresh confirmation, and which clients can give
+  one: the closed action table, the operations that confirm each action,
+  the requirement no change asks for before a proof exists, and a client
+  with no person behind it confirming nothing. No rank is held anywhere.
   """
 
   use ExUnit.Case, async: true
 
-  alias Sanctum.Consent.Authz
   alias Sanctum.Context
   alias Sanctum.Pairing
 
@@ -24,15 +23,94 @@ defmodule Sanctum.PairingTest do
     )
   end
 
-  describe "class_of/1" do
-    test "an authenticated browser session or API key is a session client" do
-      assert Pairing.class_of(ctx(auth_method: :oidc)) == :session
-      assert Pairing.class_of(ctx(auth_method: :api_key, api_key_type: :admin)) == :session
+  @sensitive [
+    :credential_entry,
+    :credential_issuance,
+    :vault_unlock,
+    :home_transfer,
+    :pairing_revocation,
+    :recovery_material,
+    :device_pairing,
+    :passkey_registration,
+    :remote_sign_in,
+    :key_rotation,
+    :sign_in_methods
+  ]
+
+  describe "the action table" do
+    test "is closed: today's rows and the seven this plan adds" do
+      assert Pairing.actions() == Enum.sort([:grant, :approval | @sensitive])
     end
 
-    test "every other context is a none client" do
-      nones = [
+    test "a grant and an approval need the session alone; every other action is sensitive" do
+      refute Pairing.sensitive?(:grant)
+      refute Pairing.sensitive?(:approval)
+      for action <- @sensitive, do: assert(Pairing.sensitive?(action), inspect(action))
+
+      assert_raise FunctionClauseError, fn -> Pairing.sensitive?(:anything) end
+    end
+
+    test "each operation that confirms something maps to its action, and no other does" do
+      expected = %{
+        "vault.create" => :credential_entry,
+        "vault.rotate" => :credential_entry,
+        "vault.authorize" => :credential_entry,
+        "oauth.set_client" => :credential_entry,
+        "key.create" => :credential_issuance,
+        "key.rotate" => :credential_issuance,
+        "webhook.create" => :credential_issuance,
+        "webhook.rotate" => :credential_issuance,
+        "pairing.revoke" => :pairing_revocation,
+        "person.enroll" => :recovery_material,
+        "person.kit" => :recovery_material,
+        "person.enroll_holder" => :recovery_material,
+        "passkey.register" => :passkey_registration,
+        "passkey.revoke" => :passkey_registration,
+        "passkey.recover_admin" => :passkey_registration,
+        "pairing.begin" => :device_pairing,
+        "person.certify" => :device_pairing,
+        "person.assert" => :remote_sign_in,
+        "person.rotate" => :key_rotation,
+        "person.link_door" => :sign_in_methods,
+        "person.unlink_door" => :sign_in_methods
+      }
+
+      for {operation, action} <- expected do
+        assert Pairing.action_for(operation) == action, operation
+        assert action in Pairing.actions()
+      end
+
+      # The unlock and the transfer have no operation yet, and a read or an
+      # everyday change confirms nothing.
+      for operation <- ~w(vault.list vault.rename key.revoke profile.commit person.kit_ack
+                          pairing.complete pairing.list vault/create) do
+        assert Pairing.action_for(operation) == nil, operation
+      end
+    end
+  end
+
+  describe "fresh_required?/2" do
+    test "asks for no proof before one can be given, for any action or caller" do
+      for action <- Pairing.actions(),
+          context <- [ctx(auth_method: :oidc), ctx(auth_method: :api_key)] do
+        refute Pairing.fresh_required?(action, context)
+      end
+
+      assert_raise FunctionClauseError, fn ->
+        Pairing.fresh_required?(:delete_everything, ctx(auth_method: :oidc))
+      end
+    end
+  end
+
+  describe "can_confirm?/1" do
+    test "a signed-in browser session has a person behind it who can give a proof" do
+      assert Pairing.can_confirm?(ctx(auth_method: :oidc))
+    end
+
+    test "a client with no person behind it confirms nothing" do
+      nobody = [
         ctx(auth_method: :oidc, plane: :guest),
+        ctx(auth_method: :api_key, api_key_type: :admin),
         ctx(auth_method: :api_key, plane: :guest),
         ctx(auth_method: :session),
         ctx(auth_method: :tincture),
@@ -43,89 +121,13 @@ defmodule Sanctum.PairingTest do
         Context.build(%{auth_method: :oidc, authenticated: false})
       ]
 
-      for context <- nones,
-          do: assert(Pairing.class_of(context) == :none, inspect(context.auth_method))
+      for context <- nobody,
+          do: refute(Pairing.can_confirm?(context), inspect(context.auth_method))
     end
 
-    test "no client holds paired or strong yet" do
-      for method <- [:oidc, :api_key, :session, :tincture, :webhook, :scheduled, :system] do
-        refute Pairing.class_of(ctx(auth_method: method)) in [:paired, :strong]
-      end
-    end
-  end
-
-  describe "required_class/1" do
-    test "the table is closed and reads as the policy says" do
-      assert Pairing.actions() ==
-               Enum.sort([
-                 :grant,
-                 :approval,
-                 :credential_entry,
-                 :vault_unlock,
-                 :home_transfer,
-                 :pairing_revocation
-               ])
-
-      for action <- [:grant, :approval, :credential_entry, :vault_unlock],
-          do: assert(Pairing.required_class(action) == :session)
-
-      for action <- [:home_transfer, :pairing_revocation],
-          do: assert(Pairing.required_class(action) == :strong)
-
-      assert_raise FunctionClauseError, fn -> Pairing.required_class(:anything) end
-    end
-  end
-
-  describe "confirm?/2" do
-    test "a session client confirms grants, approvals, credential entry and the vault unlock" do
-      session = ctx(auth_method: :oidc)
-
-      for action <- [:grant, :approval, :credential_entry, :vault_unlock],
-          do: assert(Pairing.confirm?(session, action) == :ok)
-    end
-
-    test "a none client presenting a confirmation is refused, whatever it asks" do
-      for context <- [ctx(auth_method: :oidc, plane: :guest), ctx(auth_method: :tincture)],
-          action <- Pairing.actions() do
-        assert Pairing.confirm?(context, action) == {:error, :class_too_low}
-      end
-    end
-
-    test "an action whose class no client holds waits: it never degrades to session" do
-      session = ctx(auth_method: :oidc)
-
-      for action <- [:home_transfer, :pairing_revocation] do
-        assert Pairing.confirm?(session, action) == {:error, :class_too_low}
-        assert Pairing.required_class(action) == :strong
-      end
-    end
-
-    test "an action the table does not name is never confirmed" do
-      assert Pairing.confirm?(ctx(auth_method: :oidc), :delete_everything) ==
-               {:error, :class_too_low}
-    end
-  end
-
-  describe "the consent decision" do
-    test "a session client's grant passes the class check" do
-      request = %Authz.Request{commit_digest: "sha256:commit"}
-      assert Authz.authorize(ctx(auth_method: :oidc), request) == {:ok, :interactive}
-    end
-
-    test "a none client never confirms a grant" do
-      request = %Authz.Request{commit_digest: "sha256:commit"}
-
-      for context <- [
-            ctx(auth_method: :oidc, plane: :guest),
-            ctx(auth_method: :session),
-            ctx(auth_method: :tincture)
-          ] do
-        assert {:error, _} = Authz.authorize(context, request)
-      end
-    end
-
-    test "the class refusal renders through the vocabulary's owner" do
-      assert Authz.message(:class_too_low) =~ "cannot confirm"
+    test "a paired device confirms nothing until its paired client's standing is read" do
+      refute Pairing.can_confirm?(ctx(auth_method: :device, client_id: "pcl_1"))
+      refute Pairing.can_confirm?(ctx(auth_method: :oidc, client_id: "pcl_1"))
     end
   end
 end

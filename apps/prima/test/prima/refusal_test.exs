@@ -125,6 +125,7 @@ defmodule Prima.RefusalTest do
     {:consent_required, :consent_required},
     {{:ambiguous, ["prof_a", "prof_b"]}, :conflict},
     {:service_unavailable, :unavailable},
+    {:not_built, :unavailable},
     {:execution_failed, :internal},
     {:invalid_session, :unauthenticated},
     {:missing_token, :unauthenticated},
@@ -365,6 +366,22 @@ defmodule Prima.RefusalTest do
       refute Refusal.message(:unavailable) == Refusal.message(:outcome_unknown)
       assert Refusal.message(:outcome_unknown) =~ "check before asking again"
       refute Refusal.message({:held_elsewhere, "turn_secret_id"}) =~ "turn_secret_id"
+    end
+
+    test "an operation not built yet is unavailable, says so, and logs nothing" do
+      log =
+        capture_log(fn ->
+          assert %Refusal{
+                   class: :unavailable,
+                   reason: :not_built,
+                   message: "This operation is not built yet."
+                 } = Refusal.classify(:not_built)
+        end)
+
+      # This module runs async, so the capture also holds other tests' lines;
+      # only a line about this reason would be the table's.
+      refute log =~ "not_built"
+      assert Refusal.reason?(:not_built)
     end
 
     test "a binary is internal and keeps its words" do

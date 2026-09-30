@@ -21,6 +21,7 @@ defmodule Cyfr.TelemetryBridgeTest do
     Build,
     CallerInvalidated,
     Components,
+    Confirmation,
     Execution,
     Membership,
     Notify,
@@ -96,7 +97,33 @@ defmodule Cyfr.TelemetryBridgeTest do
        {ApiKeys, %{kind: :changed}}},
       {[:cyfr, :sanctum, :webhooks, :changed], tenant, Bus.webhooks(@actor),
        {Webhooks, %{kind: :changed}}}
-    ]
+    ] ++ confirmation_cases(tenant)
+  end
+
+  # A pending confirmation's life, each on its person's own topic, carrying
+  # the id, operation and expiry and nothing else the emitter attached.
+  defp confirmation_cases(tenant) do
+    expires_at = ~U[2026-09-30 12:05:00Z]
+
+    metadata =
+      Map.merge(tenant, %{
+        user_id: @user,
+        id: "confirmation-7f3a",
+        operation: "vault.create",
+        expires_at: expires_at,
+        arguments: %{"fields" => %{"API_KEY" => "sk-never-bridged"}}
+      })
+
+    for kind <- [:opened, :confirmed, :consumed, :cancelled, :voided, :expired] do
+      {[:cyfr, :sanctum, :confirmation, kind], metadata, Bus.confirmations(@actor, @user),
+       {Confirmation,
+        %{
+          kind: kind,
+          id: "confirmation-7f3a",
+          operation: "vault.create",
+          expires_at: expires_at
+        }}}
+    end
   end
 
   defp listen(topic) do
@@ -292,6 +319,61 @@ defmodule Cyfr.TelemetryBridgeTest do
 
       assert_receive %Request{} = heard
       refute inspect(heard) =~ "sk-live"
+    end
+
+    test "a confirmation reaches its own person alone, with no argument and no preview" do
+      listen(Bus.confirmations(@actor, @user))
+      listen(Bus.confirmations(@actor, "user_other"))
+
+      :telemetry.execute([:cyfr, :sanctum, :confirmation, :opened], %{count: 1}, %{
+        athanor_id: @athanor,
+        user_id: @user,
+        id: "confirmation-7f3a",
+        operation: "vault.create",
+        expires_at: ~U[2026-09-30 12:05:00Z],
+        arguments: %{"fields" => %{"API_KEY" => "sk-confirmed"}},
+        preview: %{"resource" => "production-key"}
+      })
+
+      assert_receive %Confirmation{kind: :opened, id: "confirmation-7f3a"} = heard
+      refute inspect(heard) =~ "sk-confirmed"
+      refute inspect(heard) =~ "production-key"
+
+      # Published once, on the person's own topic: another member hears nothing.
+      refute_receive %Confirmation{}, 100
+    end
+
+    test "Sanctum's announcement of a confirmation is what the bridge carries, kind by kind" do
+      listen(Bus.confirmations(@actor, @user))
+      expires_at = ~U[2026-09-30 12:05:00Z]
+      fields = %{id: "confirmation-7f3a", operation: "vault.create", expires_at: expires_at}
+
+      for kind <- Cyfr.Bus.Confirmation.kinds() do
+        :ok = Sanctum.Telemetry.confirmation(kind, @athanor, @user, fields)
+
+        assert_receive %Confirmation{
+          kind: ^kind,
+          athanor_id: @athanor,
+          id: "confirmation-7f3a",
+          operation: "vault.create",
+          expires_at: ^expires_at
+        }
+      end
+
+      assert_raise FunctionClauseError, fn ->
+        Sanctum.Telemetry.confirmation(:approved, @athanor, @user, fields)
+      end
+    end
+
+    test "a confirmation naming no person is dropped and counted" do
+      count_drops(self())
+
+      :telemetry.execute([:cyfr, :sanctum, :confirmation, :opened], %{count: 1}, %{
+        athanor_id: @athanor,
+        id: "confirmation-7f3a"
+      })
+
+      assert_receive {:dropped, %{count: 1}, %{event: [:cyfr, :sanctum, :confirmation, :opened]}}
     end
   end
 
