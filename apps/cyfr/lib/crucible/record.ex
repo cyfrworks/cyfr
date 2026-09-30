@@ -90,7 +90,8 @@ defmodule Crucible.Record do
           reservation: map() | nil,
           retention_class: String.t() | nil,
           retained_input: map() | nil,
-          grant: Prima.ExecutionGrant.t() | nil
+          grant: Prima.ExecutionGrant.t() | nil,
+          origin: Prima.Origin.t() | nil
         }
 
   # One execution row and the admission inputs that travel with it: the
@@ -148,7 +149,13 @@ defmodule Crucible.Record do
     # root's read at admission, a child's its parent's stored stamp. Not
     # a column of this row — its attempt stores it. Nil on a record read
     # back, whose writes name the stored stamp instead.
-    :grant
+    :grant,
+    # How the run began (`Prima.Origin`): a root's is the origin of the
+    # context it was admitted in, which the admission entry that built the
+    # context set. A child names none: its row carries its parent's,
+    # read where it is admitted (`Arca.Execution.admit/2`). Nil on a
+    # record read back.
+    :origin
   ]
 
   @doc """
@@ -171,6 +178,11 @@ defmodule Crucible.Record do
     identity, `system` for the server's own context, else `api`).
   - `:grant` - The `Prima.ExecutionGrant` the run is admitted under; read
     at admission when absent (`write_started/2`).
+
+  A root carries `ctx`'s origin (`Prima.Origin`), which the admission
+  entry that built `ctx` set, into the row `write_started/2` admits; no
+  option names one. A record with a `:parent_execution_id` carries none,
+  and its row takes its parent's.
   """
   @spec new(Context.t(), String.t(), map(), keyword()) :: t()
   def new(%Context{} = ctx, reference, input, opts \\ []) do
@@ -214,7 +226,9 @@ defmodule Crucible.Record do
       reservation: Keyword.get(opts, :reservation),
       retention_class: Keyword.get(opts, :retention_class) || default_retention_class(ctx),
       retained_input: Keyword.get(opts, :retained_input),
-      grant: Keyword.get(opts, :grant)
+      grant: Keyword.get(opts, :grant),
+      # The context's, never an option's: the admission entry decides.
+      origin: if(is_nil(parent_execution_id), do: ctx.origin)
     }
   end
 
@@ -432,7 +446,8 @@ defmodule Crucible.Record do
              profile_id: record.profile_id,
              kind: record.kind || "component",
              turn_id: record.turn_id,
-             schedule_id: record.schedule_id
+             schedule_id: record.schedule_id,
+             origin: record.origin
            },
            Keyword.merge(
              [

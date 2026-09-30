@@ -17,6 +17,12 @@ defmodule Crucible do
   is taken before the run is dispatched (`Crucible.Dispatch.run/4`,
   `Crucible.Dispatch.claim/4`); a refusal runs nothing.
 
+  A root's row records the origin of the context it is started in
+  (`Prima.Origin`), which the admission entry that built the context set
+  and no option names (`Crucible.Record.new/4`). A child's row carries
+  its parent's, read where it is admitted, so a chain rooted by a
+  schedule stays `schedule` however deep it runs.
+
   A run is dispatched to the first worker service `config :cyfr, :opus_workers`
   names that is loaded and answers; with none, `available?/0` is false and
   a dispatched run answers `{:error, :execution_unavailable}`.

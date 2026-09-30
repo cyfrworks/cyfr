@@ -10,11 +10,15 @@ defmodule Aqua.Launch do
   pinned authority is never widened into it.
 
   The input is the durable step alone. The approver's context is rebuilt
-  from the approval's `decided_by` (`Sanctum.Tenancy.continuation/2`), so
+  from the approval's `decided_by` (`Sanctum.Tenancy.continuation/3`), so
   a launch consumed after a restart runs as the person who decided it, or
-  not at all: a person no longer seated refuses it. The loop marks the
-  step dispatched before calling here, which is what makes a launch
-  happen once.
+  not at all: a person no longer seated refuses it. It carries the origin
+  stored on the approved turn's row, never one inferred from the person
+  approving: a programmatic turn's launch stays `programmatic`, and a
+  turn whose row stores no origin launches nothing
+  (`{:approver_unavailable, :no_origin}`). The loop marks the step
+  dispatched before calling here, which is what makes a launch happen
+  once.
   """
 
   alias Aqua.Tape
@@ -89,10 +93,15 @@ defmodule Aqua.Launch do
     end
   end
 
-  defp approver(%Context{} = ctx, %{decided_by: user_id}) when is_binary(user_id) do
-    case Sanctum.Tenancy.continuation(user_id, Context.athanor!(ctx)) do
-      {:ok, approver} -> {:ok, approver}
-      {:error, reason} -> {:error, {:approver_unavailable, reason}}
+  # The approver continues the turn the approval was opened in, under the
+  # origin that turn's row stores.
+  defp approver(%Context{} = ctx, %{decided_by: user_id, turn_id: turn_id})
+       when is_binary(user_id) and is_binary(turn_id) do
+    with {:ok, turn} <- Tape.turn(ctx, turn_id) do
+      case Sanctum.Tenancy.continuation(user_id, Context.athanor!(ctx), turn.origin) do
+        {:ok, approver} -> {:ok, approver}
+        {:error, reason} -> {:error, {:approver_unavailable, reason}}
+      end
     end
   end
 

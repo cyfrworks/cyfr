@@ -1344,7 +1344,7 @@ defmodule Cyfr.Boundaries do
     "Sanctum.SignIn" => [admitted: 2, record_namespace: 2, suggested_slug: 2],
     "Sanctum.Tenancy" => [
       channel_active?: 2,
-      continuation: 2,
+      continuation: 3,
       list_athanors: 1,
       resolve_status: 2,
       revalidate: 1

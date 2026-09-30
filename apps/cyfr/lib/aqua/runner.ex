@@ -31,10 +31,16 @@ defmodule Aqua.Runner do
   One turn runs at a time. The loop ends the turn itself on every
   outcome but a pause; a turn paused on a card waits for the decision —
   the tape tells the runner — and continues as the person who sent it
-  (`Sanctum.Tenancy.continuation/2`), or ends uncertain when that person
+  (`Sanctum.Tenancy.continuation/3`), or ends uncertain when that person
   is no longer seated. A loop that dies without an answer is aborted
   from here (`Aqua.Loop.abort/4`) and its turn ended uncertain, or
   cancelled when a cancel asked for it.
+
+  A turn continued from its rows — a paused turn picked up again, or a
+  turn recovered after a restart — continues under the origin its row
+  stores (`Prima.Origin`), never one guessed from the person it runs
+  as: a programmatic turn resumes as `programmatic`. A turn whose row
+  stores no origin is cancelled with that reason and never resumed.
 
   ## Recovery
 
@@ -705,7 +711,7 @@ defmodule Aqua.Runner do
   defp acknowledge(state), do: state
 
   defp entry_of(paused),
-    do: paused |> Map.take([:turn_id, :user_id, :agent]) |> Map.put(:ctx, nil)
+    do: paused |> Map.take([:turn_id, :user_id, :agent, :origin]) |> Map.put(:ctx, nil)
 
   defp accept_turn(state, ctx, name, text, opts) do
     attrs = %{
@@ -723,7 +729,16 @@ defmodule Aqua.Runner do
         {:reply, {:ok, result(row, turn && turn.id, true, :turn)}, touch(state)}
 
       {:ok, %{message: row, turn: turn}} ->
-        entry = %{turn_id: turn.id, user_id: ctx.user_id, ctx: ctx, agent: name}
+        entry = %{
+          turn_id: turn.id,
+          user_id: ctx.user_id,
+          ctx: ctx,
+          agent: name,
+          # What a continuation of this turn resumes under: the origin its
+          # row stores, never the context's as it stands later.
+          origin: turn.origin
+        }
+
         state = %{state | agent: name}
 
         state =
@@ -781,19 +796,31 @@ defmodule Aqua.Runner do
     run(state, entry, fn -> Aqua.Loop.run(ctx: ctx, turn_id: turn_id) end)
   end
 
+  # A turn continued from its rows runs as its sender under the origin its
+  # row stores. A row that stores none is cancelled with that reason: it
+  # is never resumed under an origin guessed from the sender.
   defp continue(state, %{turn_id: turn_id} = entry, mode) do
-    case Sanctum.Tenancy.continuation(entry.user_id, state.athanor_id) do
+    case Sanctum.Tenancy.continuation(entry.user_id, state.athanor_id, entry.origin) do
       {:ok, actor} ->
         run(state, %{entry | ctx: actor}, fn ->
           Aqua.Loop.run_nested(ctx: actor, turn_id: turn_id, mode: mode)
         end)
 
+      {:error, :no_origin} ->
+        state
+        |> end_turn(turn_id, "cancelled", unresumable(:no_origin))
+        |> start_next()
+
       {:error, reason} ->
         state
-        |> end_turn(turn_id, "uncertain", "the sender is no longer seated here (#{reason})")
+        |> end_turn(turn_id, "uncertain", unresumable(reason))
         |> start_next()
     end
   end
+
+  # Why a turn cannot continue from its rows.
+  defp unresumable(:no_origin), do: "the turn records no origin to resume under (no_origin)"
+  defp unresumable(reason), do: "the sender is no longer seated here (#{reason})"
 
   # Viewers hear the turn start before the loop can announce anything of it.
   # The loop is a worker of this process: it, and every worker under it,
@@ -988,6 +1015,7 @@ defmodule Aqua.Runner do
               turn_id: live.turn_id,
               user_id: live.user_id,
               agent: live.agent,
+              origin: live.origin,
               reason: reason,
               expiry: nil
             }
@@ -1025,6 +1053,7 @@ defmodule Aqua.Runner do
           turn_id: live.turn_id,
           user_id: live.user_id,
           agent: live.agent,
+          origin: turn.origin,
           reason: pause_reason(turn),
           expiry: nil
         }
@@ -1300,7 +1329,8 @@ defmodule Aqua.Runner do
           turn_id: turn.id,
           user_id: turn.requested_by,
           ctx: nil,
-          agent: turn.agent
+          agent: turn.agent,
+          origin: turn.origin
         }
 
         recovered_start(state, entry)
@@ -1310,6 +1340,7 @@ defmodule Aqua.Runner do
           turn_id: turn.id,
           user_id: turn.requested_by,
           agent: turn.agent,
+          origin: turn.origin,
           reason: pause_reason(turn),
           expiry: nil
         }
@@ -1321,7 +1352,8 @@ defmodule Aqua.Runner do
           turn_id: turn.id,
           user_id: turn.requested_by,
           ctx: nil,
-          agent: turn.agent
+          agent: turn.agent,
+          origin: turn.origin
         }
 
         if busy?(state),
@@ -1333,7 +1365,8 @@ defmodule Aqua.Runner do
           turn_id: turn.id,
           user_id: turn.requested_by,
           ctx: nil,
-          agent: turn.agent
+          agent: turn.agent,
+          origin: turn.origin
         }
 
         if busy?(state),
@@ -1400,22 +1433,21 @@ defmodule Aqua.Runner do
   defp pause_reason(%{paused_reason: "uncertain"}), do: :uncertain
   defp pause_reason(_turn), do: :approval
 
-  # A queued turn recovered from its row runs as its sender's continuation.
+  # A queued turn recovered from its row runs as its sender's
+  # continuation, under the origin its row stores; one that cannot is
+  # cancelled with its reason, and the turns behind it go on.
   defp recovered_start(state, entry) do
     if busy?(state) do
       %{state | queue: state.queue ++ [entry]}
     else
-      case Sanctum.Tenancy.continuation(entry.user_id, state.athanor_id) do
+      case Sanctum.Tenancy.continuation(entry.user_id, state.athanor_id, entry.origin) do
         {:ok, actor} ->
           start(state, %{entry | ctx: actor})
 
         {:error, reason} ->
-          end_turn(
-            state,
-            entry.turn_id,
-            "cancelled",
-            "the sender is no longer seated here (#{reason})"
-          )
+          state
+          |> end_turn(entry.turn_id, "cancelled", unresumable(reason))
+          |> start_next()
       end
     end
   end

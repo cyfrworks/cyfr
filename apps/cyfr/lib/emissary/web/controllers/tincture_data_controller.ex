@@ -30,6 +30,15 @@ defmodule Emissary.Web.TinctureDataController do
   viewer's session — no route here reads a cookie. A request with neither
   is refused as `no_frame`; one with both is refused unread.
 
+  Either context carries the origin `interactive` (`Prima.Origin`): the
+  frame admission path is an interactive surface's, and nothing a frame
+  sends names another origin. The origin says how the call was admitted,
+  not that a person is present: a hidden frame keeps a standing
+  credential only under its tincture's background grant (the shell
+  suspends every other hidden frame, `Prism.Frames`), and its calls
+  follow that grant's lifecycle rather than any assumption that hidden
+  means suspended.
+
   ## What it may reach
 
   The tincture's declaration is the grant: an invoke names a component
@@ -223,7 +232,7 @@ defmodule Emissary.Web.TinctureDataController do
          {:ok, grant} <- frame_grant(ctx) do
       {:ok,
        Map.merge(grant, %{
-         ctx: CallIdentity.stamp(conn, ctx),
+         ctx: conn |> CallIdentity.stamp(ctx) |> interactive(),
          route: :protected,
          tincture: ctx.frame.reference,
          bearer: bearer,
@@ -239,6 +248,12 @@ defmodule Emissary.Web.TinctureDataController do
       {:error, reason} -> {:error, credential_refusal(reason)}
     end
   end
+
+  # The frame admission path's origin. It records how the call was
+  # admitted, not that a person is watching: a hidden frame's credential
+  # still stands only under a background grant, and its calls are
+  # admitted on this path all the same.
+  defp interactive(%Context{} = ctx), do: %{ctx | origin: :interactive}
 
   defp frame_grant(%Context{frame: frame} = ctx) do
     %{reference: reference, version_digest: digest, grant_revision: revision} = frame
@@ -301,7 +316,7 @@ defmodule Emissary.Web.TinctureDataController do
          {:ok, declaration} <- declaration(tincture.manifest) do
       {:ok,
        %{
-         ctx: %{CallIdentity.stamp(conn, public_ctx) | client_ip: client_ip},
+         ctx: %{interactive(CallIdentity.stamp(conn, public_ctx)) | client_ip: client_ip},
          route: :public,
          address: athanor,
          tincture: %{publisher: publisher, name: name},

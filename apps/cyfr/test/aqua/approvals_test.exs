@@ -357,7 +357,9 @@ defmodule Aqua.ApprovalsTest do
     {:ok, _} = Members.ensure(approver.id, scope: "athanor", athanor_id: ctx.athanor_id)
     approver_ctx = %{ctx | user_id: approver.id}
 
-    turn = started!(ctx, thread, pins)
+    # A launch continues under the origin its turn's row stores: this
+    # turn was sent from the console.
+    turn = started!(%{ctx | origin: :interactive}, thread, pins)
 
     launch = %{
       tool: "execution",

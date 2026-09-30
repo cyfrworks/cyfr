@@ -107,13 +107,17 @@ defmodule Emissary.MCP.Router do
 
   For requests, returns `{:ok, result}` or `{:error, code, message}`.
   For notifications, returns `:ok`.
+
+  Whatever origin `ctx` arrives with, the request is dispatched as
+  `programmatic` (`Prima.Origin`): MCP is a programmatic surface, and
+  nothing a client sends names another.
   """
   def dispatch(ctx, %Message{type: :request} = msg) do
-    dispatch_method(ctx, msg.method, msg.params, msg.id)
+    dispatch_method(programmatic(ctx), msg.method, msg.params, msg.id)
   end
 
   def dispatch(ctx, %Message{type: :notification} = msg) do
-    dispatch_notification(ctx, msg.method, msg.params)
+    dispatch_notification(programmatic(ctx), msg.method, msg.params)
   end
 
   def dispatch(_ctx, %Message{type: :response}) do
@@ -125,6 +129,9 @@ defmodule Emissary.MCP.Router do
     # MCP spec: client error responses return 202
     :ok
   end
+
+  # This entry's origin, over whatever the context arrived with.
+  defp programmatic(%Sanctum.Context{} = ctx), do: %{ctx | origin: :programmatic}
 
   # ============================================================================
   # Lifecycle Methods

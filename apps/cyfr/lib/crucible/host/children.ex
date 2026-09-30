@@ -30,7 +30,10 @@ defmodule Crucible.Host.Children do
   limits, rates, policy and attestation are applied, its row is admitted
   under the formula attempt's barrier carrying the key, and its attempt is
   claimed for the calling runner, its vault edge unsealed and handed to
-  that runner. The answer carries the child's signed assignment, its
+  that runner. The child's row names the calling execution as its parent
+  and carries the parent's origin (`Prima.Origin`), read where it is
+  admitted: a child of a scheduled root is `schedule`, whatever the body
+  says. The answer carries the child's signed assignment, its
   attempt's keys sealed with the calling attempt's seal key
   (`Prima.WorkerAuth.seal_attempt_keys/3`), the JSON of the input it was
   admitted with, which its assignment's `input_digest` binds, and its
@@ -49,7 +52,8 @@ defmodule Crucible.Host.Children do
 
   The tool runs through the catalog's in-chain entry
   (`Grimoire.call_in_chain/5`) under the attempt's authority and
-  context, with the header's execution as its parent, the attempt's root
+  context — the context its root was admitted in, so the call carries its
+  root's origin — with the header's execution as its parent, the attempt's root
   and the header's attempt as its lineage. A setup refusal is announced on
   the root's event stream. The answer is the tool's result.
 
