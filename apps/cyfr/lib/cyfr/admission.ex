@@ -61,7 +61,7 @@ defmodule Cyfr.Admission do
       built: true,
       listener: "CyfrWeb.Endpoint",
       sockets: [
-        {"/live", "Phoenix.LiveView.Socket"},
+        {"/live", "CyfrWeb.LiveSocket"},
         # Compiled into the endpoint only when code reloading is on, in
         # development: it pushes reload notices to the page and reads
         # nothing a client sends.

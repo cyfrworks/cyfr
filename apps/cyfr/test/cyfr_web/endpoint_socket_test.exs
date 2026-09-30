@@ -26,7 +26,7 @@ defmodule CyfrWeb.EndpointSocketTest do
   @required [:peer_data, :x_headers]
 
   test "the /live socket carries the connect_info ClientIp needs, on both transports" do
-    {"/live", Phoenix.LiveView.Socket, opts} =
+    {"/live", CyfrWeb.LiveSocket, opts} =
       Enum.find(CyfrWeb.Endpoint.__sockets__(), &match?({"/live", _, _}, &1))
 
     for transport <- [:websocket, :longpoll] do

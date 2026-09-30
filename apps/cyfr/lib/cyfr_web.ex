@@ -27,6 +27,7 @@ defmodule CyfrWeb do
       ContextGuard,
       ErrorJSON,
       ErrorRenderer,
+      LiveSocket,
       MetricsPlug,
       MinimalPage,
       PendingProbe,

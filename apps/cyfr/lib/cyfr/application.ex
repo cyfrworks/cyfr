@@ -33,6 +33,10 @@ defmodule Cyfr.Application do
 
   @impl true
   def start(_type, _args) do
+    # A stop in this VM may have marked the LiveView socket draining; a
+    # start serves `/live` again.
+    :ok = CyfrWeb.LiveSocket.undrain()
+
     # The five ports' one write each, before every domain this
     # application starts: each declaring module reads its implementation
     # from the term written here, and an uninstalled port raises where it
@@ -162,6 +166,123 @@ defmodule Cyfr.Application do
     end
   end
 
+  # How long a graceful stop waits for the endpoint to stop accepting
+  # before it goes on without it: a suspension is a few supervisor calls,
+  # and a server that cannot answer them in this long never holds the stop.
+  @suspend_deadline_ms 5_000
+
+  @impl true
+  def prep_stop(state) do
+    # A graceful stop refuses before it drains. Here, before the tree
+    # stops, the LiveView socket starts refusing every connect, and then
+    # the endpoint's listening ports close: a new connection is refused at
+    # once, and every connection already open stays. The tree then stops:
+    # the LiveView socket's drainer tells the tabs it holds to reconnect,
+    # and each meets the closed port, or on a connection already open the
+    # socket's refusal, and rejoins another member or the restarted
+    # server, never this one, while the requests in flight finish within
+    # the endpoint's drain (`shutdown_timeout`, `config/config.exs`). This
+    # also runs when the tree has already died, where the endpoint serves
+    # nothing and there is nothing to close.
+    :ok = CyfrWeb.LiveSocket.drain()
+    _ = suspend_endpoint(CyfrWeb.Endpoint)
+    state
+  end
+
+  @doc """
+  Stop `endpoint` accepting: each socket server it serves on
+  (`endpoint_servers/1`) is suspended (`suspend_server/1`). With none,
+  there is nothing to do and the answer is `:ok`.
+
+  It never raises and never outlasts `deadline_ms`: the lookup and the
+  suspensions run in a process of their own, and one that fails, crashes
+  or is still running at the deadline, which kills it, is logged and
+  answered `:error`.
+  """
+  @spec suspend_endpoint(module(), timeout()) :: :ok | :error
+  def suspend_endpoint(endpoint, deadline_ms \\ @suspend_deadline_ms) do
+    # Monitored and never linked: `prep_stop/1` runs in the application
+    # master, which traps exits, so a link would leave an exit message in
+    # its mailbox. The outcome is the process's exit reason, and the
+    # monitor is flushed on the deadline, so nothing is left behind.
+    {pid, ref} =
+      spawn_monitor(fn ->
+        suspended = Enum.map(endpoint_servers(endpoint), &suspend_server/1)
+        if Enum.all?(suspended, &(&1 == :ok)), do: :ok, else: exit({:shutdown, :not_suspended})
+      end)
+
+    receive do
+      {:DOWN, ^ref, :process, ^pid, :normal} ->
+        :ok
+
+      # `suspend_server/1` has logged each server it could not suspend.
+      {:DOWN, ^ref, :process, ^pid, {:shutdown, :not_suspended}} ->
+        :error
+
+      {:DOWN, ^ref, :process, ^pid, reason} ->
+        Logger.warning(
+          "[Cyfr] graceful stop: #{inspect(endpoint)} could not stop accepting " <>
+            "(#{inspect(reason)}); it drains while it still accepts"
+        )
+
+        :error
+    after
+      deadline_ms ->
+        Process.exit(pid, :kill)
+        Process.demonitor(ref, [:flush])
+
+        Logger.warning(
+          "[Cyfr] graceful stop: #{inspect(endpoint)} did not stop accepting within " <>
+            "#{deadline_ms} ms; it drains while it still accepts"
+        )
+
+        :error
+    end
+  end
+
+  @doc """
+  The socket servers `endpoint` serves on, one for each scheme it listens
+  on (`Bandit.PhoenixAdapter.bandit_pid/2`). Empty when it serves no
+  listener, as under `server: false`, or is not running.
+  """
+  @spec endpoint_servers(module()) :: [pid()]
+  def endpoint_servers(endpoint \\ CyfrWeb.Endpoint) do
+    for scheme <- [:http, :https],
+        {:ok, pid} when is_pid(pid) <- [Bandit.PhoenixAdapter.bandit_pid(endpoint, scheme)],
+        do: pid
+  catch
+    :exit, _not_running -> []
+  end
+
+  @doc """
+  Suspend the socket server `server` (`ThousandIsland.suspend/1`): its
+  acceptors end and its listening port closes, so a new connection is
+  refused at once, while every connection already open stays until the
+  server itself stops. A server that cannot be suspended, or is gone, is
+  logged and answered `:error`; this never raises.
+  """
+  @spec suspend_server(Supervisor.supervisor()) :: :ok | :error
+  def suspend_server(server) do
+    case safely_suspend(server) do
+      :ok ->
+        :ok
+
+      failure ->
+        Logger.warning(
+          "[Cyfr] graceful stop: the socket server #{inspect(server)} could not stop " <>
+            "accepting (#{inspect(failure)}); it drains while it still accepts"
+        )
+
+        :error
+    end
+  end
+
+  defp safely_suspend(server) do
+    ThousandIsland.suspend(server)
+  catch
+    kind, reason -> {kind, reason}
+  end
+
   @doc """
   Refuse the boot when a socket the endpoint mounts (`sockets`, its
   `__sockets__/0`) is on no admission path (`Cyfr.Admission.socket_findings/1`).
@@ -286,10 +407,11 @@ defmodule Cyfr.Application do
   end
 
   # Emissary's webhook task supervisor (an inbound webhook's delivery)
-  # starts before the endpoint and so stops after it: a shutdown closes the
-  # listener first, and a delivery already in flight is ended after it.
-  # The endpoint drains its open connections for the
-  # `thousand_island_options` `shutdown_timeout` in `config/config.exs`.
+  # starts before the endpoint and so stops after it: the listener has
+  # closed before the tree stops (`prep_stop/1`), and a delivery already in
+  # flight is ended after the endpoint. The endpoint drains its open
+  # connections for the `thousand_island_options` `shutdown_timeout` in
+  # `config/config.exs`.
   defp web do
     [
       # 30 s: the longest webhook delivery it lets finish.
