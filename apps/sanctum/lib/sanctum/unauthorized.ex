@@ -62,6 +62,10 @@ defmodule Sanctum.Unauthorized do
   def class(:unauthenticated), do: :unauthenticated
   def class({:tool_auth_required, _name}), do: :unauthenticated
   def class({:consent_class_required, :not_authenticated}), do: :unauthenticated
+
+  # A standing lookup that could not reach the store is no verdict on the
+  # caller: retryable, never a denial.
+  def class({:consent_class_required, :unavailable}), do: :unavailable
   def class({:authorization_required, _detail}), do: :setup_required
 
   # A record or resource that cannot be attributed is a fault of the

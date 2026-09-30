@@ -16,13 +16,31 @@ defmodule Sanctum.Providers.Pairing do
   person's, through an interactive surface (`consent: :interactive`).
 
   The invitation's secret is the field `invitation_secret`, which the
-  redaction vocabulary (`Prima.Sanitizer`) keeps out of every log.
+  redaction vocabulary (`Prima.Sanitizer`) keeps out of every log, in the
+  arguments `complete` takes and in the answer `begin` gives; a proof is
+  the field `proof`, redacted the same way.
 
-  Every action answers `{:error, :not_built}`: none is built yet.
+  The ceremony is `Sanctum.Pairing`'s. Here each action is read off the
+  wire and answered on it:
+
+    * `begin` answers the invitation's secret (unpadded base64url, for the
+      pairing code), the client id it reserves and its expiry.
+    * `complete` answers the `pair` challenge to sign when it carries no
+      proof, and the paired client's id and its first certificate
+      (`Prima.DeviceCert`'s JSON) when it carries the proof over it.
+    * `renew` answers the client's id and its replacement certificate. It
+      is reached from the device channel's renewal exchange alone, under
+      the renewal context the channel obtains for the client that proved
+      its key; any other caller, an ordinary device intent among them, is
+      refused.
+    * `revoke` answers the client's id and its standing, `revoked`.
+    * `list` answers the person's active paired clients.
   """
 
-  alias Prima.{Arg, Operation}
-  alias Sanctum.Context
+  alias Prima.{Arg, DeviceCert, Operation}
+  alias Prima.DeviceCert.Challenge
+  alias Prima.Identity.Encoding
+  alias Sanctum.{Context, Pairing}
 
   @doc false
   # The tool's wire definition — schema and access annotations beside the
@@ -119,9 +137,175 @@ defmodule Sanctum.Providers.Pairing do
     )
   end
 
-  @actions ~w(begin complete renew revoke list)
+  def handle(%Context{} = ctx, %{"action" => "begin"} = args) do
+    case Pairing.begin(ctx, Map.delete(args, "action")) do
+      {:ok, invitation} ->
+        {:ok,
+         %{
+           invitation_secret: Encoding.b64(invitation.invitation_secret),
+           client_id: invitation.client_id,
+           expires_at: Prima.Time.iso8601(invitation.expires_at)
+         }}
 
-  def handle(%Context{}, %{"action" => action}) when action in @actions, do: {:error, :not_built}
+      {:error, reason} ->
+        {:error, refusal(reason)}
+    end
+  end
+
+  # The glass's submission is read as the device protocol reads a
+  # `pair_request` (`Prima.Device`), so the secret and the key reach the
+  # ceremony as the raw bytes their codecs decode, or not at all.
+  def handle(%Context{} = ctx, %{"action" => "complete"} = args) do
+    with {:ok, secret, device_key} <- pair_request(args),
+         {:ok, proof} <- optional_proof(args),
+         {:ok, answer} <- Pairing.complete(ctx, secret, %{device_key: device_key, proof: proof}) do
+      {:ok, completed(answer)}
+    else
+      {:error, reason} -> {:error, refusal(reason)}
+    end
+  end
+
+  def handle(%Context{} = ctx, %{"action" => "renew"} = args) do
+    with {:ok, device_key} <- device_key(args["device_key"]),
+         {:ok, paired} <-
+           Pairing.renew(ctx, %{
+             client_id: args["client_id"],
+             device_key: device_key,
+             proof: args["proof"]
+           }) do
+      {:ok, completed(paired)}
+    else
+      {:error, reason} -> {:error, refusal(reason)}
+    end
+  end
+
+  def handle(%Context{} = ctx, %{"action" => "revoke", "client_id" => client_id})
+      when is_binary(client_id) do
+    case Pairing.revoke(ctx, client_id) do
+      {:ok, row} -> {:ok, %{client_id: row.id, standing: row.standing}}
+      {:error, reason} -> {:error, refusal(reason)}
+    end
+  end
+
+  def handle(%Context{} = ctx, %{"action" => "list"}) do
+    case Pairing.list(ctx) do
+      {:ok, clients} -> {:ok, %{clients: Enum.map(clients, &listed/1)}}
+      {:error, reason} -> {:error, refusal(reason)}
+    end
+  end
+
+  def handle(_ctx, %{"action" => "revoke"}),
+    do: {:error, {:invalid_argument, "Missing required argument: client_id"}}
+
   def handle(_ctx, %{"action" => action}), do: {:error, {:unknown_action, "pairing.#{action}"}}
   def handle(_ctx, _args), do: {:error, :action_missing}
+
+  defp pair_request(args) do
+    message = %{
+      "protocol" => Prima.Device.protocol(),
+      "type" => "pair_request",
+      "invitation_secret" => args["invitation_secret"],
+      "device_key" => args["device_key"]
+    }
+
+    case Prima.Device.decode(message, :glass) do
+      {:ok, {:pair_request, %{invitation_secret: secret, device_key: device_key}}} ->
+        {:ok, secret, device_key}
+
+      {:error, _malformed} ->
+        {:error,
+         {:invalid_argument,
+          "The pairing code or the device key is not one a pairing takes: unpadded base64url of " <>
+            "16 and 32 bytes"}}
+    end
+  end
+
+  defp optional_proof(%{"proof" => proof}) when is_map(proof), do: {:ok, proof}
+  defp optional_proof(_args), do: {:ok, nil}
+
+  defp device_key(value) do
+    case Encoding.unb64(value, Encoding.key_bytes()) do
+      {:ok, device_key} ->
+        {:ok, device_key}
+
+      :error ->
+        {:error,
+         {:invalid_argument, "The device key is not unpadded base64url of a 32-byte public key"}}
+    end
+  end
+
+  defp completed(%{challenge: challenge}), do: %{challenge: Challenge.encode(challenge)}
+
+  defp completed(%{client_id: client_id, certificate: certificate}),
+    do: %{client_id: client_id, certificate: DeviceCert.encode(certificate)}
+
+  defp listed(client) do
+    %{
+      client_id: client.client_id,
+      label: client.label,
+      source: client.source,
+      paired_at: Prima.Time.iso8601(client.paired_at),
+      certificate_expires_at: Prima.Time.iso8601(client.certificate_expires_at),
+      current: client.current
+    }
+  end
+
+  # The ceremony's own refusals in the one refusal shape every surface
+  # renders (`Prima.Refusal`), each with the sentence its person reads; the
+  # vocabulary's and the stores' own reasons (a confirmation signal, a
+  # rate limit, a standing or tenancy refusal) pass as they are.
+  defp refusal(:invalid_invitation),
+    do:
+      refused(
+        :unauthenticated,
+        :invalid_invitation,
+        "This pairing code is not valid: it has expired or was already used. Show a new one."
+      )
+
+  defp refusal(:proof_refused),
+    do: refused(:unauthenticated, :proof_refused, "The device's proof of its key was refused")
+
+  defp refusal(:wrong_audience),
+    do: refused(:invalid_argument, :wrong_audience, "This pairing code is for another home")
+
+  defp refusal(:remote_identity_unavailable),
+    do:
+      refused(
+        :unavailable,
+        :remote_identity_unavailable,
+        "Pairing a device for a person whose identity is at another home is not built yet."
+      )
+
+  defp refusal(:revoked),
+    do: refused(:forbidden, :revoked, "This device's pairing was revoked; pair it again")
+
+  defp refusal(:not_standing),
+    do:
+      refused(
+        :forbidden,
+        :not_standing,
+        "The person this pairing is for no longer stands in this athanor"
+      )
+
+  defp refusal(:renewal_exchange_only),
+    do:
+      refused(
+        :forbidden,
+        :renewal_exchange_only,
+        "A paired device renews its certificate only through its device channel's renewal exchange"
+      )
+
+  defp refusal(:replayed),
+    do: refused(:unauthenticated, :replayed, "This renewal proof was already used")
+
+  defp refusal({:rate_limited, retry_after_ms}) when is_integer(retry_after_ms),
+    do: {:rate_limited, div(retry_after_ms + 999, 1_000)}
+
+  defp refusal({:invalid, _errors}),
+    do: {:invalid_argument, "The pairing could not be recorded as given"}
+
+  defp refusal(reason), do: reason
+
+  defp refused(class, reason, message),
+    do: %Prima.Refusal{class: class, reason: reason, message: message}
 end

@@ -16,17 +16,27 @@ defmodule Sanctum.Consent.Authz do
   | Caller | May consent |
   |---|---|
   | A Sanctum session (`:oidc`) | yes — Prism web, the CLI, and device-flow-derived sessions all land here |
+  | A paired device (`:device`), naming its paired client | yes — the person's own interactive client, on its device channel |
   | An API key with a capability pinned to this exact commit digest | yes, and only for that one commit |
   | A tincture session upgrade (`:session`) | **no** — this is the public tincture surface, not a console |
   | A tincture token, webhook, cron, system, or unauthenticated caller | no |
   | Anything on the guest plane | no, whatever else it carries |
 
+  A paired client is only the device channel's: a `:device` context names
+  its client (`client_id`), and a context of any other surface names
+  none, so one that claims a paired client without being the channel's,
+  or the channel's surface without its client, is no surface that may
+  consent. The same rule holds for the interactive and staging arms
+  below.
+
   Whichever arm admits the caller, its standing is read again as the
-  grant is decided (`Sanctum.Caller.revalidate_session/1`): a session
-  must still exist, be unexpired and be its person's, the person not
-  denied and the focused athanor open; a key must still be unrevoked, its
-  athanor's and its creator's. A grant needs the session alone, never a
-  fresh confirmation.
+  grant is decided: a session must still exist, be unexpired and be its
+  person's, the person not denied and the focused athanor open
+  (`Sanctum.Caller.revalidate_session/1`); a key must still be unrevoked,
+  its athanor's and its creator's; a paired device's certificate must be
+  unexpired, its paired client active and its person still seated in the
+  athanor, which revalidation reads as it does a session's. A grant needs
+  the session alone, never a fresh confirmation.
 
   ## Sensitive changes
 
@@ -173,37 +183,40 @@ defmodule Sanctum.Consent.Authz do
 
   @doc """
   The staging gate for plan and preview: authenticated, external-plane,
-  and a surface that could ever finish the walk (`:oidc` interactively,
-  `:api_key` through a digest-pinned capability). Staging grants nothing —
-  the commit is where the consent class bites — but candidate listings
-  are operator data, so anonymous and in-chain surfaces never see them.
+  and a surface that could ever finish the walk (`:oidc` or a paired
+  `:device` interactively, `:api_key` through a digest-pinned
+  capability). Staging grants nothing — the commit is where the consent
+  class bites — but candidate listings are operator data, so anonymous
+  and in-chain surfaces never see them.
   """
   @spec authorize_staging(Context.t()) :: :ok | {:error, refusal()}
   def authorize_staging(%Context{} = ctx) do
     with :ok <- check_plane(ctx),
-         :ok <- check_authenticated(ctx) do
-      case ctx.auth_method do
-        method when method in [:oidc, :api_key] -> :ok
-        method -> {:error, {:surface_not_permitted, method}}
-      end
+         :ok <- check_authenticated(ctx),
+         {:ok, method} <- surface(ctx) do
+      if method in [:oidc, :device, :api_key],
+        do: :ok,
+        else: {:error, {:surface_not_permitted, method}}
     end
   end
 
   @doc """
   The interactive arm alone, for mutations that have no commit digest to
   bind — vault CRUD, profile revocation. Same plane and authentication
-  gates; only an `:oidc` surface passes, and no key capability can
-  substitute (a digest-pinned capability is meaningless without a
-  digest-shaped act).
+  gates; only an `:oidc` session or a paired `:device` passes, and no key
+  capability can substitute (a digest-pinned capability is meaningless
+  without a digest-shaped act). A paired device's standing is read on
+  its channel, on every request, before the gate is asked
+  (`Sanctum.DeviceCerts.verify_request/3`).
   """
   @spec authorize_interactive(Context.t()) :: {:ok, :interactive} | {:error, refusal()}
   def authorize_interactive(%Context{} = ctx) do
     with :ok <- check_plane(ctx),
-         :ok <- check_authenticated(ctx) do
-      case ctx.auth_method do
-        :oidc -> {:ok, :interactive}
-        method -> {:error, {:surface_not_permitted, method}}
-      end
+         :ok <- check_authenticated(ctx),
+         {:ok, method} <- surface(ctx) do
+      if method in [:oidc, :device],
+        do: {:ok, :interactive},
+        else: {:error, {:surface_not_permitted, method}}
     end
   end
 
@@ -307,8 +320,9 @@ defmodule Sanctum.Consent.Authz do
 
   # The caller's standing, read again as the grant is decided: whatever
   # credential admitted it must still stand, under the standing lock order
-  # (`Sanctum.Caller.revalidate_session/1`). A context no stored credential
-  # backs keeps its establishment contract.
+  # (`Sanctum.Caller.revalidate_session/1`), a paired device's client and
+  # its person's seat among them. A context no stored credential backs
+  # keeps its establishment contract.
   defp standing(ctx) do
     case Sanctum.Caller.revalidate_session(ctx) do
       {:ok, _current} -> :ok
@@ -318,6 +332,18 @@ defmodule Sanctum.Consent.Authz do
     end
   end
 
+  # The surface a context authenticated through. A paired client is the
+  # device channel's alone: a `:device` context names its client, and no
+  # other context names one, so a context that claims either without the
+  # other is refused as the surface it claims.
+  defp surface(%Context{auth_method: :device, client_id: client_id}) when is_binary(client_id),
+    do: {:ok, :device}
+
+  defp surface(%Context{auth_method: method, client_id: nil}) when method != :device,
+    do: {:ok, method}
+
+  defp surface(%Context{auth_method: method}), do: {:error, {:surface_not_permitted, method}}
+
   defp check_plane(%Context{plane: :guest}), do: {:error, :guest_plane}
   defp check_plane(%Context{}), do: :ok
 
@@ -325,12 +351,19 @@ defmodule Sanctum.Consent.Authz do
   defp check_authenticated(%Context{anonymous: true}), do: {:error, :anonymous}
   defp check_authenticated(%Context{}), do: :ok
 
+  defp by_auth_method(ctx, request, now) do
+    with {:ok, method} <- surface(ctx), do: by_surface(method, request, now)
+  end
+
   # A Sanctum session. Note this is deliberately the *loaded session*
   # provenance, so a CLI that device-flowed into a session consents like the
-  # console does — same class of act, same authorization.
-  defp by_auth_method(%Context{auth_method: :oidc}, _request, _now), do: {:ok, :interactive}
+  # console does — same class of act, same authorization. A paired device
+  # is the person's own interactive client, and grants what their session
+  # grants.
+  defp by_surface(method, _request, _now) when method in [:oidc, :device],
+    do: {:ok, :interactive}
 
-  defp by_auth_method(%Context{auth_method: :api_key}, request, now) do
+  defp by_surface(:api_key, request, now) do
     if request.override? do
       {:error, :override_requires_interactive}
     else
@@ -341,9 +374,7 @@ defmodule Sanctum.Consent.Authz do
   # Everything else is a surface that must not be able to consent — most
   # sharply `:session`, which is produced only by the tincture upgrade path
   # and would otherwise let a public tincture surface grant authority.
-  defp by_auth_method(%Context{auth_method: method}, _request, _now) do
-    {:error, {:surface_not_permitted, method}}
-  end
+  defp by_surface(method, _request, _now), do: {:error, {:surface_not_permitted, method}}
 
   defp check_capability(%Request{key_capability: nil}, _now), do: {:error, :no_capability}
 

@@ -764,7 +764,6 @@ defmodule Cyfr.BoundariesTest do
       pending = Boundaries.pending_sanctum_exports()
 
       assert pending == %{
-               "Sanctum.DeviceCerts" => [verify_connect: 3, verify_request: 3],
                "Sanctum.Recovery" => [restore: 2]
              }
 

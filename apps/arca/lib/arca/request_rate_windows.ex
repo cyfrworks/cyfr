@@ -30,6 +30,13 @@ defmodule Arca.RequestRateWindows do
 
   Cleanup is bounded: a claim that writes removes at most
   16 windows of its bucket that ran out more than a window ago.
+
+  ## Checking without counting
+
+  `check/5` answers what a claim at the cap would, from a read, and
+  counts nothing: for a caller that counts only the requests that fail
+  (a device's connect proof), which asks before its work and claims only
+  once the work failed.
   """
 
   import Ecto.Query
@@ -60,6 +67,46 @@ defmodule Arca.RequestRateWindows do
   end
 
   def claim(%Prima.Actor{scope: scope, system: system}, _bucket, _key, _cap, _window_ms)
+      when scope != :platform or system != true,
+      do: {:error, :cross_tenant}
+
+  @doc """
+  Whether `bucket` and `key`'s window of `window_ms` is spent at `cap`,
+  without counting: what `claim/5` would answer for a claim at the cap,
+  from a read. `:ok` while the window has room (or ran out, or was never
+  opened), `{:error, {:rate_limited, retry_after_ms}}` once it holds `cap`
+  requests. It writes nothing and takes no write lock, so a caller that
+  counts only what fails asks here first and claims afterwards; a check
+  and a later claim can race between concurrent callers, which overshoots
+  by that concurrency and no more. The same actor and bucket rules as
+  `claim/5`.
+  """
+  @spec check(Prima.Actor.t(), atom(), String.t(), pos_integer(), pos_integer()) ::
+          :ok
+          | {:error, {:rate_limited, non_neg_integer()} | :cross_tenant | :database_error}
+  def check(%Prima.Actor{scope: :platform, system: true}, bucket, key, cap, window_ms)
+      when is_atom(bucket) and not is_nil(bucket) and not is_boolean(bucket) and is_binary(key) and
+             key != "" and is_integer(cap) and cap > 0 and is_integer(window_ms) and
+             window_ms > 0 do
+    bucket = Atom.to_string(bucket)
+    key_hash = Prima.Digest.sha256(key)
+
+    Arca.Repo.Errors.with_db_rescue("Arca.RequestRateWindows.check", fn ->
+      now = Arca.ServerMetaStorage.now!()
+
+      case window(bucket, key_hash) do
+        %RequestRateWindow{} = row ->
+          if current?(row, window_ms, now) and row.count >= cap,
+            do: {:error, {:rate_limited, retry_after(row, now)}},
+            else: :ok
+
+        nil ->
+          :ok
+      end
+    end)
+  end
+
+  def check(%Prima.Actor{scope: scope, system: system}, _bucket, _key, _cap, _window_ms)
       when scope != :platform or system != true,
       do: {:error, :cross_tenant}
 

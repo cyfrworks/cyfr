@@ -416,12 +416,13 @@ defmodule Cyfr.Boundaries do
       depth: 3,
       allow: ~w(
         Sanctum Sanctum.BearerToken Sanctum.Caller Sanctum.ClientIp Sanctum.Consent
-        Sanctum.Context Sanctum.Directory Sanctum.Egress Sanctum.ExecutionStanding
+        Sanctum.Context Sanctum.DeviceCerts Sanctum.Directory Sanctum.Egress
+        Sanctum.ExecutionStanding
         Sanctum.Network Sanctum.Session Sanctum.TinctureAccess Sanctum.TinctureAuth
         Sanctum.ToolServerDigest Sanctum.Unauthorized Sanctum.UnauthorizedError
         Sanctum.Vault.OAuthGrant Sanctum.VaultReader Sanctum.Webhook
       ),
-      pending_allow: ~w(Sanctum.DeviceCerts Sanctum.Recovery),
+      pending_allow: ~w(Sanctum.Recovery),
       reason:
         "the auth fabric's own front door, where a wide roster is the front door doing " <>
           "its job. The MCP transport carries tenancy, reads a server's vault edge, and " <>
@@ -1308,6 +1309,7 @@ defmodule Cyfr.Boundaries do
       require_permission: 3,
       require_tenant!: 1
     ],
+    "Sanctum.DeviceCerts" => [verify_connect: 3, verify_request: 3],
     "Sanctum.Directory" => [append: 2, outcome: 1, recover: 2, register: 1, resolve: 1],
     "Sanctum.Door" => [admit_identity: 2, platform_admin_emails: 0, refusal_message: 0],
     "Sanctum.Door.Store" => [requests: 0],
@@ -1413,10 +1415,9 @@ defmodule Cyfr.Boundaries do
 
   # The Sanctum functions the host will call once the work that calls them
   # lands, each on a module that exists and holds no function yet: the
-  # restore ingress and the device channel. A call to one is admitted; one
-  # nothing calls yet is not stale.
+  # restore ingress. A call to one is admitted; one nothing calls yet is
+  # not stale.
   @pending_sanctum_exports %{
-    "Sanctum.DeviceCerts" => [verify_connect: 3, verify_request: 3],
     "Sanctum.Recovery" => [restore: 2]
   }
 

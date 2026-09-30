@@ -53,6 +53,11 @@ defmodule Grimoire.VisibilityTest do
     )
   end
 
+  # A paired device's context: the device channel's surface, naming its
+  # paired client.
+  defp paired_device_ctx(permissions),
+    do: %{ctx_with(permissions, :device) | client_id: "pcl_probe"}
+
   defp anonymous_ctx do
     Context.build(
       user_id: nil,
@@ -200,6 +205,37 @@ defmodule Grimoire.VisibilityTest do
       assert visible_actions("vault", anonymous_ctx()) == []
       assert visible_actions("profile", anonymous_ctx()) == []
     end
+
+    test "a paired device sees what its person's session sees: the whole surface" do
+      device = paired_device_ctx([])
+
+      assert visible_actions("vault", device) == visible_actions("vault", ctx_with([], :oidc))
+      assert visible_actions("profile", device) == visible_actions("profile", ctx_with([], :oidc))
+      assert length(visible_actions("vault", device)) == 9
+      assert "commit" in visible_actions("profile", device)
+      assert "revoke" in visible_actions("pairing", device)
+    end
+
+    test "a paired client is the device channel's alone: a context claiming the other half sees no consent arm" do
+      # What a surface no consent arm admits sees: the consent-free actions.
+      unconsenting = visible_actions("vault", ctx_with([], :scheduled))
+      refute "create" in unconsenting
+
+      for ctx <- [ctx_with([], :device), %{ctx_with([], :oidc) | client_id: "pcl_probe"}] do
+        assert visible_actions("vault", ctx) == unconsenting, inspect(ctx.auth_method)
+        refute "commit" in visible_actions("profile", ctx)
+        refute "plan" in visible_actions("profile", ctx)
+        refute "begin" in visible_actions("pairing", ctx)
+      end
+    end
+
+    test "inside a chain the in-chain arm is the session's alone" do
+      guest = Context.enter_guest(paired_device_ctx([]))
+      refute "revoke" in visible_actions("vault", guest)
+
+      session_chain = Context.enter_guest(ctx_with([], :oidc))
+      assert visible_actions("vault", session_chain) != []
+    end
   end
 
   # ============================================================================
@@ -262,7 +298,12 @@ defmodule Grimoire.VisibilityTest do
         ctx_with([:execute]),
         ctx_with([:storage_read]),
         ctx_with([:admin]),
-        ctx_with([:component_manage], :oidc)
+        ctx_with([:component_manage], :oidc),
+        # A paired device, and each half of one without the other.
+        paired_device_ctx([]),
+        paired_device_ctx([:component_manage]),
+        ctx_with([], :device),
+        %{ctx_with([], :oidc) | client_id: "pcl_probe"}
       ]
 
       for tool_def <- live_tools(),
