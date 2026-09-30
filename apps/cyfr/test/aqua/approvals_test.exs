@@ -199,6 +199,208 @@ defmodule Aqua.ApprovalsTest do
              Approvals.resolve(ctx, destructive.id, %{decision: :approved, scope: :thread})
   end
 
+  describe "a bounded standing approval" do
+    @write %{
+      tool: "files",
+      action: "write",
+      args: %{"path" => "data/other/x.md", "content" => "x"}
+    }
+    @notes %{kind: "storage_path", patterns: ["data/notes/"]}
+
+    defp soon, do: DateTime.add(DateTime.utc_now(), 3600, :second) |> DateTime.truncate(:second)
+
+    defp resolution(ctx, approval_id) do
+      {:ok, %{resolution: resolution}} = Tape.approval(ctx, approval_id)
+      if is_binary(resolution), do: Jason.decode!(resolution), else: resolution
+    end
+
+    test "carries its lifecycle and deadline from the card's own turn into its row", %{
+      ctx: ctx,
+      thread: thread,
+      pins: pins
+    } do
+      turn = started!(ctx, thread, pins)
+      until = soon()
+      %{approval: approval} = card!(ctx, turn, @keep, standing: "thread")
+
+      assert {:ok, %{decision: "approved"}} =
+               Approvals.resolve(ctx, approval.id, %{
+                 decision: :approved,
+                 scope: :thread,
+                 lifecycle: :turn,
+                 until: until
+               })
+
+      turn_id = turn.id
+
+      assert {:ok,
+              [
+                %{
+                  tool: "notes",
+                  action: "keep",
+                  effect: "allow",
+                  scope: "thread",
+                  lifecycle_kind: "turn",
+                  lifecycle_id: ^turn_id,
+                  constraint: nil
+                } = row
+              ]} = Aqua.ToolGrants.for_thread(ctx, thread.id, "aqua")
+
+      assert DateTime.compare(row.expires_at, until) == :eq
+
+      assert %{"scope" => "thread", "lifecycle" => "turn", "until" => spelled} =
+               resolution(ctx, approval.id)
+
+      assert {:ok, ^until, 0} = DateTime.from_iso8601(spelled)
+
+      # The run it ends with is the turn's root, read from the turn.
+      %{approval: again} = card!(ctx, turn, @keep, standing: "thread")
+
+      {:ok, _} =
+        Approvals.resolve(ctx, again.id, %{
+          decision: :approved,
+          scope: :thread,
+          lifecycle: :execution
+        })
+
+      root = turn.root_execution_id
+
+      assert {:ok, [%{lifecycle_kind: "execution", lifecycle_id: ^root}]} =
+               Aqua.ToolGrants.for_thread(ctx, thread.id, "aqua")
+    end
+
+    test "carries a constraint for an action that names its resource", %{
+      ctx: ctx,
+      thread: thread,
+      pins: pins
+    } do
+      turn = started!(ctx, thread, pins)
+
+      # What put files.write in the soul's policy: an earlier answer, for
+      # this run and data/notes/ alone, at agent scope.
+      {:ok, _} =
+        Aqua.ToolGrants.put(ctx, %{
+          scope: "agent",
+          effect: "allow",
+          agent_name: "aqua",
+          tool: "files",
+          action: "write",
+          lifecycle_kind: "execution",
+          lifecycle_id: turn.root_execution_id,
+          constraint: @notes
+        })
+
+      %{approval: approval} = card!(ctx, turn, @write)
+      other = %{kind: "storage_path", patterns: ["data/other/"]}
+
+      assert {:ok, %{decision: "approved"}} =
+               Approvals.resolve(ctx, approval.id, %{
+                 decision: :approved,
+                 scope: :thread,
+                 lifecycle: :turn,
+                 constraint: other
+               })
+
+      {:ok, rows} = Aqua.ToolGrants.for_thread(ctx, thread.id, "aqua")
+
+      assert %{constraint: ^other, lifecycle_kind: "turn"} =
+               Enum.find(rows, &(&1.scope == "thread"))
+
+      assert %{"constraint" => %{"kind" => "storage_path"}} = resolution(ctx, approval.id)
+
+      place = fn path ->
+        %{
+          agent_name: "aqua",
+          thread_id: thread.id,
+          tool: "files",
+          action: "write",
+          args: %{"path" => path},
+          turn_id: turn.id,
+          execution_id: turn.root_execution_id
+        }
+      end
+
+      assert Sanctum.ToolGrants.admits?(ctx, place.("data/other/y.md"))
+      assert Sanctum.ToolGrants.admits?(ctx, place.("data/notes/y.md"))
+      refute Sanctum.ToolGrants.admits?(ctx, place.("data/elsewhere/y.md"))
+    end
+
+    test "a bound the answer may not carry is refused, and the card stays open", %{
+      ctx: ctx,
+      thread: thread,
+      pins: pins
+    } do
+      turn = started!(ctx, thread, pins)
+      %{approval: approval} = card!(ctx, turn, @keep, standing: "thread")
+      past = DateTime.add(DateTime.utc_now(), -60, :second)
+
+      for {choice, reason} <- [
+            {%{decision: :approved, scope: :thread, constraint: @notes}, :no_resource},
+            {%{decision: :approved, scope: :once, lifecycle: :turn}, :bounds_without_standing},
+            {%{decision: :approved, scope: :thread, lifecycle: :schedule}, :no_schedule},
+            {%{decision: :approved, scope: :thread, lifecycle: :forever}, :invalid_lifecycle},
+            {%{decision: :approved, scope: :thread, until: past}, :deadline_passed},
+            {%{decision: :declined, scope: :never, until: soon()}, :bounded_deny},
+            {%{decision: :declined, scope: :never, lifecycle: :turn}, :bounded_deny},
+            {%{decision: :declined, scope: :never, constraint: @notes}, :bounded_deny},
+            {%{decision: :declined, scope: :once, until: soon()}, :bounds_without_standing}
+          ] do
+        assert {:error, {:scope_not_permitted, ^reason}} =
+                 Approvals.resolve(ctx, approval.id, choice),
+               "#{inspect(choice)} was not refused as #{reason}"
+
+        assert {:ok, %{status: "pending"}} = Tape.approval(ctx, approval.id)
+      end
+
+      assert {:ok, []} = Aqua.ToolGrants.for_thread(ctx, thread.id, "aqua")
+
+      # A constraint the store would refuse is refused by the rule, before
+      # the decision's transaction: a pattern twice, more than 64, or a
+      # wildcard. What put files.write in the policy is an earlier answer
+      # for this run and data/notes/ alone.
+      {:ok, _} =
+        Aqua.ToolGrants.put(ctx, %{
+          scope: "agent",
+          effect: "allow",
+          agent_name: "aqua",
+          tool: "files",
+          action: "write",
+          lifecycle_kind: "execution",
+          lifecycle_id: turn.root_execution_id,
+          constraint: @notes
+        })
+
+      %{approval: write} = card!(ctx, turn, @write)
+
+      for patterns <- [["data/a/", "data/a/"], Enum.map(1..65, &"data/#{&1}.md"), ["*"]] do
+        assert {:error, {:scope_not_permitted, :invalid_constraint}} =
+                 Approvals.resolve(ctx, write.id, %{
+                   decision: :approved,
+                   scope: :thread,
+                   constraint: %{kind: "storage_path", patterns: patterns}
+                 }),
+               "#{inspect(patterns)} was not refused"
+
+        assert {:ok, %{status: "pending"}} = Tape.approval(ctx, write.id)
+      end
+
+      assert {:ok, [%{scope: "agent", constraint: @notes}]} =
+               Aqua.ToolGrants.for_thread(ctx, thread.id, "aqua")
+
+      # A destructive action takes no standing allow, bounded or not.
+      %{approval: destructive} = card!(ctx, turn, @wipe, kind: "destructive")
+
+      assert {:error, {:scope_not_permitted, "destructive"}} =
+               Approvals.resolve(ctx, destructive.id, %{
+                 decision: :approved,
+                 scope: :thread,
+                 lifecycle: :turn
+               })
+
+      assert {:ok, %{status: "pending"}} = Tape.approval(ctx, destructive.id)
+    end
+  end
+
   test "declining closes the step denied with a tool result, and never records a deny", %{
     ctx: ctx,
     thread: thread,

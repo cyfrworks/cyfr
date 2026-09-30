@@ -131,8 +131,27 @@ defmodule Grimoire.VirtualToolsTest do
     end
 
     assert VirtualTools.action("files", "read") ==
-             %{kind: :read, planes: [:in_chain], recovery: :replay_safe}
+             %{
+               kind: :read,
+               planes: [:in_chain],
+               recovery: :replay_safe,
+               resource: {"path", :storage_path}
+             }
 
     assert VirtualTools.action("files", :read) == nil
+  end
+
+  test "every files action names the path it touches; storage and http name none" do
+    for action <- VirtualTools.actions_of("files") do
+      argument = if action == "search", do: "base_path", else: "path"
+
+      assert %{resource: {^argument, :storage_path}} = VirtualTools.action("files", action),
+             "files.#{action} names no path"
+    end
+
+    for tool <- ~w(storage http request_setup), action <- VirtualTools.actions_of(tool) do
+      refute Map.has_key?(VirtualTools.action(tool, action), :resource),
+             "#{tool}.#{action} names a resource"
+    end
   end
 end

@@ -162,6 +162,54 @@ defmodule Aqua.Providers.ApprovalTest do
              })
   end
 
+  test "a standing answer's bounds travel with the decision, and one it may not carry is refused",
+       %{ctx: ctx, thread: thread} do
+    %{approval: approval} = card!(ctx, thread)
+
+    resolve = fn extra ->
+      Grimoire.call_external(
+        "approval",
+        ctx,
+        Map.merge(%{"action" => "resolve", "approval" => approval.id}, extra)
+      )
+    end
+
+    # Each bound reaches the decision, which refuses it on a deny or on
+    # "once" rather than dropping it.
+    for {extra, reason} <- [
+          {%{"decision" => "decline", "scope" => "never", "lifecycle" => "turn"}, :bounded_deny},
+          {%{"decision" => "decline", "scope" => "never", "until" => "2999-01-01T00:00:00Z"},
+           :bounded_deny},
+          {%{
+             "decision" => "decline",
+             "scope" => "never",
+             "constraint" => %{"kind" => "storage_path", "patterns" => ["data/notes/"]}
+           }, :bounded_deny},
+          {%{"decision" => "decline", "until" => "2999-01-01T00:00:00+02:00"},
+           :bounds_without_standing}
+        ] do
+      assert {:error, {:invalid_argument, message}} = resolve.(extra)
+      assert message == Aqua.ToolGrants.refusal_message({:scope_not_permitted, reason})
+    end
+
+    assert {:error, {:invalid_argument, message}} =
+             resolve.(%{"decision" => "approve", "scope" => "thread", "lifecycle" => "turn"})
+
+    assert message == Aqua.ToolGrants.refusal_message({:scope_not_permitted, "destructive"})
+
+    for until <- ["tomorrow", "2026-10-01T00:00:00", "2026-13-01T00:00:00Z"] do
+      assert {:error, {:invalid_argument, message}} =
+               resolve.(%{"decision" => "decline", "until" => until})
+
+      assert message =~ "ISO 8601"
+    end
+
+    assert {:error, %Prima.Refusal{stage: :admission, reason: {:invalid_argument, _}}} =
+             resolve.(%{"decision" => "approve", "scope" => "thread", "lifecycle" => "forever"})
+
+    assert {:ok, %{status: "pending"}} = Tape.approval(ctx, approval.id)
+  end
+
   test "a wrong scope, a missing card and a bad decision are typed refusals", %{
     ctx: ctx,
     thread: thread

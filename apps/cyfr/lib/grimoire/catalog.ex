@@ -1931,6 +1931,51 @@ defmodule Grimoire.Catalog do
         do: "#{tool.name}.#{action}"
   end
 
+  # One `tool.action` as the standing rule reads it (`Sanctum.Grimoire`),
+  # classified as `tool_kind/2` classifies it: a virtual hand from its
+  # table, an upstream `server:tool` as external (it declares no standing
+  # and names no resource), a catalogued action from its operation. An
+  # action name holds no dot, so the pair splits at the last one, and a
+  # server's tool name keeps any dot of its own.
+  @impl Sanctum.Grimoire
+  def action_declaration(name) when is_binary(name) do
+    case String.split(name, ".") do
+      [_, _ | _] = parts ->
+        {tool, [action]} = Enum.split(parts, -1)
+        declaration(Enum.join(tool, "."), action)
+
+      _ ->
+        {:error, :not_found}
+    end
+  end
+
+  defp declaration(tool, action) when tool == "" or action == "", do: {:error, :not_found}
+
+  defp declaration(tool, action) do
+    cond do
+      Grimoire.VirtualTools.tool?(tool) ->
+        case Grimoire.VirtualTools.action(tool, action) do
+          %{kind: kind} = declared ->
+            {:ok, %{kind: kind, standing: nil, resource: Map.get(declared, :resource)}}
+
+          nil ->
+            {:error, :not_found}
+        end
+
+      String.contains?(tool, ":") ->
+        {:ok, %{kind: :external, standing: nil, resource: nil}}
+
+      true ->
+        with {:ok, {_module, %{operations: operations}}} <- lookup(tool),
+             %Operation{} = operation <- Enum.find(operations, &(&1.action == action)) do
+          {:ok,
+           %{kind: operation.kind, standing: operation.standing, resource: operation.resource}}
+        else
+          _ -> {:error, :not_found}
+        end
+    end
+  end
+
   # The external tool servers a grant may name (`Sanctum.Grimoire`). The
   # proxied `server:tool` entries are the proxy port's (`Grimoire.Proxy`),
   # so it is what describes them.

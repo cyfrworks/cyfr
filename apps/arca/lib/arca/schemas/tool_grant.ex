@@ -25,8 +25,9 @@ defmodule Arca.Schemas.ToolGrant do
   (`lifecycle_kind`, `execution`, `turn` or `schedule`, and
   `lifecycle_id`, that row's id), a deadline (`expires_at`) and a
   `constraint`, a resource kind (`storage_path` or `egress_domain`) and
-  its patterns, stored as JSON. A deny carries none of the four, so a
-  standing deny never lapses; one written with any is refused.
+  its patterns, stored as JSON in the one grammar `constraint_errors/2`
+  spells. A deny carries none of the four, so a standing deny never
+  lapses; one written with any is refused.
   """
 
   use Ecto.Schema
@@ -173,7 +174,18 @@ defmodule Arca.Schemas.ToolGrant do
   defp put_constraint(changeset, _other),
     do: add_error(changeset, :constraint, "is a resource kind and its patterns")
 
-  defp constraint_errors(kind, patterns) do
+  @doc """
+  The one constraint grammar: `[]` for a resource kind and patterns a
+  row may carry, else why not. A kind a constraint may name
+  (`constraint_kinds/0`); between one and #{@max_patterns} patterns, none
+  twice; each in its kind's grammar — a storage path is a safe relative
+  path, literal or a folder ending in `/`, never a wildcard, and an
+  egress domain a bare domain with an optional `*.` prefix. The write
+  holds a row to it, and the rule that decides which answers may stand
+  (`Sanctum.ToolGrants.check_standing/2`) asks it before the write.
+  """
+  @spec constraint_errors(term(), term()) :: [String.t()]
+  def constraint_errors(kind, patterns) do
     cond do
       kind not in @constraint_kinds ->
         ["names no resource kind a constraint may carry"]
@@ -192,10 +204,15 @@ defmodule Arca.Schemas.ToolGrant do
     end
   end
 
-  # The storage-path grammar is the storage layer's own denylist; the
+  # The storage-path grammar is the storage layer's own denylist, with no
+  # wildcard: a pattern names one path or, ending in `/`, one folder, and
+  # every reader of a stored constraint reads it the same way (a `*` some
+  # path matcher reads as every path would widen the answer). The
   # egress-domain grammar is a bare domain with an optional `*.` prefix.
   defp pattern?("storage_path", pattern) when is_binary(pattern) and pattern != "",
-    do: Prima.PathSafety.validate_relative_path(pattern) == :ok
+    do:
+      not String.contains?(pattern, "*") and
+        Prima.PathSafety.validate_relative_path(pattern) == :ok
 
   defp pattern?("egress_domain", pattern) when is_binary(pattern),
     do: Prima.Manifest.valid_connect_domain?(pattern)

@@ -18,7 +18,14 @@ defmodule Grimoire.VirtualTools do
     * **recovery** — `:replay_safe` on a read reviewed as safe to
       re-dispatch after an uncertain recovery;
     * **auto_only** — `true` on an action that may only ever be `auto`, a
-      UI event no card could run.
+      UI event no card could run;
+    * **resource** — on a `files` action, the argument naming the path it
+      touches, relative to the athanor root, as `Prima.Operation`'s
+      `resource:` declares one: what a standing approval's constraint is
+      checked against (`Sanctum.ToolGrants.admits?/2`). `search` names its
+      folder by `base_path`, as the hand builds it; `storage` names a key
+      and `http` a URL, so neither declares one and neither takes a
+      constraint.
 
   Every function is a pure read of the table.
   """
@@ -31,7 +38,8 @@ defmodule Grimoire.VirtualTools do
           required(:kind) => kind(),
           required(:planes) => [atom()],
           optional(:recovery) => :replay_safe,
-          optional(:auto_only) => true
+          optional(:auto_only) => true,
+          optional(:resource) => {String.t(), Prima.Operation.resource_kind()}
         }
 
   @typedoc "One virtual tool family's declaration."
@@ -44,6 +52,7 @@ defmodule Grimoire.VirtualTools do
 
   @files_catalyst "catalyst:local.files"
   @http_catalyst "catalyst:local.http"
+  @files_path {"path", :storage_path}
 
   @table %{
     "files" => %{
@@ -51,14 +60,39 @@ defmodule Grimoire.VirtualTools do
       description: "Athanor file ops. Wraps catalyst:local.files.",
       catalyst: @files_catalyst,
       actions: %{
-        "read" => %{kind: :read, planes: [:in_chain], recovery: :replay_safe},
-        "list" => %{kind: :read, planes: [:in_chain], recovery: :replay_safe},
-        "search" => %{kind: :read, planes: [:in_chain], recovery: :replay_safe},
-        "grep" => %{kind: :read, planes: [:in_chain], recovery: :replay_safe},
-        "tree" => %{kind: :read, planes: [:in_chain], recovery: :replay_safe},
-        "write" => %{kind: :write, planes: [:in_chain]},
-        "edit" => %{kind: :write, planes: [:in_chain]},
-        "delete" => %{kind: :destructive, planes: [:in_chain]}
+        "read" => %{
+          kind: :read,
+          planes: [:in_chain],
+          recovery: :replay_safe,
+          resource: @files_path
+        },
+        "list" => %{
+          kind: :read,
+          planes: [:in_chain],
+          recovery: :replay_safe,
+          resource: @files_path
+        },
+        "search" => %{
+          kind: :read,
+          planes: [:in_chain],
+          recovery: :replay_safe,
+          resource: {"base_path", :storage_path}
+        },
+        "grep" => %{
+          kind: :read,
+          planes: [:in_chain],
+          recovery: :replay_safe,
+          resource: @files_path
+        },
+        "tree" => %{
+          kind: :read,
+          planes: [:in_chain],
+          recovery: :replay_safe,
+          resource: @files_path
+        },
+        "write" => %{kind: :write, planes: [:in_chain], resource: @files_path},
+        "edit" => %{kind: :write, planes: [:in_chain], resource: @files_path},
+        "delete" => %{kind: :destructive, planes: [:in_chain], resource: @files_path}
       }
     },
     "storage" => %{

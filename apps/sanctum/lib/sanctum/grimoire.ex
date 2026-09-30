@@ -9,7 +9,9 @@ defmodule Sanctum.Grimoire do
   so shape derivation asks the catalog which those are. A grant on an
   external tool server may only name a server the catalog proxies, so a
   plan and a commit ask it which servers those are and what each exposes.
-  Both ask through this port rather than the catalog module directly: the
+  Which answers a person gave may stand (`Sanctum.ToolGrants`) depends on
+  what one action is, so the rule asks it for that action's declaration.
+  All ask through this port rather than the catalog module directly: the
   contract is written here, in the domain that depends on it, and the one
   implementation answers for every provider it has loaded. A provider that
   cannot load is a boot failure there, never a narrower answer here — a
@@ -57,8 +59,30 @@ defmodule Sanctum.Grimoire do
           optional(atom()) => term()
         }
 
+  @typedoc """
+  What one `tool.action` is, as the standing rule reads it: its `kind`,
+  its `standing` declaration (`:thread`, `false`, or nil for either
+  scope) and its `resource`, the argument that names the resource the
+  action touches with that resource's kind (`Prima.Operation`'s
+  `resource:`), or nil when it declares none.
+  """
+  @type action_declaration :: %{
+          kind: atom(),
+          standing: term(),
+          resource: {String.t(), Prima.Operation.resource_kind()} | nil
+        }
+
   @doc "Every `tool.action` the catalog serves, from its loaded providers."
   @callback tool_actions() :: [String.t()]
+
+  @doc """
+  One action's declaration, by its `tool.action` name: a catalogued
+  action, a virtual hand's or an upstream server's tool, classified as
+  the gate classifies it. `{:error, :not_found}` for a pair the catalog
+  does not hold.
+  """
+  @callback action_declaration(String.t()) ::
+              {:ok, action_declaration()} | {:error, :not_found}
 
   @doc "Whether every configured provider loaded, or which did not."
   @callback providers_loaded() :: :ok | {:error, [module()]}
@@ -124,6 +148,9 @@ defmodule Sanctum.Grimoire do
 
   @spec tool_actions() :: [String.t()]
   def tool_actions, do: impl!().tool_actions()
+
+  @spec action_declaration(String.t()) :: {:ok, action_declaration()} | {:error, :not_found}
+  def action_declaration(name) when is_binary(name), do: impl!().action_declaration(name)
 
   @spec tool_server_candidates(Context.t()) :: [tool_server_candidate()]
   def tool_server_candidates(%Context{} = ctx), do: impl!().tool_server_candidates(ctx)

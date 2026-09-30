@@ -205,14 +205,17 @@ defmodule Cyfr.DeclaredOperationsTest do
       assert call(ctx, "execution", "usage", %{"profile_id" => "prf_1"}) == {:error, :not_built}
     end
 
-    test "an approval's bounds are refused rather than dropped", %{ctx: ctx} do
+    test "an approval's bounds are decided, never refused as not built", %{ctx: ctx} do
       for bound <- [
             %{"lifecycle" => "turn"},
             %{"until" => "2026-10-01T00:00:00Z"},
             %{"constraint" => %{"kind" => "storage_path", "patterns" => ["data/notes/"]}}
           ] do
         args = Map.merge(%{"approval" => "apr_1", "decision" => "approve"}, bound)
-        assert call(ctx, "approval", "resolve", args) == {:error, :not_built}
+
+        # Carried into the decision, which finds no such approval.
+        assert call(ctx, "approval", "resolve", args) ==
+                 {:error, {:not_found, "approval", "apr_1"}}
       end
     end
 

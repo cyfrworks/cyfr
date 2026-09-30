@@ -959,10 +959,14 @@ defmodule Aqua.Loop do
          {runnable, cards}
        ) do
     decision =
-      Policy.decide(call, state.spec.policy,
-        consented?: &consented?(state, &1),
-        touched: touched,
-        restricted?: state.restricted?
+      Policy.decide(
+        call,
+        state.spec.policy,
+        [
+          consented?: &consented?(state, &1),
+          touched: touched,
+          restricted?: state.restricted?
+        ] ++ place(state)
       )
 
     case decision do
@@ -1190,13 +1194,14 @@ defmodule Aqua.Loop do
   # runs, both belonged to a grant that had gone. Every call asks again as
   # it dispatches. The check can only withdraw an `auto`: a card the person
   # answered is their decision about this exact call, and a standing grant's
-  # withdrawal does not retract it.
+  # withdrawal does not retract it. A call a bounded allow let run is asked
+  # again whether the allow still covers it, from the rows as they stand.
   defp still_granted(_state, %{approval: %{}}, _call), do: :ok
 
   defp still_granted(%State{} = state, _item, %Call{} = call) do
     case Turn.current_policy(state.spec) do
       {:ok, policy} ->
-        if Policy.auto?(call, policy),
+        if Policy.auto?(call, policy, place(state)),
           do: :ok,
           else: {:denied, "#{call.tool}.#{call.action} is no longer allowed in this thread"}
 
@@ -1205,6 +1210,19 @@ defmodule Aqua.Loop do
       {:error, _reason} ->
         {:denied, "#{call.tool}.#{call.action} could not be checked against the agent's grants"}
     end
+  end
+
+  # Where a call is made, as a bounded allow is judged against it
+  # (`Sanctum.ToolGrants.admits?/2`): the member's context its rows are
+  # read under, the agent, the thread, the turn and the turn's root.
+  defp place(%State{spec: spec, turn: turn}) do
+    [
+      ctx: spec.ctx,
+      agent: spec.agent["name"],
+      thread_id: turn.thread_id,
+      turn_id: turn.id,
+      execution_id: turn.root_execution_id
+    ]
   end
 
   defp settle_denied(%State{} = state, step, %Call{} = call, message) do

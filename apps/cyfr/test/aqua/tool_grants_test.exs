@@ -42,13 +42,32 @@ defmodule Aqua.ToolGrantsTest do
         :never_standing,
         :thread_only,
         :unknown_kind,
+        :bounded_deny,
+        :bounds_without_standing,
+        :invalid_lifecycle,
+        :no_schedule,
+        :invalid_deadline,
+        :deadline_passed,
+        :no_resource,
+        :resource_kind,
+        :invalid_constraint,
         :something_new
       ]
 
       for reason <- reasons do
         sentence = ToolGrants.refusal_message({:scope_not_permitted, reason})
         assert String.ends_with?(sentence, ".")
-        refute sentence =~ ~r/never_standing|thread_only|unknown_kind|foreign_agent/
+
+        refute sentence =~
+                 ~r/never_standing|thread_only|unknown_kind|foreign_agent|bounded_deny|bounds_without|invalid_|no_schedule|deadline_passed|no_resource|resource_kind/
+      end
+
+      # Every reason the rule and the decision name has its own sentence.
+      generic = ToolGrants.refusal_message({:scope_not_permitted, :something_new})
+
+      for reason <- reasons -- [:something_new] do
+        refute ToolGrants.refusal_message({:scope_not_permitted, reason}) == generic,
+               "#{inspect(reason)} reads as the generic refusal"
       end
 
       # The runner spells the kind as the intent stores it (a string), the
@@ -139,6 +158,134 @@ defmodule Aqua.ToolGrantsTest do
     test "no grants leaves the declared policy exactly as written" do
       declared = %{"component.pull" => "ask", "files.read" => "auto"}
       assert ToolGrants.resolve(declared, []) == declared
+    end
+  end
+
+  describe "a bounded allow" do
+    @notes %{kind: "storage_path", patterns: ["data/notes/"]}
+
+    defp bounded(overrides) do
+      Map.merge(
+        %{
+          effect: "allow",
+          scope: "thread",
+          tool: "files",
+          action: "write",
+          lifecycle_kind: "turn",
+          lifecycle_id: "turn_1",
+          expires_at: nil,
+          constraint: @notes
+        },
+        overrides
+      )
+    end
+
+    test "keeps its bounds on its pair, and the guest reads it as ask" do
+      effective = ToolGrants.effective(%{"files.write" => "ask"}, [bounded(%{})])
+
+      assert {:auto, {:bounded, [bounds]}} = effective["files.write"]
+      assert %{scope: "thread", lifecycle_kind: "turn", lifecycle_id: "turn_1"} = bounds
+      assert bounds.constraint == @notes
+
+      assert ToolGrants.to_guest(effective) == %{"files.write" => "ask"}
+
+      # One the author never listed joins the policy as a question, never
+      # as an automatic pair.
+      assert ToolGrants.resolve(%{}, [bounded(%{})]) == %{"files.write" => "ask"}
+    end
+
+    test "never narrows an authored auto, and gives way to an unbounded allow and to a deny" do
+      assert ToolGrants.resolve(%{"files.write" => "auto"}, [bounded(%{})]) ==
+               %{"files.write" => "auto"}
+
+      assert ToolGrants.resolve(%{}, [
+               bounded(%{}),
+               bounded(%{scope: "agent", lifecycle_kind: nil, lifecycle_id: nil, constraint: nil})
+             ]) ==
+               %{"files.write" => "auto"}
+
+      assert ToolGrants.resolve(%{"files.write" => "auto"}, [
+               bounded(%{}),
+               %{effect: "deny", scope: "agent", tool: "files", action: "write"}
+             ]) == %{"files.write" => "deny"}
+    end
+
+    test "keeps every bounded allow for its pair" do
+      effective =
+        ToolGrants.effective(%{}, [
+          bounded(%{}),
+          bounded(%{scope: "agent", lifecycle_kind: "execution", lifecycle_id: "exec_1"})
+        ])
+
+      assert {:auto, {:bounded, [_, _] = kept}} = effective["files.write"]
+      assert Enum.map(kept, & &1.scope) |> Enum.sort() == ["agent", "thread"]
+    end
+
+    test "is no pair the thread auto-approves" do
+      assert ToolGrants.allowed_keys([bounded(%{})]) == MapSet.new()
+
+      assert ToolGrants.allowed_keys([
+               bounded(%{}),
+               %{effect: "allow", scope: "thread", tool: "component", action: "list"}
+             ]) == MapSet.new([{"component", "list"}])
+    end
+
+    test "that the action's current declaration refuses counts for nothing" do
+      # A constraint on an action that names no resource, and a deadline
+      # already gone: neither reaches the policy as a question.
+      assert ToolGrants.resolve(%{}, [
+               bounded(%{tool: "notes", action: "keep"}),
+               bounded(%{
+                 constraint: nil,
+                 expires_at: DateTime.add(DateTime.utc_now(), -1, :second)
+               })
+             ]) == %{}
+    end
+  end
+
+  describe "the action's declaration through the port" do
+    test "a virtual hand, a catalogued action and an upstream tool, with the resource each names" do
+      assert {:ok, %{kind: :write, standing: nil, resource: {"path", :storage_path}}} =
+               Sanctum.Grimoire.action_declaration("files.write")
+
+      assert {:ok, %{kind: :read, resource: {"base_path", :storage_path}}} =
+               Sanctum.Grimoire.action_declaration("files.search")
+
+      assert {:ok, %{kind: :destructive, resource: {"path", :storage_path}}} =
+               Sanctum.Grimoire.action_declaration("files.delete")
+
+      # The files page's own tool and a component's source name their path
+      # the same way.
+      for name <-
+            ~w(file.list file.read file.write file.delete) ++
+              ~w(source.tree source.read source.grep source.write source.edit source.delete) do
+        assert {:ok, %{resource: {"path", :storage_path}}} =
+                 Sanctum.Grimoire.action_declaration(name),
+               "#{name} names no path"
+      end
+
+      assert {:ok, %{kind: :write, standing: nil, resource: {"path", :storage_path}}} =
+               Sanctum.Grimoire.action_declaration("source.write")
+
+      assert {:ok, %{kind: :write, standing: :thread, resource: nil}} =
+               Sanctum.Grimoire.action_declaration("notes.keep")
+
+      assert {:ok, %{kind: :write, standing: false, resource: nil}} =
+               Sanctum.Grimoire.action_declaration("notes.pin")
+
+      assert {:ok, %{kind: :external, standing: nil, resource: nil}} =
+               Sanctum.Grimoire.action_declaration("srv:repos.list.do")
+
+      for name <- ["no_such_tool.go", "files.nothing", "files", "", ".write", "files."] do
+        assert {:error, :not_found} = Sanctum.Grimoire.action_declaration(name),
+               "#{inspect(name)} was answered"
+      end
+    end
+
+    test "storage and http name no resource, so they take no constraint" do
+      for name <- ~w(storage.write storage.read http.get http.post) do
+        assert {:ok, %{resource: nil}} = Sanctum.Grimoire.action_declaration(name)
+      end
     end
   end
 
@@ -247,6 +394,41 @@ defmodule Aqua.ToolGrantsTest do
                grant(ctx, %{tool: "no_such_tool", action: "go"})
 
       assert {:ok, _} = grant(ctx, %{tool: "no_such_tool", action: "go", effect: "deny"})
+    end
+
+    test "a constraint binds only an action that names its resource, and a deny takes no bound",
+         %{ctx: ctx} do
+      notes = %{kind: "storage_path", patterns: ["data/notes/"]}
+
+      assert {:error, {:scope_not_permitted, :no_resource}} =
+               grant(ctx, %{tool: "notes", action: "keep", constraint: notes})
+
+      assert {:error, {:scope_not_permitted, :resource_kind}} =
+               grant(ctx, %{
+                 tool: "files",
+                 action: "write",
+                 constraint: %{kind: "egress_domain", patterns: ["example.com"]}
+               })
+
+      assert {:ok, %{constraint: ^notes}} =
+               grant(ctx, %{tool: "files", action: "write", constraint: notes})
+
+      for bound <- [
+            %{expires_at: DateTime.add(DateTime.utc_now(), 3600, :second)},
+            %{constraint: notes},
+            %{lifecycle_kind: "turn", lifecycle_id: "turn_1"}
+          ] do
+        assert {:error, {:scope_not_permitted, :bounded_deny}} =
+                 grant(ctx, Map.merge(%{tool: "files", action: "delete", effect: "deny"}, bound))
+      end
+
+      # The plain deny stands, and outranks an authored auto whatever the
+      # clock says: nothing a deny carries can lapse.
+      assert {:ok, deny} = grant(ctx, %{tool: "files", action: "delete", effect: "deny"})
+      assert is_nil(deny.expires_at) and is_nil(deny.lifecycle_kind)
+
+      rows = rows(ctx, "thread_1", ctx.athanor_id, "aqua")
+      assert ToolGrants.resolve(%{"files.delete" => "auto"}, rows)["files.delete"] == "deny"
     end
 
     test "virtual tools are classified by the catalog, not the registry", %{ctx: ctx} do
