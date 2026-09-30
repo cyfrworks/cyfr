@@ -49,6 +49,12 @@ defmodule Cyfr.Test.Sandbox do
   execution engine) calls `stop_work_on_exit/0` after registering those
   restores, so the work stops before the configuration it runs under moves.
 
+  The LiveViews a test mounts are the test supervisor's children, and they
+  are shut down with it as the test process ends, before any `on_exit`
+  runs, wherever each has reached. A test whose views start work, or read
+  what its work broadcasts, ends them and their work itself, as its last
+  step (`end_views/0`).
+
   A process that reaches the database after its owner has gone crashes
   with `DBConnection.OwnershipError`. Every such line logged at error level
   or above, from the first `setup!/1` on, is kept with the sandboxed tests
@@ -102,13 +108,8 @@ defmodule Cyfr.Test.Sandbox do
   # connection, and the work it started (a turn's host calls and runner
   # reports, a decision-log writer, a provisioning task) then finds no
   # owner. No sweep runs early enough; a module leaves this roster when its
-  # test ends that work itself.
-  @known_offenders %{
-    PrismWeb.AquaPanelLiveTest =>
-      "the panel's turn outlives the LiveView that died with the test",
-    PrismWeb.ChatLiveTest => "the chat's turns outlive the LiveViews that died with the test",
-    PrismWeb.SignInTraceTest => "the sign-in's work outlives the request that died with the test"
-  }
+  # test ends that work itself (`end_views/0`).
+  @known_offenders %{}
 
   @doc "The supervisors a sync test's work is swept from, in the order they are stopped."
   @spec supervisors() :: [atom()]
@@ -162,6 +163,79 @@ defmodule Cyfr.Test.Sandbox do
     test = self()
     spared = Process.get(@spared, [])
     ExUnit.Callbacks.on_exit(fn -> stop_work(test, spared) end)
+  end
+
+  @doc """
+  End every LiveView the calling test mounted, and the work they started,
+  as the test's last step, from the test process. Each view is stopped
+  between two of its messages, so none holds the shared connection as it
+  goes; what the views started beside themselves (a load, a component
+  call whose answer no view now waits for) is awaited to its own end.
+  Left to the test's end, the views are shut down with the test
+  supervisor, before any `on_exit` runs, at whatever point they have
+  reached, and their work is stopped by the sweep, at whatever point it
+  has reached: either one, inside a query, takes the connection with it,
+  and the next query of the work still running finds no owner.
+  """
+  @spec end_views() :: :ok
+  def end_views do
+    {supervisor, views} =
+      case ExUnit.fetch_test_supervisor() do
+        {:ok, supervisor} ->
+          views =
+            for {_id, pid, _type, [Phoenix.LiveView.Channel]} <-
+                  Supervisor.which_children(supervisor),
+                is_pid(pid),
+                do: pid
+
+          {supervisor, views}
+
+        :error ->
+          {nil, []}
+      end
+
+    watched = for pid <- views, do: {Process.monitor(pid), pid}
+
+    # A nested view stops with its parent, and every view of a client with
+    # the client, so a view may already be on its way out when its turn
+    # comes; the monitors say when each has gone.
+    for pid <- views do
+      try do
+        GenServer.stop(pid, :normal)
+      catch
+        :exit, _gone -> :ok
+      end
+    end
+
+    await_down(watched)
+
+    # What a view started unlinked goes on without it and ends on its own,
+    # a view the page closed during the test included: every view names
+    # the test among its `$callers`, and a task or a run's attempt keeps
+    # its caller's callers behind its own, so the work of any view, at any
+    # depth, names it too. The test supervisor names the test as well, and
+    # it and what it supervises stay until the test ends.
+    test = self()
+
+    work =
+      for pid <- Process.list(),
+          pid != test and pid != supervisor,
+          {:dictionary, dictionary} <- [Process.info(pid, :dictionary)],
+          test in Keyword.get(dictionary, :"$callers", []),
+          supervisor not in Keyword.get(dictionary, :"$ancestors", []),
+          do: {Process.monitor(pid), pid}
+
+    await_down(work)
+  end
+
+  defp await_down(watched) do
+    for {ref, pid} <- watched do
+      receive do
+        {:DOWN, ^ref, :process, ^pid, _reason} -> :ok
+      end
+    end
+
+    :ok
   end
 
   # A child stopped can take work it started that the pass already walked

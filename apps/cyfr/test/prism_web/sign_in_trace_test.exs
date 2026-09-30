@@ -109,6 +109,8 @@ defmodule PrismWeb.SignInTraceTest do
     assert get_session(signed_in, :sanctum_session_token)
 
     assert_console_on_filled_athanor(signed_in, "github|https://github.com|#{n}")
+
+    Cyfr.Test.Sandbox.end_views()
   end
 
   test "OIDC: the issuer round trip through /auth/oidcc/callback, the cookie, the filled athanor",
@@ -129,6 +131,8 @@ defmodule PrismWeb.SignInTraceTest do
     assert get_session(signed_in, :sanctum_session_token)
 
     assert_console_on_filled_athanor(signed_in, "oidcc|https://idp.test|trace-#{n}")
+
+    Cyfr.Test.Sandbox.end_views()
   end
 
   # The person the sign-in minted, the fill their athanor received with

@@ -9,6 +9,7 @@ defmodule Emissary.Web.MCPTransportTest do
   use Emissary.Web.ConnCase, async: false
 
   import Ecto.Query, only: [from: 2]
+  import Prima.Test.Wait
 
   alias Emissary.MCP.Progress
   alias Emissary.MCP.Subscriptions
@@ -233,6 +234,26 @@ defmodule Emissary.Web.MCPTransportTest do
       end)
     end
 
+    # A listen in `task` is open once it waits in its loop with nothing left
+    # to take: acknowledged, watching its caller's standing, and every
+    # message sent to it before this call handled. What a case revokes or
+    # sends after this reaches the loop.
+    defp await_open(task) do
+      wait_until(
+        fn ->
+          match?(
+            [
+              current_function: {Emissary.Web.MCPController, :listen_loop, 4},
+              message_queue_len: 0
+            ],
+            Process.info(task.pid, [:current_function, :message_queue_len])
+          )
+        end,
+        2_000,
+        "the listen to wait in its loop"
+      )
+    end
+
     defp last_frame(conn) do
       conn.resp_body
       |> String.split("\n\n", trim: true)
@@ -248,7 +269,7 @@ defmodule Emissary.Web.MCPTransportTest do
       session: session
     } do
       task = open_listen(conn, session.token, 11)
-      Process.sleep(300)
+      await_open(task)
 
       {:ok, _} = Sanctum.Session.revoke_all_for_user(ctx.user_id)
 
@@ -262,7 +283,7 @@ defmodule Emissary.Web.MCPTransportTest do
       session: session
     } do
       task = open_listen(conn, session.token, 12)
-      Process.sleep(300)
+      await_open(task)
 
       hash = Sanctum.Session.token_hash(session.token)
 
@@ -284,7 +305,7 @@ defmodule Emissary.Web.MCPTransportTest do
       {:ok, %{api_key: raw}} = Sanctum.ApiKey.create(ctx, %{name: name, type: :service})
 
       task = open_listen(conn, raw, 14)
-      Process.sleep(300)
+      await_open(task)
 
       :ok = Sanctum.ApiKey.revoke(ctx, name)
       send(task.pid, CyfrWeb.ContextGuard.recheck_message())
@@ -299,7 +320,7 @@ defmodule Emissary.Web.MCPTransportTest do
       session: session
     } do
       task = open_listen(conn, session.token, 13)
-      Process.sleep(300)
+      await_open(task)
       send(task.pid, CyfrWeb.ContextGuard.recheck_message())
 
       {conn, elapsed} = Task.await(task, 10_000)

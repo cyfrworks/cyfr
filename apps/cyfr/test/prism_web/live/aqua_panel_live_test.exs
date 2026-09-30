@@ -185,6 +185,8 @@ defmodule PrismWeb.AquaPanelLiveTest do
 
     # The pane is on the thread its first message created.
     on_thread!(child!(panel, "aqua-panel-pane"), you_thread.id)
+
+    Cyfr.Test.Sandbox.end_views()
   end
 
   test "the panel reads what the page shows: open another thread and it says so",
@@ -201,6 +203,8 @@ defmodule PrismWeb.AquaPanelLiveTest do
 
     render_click(view, "open_thread", %{"route" => route(room), "id" => second.id})
     assert render(panel) =~ "Reading #{room.name} · Second thread"
+
+    Cyfr.Test.Sandbox.end_views()
   end
 
   test "an answer in the panel pastes onto the room, attributed, and the room's pane shows it",
@@ -244,6 +248,8 @@ defmodule PrismWeb.AquaPanelLiveTest do
     # The room's own pane on the page heard of it.
     room_pane = child!(view, "pane-" <> room.id)
     assert render(room_pane) =~ "shared from AQUA by You"
+
+    Cyfr.Test.Sandbox.end_views()
   end
 
   test "on the bench there is no room: the panel reads nothing and sends plainly",
@@ -263,6 +269,8 @@ defmodule PrismWeb.AquaPanelLiveTest do
     assert you_thread.athanor_id == mine.id
     [request] = model_requests()
     refute request_text(request) =~ "Read from the room"
+
+    Cyfr.Test.Sandbox.end_views()
   end
 
   # The panel's pane on the thread the first send created, with the turn
@@ -313,6 +321,8 @@ defmodule PrismWeb.AquaPanelLiveTest do
     # The page is still the room's, and the room's pane is where it was.
     assert child!(view, "pane-" <> room.id)
     assert render(panel) =~ "Reading #{room.name} · #{thread.title}"
+
+    Cyfr.Test.Sandbox.end_views()
   end
 
   test "a navigate to the chat of You that names no thread is a link, and the panel keeps its thread",
@@ -333,6 +343,8 @@ defmodule PrismWeb.AquaPanelLiveTest do
     # The open thread was not blanked.
     on_thread!(child!(panel, "aqua-panel-pane"), you_thread.id)
     assert has_element?(panel, ~s(#aqua-panel-threads option[value="#{you_thread.id}"][selected]))
+
+    Cyfr.Test.Sandbox.end_views()
   end
 
   test "⌘. in the panel halts the panel's turn and leaves the room's running",
@@ -342,17 +354,32 @@ defmodule PrismWeb.AquaPanelLiveTest do
     room_id = room.id
     mine_id = mine.id
 
-    # Both models are held mid-answer, so both turns are running.
-    Cyfr.Test.ScriptedWorker.script([{:probe, self()}, {:probe, self()}])
+    # Both models are held mid-answer until each turn is stopped, so both
+    # turns run for as long as the case takes: a probe's hold ends after
+    # five seconds, and on a loaded host the room's run then went on to the
+    # panel's item before the panel was open.
+    Cyfr.Test.ScriptedWorker.script([:hang, :hang])
 
     room_pane = child!(view, "pane-" <> room.id)
     room_pane |> form("form", %{"message" => "@aqua go on"}) |> render_submit()
-    assert_receive {:scripted_probe, room_worker, _}, 30_000
+
+    wait_until(
+      fn -> length(model_requests()) == 1 end,
+      30_000,
+      "the room's model to be called"
+    )
+
     assert Runner.turn_running?(%{me | athanor_id: room_id}, thread.id)
 
     {panel, _html} = open_panel(view)
     {pane, you_thread} = panel_thread(panel, me, "and you?")
-    assert_receive {:scripted_probe, panel_worker, _}, 30_000
+
+    wait_until(
+      fn -> length(model_requests()) == 2 end,
+      30_000,
+      "the panel's model to be called"
+    )
+
     assert Runner.turn_running?(%{me | athanor_id: mine_id}, you_thread.id)
 
     # What the hook pushes for ⌘. — to its own pane.
@@ -370,8 +397,17 @@ defmodule PrismWeb.AquaPanelLiveTest do
     assert Runner.turn_running?(%{me | athanor_id: room_id}, thread.id)
     assert {:ok, []} = Aqua.Tape.open_turns(me, you_thread.id)
 
-    send(room_worker, :continue)
-    send(panel_worker, :continue)
+    # The room's turn is stopped too, as its own pane's Stop would, rather
+    # than left running under the sweep.
+    assert :ok = Runner.stop_turn(%{me | athanor_id: room_id}, thread.id)
+
+    wait_until(
+      fn -> not Runner.turn_running?(%{me | athanor_id: room_id}, thread.id) end,
+      30_000,
+      "the room's turn to be stopped"
+    )
+
+    Cyfr.Test.Sandbox.end_views()
   end
 
   test "the sheet is a dialog over a page that stays live, Escape closes it, and its button names it only while open",
@@ -398,6 +434,8 @@ defmodule PrismWeb.AquaPanelLiveTest do
     refute has_element?(panel, "#aqua-panel-sheet")
     refute has_element?(panel, "#aqua-panel-button[aria-controls]")
     assert has_element?(panel, ~s(#aqua-panel-button[aria-expanded="false"]))
+
+    Cyfr.Test.Sandbox.end_views()
   end
 
   test "the panel keeps its thread from one page to the next, and closed stays closed",
@@ -424,6 +462,8 @@ defmodule PrismWeb.AquaPanelLiveTest do
     settled_render(view)
     panel = child!(view, "aqua-panel")
     refute has_element?(panel, "#aqua-panel-sheet")
+
+    Cyfr.Test.Sandbox.end_views()
   end
 
   test "the page's first paint carries the button alone; a session that no longer establishes is sent to sign in",

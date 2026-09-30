@@ -136,6 +136,8 @@ defmodule PrismWeb.ChatLiveTest do
     # The session's default athanor did not move: the root still lands there.
     assert {:error, {:live_redirect, %{to: to}}} = live(conn, "/")
     assert to == chat_path(nil)
+
+    Cyfr.Test.Sandbox.end_views()
   end
 
   defp athanor, do: Process.get(:chat_athanor)
@@ -169,6 +171,8 @@ defmodule PrismWeb.ChatLiveTest do
     assert html =~ "cold open"
     assert :sys.get_state(view.pid).socket.assigns.athanor.id == group.id
     assert has_element?(view, "#thread-#{thread.id} button[aria-current=true]")
+
+    Cyfr.Test.Sandbox.end_views()
   end
 
   test "the rail lists only the athanors you hold a seat in", %{conn: conn} do
@@ -186,6 +190,8 @@ defmodule PrismWeb.ChatLiveTest do
     refute theirs.id in Enum.map(athanors, & &1.athanor.id)
     refute html =~ "Theirs #{bob.namespace}"
     refute carol.user_id in Enum.map(people, & &1.user_id)
+
+    Cyfr.Test.Sandbox.end_views()
   end
 
   test "a seat the store cannot read says try again shortly, never no athanor or not a member",
@@ -220,6 +226,8 @@ defmodule PrismWeb.ChatLiveTest do
     assert html =~ "That athanor cannot be opened just now. Try again shortly."
     refute html =~ "You are not a member of that athanor."
     refute html =~ "Your session could not be checked"
+
+    Cyfr.Test.Sandbox.end_views()
   end
 
   test "a thread the athanor does not hold is refused by name, and the athanor's own opens",
@@ -233,6 +241,8 @@ defmodule PrismWeb.ChatLiveTest do
     assert html =~ "That thread isn"
     assert render(pane(view)) =~ "in Chat"
     assert :sys.get_state(view.pid).socket.assigns.athanor.id == athanor().id
+
+    Cyfr.Test.Sandbox.end_views()
   end
 
   test "a DM opens from the rail, in place", %{conn: conn} do
@@ -263,6 +273,8 @@ defmodule PrismWeb.ChatLiveTest do
     # …and the session's default athanor did not move.
     assert {:error, {:live_redirect, %{to: to}}} = live(alice_conn, "/")
     assert to == chat_path(group)
+
+    Cyfr.Test.Sandbox.end_views()
   end
 
   test "the chat opens on the athanor its address names, and a sent message becomes everyone's thread",
@@ -310,6 +322,8 @@ defmodule PrismWeb.ChatLiveTest do
              |> Enum.filter(&(&1.kind == "text"))
 
     assert a == alice.user_id
+
+    Cyfr.Test.Sandbox.end_views()
   end
 
   test "an approval card decided by one member resolves for the other", %{conn: conn} do
@@ -368,6 +382,8 @@ defmodule PrismWeb.ChatLiveTest do
              Aqua.Tape.approval_by_message(start_ctx, apr.id)
 
     assert decided_by == bob.user_id
+
+    Cyfr.Test.Sandbox.end_views()
   end
 
   test "a thread opens only in its own athanor, and only for a member", %{conn: conn} do
@@ -412,6 +428,8 @@ defmodule PrismWeb.ChatLiveTest do
     # for the default athanor.
     assert {:error, {:live_redirect, %{to: "/chat"}}} =
              live(bob_conn, chat_path(group, thread.id))
+
+    Cyfr.Test.Sandbox.end_views()
   end
 
   test "in a group, people talk to each other without AQUA answering; a removed member is shown out",
@@ -482,6 +500,8 @@ defmodule PrismWeb.ChatLiveTest do
     assert text =~ ~r/: lunch at noon\?/
     assert text =~ ~r/: sure/
     assert text =~ ~r/: @aqua book it/
+
+    Cyfr.Test.Sandbox.end_views()
   end
 
   test "an attachment is stored as a blob any member can fetch, and never from outside", %{
@@ -571,6 +591,8 @@ defmodule PrismWeb.ChatLiveTest do
     assert get(carol_conn, path).status == 404
     assert redirected_to(get(build_conn(), path)) == "/login"
     assert get(bob_conn, athanor_path("/attachments/#{msg.id}/nope.txt", group)).status == 404
+
+    Cyfr.Test.Sandbox.end_views()
   end
 
   test "an athanor still being set up says so, and any member can retry from the chat", %{
@@ -613,6 +635,8 @@ defmodule PrismWeb.ChatLiveTest do
 
     refute render(view) =~ "still being set up"
     refute render(pane(view)) =~ "Still being prepared"
+
+    Cyfr.Test.Sandbox.end_views()
   end
 
   test "a message sent while the athanor is prepared is held, offered back after a reload, and accepted once",
@@ -708,6 +732,8 @@ defmodule PrismWeb.ChatLiveTest do
                Threads.latest_messages(Sanctum.Context.actor(ctx), thread_id, 50),
                &(&1.author == alice.user_id)
              )
+
+    Cyfr.Test.Sandbox.end_views()
   end
 
   test "a mount on an athanor still being filled does not wait for the fill", %{conn: conn} do
@@ -737,6 +763,8 @@ defmodule PrismWeb.ChatLiveTest do
     {_view, html} = mount_chat(conn, group)
     assert System.monotonic_time(:millisecond) - started < 5_000
     assert html =~ "still being set up"
+
+    Cyfr.Test.Sandbox.end_views()
   end
 
   test "archiving the athanor sends every open chat away", %{conn: conn} do
@@ -754,6 +782,8 @@ defmodule PrismWeb.ChatLiveTest do
     # archived group was the only athanor the session had.
     assert {:error, {_, %{to: to}}} = live(alice_conn, chat_path(group))
     assert to in ["/chat", "/login?error=no_athanor"]
+
+    Cyfr.Test.Sandbox.end_views()
   end
 
   test "the AQUA page mounts with the athanor's soul and roles, and opens the grant sheet for a model",
@@ -769,6 +799,8 @@ defmodule PrismWeb.ChatLiveTest do
     assert has_element?(view, ".consent-sheet")
     send(view.pid, {:consent_sheet_closed, "catalyst:local.http:1.1.2"})
     refute has_element?(view, ".consent-sheet")
+
+    Cyfr.Test.Sandbox.end_views()
   end
 
   test "on a phone the drawer opens from the pane's Chats button and closes from its own ×",
@@ -787,6 +819,8 @@ defmodule PrismWeb.ChatLiveTest do
 
     view |> element("#thread-list button[phx-click=close_rail]") |> render_click()
     assert render(view) =~ hidden
+
+    Cyfr.Test.Sandbox.end_views()
   end
 
   test "a seat gained while the page is open joins the rail, and a fold the person closed stays closed",
@@ -838,6 +872,8 @@ defmodule PrismWeb.ChatLiveTest do
     :ok = Sanctum.Tenancy.Members.remove_member(group, user_id: alice.user_id)
     refute has_element?(view, "#athanor-" <> group.id)
     assert has_element?(view, "#athanor-#{athanor().id} button[aria-current=true]", "Chat")
+
+    Cyfr.Test.Sandbox.end_views()
   end
 
   test "following names only the open athanor's own threads: a foreign id writes no row",
@@ -883,6 +919,8 @@ defmodule PrismWeb.ChatLiveTest do
 
     assert render_click(view, "unfollow_thread", %{"id" => foreign.id}) =~
              "That thread isn"
+
+    Cyfr.Test.Sandbox.end_views()
   end
 
   test "+ New opens a blank pane, whatever the athanor already holds", %{conn: conn} do
@@ -909,6 +947,8 @@ defmodule PrismWeb.ChatLiveTest do
     {view2, _} = mount_chat(conn, home, PrismWeb.ChatLive.blank())
     assert pane(view2).id == "pane-#{home.id}"
     assert pane_thread(view2) == nil
+
+    Cyfr.Test.Sandbox.end_views()
   end
 
   test "a thread switch turns the athanor's pane rather than mounting another", %{conn: conn} do
@@ -933,5 +973,7 @@ defmodule PrismWeb.ChatLiveTest do
 
     assert pane(view).pid == pid
     assert pane_thread(view).id == second.id
+
+    Cyfr.Test.Sandbox.end_views()
   end
 end
