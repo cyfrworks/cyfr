@@ -40,8 +40,9 @@ defmodule Sanctum.Consent.BlobBuilder do
   domain the ask names, or a plain host one of its patterns admits
   (`Prima.Network.domain_allowed?/2`); a private range the ask names, or an
   address or narrower range inside one of its ranges; a storage path the
-  ask names, or a guest path below one of its prefixes, the way
-  `Crucible.GuestStorage` matches a grant; and exactly one of the ask's
+  ask names, or a guest path the ask admits, read as
+  `Crucible.GuestStorage` enforces a grant
+  (`Prima.ComponentPath.path_granted?/2`); and exactly one of the ask's
   values for every other field.
 
   ## Preview rows
@@ -479,8 +480,13 @@ defmodule Sanctum.Consent.BlobBuilder do
   defp inside?("egress", "private_ips", value, asked),
     do: value in asked or in_range?(value, asked)
 
+  # A narrowed path is itself a grant, and it lies inside the ask when
+  # every path it admits the ask admits too; read by the one reading of a
+  # storage grant, that is the ask admitting it as a path.
   defp inside?("storage", "paths", value, asked),
-    do: value in asked or (guest_path?(value) and Enum.any?(asked, &below?(value, &1)))
+    do:
+      value in asked or
+        (guest_path?(value) and Prima.ComponentPath.path_granted?(value, asked))
 
   defp inside?(_kind, _field, value, asked), do: value in asked
 
@@ -511,13 +517,6 @@ defmodule Sanctum.Consent.BlobBuilder do
       :error -> Prima.Cidr.parse_cidr(value)
     end
   end
-
-  # A grant ending in `/` is a prefix and any other names one path, as
-  # `Crucible.GuestStorage` matches them; `*` is every path.
-  defp below?(_value, "*"), do: true
-
-  defp below?(value, grant),
-    do: String.ends_with?(grant, "/") and String.starts_with?(value, grant)
 
   defp guest_path?(value) do
     Prima.PathSafety.validate_relative_path(value) == :ok and

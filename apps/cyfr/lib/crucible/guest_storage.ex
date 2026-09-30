@@ -32,9 +32,11 @@ defmodule Crucible.GuestStorage do
        under a component publisher (`Prima.ComponentPath.publisher/1`) only
        `local/` (`Prima.ComponentNamespace.require_local_guest_write/1`).
     5. The path is relative, with no traversal (`Prima.PathSafety`).
-    6. The edge's `storage.paths` allow the path: `"*"` allows every path,
-       an entry ending in `/` a prefix, anything else that exact path. An
-       empty list, a nil storage group and a nil edge allow nothing.
+    6. The edge's `storage.paths` allow the path
+       (`Prima.ComponentPath.path_granted?/2`): `"*"` allows every path,
+       an entry ending in `/` a prefix and its bare directory, anything
+       else that exact path. An empty list, a nil storage group and a nil
+       edge allow nothing.
     7. A write or append's decoded content is within the node's
        `max_request_size`.
     8. For a public profile, a write or append keeps its scope within the
@@ -287,22 +289,12 @@ defmodule Crucible.GuestStorage do
     end
   end
 
-  # A directory listing names the bare directory while a grant names its
-  # prefix, so a path is also matched with a trailing slash.
+  # The grant's reading is `Prima.ComponentPath.path_granted?/2`'s, the
+  # one every reader of a storage grant shares.
   defp path_allowed(edge, path) do
-    with_slash = if String.ends_with?(path, "/"), do: path, else: path <> "/"
-
-    if Enum.any?(Edge.paths(edge), &grant_matches?(&1, path, with_slash)),
+    if Prima.ComponentPath.path_granted?(path, Edge.paths(edge)),
       do: :ok,
       else: guest_error(:storage_path_denied, "Storage path '#{path}' is not allowed by policy.")
-  end
-
-  defp grant_matches?("*", _path, _with_slash), do: true
-
-  defp grant_matches?(grant, path, with_slash) do
-    if String.ends_with?(grant, "/"),
-      do: String.starts_with?(path, grant) or String.starts_with?(with_slash, grant),
-      else: path == grant or with_slash == grant
   end
 
   # Measured on the decoded content; content that does not decode is

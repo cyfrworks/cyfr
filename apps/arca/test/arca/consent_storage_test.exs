@@ -354,6 +354,109 @@ defmodule Arca.ConsentStorageTest do
     end
   end
 
+  describe "active_heads/1" do
+    defp granted!(athanor, id, status, refs \\ []) do
+      {:ok, _profile} =
+        ProfileStorage.put(%{
+          id: id,
+          athanor_id: athanor,
+          source_ref: "reagent:local.#{id}",
+          kind: "owner",
+          label: "default",
+          status: "active"
+        })
+
+      {:ok, consent} =
+        ConsentStorage.insert_revision(consent_attrs(athanor, id, 1), refs, nil)
+
+      if status != "active",
+        do: :ok = ProfileStorage.set_status(Prima.Actor.in_athanor(athanor), id, status)
+
+      consent
+    end
+
+    test "answers each active profile with its head revision and that revision's refs",
+         %{athanor: athanor} do
+      entry = entry!(athanor)
+      ref = %{vault_entry_id: entry.id, binding_digest: "sha256:b"}
+
+      first = granted!(athanor, "prof_heads_a", "active", [ref])
+      _second = granted!(athanor, "prof_heads_b", "active")
+      _waiting = granted!(athanor, "prof_heads_c", "needs_consent", [ref])
+      _revoked = granted!(athanor, "prof_heads_d", "revoked", [ref])
+
+      # A profile with no revision yet roots nothing.
+      _headless = profile!(athanor, "prof_heads_e")
+
+      assert {:ok, [a, b]} = ConsentStorage.active_heads(Prima.Actor.in_athanor(athanor))
+
+      assert %{
+               profile: %{id: "prof_heads_a", kind: :owner, status: :active},
+               consent: %{id: consent_id, revision: 1, vault_refs: [%{vault_entry_id: id}]}
+             } = a
+
+      assert consent_id == first.id
+      assert id == entry.id
+      assert %{profile: %{id: "prof_heads_b"}, consent: %{vault_refs: []}} = b
+    end
+
+    test "reads the head alone: a later revision's refs, never an earlier one's",
+         %{athanor: athanor} do
+      entry = entry!(athanor)
+      first = granted!(athanor, "prof_heads_moved", "active")
+
+      {:ok, second} =
+        ConsentStorage.insert_revision(
+          consent_attrs(athanor, "prof_heads_moved", 2),
+          [%{vault_entry_id: entry.id, binding_digest: "sha256:b"}],
+          first.id
+        )
+
+      assert {:ok, [%{consent: head}]} =
+               ConsentStorage.active_heads(Prima.Actor.in_athanor(athanor))
+
+      assert head.id == second.id
+      assert head.revision == 2
+      assert [%{vault_entry_id: id}] = head.vault_refs
+      assert id == entry.id
+    end
+
+    test "drops a row that does not decode, and keeps the rest", %{athanor: athanor} do
+      _fine = granted!(athanor, "prof_heads_fine", "active")
+      damaged = granted!(athanor, "prof_heads_damaged", "active")
+      _odd_kind = granted!(athanor, "prof_heads_kind", "active")
+
+      {1, _} =
+        Arca.Repo.update_all(
+          Ecto.Query.from(c in Arca.Schemas.Consent, where: c.id == ^damaged.id),
+          set: [scope: "sideways"]
+        )
+
+      {1, _} =
+        Arca.Repo.update_all(
+          Ecto.Query.from(p in Arca.Schemas.Profile, where: p.id == "prof_heads_kind"),
+          set: [kind: "sideways"]
+        )
+
+      assert {:ok, [%{profile: %{id: "prof_heads_fine"}}]} =
+               ConsentStorage.active_heads(Prima.Actor.in_athanor(athanor))
+    end
+
+    test "answers the actor's own athanor, and refuses an actor with none", %{athanor: athanor} do
+      _mine = granted!(athanor, "prof_heads_mine", "active")
+      theirs = Prima.Actor.in_athanor(Arca.Test.Actor.athanor!("ath_other").id)
+
+      assert {:ok, [%{profile: %{id: "prof_heads_mine"}}]} =
+               ConsentStorage.active_heads(Prima.Actor.in_athanor(athanor))
+
+      assert {:ok, []} = ConsentStorage.active_heads(theirs)
+
+      for nobody <- [%Prima.Actor{}, %Prima.Actor{athanor_id: ""}] do
+        assert {:error, :no_athanor} = ConsentStorage.active_heads(nobody)
+      end
+    end
+  end
+
   describe "insert-only surface" do
     test "the module still exports no update function" do
       exported =

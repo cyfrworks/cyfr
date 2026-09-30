@@ -39,4 +39,55 @@ defmodule Prima.ComponentPathTest do
       end
     end
   end
+
+  describe "path_granted?/2" do
+    test "a prefix grant admits what it prefixes and its bare directory, and nothing beside it" do
+      grants = ["data/notes/"]
+
+      for path <- ["data/notes/today.md", "data/notes/2026/09/a.md", "data/notes/", "data/notes"] do
+        assert ComponentPath.path_granted?(path, grants), path
+      end
+
+      for path <- ["data/notesheet.md", "data/note", "data", "data/", "data/other/notes/a.md"] do
+        refute ComponentPath.path_granted?(path, grants), path
+      end
+    end
+
+    test "any other grant admits exactly the path it spells" do
+      grants = ["data/report.md"]
+
+      assert ComponentPath.path_granted?("data/report.md", grants)
+
+      for path <- ["data/report.md/", "data/report.md/x", "data/report", "data/report.mdx"] do
+        refute ComponentPath.path_granted?(path, grants), path
+      end
+    end
+
+    test "the wildcard admits every path, and no grant admits nothing" do
+      for path <- ["", "data/a", "components/catalysts/local/x/1.0.0/src/lib.rs"] do
+        assert ComponentPath.path_granted?(path, ["*"]), path
+        refute ComponentPath.path_granted?(path, []), path
+      end
+
+      # A pattern is never read as a glob: only the bare wildcard is one.
+      refute ComponentPath.path_granted?("data/a", ["data/*"])
+      refute ComponentPath.path_granted?("data/a", ["*/"])
+    end
+
+    test "any grant of several admits, and each side compares as spelled" do
+      assert ComponentPath.path_granted?("data/b/x", ["data/a/", "data/b/"])
+
+      # Nothing is trimmed or resolved here: the caller refuses an unsafe
+      # path first, and a spelling with an empty segment is its own path.
+      refute ComponentPath.path_granted?("data//notes/a.md", ["data/notes/"])
+      refute ComponentPath.path_granted?("/data/notes/a.md", ["data/notes/"])
+      assert ComponentPath.path_granted?("data/notes/../../etc", ["data/notes/"])
+    end
+
+    test "a value that is no path or no grant list admits nothing" do
+      refute ComponentPath.path_granted?(nil, ["*"])
+      refute ComponentPath.path_granted?("data/a", nil)
+      refute ComponentPath.path_granted?("data/a", [nil, 7])
+    end
+  end
 end

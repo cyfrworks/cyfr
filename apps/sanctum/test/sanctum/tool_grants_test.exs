@@ -509,12 +509,17 @@ defmodule Sanctum.ToolGrantsTest do
 
       assert ToolGrants.admits?(ctx, call(thread, %{execution_id: a}))
 
-      for path <- ["data/notes/deep/b.md", "data/notes", "/data//notes/c.md"] do
+      for path <- ["data/notes/deep/b.md", "data/notes"] do
         assert ToolGrants.admits?(ctx, call(thread, %{execution_id: a, args: %{"path" => path}})),
                "#{path} was not covered"
       end
 
+      # Read as the storage door reads a path: an absolute one is refused,
+      # and a spelling the door would not match under the pattern asks.
       for path <- [
+            "/data/notes/c.md",
+            "/data//notes/c.md",
+            "data//notes/c.md",
             "data/other/b.md",
             "data/notesx/b.md",
             "data/notes/../secrets.md",
