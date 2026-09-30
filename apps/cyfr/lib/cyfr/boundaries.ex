@@ -416,12 +416,12 @@ defmodule Cyfr.Boundaries do
       depth: 3,
       allow: ~w(
         Sanctum Sanctum.BearerToken Sanctum.Caller Sanctum.ClientIp Sanctum.Consent
-        Sanctum.Context Sanctum.Egress Sanctum.ExecutionStanding Sanctum.Network
-        Sanctum.Session Sanctum.TinctureAccess Sanctum.TinctureAuth Sanctum.ToolServerDigest
-        Sanctum.Unauthorized Sanctum.UnauthorizedError Sanctum.Vault.OAuthGrant
-        Sanctum.VaultReader Sanctum.Webhook
+        Sanctum.Context Sanctum.Directory Sanctum.Egress Sanctum.ExecutionStanding
+        Sanctum.Network Sanctum.Session Sanctum.TinctureAccess Sanctum.TinctureAuth
+        Sanctum.ToolServerDigest Sanctum.Unauthorized Sanctum.UnauthorizedError
+        Sanctum.Vault.OAuthGrant Sanctum.VaultReader Sanctum.Webhook
       ),
-      pending_allow: ~w(Sanctum.DeviceCerts Sanctum.Directory Sanctum.Recovery),
+      pending_allow: ~w(Sanctum.DeviceCerts Sanctum.Recovery),
       reason:
         "the auth fabric's own front door, where a wide roster is the front door doing " <>
           "its job. The MCP transport carries tenancy, reads a server's vault edge, and " <>
@@ -1308,6 +1308,7 @@ defmodule Cyfr.Boundaries do
       require_permission: 3,
       require_tenant!: 1
     ],
+    "Sanctum.Directory" => [append: 2, outcome: 1, recover: 2, register: 1, resolve: 1],
     "Sanctum.Door" => [admit_identity: 2, platform_admin_emails: 0, refusal_message: 0],
     "Sanctum.Door.Store" => [requests: 0],
     "Sanctum.Egress" => [pinned_request: 5],
@@ -1412,11 +1413,10 @@ defmodule Cyfr.Boundaries do
 
   # The Sanctum functions the host will call once the work that calls them
   # lands, each on a module that exists and holds no function yet: the
-  # directory's routes, the restore ingress and the device channel. A call
-  # to one is admitted; one nothing calls yet is not stale.
+  # restore ingress and the device channel. A call to one is admitted; one
+  # nothing calls yet is not stale.
   @pending_sanctum_exports %{
     "Sanctum.DeviceCerts" => [verify_connect: 3, verify_request: 3],
-    "Sanctum.Directory" => [append: 2, outcome: 1, recover: 2, register: 1, resolve: 1],
     "Sanctum.Recovery" => [restore: 2]
   }
 
@@ -1563,7 +1563,6 @@ defmodule Cyfr.Boundaries do
     },
     public_directory: %{
       admits: :nothing,
-      pending: true,
       why:
         "the identity directory's reads and a genesis registration, which any caller may " <>
           "make: a log is public history, and a genesis names its own keys and is its own " <>
@@ -1571,7 +1570,6 @@ defmodule Cyfr.Boundaries do
     },
     directory_signed: %{
       admits: :credential,
-      pending: true,
       why:
         "a directory entry or recovery, signed by a key the identifier's verified chain " <>
           "authorizes and verified against that chain before anything is written; no session"
@@ -1583,16 +1581,15 @@ defmodule Cyfr.Boundaries do
     {:get, "/api/health/ready"},
     {:get, "/auth/:provider"},
     {:post, "/auth/logout"},
+    {:get, "/directory/v1/:identifier"},
+    {:get, "/directory/v1/:identifier/requests/:request_id"},
+    {:post, "/directory/v1/genesis"},
     {:get, "/login"}
   ]
 
   # The routes anyone will reach once the work that declares them lands:
-  # the directory's public reads and genesis registration, and the
-  # sessionless page a pairing code opens.
+  # the sessionless page a pairing code opens.
   @pending_public_routes [
-    {:get, "/directory/v1/:identifier"},
-    {:get, "/directory/v1/:identifier/requests/:request_id"},
-    {:post, "/directory/v1/genesis"},
     {:get, "/pair"}
   ]
 

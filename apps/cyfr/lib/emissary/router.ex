@@ -6,7 +6,7 @@ defmodule Emissary.Router do
   Emissary's routes, with the pipelines they pass through: MCP, the HTTP
   API's sign-out and session read, the vault's OAuth grant callback,
   tincture serving and the tincture data routes, health, the
-  execution-events stream and inbound webhooks.
+  execution-events stream, inbound webhooks and the identity directory.
 
   The composition router invokes `routes/0` where the adapter's routes
   stand, so its `__routes__/0` stays the total table. The quoted calls
@@ -263,6 +263,29 @@ defmodule Emissary.Router do
       scope "/hooks", Emissary.Web do
         pipe_through :webhook
         post "/:slug", WebhookController, :invoke, metadata: %{auth: :webhook_hmac}
+      end
+
+      # The identity directory (`Sanctum.Directory`): no session, since a log
+      # is public history and every signed write is verified against the
+      # identifier's chain. A write's body is bounded to 16 KiB before it is
+      # decoded (`CyfrWeb.Plugs.RawBodyReader`), and every request to the
+      # directory's per-source and per-installation windows before any
+      # signature is checked. The literal `genesis` is declared above the
+      # `:identifier` routes.
+      scope "/directory/v1", Emissary.Web do
+        pipe_through :api
+
+        post "/genesis", DirectoryController, :register, metadata: %{auth: :public_directory}
+        get "/:identifier", DirectoryController, :resolve, metadata: %{auth: :public_directory}
+
+        post "/:identifier/entries", DirectoryController, :append,
+          metadata: %{auth: :directory_signed}
+
+        post "/:identifier/recover", DirectoryController, :recover,
+          metadata: %{auth: :directory_signed}
+
+        get "/:identifier/requests/:request_id", DirectoryController, :outcome,
+          metadata: %{auth: :public_directory}
       end
     end
   end

@@ -84,6 +84,85 @@ defmodule CyfrWeb.Plugs.RawBodyReaderTest do
     assert byte_size(conn.assigns[:raw_body]) == 200_000
   end
 
+  test "a doubled slash, which the router still routes to /hooks, is cached and capped the same" do
+    cap = Prima.Limits.default_max_request_size()
+    conn = build_conn(:post, "http://www.example.com//hooks/wh_double", ~s({"x":1}))
+    assert ["hooks", "wh_double"] = conn.path_info
+
+    assert {:ok, ~s({"x":1}), conn} = RawBodyReader.read_body(conn, [])
+    assert conn.assigns[:raw_body] == ~s({"x":1})
+
+    big =
+      build_conn(:post, "http://www.example.com//hooks/wh_double", :binary.copy(<<?x>>, cap + 1))
+
+    assert {:more, chunk, _conn} = RawBodyReader.read_body(big, length: 28_000_000)
+    assert byte_size(chunk) == cap
+  end
+
+  describe "the directory's write-body limit" do
+    test "caps a /directory/* body at 16 KiB, whatever the endpoint allows, and caches nothing" do
+      body = :binary.copy(<<?x>>, Prima.Identity.max_entry_bytes() + 1)
+      conn = build_conn(:post, "/directory/v1/genesis", body)
+
+      assert {:more, chunk, conn} = RawBodyReader.read_body(conn, length: 28_000_000)
+      assert byte_size(chunk) == Prima.Identity.max_entry_bytes()
+      refute Map.has_key?(conn.assigns, :raw_body)
+    end
+
+    test "reads a /directory/* body at the limit whole" do
+      body = :binary.copy(<<?x>>, Prima.Identity.max_entry_bytes())
+      conn = build_conn(:post, "/directory/v1/per_x/entries", body)
+
+      assert {:ok, ^body, _conn} = RawBodyReader.read_body(conn, length: 28_000_000)
+    end
+
+    test "a doubled slash, which the router still routes to the directory, meets the same cap" do
+      body = :binary.copy(<<?x>>, Prima.Identity.max_entry_bytes() + 1)
+
+      for url <- [
+            "http://www.example.com//directory/v1/genesis",
+            "http://www.example.com///directory//v1/per_x/entries"
+          ] do
+        conn = build_conn(:post, url, body)
+        assert ["directory" | _] = conn.path_info
+
+        assert {:more, chunk, _conn} = RawBodyReader.read_body(conn, length: 28_000_000)
+        assert byte_size(chunk) == Prima.Identity.max_entry_bytes()
+      end
+    end
+
+    test "never raises a smaller cap set upstream" do
+      conn = build_conn(:post, "/directory/v1/per_x/recover", :binary.copy(<<?x>>, 200))
+
+      assert {:more, chunk, _conn} = RawBodyReader.read_body(conn, length: 100)
+      assert byte_size(chunk) == 100
+    end
+
+    test "Plug.Parsers refuses an oversized directory body as too large, before decoding it" do
+      opts =
+        Plug.Parsers.init(
+          parsers: [:json],
+          pass: ["*/*"],
+          json_decoder: Jason,
+          length: 28_000_000,
+          body_reader: {RawBodyReader, :read_body, []}
+        )
+
+      # Not JSON at all: a body past the limit is refused as large, never
+      # as unparseable, because no byte of it is decoded.
+      body = :binary.copy(<<?{>>, Prima.Identity.max_entry_bytes() + 1)
+
+      assert_raise Plug.Parsers.RequestTooLargeError, fn ->
+        Plug.Parsers.call(build_conn(:post, "/directory/v1/genesis", body), opts)
+      end
+
+      # The same bytes elsewhere reach the decoder.
+      assert_raise Plug.Parsers.ParseError, fn ->
+        Plug.Parsers.call(build_conn(:post, "/api/elsewhere", body), opts)
+      end
+    end
+  end
+
   test "accumulates correctly when final read returns {:ok, last_chunk, conn}" do
     # 250KB body, read in 100KB chunks → two :more, then one :ok with 50KB tail.
     body = :binary.copy(<<?z>>, 250_000)

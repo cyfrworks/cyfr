@@ -260,6 +260,86 @@ defmodule Arca.IdentityLogTest do
     end
   end
 
+  describe "keys/2" do
+    test "answers the head with the genesis and every accepted recovery, in order" do
+      {identifier, genesis} = genesis!()
+      {:ok, r1} = rotate(identifier, genesis.entry_hash)
+      {:ok, first} = recover(identifier, r1.entry_hash, %{expected_revision: 0})
+      {:ok, r2} = rotate(identifier, first.entry_hash)
+      {:ok, r3} = rotate(identifier, r2.entry_hash)
+      {:ok, second} = recover(identifier, r3.entry_hash, %{expected_revision: 1})
+      {:ok, third} = recover(identifier, second.entry_hash, %{expected_revision: 2})
+      {:ok, last} = rotate(identifier, third.entry_hash)
+
+      # A refused recovery is recorded with no position, and is no key.
+      assert {:error, :stale_policy} =
+               recover(identifier, last.entry_hash, %{
+                 request_id: "req_late",
+                 expected_revision: 0
+               })
+
+      assert {:ok, %{head: ^last, keyed: keyed}} = IdentityLog.keys(server(), identifier)
+      assert keyed == [genesis, first, second, third]
+      assert Enum.map(keyed, & &1.seq) == [0, 2, 5, 6]
+    end
+
+    test "a log of only a genesis answers the genesis as its head and its one key" do
+      {identifier, genesis} = genesis!()
+      assert {:ok, %{head: ^genesis, keyed: [^genesis]}} = IdentityLog.keys(server(), identifier)
+    end
+
+    test "an unknown identifier is not found, and only the platform's actor reads" do
+      assert {:error, :not_found} =
+               IdentityLog.keys(server(), "per_" <> String.duplicate("0", 64))
+
+      {identifier, _genesis} = genesis!()
+
+      assert {:error, :cross_tenant} =
+               IdentityLog.keys(Prima.Actor.in_athanor("ath_test"), identifier)
+    end
+
+    test "reads no entry outside the key-bearing ones, and writes nothing" do
+      {identifier, genesis} = genesis!()
+
+      Enum.reduce(1..5, genesis.entry_hash, fn _, prev ->
+        {:ok, row} = rotate(identifier, prev)
+        row.entry_hash
+      end)
+
+      handler = "identity-log-keys-#{System.unique_integer([:positive])}"
+      test = self()
+
+      :telemetry.attach(
+        handler,
+        [:arca, :repo, :query],
+        fn _event, _measurements, meta, _config ->
+          if self() == test, do: send(test, {:query, meta[:query], meta[:result]})
+        end,
+        nil
+      )
+
+      on_exit(fn -> :telemetry.detach(handler) end)
+
+      assert {:ok, %{keyed: [^genesis], head: %{seq: 5}}} = IdentityLog.keys(server(), identifier)
+
+      queries = collect_queries()
+      assert length(queries) == 2
+      assert Enum.all?(queries, fn {sql, _} -> String.starts_with?(sql, "SELECT") end)
+
+      # The key read answers the one key-bearing row, not the five rotations.
+      assert Enum.any?(queries, fn {_sql, {:ok, %{num_rows: rows}}} -> rows == 1 end)
+      refute Enum.any?(queries, fn {_sql, {:ok, %{num_rows: rows}}} -> rows > 1 end)
+    end
+  end
+
+  defp collect_queries do
+    receive do
+      {:query, sql, result} -> [{sql, result} | collect_queries()]
+    after
+      0 -> []
+    end
+  end
+
   test "reads page the log, and only the platform's actor reads or writes" do
     {identifier, genesis} = genesis!()
     {:ok, one} = rotate(identifier, genesis.entry_hash)
