@@ -580,7 +580,10 @@ defmodule Cyfr.AdmissionEntriesSeamTest do
       fn -> DeviceChannel.handle_in({"{}", [opcode: :text]}, closed) end
     ]
 
-    for delivered <- after_close, do: assert(delivered.() == {:ok, closed})
+    # Whatever arrives after the close stops the connection and records
+    # nothing.
+    for delivered <- after_close,
+        do: assert(delivered.() == {:stop, {:shutdown, :closed}, closed})
 
     where = {:request, closed.ctx.request_id}
     assert [%{call_id: call_id}] = decisions(where)

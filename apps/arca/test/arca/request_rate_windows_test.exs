@@ -130,6 +130,88 @@ defmodule Arca.RequestRateWindowsTest do
              5
   end
 
+  describe "check/5" do
+    test "a key never claimed has room, and checking opens no window" do
+      source = key()
+      watch_statements!()
+
+      for _ <- 1..10,
+          do: assert(RequestRateWindows.check(server(), :checked, source, 3, 60_000) == :ok)
+
+      assert Enum.filter(statements(), &(&1 =~ ~r/^\s*(INSERT|UPDATE|DELETE)/i)) == []
+      assert Arca.Repo.all(from(w in RequestRateWindow, where: w.bucket == "checked")) == []
+    end
+
+    test "under the cap it has room, and the count does not move" do
+      source = key()
+      :ok = RequestRateWindows.claim(server(), :checked, source, 3, 60_000)
+      :ok = RequestRateWindows.claim(server(), :checked, source, 3, 60_000)
+      watch_statements!()
+
+      for _ <- 1..10,
+          do: assert(RequestRateWindows.check(server(), :checked, source, 3, 60_000) == :ok)
+
+      assert Enum.filter(statements(), &(&1 =~ ~r/^\s*(INSERT|UPDATE|DELETE)/i)) == []
+
+      assert [%{count: 2}] =
+               Arca.Repo.all(from(w in RequestRateWindow, where: w.bucket == "checked"))
+
+      # The one request left is still there for the caller that claims.
+      assert :ok = RequestRateWindows.claim(server(), :checked, source, 3, 60_000)
+      assert {:error, _} = RequestRateWindows.claim(server(), :checked, source, 3, 60_000)
+    end
+
+    test "at the cap it refuses with the time left, as a claim would, writing nothing" do
+      source = key()
+      for _ <- 1..3, do: :ok = RequestRateWindows.claim(server(), :checked, source, 3, 60_000)
+      watch_statements!()
+
+      assert {:error, {:rate_limited, retry_after}} =
+               RequestRateWindows.check(server(), :checked, source, 3, 60_000)
+
+      assert retry_after > 0 and retry_after <= 60_000
+
+      assert {:error, {:rate_limited, _}} =
+               RequestRateWindows.claim(server(), :checked, source, 3, 60_000)
+
+      assert Enum.filter(statements(), &(&1 =~ ~r/^\s*(INSERT|UPDATE|DELETE)/i)) == []
+
+      assert [%{count: 3}] =
+               Arca.Repo.all(from(w in RequestRateWindow, where: w.bucket == "checked"))
+
+      # Another key and another bucket have their own room.
+      assert :ok = RequestRateWindows.check(server(), :checked, key(), 3, 60_000)
+      assert :ok = RequestRateWindows.check(server(), :other, source, 3, 60_000)
+    end
+
+    test "a window that ran out has room again, and is left as it was" do
+      source = key()
+      :ok = RequestRateWindows.claim(server(), :checked, source, 1, 60_000)
+
+      {1, _} =
+        Arca.Repo.update_all(from(w in RequestRateWindow, where: w.bucket == "checked"),
+          set: [window_start: DateTime.add(DateTime.utc_now(), -61, :second)]
+        )
+
+      [before] = Arca.Repo.all(from(w in RequestRateWindow, where: w.bucket == "checked"))
+      assert :ok = RequestRateWindows.check(server(), :checked, source, 1, 60_000)
+      assert [^before] = Arca.Repo.all(from(w in RequestRateWindow, where: w.bucket == "checked"))
+    end
+
+    test "only the platform's own actor checks, under a bucket spelled in code" do
+      assert {:error, :cross_tenant} =
+               RequestRateWindows.check(Prima.Actor.in_athanor("ath_test"), :b, key(), 1, 1_000)
+
+      assert_raise FunctionClauseError, fn ->
+        apply(RequestRateWindows, :check, [server(), "from-a-request", key(), 1, 1_000])
+      end
+
+      assert_raise FunctionClauseError, fn ->
+        apply(RequestRateWindows, :check, [server(), :b, key(), 0, 1_000])
+      end
+    end
+  end
+
   test "only the platform's own actor claims, under a bucket spelled in code" do
     assert {:error, :cross_tenant} =
              RequestRateWindows.claim(Prima.Actor.in_athanor("ath_test"), :b, key(), 1, 1_000)

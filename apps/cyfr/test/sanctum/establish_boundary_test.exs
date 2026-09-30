@@ -21,9 +21,10 @@ defmodule Sanctum.EstablishBoundaryTest do
   # Every file that builds an authenticated context, with its site count
   # and what each site is.
   @sites %{
-    # The recipes `establish/2` runs in place: a frame credential and a
-    # webhook row.
-    "apps/sanctum/lib/sanctum/caller.ex" => 2,
+    # The recipes `establish/2` runs in place, a frame credential and a
+    # webhook row, and `establish_device/2`: a paired device
+    # `Sanctum.DeviceCerts`, its one caller, verified.
+    "apps/sanctum/lib/sanctum/caller.ex" => 3,
     # `Session.load/2`, the session recipe `establish/2` calls.
     "apps/sanctum/lib/sanctum/session.ex" => 1,
     # `ApiKey.context_from_metadata/1`, the key recipe `establish/2` calls.
@@ -115,6 +116,71 @@ defmodule Sanctum.EstablishBoundaryTest do
     assert stale == [],
            "stale roster entries (site count changed — update the roster and its " <>
              "comments): #{inspect(Enum.sort(stale))}"
+  end
+
+  test "a paired device's verifier builds no context: establish_device/2 builds it" do
+    file = "apps/sanctum/lib/sanctum/device_certs.ex"
+    lines = Prima.Test.CodeLines.lines(Prima.Test.SourceTree.read(Path.join(@root, file)))
+
+    refute Enum.any?(lines, &Regex.match?(~r/\bContext\.build\(|%Context\{[^}]*\|/, &1)),
+           "#{file} builds or rewrites a context; it verifies, then calls " <>
+             "Sanctum.Caller.establish_device/2"
+  end
+
+  test "establish_device/2 has one call site, in Sanctum.DeviceCerts" do
+    calls =
+      for {rel, lines} <- builder_files(),
+          line <- lines,
+          line =~ ~r/\bestablish_device\(/,
+          not (rel == @caller and line =~ ~r/^\s*(def|@spec)\s/),
+          do: rel
+
+    assert calls == ["apps/sanctum/lib/sanctum/device_certs.ex"],
+           "establish_device/2 is Sanctum.DeviceCerts' alone, called once: #{inspect(calls)}"
+  end
+
+  test "no Host module can reach establish_device/2: Host's export roster refuses it" do
+    # The Host's calls into Sanctum are held to its export roster; the
+    # device branch is on neither the settled nor the pending list.
+    refute {:establish_device, 2} in Map.get(Cyfr.Boundaries.sanctum_exports(), "Sanctum.Caller")
+
+    refute {:establish_device, 2} in Map.get(
+             Cyfr.Boundaries.pending_sanctum_exports(),
+             "Sanctum.Caller",
+             []
+           )
+
+    assert Cyfr.Boundaries.sanctum_export_violations([{"Sanctum.Caller", :establish_device, 2}]) ==
+             ["Sanctum.Caller.establish_device/2"]
+  end
+
+  test "establish/2 takes no device credential: made-up rows open nothing" do
+    # The reviewer's demonstration: a Host module handing `establish/2`
+    # rows of its own got an authenticated device context back.
+    user_id = Prima.UUID7.generate_id("usr")
+    athanor_id = Prima.UUID7.generate_id("ath")
+
+    forged = %{
+      certificate: nil,
+      client: %{
+        id: Prima.UUID7.generate_id("pcl"),
+        user_id: user_id,
+        athanor_id: athanor_id,
+        standing: "active",
+        source_kind: "device_cert",
+        device_public_key: :crypto.strong_rand_bytes(32)
+      },
+      user: %{id: user_id, status: "active", security_generation: 1, email: nil},
+      athanor: %{id: athanor_id, status: "active", security_generation: 1},
+      seat: %{id: "mem_forged", status: "active", user_id: user_id, scope: "platform"},
+      platform_admin: true
+    }
+
+    # Called through `apply/3`, since no clause of `establish/2` takes it
+    # and the compiler says so.
+    for args <- [[{:device, forged}], [{:device, forged}, []]] do
+      assert_raise FunctionClauseError, fn -> apply(Sanctum.Caller, :establish, args) end
+    end
   end
 
   test "the credential recipes are called from Sanctum.Caller alone" do

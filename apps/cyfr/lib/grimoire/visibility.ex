@@ -17,7 +17,8 @@ defmodule Grimoire.Visibility do
   - `auth: :anonymous` actions are visible to everyone.
   - `permission:` actions require the named permission.
   - `consent:` actions require an admitted surface: `:interactive` accepts
-    OIDC sessions; `:staging` accepts OIDC sessions or API keys.
+    OIDC sessions and paired devices; `:staging` accepts those or API
+    keys.
   - Unannotated actions are invisible and refused by dispatch.
 
   The completeness audit (`Grimoire.Catalog.audit_action_kinds/0`,
@@ -152,10 +153,21 @@ defmodule Grimoire.Visibility do
   defp consent_visible?(annotation, ctx) do
     case Map.get(annotation, :consent) do
       nil -> true
-      :interactive -> ctx.auth_method == :oidc
-      :staging -> ctx.auth_method in [:oidc, :api_key]
+      :interactive -> interactive?(ctx)
+      :staging -> interactive?(ctx) or keyed?(ctx)
     end
   end
+
+  # On the external plane, a browser session that names no paired client,
+  # or a paired device that names its client (the device channel's alone);
+  # inside a chain, the in-chain arm's session alone.
+  defp interactive?(%Context{plane: :guest, auth_method: method}), do: method == :oidc
+  defp interactive?(%Context{auth_method: :oidc, client_id: nil}), do: true
+  defp interactive?(%Context{auth_method: :device, client_id: id}), do: is_binary(id)
+  defp interactive?(%Context{}), do: false
+
+  defp keyed?(%Context{auth_method: :api_key, client_id: nil}), do: true
+  defp keyed?(%Context{}), do: false
 
   # One shape reaches here. `Grimoire.Catalog` emits the wire
   # spelling for registered tools and `Emissary.External.Proxy` maps a peer's

@@ -64,6 +64,10 @@ defmodule Prima.RateLimiter do
   advisory limit (not a security boundary); the storage/authority caps
   make the same call explicitly at their own sites.
 
+  `peek/3` answers what `check/3` would at the cap, and counts nothing:
+  for a caller that counts only what fails, which asks before its work
+  and counts once the work failed.
+
   The transport plugs (`CyfrWeb.Plugs.*RateLimit`) all share `check/3`:
 
       case Prima.RateLimiter.check(key, max, window_ms) do
@@ -115,6 +119,31 @@ defmodule Prima.RateLimiter do
       _ ->
         # Absent or a closed window: start a fresh one.
         :ets.insert(@table, {key, 1, now})
+        :ok
+    end
+  rescue
+    ArgumentError ->
+      Logger.error("[Prima.RateLimiter] table unavailable; denying request")
+      {:deny, 1}
+  end
+
+  @doc """
+  Whether `key`'s window is spent, without counting: what `check/3` would
+  answer for a caller at the cap, from a read. `:ok` while the window has
+  room (or is closed, or was never opened), `{:deny, retry_after_seconds}`
+  once it holds `max` hits. It writes nothing and opens no window, so a
+  caller that counts only what fails asks here first and counts with
+  `check/3` afterwards. An unavailable table denies, as `check/3` does.
+  """
+  @spec peek(term(), pos_integer(), pos_integer()) :: :ok | {:deny, pos_integer()}
+  def peek(key, max, window_ms) do
+    now = System.monotonic_time(:millisecond)
+
+    case :ets.lookup(@table, key) do
+      [{^key, count, window_start}] when now - window_start < window_ms and count >= max ->
+        {:deny, max(div(window_ms - (now - window_start), 1000), 1)}
+
+      _room ->
         :ok
     end
   rescue

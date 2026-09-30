@@ -36,6 +36,14 @@ defmodule Sanctum.Caller do
     * `{:webhook, webhook}` — a verified webhook row (`request_id:`).
       Stands while its athanor is open and its creator is not denied.
 
+  A paired device is established by `establish_device/2`, not
+  `establish/2`: its one caller is `Sanctum.DeviceCerts`, which verified
+  the device's proof of possession and certificate on its channel and
+  read the rows the context is built from. The branch trusts that caller
+  and reads nothing from the store. Host's export roster
+  (`Cyfr.Boundaries`) does not name it, so no surface can hand it rows of
+  its own.
+
   Every Context this module establishes from a credential carries
   `validated_at`, the instant its credential and standing were read from
   the store. A memo hit returns that same instant, so reuse never extends
@@ -84,6 +92,22 @@ defmodule Sanctum.Caller do
           | :archived
           | :not_found
           | :unavailable
+
+  @typedoc """
+  A paired device as `Sanctum.DeviceCerts` verified it: the certificate
+  it stands under (nil for a renewal), its paired-client row, and its
+  person's `users` row, the athanor's row and the membership that seats
+  them there, read for this verification, and whether they hold the
+  platform's.
+  """
+  @type device :: %{
+          required(:certificate) => Prima.DeviceCert.t() | nil,
+          required(:client) => map(),
+          required(:user) => map(),
+          required(:athanor) => map(),
+          required(:seat) => map(),
+          required(:platform_admin) => boolean()
+        }
 
   @type credential ::
           {:session, String.t() | nil}
@@ -233,6 +257,121 @@ defmodule Sanctum.Caller do
   defp api_key_refusal(reason) when reason in [:revoked, :channel_closed], do: :revoked
   defp api_key_refusal(:ip_not_allowed), do: :ip_not_allowed
   defp api_key_refusal(:database_error), do: :unavailable
+
+  @doc """
+  Establish a paired device's context from what `Sanctum.DeviceCerts`
+  verified and read for it (`t:device/0`; `request_id:` and `client_ip:`
+  for the connection): its one caller. It trusts that caller, which
+  verified the device's proof of possession on its channel and its
+  certificate, and read the paired client and its person, athanor and
+  seat from the store. It reads nothing from the store itself, and checks
+  only that the rows it is handed agree with each other: one active
+  device client of that person in that athanor, the person and the
+  athanor active, the seat theirs, and the certificate, when there is
+  one, naming that client, athanor, person and device key. Rows that do
+  not agree are `{:error, :unauthenticated}`.
+
+  The context is the person's own interactive client there
+  (`auth_method: :device`, its `client_id`, `origin: :interactive`),
+  whose credential deadline is the certificate's expiry. A renewal's
+  context carries no certificate and so no deadline: it is the fixed
+  renewal exchange's, and the one operation it is used for,
+  `Sanctum.Pairing.renew/2`, takes no other. Nothing is memoized: the
+  channel reads it all again on every request.
+
+  Host's export roster (`Cyfr.Boundaries`) does not name this function.
+  """
+  @spec establish_device(device(), keyword()) :: {:ok, Context.t()} | {:error, refusal()}
+  def establish_device(%{client: client} = device, opts) when is_map(client) and is_list(opts) do
+    if device_stands?(device) do
+      ctx =
+        Context.build(
+          user_id: client.user_id,
+          email: device.user.email,
+          provider: device.user.provider,
+          namespace: device.user.namespace,
+          athanor_id: client.athanor_id,
+          permissions: Context.person_permissions(),
+          scope: :athanor,
+          auth_method: :device,
+          client_id: client.id,
+          credential_binding: device_binding(device),
+          credential_deadline: device_deadline(device.certificate),
+          platform_admin: device.platform_admin,
+          origin: :interactive,
+          request_id: Keyword.get(opts, :request_id),
+          client_ip: Keyword.get(opts, :client_ip),
+          authenticated: true
+        )
+
+      with :ok <- tenant_ok(ctx), do: {:ok, validated(ctx)}
+    else
+      {:error, :unauthenticated}
+    end
+  end
+
+  # The rows a device's verification read agree with each other, as they
+  # were read (nothing is read here): one active device client of the
+  # person in the athanor, the person and the athanor active, the seat
+  # theirs (their seat there or their platform row), and the certificate,
+  # when there is one, naming that client, athanor, person and device key.
+  defp device_stands?(%{
+         certificate: certificate,
+         client:
+           %{
+             id: client_id,
+             user_id: user_id,
+             athanor_id: athanor_id,
+             standing: "active",
+             source_kind: "device_cert"
+           } = client,
+         user: %{id: user_id, status: "active", security_generation: user_generation},
+         athanor: %{id: athanor_id, status: "active", security_generation: athanor_generation},
+         seat: %{id: seat_id, status: "active", user_id: user_id} = seat,
+         platform_admin: platform_admin
+       })
+       when is_binary(client_id) and is_binary(user_id) and is_binary(athanor_id) and
+              is_binary(seat_id) and is_integer(user_generation) and
+              is_integer(athanor_generation) and is_boolean(platform_admin) do
+    seated?(seat, athanor_id) and certifies?(certificate, client)
+  end
+
+  defp device_stands?(_device), do: false
+
+  defp seated?(%{scope: "athanor", athanor_id: athanor_id}, athanor_id), do: true
+  defp seated?(%{scope: "platform"}, _athanor_id), do: true
+  defp seated?(_seat, _athanor_id), do: false
+
+  defp certifies?(nil, _client), do: true
+
+  defp certifies?(%Prima.DeviceCert{} = certificate, client) do
+    certificate.client_id == client.id and certificate.athanor == client.athanor_id and
+      certificate.subject == %{kind: :local, user_id: client.user_id} and
+      certificate.device_key == client.device_public_key
+  end
+
+  defp certifies?(_certificate, _client), do: false
+
+  # What the device's context was read against
+  # (`t:Sanctum.Context.credential_binding/0`): the person's and the
+  # athanor's generations and the seat that grants the athanor, so an
+  # issuance from it locks and rereads them. Its source is `:identity`,
+  # the kind that names no stored credential of its own: the paired client
+  # is read again on every request, not held.
+  defp device_binding(device) do
+    %{
+      source_kind: :identity,
+      source_id: nil,
+      focus_basis: device.seat.id,
+      user_generation: device.user.security_generation,
+      athanor_generation: device.athanor.security_generation
+    }
+  end
+
+  defp device_deadline(nil), do: nil
+
+  defp device_deadline(%Prima.DeviceCert{expires_at: expires_at}),
+    do: DateTime.from_unix!(expires_at, :millisecond)
 
   # A frame acts as its person, whose session holds every person
   # permission; what it may reach of them is its tincture's declaration,
@@ -479,6 +618,15 @@ defmodule Sanctum.Caller do
   admits the caller and `:not_standing` for an athanor or creator that no
   longer stands.
 
+  A paired device's context is held to its paired client the same way
+  (`Sanctum.DeviceCerts.client_standing/1`): past its certificate's
+  expiry it is refused as an expired session is, `:unauthenticated`; a
+  client revoked, or a person denied, gone from the athanor or in an
+  archived one, is `:not_standing`; and it comes back with a new
+  `validated_at` while it stands. So work a device started and something
+  else holds (a pending OAuth grant, say) is refused at its recheck once
+  the device is revoked or its certificate expired.
+
   Any other context — one an auth provider synthesized, a frame's, a
   webhook, the system's own — keeps its establishment contract and is
   answered `{:ok, ctx}` unchanged.
@@ -489,6 +637,7 @@ defmodule Sanctum.Caller do
     case holder(ctx) do
       {:session, hash, surface} -> revalidate_stored(ctx, hash, surface)
       {:api_key, id} -> revalidate_key(ctx, id)
+      :device -> revalidate_device(ctx)
       :other -> {:ok, ctx}
       :unbound -> {:error, :unauthenticated}
     end
@@ -524,6 +673,7 @@ defmodule Sanctum.Caller do
   # names a session — by binding or by row key — is revalidated from that
   # session and nothing else, so a binding without its key refuses rather
   # than passing as some other kind.
+  defp holder(%Context{auth_method: :device}), do: :device
   defp holder(%Context{auth_method: :tincture}), do: :other
   defp holder(%Context{auth_method: :api_key} = ctx), do: key_holder(ctx)
 
@@ -630,6 +780,24 @@ defmodule Sanctum.Caller do
   defp standing_athanor(_athanor, nil), do: :ok
   defp standing_athanor(%{status: "active"}, _athanor_id), do: :ok
   defp standing_athanor(_athanor, _athanor_id), do: {:error, :not_member}
+
+  # A paired device's certificate deadline on this node's clock, then its
+  # paired client and its person's seat, read from the store. Nothing is
+  # rebuilt: everything the context carries is the client row's.
+  defp revalidate_device(%Context{credential_deadline: deadline} = ctx) do
+    if expired?(deadline) do
+      {:error, :unauthenticated}
+    else
+      case Sanctum.DeviceCerts.client_standing(ctx) do
+        :ok -> {:ok, validated(ctx)}
+        {:error, :unavailable} -> {:error, :unavailable}
+        {:error, _ended} -> {:error, :not_standing}
+      end
+    end
+  end
+
+  defp expired?(%DateTime{} = deadline), do: DateTime.compare(now(), deadline) != :lt
+  defp expired?(nil), do: false
 
   # The key row, its creator and its athanor, locked and reread in the
   # standing order; nothing is rebuilt, since everything a key's context

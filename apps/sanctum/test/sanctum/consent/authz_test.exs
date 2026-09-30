@@ -7,7 +7,12 @@ defmodule Sanctum.Consent.AuthzTest do
   A grant needs an interactive caller, or a key capability within its
   exact envelope, and that caller's standing read again as it is decided:
   a session that expired or is gone, a person denied, an athanor archived
-  or a key revoked grants nothing. Tincture sessions, the guest plane and
+  or a key revoked grants nothing. A paired device is an interactive
+  caller: it previews and grants as its person's session does, while its
+  certificate's deadline holds, its paired client is active and its
+  person is seated. A paired client is the device channel's alone: a
+  context that names one without being the channel's, or the channel's
+  without its client, is refused. Tincture sessions, the guest plane and
   key overrides stay refused. No client holds a rank.
 
   `confirm/3`, `check/3` and `consume/2` decide a sensitive change: in
@@ -109,6 +114,44 @@ defmodule Sanctum.Consent.AuthzTest do
     %{key_ctx: key_ctx, key_name: name, key_digest: digest, key_capability: key_capability}
   end
 
+  # A device paired to that person through the ceremony, and the context
+  # its channel mints once it proves its key.
+  defp paired_device(%{session_ctx: session_ctx}) do
+    source = "192.0.2.#{rem(System.unique_integer([:positive]), 250) + 1}"
+    glass = Context.build(%{authenticated: false, client_ip: source})
+    {device_key, private} = :crypto.generate_key(:eddsa, :ed25519)
+    {:ok, invitation} = Sanctum.Pairing.begin(session_ctx, %{})
+
+    {:ok, %{challenge: challenge}} =
+      Sanctum.Pairing.complete(glass, invitation.invitation_secret, %{device_key: device_key})
+
+    {:ok, %{client_id: client_id, certificate: certificate}} =
+      Sanctum.Pairing.complete(glass, invitation.invitation_secret, %{
+        device_key: device_key,
+        proof: Prima.DeviceCert.Proof.sign(challenge, private)
+      })
+
+    {:ok, connect} =
+      Prima.DeviceCert.Challenge.new(
+        purpose: :connect,
+        home: certificate.audience,
+        athanor: certificate.athanor,
+        client_id: client_id,
+        device_key: device_key,
+        nonce: :crypto.strong_rand_bytes(32),
+        now: System.system_time(:millisecond)
+      )
+
+    {:ok, device_ctx} =
+      Sanctum.DeviceCerts.verify_connect(
+        %{client_id: client_id, certificate: certificate, source: source},
+        Prima.DeviceCert.Proof.sign(connect, private),
+        connect
+      )
+
+    %{device_ctx: device_ctx}
+  end
+
   defp session_rows(hash), do: from(s in Arca.Schemas.Session, where: s.token_hash == ^hash)
 
   describe "a standing session" do
@@ -154,6 +197,95 @@ defmodule Sanctum.Consent.AuthzTest do
     test "the refusals render through the vocabulary's owner" do
       assert Authz.message(:not_standing) =~ "no longer stands"
       assert Authz.message(:unavailable) =~ "try again"
+    end
+  end
+
+  describe "a paired device" do
+    setup [:checkout, :standing_session, :paired_device]
+
+    test "previews and grants a component's consent as its person's session does", %{
+      device_ctx: device_ctx
+    } do
+      assert device_ctx.auth_method == :device
+      assert Authz.authorize_staging(device_ctx) == :ok
+      assert Authz.authorize_interactive(device_ctx) == {:ok, :interactive}
+      assert Authz.authorize(device_ctx, request()) == {:ok, :interactive}
+      assert Authz.authorize(device_ctx, request(override?: true)) == {:ok, :interactive}
+    end
+
+    test "whose pairing was revoked grants nothing", %{
+      device_ctx: device_ctx,
+      session_ctx: session_ctx
+    } do
+      {:ok, _row} = Sanctum.Pairing.revoke(session_ctx, device_ctx.client_id)
+
+      assert Authz.authorize(device_ctx, request()) == {:error, :not_standing}
+    end
+
+    test "whose certificate's deadline passed grants nothing, as an expired session", %{
+      device_ctx: device_ctx
+    } do
+      expired = %{device_ctx | credential_deadline: DateTime.add(DateTime.utc_now(), -1, :second)}
+
+      assert Authz.authorize(expired, request()) == {:error, :not_authenticated}
+    end
+
+    test "of a person since denied grants nothing", %{device_ctx: device_ctx, user: user} do
+      Arca.Repo.update_all(from(u in Arca.Schemas.User, where: u.id == ^user.id),
+        set: [status: "denied"]
+      )
+
+      assert Authz.authorize(device_ctx, request()) == {:error, :not_standing}
+    end
+  end
+
+  describe "a paired client is the device channel's alone" do
+    test "a guest-plane context carrying a client id is refused before anything else" do
+      for method <- [:device, :oidc] do
+        guest = Context.enter_guest(ctx(auth_method: method, client_id: "pcl_1"))
+
+        assert Authz.authorize(guest, request()) == {:error, :guest_plane}
+        assert Authz.authorize_staging(guest) == {:error, :guest_plane}
+        assert Authz.authorize_interactive(guest) == {:error, :guest_plane}
+      end
+
+      # The in-chain arm stays the session's: a device's chain is refused.
+      assert Authz.authorize_interactive_in_chain(
+               Context.enter_guest(ctx(auth_method: :device, client_id: "pcl_1"))
+             ) == {:error, {:surface_not_permitted, :device}}
+    end
+
+    test "a tincture credential, a session or a key claiming a client id is refused" do
+      for method <- [:tincture, :oidc, :api_key, :session] do
+        claiming = ctx(auth_method: method, client_id: "pcl_1")
+        refused = {:error, {:surface_not_permitted, method}}
+
+        assert Authz.authorize(claiming, request(key_capability: capability())) == refused
+        assert Authz.authorize_staging(claiming) == refused
+        assert Authz.authorize_interactive(claiming) == refused
+      end
+    end
+
+    test "the channel's surface naming no client is refused" do
+      unpaired = ctx(auth_method: :device)
+      refused = {:error, {:surface_not_permitted, :device}}
+
+      assert Authz.authorize(unpaired, request()) == refused
+      assert Authz.authorize_staging(unpaired) == refused
+      assert Authz.authorize_interactive(unpaired) == refused
+    end
+
+    test "a standing lookup that cannot reach the store is unavailable, never a denial" do
+      assert Sanctum.Unauthorized.class({:consent_class_required, :unavailable}) == :unavailable
+
+      assert Sanctum.Unauthorized.message({:consent_class_required, :unavailable}) ==
+               Authz.message(:unavailable)
+
+      # Every other consent refusal keeps its class.
+      assert Sanctum.Unauthorized.class({:consent_class_required, :not_standing}) == :forbidden
+
+      assert Sanctum.Unauthorized.class({:consent_class_required, :not_authenticated}) ==
+               :unauthenticated
     end
   end
 
@@ -294,7 +426,7 @@ defmodule Sanctum.Consent.AuthzTest do
                {:error, {:surface_not_permitted, :session}}
     end
 
-    test "no non-interactive surface can consent, a paired device not yet among them" do
+    test "no non-interactive surface can consent, nor the device channel's naming no client" do
       for method <- [:tincture, :webhook, :scheduled, :system, :device, nil] do
         assert {:error, {:surface_not_permitted, ^method}} =
                  Authz.authorize(ctx(auth_method: method), request()),

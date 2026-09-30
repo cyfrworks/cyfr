@@ -52,25 +52,6 @@ defmodule Cyfr.DeclaredOperationsTest do
        "action_id" => "act_1",
        "key_epoch" => @digest
      }},
-    {"pairing", "begin", %{}},
-    {"pairing", "renew",
-     %{
-       "client_id" => "pcl_1",
-       "device_key" => @seed,
-       "proof" => %{
-         "protocol" => "cyfr-device-proof/v1",
-         "purpose" => "renew",
-         "home" => "https://home.example.com",
-         "athanor" => "ath_1",
-         "client_id" => "pcl_1",
-         "device_key" => @seed,
-         "nonce" => @seed,
-         "expires_at" => 1,
-         "sig" => @seed
-       }
-     }},
-    {"pairing", "revoke", %{"client_id" => "pcl_1"}},
-    {"pairing", "list", %{}},
     {"passkey", "register", %{}},
     {"passkey", "list", %{}},
     {"passkey", "revoke", %{"passkey_id" => "psk_1"}},
@@ -126,14 +107,6 @@ defmodule Cyfr.DeclaredOperationsTest do
       for {tool, action, args} <- @stubs do
         assert call(ctx, tool, action, args) == {:error, :not_built}, "#{tool}.#{action}"
       end
-
-      # The anonymous completion, from a glass that holds no credential.
-      anonymous = Sanctum.Context.build(%{authenticated: false})
-
-      assert call(anonymous, "pairing", "complete", %{
-               "invitation_secret" => @seed,
-               "device_key" => @seed
-             }) == {:error, :not_built}
 
       # The platform administrator's authorization of a pending passkey.
       admin = %{ctx | platform_admin: true}
