@@ -12,7 +12,10 @@ defmodule Sanctum.Consent.BootstrapGoldenTest do
   re-recording (`CYFR_GOLDEN_RECORD=1 mix test <this file>`).
 
   Only the blob is golden: the activation and its digests move with every
-  wasm rebuild, so they are asserted present, not pinned.
+  wasm rebuild, so they are asserted present, not pinned. The origins a
+  seeded grant admits are asserted beside it: `interactive` and
+  `programmatic`, the operator's own first-party install, and never a
+  schedule or a webhook.
   """
   use ExUnit.Case, async: false
 
@@ -76,6 +79,7 @@ defmodule Sanctum.Consent.BootstrapGoldenTest do
         {:ok, consent} = Arca.ConsentStorage.head_consent(Sanctum.Context.actor(ctx), profile.id)
         assert is_map(consent.activation) and consent.activation != %{}
         assert is_binary(consent.shape_digest) and consent.shape_digest != ""
+        assert consent.admitted_origins == [:interactive, :programmatic]
         {ref, consent.resolved_policy}
       end)
 

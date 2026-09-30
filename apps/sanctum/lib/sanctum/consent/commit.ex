@@ -17,6 +17,25 @@ defmodule Sanctum.Consent.Commit do
   release between plan and commit, a `vault.rebind` between preview and
   commit, a concurrent revision — lands on one of those checks and
   surfaces as `consent_conflict`, never as a grant against stale facts.
+
+  ## What a decision may name beyond bindings
+
+    * `:origins` — the `Prima.Origin` values the revision admits, a
+      non-empty list; `[:interactive]` when absent. The revision is written
+      with them as its `admitted_origins`, and the commit digest binds them.
+    * `:subset` — a narrowing: per consent-graph node, the part of the ask
+      granted for each kind its enforcement point can narrow, in the wire's
+      string-keyed form (`Sanctum.Consent.Normalize.subset/3`). Each value
+      must lie inside the ask, and a limit inside the ceiling too
+      (`Sanctum.Consent.BlobBuilder.narrow/5`); a superset is refused, since
+      granting more than the ask is the `:override` decision.
+
+  ## What preview answers
+
+  A `Prima.ConsentPreview` (`t:Sanctum.Consent.preview/0`): the typed
+  rows of what the revision would grant, the origins it would admit and the
+  commit digest binding both, with the proof and the expected revision
+  beside them, and the rendered `summary` lines the rows replace.
   """
 
   require Logger
@@ -24,6 +43,7 @@ defmodule Sanctum.Consent.Commit do
   alias Sanctum.Consent.Authz
   alias Sanctum.Consent.BlobBuilder
   alias Sanctum.Consent.CommitDigest
+  alias Sanctum.Consent.Normalize
   alias Sanctum.Consent.Plan
   alias Sanctum.Consent.Proof
   alias Sanctum.Consent.ShapeDerivation
@@ -45,7 +65,9 @@ defmodule Sanctum.Consent.Commit do
           optional(:override) => boolean(),
           optional(:publish_from) => String.t(),
           optional(:need_ids) => [String.t()],
-          optional(:durable_storage) => boolean()
+          optional(:durable_storage) => boolean(),
+          optional(:origins) => [Prima.Origin.t(), ...],
+          optional(:subset) => CommitDigest.subset()
         }
 
   # Derive public-source limits from Prima.Authority.zero_limits/0.
@@ -66,15 +88,27 @@ defmodule Sanctum.Consent.Commit do
   # Preview
   # ---------------------------------------------------------------------------
 
-  @doc "Recompute live, render the summary, mint the commit proof."
-  @spec preview(Context.t(), decisions()) :: {:ok, map()} | {:error, term()}
+  @doc """
+  Recompute live, answer the structured preview with the summary, mint the
+  commit proof. Two previews of the same decisions over the same world
+  answer the same rows and the same digest.
+  """
+  @spec preview(Context.t(), decisions()) ::
+          {:ok, Sanctum.Consent.preview()} | {:error, term()}
   def preview(%Context{} = ctx, decisions) do
     with :ok <- Authz.authorize_staging(ctx),
          {:ok, prep} <- prepare(ctx, decisions),
+         {:ok, rows} <- preview_rows(ctx, prep),
+         {:ok, preview} <- consent_preview(rows, prep),
          {:ok, proof} <- mint_commit_proof(ctx, prep) do
+      document = Prima.ConsentPreview.encode(preview)
+
       {:ok,
        %{
-         commit_digest: prep.commit_digest,
+         v: document["v"],
+         rows: document["rows"],
+         origins: document["origins"],
+         commit_digest: document["commit_digest"],
          summary: render_summary(prep),
          proof: proof,
          expected_consent_revision: prep.expected_revision
@@ -127,12 +161,15 @@ defmodule Sanctum.Consent.Commit do
   without a fresh plan, preview and proof.
 
   It reuses the commit's binding resolution, its compare-and-set on the
-  consent revision and its digests, and re-issues the head's scope and
-  invoke mode. It refuses when the revision is stale (a consent
-  conflict), when the component's shape moved since the head
-  (`:shape_moved` — plan, preview and commit again), when the profile is
-  not an active owner profile, or when the head grants external tool
-  servers, which a grant does not carry (`:grant_requires_full_commit`).
+  consent revision and its digests, and re-issues the head's scope, invoke
+  mode and admitted origins, and the narrowing the head holds: every field
+  whose grant differs from the ask is named again, so binding a key never
+  widens a narrowed consent. It refuses when the revision is stale, or
+  moves while the head is re-issued (a consent conflict), when the
+  component's shape moved since the head (`:shape_moved` — plan, preview
+  and commit again), when the profile is not an active owner profile, or
+  when the head grants external tool servers, which a grant does not carry
+  (`:grant_requires_full_commit`).
 
   Params: `:profile_id`, `:bindings` (the commit's binding shape) and
   `:expected_consent_revision`.
@@ -145,9 +182,12 @@ defmodule Sanctum.Consent.Commit do
          {:ok, head} <- Arca.ConsentStorage.head_consent(Context.actor(ctx), profile_id),
          :ok <- check_no_tool_servers(head, profile.source_ref),
          decisions = grant_decisions(profile, head, Map.get(params, :bindings, [])),
-         {:ok, prep} <- prepare(ctx, decisions),
+         {:ok, asked} <- prepare(ctx, decisions),
+         :ok <- check_expected_revision(params, asked),
+         :ok <- check_head_read(head, asked),
+         :ok <- check_shape_unmoved(asked, head),
+         {:ok, prep} <- keep_narrowing(ctx, decisions, asked, {profile_id, head}),
          :ok <- check_expected_revision(params, prep),
-         :ok <- check_shape_unmoved(prep, head),
          {:ok, activation_json} <- JCS.encode(prep.activation.graph),
          {:ok, consent} <-
            persist(ctx, prep, prep.blob_json, prep.blob_refs, activation_json, :interactive) do
@@ -162,6 +202,16 @@ defmodule Sanctum.Consent.Commit do
     end
   end
 
+  # The head whose decisions a grant re-issues must be the revision the
+  # caller presented and the one its walk read: a revision landing between
+  # the head's read and a walk, or between the two walks a narrowed head
+  # takes, would otherwise be written over with the older head's origins
+  # and narrowing, a write nobody decided that can widen the grant.
+  defp check_head_read(%{revision: revision}, %{expected_revision: revision}), do: :ok
+
+  defp check_head_read(%{revision: head}, %{expected_revision: walked}),
+    do: conflict(:stale_plan, head, walked)
+
   defp check_grantable_profile(%{kind: "owner", status: status}) when status != "revoked",
     do: :ok
 
@@ -169,8 +219,9 @@ defmodule Sanctum.Consent.Commit do
   defp check_grantable_profile(_profile), do: {:error, :grant_requires_owner_profile}
 
   # The head's decisions, with the new bindings in place of its own: an
-  # owner profile, the label it carries, and the scope and invoke mode the
-  # head was committed under.
+  # owner profile, the label it carries, and the scope, invoke mode and
+  # origins the head was committed under. A head written without origins
+  # admits interactive alone.
   defp grant_decisions(profile, head, bindings) do
     %{
       ref: profile.source_ref,
@@ -178,11 +229,93 @@ defmodule Sanctum.Consent.Commit do
       kind: :owner,
       scope: head.scope,
       invoke_mode: head.invoke_mode,
+      origins: Map.get(head, :admitted_origins) || Plan.default_origins(),
       bindings: bindings,
       selections: head_selections(head),
       tool_servers: []
     }
   end
+
+  # The head's narrowing, named again: every field of a narrowable kind
+  # whose grant on the head differs from the ask as it stands. A head no
+  # narrowing touched grants the ask, and is re-issued as `asked` was.
+  defp keep_narrowing(ctx, decisions, asked, {profile_id, head}) do
+    with {:ok, head_nodes} <- blob_nodes(head.resolved_policy),
+         {:ok, asked_nodes} <- blob_nodes(asked.blob_json) do
+      case head_narrowing(asked.source_ref, head_nodes, asked_nodes) do
+        subset when subset == %{} -> {:ok, asked}
+        subset -> prepare(ctx, Map.put(decisions, :subset, subset))
+      end
+    else
+      # Unreadable, the head's narrowing is unknown: re-issuing the ask
+      # could widen it, so nothing is granted.
+      :error -> {:error, {:corrupt, {:profile, profile_id}}}
+    end
+  end
+
+  defp blob_nodes(json) do
+    case Jason.decode(json) do
+      {:ok, %{"nodes" => nodes}} when is_map(nodes) -> {:ok, nodes}
+      _ -> :error
+    end
+  end
+
+  defp head_narrowing(source_ref, head_nodes, asked_nodes) do
+    for {node_key, head_node} <- head_nodes,
+        Map.has_key?(asked_nodes, node_key),
+        record =
+          node_narrowing(
+            BlobBuilder.node_resources(head_nodes, source_ref, node_key),
+            BlobBuilder.node_resources(asked_nodes, source_ref, node_key),
+            head_node["limits"],
+            asked_nodes[node_key]["limits"]
+          ),
+        record != %{},
+        into: %{},
+        do: {node_key, record}
+  end
+
+  defp node_narrowing(head, asked, head_limits, asked_limits) do
+    %{}
+    |> put_differing(
+      "egress",
+      fields_differing(head, asked, "egress", ~w(domains methods schemes private_ips))
+    )
+    |> put_differing("storage", fields_differing(head, asked, "storage", ~w(paths actions)))
+    |> put_differing("tools", tools_differing(head, asked))
+    |> put_differing("limits", limits_differing(head_limits || %{}, asked_limits || %{}))
+  end
+
+  defp fields_differing(head, asked, kind, fields) do
+    head_kind = (head && head[kind]) || %{}
+    asked_kind = (asked && asked[kind]) || %{}
+
+    for field <- fields,
+        Map.get(head_kind, field, []) != Map.get(asked_kind, field, []),
+        into: %{},
+        do: {field, Map.get(head_kind, field, [])}
+  end
+
+  defp tools_differing(head, asked) do
+    head_tools = (head && head["tools"]) || []
+    if head_tools != ((asked && asked["tools"]) || []), do: head_tools
+  end
+
+  defp limits_differing(head_limits, asked_limits) do
+    for {field, value} <- head_limits, value != asked_limits[field], into: %{} do
+      case {value, asked_limits[field]} do
+        {%{} = rate, %{} = asked_rate} ->
+          {field, for({k, v} <- rate, v != asked_rate[k], into: %{}, do: {k, v})}
+
+        _differs ->
+          {field, value}
+      end
+    end
+  end
+
+  defp put_differing(record, _kind, nil), do: record
+  defp put_differing(record, _kind, empty) when empty == %{}, do: record
+  defp put_differing(record, kind, value), do: Map.put(record, kind, value)
 
   # The selections the head carries, re-decided as they stand: the same
   # lender, the same fields, the digest pinned again from the live entry.
@@ -226,7 +359,8 @@ defmodule Sanctum.Consent.Commit do
   @doc """
   Stages `profile.publish` from an owner profile with public, edge-only,
   pinned decisions. Retains credentials only for `need_ids` and returns a
-  plan token for preview and commit.
+  plan token for preview and commit, with what the public profile would
+  grant as preview rows and the origins it would admit.
   """
   @spec stage_publish(Context.t(), map()) :: {:ok, map()} | {:error, term()}
   def stage_publish(%Context{} = ctx, %{profile_id: profile_id} = params) do
@@ -241,6 +375,7 @@ defmodule Sanctum.Consent.Commit do
 
     with :ok <- Authz.authorize_staging(ctx),
          {:ok, prep} <- prepare(ctx, decisions),
+         {:ok, rows} <- preview_rows(ctx, prep),
          {:ok, plan_token} <- mint_publish_plan_token(ctx, prep) do
       {:ok,
        %{
@@ -249,6 +384,8 @@ defmodule Sanctum.Consent.Commit do
          shape_digest: prep.shape_digest,
          expected_consent_revision: prep.expected_revision,
          source_ref: prep.source_ref,
+         rows: rows,
+         origins: Prima.Origin.to_wire_list(prep.origins),
          summary: render_summary(prep)
        }}
     end
@@ -307,6 +444,8 @@ defmodule Sanctum.Consent.Commit do
     invoke_mode = Map.get(decisions, :invoke_mode, default_invoke_mode(kind))
 
     with :ok <- RootSelect.check_label(label),
+         {:ok, origins} <- decided_origins(decisions),
+         {:ok, subset} <- decided_subset(decisions),
          {:ok, source_ref} <- Plan.name_ref(Map.get(decisions, :ref, "")),
          {:ok, component} <- Plan.fetch_component(ctx, source_ref),
          {:ok, activation} <- resolve_activation(ctx, component),
@@ -326,17 +465,17 @@ defmodule Sanctum.Consent.Commit do
            bindings: bindings,
            selections: selections,
            tool_servers: tool_servers,
+           subset: subset,
            publish_nodes: published && published.nodes
          },
-         {:ok, blob_json, blob_refs} <- build_blob(ctx, blob_inputs),
+         {:ok, blob_json, blob_refs, narrowed} <- build_blob(ctx, blob_inputs),
          blob_digest = JCS.hash_binary(blob_json),
          {:ok, commit_input} <-
            commit_input(
              shape_digest,
              blob_digest,
-             label,
-             kind,
-             invoke_mode,
+             {label, kind, invoke_mode},
+             {origins, subset},
              bindings,
              selections,
              tool_servers,
@@ -362,6 +501,9 @@ defmodule Sanctum.Consent.Commit do
          selections: selections,
          entries: entries,
          tool_servers: tool_servers,
+         origins: origins,
+         subset: subset,
+         narrowed: narrowed,
          profile_id: profile_id,
          expected_revision: expected_revision,
          override: Map.get(decisions, :override, false),
@@ -369,6 +511,39 @@ defmodule Sanctum.Consent.Commit do
        }}
     end
   end
+
+  # The origins a decision names, in the enum's order; interactive alone
+  # when it names none.
+  defp decided_origins(decisions) do
+    case Map.get(decisions, :origins) do
+      nil ->
+        {:ok, Plan.default_origins()}
+
+      origins ->
+        case Normalize.origins(%{origins: origins}, :origins, :invalid_decision) do
+          {:ok, spellings} ->
+            {:ok, Enum.map(spellings, &(&1 |> Prima.Origin.from_wire() |> elem(1)))}
+
+          {:error, {:invalid_decision, :origins, why}} ->
+            {:error, {:invalid_argument, "The origins a grant admits #{why}"}}
+        end
+    end
+  end
+
+  # The narrowing's shape; whether it lies inside the ask is the builder's.
+  defp decided_subset(decisions) do
+    case Normalize.subset(decisions, :subset, :invalid_decision) do
+      {:ok, subset} ->
+        {:ok, subset}
+
+      {:error, {:invalid_decision, _key, why}} ->
+        {:error, {:invalid_argument, "The narrowing " <> narrowing_sentence(why)}}
+    end
+  end
+
+  defp narrowing_sentence("must be " <> _ = why), do: why
+  defp narrowing_sentence("names " <> _ = why), do: why
+  defp narrowing_sentence(why), do: "is refused: " <> why
 
   # The caller's requested patterns, narrowed to what the server's own
   # config permits. Nothing is taken verbatim.
@@ -495,7 +670,9 @@ defmodule Sanctum.Consent.Commit do
           entry_id: entry.id,
           entry_name: entry.name,
           fields: fields,
-          lent_fields: lent
+          lent_fields: lent,
+          # The selection names no scopes, so the lender's reach the edge.
+          lent_scopes: Map.get(bound.projection, :scopes) || []
         }
 
         {:cont, {:ok, [selection | acc]}}
@@ -877,9 +1054,8 @@ defmodule Sanctum.Consent.Commit do
   defp commit_input(
          shape_digest,
          blob_digest,
-         label,
-         kind,
-         invoke_mode,
+         {label, kind, invoke_mode},
+         {origins, subset},
          bindings,
          selections,
          tool_servers,
@@ -896,12 +1072,14 @@ defmodule Sanctum.Consent.Commit do
        label: label,
        kind: kind,
        invoke_mode: invoke_mode,
+       origins: origins,
        bindings: bindings,
        selections:
          Enum.map(selections, &Map.take(&1, [:from, :dep, :label, :binding_digest, :fields])),
        tool_servers:
          Enum.map(tool_servers, &Map.take(&1, [:server_name, :server_digest, :tool_patterns])),
-       override: Map.get(decisions, :override, false)
+       override: Map.get(decisions, :override, false),
+       subset: subset
      }}
   end
 
@@ -1013,9 +1191,10 @@ defmodule Sanctum.Consent.Commit do
       |> Enum.map(&%{vault_entry_id: &1.entry_id, binding_digest: &1.binding_digest})
       |> Enum.uniq()
 
-    with {:ok, blob_json} <- JCS.encode(%{"canonical" => "jcs-1", "nodes" => nodes}),
+    with {:ok, nodes, narrowed} <- BlobBuilder.narrow_nodes(nodes, prep.source_ref, prep.subset),
+         {:ok, blob_json} <- JCS.encode(%{"canonical" => "jcs-1", "nodes" => nodes}),
          :ok <- check_binding_digests(blob_json, prep) do
-      {:ok, blob_json, refs}
+      {:ok, blob_json, refs, narrowed}
     end
   end
 
@@ -1046,11 +1225,12 @@ defmodule Sanctum.Consent.Commit do
     with {:ok, nodes} <-
            BlobBuilder.build(ctx, prep.activation.graph, prep.source_ref, vault_fn,
              ingress_extras: extras,
-             edge_vault_fn: edge_vault_fn
+             edge_vault_fn: edge_vault_fn,
+             subset: prep.subset
            ),
          {:ok, blob_json} <- BlobBuilder.encode(nodes),
          :ok <- check_binding_digests(blob_json, prep) do
-      {:ok, blob_json, BlobBuilder.vault_refs(nodes)}
+      {:ok, blob_json, BlobBuilder.vault_refs(nodes), BlobBuilder.narrowed(nodes)}
     end
   end
 
@@ -1139,6 +1319,7 @@ defmodule Sanctum.Consent.Commit do
       blob_digest: prep.blob_digest,
       resolved_policy: blob_json,
       activation: activation_json,
+      admitted_origins: prep.origins,
       granted_by: ctx.user_id,
       granted_via: Atom.to_string(granted_via)
     }
@@ -1239,6 +1420,142 @@ defmodule Sanctum.Consent.Commit do
   # ---------------------------------------------------------------------------
   # Rendering + helpers
   # ---------------------------------------------------------------------------
+
+  # The typed rows of what the revision grants, read from the same blob
+  # bytes the digest covers: the builder's rows for resources, limits and a
+  # tincture's declarations, and the credentials and tool servers only the
+  # commit can name.
+  defp preview_rows(ctx, prep) do
+    with {:ok, nodes} <- blob_nodes_or_bug(prep.blob_json),
+         {:ok, granted} <- BlobBuilder.grant_rows(ctx, prep.source_ref, nodes, prep.narrowed),
+         {:ok, credentials} <- credential_rows(prep, nodes) do
+      rows = BlobBuilder.order_rows(granted ++ credentials ++ tool_server_rows(prep, nodes))
+
+      case BlobBuilder.check_rows(rows) do
+        {:ok, _checked} -> {:ok, rows}
+        {:error, reason} -> {:error, {:preview_unrepresentable, reason}}
+      end
+    end
+  end
+
+  defp consent_preview(rows, prep) do
+    document = %{
+      "v" => Prima.ConsentPreview.version(),
+      "rows" => rows,
+      "origins" => Prima.Origin.to_wire_list(prep.origins),
+      "commit_digest" => prep.commit_digest
+    }
+
+    case Prima.ConsentPreview.decode(document) do
+      {:ok, preview} -> {:ok, preview}
+      {:error, reason} -> {:error, {:preview_unrepresentable, reason}}
+    end
+  end
+
+  # The blob was just built from this prep; bytes that do not decode are a
+  # construction bug, never a shorter preview.
+  defp blob_nodes_or_bug(json) do
+    case blob_nodes(json) do
+      {:ok, nodes} -> {:ok, nodes}
+      :error -> {:error, {:preview_unrepresentable, :blob}}
+    end
+  end
+
+  # One row per credential an edge carries, on the node whose edge carries
+  # it: the source for its ingress, the calling node for an edge into a
+  # dependency. A bound entry is named by the entry; a selection by the
+  # lender's entry and the label of the profile lending it.
+  defp credential_rows(prep, nodes) do
+    carried =
+      for {from, node} <- Enum.sort(nodes),
+          {key, %{"vault" => vault}} <- Enum.sort(node["edges"] || %{}) do
+        target =
+          case Prima.Authority.Blob.edge_target(key) do
+            :ingress -> from
+            {:ok, dep} -> dep
+          end
+
+        credential_row(prep, from, target, vault)
+      end
+
+    case Enum.find(carried, &match?({:error, _}, &1)) do
+      nil ->
+        rows = for {:ok, row} <- carried, uniq: true, do: row
+        {:ok, Enum.sort_by(rows, &{&1["node"], &1["values"]["name"]})}
+
+      error ->
+        error
+    end
+  end
+
+  defp credential_row(prep, from, _target, %{"entry_id" => entry_id} = vault) do
+    case Map.fetch(prep.entries, entry_id) do
+      {:ok, entry} ->
+        {:ok,
+         BlobBuilder.row(
+           "credential",
+           from,
+           %{
+             "name" => entry.name,
+             "fields" => projection(vault, "fields"),
+             "scopes" => projection(vault, "scopes")
+           },
+           false
+         )}
+
+      :error ->
+        {:error, {:preview_unrepresentable, :credential}}
+    end
+  end
+
+  defp credential_row(prep, from, target, %{"via" => %{"label" => label}} = vault) do
+    case Enum.find(prep.selections, &(&1.from == from and &1.dep == target)) do
+      nil ->
+        {:error, {:preview_unrepresentable, :credential}}
+
+      selection ->
+        fields =
+          case projection(vault, "fields") do
+            [] -> Enum.sort(selection.lent_fields)
+            fields -> fields
+          end
+
+        {:ok,
+         BlobBuilder.row(
+           "credential",
+           from,
+           %{
+             "name" => selection.entry_name,
+             "label" => label,
+             "fields" => fields,
+             "scopes" => Enum.sort(Enum.uniq(selection.lent_scopes))
+           },
+           false
+         )}
+    end
+  end
+
+  defp projection(vault, key),
+    do: (get_in(vault, ["projection", key]) || []) |> Enum.uniq() |> Enum.sort()
+
+  defp tool_server_rows(prep, nodes) do
+    nodes
+    |> get_in([prep.source_ref, "edges", Prima.Authority.Blob.ingress_key(), "tool_servers"])
+    |> List.wrap()
+    |> Enum.sort_by(& &1["server_name"])
+    |> Enum.map(fn server ->
+      BlobBuilder.row(
+        "tool_servers",
+        prep.source_ref,
+        %{
+          "name" => server["server_name"],
+          "digest" => server["server_digest"],
+          "tool_patterns" => server["tool_patterns"] |> List.wrap() |> Enum.uniq() |> Enum.sort()
+        },
+        false
+      )
+    end)
+  end
 
   # Render grants from the same blob covered by the approved digest.
   defp render_summary(prep) do

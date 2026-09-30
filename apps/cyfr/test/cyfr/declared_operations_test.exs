@@ -211,15 +211,17 @@ defmodule Cyfr.DeclaredOperationsTest do
       end
     end
 
-    test "a grant's origins and narrowing are refused rather than dropped", %{ctx: ctx} do
+    test "a grant's origins and narrowing are decided, never refused as not built",
+         %{ctx: ctx} do
       for extra <- [
             %{"origins" => ["interactive", "programmatic"]},
             %{"subset" => %{"reagent:local.x" => %{"egress" => %{"domains" => []}}}}
           ] do
         decisions = Map.merge(%{"ref" => "reagent:local.no-such-component"}, extra)
 
+        # Decoded and carried into the walk, which finds no such component.
         assert call(ctx, "profile", "preview", %{"decisions" => decisions}) ==
-                 {:error, :not_built}
+                 {:error, "component_not_found"}
       end
     end
 
