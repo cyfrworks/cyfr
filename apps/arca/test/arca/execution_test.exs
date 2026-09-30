@@ -701,6 +701,121 @@ defmodule Arca.ExecutionTest do
     end
   end
 
+  describe "list_by_profile/3" do
+    defp profile_row(attrs) do
+      id = "exec_by_profile_#{System.unique_integer([:positive])}"
+
+      {:ok, row} =
+        Execution.record_start(
+          Map.merge(
+            %{
+              id: id,
+              root_execution_id: id,
+              reference: "catalyst:local.usage:1.0.0",
+              user_id: "user_test",
+              athanor_id: @athanor,
+              started_at: DateTime.utc_now(),
+              status: "running",
+              component_type: "catalyst"
+            },
+            attrs
+          )
+        )
+
+      row
+    end
+
+    test "answers the runs the profile rooted, newest first, with origin, root and time" do
+      profile_id = "prof_usage_#{System.unique_integer([:positive])}"
+      earlier = DateTime.add(DateTime.utc_now(), -60, :second)
+
+      first =
+        profile_row(%{profile_id: profile_id, origin: "interactive", started_at: earlier})
+
+      second = profile_row(%{profile_id: profile_id, origin: "schedule", schedule_id: "sch_1"})
+
+      # A child walks its root's authority and carries no profile of its own.
+      _child =
+        profile_row(%{
+          parent_execution_id: second.id,
+          root_execution_id: second.id,
+          origin: "schedule"
+        })
+
+      _other_profile = profile_row(%{profile_id: profile_id <> "_other", origin: "webhook"})
+
+      assert {:ok, [newest, oldest]} =
+               Execution.list_by_profile(Arca.Test.Actor.local(), profile_id, 20)
+
+      assert %{id: id, root_execution_id: id, origin: "schedule", schedule_id: "sch_1"} = newest
+      assert id == second.id
+      assert %{id: id, origin: "interactive", kind: "component", status: "running"} = oldest
+      assert id == first.id
+      assert DateTime.compare(oldest.started_at, earlier) == :eq
+      assert is_nil(oldest.completed_at)
+    end
+
+    test "is bounded by its limit, keeping the newest" do
+      profile_id = "prof_usage_#{System.unique_integer([:positive])}"
+
+      _older =
+        profile_row(%{
+          profile_id: profile_id,
+          origin: "programmatic",
+          started_at: DateTime.add(DateTime.utc_now(), -60, :second)
+        })
+
+      newer = profile_row(%{profile_id: profile_id, origin: "programmatic"})
+
+      assert {:ok, [only]} = Execution.list_by_profile(Arca.Test.Actor.local(), profile_id, 1)
+      assert only.id == newer.id
+    end
+
+    test "never crosses athanors: another athanor's rows under the same id are not read" do
+      Arca.Test.Actor.athanor!("ath_other")
+      profile_id = "prof_usage_#{System.unique_integer([:positive])}"
+      mine = profile_row(%{profile_id: profile_id, origin: "interactive"})
+      theirs = profile_row(%{profile_id: profile_id, origin: "webhook", athanor_id: "ath_other"})
+
+      assert {:ok, [%{id: id}]} =
+               Execution.list_by_profile(Arca.Test.Actor.local(), profile_id, 20)
+
+      assert id == mine.id
+
+      assert {:ok, [%{id: id}]} =
+               Execution.list_by_profile(Arca.Test.Actor.in_athanor("ath_other"), profile_id, 20)
+
+      assert id == theirs.id
+
+      # A platform-scope actor reads the one athanor it carries, never all.
+      assert {:ok, [%{id: id}]} =
+               Execution.list_by_profile(
+                 Arca.Test.Actor.platform(athanor_id: @athanor),
+                 profile_id,
+                 20
+               )
+
+      assert id == mine.id
+    end
+
+    test "a profile with no runs is an empty answer, and an actor with no athanor is refused" do
+      assert {:ok, []} =
+               Execution.list_by_profile(Arca.Test.Actor.local(), "prof_usage_none", 20)
+
+      for athanor_id <- [nil, ""] do
+        assert {:error, :no_athanor} =
+                 Execution.list_by_profile(
+                   Arca.Test.Actor.local(athanor_id: athanor_id),
+                   "prof_usage_none",
+                   20
+                 )
+      end
+
+      assert {:error, :no_athanor} =
+               Execution.list_by_profile(Arca.Test.Actor.platform(), "prof_usage_none", 20)
+    end
+  end
+
   describe "hash_input/1" do
     test "returns consistent hash for same input" do
       input = %{"method" => "GET", "url" => "https://example.com"}

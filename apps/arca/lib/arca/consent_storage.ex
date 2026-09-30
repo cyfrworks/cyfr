@@ -322,6 +322,70 @@ defmodule Arca.ConsentStorage do
 
   def head_referenced_entries(%Prima.Actor{}), do: {:error, :no_athanor}
 
+  @typedoc "An active profile and its head revision, as `active_heads/1` answers them."
+  @type active_head :: %{
+          profile: Prima.Authority.RootSelect.profile_summary(),
+          consent: consent()
+        }
+
+  @doc """
+  Every `active` profile of the actor's athanor with its **head** revision
+  and that revision's vault refs, decoded as `profiles/2` and
+  `head_consent/2` decode them, ordered by profile id: the grants the
+  athanor holds now.
+
+  Two queries: the profiles with their heads, then the refs of those
+  heads by consent id. A revision and its refs commit in one transaction
+  and never change, so the second query reads exactly the first one's
+  revisions whatever advances in between. A profile with no head, or a
+  row that does not decode, is dropped, as `profiles/2` drops one: it
+  roots nothing. An actor whose athanor is nil or the empty string is
+  `{:error, :no_athanor}` before any query.
+  """
+  @spec active_heads(Prima.Actor.t()) ::
+          {:ok, [active_head()]} | {:error, :no_athanor | term()}
+  def active_heads(%Prima.Actor{athanor_id: athanor_id})
+      when is_binary(athanor_id) and athanor_id != "" do
+    Arca.Repo.Errors.with_db_rescue("Arca.ConsentStorage.active_heads", fn ->
+      heads =
+        from(p in Arca.Schemas.Profile,
+          join: c in Consent,
+          on: c.id == p.head_consent_id and c.athanor_id == p.athanor_id,
+          where: p.status == "active",
+          order_by: p.id,
+          select: {p, c}
+        )
+        |> Arca.QueryHelpers.where_athanor(athanor_id)
+        |> Arca.Repo.all()
+
+      refs = refs_by_consent(athanor_id, Enum.map(heads, fn {_profile, c} -> c.id end))
+
+      decoded =
+        Enum.flat_map(heads, fn {profile, consent} ->
+          with %{} = summary <- profile_summary(profile),
+               {:ok, head} <- decode_consent(consent, Map.get(refs, consent.id, [])) do
+            [%{profile: summary, consent: head}]
+          else
+            _undecodable -> []
+          end
+        end)
+
+      {:ok, decoded}
+    end)
+    |> Arca.Data.project()
+  end
+
+  def active_heads(%Prima.Actor{}), do: {:error, :no_athanor}
+
+  defp refs_by_consent(_athanor_id, []), do: %{}
+
+  defp refs_by_consent(athanor_id, consent_ids) do
+    from(r in ConsentVaultRef, where: r.consent_id in ^consent_ids)
+    |> Arca.QueryHelpers.where_athanor(athanor_id)
+    |> Arca.Repo.all()
+    |> Enum.group_by(& &1.consent_id)
+  end
+
   @doc """
   Candidate profiles for a name-level source ref within the actor's tenant,
   decoded into the selection vocabulary.

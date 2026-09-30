@@ -213,9 +213,11 @@ defmodule Sanctum.ToolGrants do
   tool and action, read fresh from the store, still stands
   (`check_standing/2`, at this moment) and covers the call — its
   lifecycle is the call's own execution, turn or the schedule its
-  execution was started by, and the call's resource argument, resolved as
-  a path relative to the athanor root or as a host, lies inside its
-  constraint. An unbounded allow is the policy's to answer, not this.
+  execution was started by, and the call's resource argument lies inside
+  its constraint: a path read as the storage door reads it (refused when
+  absolute or unsafe, then matched as the call spells it by
+  `Prima.ComponentPath.path_granted?/2`), or a host as the egress policy
+  matches it. An unbounded allow is the policy's to answer, not this.
 
   A store that cannot be read, a call that names no thread or agent, and
   a call whose resource argument is absent or unsafe are all `false`: a
@@ -433,16 +435,16 @@ defmodule Sanctum.ToolGrants do
     end
   end
 
-  # A path is read as the storage doors read one, relative to the athanor
-  # root with its empty segments trimmed, and refused whole when a segment
-  # is unsafe (`..`, `.`, an encoded dot, a backslash). A pattern ending in
-  # `/` covers the folder and everything below it, any other names one
-  # path, as the storage grant's own paths match.
+  # A path is read as the storage door reads one (`Crucible.GuestStorage`):
+  # refused whole when it is absolute or a segment is unsafe (`..`, `.`, an
+  # encoded dot, a backslash), then matched as the call spells it against
+  # the constraint's patterns by the door's own rule
+  # (`Prima.ComponentPath.path_granted?/2`). A pattern ending in `/` covers
+  # the folder and everything below it, any other names one path; a
+  # constraint holds no wildcard (`Arca.Schemas.ToolGrant`).
   defp inside?("storage_path", value, patterns) when is_binary(value) do
-    segments = String.split(value, "/", trim: true)
-
-    segments != [] and Prima.PathSafety.validate_segments(segments) == :ok and
-      Enum.any?(patterns, &path_within?(segments, &1))
+    value != "" and Prima.PathSafety.validate_relative_path(value) == :ok and
+      Prima.ComponentPath.path_granted?(value, patterns)
   end
 
   # A host is matched as the egress policy matches one; a wildcard is a
@@ -453,14 +455,6 @@ defmodule Sanctum.ToolGrants do
   end
 
   defp inside?(_kind, _value, _patterns), do: false
-
-  defp path_within?(segments, pattern) do
-    folder = String.split(pattern, "/", trim: true)
-
-    if String.ends_with?(pattern, "/"),
-      do: Enum.take(segments, length(folder)) == folder,
-      else: segments == folder
-  end
 
   # ---------------------------------------------------------------------------
   # Rows

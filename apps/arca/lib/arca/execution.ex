@@ -629,6 +629,72 @@ defmodule Arca.Execution do
     end)
   end
 
+  @typedoc "One run a profile admitted, as `list_by_profile/3` answers it."
+  @type profile_run :: %{
+          id: String.t(),
+          root_execution_id: String.t() | nil,
+          origin: String.t() | nil,
+          kind: String.t(),
+          status: String.t(),
+          reference: String.t(),
+          started_at: DateTime.t(),
+          completed_at: DateTime.t() | nil,
+          turn_id: String.t() | nil,
+          schedule_id: String.t() | nil
+        }
+
+  @doc """
+  The runs `profile_id` admitted in the actor's athanor, newest first, at
+  most `limit`: the rows that rooted under that profile (a child row
+  carries no profile and walks its root's), each with its origin's wire
+  spelling (`Prima.Origin`), its root and its times.
+
+  Scoped to the actor's own athanor whatever its scope: a profile is one
+  athanor's, so no reader of its runs crosses athanors. An actor whose
+  athanor is nil or the empty string is `{:error, :no_athanor}` before any
+  query. A profile with no runs, or no such profile, is `{:ok, []}`;
+  telling those apart is the caller's, which reads the profile through
+  its owner.
+  """
+  @spec list_by_profile(Prima.Actor.t(), String.t(), pos_integer()) ::
+          {:ok, [profile_run()]} | {:error, :no_athanor | :database_error}
+  def list_by_profile(%Prima.Actor{athanor_id: athanor_id}, profile_id, limit)
+      when is_binary(athanor_id) and athanor_id != "" and is_binary(profile_id) and
+             is_integer(limit) and limit > 0 do
+    Arca.Repo.Errors.with_db_rescue("Execution.list_by_profile", fn ->
+      runs =
+        from(e in Row,
+          where: e.profile_id == ^profile_id,
+          order_by: [desc: e.started_at, desc: e.id],
+          limit: ^limit,
+          select:
+            map(e, [
+              :id,
+              :root_execution_id,
+              :origin,
+              :kind,
+              :status,
+              :reference,
+              :started_at,
+              :completed_at,
+              :turn_id,
+              :schedule_id
+            ])
+        )
+        |> Arca.QueryHelpers.where_athanor(athanor_id)
+        |> Arca.Repo.all()
+
+      {:ok, runs}
+    end)
+    |> Arca.Data.project()
+  end
+
+  # Reached only when the actor's athanor is unresolved: a profile id or a
+  # limit of another shape matches neither head.
+  def list_by_profile(%Prima.Actor{}, profile_id, limit)
+      when is_binary(profile_id) and is_integer(limit) and limit > 0,
+      do: {:error, :no_athanor}
+
   @doc """
   Deletes executions older than the newest `keep` records within an
   athanor. Members are interchangeable, so retention keeps the N most

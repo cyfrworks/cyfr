@@ -14,9 +14,12 @@ defmodule Crucible.Provider do
   - `status` - Execution slot diagnostics
   - `force_release` - Release every athanor's execution slots (operator only)
   - `read_resource` - Read a `crucible://executions/…` resource
+  - `usage` - The runs one profile admitted, each with its origin, root
+    and time
 
   Runs and cancels go through `Crucible`; reads
-  come from the execution records (`Crucible.Record`). Its service
+  come from the execution records (`Crucible.Record`), and `usage` from
+  their read by profile (`Arca.Execution.list_by_profile/3`). Its service
   name is `"crucible"` and its resources are `crucible://executions/…`.
 
   Beside it, the `card` tool: `refresh` runs a placed card's declared
@@ -437,8 +440,7 @@ defmodule Crucible.Provider do
             recovery: :replay_safe,
             resource_schemes: ["crucible"]
           ),
-          # Which runs used a grant, with how each started: declared, and
-          # not yet answered.
+          # Which runs a grant admitted, with how each started.
           Operation.new(
             "execution",
             "usage",
@@ -705,8 +707,27 @@ defmodule Crucible.Provider do
     {:error, {:invalid_argument, "Missing required argument: uri"}}
   end
 
-  # Which runs used a grant is declared and not yet answered.
-  def handle("execution", %Context{}, %{"action" => "usage"}), do: {:error, :not_built}
+  # Which runs a grant admitted: the profile is read through its owner
+  # first, in the caller's athanor, so another athanor's profile or none
+  # at all is refused, and a profile of this athanor with no runs answers
+  # an empty list rather than a refusal.
+  def handle(
+        "execution",
+        %Context{} = ctx,
+        %{"action" => "usage", "profile_id" => profile_id} = args
+      )
+      when is_binary(profile_id) and profile_id != "" do
+    with {:ok, limit} <- usage_limit(args["limit"]),
+         :ok <- usage_profile(ctx, profile_id),
+         {:ok, rows} <- usage_runs(ctx, profile_id, limit) do
+      runs = Enum.map(rows, &usage_run/1)
+      {:ok, %{profile_id: profile_id, runs: runs, count: length(runs)}}
+    end
+  end
+
+  def handle("execution", _ctx, %{"action" => "usage"}) do
+    {:error, {:invalid_argument, "Missing required argument: profile_id"}}
+  end
 
   # Invalid action
   def handle("execution", _ctx, %{"action" => action}) do
@@ -920,6 +941,45 @@ defmodule Crucible.Provider do
       user_id: meta.user_id,
       reference: reference,
       policy_applied: meta.policy_applied
+    }
+  end
+
+  # `usage`'s page: the declared default when absent, capped as `list`
+  # caps it, and a count that bounds nothing refused.
+  defp usage_limit(nil), do: {:ok, 20}
+  defp usage_limit(limit) when is_integer(limit) and limit > 0, do: {:ok, min(limit, 1000)}
+
+  defp usage_limit(_limit),
+    do: {:error, {:invalid_argument, "limit must be a positive integer"}}
+
+  # The profile is read through its owner in the caller's athanor, so a
+  # profile of another athanor reads exactly as one that does not exist.
+  # A head that no longer decodes is still this athanor's profile, and
+  # the runs it admitted are facts of their own rows.
+  defp usage_profile(ctx, profile_id) do
+    case Sanctum.Consent.head_consent(ctx, profile_id) do
+      {:ok, _consent} -> :ok
+      {:error, :corrupt} -> :ok
+      {:error, :not_found} -> {:error, {:not_found, "Profile", profile_id}}
+      {:error, reason} -> {:error, reason}
+    end
+  end
+
+  defp usage_runs(ctx, profile_id, limit),
+    do: Arca.Execution.list_by_profile(Context.actor(ctx), profile_id, limit)
+
+  defp usage_run(row) do
+    %{
+      execution_id: row.id,
+      root_execution_id: row.root_execution_id,
+      origin: row.origin,
+      kind: row.kind,
+      status: row.status,
+      reference: row.reference,
+      turn_id: row.turn_id,
+      schedule_id: row.schedule_id,
+      started_at: DateTime.to_iso8601(row.started_at),
+      completed_at: row.completed_at && DateTime.to_iso8601(row.completed_at)
     }
   end
 

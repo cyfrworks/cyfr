@@ -198,11 +198,17 @@ defmodule Cyfr.DeclaredOperationsTest do
       end
     end
 
-    test "the grant and run reads answer not built", %{ctx: ctx} do
+    test "the grant and run reads are answered, never refused as not built", %{ctx: ctx} do
+      # An athanor that granted nothing reaches nothing
+      # (`Sanctum.Providers.ProfileGrantsTest`).
       assert call(ctx, "profile", "grants", %{"domain" => "api.example.com"}) ==
-               {:error, :not_built}
+               {:ok,
+                %{resource: %{kind: "domain", value: "api.example.com"}, grants: [], count: 0}}
 
-      assert call(ctx, "execution", "usage", %{"profile_id" => "prf_1"}) == {:error, :not_built}
+      # The profile is read first, so an unknown one is refused by name
+      # (`Crucible.UsageTest`).
+      assert call(ctx, "execution", "usage", %{"profile_id" => "prf_1"}) ==
+               {:error, {:not_found, "Profile", "prf_1"}}
     end
 
     test "an approval's bounds are decided, never refused as not built", %{ctx: ctx} do

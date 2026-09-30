@@ -4,7 +4,8 @@
 defmodule Sanctum.Providers.Profile do
   @moduledoc """
   Profile tool handlers for the Sanctum MCP provider — the consent walk
-  over `Sanctum.Consent.{Plan,Commit}` plus thin list/revoke.
+  over `Sanctum.Consent.{Plan,Commit}` plus thin list/revoke, and the
+  read of which grants reach a resource (`grants`).
 
   Consent errors remain typed across this boundary. A key-authenticated
   commit loads its consent capability from the stored key row, never from
@@ -415,8 +416,14 @@ defmodule Sanctum.Providers.Profile do
     {:error, "list requires ref"}
   end
 
-  # Which grants reach a resource is declared and not yet answered.
-  def handle(%Context{}, %{"action" => "grants"}), do: {:error, :not_built}
+  # Which grants of the caller's athanor reach one resource
+  # (`grants_reaching/2`). The same defense in depth as list's.
+  def handle(%Context{} = ctx, %{"action" => "grants"} = args) do
+    case Sanctum.Consent.Authz.authorize_staging(ctx) do
+      :ok -> grants_reaching(ctx, args)
+      {:error, reason} -> {:error, fmt(reason)}
+    end
+  end
 
   def handle(%Context{} = ctx, %{"action" => "revoke", "profile_id" => profile_id}) do
     with {:ok, :interactive} <- Sanctum.Consent.Authz.authorize_interactive(ctx),
@@ -434,6 +441,214 @@ defmodule Sanctum.Providers.Profile do
   def handle(_ctx, _args) do
     {:error, Prima.Provider.invalid_action("profile", action_enum())}
   end
+
+  # ---------------------------------------------------------------------------
+  # The grant read — which grants reach one resource
+  # ---------------------------------------------------------------------------
+
+  # The head revision of every active profile of the caller's athanor, read
+  # as the enforcement point would admit it, so no grant shows wider or
+  # narrower than it runs. A revision is its built blob, narrowing already
+  # applied, and one whose policy fails its digest or does not parse
+  # reaches nothing, as the loader roots nothing on it. Every edge counts:
+  #
+  # - a domain, as egress pins a host (`Prima.Network.domain_allowed?/2`),
+  #   on an edge that also allows a method and a scheme;
+  # - a path, as the storage door reads a grant
+  #   (`Prima.ComponentPath.path_granted?/2`) through each pattern as the
+  #   door reaches through it (`door_pattern/1`), on an edge that allows
+  #   an action;
+  # - a vault entry, by its id among the revision's vault references, on
+  #   the edges that bind it. A revision whose references and blob
+  #   disagree reaches nothing through the entry: the loader refuses it.
+  #
+  # Only an active profile's head counts: the loader roots no other.
+  defp grants_reaching(ctx, args) do
+    with {:ok, resource} <- grants_resource(args),
+         {:ok, heads} <- grant_heads(ctx, resource) do
+      grants = Enum.flat_map(heads, &reaching_grant(&1, resource))
+
+      {:ok, %{resource: resource_answer(resource), grants: grants, count: length(grants)}}
+    end
+  end
+
+  @grant_resources ~w(domain path entry_id)
+
+  defp grants_resource(args) do
+    case Enum.reject(@grant_resources, &is_nil(args[&1])) do
+      [key] -> grant_resource(key, args[key])
+      _none_or_several -> grants_refusal("grants names exactly one of domain, path, entry_id")
+    end
+  end
+
+  defp grant_resource(key, value) when not is_binary(value) or value == "",
+    do: grants_refusal("grants: #{key} must be a non-empty string")
+
+  # A wildcard is a pattern a grant may hold, never a host a request names.
+  defp grant_resource("domain", domain) do
+    if String.contains?(domain, "*"),
+      do: grants_refusal("grants: domain names one host, never a pattern"),
+      else: {:ok, {:domain, domain}}
+  end
+
+  # Read as the storage doors read a path: relative to the athanor root,
+  # with its empty segments trimmed, and refused whole when a segment is
+  # unsafe.
+  defp grant_resource("path", path) do
+    segments = String.split(path, "/", trim: true)
+
+    case segments != [] && Prima.PathSafety.validate_segments(segments) do
+      :ok -> {:ok, {:path, Enum.join(segments, "/")}}
+      false -> grants_refusal("grants: path names no file or folder")
+      {:error, {_reason, message}} -> grants_refusal("grants: path is refused: #{message}")
+    end
+  end
+
+  defp grant_resource("entry_id", entry_id), do: {:ok, {:entry_id, entry_id}}
+
+  defp grants_refusal(message), do: {:error, {:invalid_argument, message}}
+
+  # A path outside every guest scope is one no grant can reach, and an
+  # entry that is not the caller's athanor's is refused as unknown, the
+  # same answer whether it exists elsewhere or nowhere.
+  defp grant_heads(ctx, {:path, path}) do
+    if Arca.Storage.valid_guest_path?(path), do: active_heads(ctx), else: {:ok, []}
+  end
+
+  defp grant_heads(ctx, {:entry_id, entry_id}) do
+    case Arca.VaultStorage.get(Context.actor(ctx), entry_id) do
+      {:ok, _entry} -> active_heads(ctx)
+      {:error, :not_found} -> {:error, {:not_found, "Vault entry", entry_id}}
+      {:error, :no_athanor} -> {:error, :no_athanor}
+      {:error, _unreadable} -> {:error, :unavailable}
+    end
+  end
+
+  defp grant_heads(ctx, {:domain, _domain}), do: active_heads(ctx)
+
+  defp active_heads(ctx) do
+    case Arca.ConsentStorage.active_heads(Context.actor(ctx)) do
+      {:ok, heads} -> {:ok, heads}
+      {:error, :no_athanor} -> {:error, :no_athanor}
+      {:error, _unreadable} -> {:error, :unavailable}
+    end
+  end
+
+  defp reaching_grant(%{profile: profile, consent: consent}, resource) do
+    case reaching_edges(consent, resource) do
+      [] ->
+        []
+
+      edges ->
+        [
+          %{
+            profile_id: profile.id,
+            source_ref: profile.source_ref,
+            kind: Atom.to_string(profile.kind),
+            label: profile.label,
+            consent_id: consent.id,
+            revision: consent.revision,
+            admitted_origins:
+              consent.admitted_origins && Prima.Origin.to_wire_list(consent.admitted_origins),
+            edges: edges
+          }
+        ]
+    end
+  end
+
+  defp reaching_edges(%{vault_refs: refs} = consent, {:entry_id, entry_id} = resource) do
+    if Enum.any?(refs, &(&1.vault_entry_id == entry_id)),
+      do: blob_edges(consent, resource),
+      else: []
+  end
+
+  defp reaching_edges(consent, resource), do: blob_edges(consent, resource)
+
+  defp blob_edges(consent, resource) do
+    case verified_blob(consent) do
+      {:ok, blob} ->
+        for {node_ref, %Prima.Authority.Blob.Node{edges: edges}} <- Enum.sort(blob.nodes),
+            {key, edge} <- Enum.sort(edges),
+            %{} = reached <- [edge_reach(edge, resource)],
+            do: Map.merge(%{node: node_ref, edge: key}, reached)
+
+      :error ->
+        []
+    end
+  end
+
+  # The bytes the revision's digest names, parsed fail-closed, as the
+  # loader reads them.
+  defp verified_blob(%{blob_digest: digest, resolved_policy: policy})
+       when is_binary(digest) and is_binary(policy) do
+    with true <- Prima.JCS.hash_binary(policy) == digest,
+         {:ok, blob} <- Prima.Authority.Blob.parse(policy) do
+      {:ok, blob}
+    else
+      _unverified -> :error
+    end
+  end
+
+  defp verified_blob(_consent), do: :error
+
+  defp edge_reach(%{egress: %{} = egress}, {:domain, domain}) do
+    grant = %{
+      domains: Map.get(egress, :domains, []),
+      methods: Map.get(egress, :methods, []),
+      schemes: Map.get(egress, :schemes, []),
+      private_ips: Map.get(egress, :private_ips, [])
+    }
+
+    if Prima.Network.domain_allowed?(domain, grant.domains) and grant.methods != [] and
+         grant.schemes != [],
+       do: %{egress: grant}
+  end
+
+  defp edge_reach(%{storage: %{} = storage}, {:path, path}) do
+    grant = %{paths: Map.get(storage, :paths, []), actions: Map.get(storage, :actions, [])}
+    reached = Enum.flat_map(grant.paths, &door_pattern/1)
+
+    if Prima.ComponentPath.path_granted?(path, reached) and grant.actions != [],
+      do: %{storage: grant}
+  end
+
+  defp edge_reach(%{vault: %{entry_id: entry_id} = vault}, {:entry_id, entry_id}) do
+    %{
+      vault: %{
+        entry_id: entry_id,
+        binding_digest: vault.binding_digest,
+        projection: vault.projection
+      }
+    }
+  end
+
+  defp edge_reach(_edge, _resource), do: nil
+
+  # A grant pattern as the door reaches through it, for a read that names
+  # the path trimmed. The door matches the guest's own spelling against the
+  # pattern as written and then reaches the physical path with its empty
+  # segments trimmed, so `data//secrets/` serves `data/secrets/key.txt`
+  # through `data//secrets/key.txt`: the pattern reaches what its trimmed
+  # spelling names, `*` and a trailing `/` kept. A pattern under which the
+  # door's path check refuses every spelling (`Prima.PathSafety`: an unsafe
+  # segment, or an absolute path) reaches nothing, and so does one that
+  # names no segment, which no read can name either.
+  defp door_pattern("*"), do: ["*"]
+
+  defp door_pattern(pattern) when is_binary(pattern) do
+    segments = String.split(pattern, "/", trim: true)
+
+    if segments != [] and Prima.PathSafety.validate_relative_path(pattern) == :ok do
+      trimmed = Enum.join(segments, "/")
+      [if(String.ends_with?(pattern, "/"), do: trimmed <> "/", else: trimmed)]
+    else
+      []
+    end
+  end
+
+  defp door_pattern(_pattern), do: []
+
+  defp resource_answer({kind, value}), do: %{kind: Atom.to_string(kind), value: value}
 
   # ---------------------------------------------------------------------------
   # Decisions decoding — string-keyed wire shape → the Commit vocabulary

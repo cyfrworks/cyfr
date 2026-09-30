@@ -194,6 +194,26 @@ defmodule Sanctum.Consent.BlobBuilderTest do
       refute Prima.Network.domain_allowed?("api.one.example", authority.resources.egress.domains)
     end
 
+    test "a path is inside the ask when the ask admits it, as the storage door reads the ask",
+         %{ctx: ctx} do
+      # The bare folder a prefix names is a path that prefix admits (a
+      # listing names it without its slash), so it narrows the ask, as a
+      # path or a prefix below the ask's prefix does.
+      for paths <- [["data"], ["data/reports"], ["data/reports/"]] do
+        assert {:ok, preview} = preview(ctx, %{@ref => %{"storage" => %{"paths" => paths}}}),
+               inspect(paths)
+
+        assert %{narrowed: true, values: %{"paths" => ^paths}} = rows(preview)[{:storage, @ref}]
+      end
+
+      walk!(ctx, %{@ref => %{"storage" => %{"paths" => ["data"]}}})
+      {:ok, authority} = Crucible.authority_for(ctx, :default, @ref)
+      granted = Blob.Edge.paths(authority.resources)
+
+      assert Prima.ComponentPath.path_granted?("data", granted)
+      refute Prima.ComponentPath.path_granted?("data/reports/a.md", granted)
+    end
+
     test "a narrowing that leaves the ask as it is is not shown as narrowed", %{ctx: ctx} do
       {:ok, preview} =
         preview(ctx, %{@ref => %{"storage" => %{"actions" => ["write", "read", "list"]}}})

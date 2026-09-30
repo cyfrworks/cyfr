@@ -15,7 +15,9 @@ defmodule Prima.ComponentPath do
   and the unit locator and delegates the shape here; the identity domain
   reads it here to say which directory a consent or a tincture grant
   covers, and the storage layer to read the publisher of a unit the
-  grammar located.
+  grammar located. Which paths a storage grant admits is read here too
+  (`path_granted?/2`), by the boundary that enforces it and by every
+  reader of a grant.
 
   Vocabulary note: paths and the components table say `publisher`;
   references and identity (`Prima.ComponentRef`) say `namespace` — the
@@ -151,4 +153,58 @@ defmodule Prima.ComponentPath do
   @spec publisher([String.t()]) :: {:ok, String.t()} | :error
   def publisher([@components_root, _type_plural, publisher | _rest]), do: {:ok, publisher}
   def publisher(_segments), do: :error
+
+  @doc """
+  Whether a storage grant's `paths` (`Prima.Authority.Blob.Edge.paths/1`)
+  admit `path`: the one reading of a storage grant, which the storage
+  boundary enforces (`Crucible.GuestStorage`) and every reader of a grant
+  shares, so no reader shows a grant wider or narrower than it is.
+
+  `"*"` admits every path. A grant ending in `/` is a prefix: it admits
+  every path it prefixes, and the bare directory it names, since a listing
+  names the directory without its slash. Any other grant admits exactly
+  the path it spells. An empty list admits nothing.
+
+  Both sides compare as spelled, byte for byte: nothing here trims an
+  empty segment or resolves a `..`. Whether `path` is a safe guest path
+  is the caller's check, made before this one (`Prima.PathSafety`).
+
+  ## Examples
+
+      iex> Prima.ComponentPath.path_granted?("data/notes/today.md", ["data/notes/"])
+      true
+
+      iex> Prima.ComponentPath.path_granted?("data/notes", ["data/notes/"])
+      true
+
+      iex> Prima.ComponentPath.path_granted?("data/notesheet.md", ["data/notes/"])
+      false
+
+      iex> Prima.ComponentPath.path_granted?("data/report.md", ["data/report.md"])
+      true
+
+      iex> Prima.ComponentPath.path_granted?("components/catalysts/local/x/1.0.0/a", ["*"])
+      true
+
+      iex> Prima.ComponentPath.path_granted?("data/report.md", [])
+      false
+
+  """
+  @spec path_granted?(String.t(), [String.t()]) :: boolean()
+  def path_granted?(path, grants) when is_binary(path) and is_list(grants) do
+    with_slash = if String.ends_with?(path, "/"), do: path, else: path <> "/"
+    Enum.any?(grants, &grant_admits?(&1, path, with_slash))
+  end
+
+  def path_granted?(_path, _grants), do: false
+
+  defp grant_admits?("*", _path, _with_slash), do: true
+
+  defp grant_admits?(grant, path, with_slash) when is_binary(grant) do
+    if String.ends_with?(grant, "/"),
+      do: String.starts_with?(path, grant) or String.starts_with?(with_slash, grant),
+      else: path == grant or with_slash == grant
+  end
+
+  defp grant_admits?(_grant, _path, _with_slash), do: false
 end
