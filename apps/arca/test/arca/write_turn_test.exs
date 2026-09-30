@@ -47,7 +47,10 @@ defmodule Arca.WriteTurnTest do
          %{server: server} do
       a = writer(server, :a, :audit)
       assert_receive {:issued, :a, _}
+      # b asks before c does: the arbiter issues in the order asked, so c is
+      # started only once b is queued.
       writer(server, :b, :audit)
+      await_waiting(server, audit: 1)
       writer(server, :c, :audit)
       await_waiting(server, audit: 2)
       renewal = writer(server, :renewal, :control_plane)
@@ -120,7 +123,9 @@ defmodule Arca.WriteTurnTest do
          %{server: server} do
       holder = writer(server, :holder, :audit)
       assert_receive {:issued, :holder, _}
+      # The late waiter asks first, so it heads the audit queue.
       writer(server, :late, :audit, 1_000)
+      await_waiting(server, audit: 1)
       writer(server, :audit, :audit)
       await_waiting(server, audit: 2)
 
@@ -441,7 +446,10 @@ defmodule Arca.WriteTurnLockTest do
         end)
 
       assert_receive :issued
-      for tag <- [:a1, :a2], do: waiter(tag, :audit)
+      # a1 asks before a2, so a1 is issued the turn after the renewal.
+      waiter(:a1, :audit)
+      await_waiting(audit: 1)
+      waiter(:a2, :audit)
       await_waiting(audit: 2)
 
       renewal = Task.async(fn -> timed(fn -> ControlPlane.renew(60_000) end) end)
