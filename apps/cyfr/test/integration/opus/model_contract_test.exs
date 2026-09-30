@@ -885,10 +885,15 @@ defmodule Opus.ModelContractTest do
     drain_thread()
     :ok = Runner.subscribe(thread.id, ctx.athanor_id)
 
+    # The person sends from the console, whose context carries the origin
+    # `interactive`: a turn paused on a card resumes under the origin its
+    # row stores.
+    sender = %{ctx | origin: :interactive}
+
     {turn_id, log} =
       with_every_log(fn ->
         assert {:ok, %{accepted: true, admitted: :turn, turn_id: turn_id}} =
-                 Runner.send_message(ctx, thread.id, text)
+                 Runner.send_message(sender, thread.id, text)
 
         await_turn(ctx, turn_id, :pauses)
         turn_id

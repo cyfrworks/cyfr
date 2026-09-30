@@ -353,49 +353,74 @@ defmodule Sanctum.Tenancy do
   The context a recovered turn continues under: the person-shaped
   context the sender's sign-in would carry (`auth_method: :oidc`, the
   person's full permission vocabulary), rebuilt from the turn's rows when
-  the sender's own context is gone. Unlike `revalidate/1`, it refuses
-  instead of degrading: `:denied` when the `users` row is denied or
-  missing (read first — a denial marks the user before memberships are
-  swept, so a surviving membership proves nothing), `:not_member` when
-  the person is not seated in the turn's own athanor, `:archived` when
-  the athanor is not active, `:unavailable` when the store cannot answer.
+  the sender's own context is gone, and carrying `origin`, the origin
+  stored with the work it continues (`Prima.Origin`, an atom or its wire
+  spelling as a row keeps it). The origin is the stored one and never
+  one inferred from the person continuing: a programmatic turn a person
+  approved continues as `programmatic`.
+
+  Unlike `revalidate/1`, it refuses instead of degrading: `:no_origin`
+  when `origin` is missing or names no origin, before anything is read;
+  `:denied` when the `users` row is denied or missing (read first — a
+  denial marks the user before memberships are swept, so a surviving
+  membership proves nothing), `:not_member` when the person is not
+  seated in the turn's own athanor, `:archived` when the athanor is not
+  active, `:unavailable` when the store cannot answer.
   """
-  @spec continuation(String.t(), String.t()) ::
-          {:ok, Context.t()} | {:error, :denied | :not_member | :archived | :unavailable}
-  def continuation(user_id, athanor_id)
+  @spec continuation(String.t(), String.t(), Prima.Origin.t() | String.t() | nil) ::
+          {:ok, Context.t()}
+          | {:error, :no_origin | :denied | :not_member | :archived | :unavailable}
+  def continuation(user_id, athanor_id, origin)
       when is_binary(user_id) and user_id != "" and is_binary(athanor_id) and athanor_id != "" do
-    case Users.get(user_id) do
-      {:ok, %{status: "denied"}} ->
-        {:error, :denied}
+    with {:ok, origin} <- stored_origin(origin) do
+      case Users.get(user_id) do
+        {:ok, %{status: "denied"}} ->
+          {:error, :denied}
 
-      {:ok, _user} ->
-        cond do
-          not Members.member?(user_id, athanor_id) -> {:error, :not_member}
-          not Athanors.active?(athanor_id) -> {:error, :archived}
-          true -> {:ok, continuation_context(user_id, athanor_id)}
-        end
+        {:ok, _user} ->
+          cond do
+            not Members.member?(user_id, athanor_id) -> {:error, :not_member}
+            not Athanors.active?(athanor_id) -> {:error, :archived}
+            true -> {:ok, continuation_context(user_id, athanor_id, origin)}
+          end
 
-      {:error, :not_found} ->
-        {:error, :denied}
+        {:error, :not_found} ->
+          {:error, :denied}
 
-      {:error, reason} ->
-        Logger.warning(
-          "[Sanctum.Tenancy] user read failed while continuing a turn for user=#{user_id}: " <>
-            "#{inspect(reason)} — refusing"
-        )
+        {:error, reason} ->
+          Logger.warning(
+            "[Sanctum.Tenancy] user read failed while continuing a turn for user=#{user_id}: " <>
+              "#{inspect(reason)} — refusing"
+          )
 
-        {:error, :unavailable}
+          {:error, :unavailable}
+      end
     end
   end
 
+  # The origin a row stores, as the atom a context carries. Anything else
+  # — no origin, or a value outside the enum — is refused, never read as
+  # `interactive`.
+  defp stored_origin(origin) when is_binary(origin) do
+    case Prima.Origin.from_wire(origin) do
+      {:ok, origin} -> {:ok, origin}
+      {:error, _unknown} -> {:error, :no_origin}
+    end
+  end
+
+  defp stored_origin(origin) do
+    if Prima.Origin.origin?(origin), do: {:ok, origin}, else: {:error, :no_origin}
+  end
+
   # The one site that builds a person's continuation context.
-  defp continuation_context(user_id, athanor_id) do
+  defp continuation_context(user_id, athanor_id, origin) do
     Context.build(
       user_id: user_id,
       athanor_id: athanor_id,
       permissions: Sanctum.Atoms.person_permissions(),
       scope: :athanor,
       auth_method: :oidc,
+      origin: origin,
       authenticated: true
     )
   end

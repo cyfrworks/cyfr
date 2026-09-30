@@ -55,6 +55,12 @@ defmodule Aqua.Tape do
   `:client_id`), and one of `:turn` (`%{agent, requested_by,
   model, options}`) or `:steer_turn_id`, or neither for room content.
 
+  A turn opened here is recorded with the origin `ctx` carries
+  (`Prima.Origin`), which the admission entry that built the context
+  set, so a turn recovered after a restart resumes under it; an origin
+  named in `:turn` is not read. A context that carries none opens a turn
+  with none, which recovery cancels rather than resumes.
+
   A `client_id` this thread already accepted answers the existing
   acceptance as `replayed: true` when it is the same send — same actor,
   text, attachments, and the same work: the agent, model and room of the
@@ -66,6 +72,8 @@ defmodule Aqua.Tape do
   @spec accept(Context.t(), String.t(), map()) ::
           {:ok, %{message: row(), turn: turn() | nil, replayed: boolean()}} | {:error, term()}
   def accept(%Context{} = ctx, thread_id, attrs) when is_map(attrs) do
+    attrs = with_origin(attrs, ctx)
+
     case TurnStorage.accept_message(Sanctum.Context.actor(ctx), thread_id, attrs) do
       {:ok, %{message: message, turn: turn}} ->
         broadcast(ctx, thread_id, :message, message)
@@ -78,6 +86,12 @@ defmodule Aqua.Tape do
         other
     end
   end
+
+  # The turn takes its context's origin, whatever the caller put in it.
+  defp with_origin(%{turn: %{} = turn} = attrs, %Context{origin: origin}),
+    do: %{attrs | turn: Map.put(turn, :origin, origin)}
+
+  defp with_origin(attrs, _ctx), do: attrs
 
   # The identity offered again — by client id, or by a message id already
   # taken — answers what was accepted when it is the same send; the

@@ -8,7 +8,8 @@ defmodule Aqua.RunnerTest do
   one turn runs at a time, the sender's own line steers it and another
   member's waits; a stop cuts the turn and drops the queue; a card pauses
   the turn and its decision continues it; a runner that starts finds the
-  open turns and does what their rows say. A runner's loop dies with it;
+  open turns and does what their rows say, resuming each under the origin
+  its row stores and cancelling one that stores none. A runner's loop dies with it;
   a runner starts and handles loop events only on a boot that owns the
   control plane, and never takes a turn another process on this boot holds.
   """
@@ -52,6 +53,9 @@ defmodule Aqua.RunnerTest do
     Cyfr.Test.Sandbox.stop_work_on_exit()
 
     {ctx, user} = Sanctum.TestContext.person!(Sanctum.TestContext.local())
+    # The sends here are the console's: a person on an interactive surface,
+    # the origin `CyfrWeb.ContextGuard` gives the context it establishes.
+    ctx = %{ctx | origin: :interactive}
     {:ok, _} = Members.ensure(user.id, scope: "athanor", athanor_id: ctx.athanor_id)
     :ok = Sanctum.TestContext.shipped!(ctx.athanor_id)
     {:ok, %{errors: 0}} = Compendium.AutoIndexer.scan(ctx: ctx)
@@ -1006,6 +1010,114 @@ defmodule Aqua.RunnerTest do
       {:ok, _runner} = Runner.ensure(thread.id, ctx.athanor_id)
       assert_receive %ThreadEvent{kind: :turn_finished}, 60_000
       assert {:ok, %{status: "completed", recovery_attempts: 1}} = Tape.turn(ctx, turn_id)
+    end
+  end
+
+  describe "the origin a turn resumes under" do
+    test "a programmatic turn queued, the runner restarted before it runs, resumes as programmatic",
+         %{ctx: ctx, thread: thread} do
+      import Ecto.Query, only: [from: 2]
+
+      script!([{:probe, self()}, reply("taken over"), reply("queued one")])
+
+      {:ok, %{turn_id: first}} = Runner.send_message(ctx, thread.id, "@aqua go")
+      pids = running!(thread)
+
+      # A script's line over the HTTP API, behind the running turn.
+      script = %{second_member(ctx) | origin: :programmatic}
+
+      assert {:ok, %{turn_id: queued, admitted: :turn}} =
+               Runner.send_message(script, thread.id, "@aqua after that")
+
+      assert %{queued: 1} = Runner.state(thread.id, ctx.athanor_id)
+      assert {:ok, %{status: "accepted", origin: "programmatic"}} = Tape.turn(ctx, queued)
+
+      # The runner goes before the queued turn runs; its restart takes the
+      # running turn over and then runs the queued one from its row.
+      :ok = kill_and_await!(pids)
+
+      wait_until(
+        fn -> match?({:ok, %{status: "completed"}}, Tape.turn(ctx, queued)) end,
+        60_000
+      )
+
+      send(pids.call, :continue)
+
+      # Resumed as its sender, under the origin its row stores: its root
+      # and every run under it are programmatic, never the interactive
+      # origin of the turn that ran before it.
+      {:ok, %{root_execution_id: root}} = Tape.turn(ctx, queued)
+
+      assert %{origin: "programmatic", user_id: sender} =
+               Arca.Repo.get!(Arca.Schemas.Execution, root)
+
+      assert sender == script.user_id
+
+      children =
+        Arca.Repo.all(
+          from(e in Arca.Schemas.Execution,
+            where: e.parent_execution_id == ^root,
+            select: e.origin
+          )
+        )
+
+      assert children != []
+      assert Enum.all?(children, &(&1 == "programmatic"))
+
+      assert {:ok, %{status: "completed", root_execution_id: first_root}} = Tape.turn(ctx, first)
+      assert %{origin: "interactive"} = Arca.Repo.get!(Arca.Schemas.Execution, first_root)
+    end
+
+    test "a recovered turn whose row stores no origin is cancelled with its reason, never resumed",
+         %{ctx: ctx, thread: thread} do
+      script!([reply("never")])
+
+      # Accepted by a runner that is gone, from a context no entry gave an
+      # origin.
+      {:ok, %{turn: accepted}} =
+        Tape.accept(%{ctx | origin: nil}, thread.id, %{
+          message: %{author: ctx.user_id, content: "@aqua later"},
+          turn: %{agent: "aqua", requested_by: ctx.user_id}
+        })
+
+      assert is_nil(accepted.origin)
+
+      {:ok, _pid} = Runner.ensure(thread.id, ctx.athanor_id)
+      assert_receive %ThreadEvent{kind: :turn_finished}, 60_000
+
+      assert {:ok, %{status: "cancelled", error: error, root_execution_id: nil}} =
+               Tape.turn(ctx, accepted.id)
+
+      assert error =~ "no_origin"
+      assert ScriptedWorker.calls() == []
+    end
+
+    test "a card decided on a turn whose row stores no origin cancels the turn rather than resume it",
+         %{ctx: ctx, thread: thread} do
+      script!([call("c1", "notes", %{"action" => "keep", "name" => "n", "content" => "x"})])
+
+      # The turn runs live under its sender's context; only continuing it
+      # from its row needs the origin the row stores.
+      {:ok, %{turn_id: turn_id}} =
+        Runner.send_message(%{ctx | origin: nil}, thread.id, "@aqua keep it")
+
+      wait_until(fn -> match?({:ok, %{status: "paused"}}, Tape.turn(ctx, turn_id)) end, 60_000)
+      {:ok, paused} = Tape.turn(ctx, turn_id)
+      assert is_nil(paused.origin)
+      {:ok, [approval]} = Tape.pending_approvals(ctx, paused)
+      calls = ScriptedWorker.calls()
+
+      assert {:ok, %{decision: "approved"}} =
+               Approvals.resolve(ctx, approval.id, %{decision: :approved})
+
+      assert_receive %ThreadEvent{kind: :turn_finished}, 60_000
+      assert {:ok, %{status: "cancelled", error: error}} = Tape.turn(ctx, turn_id)
+      assert error =~ "no_origin"
+
+      # Nothing ran past the card.
+      {:ok, steps} = Tape.steps(ctx, paused)
+      refute Enum.any?(steps, &(&1.action == "keep" and &1.outcome == "ok"))
+      assert ScriptedWorker.calls() == calls
     end
   end
 

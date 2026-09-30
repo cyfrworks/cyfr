@@ -39,6 +39,12 @@ defmodule CyfrWeb.ContextGuard do
   stands (`:not_member`) sends them to the root, and a store that cannot
   answer (`:unavailable`) halts the action with "try again shortly" —
   never a success and never a sign-out.
+
+  A context this module establishes — a mounted console's, and a
+  per-request read's (`authenticate/2`) — is a person acting on an
+  interactive surface: it carries the origin `interactive`
+  (`Prima.Origin`), which revalidation and refocusing keep. The console
+  decides it; nothing a request carries names another.
   """
 
   import Phoenix.Component, only: [assign: 3]
@@ -147,6 +153,9 @@ defmodule CyfrWeb.ContextGuard do
       else: socket
   end
 
+  # The console's admission path: a person on an interactive surface.
+  defp interactive(%Context{} = ctx), do: %{ctx | origin: :interactive}
+
   defp routed?(%Socket{parent_pid: parent, router: router}),
     do: is_nil(parent) and not is_nil(router)
 
@@ -241,7 +250,11 @@ defmodule CyfrWeb.ContextGuard do
   defp focus_of(%Context{athanor_id: athanor_id}), do: athanor_id
   defp focus_of(_), do: nil
 
+  # Every context a socket holds is the console's, so it carries the
+  # console's origin whichever path put it there: a mount, a refocus or
+  # a revalidation.
   defp put_context(socket, %Context{} = ctx) do
+    ctx = interactive(ctx)
     Prima.LoggerContext.set_from_context(ctx)
     assign(socket, :context, ctx)
   end
@@ -307,7 +320,7 @@ defmodule CyfrWeb.ContextGuard do
           {:ok, Context.t()} | {:error, Caller.refusal()}
   def authenticate(token, athanor_id \\ nil) do
     with {:ok, ctx} <- Caller.establish(token, focus: athanor_id),
-         {:ok, ctx} <- check(ctx) do
+         {:ok, ctx} <- check(interactive(ctx)) do
       Prima.LoggerContext.set_from_context(ctx)
       {:ok, ctx}
     end

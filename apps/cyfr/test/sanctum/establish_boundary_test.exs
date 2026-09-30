@@ -36,7 +36,7 @@ defmodule Sanctum.EstablishBoundaryTest do
     # `Provisioning`'s person context: the server filling an admitted
     # person's athanor with their pull credential; no credential of its own.
     "apps/sanctum/lib/sanctum/provisioning.ex" => 1,
-    # `Tenancy.continuation/2`: the person-shaped context a recovered
+    # `Tenancy.continuation/3`: the person-shaped context a recovered
     # turn continues under, rebuilt from the turn's rows and refused when
     # the person is denied, unseated or the athanor archived.
     "apps/sanctum/lib/sanctum/tenancy.ex" => 1,

@@ -20,8 +20,10 @@ defmodule Emissary.Web.WebhookController do
   one admission decision (`Grimoire.open_decision/3`), recorded with its
   request-log row before the run is spawned, under a call id minted beside
   the request id and carried on the context, so the root execution's row
-  names it; the component outcome is its completion
-  (`Grimoire.close_decision/3`), recorded and emitted via `[:cyfr,
+  names it. The context carries the origin `webhook` (`Prima.Origin`),
+  which that row records; a retried delivery the idempotency claim
+  admits again runs under the same origin. The component outcome is its
+  completion (`Grimoire.close_decision/3`), recorded and emitted via `[:cyfr,
   :emissary, :webhook, :invoke, :stop]` telemetry from inside the spawned
   task, correlated to the HTTP response by `request_id`.
 
@@ -67,7 +69,8 @@ defmodule Emissary.Web.WebhookController do
 
         case Sanctum.Caller.establish({:webhook, webhook}, request_id: request_id) do
           {:ok, ctx} ->
-            ctx = CyfrWeb.Plugs.CallIdentity.stamp(conn, ctx)
+            # A delivery's run is a webhook's, whatever the request says.
+            ctx = %{CyfrWeb.Plugs.CallIdentity.stamp(conn, ctx) | origin: :webhook}
             invoke_active(conn, ctx, webhook, conn.assigns[:raw_body], request_id)
 
           {:error, :unauthenticated} ->

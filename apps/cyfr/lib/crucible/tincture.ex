@@ -99,10 +99,12 @@ defmodule Crucible.Tincture do
     tincture_ref = Prima.ComponentRef.build("tincture", tincture.publisher, tincture.name)
 
     # The run's context is the tincture's, correlated by the request the
-    # gate filed this call under.
+    # gate filed this call under, and started on the caller's admission
+    # path: the root's row records the caller's origin, not the source's.
     run_ctx = %{
       Sanctum.build_tincture_context(source_ctx, tincture)
-      | request_id: ctx.request_id
+      | request_id: ctx.request_id,
+        origin: ctx.origin
     }
 
     if is_binary(run_ctx.request_id), do: Prima.LoggerContext.set_request_id(run_ctx.request_id)

@@ -19,6 +19,10 @@ defmodule CyfrWeb.Plugs.Authenticate do
   An auth-provider *error* is distinguished from absent credentials and fails
   closed with 503; it never degrades to unauthenticated.
 
+  Every context this plug assigns carries the origin `programmatic`
+  (`Prima.Origin`): the HTTP API and MCP are programmatic surfaces,
+  whichever credential the request carries.
+
   ## Options
 
   - `:errors` — rejection renderer, defaulting to `CyfrWeb.ApiError`. A
@@ -169,12 +173,16 @@ defmodule CyfrWeb.Plugs.Authenticate do
     %{context | client_ip: Sanctum.ClientIp.resolve(conn)}
   end
 
-  # The context as the surface hands it on: the caller's address, and the
+  # The context as the surface hands it on: the caller's address, the
   # request's identity the pipeline minted (`CyfrWeb.Plugs.CallIdentity`)
   # — its request id and the admission's call id, which the gate takes as
-  # its own.
+  # its own — and the origin of this admission path. A call over the HTTP
+  # API or MCP is `programmatic` whatever credential it carries: a key, a
+  # session token or none proves who is calling, never that a person is
+  # present.
   defp established(conn, %Context{} = context) do
-    CyfrWeb.Plugs.CallIdentity.stamp(conn, stamp_client_ip(conn, context))
+    stamped = CyfrWeb.Plugs.CallIdentity.stamp(conn, stamp_client_ip(conn, context))
+    %{stamped | origin: :programmatic}
   end
 
   defp unauthenticated_context do
