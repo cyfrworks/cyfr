@@ -70,7 +70,9 @@ defmodule CyfrWeb.Endpoint do
   # registry appeal) has to budget by IP itself.
   @live_connect_info [:peer_data, :x_headers, session: {__MODULE__, :session_options, []}]
 
-  socket "/live", Phoenix.LiveView.Socket,
+  # The socket refuses every connect once a graceful stop begins
+  # (`CyfrWeb.LiveSocket.drain/0`), on either transport.
+  socket "/live", CyfrWeb.LiveSocket,
     websocket: [connect_info: @live_connect_info],
     longpoll: [connect_info: @live_connect_info]
 
