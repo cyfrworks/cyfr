@@ -3,13 +3,13 @@
 
 defmodule Arca.ToolGrantStorage do
   @moduledoc """
-  Persistence mechanics for tool grants. The row shape and its tenancy
-  live in `Sanctum.ToolGrants`, the only caller above this layer, which
-  also builds the rows `Arca.TurnStorage` writes inside a decision's
-  transaction; the scope rules and the composition with declared policy
-  live in `Aqua.ToolGrants`. Every read and write is keyed by the owning
-  athanor, and every grant a function here answers is a plain map
-  (`Arca.Data`).
+  Persistence mechanics for tool grants. The row shape, its tenancy and
+  the rule for which answers may stand live in `Sanctum.ToolGrants`, the
+  only caller above this layer, which also builds the rows
+  `Arca.TurnStorage` writes inside a decision's transaction; the
+  composition with declared policy lives in `Aqua.ToolGrants`. Every
+  read and write is keyed by the owning athanor, and every grant a
+  function here answers is a plain map (`Arca.Data`).
   """
 
   import Ecto.Query
@@ -23,6 +23,18 @@ defmodule Arca.ToolGrantStorage do
   @doc "The effects a grant may carry."
   @spec effects() :: [String.t()]
   def effects, do: ToolGrant.effects()
+
+  @doc "The lifecycles a bounded allow may end with."
+  @spec lifecycle_kinds() :: [String.t()]
+  def lifecycle_kinds, do: ToolGrant.lifecycle_kinds()
+
+  @doc """
+  Why a resource kind and its patterns make no constraint a row may
+  carry, or `[]` when they make one: the grammar the write holds a row to
+  (`Arca.Schemas.ToolGrant.constraint_errors/2`).
+  """
+  @spec constraint_errors(term(), term()) :: [String.t()]
+  def constraint_errors(kind, patterns), do: ToolGrant.constraint_errors(kind, patterns)
 
   @doc """
   Record a decision, replacing whatever the same key already said.

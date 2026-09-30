@@ -1379,7 +1379,14 @@ defmodule Cyfr.Boundaries do
       suspend_frame: 2,
       verify_asset_credential: 2
     ],
-    "Sanctum.ToolGrants" => [for_thread: 2, grant_row: 2, put: 2, revoke: 2],
+    "Sanctum.ToolGrants" => [
+      admits?: 2,
+      check_standing: 2,
+      for_thread: 2,
+      grant_row: 2,
+      put: 2,
+      revoke: 2
+    ],
     "Sanctum.ToolServerDigest" => [
       descriptions_digest: 2,
       from_server: 1,

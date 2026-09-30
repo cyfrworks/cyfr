@@ -61,7 +61,8 @@ defmodule Compendium.Providers.Source do
     alias Prima.{Arg, Operation}
 
     # Every action names its file or folder by the one argument, in the
-    # grammar `scoped/2` reads.
+    # grammar `scoped/2` reads, and declares it as its resource, so a
+    # standing approval may be constrained to paths.
     path =
       Arg.new("path", :string,
         required: true,
@@ -80,7 +81,8 @@ defmodule Compendium.Providers.Source do
           kind: :read,
           planes: [:in_chain],
           permission: :storage_read,
-          recovery: :replay_safe
+          recovery: :replay_safe,
+          resource: {"path", :storage_path}
         ),
         Operation.new(
           "source",
@@ -92,7 +94,8 @@ defmodule Compendium.Providers.Source do
           kind: :read,
           planes: [:in_chain],
           permission: :storage_read,
-          recovery: :replay_safe
+          recovery: :replay_safe,
+          resource: {"path", :storage_path}
         ),
         Operation.new(
           "source",
@@ -111,7 +114,8 @@ defmodule Compendium.Providers.Source do
           kind: :read,
           planes: [:in_chain],
           permission: :storage_read,
-          recovery: :replay_safe
+          recovery: :replay_safe,
+          resource: {"path", :storage_path}
         ),
         Operation.new(
           "source",
@@ -126,7 +130,8 @@ defmodule Compendium.Providers.Source do
           ],
           kind: :write,
           planes: [:in_chain],
-          permission: :storage_write
+          permission: :storage_write,
+          resource: {"path", :storage_path}
         ),
         Operation.new(
           "source",
@@ -158,7 +163,8 @@ defmodule Compendium.Providers.Source do
           ],
           kind: :write,
           planes: [:in_chain],
-          permission: :storage_write
+          permission: :storage_write,
+          resource: {"path", :storage_path}
         ),
         Operation.new(
           "source",
@@ -169,7 +175,8 @@ defmodule Compendium.Providers.Source do
           ],
           kind: :destructive,
           planes: [:in_chain],
-          permission: :storage_write
+          permission: :storage_write,
+          resource: {"path", :storage_path}
         )
       ],
       description:

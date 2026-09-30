@@ -12,7 +12,10 @@ defmodule Aqua.Providers.Approval do
   and no standing credential can decide for a person.
 
   A decision is made once: deciding a card again answers the first
-  decision as a replay, with no second effect.
+  decision as a replay, with no second effect. A standing approval may
+  name its bounds — the card's own execution, turn or schedule it ends
+  with (`lifecycle`), a deadline (`until`) and the resources it covers
+  (`constraint`) — and each is carried into the standing row or refused.
   """
 
   @behaviour Prima.Provider
@@ -102,21 +105,16 @@ defmodule Aqua.Providers.Approval do
   def handle("approval", %Context{} = ctx, args), do: dispatch(ctx, args)
   def handle(tool, _ctx, _args), do: {:error, {:not_found, "tool", tool}}
 
-  # A standing approval's bounds are declared and not yet decided: given,
-  # each refuses rather than being dropped, so an answer never stands
-  # wider than the one the person chose.
-  defp dispatch(_ctx, %{"action" => "resolve"} = args)
-       when is_map_key(args, "lifecycle") or is_map_key(args, "until") or
-              is_map_key(args, "constraint"),
-       do: {:error, :not_built}
-
   # The interactive-surface gate is the `consent: :interactive`
   # declaration on every action, enforced by the registry before this
-  # runs.
+  # runs. A standing approval's bounds travel with the choice, and one the
+  # answer may not carry is refused, never dropped, so an answer never
+  # stands wider than the one the person chose.
   defp dispatch(ctx, %{"action" => "resolve", "approval" => id, "decision" => decision} = args)
        when is_binary(id) and id != "" do
-    with {:ok, choice} <- choice(decision, args["scope"], args["reason"]) do
-      case Approvals.resolve(ctx, id, choice) do
+    with {:ok, choice} <- choice(decision, args["scope"], args["reason"]),
+         {:ok, bounds} <- bounds(args) do
+      case Approvals.resolve(ctx, id, Map.merge(choice, bounds)) do
         {:ok, outcome} -> {:ok, outcome}
         {:error, reason} -> {:error, refusal(reason, id)}
       end
@@ -169,6 +167,59 @@ defmodule Aqua.Providers.Approval do
     do:
       {:error,
        {:invalid_argument, "decision must be approve or decline, not #{inspect(decision)}"}}
+
+  @lifecycles %{"execution" => :execution, "turn" => :turn, "schedule" => :schedule}
+
+  # The bounds a resolve names, each read explicitly: a lifecycle by its
+  # name, a deadline as an ISO 8601 time with its offset, a constraint as
+  # its resource kind and patterns. Whether they may stand is the
+  # decision's (`Aqua.Standing`).
+  defp bounds(args) do
+    with {:ok, lifecycle} <- lifecycle(args["lifecycle"]),
+         {:ok, until} <- until(args["until"]),
+         {:ok, constraint} <- constraint(args["constraint"]) do
+      {:ok,
+       %{lifecycle: lifecycle, until: until, constraint: constraint}
+       |> Map.reject(fn {_bound, value} -> is_nil(value) end)}
+    end
+  end
+
+  defp lifecycle(nil), do: {:ok, nil}
+
+  defp lifecycle(name) do
+    case Map.fetch(@lifecycles, name) do
+      {:ok, lifecycle} -> {:ok, lifecycle}
+      :error -> {:error, {:invalid_argument, "lifecycle is execution, turn or schedule"}}
+    end
+  end
+
+  defp until(nil), do: {:ok, nil}
+
+  defp until(time) when is_binary(time) do
+    case DateTime.from_iso8601(time) do
+      {:ok, at, _offset} ->
+        {:ok, at}
+
+      {:error, _} ->
+        {:error,
+         {:invalid_argument,
+          "until is an ISO 8601 time with its offset, like 2026-10-01T17:00:00Z"}}
+    end
+  end
+
+  defp until(_time),
+    do:
+      {:error,
+       {:invalid_argument, "until is an ISO 8601 time with its offset, like 2026-10-01T17:00:00Z"}}
+
+  defp constraint(nil), do: {:ok, nil}
+
+  defp constraint(%{"kind" => kind, "patterns" => patterns})
+       when is_binary(kind) and is_list(patterns),
+       do: {:ok, %{kind: kind, patterns: patterns}}
+
+  defp constraint(_constraint),
+    do: {:error, {:invalid_argument, "constraint names a resource kind and its patterns"}}
 
   defp render(approval) do
     %{

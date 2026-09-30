@@ -505,6 +505,253 @@ defmodule Aqua.LoopTest do
     refute outcome == "ok"
   end
 
+  describe "a bounded standing allow" do
+    # A standing allow bound to a lifecycle, a deadline or some paths: the
+    # guest reads its pair as a question, and each call runs at once only
+    # when the rows as they stand when it is decided cover it.
+
+    defp bounded!(ctx, thread, pair, bounds) do
+      {:ok, _} =
+        Aqua.ToolGrants.put(
+          ctx,
+          Map.merge(
+            %{scope: "thread", effect: "allow", thread_id: thread.id, agent_name: "aqua"},
+            Map.merge(pair, bounds)
+          )
+        )
+    end
+
+    defp other_execution!(ctx) do
+      id = "exec_bounded_#{System.unique_integer([:positive])}"
+
+      {:ok, _} =
+        Arca.Execution.admit(
+          %{
+            id: id,
+            reference: "catalyst:local.files:0.5.2",
+            user_id: ctx.user_id,
+            athanor_id: ctx.athanor_id,
+            component_type: "catalyst"
+          },
+          grant: Cyfr.Test.AttemptFixtures.grant(ctx.athanor_id),
+          verify: &Sanctum.ExecutionStanding.verify/1
+        )
+
+      id
+    end
+
+    @keep_pair %{tool: "notes", action: "keep"}
+
+    # The files hand is not scripted: it runs on the opus worker service.
+    test "an allow for this execution and data/notes/ runs a write there and asks for one elsewhere",
+         %{ctx: ctx, thread: thread} do
+      notes = %{kind: "storage_path", patterns: ["data/notes/"]}
+
+      # An answer given for another run, still going: it puts files.write
+      # in the turn's policy as a question, and covers none of this turn's
+      # calls.
+      a = other_execution!(ctx)
+
+      {:ok, _} =
+        Aqua.ToolGrants.put(ctx, %{
+          scope: "agent",
+          effect: "allow",
+          agent_name: "aqua",
+          tool: "files",
+          action: "write",
+          lifecycle_kind: "execution",
+          lifecycle_id: a,
+          constraint: notes
+        })
+
+      turn = accept!(ctx, thread, "@aqua write two files")
+
+      script!([
+        {:probe, self()},
+        calls([
+          {"c1", "files",
+           %{"action" => "write", "path" => "data/notes/a.md", "content" => "inside"}},
+          {"c2", "files",
+           %{"action" => "write", "path" => "data/other/b.md", "content" => "outside"}}
+        ])
+      ])
+
+      task = run(ctx, turn)
+
+      # The answer for this turn's own execution, given once it runs.
+      assert_receive {:scripted_probe, worker, _}, 10_000
+
+      bounded!(ctx, thread, %{tool: "files", action: "write"}, %{
+        lifecycle_kind: "execution",
+        lifecycle_id: turn_root(ctx, turn),
+        constraint: notes
+      })
+
+      send(worker, :continue)
+      assert {:paused, :approval} = Task.await(task, 60_000)
+
+      {:ok, paused} = Tape.turn(ctx, turn.id)
+      {:ok, [approval]} = Tape.pending_approvals(ctx, paused)
+      {:ok, steps} = Tape.steps(ctx, paused)
+
+      inside = Enum.find(steps, &(&1.kind == "tool" and &1.approval_id == nil))
+      outside = Enum.find(steps, &(&1.approval_id == approval.id))
+
+      assert %{action: "write", dispatch_state: "closed", outcome: "ok"} = inside
+      assert %{action: "write", dispatch_state: "proposed"} = outside
+      assert {:ok, card} = Tape.message(ctx, approval.message_id)
+
+      assert get_in(Threads.payload(card), ["intent", "proposal", "args", "path"]) ==
+               "data/other/b.md"
+    end
+
+    test "an allow for another execution asks while that execution still runs",
+         %{ctx: ctx, thread: thread} do
+      a = other_execution!(ctx)
+      bounded!(ctx, thread, @keep_pair, %{lifecycle_kind: "execution", lifecycle_id: a})
+
+      turn = accept!(ctx, thread, "@aqua keep a note")
+      script!([calls([{"c1", "notes", %{"action" => "keep", "name" => "n", "content" => "x"}}])])
+
+      assert {:paused, :approval} = Task.await(run(ctx, turn), 60_000)
+      {:ok, paused} = Tape.turn(ctx, turn.id)
+      assert {:ok, [_card]} = Tape.pending_approvals(ctx, paused)
+      assert %{status: "running"} = Arca.Repo.get(Arca.Schemas.Execution, a)
+    end
+
+    test "an allow for this execution, given after the turn began, is read as the call is made",
+         %{ctx: ctx, thread: thread} do
+      turn = accept!(ctx, thread, "@aqua keep a note")
+
+      script!([
+        {:probe, self()},
+        calls([{"c1", "notes", %{"action" => "keep", "name" => "n", "content" => "x"}}]),
+        reply("kept")
+      ])
+
+      task = run(ctx, turn)
+
+      # The turn's policy was composed before this allow existed; the call
+      # is decided from the rows as they stand when it is made.
+      assert_receive {:scripted_probe, worker, _}, 10_000
+
+      bounded!(ctx, thread, @keep_pair, %{
+        lifecycle_kind: "execution",
+        lifecycle_id: turn_root(ctx, turn),
+        expires_at: DateTime.add(DateTime.utc_now(), 3600, :second)
+      })
+
+      send(worker, :continue)
+      assert :completed = Task.await(task, 60_000)
+
+      {:ok, steps} = Tape.steps(ctx, turn)
+
+      assert %{dispatch_state: "closed", outcome: "ok", approval_id: nil} =
+               Enum.find(steps, &(&1.action == "keep"))
+    end
+
+    test "a call after the allow's deadline asks", %{ctx: ctx, thread: thread} do
+      turn = accept!(ctx, thread, "@aqua keep a note")
+
+      bounded!(ctx, thread, @keep_pair, %{
+        lifecycle_kind: "turn",
+        lifecycle_id: turn.id,
+        expires_at: DateTime.add(DateTime.utc_now(), 3600, :second)
+      })
+
+      # The deadline passes before the call is made.
+      {1, _} =
+        Arca.Repo.update_all(
+          from(g in Arca.Schemas.ToolGrant, where: g.thread_id == ^thread.id),
+          set: [expires_at: DateTime.add(DateTime.utc_now(), -1, :second)]
+        )
+
+      script!([calls([{"c1", "notes", %{"action" => "keep", "name" => "n", "content" => "x"}}])])
+
+      assert {:paused, :approval} = Task.await(run(ctx, turn), 60_000)
+      {:ok, paused} = Tape.turn(ctx, turn.id)
+      assert {:ok, [_card]} = Tape.pending_approvals(ctx, paused)
+    end
+
+    test "the decision and the dispatch recheck read the rows as they stand, and a deny stands",
+         %{ctx: ctx, thread: thread} do
+      turn = accept!(ctx, thread, "@aqua keep a note")
+      a = other_execution!(ctx)
+
+      {:ok, call} =
+        Aqua.Loop.Binding.resolve("files", %{
+          "action" => "write",
+          "path" => "data/notes/a.md",
+          "content" => "x"
+        })
+
+      policy = %{"files.write" => "ask"}
+
+      place = [
+        ctx: ctx,
+        agent: "aqua",
+        thread_id: thread.id,
+        turn_id: turn.id,
+        execution_id: a
+      ]
+
+      assert :ask = Aqua.Loop.Policy.decide(call, policy, place)
+      refute Aqua.Loop.Policy.auto?(call, policy, place)
+
+      bounded!(ctx, thread, %{tool: "files", action: "write"}, %{
+        lifecycle_kind: "execution",
+        lifecycle_id: a,
+        constraint: %{kind: "storage_path", patterns: ["data/notes/"]}
+      })
+
+      assert :auto = Aqua.Loop.Policy.decide(call, policy, place)
+      assert Aqua.Loop.Policy.auto?(call, policy, place)
+
+      # Without its place a call is judged by no allow at all, and a
+      # bounded allow never answers for a key the policy denies.
+      assert :ask = Aqua.Loop.Policy.decide(call, policy, [])
+      refute Aqua.Loop.Policy.auto?(call, policy, [])
+      assert {:deny, _} = Aqua.Loop.Policy.decide(call, %{}, place)
+
+      # Another agent's call, or this one once the execution ends, asks.
+      assert :ask = Aqua.Loop.Policy.decide(call, policy, Keyword.put(place, :agent, "planner"))
+
+      {1, _} =
+        Arca.Repo.update_all(
+          from(e in Arca.Schemas.Execution, where: e.id == ^a),
+          set: [status: "completed", completed_at: DateTime.utc_now(), duration_ms: 1]
+        )
+
+      refute Aqua.Loop.Policy.auto?(call, policy, place)
+
+      # A standing deny outranks everything, whatever time passes.
+      b = other_execution!(ctx)
+      place = Keyword.put(place, :execution_id, b)
+
+      bounded!(ctx, thread, %{tool: "files", action: "write"}, %{
+        lifecycle_kind: "execution",
+        lifecycle_id: b
+      })
+
+      assert :auto = Aqua.Loop.Policy.decide(call, policy, place)
+
+      {:ok, _} =
+        Aqua.ToolGrants.put(ctx, %{
+          scope: "agent",
+          effect: "deny",
+          agent_name: "aqua",
+          tool: "files",
+          action: "write"
+        })
+
+      assert :ask = Aqua.Loop.Policy.decide(call, policy, place)
+      refute Aqua.Loop.Policy.auto?(call, policy, place)
+
+      {:ok, rows} = Aqua.ToolGrants.for_thread(ctx, thread.id, "aqua")
+      assert Aqua.ToolGrants.resolve(%{"files.write" => "auto"}, rows)["files.write"] == "deny"
+    end
+  end
+
   test "a steer that arrived while the turn waited skips the approved step and reaches the model",
        %{
          ctx: ctx,

@@ -47,6 +47,9 @@ defmodule Sanctum.Consent.CommitTest do
     end
 
     @impl true
+    def action_declaration(name), do: real().action_declaration(name)
+
+    @impl true
     def providers_loaded, do: real().providers_loaded()
 
     @impl true

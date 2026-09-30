@@ -14,6 +14,10 @@ defmodule Arca.Providers.Files do
   fill `data/` unattended. The actions are external-plane only: a chain
   reaches files through its own consented hands.
 
+  Every action names its file or folder by `path`, relative to the
+  athanor root, and declares it as its resource (`resource:`), so a
+  standing approval may be constrained to paths.
+
   The provider declares `context_kind: :actor`: the gate authorizes the
   call with the caller's full context and hands this handler the
   `Prima.Actor` it projects, and nothing else.
@@ -48,12 +52,14 @@ defmodule Arca.Providers.Files do
           [path],
           kind: :read,
           planes: [:external],
-          permission: :storage_read
+          permission: :storage_read,
+          resource: {"path", :storage_path}
         ),
         Operation.new("file", "read", "Read a file as text or base64 bytes", [Arg.required(path)],
           kind: :read,
           planes: [:external],
-          permission: :storage_read
+          permission: :storage_read,
+          resource: {"path", :storage_path}
         ),
         Operation.new(
           "file",
@@ -72,12 +78,14 @@ defmodule Arca.Providers.Files do
           ],
           kind: :write,
           planes: [:external],
-          permission: :storage_write
+          permission: :storage_write,
+          resource: {"path", :storage_path}
         ),
         Operation.new("file", "delete", "Delete a file or folder", [Arg.required(path)],
           kind: :destructive,
           planes: [:external],
-          permission: :storage_write
+          permission: :storage_write,
+          resource: {"path", :storage_path}
         )
       ],
       title: "Files",

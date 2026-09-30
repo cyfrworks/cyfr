@@ -17,6 +17,13 @@ defmodule Aqua.Loop.Policy do
   turn has not written to may run under `auto`, anything else needs a
   card. Reads run beside each other; everything else runs alone.
 
+  A key that asks runs at once only when a bounded allow covers this very
+  call (`Sanctum.ToolGrants.admits?/2`): its lifecycle is the call's own
+  execution, turn or schedule and still live, its deadline has not
+  passed and the call's resource lies inside its constraint, read from
+  the rows as they stand when the call is decided and again when it
+  dispatches, never from the turn's start.
+
   What this turn wrote to is read from the durable rows, never from
   memory: `touched_refs/1` names the components the turn's closed write,
   destructive and execute calls — its own and its clones' — reached, so
@@ -31,7 +38,11 @@ defmodule Aqua.Loop.Policy do
   The decision for `call` under `policy`. `opts`: `:consented?` (a
   function of a reference), `:touched` (a `MapSet` of references this
   turn wrote to), `:restricted?` (the turn holds a call whose outcome is
-  unknown: only a replay-safe read runs, whatever the policy says).
+  unknown: only a replay-safe read runs, whatever the policy says), and
+  where the call is made, which a bounded allow is judged against:
+  `:ctx` (the member's context its rows are read under), `:agent` (the
+  agent's name), `:thread_id`, `:turn_id` and `:execution_id` (the
+  turn's root). Without them a key that asks, asks.
   """
   @spec decide(Call.t(), map(), keyword()) :: decision()
   def decide(%Call{} = call, policy, opts) do
@@ -71,35 +82,68 @@ defmodule Aqua.Loop.Policy do
     case launch_rule(reference, opts) do
       {:refuse, text} -> {:refuse, text}
       :card -> if Map.get(policy, key(call)) == "deny", do: deny(call), else: :ask
-      :child -> by_key(call, policy)
+      :child -> by_key(call, policy, opts)
     end
   end
 
-  defp decide_open(%Call{} = call, policy, _opts), do: by_key(call, policy)
+  defp decide_open(%Call{} = call, policy, opts), do: by_key(call, policy, opts)
 
   @doc """
   Whether `policy` still grants `call` without asking.
 
   The narrow re-check a call makes against the member's live grants as it
-  dispatches. It can only withdraw an `auto`, never widen one, so it needs
-  none of `decide/3`'s turn context: a restricted turn, a touched reference
-  and a launch rule have all already had their say by the time a step runs.
+  dispatches. It can only withdraw an `auto`, never widen one: a
+  restricted turn, a touched reference and a launch rule have all already
+  had their say by the time a step runs. `opts` are `decide/3`'s place of
+  the call, so a call a bounded allow let run is asked again whether the
+  allow still covers it (`Sanctum.ToolGrants.admits?/2`), from the rows
+  as they stand now.
   """
-  @spec auto?(Call.t(), map()) :: boolean()
-  def auto?(%Call{kind: :ui}, _policy), do: true
+  @spec auto?(Call.t(), map(), keyword()) :: boolean()
+  def auto?(%Call{kind: :ui}, _policy, _opts), do: true
 
-  def auto?(%Call{kind: :clone, target: role}, policy),
+  def auto?(%Call{kind: :clone, target: role}, policy, _opts),
     do: Map.get(policy, "#{role}.*") == "auto"
 
-  def auto?(%Call{} = call, policy), do: Map.get(policy, key(call)) == "auto"
+  def auto?(%Call{} = call, policy, opts) do
+    case Map.get(policy, key(call)) do
+      "auto" -> true
+      "ask" -> admitted?(call, opts)
+      _ -> false
+    end
+  end
 
-  defp by_key(call, policy) do
+  defp by_key(call, policy, opts) do
     case Map.get(policy, key(call)) do
       "auto" -> :auto
-      "ask" -> :ask
+      "ask" -> if admitted?(call, opts), do: :auto, else: :ask
       _ -> deny(call)
     end
   end
+
+  # Whether a bounded allow covers this very call, read fresh. Only a
+  # hand, a catalog call or a child launch runs under a standing answer;
+  # a call made nowhere the rows can be read for asks.
+  defp admitted?(%Call{kind: kind, tool: tool, action: action, args: args}, opts)
+       when kind in [:hand, :catalog, :launch] and is_binary(action) do
+    with %Sanctum.Context{} = ctx <- Keyword.get(opts, :ctx),
+         agent when is_binary(agent) <- Keyword.get(opts, :agent),
+         thread_id when is_binary(thread_id) <- Keyword.get(opts, :thread_id) do
+      Sanctum.ToolGrants.admits?(ctx, %{
+        agent_name: agent,
+        thread_id: thread_id,
+        tool: tool,
+        action: action,
+        args: args,
+        execution_id: Keyword.get(opts, :execution_id),
+        turn_id: Keyword.get(opts, :turn_id)
+      })
+    else
+      _ -> false
+    end
+  end
+
+  defp admitted?(_call, _opts), do: false
 
   defp deny(call), do: {:deny, "#{key(call)} is not in the agent's policy"}
 
