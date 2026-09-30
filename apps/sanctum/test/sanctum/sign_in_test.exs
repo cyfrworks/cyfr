@@ -271,7 +271,9 @@ defmodule Sanctum.SignInTest do
         results =
           order
           |> Enum.map(fn verdict ->
-            Task.async(fn -> {verdict, unboxed(fn -> SignIn.identify(assertion[verdict], verdict) end)} end)
+            Task.async(fn ->
+              {verdict, unboxed(fn -> SignIn.identify(assertion[verdict], verdict) end)}
+            end)
           end)
           |> Enum.map(&Task.await(&1, 25_000))
 
@@ -313,7 +315,9 @@ defmodule Sanctum.SignInTest do
       # than a partition's dirty I/O schedulers starve the lock's holder.
       results =
         1..2
-        |> Enum.map(fn _ -> Task.async(fn -> unboxed(fn -> SignIn.identify(ops, :admin) end) end) end)
+        |> Enum.map(fn _ ->
+          Task.async(fn -> unboxed(fn -> SignIn.identify(ops, :admin) end) end)
+        end)
         |> Enum.map(&Task.await(&1, 25_000))
 
       assert Enum.all?(results, &match?({:ok, _}, &1))
@@ -338,9 +342,7 @@ defmodule Sanctum.SignInTest do
       Arca.Repo.delete_all(from(m in Arca.Schemas.Membership, where: m.user_id == ^user_id))
       Arca.Repo.delete_all(from(s in Arca.Schemas.Session, where: s.user_id == ^user_id))
 
-      Arca.Repo.delete_all(
-        from(i in Arca.Schemas.ExternalIdentity, where: i.user_id == ^user_id)
-      )
+      Arca.Repo.delete_all(from(i in Arca.Schemas.ExternalIdentity, where: i.user_id == ^user_id))
 
       Arca.Repo.delete_all(from(u in Arca.Schemas.User, where: u.id == ^user_id))
     end)

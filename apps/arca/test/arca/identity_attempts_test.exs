@@ -40,7 +40,6 @@ defmodule Arca.IdentityAttemptsTest do
     {:ok, slot: slot}
   end
 
-
   # The writes under test are fenced by the member's slot: a claimant runs
   # and this member holds its slot. The process-wide standing and the claim
   # switch are restored after each case.
@@ -182,7 +181,9 @@ defmodule Arca.IdentityAttemptsTest do
                  also: fn _attempt -> {:error, :confirmation_required} end
                )
 
-      assert {:error, :not_found} = IdentityAttempts.in_progress(as(person), person.id, "enrollment")
+      assert {:error, :not_found} =
+               IdentityAttempts.in_progress(as(person), person.id, "enrollment")
+
       assert {:ok, %{enrollment: "none"}} = PersonIdentities.get(server(), person.id)
     end
 
@@ -245,7 +246,9 @@ defmodule Arca.IdentityAttemptsTest do
       assert refused.phase == "refused"
       assert refused.outcome == ~s({"status":409})
       assert is_nil(refused.kit_seed_sealed)
-      assert {:ok, %{enrollment: "none", identifier: nil}} = PersonIdentities.get(server(), person.id)
+
+      assert {:ok, %{enrollment: "none", identifier: nil}} =
+               PersonIdentities.get(server(), person.id)
 
       # The person may enroll again.
       assert {:ok, _} = IdentityAttempts.open(as(person), enrollment(person.id))
@@ -383,13 +386,19 @@ defmodule Arca.IdentityAttemptsTest do
                IdentityAttempts.open(server(), %{attrs | request_id: request_id()})
 
       assert {:ok, ^attempt} = IdentityAttempts.open(server(), attrs)
-      assert {:error, :cross_tenant} = IdentityAttempts.open(%Prima.Actor{user_id: "usr_x"}, attrs)
+
+      assert {:error, :cross_tenant} =
+               IdentityAttempts.open(%Prima.Actor{user_id: "usr_x"}, attrs)
     end
 
     test "resumes through minting, and its end ends the claim", %{restore: restore} do
       {:ok, attempt} = IdentityAttempts.open(server(), restore_attrs(restore))
 
-      for {from, to} <- [{"staged", "submitted"}, {"submitted", "accepted"}, {"accepted", "keys_active"}] do
+      for {from, to} <- [
+            {"staged", "submitted"},
+            {"submitted", "accepted"},
+            {"accepted", "keys_active"}
+          ] do
         assert {:ok, %{phase: ^to}} = IdentityAttempts.advance(server(), attempt.id, from, to)
       end
 
@@ -421,7 +430,9 @@ defmodule Arca.IdentityAttemptsTest do
           end
         )
 
-      assert {:ok, %{phase: "minted", user_id: user_id}} = IdentityAttempts.get(server(), attempt.id)
+      assert {:ok, %{phase: "minted", user_id: user_id}} =
+               IdentityAttempts.get(server(), attempt.id)
+
       assert user_id == person.id
 
       assert {:ok, %{phase: "completed", staged_live_key_sealed: nil}} =
@@ -590,9 +601,16 @@ defmodule Arca.IdentityAttemptsRaceTest do
       end)
 
     cond do
-      type == "Lock" and Enum.all?(fragments, &String.contains?(query, &1)) -> :ok
-      tries == 0 -> flunk("backend #{backend} is not waiting at #{inspect(fragments)}: #{type} #{event} #{query}")
-      true -> retry_wait!(backend, fragments, tries)
+      type == "Lock" and Enum.all?(fragments, &String.contains?(query, &1)) ->
+        :ok
+
+      tries == 0 ->
+        flunk(
+          "backend #{backend} is not waiting at #{inspect(fragments)}: #{type} #{event} #{query}"
+        )
+
+      true ->
+        retry_wait!(backend, fragments, tries)
     end
   end
 

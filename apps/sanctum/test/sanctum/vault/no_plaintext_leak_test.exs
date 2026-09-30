@@ -166,6 +166,7 @@ defmodule Sanctum.Vault.NoPlaintextLeakTest do
           })
 
         {:ok, digest} = VaultReader.binding_digest(entry)
+
         result =
           VaultReader.fetch(ctx, %{
             entry_id: id,

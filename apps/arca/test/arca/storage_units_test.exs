@@ -327,6 +327,7 @@ defmodule Arca.StorageUnitsTest do
       commit!(actor, key, "rev_1")
 
       assert {:retired, retired} = StorageUnits.stamped_retire(actor, @root, key)
+
       assert %{generation: ^retired, tombstone: true, ready: false, source_revision: nil} =
                change(actor, key)
 

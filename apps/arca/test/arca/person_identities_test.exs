@@ -21,7 +21,6 @@ defmodule Arca.PersonIdentitiesTest do
     :ok
   end
 
-
   @slot_keys [
     {Arca.ControlPlane, :standing},
     {Arca.ControlPlane, :generation},
@@ -119,7 +118,10 @@ defmodule Arca.PersonIdentitiesTest do
                })
 
       assert {:error, {:invalid, %{live_key_sealed: _}}} =
-               PersonIdentities.create(server(), Map.delete(local_attrs(person.id), :live_key_sealed))
+               PersonIdentities.create(
+                 server(),
+                 Map.delete(local_attrs(person.id), :live_key_sealed)
+               )
 
       assert {:error, {:invalid, %{head_hash: _, directory_url: _}}} =
                PersonIdentities.create(
@@ -234,8 +236,11 @@ defmodule Arca.PersonIdentitiesTest do
       person = person!()
       {:ok, _} = PersonIdentities.create(server(), local_attrs(person.id))
 
-      assert {:ok, :marked} = Arca.Repo.transaction(fn -> PersonIdentities.first_method!(person.id) end)
-      assert {:ok, :already} = Arca.Repo.transaction(fn -> PersonIdentities.first_method!(person.id) end)
+      assert {:ok, :marked} =
+               Arca.Repo.transaction(fn -> PersonIdentities.first_method!(person.id) end)
+
+      assert {:ok, :already} =
+               Arca.Repo.transaction(fn -> PersonIdentities.first_method!(person.id) end)
 
       assert {:ok, :no_identity} =
                Arca.Repo.transaction(fn -> PersonIdentities.first_method!("usr_nobody") end)

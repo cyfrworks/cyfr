@@ -131,11 +131,15 @@ defmodule Arca.Passkeys do
   """
   @spec list(Prima.Actor.t(), String.t(), keyword()) ::
           {:ok, [row()]} | {:error, :cross_tenant | :database_error}
-  def list(%Prima.Actor{} = actor, user_id, filters \\ []) when is_binary(user_id) and is_list(filters) do
+  def list(%Prima.Actor{} = actor, user_id, filters \\ [])
+      when is_binary(user_id) and is_list(filters) do
     with :ok <- person(actor, user_id) do
       Arca.Repo.Errors.with_db_rescue("Arca.Passkeys.list", fn ->
         {:ok,
-         from(p in Passkey, where: p.user_id == ^user_id, order_by: [asc: p.inserted_at, asc: p.id])
+         from(p in Passkey,
+           where: p.user_id == ^user_id,
+           order_by: [asc: p.inserted_at, asc: p.id]
+         )
          |> by_state(Keyword.get(filters, :state, :active))
          |> Arca.Repo.all()}
       end)
@@ -324,7 +328,9 @@ defmodule Arca.Passkeys do
         {:error, :not_found}
 
       passkey ->
-        if person(actor, passkey.user_id) == :ok, do: {:ok, passkey}, else: {:error, :cross_tenant}
+        if person(actor, passkey.user_id) == :ok,
+          do: {:ok, passkey},
+          else: {:error, :cross_tenant}
     end
   end
 
@@ -336,6 +342,7 @@ defmodule Arca.Passkeys do
   defp person(%Prima.Actor{}, _user_id), do: {:error, :cross_tenant}
 
   defp by_state(query, :all), do: query
+
   defp by_state(query, state) when state in [:active, :pending, :revoked],
     do: where(query, [p], p.state == ^Atom.to_string(state))
 

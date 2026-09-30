@@ -55,7 +55,12 @@ defmodule Arca.LayoutsTest do
           "hand" => %{
             "desktop" => desktop,
             "slots" => [
-              %{"id" => "gone", "tincture" => "tincture:acme.uninstalled", "size" => "icon", "order" => 0}
+              %{
+                "id" => "gone",
+                "tincture" => "tincture:acme.uninstalled",
+                "size" => "icon",
+                "order" => 0
+              }
             ],
             "floating" => []
           }
@@ -124,7 +129,9 @@ defmodule Arca.LayoutsTest do
     {:ok, 1} = Layouts.publish(actor, user, layout(), 0)
     assert {:error, :not_found} = Layouts.get(actor, "usr_someone_else")
 
-    elsewhere = Arca.Test.Actor.local(athanor_id: "ath_lay_other_#{System.unique_integer([:positive])}")
+    elsewhere =
+      Arca.Test.Actor.local(athanor_id: "ath_lay_other_#{System.unique_integer([:positive])}")
+
     assert {:error, :not_found} = Layouts.get(elsewhere, user)
     assert {:ok, 1} = Layouts.publish(elsewhere, user, layout(), 0)
   end
@@ -143,7 +150,10 @@ defmodule Arca.LayoutsTest do
     assert {:ok, %{revision: 1}} = Layouts.get(actor, user)
   end
 
-  test "bytes that no longer hold the digest their reference records read as corrupt", %{actor: actor, user: user} do
+  test "bytes that no longer hold the digest their reference records read as corrupt", %{
+    actor: actor,
+    user: user
+  } do
     {:ok, 1} = Layouts.publish(actor, user, layout(), 0)
     key = Layouts.key(user)
 

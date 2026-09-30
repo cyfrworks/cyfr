@@ -52,7 +52,9 @@ defmodule Arca.RequestRateWindowsTest do
 
   test "admits up to the cap in a window, then refuses with the time left" do
     source = key()
-    for _ <- 1..3, do: assert(:ok = RequestRateWindows.claim(server(), :pairing_source, source, 3, 60_000))
+
+    for _ <- 1..3,
+        do: assert(:ok = RequestRateWindows.claim(server(), :pairing_source, source, 3, 60_000))
 
     assert {:error, {:rate_limited, retry_after}} =
              RequestRateWindows.claim(server(), :pairing_source, source, 3, 60_000)
@@ -70,7 +72,8 @@ defmodule Arca.RequestRateWindowsTest do
     watch_statements!()
 
     for _ <- 1..50 do
-      assert {:error, {:rate_limited, _}} = RequestRateWindows.claim(server(), :flood, source, 1, 60_000)
+      assert {:error, {:rate_limited, _}} =
+               RequestRateWindows.claim(server(), :flood, source, 1, 60_000)
     end
 
     written =
@@ -123,7 +126,8 @@ defmodule Arca.RequestRateWindowsTest do
     :ok = RequestRateWindows.claim(server(), :sweep, key(), 5, 60_000)
 
     # The claim's own window, and the 4 spent ones beyond the batch of 16.
-    assert Arca.Repo.aggregate(from(w in RequestRateWindow, where: w.bucket == "sweep"), :count) == 5
+    assert Arca.Repo.aggregate(from(w in RequestRateWindow, where: w.bucket == "sweep"), :count) ==
+             5
   end
 
   test "only the platform's own actor claims, under a bucket spelled in code" do
@@ -204,9 +208,14 @@ defmodule Arca.RequestRateWindowsRaceTest do
         end
 
     cond do
-      waiting? -> :ok
-      tries == 0 -> flunk("backend #{backend} is not waiting at #{inspect(at)}: #{type} #{event} #{query}")
-      true -> retry_wait!(backend, at, tries)
+      waiting? ->
+        :ok
+
+      tries == 0 ->
+        flunk("backend #{backend} is not waiting at #{inspect(at)}: #{type} #{event} #{query}")
+
+      true ->
+        retry_wait!(backend, at, tries)
     end
   end
 

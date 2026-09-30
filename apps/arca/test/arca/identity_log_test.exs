@@ -24,7 +24,6 @@ defmodule Arca.IdentityLogTest do
     :ok
   end
 
-
   @slot_keys [
     {Arca.ControlPlane, :standing},
     {Arca.ControlPlane, :generation},
@@ -65,7 +64,11 @@ defmodule Arca.IdentityLogTest do
     hash = "sha256:" <> Prima.Digest.sha256_hex(entry)
 
     {:ok, row} =
-      IdentityLog.register(server(), %{identifier: identifier, entry: entry, entry_hash: hash}, @policy)
+      IdentityLog.register(
+        server(),
+        %{identifier: identifier, entry: entry, entry_hash: hash},
+        @policy
+      )
 
     {identifier, row}
   end
@@ -74,7 +77,11 @@ defmodule Arca.IdentityLogTest do
     IdentityLog.append(
       server(),
       identifier,
-      %{entry: "rotate-#{System.unique_integer()}", entry_hash: digest("rotate"), prev_hash: prev},
+      %{
+        entry: "rotate-#{System.unique_integer()}",
+        entry_hash: digest("rotate"),
+        prev_hash: prev
+      },
       policy
     )
   end
@@ -102,9 +109,16 @@ defmodule Arca.IdentityLogTest do
     test "writes the genesis at position 0, and the same genesis again is one registration" do
       entry = "genesis-#{System.unique_integer()}"
       identifier = "per_" <> Prima.Digest.sha256_hex(entry)
-      attrs = %{identifier: identifier, entry: entry, entry_hash: "sha256:" <> Prima.Digest.sha256_hex(entry)}
 
-      assert {:ok, %{seq: 0, kind: "genesis"} = first} = IdentityLog.register(server(), attrs, @policy)
+      attrs = %{
+        identifier: identifier,
+        entry: entry,
+        entry_hash: "sha256:" <> Prima.Digest.sha256_hex(entry)
+      }
+
+      assert {:ok, %{seq: 0, kind: "genesis"} = first} =
+               IdentityLog.register(server(), attrs, @policy)
+
       assert {:ok, ^first} = IdentityLog.register(server(), attrs, @policy)
       assert {:ok, [^first]} = IdentityLog.entries(server(), identifier)
       assert {:ok, %{identities: 1}} = IdentityLog.usage(server())
@@ -150,7 +164,10 @@ defmodule Arca.IdentityLogTest do
       assert {:error, :entry_too_large} = IdentityLog.register(server(), attrs, @policy)
 
       assert {:error, :invalid_policy} =
-               IdentityLog.register(server(), attrs, %{@policy | recovery_reserve_bytes: @policy.log_bytes})
+               IdentityLog.register(server(), attrs, %{
+                 @policy
+                 | recovery_reserve_bytes: @policy.log_bytes
+               })
     end
   end
 
@@ -184,7 +201,8 @@ defmodule Arca.IdentityLogTest do
 
       # Online state moved (a rotation) and the recovery still applies at
       # the head, against the revision it expected.
-      assert {:ok, %{kind: "recover", seq: 2} = accepted} = recover(identifier, rotated.entry_hash, request)
+      assert {:ok, %{kind: "recover", seq: 2} = accepted} =
+               recover(identifier, rotated.entry_hash, request)
 
       # The same request again, whatever the head is now: its recorded outcome.
       assert {:ok, ^accepted} = recover(identifier, accepted.entry_hash, request)
@@ -304,6 +322,7 @@ defmodule Arca.IdentityLogRaceTest do
       unboxed(fn ->
         Arca.Repo.delete_all(where(IdentityLogEntry, identifier: ^identifier))
         Arca.Repo.delete_all(where(ServerMeta, key: @usage_key))
+
         if usage do
           Arca.Repo.insert_all(ServerMeta, [
             %{key: usage.key, value: usage.value, updated_at: usage.updated_at}
@@ -316,7 +335,11 @@ defmodule Arca.IdentityLogRaceTest do
       unboxed(fn ->
         IdentityLog.register(
           server(),
-          %{identifier: identifier, entry: entry, entry_hash: "sha256:" <> Prima.Digest.sha256_hex(entry)},
+          %{
+            identifier: identifier,
+            entry: entry,
+            entry_hash: "sha256:" <> Prima.Digest.sha256_hex(entry)
+          },
           @policy
         )
       end)
@@ -375,9 +398,14 @@ defmodule Arca.IdentityLogRaceTest do
         end
 
     cond do
-      waiting? -> :ok
-      tries == 0 -> flunk("backend #{backend} is not waiting at #{inspect(at)}: #{type} #{event} #{query}")
-      true -> retry_wait!(backend, at, tries)
+      waiting? ->
+        :ok
+
+      tries == 0 ->
+        flunk("backend #{backend} is not waiting at #{inspect(at)}: #{type} #{event} #{query}")
+
+      true ->
+        retry_wait!(backend, at, tries)
     end
   end
 
@@ -483,7 +511,11 @@ defmodule Arca.IdentityLogRaceTest do
     IdentityLog.append(
       server(),
       identifier,
-      %{entry: "rotate-#{System.unique_integer()}", entry_hash: digest("rotate"), prev_hash: prev},
+      %{
+        entry: "rotate-#{System.unique_integer()}",
+        entry_hash: digest("rotate"),
+        prev_hash: prev
+      },
       @policy
     )
   end
@@ -516,7 +548,9 @@ defmodule Arca.IdentityLogRaceTest do
 
         {second, waiting} = appender(identifier, genesis.entry_hash, false)
         await_wait!(waiting, [~s("server_meta")])
-        refute Task.yield(second, 300), "the second append decided while the first held the usage row"
+
+        refute Task.yield(second, 300),
+               "the second append decided while the first held the usage row"
 
         open_gate!(gate)
         assert {:ok, %{seq: 1}} = Task.await(first, 25_000)
@@ -530,7 +564,11 @@ defmodule Arca.IdentityLogRaceTest do
         refute Task.yield(second, 300)
 
         release_write_lock!(holder)
-        Enum.sort_by([Task.await(first, 25_000), Task.await(second, 25_000)], &match?({:ok, _}, &1))
+
+        Enum.sort_by(
+          [Task.await(first, 25_000), Task.await(second, 25_000)],
+          &match?({:ok, _}, &1)
+        )
       end
 
     case results do
@@ -538,6 +576,7 @@ defmodule Arca.IdentityLogRaceTest do
       [{:error, :stale}, {:ok, %{seq: 1}}] -> :ok
     end
 
-    assert {:ok, [_genesis, %{seq: 1}]} = unboxed(fn -> IdentityLog.entries(server(), identifier) end)
+    assert {:ok, [_genesis, %{seq: 1}]} =
+             unboxed(fn -> IdentityLog.entries(server(), identifier) end)
   end
 end

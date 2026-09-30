@@ -125,6 +125,7 @@ defmodule Sanctum.TelemetryTest do
       assert metadata.outcome == :success
     end
   end
+
   # The identity domain announces its standing changes as telemetry and
   # never broadcasts: what it hands the host's bridge is data, and naming
   # no topic is the point.

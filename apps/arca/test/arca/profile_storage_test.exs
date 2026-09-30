@@ -76,7 +76,10 @@ defmodule Arca.ProfileStorageTest do
     } do
       actor = Prima.Actor.in_athanor(athanor)
       {:ok, owner} = ProfileStorage.put(attrs(athanor, %{}))
-      {:ok, blocked} = ProfileStorage.put(attrs(athanor, %{label: "blocked", status: "needs_consent"}))
+
+      {:ok, blocked} =
+        ProfileStorage.put(attrs(athanor, %{label: "blocked", status: "needs_consent"}))
+
       {:ok, _gone} = ProfileStorage.put(attrs(athanor, %{label: "gone", status: "revoked"}))
 
       {:ok, elsewhere} =

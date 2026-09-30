@@ -433,7 +433,10 @@ defmodule Sanctum.Tenancy.Members do
     with {:ok, row} <- find(user_id, "athanor", athanor_id),
          :ok <- end_if_frozen(athanor),
          :ok <-
-           Arca.ThreadSubscriptionStorage.unfollow_all(Prima.Actor.in_athanor(athanor_id), user_id),
+           Arca.ThreadSubscriptionStorage.unfollow_all(
+             Prima.Actor.in_athanor(athanor_id),
+             user_id
+           ),
          {:ok, _} <- remove(row) do
       # Invalidate cached contexts after membership removal; retain sessions for revalidation.
       Sanctum.Session.invalidate_memo_for_user(user_id)

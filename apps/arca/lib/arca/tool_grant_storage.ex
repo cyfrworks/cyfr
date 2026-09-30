@@ -121,7 +121,8 @@ defmodule Arca.ToolGrantStorage do
             g.lifecycle_kind == "execution" and e.id == g.lifecycle_id and
               e.athanor_id == g.athanor_id,
           left_join: t in Turn,
-          on: g.lifecycle_kind == "turn" and t.id == g.lifecycle_id and t.athanor_id == g.athanor_id,
+          on:
+            g.lifecycle_kind == "turn" and t.id == g.lifecycle_id and t.athanor_id == g.athanor_id,
           left_join: s in CronSchedule,
           on:
             g.lifecycle_kind == "schedule" and s.id == g.lifecycle_id and
@@ -156,7 +157,10 @@ defmodule Arca.ToolGrantStorage do
   # does not decode is not a narrower allow to guess at: the row is
   # answered with `constraint: :corrupt`, which no caller may admit under.
   defp decoded(%ToolGrant{constraint: constraint} = grant),
-    do: grant |> Arca.Data.project() |> Map.put(:constraint, ToolGrant.decode_constraint(constraint))
+    do:
+      grant
+      |> Arca.Data.project()
+      |> Map.put(:constraint, ToolGrant.decode_constraint(constraint))
 
   defp conflict_columns("thread"), do: [:thread_id, :agent_name, :tool, :action]
   defp conflict_columns("agent"), do: [:athanor_id, :agent_name, :tool, :action]

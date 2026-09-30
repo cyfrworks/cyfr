@@ -245,9 +245,7 @@ defmodule Arca.McpLogTest do
         seed(log_attrs(%{id: "req_sts1", timestamp: old_time, status: "success"}))
 
       {:ok, _} =
-        seed(
-          log_attrs(%{id: "req_sts2", timestamp: DateTime.utc_now(), status: "success"})
-        )
+        seed(log_attrs(%{id: "req_sts2", timestamp: DateTime.utc_now(), status: "success"}))
 
       cutoff = DateTime.add(DateTime.utc_now(), -60, :second)
       {:ok, stats} = McpLog.stats(athanor_id: "ath_test", since: cutoff)

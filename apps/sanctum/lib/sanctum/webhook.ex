@@ -198,7 +198,8 @@ defmodule Sanctum.Webhook do
          :ok <- maybe_validate_target_ref(ctx, normalized),
          :ok <- maybe_authorize_profile_binding(ctx, name, athanor_id, normalized),
          :ok <- check_replay_transition(athanor_id, name, normalized, attrs),
-         :ok <- WebhookStorage.update_webhook(Prima.Actor.in_athanor(athanor_id), name, normalized) do
+         :ok <-
+           WebhookStorage.update_webhook(Prima.Actor.in_athanor(athanor_id), name, normalized) do
       get(ctx, name)
     end
   end
@@ -674,7 +675,9 @@ defmodule Sanctum.Webhook do
 
   defp authorize_profile_binding(ctx, target_ref, profile_id) when is_binary(profile_id) do
     case Sanctum.Consent.RegistrationBinding.authorize(ctx, target_ref, profile_id) do
-      :ok -> :ok
+      :ok ->
+        :ok
+
       {:error, reason} ->
         {:error,
          "profile binding refused: #{Sanctum.Consent.RegistrationBinding.message(reason)}"}

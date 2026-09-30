@@ -28,7 +28,9 @@ defmodule Arca.StorageProjectionRootsTest do
 
   defp advance(actor, root, change) do
     {:ok, generation} =
-      Arca.Repo.locking_transaction(fn -> StorageProjectionRoots.advance!(actor, root, change) end)
+      Arca.Repo.locking_transaction(fn ->
+        StorageProjectionRoots.advance!(actor, root, change)
+      end)
 
     generation
   end
@@ -42,6 +44,7 @@ defmodule Arca.StorageProjectionRootsTest do
       second = advance(actor, "components", change("catalysts/local/b/1.0.0", %{ready: true}))
 
       assert second == first + 1
+
       assert {:ok, %{epoch: ^second, acknowledged_epoch: 0}} =
                StorageProjectionRoots.epoch(actor, "components")
 
@@ -100,7 +103,9 @@ defmodule Arca.StorageProjectionRootsTest do
       end
 
       assert {:error, :no_athanor} = StorageProjectionRoots.epoch(nobody, "components")
-      assert {:error, :no_athanor} = StorageProjectionRoots.epoch(%{nobody | athanor_id: ""}, "aqua")
+
+      assert {:error, :no_athanor} =
+               StorageProjectionRoots.epoch(%{nobody | athanor_id: ""}, "aqua")
     end
 
     test "a change that rolls back takes its epoch back with it", %{actor: actor} do
@@ -108,11 +113,17 @@ defmodule Arca.StorageProjectionRootsTest do
 
       assert {:error, :refused} =
                Arca.Repo.locking_transaction(fn ->
-                 StorageProjectionRoots.advance!(actor, "components", change("catalysts/local/b/1.0.0"))
+                 StorageProjectionRoots.advance!(
+                   actor,
+                   "components",
+                   change("catalysts/local/b/1.0.0")
+                 )
+
                  Arca.Repo.rollback(:refused)
                end)
 
       assert {:ok, %{epoch: ^before}} = StorageProjectionRoots.epoch(actor, "components")
+
       assert {:ok, %{units: [%{unit_key: "catalysts/local/a/1.0.0"}]}} =
                StorageProjectionChanges.snapshot(actor, "components")
     end

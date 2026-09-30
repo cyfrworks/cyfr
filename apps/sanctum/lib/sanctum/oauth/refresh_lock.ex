@@ -80,10 +80,20 @@ defmodule Sanctum.OAuth.RefreshLock do
   mid-refresh). It is also what a member waiting on a PEER's claim polls,
   so a refresh that landed on another member is read rather than repeated.
   """
-  @spec run({atom(), String.t(), String.t()}, (-> result), (-> {:ok, term()} | :stale), non_neg_integer()) ::
+  @spec run(
+          {atom(), String.t(), String.t()},
+          (-> result),
+          (-> {:ok, term()} | :stale),
+          non_neg_integer()
+        ) ::
           result
         when result: {:ok, term()} | {:error, term()}
-  def run({_kind, athanor_id, subject_id} = key, refresh_fun, recheck_fun, timeout_ms \\ @default_timeout_ms)
+  def run(
+        {_kind, athanor_id, subject_id} = key,
+        refresh_fun,
+        recheck_fun,
+        timeout_ms \\ @default_timeout_ms
+      )
       when is_binary(athanor_id) and athanor_id != "" and is_binary(subject_id) and
              subject_id != "" do
     do_run(key, refresh_fun, recheck_fun, timeout_ms, 2)

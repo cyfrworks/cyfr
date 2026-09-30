@@ -145,11 +145,15 @@ defmodule Arca.PlatformSettingsTest do
       break_store!()
 
       assert PlatformSettings.effective("a_rate") == {:ok, 240}
-      assert_received {[:cyfr, :platform_settings, :stale_served], ^ref, %{count: 1}, %{key: "a_rate"}}
+
+      assert_received {[:cyfr, :platform_settings, :stale_served], ^ref, %{count: 1},
+                       %{key: "a_rate"}}
 
       # Never read before the store went, a :serve key serves its default.
       assert PlatformSettings.effective("a_label") == {:ok, nil}
-      assert_received {[:cyfr, :platform_settings, :stale_served], ^ref, %{count: 1}, %{key: "a_label"}}
+
+      assert_received {[:cyfr, :platform_settings, :stale_served], ^ref, %{count: 1},
+                       %{key: "a_label"}}
     end
   end
 

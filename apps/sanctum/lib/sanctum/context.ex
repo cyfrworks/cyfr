@@ -291,7 +291,8 @@ defmodule Sanctum.Context do
       val = Map.get(attrs, field)
 
       unless is_nil(val) or is_binary(val) do
-        raise ArgumentError, "#{field} must be a string or nil, got: #{Prima.LoggerContext.shape(val)}"
+        raise ArgumentError,
+              "#{field} must be a string or nil, got: #{Prima.LoggerContext.shape(val)}"
       end
     end
 
@@ -390,7 +391,8 @@ defmodule Sanctum.Context do
        do: binding
 
   defp binding!(other),
-    do: raise(ArgumentError, "credential_binding is malformed: #{Prima.LoggerContext.shape(other)}")
+    do:
+      raise(ArgumentError, "credential_binding is malformed: #{Prima.LoggerContext.shape(other)}")
 
   defp deadline!(nil), do: nil
   defp deadline!(%DateTime{} = deadline), do: deadline
@@ -424,7 +426,11 @@ defmodule Sanctum.Context do
   defp validated_at!(%DateTime{} = at), do: at
 
   defp validated_at!(other),
-    do: raise(ArgumentError, "validated_at must be a DateTime or nil, got: #{Prima.LoggerContext.shape(other)}")
+    do:
+      raise(
+        ArgumentError,
+        "validated_at must be a DateTime or nil, got: #{Prima.LoggerContext.shape(other)}"
+      )
 
   @doc """
   The single builder for server-constructed, no-external-credential contexts.

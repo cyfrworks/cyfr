@@ -150,7 +150,9 @@ defmodule Arca.ToolGrantStorageTest do
       {:ok, _} = ToolGrantStorage.put(Map.put(row, :expires_at, past))
       assert listed(row) == []
 
-      {:ok, _} = ToolGrantStorage.put(Map.put(row, :expires_at, DateTime.add(past, 3600, :second)))
+      {:ok, _} =
+        ToolGrantStorage.put(Map.put(row, :expires_at, DateTime.add(past, 3600, :second)))
+
       assert [%{effect: "allow"}] = listed(row)
 
       {:ok, _} = ToolGrantStorage.put(%{row | effect: "deny"})
@@ -190,7 +192,9 @@ defmodule Arca.ToolGrantStorageTest do
     test "an allow bound to a lifecycle row that does not exist is not answered", %{thread: row} do
       for kind <- ["execution", "turn", "schedule"] do
         {:ok, _} =
-          ToolGrantStorage.put(Map.merge(row, %{lifecycle_kind: kind, lifecycle_id: "#{kind}_gone"}))
+          ToolGrantStorage.put(
+            Map.merge(row, %{lifecycle_kind: kind, lifecycle_id: "#{kind}_gone"})
+          )
 
         assert listed(row) == []
       end

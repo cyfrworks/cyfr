@@ -25,7 +25,6 @@ defmodule Arca.PasskeysTest do
     :ok
   end
 
-
   @slot_keys [
     {Arca.ControlPlane, :standing},
     {Arca.ControlPlane, :generation},
@@ -351,7 +350,8 @@ defmodule Arca.PasskeysTest do
 
     passkey_id = passkey.id
 
-    assert {:ok, %{passkey: %{id: ^passkey_id, state: "revoked"}, voided_confirmation_ids: [voided]}} =
+    assert {:ok,
+            %{passkey: %{id: ^passkey_id, state: "revoked"}, voided_confirmation_ids: [voided]}} =
              Passkeys.revoke(as(person), passkey.id)
 
     assert voided == record.id

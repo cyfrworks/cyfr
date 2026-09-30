@@ -25,7 +25,6 @@ defmodule Arca.CarryActionsTest do
     {:ok, person: person!(), slot: slot}
   end
 
-
   @slot_keys [
     {Arca.ControlPlane, :standing},
     {Arca.ControlPlane, :generation},
@@ -156,7 +155,9 @@ defmodule Arca.CarryActionsTest do
       challenge = %{challenge: "b-challenge", challenge_digest: digest("challenge")}
       assertion = %{assertion: "signed-assertion", assertion_digest: digest("assertion")}
 
-      assert {:error, :no_challenge} = CarryActions.record_assertion(as(person), action.id, assertion)
+      assert {:error, :no_challenge} =
+               CarryActions.record_assertion(as(person), action.id, assertion)
+
       assert {:ok, attached} = CarryActions.attach_challenge(as(person), action.id, challenge)
       assert {:ok, ^attached} = CarryActions.attach_challenge(as(person), action.id, challenge)
 
@@ -219,7 +220,9 @@ defmodule Arca.CarryActionsTest do
       assert %DateTime{} = completed.retain_until
 
       assert {:ok, ^completed} = CarryActions.consume(as(person), done)
-      assert {:error, :changed_content} = CarryActions.consume(as(person), %{done | outcome: "refused"})
+
+      assert {:error, :changed_content} =
+               CarryActions.consume(as(person), %{done | outcome: "refused"})
 
       assert {:error, :changed_content} =
                CarryActions.consume(as(person), %{done | payload_digest: digest("changed")})
@@ -232,8 +235,12 @@ defmodule Arca.CarryActionsTest do
       {:ok, action} = CarryActions.open(as(person), attrs)
 
       assert {:error, :stale} = CarryActions.deliver(as(person), action.id, action.revision + 1)
-      assert {:ok, %{phase: "delivered"}} = CarryActions.deliver(as(person), action.id, action.revision)
-      assert {:ok, %{phase: "cancelled", payload: nil}} = CarryActions.cancel(as(person), action.id)
+
+      assert {:ok, %{phase: "delivered"}} =
+               CarryActions.deliver(as(person), action.id, action.revision)
+
+      assert {:ok, %{phase: "cancelled", payload: nil}} =
+               CarryActions.cancel(as(person), action.id)
 
       assert {:error, :cancelled} =
                CarryActions.consume(as(person), %{
@@ -285,7 +292,10 @@ defmodule Arca.CarryActionsTest do
       assert {:ok, ^recorded} = CarryActions.record_receipt(server(), attrs)
 
       assert {:error, :receipt_conflict} =
-               CarryActions.record_receipt(server(), %{attrs | browser_binding_digest: digest("other")})
+               CarryActions.record_receipt(server(), %{
+                 attrs
+                 | browser_binding_digest: digest("other")
+               })
 
       assert {:error, :receipt_conflict} =
                CarryActions.record_receipt(server(), %{attrs | assertion_digest: digest("other")})
@@ -419,9 +429,16 @@ defmodule Arca.CarryActionsRaceTest do
       end)
 
     cond do
-      type == "Lock" and Enum.all?(fragments, &String.contains?(query, &1)) -> :ok
-      tries == 0 -> flunk("backend #{backend} is not waiting at #{inspect(fragments)}: #{type} #{event} #{query}")
-      true -> retry_wait!(backend, fragments, tries)
+      type == "Lock" and Enum.all?(fragments, &String.contains?(query, &1)) ->
+        :ok
+
+      tries == 0 ->
+        flunk(
+          "backend #{backend} is not waiting at #{inspect(fragments)}: #{type} #{event} #{query}"
+        )
+
+      true ->
+        retry_wait!(backend, fragments, tries)
     end
   end
 

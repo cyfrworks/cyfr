@@ -263,7 +263,9 @@ defmodule Arca.PendingConfirmations do
       when is_binary(athanor_id) and athanor_id != "" and is_binary(id) and is_map(challenge) do
     set =
       case challenge do
-        %{reauth_nonce: nonce} when is_binary(nonce) and nonce != "" -> [reauth_nonce: nonce]
+        %{reauth_nonce: nonce} when is_binary(nonce) and nonce != "" ->
+          [reauth_nonce: nonce]
+
         %{email_code_hash: hash} when is_binary(hash) and hash != "" ->
           [email_code_hash: hash, email_code_failures: 0]
 
@@ -581,7 +583,9 @@ defmodule Arca.PendingConfirmations do
     end
   end
 
-  defp consumable(%PendingConfirmation{state: "confirmed"} = record, now), do: unexpired(record, now)
+  defp consumable(%PendingConfirmation{state: "confirmed"} = record, now),
+    do: unexpired(record, now)
+
   defp consumable(%PendingConfirmation{state: "pending"}, _now), do: {:error, :not_confirmed}
   defp consumable(%PendingConfirmation{state: "consumed"}, _now), do: {:error, :consumed}
   defp consumable(%PendingConfirmation{state: "cancelled"}, _now), do: {:error, :cancelled}
@@ -657,7 +661,8 @@ defmodule Arca.PendingConfirmations do
     end
   end
 
-  defp proof(_proof), do: {:error, {:invalid, %{proof: ["is passkey, oidc_reauth or email_code"]}}}
+  defp proof(_proof),
+    do: {:error, {:invalid, %{proof: ["is passkey, oidc_reauth or email_code"]}}}
 
   defp preview_text(%Preview{} = preview),
     do: preview |> Preview.encode() |> Prima.Identity.Encoding.jcs!()

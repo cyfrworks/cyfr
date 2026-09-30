@@ -271,33 +271,33 @@ defmodule Arca.CarryActions do
   def sweep(%Prima.Actor{}, _limit), do: {:error, :cross_tenant}
 
   defp swept(limit) do
-      now = Arca.ServerMetaStorage.now!()
-      retain = DateTime.add(now, @retention_ms, :millisecond)
+    now = Arca.ServerMetaStorage.now!()
+    retain = DateTime.add(now, @retention_ms, :millisecond)
 
-      due =
-        from(a in CarryAction,
-          where: a.phase in ^@open and a.expires_at <= ^now,
-          select: a.id,
-          limit: ^limit
-        )
+    due =
+      from(a in CarryAction,
+        where: a.phase in ^@open and a.expires_at <= ^now,
+        select: a.id,
+        limit: ^limit
+      )
 
-      {expired, _} =
-        from(a in CarryAction, where: a.id in subquery(due) and a.phase in ^@open)
-        |> Arca.Repo.update_all(
-          set: [phase: "expired", payload: nil, retain_until: retain, updated_at: now],
-          inc: [revision: 1]
-        )
+    {expired, _} =
+      from(a in CarryAction, where: a.id in subquery(due) and a.phase in ^@open)
+      |> Arca.Repo.update_all(
+        set: [phase: "expired", payload: nil, retain_until: retain, updated_at: now],
+        inc: [revision: 1]
+      )
 
-      gone =
-        from(a in CarryAction,
-          where: not is_nil(a.retain_until) and a.retain_until <= ^now,
-          select: a.id,
-          limit: ^limit
-        )
+    gone =
+      from(a in CarryAction,
+        where: not is_nil(a.retain_until) and a.retain_until <= ^now,
+        select: a.id,
+        limit: ^limit
+      )
 
-      {removed, _} = Arca.Repo.delete_all(from(a in CarryAction, where: a.id in subquery(gone)))
+    {removed, _} = Arca.Repo.delete_all(from(a in CarryAction, where: a.id in subquery(gone)))
 
-      %{expired: expired, removed: removed}
+    %{expired: expired, removed: removed}
   end
 
   # ---- internals -------------------------------------------------------------
@@ -471,8 +471,11 @@ defmodule Arca.CarryActions do
     |> Arca.QueryHelpers.for_update()
     |> Arca.Repo.one()
     |> case do
-      nil -> {:error, :not_found}
-      action -> if person(actor, action.user_id) == :ok, do: {:ok, action}, else: {:error, :cross_tenant}
+      nil ->
+        {:error, :not_found}
+
+      action ->
+        if person(actor, action.user_id) == :ok, do: {:ok, action}, else: {:error, :cross_tenant}
     end
   end
 
@@ -552,7 +555,8 @@ defmodule Arca.CarryActions do
         {:challenge_id, Prima.Identity.Encoding.id?(attrs[:challenge_id])},
         {:user_id, nonempty?(attrs[:user_id])},
         {:key_epoch, Prima.Identity.Encoding.digest?(attrs[:key_epoch])},
-        {:browser_binding_digest, Prima.Identity.Encoding.digest?(attrs[:browser_binding_digest])},
+        {:browser_binding_digest,
+         Prima.Identity.Encoding.digest?(attrs[:browser_binding_digest])},
         {:assertion_digest, Prima.Identity.Encoding.digest?(attrs[:assertion_digest])},
         {:outcome, nonempty?(attrs[:outcome])}
       ]

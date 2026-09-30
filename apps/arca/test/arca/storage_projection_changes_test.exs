@@ -24,7 +24,9 @@ defmodule Arca.StorageProjectionChangesTest do
     :ok = Ecto.Adapters.SQL.Sandbox.checkout(Arca.Repo)
     Ecto.Adapters.SQL.Sandbox.mode(Arca.Repo, {:shared, self()})
 
-    base = Path.join(System.tmp_dir!(), "projection_changes_#{System.unique_integer([:positive])}")
+    base =
+      Path.join(System.tmp_dir!(), "projection_changes_#{System.unique_integer([:positive])}")
+
     prev_base = Application.fetch_env!(:arca, :base_path)
     Application.put_env(:arca, :base_path, base)
 
@@ -139,7 +141,9 @@ defmodule Arca.StorageProjectionChangesTest do
 
       assert {:retired, deleted} = StorageUnits.stamped_retire(actor, @root, key)
       assert deleted > published
-      assert %{generation: ^deleted, tombstone: true, ready: false, source_revision: nil} = row(actor, key)
+
+      assert %{generation: ^deleted, tombstone: true, ready: false, source_revision: nil} =
+               row(actor, key)
 
       {:ok, draft} = StorageUnits.register_draft(actor, @root, key, "wrt_again")
       assert :ok = StorageUnits.abandon_draft(actor, draft, "wrt_again")
@@ -147,17 +151,30 @@ defmodule Arca.StorageProjectionChangesTest do
 
       recreated = commit!(actor, key, "rev_1")
       assert recreated > deleted
-      assert %{generation: ^recreated, tombstone: false, source_revision: "rev_1"} = row(actor, key)
+
+      assert %{generation: ^recreated, tombstone: false, source_revision: "rev_1"} =
+               row(actor, key)
     end
 
-    test "a retirement leaves its tombstone even where no unit row stood", %{actor: actor, key: key} do
+    test "a retirement leaves its tombstone even where no unit row stood", %{
+      actor: actor,
+      key: key
+    } do
       assert {:not_found, generation} = StorageUnits.stamped_retire(actor, @root, key)
       assert {:error, :not_found} = StorageUnits.retire(actor, @root, key)
 
       assert %{tombstone: true, ready: false} = row(actor, key)
       assert row(actor, key).generation > generation
 
-      assert :ok = StorageProjectionChanges.mark_ready(actor, @root, key, row(actor, key).generation, nil)
+      assert :ok =
+               StorageProjectionChanges.mark_ready(
+                 actor,
+                 @root,
+                 key,
+                 row(actor, key).generation,
+                 nil
+               )
+
       assert %{tombstone: true, ready: true} = row(actor, key)
     end
 
@@ -254,6 +271,7 @@ defmodule Arca.StorageProjectionChangesTest do
     } do
       fresh_key = "catalysts/local/fresh-#{System.unique_integer([:positive])}/1.0.0"
       {:ok, stale} = StorageProjectionChanges.begin_edit(actor, @root, key)
+
       Arca.Repo.update_all(from(c in StorageProjectionChange, where: c.unit_key == ^key),
         set: [updated_at: DateTime.add(DateTime.utc_now(), -120, :second)]
       )
@@ -301,7 +319,9 @@ defmodule Arca.StorageProjectionChangesTest do
       :ok = StorageProjectionChanges.mark_ready(actor, @root, key, generation, "rev_1")
       assert {:ok, :acknowledged} = acknowledge(actor, snapshot(actor))
 
-      assert {:ok, caught_up} = StorageProjectionChanges.pending_athanors(platform, limit: 100_000)
+      assert {:ok, caught_up} =
+               StorageProjectionChanges.pending_athanors(platform, limit: 100_000)
+
       refute actor.athanor_id in caught_up
     end
 
@@ -371,10 +391,15 @@ defmodule Arca.StorageProjectionChangesTest do
     test "an actor without an athanor is refused before any query", %{key: key} do
       for nobody <- [%Prima.Actor{athanor_id: nil}, %Prima.Actor{athanor_id: ""}] do
         assert {:error, :no_athanor} = StorageProjectionChanges.snapshot(nobody, @root)
-        assert {:error, :no_athanor} = StorageProjectionChanges.mark_ready(nobody, @root, key, 1, nil)
+
+        assert {:error, :no_athanor} =
+                 StorageProjectionChanges.mark_ready(nobody, @root, key, 1, nil)
+
         assert {:error, :no_athanor} = StorageProjectionChanges.begin_edit(nobody, @root, key)
         assert {:error, :no_athanor} = StorageProjectionChanges.finish_edit(nobody, @root, key, 1)
-        assert {:error, :no_athanor} = StorageProjectionChanges.begin_repair(nobody, @root, key, "r")
+
+        assert {:error, :no_athanor} =
+                 StorageProjectionChanges.begin_repair(nobody, @root, key, "r")
 
         assert {:error, :no_athanor} =
                  StorageProjectionChanges.settle_stale(nobody, @root, settle_after_ms: 0)
@@ -401,7 +426,9 @@ defmodule Arca.StorageProjectionChangesTest do
                StorageProjectionChanges.replace(actor, "aqua", token, fn -> flunk("written") end)
 
       assert {:error, :invalid_token} =
-               StorageProjectionChanges.replace(actor, @root, %{units: []}, fn -> flunk("written") end)
+               StorageProjectionChanges.replace(actor, @root, %{units: []}, fn ->
+                 flunk("written")
+               end)
 
       assert %{acknowledged_epoch: 0} = standing(actor)
     end
@@ -444,7 +471,13 @@ defmodule Arca.StorageProjectionChangesTest do
       {:ok, draft} = StorageUnits.register_draft(actor, @root, key, "wrt_late")
 
       assert {:error, :stale_revision} =
-               StorageUnits.stamped_commit(actor, draft, "rev_gone", "wrt_late", identity("rev_2"))
+               StorageUnits.stamped_commit(
+                 actor,
+                 draft,
+                 "rev_gone",
+                 "wrt_late",
+                 identity("rev_2")
+               )
 
       refute_receive {:changed, _, _, _}, 100
     end

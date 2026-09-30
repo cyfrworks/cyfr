@@ -45,7 +45,6 @@ defmodule Arca.PairingInvitationsTest do
     {:ok, actor: actor, person: person, membership: membership, slot: slot}
   end
 
-
   # The writes under test are fenced by the member's slot: a claimant runs
   # and this member holds its slot. The process-wide standing and the claim
   # switch are restored after each case.
@@ -222,9 +221,12 @@ defmodule Arca.PairingInvitationsTest do
 
     assert {:error, :consumed} = PairingInvitations.consume(actor, hash, &admits/1, issue(actor))
     assert {:ok, [%{state: "consumed"}]} = PairingInvitations.list(actor, state: :consumed)
-    assert Arca.Repo.aggregate(from(p in PairedClient, where: p.athanor_id == ^actor.athanor_id), :count) == 1
-  end
 
+    assert Arca.Repo.aggregate(
+             from(p in PairedClient, where: p.athanor_id == ^actor.athanor_id),
+             :count
+           ) == 1
+  end
 
   test "a failed issuance rolls everything back and the invitation stays pending", %{
     actor: actor,
@@ -246,8 +248,14 @@ defmodule Arca.PairingInvitationsTest do
       {:error, :certificate_refused}
     end
 
-    assert {:error, :certificate_refused} = PairingInvitations.consume(actor, hash, &admits/1, failing)
-    assert Arca.Repo.aggregate(from(p in PairedClient, where: p.athanor_id == ^actor.athanor_id), :count) == 0
+    assert {:error, :certificate_refused} =
+             PairingInvitations.consume(actor, hash, &admits/1, failing)
+
+    assert Arca.Repo.aggregate(
+             from(p in PairedClient, where: p.athanor_id == ^actor.athanor_id),
+             :count
+           ) == 0
+
     assert {:ok, [%{state: "pending"}]} = PairingInvitations.list(actor, [])
   end
 
@@ -258,7 +266,9 @@ defmodule Arca.PairingInvitationsTest do
   } do
     {revoked, revoked_hash} = open!(actor, person, m)
     {:ok, %{state: "revoked"}} = PairingInvitations.revoke(actor, revoked.id)
-    assert {:error, :revoked} = PairingInvitations.consume(actor, revoked_hash, &admits/1, issue(actor))
+
+    assert {:error, :revoked} =
+             PairingInvitations.consume(actor, revoked_hash, &admits/1, issue(actor))
 
     {expired, expired_hash} = open!(actor, person, m)
 
@@ -268,15 +278,23 @@ defmodule Arca.PairingInvitationsTest do
         set: [expires_at: DateTime.add(DateTime.utc_now(), -1, :second)]
       )
 
-    assert {:error, :expired} = PairingInvitations.consume(actor, expired_hash, &admits/1, issue(actor))
+    assert {:error, :expired} =
+             PairingInvitations.consume(actor, expired_hash, &admits/1, issue(actor))
 
     {_denied, denied_hash} = open!(actor, person, m)
 
     assert {:error, :not_a_member} =
-             PairingInvitations.consume(actor, denied_hash, fn _ -> {:error, :not_a_member} end, issue(actor))
+             PairingInvitations.consume(
+               actor,
+               denied_hash,
+               fn _ -> {:error, :not_a_member} end,
+               issue(actor)
+             )
 
     other = Prima.Actor.in_athanor("ath_pin_other")
-    assert {:error, :not_found} = PairingInvitations.consume(other, denied_hash, &admits/1, issue(other))
+
+    assert {:error, :not_found} =
+             PairingInvitations.consume(other, denied_hash, &admits/1, issue(other))
   end
 
   test "a standing transition revokes pending invitations, and an allow never resurrects them", %{
@@ -298,7 +316,12 @@ defmodule Arca.PairingInvitationsTest do
   end
 
   describe "the member fence" do
-    test "a stale owner redeems nothing", %{actor: actor, person: person, membership: m, slot: slot} do
+    test "a stale owner redeems nothing", %{
+      actor: actor,
+      person: person,
+      membership: m,
+      slot: slot
+    } do
       {_invitation, hash} = open!(actor, person, m)
 
       {1, _} =
@@ -306,7 +329,9 @@ defmodule Arca.PairingInvitationsTest do
           set: [owner: "someone-else", generation: slot.generation + 1]
         )
 
-      assert {:error, :not_owner} = PairingInvitations.consume(actor, hash, &admits/1, issue(actor))
+      assert {:error, :not_owner} =
+               PairingInvitations.consume(actor, hash, &admits/1, issue(actor))
+
       assert {:ok, [%{state: "pending"}]} = PairingInvitations.list(actor, [])
     end
   end
@@ -467,9 +492,14 @@ defmodule Arca.PairingInvitationsRaceTest do
         end
 
     cond do
-      waiting? -> :ok
-      tries == 0 -> flunk("backend #{backend} is not waiting at #{inspect(at)}: #{type} #{event} #{query}")
-      true -> retry_wait!(backend, at, tries)
+      waiting? ->
+        :ok
+
+      tries == 0 ->
+        flunk("backend #{backend} is not waiting at #{inspect(at)}: #{type} #{event} #{query}")
+
+      true ->
+        retry_wait!(backend, at, tries)
     end
   end
 
@@ -685,7 +715,8 @@ defmodule Arca.PairingInvitationsRaceTest do
   end
 
   if Arca.Repo.adapter() != Ecto.Adapters.Postgres do
-    @tag skip: "the revocation has no pause point but a PostgreSQL trigger; SQLite's write lock orders it"
+    @tag skip:
+           "the revocation has no pause point but a PostgreSQL trigger; SQLite's write lock orders it"
   end
 
   test "a redemption waiting behind a revocation reads it revoked", %{
@@ -729,7 +760,10 @@ defmodule Arca.PairingInvitationsRaceTest do
     assert_waits!(second, pid, [~s("users"), "FOR UPDATE"])
 
     now = unboxed(fn -> Arca.ServerMetaStorage.now!() end)
-    assert DateTime.compare(now, short.expires_at) == :lt, "the redemption did not wait before expiry"
+
+    assert DateTime.compare(now, short.expires_at) == :lt,
+           "the redemption did not wait before expiry"
+
     await_past!(short.expires_at)
 
     send(first.pid, :go)

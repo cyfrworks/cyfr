@@ -969,7 +969,8 @@ defmodule Arca.MembersIdentifierInvitesTest do
     assert {:error, :not_owner} =
              Members.activate_invited_identifier(server(), person_id(), id, DateTime.utc_now())
 
-    assert {:ok, [%{status: "invited", person_identifier: ^id}]} = Members.list(in_athanor(athanor.id))
+    assert {:ok, [%{status: "invited", person_identifier: ^id}]} =
+             Members.list(in_athanor(athanor.id))
 
     # An email invitation and an active seat widen nothing a proof claims.
     assert {:ok, %{email: "stale@example.com"}} =

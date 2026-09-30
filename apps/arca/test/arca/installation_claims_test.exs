@@ -242,7 +242,9 @@ defmodule Arca.InstallationClaimsTest do
     test "an open that fails claims nothing, and its token is not spent" do
       attrs = restore()
 
-      assert {:error, :kit_unsealed} = open(attrs, also: fn _attempt -> {:error, :kit_unsealed} end)
+      assert {:error, :kit_unsealed} =
+               open(attrs, also: fn _attempt -> {:error, :kit_unsealed} end)
+
       assert {:error, :not_found} = InstallationClaims.get(server())
       assert claims() == 0
       assert Arca.Repo.aggregate(IdentityAttempt, :count) == 0
@@ -288,7 +290,8 @@ defmodule Arca.InstallationClaimsTest do
     end
 
     test "refuses a malformed field and any actor but the platform's own" do
-      assert {:error, {:invalid, %{token_digest: _}}} = open(%{restore() | token_digest: "raw-token"})
+      assert {:error, {:invalid, %{token_digest: _}}} =
+               open(%{restore() | token_digest: "raw-token"})
 
       assert {:error, :cross_tenant} =
                IdentityAttempts.open(Prima.Actor.in_athanor("ath_test"), restore())
@@ -426,9 +429,16 @@ defmodule Arca.InstallationClaimsRaceTest do
       end)
 
     cond do
-      type == "Lock" and Enum.all?(fragments, &String.contains?(query, &1)) -> :ok
-      tries == 0 -> flunk("backend #{backend} is not waiting at #{inspect(fragments)}: #{type} #{event} #{query}")
-      true -> retry_wait!(backend, fragments, tries)
+      type == "Lock" and Enum.all?(fragments, &String.contains?(query, &1)) ->
+        :ok
+
+      tries == 0 ->
+        flunk(
+          "backend #{backend} is not waiting at #{inspect(fragments)}: #{type} #{event} #{query}"
+        )
+
+      true ->
+        retry_wait!(backend, fragments, tries)
     end
   end
 
@@ -503,7 +513,9 @@ defmodule Arca.InstallationClaimsRaceTest do
 
     claimant =
       Task.async(fn ->
-        unboxed(fn -> IdentityAttempts.open(server(), restore(token), also: pause(test, :claim)) end)
+        unboxed(fn ->
+          IdentityAttempts.open(server(), restore(token), also: pause(test, :claim))
+        end)
       end)
 
     assert_receive {:claim, :holds}, 5_000
@@ -580,6 +592,9 @@ defmodule Arca.InstallationClaimsRaceTest do
     assert [%{request_id: ^request, state: "pending"}] =
              unboxed(fn -> Arca.Repo.all(where(InstallationClaim, token_digest: ^token)) end)
 
-    assert 1 == unboxed(fn -> Arca.Repo.aggregate(where(IdentityAttempt, token_digest: ^token), :count) end)
+    assert 1 ==
+             unboxed(fn ->
+               Arca.Repo.aggregate(where(IdentityAttempt, token_digest: ^token), :count)
+             end)
   end
 end

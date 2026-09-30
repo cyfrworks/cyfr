@@ -203,7 +203,9 @@ defmodule Arca.PairingInvitations do
 
       query =
         case Keyword.get(filters, :state, :pending) do
-          :all -> query
+          :all ->
+            query
+
           state when state in [:pending, :consumed, :revoked] ->
             where(query, [i], i.state == ^Atom.to_string(state))
         end
@@ -264,11 +266,20 @@ defmodule Arca.PairingInvitations do
   # were taken for.
   defp redeemable(current, read, now) do
     cond do
-      current.state == "consumed" -> {:error, :consumed}
-      current.state == "revoked" -> {:error, :revoked}
-      DateTime.compare(current.expires_at, now) != :gt -> {:error, :expired}
-      current.user_id != read.user_id or current.membership_id != read.membership_id -> {:error, :not_found}
-      true -> :ok
+      current.state == "consumed" ->
+        {:error, :consumed}
+
+      current.state == "revoked" ->
+        {:error, :revoked}
+
+      DateTime.compare(current.expires_at, now) != :gt ->
+        {:error, :expired}
+
+      current.user_id != read.user_id or current.membership_id != read.membership_id ->
+        {:error, :not_found}
+
+      true ->
+        :ok
     end
   end
 
@@ -327,7 +338,9 @@ defmodule Arca.PairingInvitations do
       |> Map.new(fn {field, _ok} -> {field, ["is required or malformed"]} end)
 
     if errors == %{},
-      do: {:ok, Map.take(attrs, [:user_id, :membership_id, :secret_hash, :audience_home, :lifetime_ms])},
+      do:
+        {:ok,
+         Map.take(attrs, [:user_id, :membership_id, :secret_hash, :audience_home, :lifetime_ms])},
       else: {:error, {:invalid, errors}}
   end
 end

@@ -197,7 +197,9 @@ defmodule Arca.FrameCredentialsTest do
     end
 
     test "a person's rows go in every athanor only for the platform's own actor", %{actor: actor} do
-      elsewhere = Prima.Actor.in_athanor("ath_frc_elsewhere_#{System.unique_integer([:positive])}")
+      elsewhere =
+        Prima.Actor.in_athanor("ath_frc_elsewhere_#{System.unique_integer([:positive])}")
+
       here = mint!(actor)
       there = mint!(elsewhere)
       theirs = mint!(actor, %{user_id: "usr_other"})
@@ -211,7 +213,10 @@ defmodule Arca.FrameCredentialsTest do
       assert {:ok, %{state: "active"}} = FrameCredentials.get(actor, theirs.id)
 
       assert {:error, :no_athanor} =
-               FrameCredentials.revoke_for_user(%{Prima.Actor.system() | system: false}, "usr_frc")
+               FrameCredentials.revoke_for_user(
+                 %{Prima.Actor.system() | system: false},
+                 "usr_frc"
+               )
     end
   end
 

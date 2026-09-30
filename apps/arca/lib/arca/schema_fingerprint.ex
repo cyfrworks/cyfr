@@ -51,9 +51,15 @@ defmodule Arca.SchemaFingerprint do
   @spec verify() :: :ok | {:error, String.t()}
   def verify do
     case Arca.ServerMetaStorage.get(@key) do
-      {:ok, @fingerprint} -> :ok
-      {:ok, recorded} -> {:error, refusal("was built from a different schema (#{recorded})")}
-      {:error, :not_found} -> {:error, refusal("records no schema fingerprint")}
+      {:ok, @fingerprint} ->
+        :ok
+
+      {:ok, recorded} ->
+        {:error, refusal("was built from a different schema (#{recorded})")}
+
+      {:error, :not_found} ->
+        {:error, refusal("records no schema fingerprint")}
+
       {:error, reason} ->
         Logger.error("[Arca.SchemaFingerprint] the fingerprint read failed: #{inspect(reason)}")
         {:error, refusal("could not be read")}
