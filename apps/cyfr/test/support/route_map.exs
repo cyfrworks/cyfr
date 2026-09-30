@@ -184,6 +184,51 @@
           pipe_through: ["api", "auth_api_throttle"]
         },
         %{
+          verb: "GET",
+          path: "/directory/v1/:identifier",
+          plug: "Emissary.Web.DirectoryController",
+          plug_opts: ":resolve",
+          auth: "public_directory",
+          live_view: nil,
+          pipe_through: ["api"]
+        },
+        %{
+          verb: "POST",
+          path: "/directory/v1/:identifier/entries",
+          plug: "Emissary.Web.DirectoryController",
+          plug_opts: ":append",
+          auth: "directory_signed",
+          live_view: nil,
+          pipe_through: ["api"]
+        },
+        %{
+          verb: "POST",
+          path: "/directory/v1/:identifier/recover",
+          plug: "Emissary.Web.DirectoryController",
+          plug_opts: ":recover",
+          auth: "directory_signed",
+          live_view: nil,
+          pipe_through: ["api"]
+        },
+        %{
+          verb: "GET",
+          path: "/directory/v1/:identifier/requests/:request_id",
+          plug: "Emissary.Web.DirectoryController",
+          plug_opts: ":outcome",
+          auth: "public_directory",
+          live_view: nil,
+          pipe_through: ["api"]
+        },
+        %{
+          verb: "POST",
+          path: "/directory/v1/genesis",
+          plug: "Emissary.Web.DirectoryController",
+          plug_opts: ":register",
+          auth: "public_directory",
+          live_view: nil,
+          pipe_through: ["api"]
+        },
+        %{
           verb: "POST",
           path: "/hooks/:slug",
           plug: "Emissary.Web.WebhookController",

@@ -13,7 +13,8 @@ defmodule CyfrWeb.Plugs.RawBodyReader do
   `CyfrWeb.Plugs.VerifyWebhookSignature` plug can recover them.
 
   To avoid memory pressure on hot paths (`/mcp`, `/t/*`, `/api/*`, etc.) the
-  bytes are NOT cached unless the request path begins with `/hooks/`.
+  bytes are NOT cached unless the routed path (`conn.path_info`, which the
+  router matches and which drops empty segments) begins with `hooks`.
 
   ## Per-feature length cap
 
@@ -25,6 +26,15 @@ defmodule CyfrWeb.Plugs.RawBodyReader do
   Bodies larger than the cap cause `Plug.Conn.read_body/2` to return
   `{:more, _, _}` — `Plug.Parsers` then raises `Plug.Parsers.RequestTooLargeError`,
   which Phoenix maps to a 413 response.
+
+  ## The directory's write-body limit
+
+  The identity directory's routes (a routed path beginning `directory`,
+  `//directory/…` included) take requests no session
+  stands behind, so their bodies are bounded to the largest entry
+  (`Prima.Identity.max_entry_bytes/0`, 16 KiB) here, before any byte of
+  them is decoded: a larger body is refused 413 the same way. Their raw
+  bytes are not cached.
 
   ## Chunked reads
 
@@ -40,6 +50,9 @@ defmodule CyfrWeb.Plugs.RawBodyReader do
   # spelled by its owner rather than a sixth literal.
   @default_webhook_max_body_bytes Prima.Limits.default_max_request_size()
 
+  # The directory's write-body limit is its largest entry.
+  @directory_max_body_bytes Prima.Identity.max_entry_bytes()
+
   @doc """
   Plug.Parsers `:body_reader` callback.
 
@@ -48,9 +61,11 @@ defmodule CyfrWeb.Plugs.RawBodyReader do
   chunk is appended to `conn.assigns[:raw_body]` so downstream plugs can
   verify HMAC signatures against the complete body, and the `:length` opt
   is tightened to the webhook-specific cap so oversized bodies surface as 413.
+  Under `/directory/*` the `:length` opt is tightened to the directory's
+  16 KiB write-body limit the same way.
   """
   def read_body(conn, opts) do
-    opts = maybe_cap_length_for_webhook(conn, opts)
+    opts = conn |> maybe_cap_length_for_webhook(opts) |> cap_length_for_directory(conn)
 
     case Plug.Conn.read_body(conn, opts) do
       {:ok, body, conn} ->
@@ -66,8 +81,15 @@ defmodule CyfrWeb.Plugs.RawBodyReader do
     end
   end
 
-  defp hooks_path?(%Plug.Conn{request_path: "/hooks/" <> _}), do: true
+  # Both families are recognized by the path the router routes on,
+  # `path_info`, which drops empty segments: matched on the raw request
+  # path instead, `//directory/…` would reach the directory's routes under
+  # the endpoint's own limit.
+  defp hooks_path?(%Plug.Conn{path_info: ["hooks" | _]}), do: true
   defp hooks_path?(_), do: false
+
+  defp directory_path?(%Plug.Conn{path_info: ["directory" | _]}), do: true
+  defp directory_path?(_), do: false
 
   defp append_raw_body(conn, chunk) do
     existing = Map.get(conn.assigns, :raw_body, "")
@@ -82,6 +104,17 @@ defmodule CyfrWeb.Plugs.RawBodyReader do
       cap = Application.get_env(:cyfr, :webhook_max_body_bytes, @default_webhook_max_body_bytes)
       existing = Keyword.get(opts, :length, 8_000_000)
       Keyword.put(opts, :length, min(existing, cap))
+    else
+      opts
+    end
+  end
+
+  # The directory's routes take no body past their largest entry, whatever
+  # the endpoint's own cap: the smaller of the two applies.
+  defp cap_length_for_directory(opts, conn) do
+    if directory_path?(conn) do
+      existing = Keyword.get(opts, :length, 8_000_000)
+      Keyword.put(opts, :length, min(existing, @directory_max_body_bytes))
     else
       opts
     end

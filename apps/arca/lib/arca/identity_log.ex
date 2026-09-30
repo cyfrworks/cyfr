@@ -174,6 +174,44 @@ defmodule Arca.IdentityLog do
   def head(%Prima.Actor{}, _identifier), do: {:error, :cross_tenant}
 
   @doc """
+  The last entry of `identifier`'s log and its key-bearing entries: the
+  genesis and every accepted recovery up to that head, in position order.
+  Rotations name only a live key, so these alone carry the operational key
+  and the recovery set in force at the head and at every earlier policy
+  revision: what a directory checks a new entry's signature against before
+  it reads the whole log. A read, through the identifier's index.
+  """
+  @spec keys(Prima.Actor.t(), String.t()) ::
+          {:ok, %{head: row(), keyed: [row()]}}
+          | {:error, :not_found | :cross_tenant | :database_error}
+  def keys(%Prima.Actor{scope: :platform}, identifier) when is_binary(identifier) do
+    Arca.Repo.Errors.with_db_rescue("Arca.IdentityLog.keys", fn ->
+      case head_of(identifier) do
+        nil ->
+          {:error, :not_found}
+
+        head ->
+          # Bounded by the head read first, so an entry appended between
+          # the two reads is not answered beside a head that predates it.
+          keyed =
+            Arca.Repo.all(
+              from(e in IdentityLogEntry,
+                where:
+                  e.identifier == ^identifier and e.kind in ["genesis", "recover"] and
+                    not is_nil(e.seq) and e.seq <= ^head.seq,
+                order_by: [asc: e.seq]
+              )
+            )
+
+          {:ok, %{head: head, keyed: keyed}}
+      end
+    end)
+    |> Arca.Data.project()
+  end
+
+  def keys(%Prima.Actor{}, _identifier), do: {:error, :cross_tenant}
+
+  @doc """
   The recorded outcome of `request_id` under `identifier`: the accepted
   entry, or the refusal's record (`outcome: "stale_policy"` with its
   `outcome_body`).

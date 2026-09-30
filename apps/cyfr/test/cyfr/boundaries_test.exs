@@ -765,13 +765,6 @@ defmodule Cyfr.BoundariesTest do
 
       assert pending == %{
                "Sanctum.DeviceCerts" => [verify_connect: 3, verify_request: 3],
-               "Sanctum.Directory" => [
-                 append: 2,
-                 outcome: 1,
-                 recover: 2,
-                 register: 1,
-                 resolve: 1
-               ],
                "Sanctum.Recovery" => [restore: 2]
              }
 
@@ -789,8 +782,8 @@ defmodule Cyfr.BoundariesTest do
       # A call the host makes to one is admitted, and one nothing calls is
       # not stale.
       reaches = host_sanctum_reaches()
-      assert Boundaries.sanctum_export_violations([{"Sanctum.Directory", :register, 1}]) == []
-      refute "Sanctum.Directory.register/1" in Boundaries.stale_sanctum_exports(reaches)
+      assert Boundaries.sanctum_export_violations([{"Sanctum.Recovery", :restore, 2}]) == []
+      refute "Sanctum.Recovery.restore/2" in Boundaries.stale_sanctum_exports(reaches)
     end
 
     test "every rostered function is a public function of a Sanctum module, listed once in order" do
@@ -878,12 +871,7 @@ defmodule Cyfr.BoundariesTest do
     test "a pending public route is apart from the settled roster, and admitted once declared" do
       pending = Boundaries.pending_public_routes()
 
-      assert pending == [
-               {:get, "/directory/v1/:identifier"},
-               {:get, "/directory/v1/:identifier/requests/:request_id"},
-               {:post, "/directory/v1/genesis"},
-               {:get, "/pair"}
-             ]
+      assert pending == [{:get, "/pair"}]
 
       assert MapSet.disjoint?(MapSet.new(pending), MapSet.new(Boundaries.public_routes()))
 
