@@ -109,9 +109,12 @@ defmodule Sanctum.ProvisioningRemoteDepsTest do
   @cut_budget_ms 500
   @budget_ms 60_000
 
-  setup do
-    :ok = Ecto.Adapters.SQL.Sandbox.checkout(Arca.Repo)
-    Ecto.Adapters.SQL.Sandbox.mode(Arca.Repo, {:shared, self()})
+  setup tags do
+    # The suite's sandbox, started once no other connection holds SQLite's
+    # write lock: on a connection that has read, the first write answers
+    # busy at once while another holds it, and the rollback of the case
+    # before this one may still hold it.
+    Cyfr.Test.Sandbox.setup!(tags)
 
     test_dir = Path.join(System.tmp_dir!(), "cyfr_deadline_#{System.unique_integer([:positive])}")
     seed_dir = Path.join(test_dir, "seed")
@@ -315,10 +318,11 @@ defmodule Sanctum.ProvisioningRemoteDepsTest do
          %{ctx: ctx, group: group} do
       actor = %Prima.Actor{athanor_id: group.id}
 
-      # The reader answers at once and the fill goes on without it.
-      started = System.monotonic_time(:millisecond)
+      # The reader answers and the fill goes on without it: the fill it
+      # started still stands after the answer, unsettled, where a reader
+      # that waited for it would have come back only once its deadline
+      # settled it failed.
       assert {:error, :not_provisioned} = Provisioning.ready(ctx)
-      assert System.monotonic_time(:millisecond) - started < 1_000
 
       wait_until(fn -> Provisioning.status(ctx) == :filling end, 5_000, "the fill to claim")
       assert {:ok, %{entry_kind: "first_need", fence: 1, outcome: nil}} = Claims.current(actor)
@@ -398,8 +402,9 @@ defmodule Sanctum.ProvisioningRemoteDepsTest do
       wait_until(fn -> started_beside(before) != nil end, 5_000, "the pull to be running")
       pull = started_beside(before)
 
-      # Killed: no `after` runs, so nothing in the attempt lets go.
-      killed_at = System.monotonic_time(:millisecond)
+      # Killed: no `after` runs, so nothing in the attempt lets go. What
+      # gives the claim back as `released` is its keeper; a lease that ran
+      # out would leave the row unsettled.
       Process.exit(attempt, :kill)
 
       wait_until(
@@ -410,10 +415,8 @@ defmodule Sanctum.ProvisioningRemoteDepsTest do
 
       # The claim came back only once the pull had stopped: a successor
       # taking the athanor now is not racing a predecessor still writing to
-      # it. And it came back on the keeper's watch, far inside the minute
-      # the lease would otherwise have taken.
+      # it.
       refute Process.alive?(pull)
-      assert System.monotonic_time(:millisecond) - killed_at < 10_000
 
       # Nothing was marked or recorded for it, and nothing half-landed:
       # the athanor is unfilled, not partly filled.

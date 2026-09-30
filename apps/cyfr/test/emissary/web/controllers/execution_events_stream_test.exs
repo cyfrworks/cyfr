@@ -5,6 +5,7 @@ defmodule Emissary.Web.ExecutionEventsStreamTest do
   use CyfrWeb.ConnCase, async: false
 
   import Ecto.Query, only: [from: 2]
+  import Prima.Test.Wait
 
   alias Emissary.Web.ExecutionEventsController
   alias Crucible.Events
@@ -51,6 +52,30 @@ defmodule Emissary.Web.ExecutionEventsStreamTest do
     get(conn, "/api/executions/#{exec.id}/events")
   end
 
+  # A stream in `task` is live once it waits in its event loop with no
+  # recheck left to take: subscribed to the execution and to its caller's
+  # standing, its replay sent, and a recheck sent to it before this call
+  # handled. What a case publishes or announces after this reaches the
+  # loop. (The mailbox is never empty: the test adapter tells the process
+  # its response was sent, and the loop takes nothing it does not own.)
+  defp await_live(task) do
+    recheck = CyfrWeb.ContextGuard.recheck_message()
+
+    wait_until(
+      fn ->
+        case Process.info(task.pid, [:current_function, :messages]) do
+          [current_function: {ExecutionEventsController, :event_loop, 4}, messages: messages] ->
+            recheck not in messages
+
+          _elsewhere ->
+            false
+        end
+      end,
+      2_000,
+      "the stream to wait in its event loop"
+    )
+  end
+
   test "the cursor is <durable> or <durable>.<n>" do
     assert ExecutionEventsController.parse_cursor("40") == {40, 0}
     assert ExecutionEventsController.parse_cursor("40.10") == {40, 10}
@@ -86,7 +111,7 @@ defmodule Emissary.Web.ExecutionEventsStreamTest do
     # publishing; writer B commits row 3 (terminal) and publishes it. The
     # client receives 2 before 3.
     task = Task.async(fn -> stream(conn, exec).resp_body end)
-    Process.sleep(300)
+    await_live(task)
 
     two = durable!(exec, "step.closed", %{"step" => "a"})
     three = durable!(exec, "execution.completed", %{"status" => "completed"})
@@ -102,7 +127,7 @@ defmodule Emissary.Web.ExecutionEventsStreamTest do
     exec: exec
   } do
     task = Task.async(fn -> stream(conn, exec).resp_body end)
-    Process.sleep(300)
+    await_live(task)
 
     {:ok, "1.1"} = Events.push(exec.id, %{"i" => 1}, exec)
     two = durable!(exec, "step.closed", %{"step" => "a"})
@@ -143,7 +168,7 @@ defmodule Emissary.Web.ExecutionEventsStreamTest do
       person: person
     } do
       task = bearer_stream(conn, exec, session.token)
-      Process.sleep(300)
+      await_live(task)
 
       {:ok, _} = Sanctum.Session.revoke_all_for_user(person.user_id)
       {:ok, "1.1"} = Events.push(exec.id, %{"i" => 1}, exec)
@@ -160,7 +185,7 @@ defmodule Emissary.Web.ExecutionEventsStreamTest do
       session: session
     } do
       task = bearer_stream(conn, exec, session.token)
-      Process.sleep(300)
+      await_live(task)
 
       hash = Sanctum.Session.token_hash(session.token)
 
@@ -179,10 +204,11 @@ defmodule Emissary.Web.ExecutionEventsStreamTest do
       session: session
     } do
       task = bearer_stream(conn, exec, session.token)
-      Process.sleep(300)
+      await_live(task)
 
       send(task.pid, CyfrWeb.ContextGuard.recheck_message())
-      Process.sleep(100)
+      # Revalidated, the stream is back in its loop, still delivering.
+      await_live(task)
       {:ok, "1.1"} = Events.push(exec.id, %{"i" => 1}, exec)
       two = durable!(exec, "execution.completed", %{"status" => "completed"})
       publish!(exec, "execution.completed", two)

@@ -261,7 +261,8 @@ defmodule CyfrWeb.ContextGuardTest do
 
     test "within the bound a context is acted on; the bound runs from its validation, not its reuse",
          %{conn: conn} do
-      bound!(1_000)
+      # A bound no stretch of this case outlasts, however loaded the host.
+      bound!(60_000)
       {conn, _token, hash} = signed_in(conn, test_user())
       {view, _html} = mount_athanor(conn, "/settings")
       validated_at = :sys.get_state(view.pid).socket.assigns.context.validated_at
@@ -276,8 +277,9 @@ defmodule CyfrWeb.ContextGuardTest do
         assert :sys.get_state(view.pid).socket.assigns.context.validated_at == validated_at
       end
 
-      # Past the bound from the validation, however recently it was used.
-      Process.sleep(700)
+      # The bound drawn in to the context's age at its last use: past it from
+      # the validation, however recently the context was used.
+      bound!(DateTime.diff(DateTime.utc_now(), validated_at, :millisecond))
       send(view.pid, :load)
       assert_redirect(view, "/login", 2_000)
     end

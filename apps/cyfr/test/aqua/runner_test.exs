@@ -1355,7 +1355,8 @@ defmodule Aqua.RunnerTest do
        } do
     script!([{:probe, self()}, {:probe, self()}, reply("never resumed")])
     {:ok, %{turn_id: first}} = Runner.send_message(ctx, thread.id, "@aqua first")
-    _ = running!(thread)
+    %{runner: stopped} = running!(thread)
+    watched = Process.monitor(stopped)
 
     {:ok, %{turn_id: queued}} =
       Runner.send_message(second_member(ctx), thread.id, "@aqua queued")
@@ -1366,9 +1367,15 @@ defmodule Aqua.RunnerTest do
     assert {:ok, %{status: "accepted", fence: 1}} = Tape.turn(ctx, queued)
     allow_turn_writes()
 
-    # The runner that stopped on the refusal starts again and runs the
-    # queued turn until its loop waits on the model's call, so the Stop
-    # stops a loop that waits and not one in the middle of a write.
+    # The runner that stopped on the refusal is gone, and its name with it,
+    # before the thread's runner is asked: until then the name still finds
+    # the one that is stopping, which answers nothing.
+    assert_receive {:DOWN, ^watched, :process, ^stopped, _reason}, 5_000
+    wait_until(fn -> Runner.whereis(thread.id) != stopped end)
+
+    # A runner starts again and runs the queued turn until its loop waits
+    # on the model's call, so the Stop stops a loop that waits and not one
+    # in the middle of a write.
     assert %{running: true} = Runner.state(thread.id, ctx.athanor_id)
     assert_receive {:scripted_probe, _call, _}, 60_000
 

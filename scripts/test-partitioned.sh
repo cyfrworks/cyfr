@@ -44,7 +44,12 @@ per=$(( cores / PARTITIONS )); [ "$per" -lt 2 ] && per=2
 # Dirty I/O schedulers are threads that block inside the SQLite driver while
 # a writer waits out a busy quantum; scaling them down with the partition
 # count lets waiters crowd out the holder they wait for. They stay wide.
-export ERL_FLAGS="+S ${per}:${per} +SDcpu ${per} +SDio 16"
+# No scheduler busy-waits: on a loaded host, a partition's idle scheduler
+# threads spinning for work compete with the one that has it, and pinned to
+# two CPUs beside six busy loops a partition's throughput fell as low as
+# 1.5% of what it had on them unloaded (about 63% with busy-wait off). A
+# runner VM outside a release makes the same choice (`Opus.Release`).
+export ERL_FLAGS="+S ${per}:${per} +SDcpu ${per} +SDio 16 +sbwt none +sbwtdcpu none +sbwtdio none"
 umask 077
 # UNIX socket paths have a small fixed ceiling on macOS. Do not nest under
 # the inherited TMPDIR (which may already consume most of that ceiling), and

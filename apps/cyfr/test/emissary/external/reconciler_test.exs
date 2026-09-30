@@ -10,9 +10,12 @@ defmodule Emissary.External.ReconcilerTest do
   alias Emissary.External.Reconciler
   alias Sanctum.Vault
 
-  setup do
-    :ok = Ecto.Adapters.SQL.Sandbox.checkout(Arca.Repo)
-    Ecto.Adapters.SQL.Sandbox.mode(Arca.Repo, {:shared, self()})
+  setup tags do
+    # The suite's sandbox, started once no other connection holds SQLite's
+    # write lock: on a connection that has read, the first write answers
+    # busy at once while another holds it, and the rollback of the case
+    # before this one may still hold it.
+    Cyfr.Test.Sandbox.setup!(tags)
     Arca.Cache.init()
 
     test_pid = self()
