@@ -23,6 +23,14 @@ defmodule Sanctum.Consent.Plan do
   of its own owner profiles bind an entry — the candidates a `selections`
   decision picks from, so that edge runs the dependency with the key
   bound on that profile rather than a copy of its own.
+
+  The ask is answered as `rows`, the typed rows of `Prima.ConsentPreview`
+  in their JSON form, one per resource each node of the closure asks for,
+  its limits, and a tincture's frame, streams, cards and system actions:
+  what a narrowing is chosen from, none of it narrowed yet. `origins` is
+  the default a decision that names none admits, `interactive` alone. A
+  closure that cannot be resolved asks for its source's resources alone
+  here; the preview refuses it.
   """
 
   alias Prima.Authority.RootSelect
@@ -41,6 +49,9 @@ defmodule Sanctum.Consent.Plan do
   # proof (120s) is the short-lived one; the plan token only pins facts.
   @plan_ttl_ms 600_000
 
+  # What a grant admits when its decision names no origin.
+  @default_origins [:interactive]
+
   @type t :: %{
           plan_token: String.t(),
           shape_digest: String.t(),
@@ -51,11 +62,17 @@ defmodule Sanctum.Consent.Plan do
           dependency_needs: [map()],
           caps: map(),
           limits: map(),
+          rows: [BlobBuilder.row()],
+          origins: [String.t(), ...],
           candidates: [map()],
           tool_server_candidates: [Sanctum.Grimoire.tool_server_candidate()],
           warnings: [String.t()],
           defaults: map()
         }
+
+  @doc "The origins a grant admits when its decision names none: `interactive` alone."
+  @spec default_origins() :: [Prima.Origin.t(), ...]
+  def default_origins, do: @default_origins
 
   @doc "Stage a consent: facts, candidates, and the plan token."
   @spec plan(Context.t(), map()) :: {:ok, t()} | {:error, term()}
@@ -73,6 +90,8 @@ defmodule Sanctum.Consent.Plan do
          manifest = manifest(component, source_ref),
          {:ok, resources, limits} <-
            Sanctum.Consent.BlobBuilder.node_grant(ctx, source_ref, manifest),
+         graph = closure(ctx, component),
+         {:ok, rows} <- ask_rows(ctx, graph, source_ref),
          {:ok, candidates} <- candidates(ctx),
          needs = need_rows(manifest),
          {:ok, plan_token} <-
@@ -85,9 +104,11 @@ defmodule Sanctum.Consent.Plan do
          profile_id: profile_id,
          source_ref: source_ref,
          needs: needs,
-         dependency_needs: dependency_needs(ctx, component, source_ref),
+         dependency_needs: dependency_needs(ctx, graph),
          caps: resources,
          limits: limits,
+         rows: rows,
+         origins: Prima.Origin.to_wire_list(@default_origins),
          candidates: candidates,
          tool_server_candidates: Sanctum.Grimoire.tool_server_candidates(ctx),
          warnings: need_warnings(needs, candidates),
@@ -201,32 +222,51 @@ defmodule Sanctum.Consent.Plan do
     end
   end
 
+  # The activation closure's graph, or nil for one that cannot be resolved.
+  defp closure(ctx, component) do
+    case Components.resolve(ctx, component) do
+      {:ok, %{graph: graph}} when is_map(graph) -> graph
+      _unresolvable -> nil
+    end
+  end
+
+  # The ask of every node of the closure, or of the source alone when the
+  # closure cannot be resolved; each row held to its shape, each once.
+  defp ask_rows(ctx, graph, source_ref) do
+    node_keys = if graph, do: Map.keys(graph), else: [source_ref]
+
+    with {:ok, rows} <- BlobBuilder.ask_rows(ctx, node_keys) do
+      rows = BlobBuilder.order_rows(rows)
+
+      case BlobBuilder.check_rows(rows) do
+        {:ok, _checked} -> {:ok, rows}
+        {:error, reason} -> {:error, {:preview_unrepresentable, reason}}
+      end
+    end
+  end
+
   # The closure's dependency edges whose target declares a credential
   # need, each with the owner profiles of that target that bind one —
   # what a selection may name. A closure that cannot be resolved offers
   # none; the commit refuses a selection it cannot place anyway.
-  defp dependency_needs(ctx, component, _source_ref) do
-    case Components.resolve(ctx, component) do
-      {:ok, %{graph: graph}} ->
-        graph
-        |> Map.keys()
-        |> Enum.sort()
-        |> Enum.flat_map(fn from ->
-          case node_manifest(ctx, from) do
-            {:ok, manifest} ->
-              manifest
-              |> BlobBuilder.dep_edges(graph, from)
-              |> Enum.sort()
-              |> Enum.flat_map(&dependency_rows(ctx, from, &1))
+  defp dependency_needs(_ctx, nil), do: []
 
-            _ ->
-              []
-          end
-        end)
+  defp dependency_needs(ctx, graph) do
+    graph
+    |> Map.keys()
+    |> Enum.sort()
+    |> Enum.flat_map(fn from ->
+      case node_manifest(ctx, from) do
+        {:ok, manifest} ->
+          manifest
+          |> BlobBuilder.dep_edges(graph, from)
+          |> Enum.sort()
+          |> Enum.flat_map(&dependency_rows(ctx, from, &1))
 
-      _unresolvable ->
-        []
-    end
+        _ ->
+          []
+      end
+    end)
   end
 
   defp node_manifest(ctx, node_key) do

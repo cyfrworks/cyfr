@@ -440,15 +440,16 @@ defmodule Sanctum.Providers.Profile do
   # ---------------------------------------------------------------------------
 
   defp decode_decisions(raw) do
-    with :ok <- refuse_undecided(raw),
-         :ok <- refuse_limits(raw),
+    with :ok <- refuse_limits(raw),
          {:ok, kind} <- kind(raw),
          {:ok, scope} <- enum(raw, "scope", %{"versionless" => :versionless, "pinned" => :pinned}),
          {:ok, invoke_mode} <-
            enum(raw, "invoke_mode", %{"open_inert" => :open_inert, "edge_only" => :edge_only}),
          {:ok, bindings} <- decode_bindings(Map.get(raw, "bindings", [])),
          {:ok, selections} <- decode_selections(Map.get(raw, "selections", [])),
-         {:ok, tool_servers} <- decode_tool_servers(Map.get(raw, "tool_servers", [])) do
+         {:ok, tool_servers} <- decode_tool_servers(Map.get(raw, "tool_servers", [])),
+         {:ok, origins} <- decode_origins(raw),
+         {:ok, subset} <- decode_subset(raw) do
       decisions =
         %{
           ref: raw["ref"] || "",
@@ -460,6 +461,8 @@ defmodule Sanctum.Providers.Profile do
         |> Prima.MapUtil.put_present(:label, raw["label"])
         |> Prima.MapUtil.put_present(:scope, scope)
         |> Prima.MapUtil.put_present(:invoke_mode, invoke_mode)
+        |> Prima.MapUtil.put_present(:origins, origins)
+        |> Prima.MapUtil.put_present(:subset, subset)
         |> Map.put(:override, raw["override"] == true)
         |> maybe_publish_passthrough(raw)
 
@@ -467,18 +470,45 @@ defmodule Sanctum.Providers.Profile do
     end
   end
 
-  # The admitted origins and a narrowing are declared decisions no commit
-  # decides yet: either one refuses rather than being silently dropped, so
-  # a grant never reads as narrower, or as admitting fewer origins, than
-  # the one written.
-  defp refuse_undecided(raw) do
-    if Map.has_key?(raw, "origins") or Map.has_key?(raw, "subset"),
-      do: {:error, :not_built},
-      else: :ok
+  # The origins the grant admits, from their wire spellings; absent, the
+  # commit admits interactive alone.
+  defp decode_origins(raw) do
+    case Map.fetch(raw, "origins") do
+      :error ->
+        {:ok, nil}
+
+      {:ok, spellings} ->
+        case Prima.Origin.parse_list(spellings) do
+          {:ok, origins} ->
+            {:ok, origins}
+
+          {:error, :empty_origins} ->
+            {:error, {:invalid_argument, "origins must name at least one origin"}}
+
+          {:error, :duplicate_origin} ->
+            {:error, {:invalid_argument, "origins names an origin twice"}}
+
+          {:error, {:unknown_origin, _spelling}} ->
+            {:error,
+             {:invalid_argument,
+              "origins must name only #{Enum.join(Prima.Origin.spellings(), ", ")}"}}
+        end
+    end
   end
 
-  # Reject per-consent limits overrides. Runtime limits come from manifest
-  # caps and defaults and are covered by the shape digest.
+  # The narrowing in its wire form, which the commit validates against the
+  # ask and the ceiling.
+  defp decode_subset(raw) do
+    case Map.fetch(raw, "subset") do
+      :error -> {:ok, nil}
+      {:ok, subset} when is_map(subset) -> {:ok, subset}
+      {:ok, _other} -> {:error, {:invalid_argument, "subset must be a map of node references"}}
+    end
+  end
+
+  # Reject a top-level limits override. Runtime limits come from manifest
+  # caps and defaults and are covered by the shape digest; a decision may
+  # only narrow them, per node, under `subset`.
   defp refuse_limits(raw) do
     case Map.get(raw, "limits") do
       nil ->
@@ -487,7 +517,8 @@ defmodule Sanctum.Providers.Profile do
       _ ->
         {:error,
          "limits are not a consent decision — a component's limits come from its " <>
-           "manifest caps, which shape_digest already covers"}
+           "manifest caps, which shape_digest already covers; a decision narrows " <>
+           "them per node under subset.<node>.limits"}
     end
   end
 
@@ -639,6 +670,11 @@ defmodule Sanctum.Providers.Profile do
   defp fmt(:grant_requires_full_commit),
     do:
       "grant_requires_full_commit: this profile grants external tool servers, which a grant cannot carry — plan, preview and commit"
+
+  defp fmt({:preview_unrepresentable, _reason}),
+    do:
+      "preview_unrepresentable: what this grant would give cannot be shown as preview rows, " <>
+        "so it is not offered"
 
   defp fmt(:grant_requires_owner_profile), do: "grant_requires_owner_profile"
   defp fmt(:profile_revoked), do: "profile_revoked"

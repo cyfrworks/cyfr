@@ -30,20 +30,27 @@ defmodule Sanctum.Consent do
   operator saw — not a plan that could still change underneath it:
 
       plan     {ref, label?, kind?, scope?}
-               → shape digest, expected revision, candidates, defaults
+               → shape digest, expected revision, candidates, defaults,
+                 the ask as preview rows, the default origins
 
       preview  {plan_token, decisions}
-               → commit digest, rendered summary
+               → the structured preview (rows, origins, commit digest),
+                 the proof, rendered summary
 
       commit   {plan_token, decisions, commit_digest, expected_revision, proof}
                → verify the proof binds THIS commit digest, recompute the
                  live shape digest, re-verify vault binding liveness, CAS on
-                 the head revision, then insert
+                 the head revision, then insert with its admitted origins
 
   `preview` exists so a proof can bind the exact commit digest that was
   rendered. Without it, a choice made after approval — a different vault
   entry, a widened projection — would be covered by an authorization the
   operator never gave.
+
+  Decisions may narrow the ask (`subset`, per consent-graph node and
+  resource kind) and name the origins the grant admits (`origins`,
+  `interactive` alone when absent); the commit digest binds both
+  (`Sanctum.Consent.Commit`).
 
   ## Errors
 
@@ -108,6 +115,29 @@ defmodule Sanctum.Consent do
           id: String.t(),
           operation: String.t(),
           expires_at: DateTime.t()
+        }
+
+  @typedoc """
+  What `preview` answers: a `Prima.ConsentPreview` document, its fields
+  beside the envelope a commit presents.
+
+    * `v`, `rows`, `origins`, `commit_digest` — the document: its version,
+      its typed rows each in the row's JSON form
+      (`Prima.ConsentPreview.Row`), the origins the grant would admit as
+      their wire spellings, and the commit digest binding them.
+      `Prima.ConsentPreview.decode/1` reads these four back.
+    * `proof` and `expected_consent_revision` — what the commit presents
+      with the digest.
+    * `summary` — the rendered lines the rows replace.
+  """
+  @type preview :: %{
+          v: pos_integer(),
+          rows: [%{required(String.t()) => term()}],
+          origins: [String.t(), ...],
+          commit_digest: String.t(),
+          proof: String.t(),
+          expected_consent_revision: non_neg_integer(),
+          summary: [String.t()]
         }
 
   @type error ::
