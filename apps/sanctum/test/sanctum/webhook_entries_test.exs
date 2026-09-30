@@ -155,7 +155,13 @@ defmodule Sanctum.WebhookEntriesTest do
       actor = Sanctum.Context.actor(ctx)
       later = DateTime.add(DateTime.utc_now(), 3600, :second)
 
-      :ok = Arca.WebhookStorage.rotate_secret(actor, "rotating", seal(ctx, "rotating", "whsec_new"), later)
+      :ok =
+        Arca.WebhookStorage.rotate_secret(
+          actor,
+          "rotating",
+          seal(ctx, "rotating", "whsec_new"),
+          later
+        )
 
       assert {:ok, row} = Webhook.resolve_ingress(slug)
       assert %{current: "whsec_new", previous: ^old} = row.signing_secrets.()
@@ -163,7 +169,14 @@ defmodule Sanctum.WebhookEntriesTest do
       assert :ok = Webhook.verify_with_grace(row, "{}", sign(old, "{}"))
 
       earlier = DateTime.add(DateTime.utc_now(), -1, :second)
-      :ok = Arca.WebhookStorage.rotate_secret(actor, "rotating", seal(ctx, "rotating", "whsec_3"), earlier)
+
+      :ok =
+        Arca.WebhookStorage.rotate_secret(
+          actor,
+          "rotating",
+          seal(ctx, "rotating", "whsec_3"),
+          earlier
+        )
 
       assert {:ok, row} = Webhook.resolve_ingress(slug)
       assert %{current: "whsec_3", previous: nil} = row.signing_secrets.()

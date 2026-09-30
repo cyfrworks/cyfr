@@ -985,8 +985,11 @@ defmodule Arca.Overlay do
     relatives
     |> Enum.reduce_while({:ok, []}, fn rel, {:ok, acc} ->
       case Arca.get(internal, UnitLocator.staged_object(unit, revision, rel)) do
-        {:ok, bytes} -> {:cont, {:ok, [{rel, Prima.Digest.sha256(bytes), byte_size(bytes)} | acc]}}
-        {:error, _} = error -> {:halt, error}
+        {:ok, bytes} ->
+          {:cont, {:ok, [{rel, Prima.Digest.sha256(bytes), byte_size(bytes)} | acc]}}
+
+        {:error, _} = error ->
+          {:halt, error}
       end
     end)
     |> case do

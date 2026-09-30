@@ -267,7 +267,10 @@ defmodule Arca.StorageProjectionChanges do
   end
 
   defp acknowledge!(athanor, %{root: root, epoch: epoch, units: units} = token) do
-    ready = for %{ready: true, generation: generation} = unit <- units, generation > 0, do: unit.unit_key
+    ready =
+      for %{ready: true, generation: generation} = unit <- units,
+          generation > 0,
+          do: unit.unit_key
 
     if ready != [] do
       from(c in where_athanor(StorageProjectionChange, athanor),
@@ -456,7 +459,8 @@ defmodule Arca.StorageProjectionChanges do
     cutoff = DateTime.add(Keyword.get(opts, :now, DateTime.utc_now()), -after_ms, :millisecond)
 
     with {:ok, athanor} <- tenant(actor),
-         {:ok, stale} <- rescuing_db("settle_stale", fn -> {:ok, stale(athanor, root, cutoff)} end) do
+         {:ok, stale} <-
+           rescuing_db("settle_stale", fn -> {:ok, stale(athanor, root, cutoff)} end) do
       {:ok, Enum.count(stale, &settle(actor, athanor, root, &1))}
     end
   end

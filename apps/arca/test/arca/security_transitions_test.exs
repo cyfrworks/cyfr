@@ -701,7 +701,10 @@ defmodule Arca.SecurityTransitionsTest do
       assert {:ok, change} = SecurityTransitions.deny_user(server(), user.id, verify: admit())
 
       assert change.revoked_frame_credential_ids == Enum.sort([mine_own, mine_shared, guest_own])
-      for id <- [mine_own, mine_shared, guest_own, already], do: assert(frame_state(id) == "revoked")
+
+      for id <- [mine_own, mine_shared, guest_own, already],
+          do: assert(frame_state(id) == "revoked")
+
       assert frame_state(peer_shared) == "active"
     end
 
@@ -757,6 +760,7 @@ defmodule Arca.SecurityTransitionsTest do
       assert frame_state(frame) == "active"
 
       clear_failure!(failure)
+
       assert {:ok, %{revoked_frame_credential_ids: [^frame]}} =
                SecurityTransitions.deny_user(server(), user.id, verify: admit())
     end
@@ -852,7 +856,8 @@ defmodule Arca.SecurityTransitionsTest do
 
       clear_failure!(failure)
 
-      assert {:ok, %{revoked_paired_client_ids: [^paired], revoked_frame_credential_ids: [^frame]}} =
+      assert {:ok,
+              %{revoked_paired_client_ids: [^paired], revoked_frame_credential_ids: [^frame]}} =
                SecurityTransitions.deny_user(server(), user.id, verify: admit())
     end
   end
@@ -912,7 +917,9 @@ defmodule Arca.SecurityTransitionsTest do
       confirmed = confirmation!(group.id, member.id, client: client)
       elsewhere = invitation!(group!().id, member.id)
 
-      assert {:ok, archived} = SecurityTransitions.archive_athanor(server(), group.id, verify: admit())
+      assert {:ok, archived} =
+               SecurityTransitions.archive_athanor(server(), group.id, verify: admit())
+
       assert archived.revoked_device_certificate_ids == [cert]
       assert archived.revoked_pairing_invitation_ids == [invitation]
       assert archived.voided_confirmation_ids == [confirmed]
@@ -944,6 +951,7 @@ defmodule Arca.SecurityTransitionsTest do
       assert certificate_state(cert) == "active"
 
       clear_failure!(failure)
+
       assert {:ok, %{revoked_device_certificate_ids: [^cert]}} =
                SecurityTransitions.deny_user(server(), user.id, verify: admit())
     end
@@ -1008,7 +1016,8 @@ defmodule Arca.SecurityTransitionsTest do
       person = person!()
       actor = Prima.Actor.in_athanor(group.id)
 
-      assert {:error, :not_member} = SecurityTransitions.leave_athanor(actor, person.id, verify: admit())
+      assert {:error, :not_member} =
+               SecurityTransitions.leave_athanor(actor, person.id, verify: admit())
 
       seat!(group.id, person.id)
       session = session!(person.id, group.id)

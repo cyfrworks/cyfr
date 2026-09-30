@@ -196,8 +196,9 @@ defmodule Arca.CipherRotation do
       when is_cursor(cursor) and is_page_limit(limit),
       do: unknown(table)
 
-  def ciphertext_page(%Prima.Actor{scope: scope}, _table, _cursor, _limit) when scope != :platform,
-    do: {:error, :not_platform}
+  def ciphertext_page(%Prima.Actor{scope: scope}, _table, _cursor, _limit)
+      when scope != :platform,
+      do: {:error, :not_platform}
 
   @doc """
   Write `sealed` — a map of sealed column to new bytes — into the row `id`

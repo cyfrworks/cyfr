@@ -255,7 +255,9 @@ defmodule Arca.WebhookStorageTest do
       {:ok, hook_a} =
         WebhookStorage.get_by_name(Prima.Actor.in_athanor("ath_alpha"), "shared-name")
 
-      {:ok, hook_b} = WebhookStorage.get_by_name(Prima.Actor.in_athanor("ath_beta"), "shared-name")
+      {:ok, hook_b} =
+        WebhookStorage.get_by_name(Prima.Actor.in_athanor("ath_beta"), "shared-name")
+
       assert hook_a.athanor_id != hook_b.athanor_id
 
       {:ok, list_a} = WebhookStorage.list_webhooks(Prima.Actor.in_athanor("ath_alpha"))

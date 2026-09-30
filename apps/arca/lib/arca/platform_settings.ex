@@ -284,8 +284,11 @@ defmodule Arca.PlatformSettings do
         end
       end)
       |> case do
-        {:ok, projected} -> {:ok, %{revision: reserved.revision, settings: Enum.reverse(projected)}}
-        error -> error
+        {:ok, projected} ->
+          {:ok, %{revision: reserved.revision, settings: Enum.reverse(projected)}}
+
+        error ->
+          error
       end
     end)
   end
@@ -377,7 +380,10 @@ defmodule Arca.PlatformSettings do
           {:ok, value} ->
             {:cont,
              {:ok,
-              [%{key: pin.key, member: pin.member, generation: pin.generation, value: value} | acc]}}
+              [
+                %{key: pin.key, member: pin.member, generation: pin.generation, value: value}
+                | acc
+              ]}}
 
           {:error, _reason} ->
             {:halt, undecodable(pin.key)}

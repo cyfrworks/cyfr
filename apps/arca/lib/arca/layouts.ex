@@ -56,7 +56,12 @@ defmodule Arca.Layouts do
   @spec get(Prima.Actor.t(), String.t()) ::
           {:ok, stored()}
           | {:error,
-             :not_found | :corrupt | :no_person | :no_athanor | :database_error | {:storage, term()}}
+             :not_found
+             | :corrupt
+             | :no_person
+             | :no_athanor
+             | :database_error
+             | {:storage, term()}}
   def get(%Prima.Actor{} = actor, user_id) do
     with :ok <- person(user_id) do
       case FencedPublication.document(actor, key(user_id)) do

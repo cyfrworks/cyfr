@@ -74,6 +74,7 @@ defmodule Sanctum.Consent.ReadEntriesTest do
       assert {:ok, entries} = Consent.profiles(ctx, @source)
 
       assert entries |> Enum.map(& &1.id) |> Enum.sort() == ["prof_owner", "prof_public"]
+
       assert %{kind: :public, status: :active, source_ref: @source} =
                Enum.find(entries, &(&1.id == "prof_public"))
     end
@@ -162,7 +163,9 @@ defmodule Sanctum.Consent.ReadEntriesTest do
       assert Enum.sort(revoked) == ["prof_blocked", "prof_owner", "prof_public"]
 
       assert {:ok, []} = Consent.profiles(ctx, @source)
-      assert {:ok, [%{id: "prof_elsewhere", status: :active}]} = Consent.profiles(ctx, @other_source)
+
+      assert {:ok, [%{id: "prof_elsewhere", status: :active}]} =
+               Consent.profiles(ctx, @other_source)
 
       # Consent history stays: the revoked profile still has its head.
       assert {:ok, %{revision: 1}} = Consent.head_consent(ctx, "prof_owner")

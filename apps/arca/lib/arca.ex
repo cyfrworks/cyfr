@@ -326,7 +326,8 @@ defmodule Arca do
       iex> Arca.put_json(actor, ["data", "data.json"], %{"key" => "value"})
       :ok
   """
-  @spec put_json(Prima.Actor.t(), Arca.Storage.path(), term(), keyword()) :: :ok | {:error, term()}
+  @spec put_json(Prima.Actor.t(), Arca.Storage.path(), term(), keyword()) ::
+          :ok | {:error, term()}
   def put_json(%Prima.Actor{} = actor, path, data, opts \\ []) do
     # `Prima.Json` on both sides of the round-trip: `get_json/2` speaks its
     # `:invalid_json`, so the write side speaks its `:unencodable` too —
@@ -362,7 +363,8 @@ defmodule Arca do
       iex> Arca.append(actor, ["data", "logs", "2025-01-15.jsonl"], ~s|{"event":"logout"}\\n|)
       :ok
   """
-  @spec append(Prima.Actor.t(), Arca.Storage.path(), binary(), keyword()) :: :ok | {:error, term()}
+  @spec append(Prima.Actor.t(), Arca.Storage.path(), binary(), keyword()) ::
+          :ok | {:error, term()}
   def append(%Prima.Actor{} = actor, path, content, opts \\ []),
     do:
       mutating(actor, normalize(path), {:create, byte_size(content)}, opts, fn p ->
@@ -830,7 +832,8 @@ defmodule Arca do
           :ok
 
         other ->
-          raise ArgumentError, "cap: must be :checked or :exempt, got #{Prima.LoggerContext.shape(other)}"
+          raise ArgumentError,
+                "cap: must be :checked or :exempt, got #{Prima.LoggerContext.shape(other)}"
       end
     else
       :ok
@@ -850,7 +853,8 @@ defmodule Arca do
         :ok
 
       other ->
-        raise ArgumentError, "cap: must be {:checked, bytes} or :exempt, got #{Prima.LoggerContext.shape(other)}"
+        raise ArgumentError,
+              "cap: must be {:checked, bytes} or :exempt, got #{Prima.LoggerContext.shape(other)}"
     end
   end
 

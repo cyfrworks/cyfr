@@ -86,8 +86,11 @@ defmodule Arca.FrameCredentials do
     if changeset.valid? do
       owned("Arca.FrameCredentials.mint", fn ->
         case Arca.Repo.insert(changeset) do
-          {:ok, row} -> {:ok, row}
-          {:error, %Ecto.Changeset{errors: errors} = changeset} -> conflict_or_invalid(errors, changeset)
+          {:ok, row} ->
+            {:ok, row}
+
+          {:error, %Ecto.Changeset{errors: errors} = changeset} ->
+            conflict_or_invalid(errors, changeset)
         end
       end)
     else
@@ -103,7 +106,10 @@ defmodule Arca.FrameCredentials do
   def get(%Prima.Actor{athanor_id: athanor_id} = actor, id)
       when is_binary(athanor_id) and athanor_id != "" and is_binary(id) do
     Arca.Repo.Errors.with_db_rescue("Arca.FrameCredentials.get", fn ->
-      case FrameCredential |> QueryHelpers.where_tenant(actor) |> where([f], f.id == ^id) |> Arca.Repo.one() do
+      case FrameCredential
+           |> QueryHelpers.where_tenant(actor)
+           |> where([f], f.id == ^id)
+           |> Arca.Repo.one() do
         nil -> {:error, :not_found}
         row -> {:ok, row}
       end
@@ -188,6 +194,7 @@ defmodule Arca.FrameCredentials do
   def revoke_for_source(%Prima.Actor{} = actor, {kind, source_id})
       when kind in [:session, :api_key] and is_binary(source_id) and source_id != "" do
     kind = Atom.to_string(kind)
+
     scoped(actor, "Arca.FrameCredentials.revoke_for_source", fn query ->
       where(query, [f], f.source_kind == ^kind and f.source_id == ^source_id)
     end)
@@ -200,7 +207,8 @@ defmodule Arca.FrameCredentials do
   """
   @spec revoke_for_user(Prima.Actor.t(), String.t()) ::
           {:ok, [String.t()]} | {:error, :no_athanor | :database_error}
-  def revoke_for_user(%Prima.Actor{} = actor, user_id) when is_binary(user_id) and user_id != "" do
+  def revoke_for_user(%Prima.Actor{} = actor, user_id)
+      when is_binary(user_id) and user_id != "" do
     scoped(actor, "Arca.FrameCredentials.revoke_for_user", fn query ->
       where(query, [f], f.user_id == ^user_id)
     end)
@@ -209,7 +217,8 @@ defmodule Arca.FrameCredentials do
   @doc false
   # The retention kind's count: revoked rows of the athanor retired before
   # `cutoff`.
-  @spec count_revoked_before(DateTime.t(), keyword()) :: {:ok, non_neg_integer()} | {:error, :database_error}
+  @spec count_revoked_before(DateTime.t(), keyword()) ::
+          {:ok, non_neg_integer()} | {:error, :database_error}
   def count_revoked_before(%DateTime{} = cutoff, opts) do
     athanor_id = Keyword.fetch!(opts, :athanor_id)
 
@@ -222,7 +231,8 @@ defmodule Arca.FrameCredentials do
   # The retention kind's sweep: delete the athanor's revoked rows retired
   # before `cutoff`. An active or suspended row is never swept, whatever
   # its age: it is a standing, not a record.
-  @spec delete_revoked_before(DateTime.t(), keyword()) :: {:ok, non_neg_integer()} | {:error, :database_error}
+  @spec delete_revoked_before(DateTime.t(), keyword()) ::
+          {:ok, non_neg_integer()} | {:error, :database_error}
   def delete_revoked_before(%DateTime{} = cutoff, opts) do
     athanor_id = Keyword.fetch!(opts, :athanor_id)
 

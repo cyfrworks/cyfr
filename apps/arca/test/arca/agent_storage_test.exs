@@ -93,11 +93,15 @@ defmodule Arca.AgentStorageTest do
   end
 
   test "a rewrite with no claim stands on its own", %{actor: actor, athanor_id: athanor_id} do
-    assert {:ok, _} = AgentStorage.replace_projection(actor, token(actor), [row(athanor_id, "alpha")])
+    assert {:ok, _} =
+             AgentStorage.replace_projection(actor, token(actor), [row(athanor_id, "alpha")])
+
     assert names(actor) == ["alpha"]
 
     # A whole rewrite, never a merge.
-    assert {:ok, _} = AgentStorage.replace_projection(actor, token(actor), [row(athanor_id, "beta")])
+    assert {:ok, _} =
+             AgentStorage.replace_projection(actor, token(actor), [row(athanor_id, "beta")])
+
     assert names(actor) == ["beta"]
 
     assert {:ok, _} = AgentStorage.replace_projection(actor, token(actor), [])
@@ -111,7 +115,9 @@ defmodule Arca.AgentStorageTest do
     generation = edited!(actor, "alpha")
     assert %{epoch: ^generation, acknowledged_epoch: 0} = standing(actor)
 
-    assert {:ok, _} = AgentStorage.replace_projection(actor, token(actor), [row(athanor_id, "alpha")])
+    assert {:ok, _} =
+             AgentStorage.replace_projection(actor, token(actor), [row(athanor_id, "alpha")])
+
     assert %{epoch: ^generation, acknowledged_epoch: ^generation} = standing(actor)
     assert {:ok, %{units: []}} = StorageProjectionChanges.snapshot(actor, @root)
   end
@@ -201,7 +207,9 @@ defmodule Arca.AgentStorageTest do
 
       assert names(actor) == []
       assert %{epoch: ^generation, acknowledged_epoch: 0} = standing(actor)
-      assert {:ok, %{units: [%{acknowledged_generation: 0}]}} = StorageProjectionChanges.snapshot(actor, @root)
+
+      assert {:ok, %{units: [%{acknowledged_generation: 0}]}} =
+               StorageProjectionChanges.snapshot(actor, @root)
     end
 
     @tag :capture_log
@@ -209,7 +217,9 @@ defmodule Arca.AgentStorageTest do
       actor: actor,
       athanor_id: athanor_id
     } do
-      assert {:ok, _} = AgentStorage.replace_projection(actor, token(actor), [row(athanor_id, "alpha")])
+      assert {:ok, _} =
+               AgentStorage.replace_projection(actor, token(actor), [row(athanor_id, "alpha")])
+
       generation = edited!(actor, "beta")
 
       # `kind` is NOT NULL: the insert fails after the delete, inside the
@@ -217,7 +227,10 @@ defmodule Arca.AgentStorageTest do
       broken = %{row(athanor_id, "beta") | kind: nil}
 
       assert {:error, :database_error} =
-               AgentStorage.replace_projection(actor, token(actor), [row(athanor_id, "alpha"), broken])
+               AgentStorage.replace_projection(actor, token(actor), [
+                 row(athanor_id, "alpha"),
+                 broken
+               ])
 
       assert names(actor) == ["alpha"]
       assert %{epoch: ^generation, acknowledged_epoch: previous} = standing(actor)
@@ -242,13 +255,16 @@ defmodule Arca.AgentStorageTest do
        %{actor: actor, athanor_id: athanor_id} do
     nobody = %Prima.Actor{athanor_id: nil, user_id: "someone"}
     assert AgentStorage.replace_projection(nobody, token(actor), []) == {:error, :no_athanor}
+
     assert AgentStorage.replace_projection(%{nobody | athanor_id: ""}, token(actor), []) ==
              {:error, :no_athanor}
 
     assert AgentStorage.list(nobody) == {:error, :no_athanor}
 
     other = %Prima.Actor{athanor_id: "#{athanor_id}_other"}
-    assert {:ok, _} = AgentStorage.replace_projection(actor, token(actor), [row(athanor_id, "alpha")])
+
+    assert {:ok, _} =
+             AgentStorage.replace_projection(actor, token(actor), [row(athanor_id, "alpha")])
 
     assert {:error, :cross_tenant} =
              AgentStorage.replace_projection(other, token(actor), [row(other.athanor_id, "x")])

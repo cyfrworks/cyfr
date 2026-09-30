@@ -124,7 +124,8 @@ defmodule Sanctum.TenancyMCPTest do
       assert {:ok, %{status: "archived"}} =
                Provider.handle("athanor", ctx, %{"action" => "get", "athanor" => created.id})
 
-      assert {:ok, _} = Provider.handle("member", ctx, %{"action" => "list", "athanor" => created.id})
+      assert {:ok, _} =
+               Provider.handle("member", ctx, %{"action" => "list", "athanor" => created.id})
 
       # Everything that would change it does not.
       assert {:error, _} =

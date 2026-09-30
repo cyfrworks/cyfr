@@ -157,7 +157,8 @@ defmodule Arca.Users do
 
   @doc "Stamp `now` on the identity row this key names, as its last sighting."
   @spec touch_identity(Prima.Actor.t(), String.t(), DateTime.t()) :: :ok | refusal()
-  def touch_identity(%Prima.Actor{scope: :platform}, key, %DateTime{} = now) when is_binary(key) do
+  def touch_identity(%Prima.Actor{scope: :platform}, key, %DateTime{} = now)
+      when is_binary(key) do
     Arca.Repo.Errors.with_db_rescue("Arca.Users.touch_identity", fn ->
       Arca.Repo.update_all(from(i in ExternalIdentity, where: i.key == ^key),
         set: [last_seen_at: now]

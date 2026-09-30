@@ -339,7 +339,9 @@ defmodule Arca.ConsentStorageTest do
 
     test "a stored list that does not parse refuses the consent", %{athanor: athanor} do
       profile = profile!(athanor, "prof_corrupt_origins")
-      {:ok, consent} = ConsentStorage.insert_revision(consent_attrs(athanor, profile.id, 1), [], nil)
+
+      {:ok, consent} =
+        ConsentStorage.insert_revision(consent_attrs(athanor, profile.id, 1), [], nil)
 
       {1, _} =
         Arca.Repo.update_all(

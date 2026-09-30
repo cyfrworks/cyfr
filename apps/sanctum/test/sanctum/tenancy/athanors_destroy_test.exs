@@ -166,7 +166,10 @@ defmodule Sanctum.Tenancy.AthanorsDestroyTest do
     assert {:ok, %{status: "archived"}} = Athanors.get(group.id)
   end
 
-  test "the athanor's decisions go with it, and the host's decisions stay", %{group: group, ctx: ctx} do
+  test "the athanor's decisions go with it, and the host's decisions stay", %{
+    group: group,
+    ctx: ctx
+  } do
     decision = fn admission ->
       Prima.Decision.new(
         call_id: "call_destroy_#{uniq()}",

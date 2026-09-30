@@ -92,7 +92,8 @@ defmodule Arca.AgentStorage do
 
   @doc "The athanor's rows, by name."
   @spec list(Prima.Actor.t()) :: {:ok, [map()]} | {:error, term()}
-  def list(%Prima.Actor{athanor_id: athanor_id}) when is_binary(athanor_id) and athanor_id != "" do
+  def list(%Prima.Actor{athanor_id: athanor_id})
+      when is_binary(athanor_id) and athanor_id != "" do
     Arca.Repo.Errors.with_db_rescue("Arca.AgentStorage.list", fn ->
       {:ok,
        Arca.Repo.all(

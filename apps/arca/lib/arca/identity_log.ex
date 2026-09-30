@@ -235,7 +235,12 @@ defmodule Arca.IdentityLog do
               entry_row(identifier, 0, "genesis", entry, hash, nil)
               |> Map.put(:bytes, size)
 
-            put_usage!(%{usage | identities: usage.identities + 1, log_bytes: usage.log_bytes + size})
+            put_usage!(%{
+              usage
+              | identities: usage.identities + 1,
+                log_bytes: usage.log_bytes + size
+            })
+
             insert!(row)
         end
     end
@@ -254,7 +259,11 @@ defmodule Arca.IdentityLog do
           {:error, {:capacity, :log_bytes}}
         else
           put_usage!(%{usage | log_bytes: usage.log_bytes + size})
-          insert!(entry_row(identifier, seq + 1, "rotate", entry, hash, prev) |> Map.put(:bytes, size))
+
+          insert!(
+            entry_row(identifier, seq + 1, "rotate", entry, hash, prev)
+            |> Map.put(:bytes, size)
+          )
         end
 
       %IdentityLogEntry{} ->
@@ -306,7 +315,14 @@ defmodule Arca.IdentityLog do
     else
       put_usage!(%{usage | log_bytes: usage.log_bytes + size})
 
-      entry_row(identifier, head.seq + 1, "recover", fields.entry, fields.entry_hash, head.entry_hash)
+      entry_row(
+        identifier,
+        head.seq + 1,
+        "recover",
+        fields.entry,
+        fields.entry_hash,
+        head.entry_hash
+      )
       |> Map.merge(%{
         request_id: fields.request_id,
         request_digest: fields.request_digest,
@@ -360,9 +376,7 @@ defmodule Arca.IdentityLog do
   # ---- reads under the lock --------------------------------------------------
 
   defp genesis_of(identifier) do
-    Arca.Repo.one(
-      from(e in IdentityLogEntry, where: e.identifier == ^identifier and e.seq == 0)
-    )
+    Arca.Repo.one(from(e in IdentityLogEntry, where: e.identifier == ^identifier and e.seq == 0))
   end
 
   defp head_of(identifier) do
@@ -419,7 +433,13 @@ defmodule Arca.IdentityLog do
   defp lock_usage! do
     Arca.Repo.insert_all(
       ServerMeta,
-      [%{key: @usage_key, value: encode_usage(%{identities: 0, log_bytes: 0}), updated_at: DateTime.utc_now()}],
+      [
+        %{
+          key: @usage_key,
+          value: encode_usage(%{identities: 0, log_bytes: 0}),
+          updated_at: DateTime.utc_now()
+        }
+      ],
       on_conflict: :nothing
     )
 

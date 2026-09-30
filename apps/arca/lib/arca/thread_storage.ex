@@ -148,7 +148,8 @@ defmodule Arca.ThreadStorage do
   # Best effort: a thread that exists but is in nobody's sidebar is a
   # recoverable annoyance (follow it), where failing the create over it
   # would lose the thread itself.
-  defp subscribe_creator(%Prima.Actor{user_id: creator} = actor, thread) when is_binary(creator) do
+  defp subscribe_creator(%Prima.Actor{user_id: creator} = actor, thread)
+       when is_binary(creator) do
     Arca.ThreadSubscriptionStorage.follow(actor, thread.id, creator)
   end
 
@@ -855,7 +856,13 @@ defmodule Arca.ThreadStorage do
   context's user and `resolved_at` is now unless the row is only being
   marked `"running"`.
   """
-  @spec resolve_approval(Prima.Actor.t(), String.t(), [String.t()] | String.t(), String.t(), map()) ::
+  @spec resolve_approval(
+          Prima.Actor.t(),
+          String.t(),
+          [String.t()] | String.t(),
+          String.t(),
+          map()
+        ) ::
           {:ok, map()}
           | {:error, :no_athanor | :not_found | :already_resolved | :database_error}
   def resolve_approval(actor, id, from, to, attrs \\ %{})

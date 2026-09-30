@@ -102,9 +102,14 @@ defmodule Arca.RequestRateWindows do
 
       %RequestRateWindow{} = row ->
         cond do
-          not current?(row, window_ms, now) -> rolled(row, bucket, key_hash, cap, window_ms, now, rounds)
-          row.count >= cap -> {:error, {:rate_limited, retry_after(row, now)}}
-          true -> incremented(row, bucket, key_hash, cap, window_ms, rounds)
+          not current?(row, window_ms, now) ->
+            rolled(row, bucket, key_hash, cap, window_ms, now, rounds)
+
+          row.count >= cap ->
+            {:error, {:rate_limited, retry_after(row, now)}}
+
+          true ->
+            incremented(row, bucket, key_hash, cap, window_ms, rounds)
         end
     end
   end

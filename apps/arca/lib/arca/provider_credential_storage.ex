@@ -98,7 +98,8 @@ defmodule Arca.ProviderCredentialStorage do
   @spec list(Prima.Actor.t()) ::
           {:ok, [%{provider: String.t(), created_by: String.t() | nil, updated_at: DateTime.t()}]}
           | {:error, :no_athanor | :database_error}
-  def list(%Prima.Actor{athanor_id: athanor_id}) when is_binary(athanor_id) and athanor_id != "" do
+  def list(%Prima.Actor{athanor_id: athanor_id})
+      when is_binary(athanor_id) and athanor_id != "" do
     Arca.Repo.Errors.with_db_rescue("ProviderCredentialStorage.list", fn ->
       rows =
         from(c in OauthProviderCredential,

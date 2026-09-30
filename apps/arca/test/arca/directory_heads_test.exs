@@ -35,7 +35,6 @@ defmodule Arca.DirectoryHeadsTest do
     :ok
   end
 
-
   @slot_keys [
     {Arca.ControlPlane, :standing},
     {Arca.ControlPlane, :generation},
@@ -188,7 +187,10 @@ defmodule Arca.DirectoryHeadsTest do
 
   defp confirmation!(athanor, user_id, epoch) do
     {:ok, row} =
-      PendingConfirmations.open(athanor, %{record: record(athanor, user_id), identity_key_epoch: epoch})
+      PendingConfirmations.open(athanor, %{
+        record: record(athanor, user_id),
+        identity_key_epoch: epoch
+      })
 
     row
   end
@@ -281,7 +283,10 @@ defmodule Arca.DirectoryHeadsTest do
     assert {:error, :stale} = DirectoryHeads.advance(server(), id, digest("wrong"), attrs)
 
     assert {:error, :binding_changed} =
-             DirectoryHeads.advance(server(), id, epoch, %{attrs | directory_url: "https://other.example"})
+             DirectoryHeads.advance(server(), id, epoch, %{
+               attrs
+               | directory_url: "https://other.example"
+             })
 
     assert {:error, :binding_changed} =
              DirectoryHeads.advance(server(), id, epoch, %{attrs | genesis: "other genesis"})
@@ -289,7 +294,13 @@ defmodule Arca.DirectoryHeadsTest do
     assert {:ok, %{head: %{head_hash: ^next}, retired: retired}} =
              DirectoryHeads.advance(server(), id, epoch, attrs)
 
-    assert retired == %{session_hashes: [], passkey_ids: [], confirmation_ids: [], certificate_ids: []}
+    assert retired == %{
+             session_hashes: [],
+             passkey_ids: [],
+             confirmation_ids: [],
+             certificate_ids: []
+           }
+
     assert {:error, :not_found} = DirectoryHeads.advance(server(), identifier(), epoch, attrs)
   end
 
@@ -510,9 +521,14 @@ defmodule Arca.DirectoryHeadsRaceTest do
         end
 
     cond do
-      waiting? -> :ok
-      tries == 0 -> flunk("backend #{backend} is not waiting at #{inspect(at)}: #{type} #{event} #{query}")
-      true -> retry_wait!(backend, at, tries)
+      waiting? ->
+        :ok
+
+      tries == 0 ->
+        flunk("backend #{backend} is not waiting at #{inspect(at)}: #{type} #{event} #{query}")
+
+      true ->
+        retry_wait!(backend, at, tries)
     end
   end
 
@@ -653,7 +669,8 @@ defmodule Arca.DirectoryHeadsRaceTest do
   end
 
   if Arca.Repo.adapter() != Ecto.Adapters.Postgres do
-    @tag skip: "the advance has no pause point but a PostgreSQL trigger; SQLite's write lock orders it"
+    @tag skip:
+           "the advance has no pause point but a PostgreSQL trigger; SQLite's write lock orders it"
   end
 
   test "a session waiting behind the advance reads the new epoch and is refused", %{

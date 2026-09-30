@@ -154,7 +154,9 @@ defmodule Sanctum.ToolGrants do
   end
 
   # A decision names its effect; a revoke deletes by key and ignores it.
-  defp check_effect(errors, attrs, :decision), do: require_member(errors, attrs, :effect, effects())
+  defp check_effect(errors, attrs, :decision),
+    do: require_member(errors, attrs, :effect, effects())
+
   defp check_effect(errors, _attrs, :key), do: errors
 
   defp require_text(errors, attrs, field) do
@@ -164,6 +166,8 @@ defmodule Sanctum.ToolGrants do
     end
   end
 
-  defp check_thread(errors, %{scope: "thread"} = attrs), do: require_text(errors, attrs, :thread_id)
+  defp check_thread(errors, %{scope: "thread"} = attrs),
+    do: require_text(errors, attrs, :thread_id)
+
   defp check_thread(errors, _attrs), do: errors
 end

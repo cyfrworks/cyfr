@@ -255,7 +255,10 @@ defmodule Arca.SessionStorageTest do
       assert {:error, :stale_key_epoch} =
                SessionStorage.create_session(
                  hash,
-                 session_attrs(%{user_id: person.id, identity_key_epoch: Prima.Digest.sha256("gone")}),
+                 session_attrs(%{
+                   user_id: person.id,
+                   identity_key_epoch: Prima.Digest.sha256("gone")
+                 }),
                  issuance
                )
 
@@ -279,7 +282,9 @@ defmodule Arca.SessionStorageTest do
                  Arca.Test.Actor.issuance()
                )
 
-      assert :ok = SessionStorage.create_session(hash, session_attrs(), Arca.Test.Actor.issuance())
+      assert :ok =
+               SessionStorage.create_session(hash, session_attrs(), Arca.Test.Actor.issuance())
+
       assert {:ok, %{identity_key_epoch: nil}} = SessionStorage.get_session(hash)
     end
 
@@ -314,9 +319,15 @@ defmodule Arca.SessionStorageTest do
         )
 
       assert {:error, :cross_tenant} =
-               SessionStorage.revoke_key_epoch(Prima.Actor.in_athanor("ath_test"), [person.id], old)
+               SessionStorage.revoke_key_epoch(
+                 Prima.Actor.in_athanor("ath_test"),
+                 [person.id],
+                 old
+               )
 
-      assert {:ok, [^retired]} = SessionStorage.revoke_key_epoch(Prima.Actor.system(), [person.id], old)
+      assert {:ok, [^retired]} =
+               SessionStorage.revoke_key_epoch(Prima.Actor.system(), [person.id], old)
+
       assert {:error, :not_found} = SessionStorage.get_session(retired)
       assert {:ok, _} = SessionStorage.get_session(current)
     end
@@ -328,7 +339,8 @@ defmodule Arca.SessionStorageTest do
                SessionStorage.create_session(
                  hash,
                  session_attrs(),
-                 Arca.Test.Actor.issuance() ++ [also: fn _session -> {:error, :receipt_conflict} end]
+                 Arca.Test.Actor.issuance() ++
+                   [also: fn _session -> {:error, :receipt_conflict} end]
                )
 
       assert {:error, :not_found} = SessionStorage.get_session(hash)
@@ -338,10 +350,13 @@ defmodule Arca.SessionStorageTest do
                SessionStorage.create_session(
                  hash,
                  session_attrs(),
-                 Arca.Test.Actor.issuance() ++ [also: fn session ->
-                     send(me, {:session, session})
-                     :ok
-                   end]
+                 Arca.Test.Actor.issuance() ++
+                   [
+                     also: fn session ->
+                       send(me, {:session, session})
+                       :ok
+                     end
+                   ]
                )
 
       assert_received {:session, %{id: "ses_" <> _, user_id: "user_1"}}

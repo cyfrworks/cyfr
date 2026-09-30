@@ -1203,8 +1203,11 @@ defmodule Arca.TurnStorage do
 
           calls = Map.get(response, :tool_calls, [])
 
-          if Enum.any?(calls, &(Map.get(&1, :recovery) not in [nil | Prima.TurnState.recoveries()])),
-            do: Arca.Repo.rollback(:illegal_transition)
+          if Enum.any?(
+               calls,
+               &(Map.get(&1, :recovery) not in [nil | Prima.TurnState.recoveries()])
+             ),
+             do: Arca.Repo.rollback(:illegal_transition)
 
           thread = thread!(athanor_id, turn.thread_id)
           now = DateTime.utc_now()

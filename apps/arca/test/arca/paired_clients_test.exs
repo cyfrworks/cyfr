@@ -197,7 +197,9 @@ defmodule Arca.PairedClientsTest do
     test "a person's clients go in every athanor only for the platform's own actor", %{
       actor: actor
     } do
-      elsewhere = Prima.Actor.in_athanor("ath_pcl_elsewhere_#{System.unique_integer([:positive])}")
+      elsewhere =
+        Prima.Actor.in_athanor("ath_pcl_elsewhere_#{System.unique_integer([:positive])}")
+
       here = record!(actor)
       there = record!(elsewhere)
       bystander = record!(actor, %{user_id: "usr_bystander"})

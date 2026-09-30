@@ -226,7 +226,9 @@ defmodule Sanctum.Providers.Session do
           # Provider returned a structured error body (e.g. Google's
           # "unsupported_grant_type" when the OAuth client isn't a
           # "TV & Limited Input" type, or "invalid_client" for a bad id).
-          Logger.warning("[Sanctum.Providers.Session] Device flow init rejected by provider: #{inspect(code)}")
+          Logger.warning(
+            "[Sanctum.Providers.Session] Device flow init rejected by provider: #{inspect(code)}"
+          )
 
           {:error,
            "Device flow rejected by provider: #{code}. " <>
@@ -235,7 +237,10 @@ defmodule Sanctum.Providers.Session do
         {:error, {:device_code_request_failed, reason}} ->
           # The reason is a transport term (a Req/Mint struct) — log it,
           # never reflect it.
-          Logger.warning("[Sanctum.Providers.Session] Device flow network error: #{inspect(reason)}")
+          Logger.warning(
+            "[Sanctum.Providers.Session] Device flow network error: #{inspect(reason)}"
+          )
+
           {:error, {:unavailable, "The sign-in provider"}}
 
         {:error, {:unknown_provider, name}} ->
@@ -274,11 +279,17 @@ defmodule Sanctum.Providers.Session do
           # Provider returned a structured error on the token exchange —
           # e.g. Google's "invalid_request" when client_secret is missing,
           # or "invalid_grant" for an expired device code.
-          Logger.warning("[Sanctum.Providers.Session] Token exchange rejected by provider: #{inspect(code)}")
+          Logger.warning(
+            "[Sanctum.Providers.Session] Token exchange rejected by provider: #{inspect(code)}"
+          )
+
           {:error, "Token exchange rejected by provider: #{code}"}
 
         {:error, {:token_request_failed, reason}} ->
-          Logger.warning("[Sanctum.Providers.Session] Token exchange network error: #{inspect(reason)}")
+          Logger.warning(
+            "[Sanctum.Providers.Session] Token exchange network error: #{inspect(reason)}"
+          )
+
           {:error, {:unavailable, "The sign-in provider"}}
 
         # The server is at capacity: a person admitted without an athanor
@@ -294,7 +305,10 @@ defmodule Sanctum.Providers.Session do
           {:error, {:invalid_argument, unknown_provider_message(name)}}
 
         {:error, reason} ->
-          Logger.warning("[Sanctum.Providers.Session] Failed to poll for token: #{inspect(reason)}")
+          Logger.warning(
+            "[Sanctum.Providers.Session] Failed to poll for token: #{inspect(reason)}"
+          )
+
           {:error, {:unavailable, "The sign-in provider"}}
       end
     else

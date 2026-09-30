@@ -243,8 +243,7 @@ defmodule Sanctum.Consent.CommitDigest do
   end
 
   defp normalize_selection(_other) do
-    {:error,
-     {:invalid_commit, :selections, "each selection must be a map"}}
+    {:error, {:invalid_commit, :selections, "each selection must be a map"}}
   end
 
   defp ensure_one_selection_per_edge(selections) do

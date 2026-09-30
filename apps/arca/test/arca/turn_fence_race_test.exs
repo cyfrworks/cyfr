@@ -35,6 +35,7 @@ defmodule Arca.TurnFenceRaceTest do
             message: %{author: actor.user_id, content: "@aqua go"},
             turn: %{agent: "aqua", requested_by: actor.user_id}
           })
+
         {thread, turn}
       end)
 

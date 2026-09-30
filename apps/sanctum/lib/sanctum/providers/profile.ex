@@ -548,6 +548,7 @@ defmodule Sanctum.Providers.Profile do
   defp fmt(:profile_revoked), do: "profile_revoked"
   defp fmt({:component_not_found, _reason}), do: "component_not_found"
   defp fmt({:invalid_ref, reason}), do: "invalid_ref: #{reason}"
+
   defp fmt(reason) do
     if Sanctum.Unauthorized.reason?(reason),
       do: Sanctum.Unauthorized.message(reason),

@@ -248,7 +248,11 @@ defmodule Arca.CipherRotationTest do
                  staged_operational_key_sealed: bytes("op-2")
                })
 
-      assert {:ok, [%{ciphertexts: [staged_live_key_sealed: live, staged_operational_key_sealed: op]}, _]} =
+      assert {:ok,
+              [
+                %{ciphertexts: [staged_live_key_sealed: live, staged_operational_key_sealed: op]},
+                _
+              ]} =
                Rotation.page(actor, :identity_attempts, nil, 10)
 
       assert {live, op} == {bytes("live-2"), bytes("op-2")}

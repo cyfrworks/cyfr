@@ -17,7 +17,8 @@ defmodule Arca.Retention.ExecutionRows do
   @doc "Delete the executions `select` names, less those whose payloads are still held."
   @spec delete(Prima.Actor.t(), (-> {:ok, [String.t()]} | {:error, term()}), keyword()) ::
           {:ok, non_neg_integer()} | {:error, term()}
-  def delete(%Prima.Actor{} = actor, select, opts) when is_function(select, 0) and is_list(opts) do
+  def delete(%Prima.Actor{} = actor, select, opts)
+      when is_function(select, 0) and is_list(opts) do
     with {:ok, ids} <- select.() do
       ids
       |> Enum.chunk_every(@batch)

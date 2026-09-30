@@ -192,7 +192,11 @@ defmodule Arca.ComponentStorage do
       )
       when is_binary(athanor_id) and athanor_id != "" and is_map(token) and is_list(puts) and
              is_list(removals) do
-    puts = Enum.map(puts, &(&1 |> validate_source!() |> then(fn row -> ensure_tenant_fields(actor, row) end)))
+    puts =
+      Enum.map(
+        puts,
+        &(&1 |> validate_source!() |> then(fn row -> ensure_tenant_fields(actor, row) end))
+      )
 
     rescuing_db("replace_projection", fn ->
       StorageProjectionChanges.replace(actor, "components", token, fn ->

@@ -117,8 +117,11 @@ defmodule Arca.PairedClients do
     if changeset.valid? do
       owned("Arca.PairedClients.record", fn ->
         case Arca.Repo.insert(changeset) do
-          {:ok, row} -> {:ok, row}
-          {:error, %Ecto.Changeset{errors: errors} = changeset} -> conflict_or_invalid(errors, changeset)
+          {:ok, row} ->
+            {:ok, row}
+
+          {:error, %Ecto.Changeset{errors: errors} = changeset} ->
+            conflict_or_invalid(errors, changeset)
         end
       end)
     else
@@ -169,7 +172,8 @@ defmodule Arca.PairedClients do
   """
   @spec revoke_for_user(Prima.Actor.t(), String.t()) ::
           {:ok, [String.t()]} | {:error, :no_athanor | :database_error}
-  def revoke_for_user(%Prima.Actor{} = actor, user_id) when is_binary(user_id) and user_id != "" do
+  def revoke_for_user(%Prima.Actor{} = actor, user_id)
+      when is_binary(user_id) and user_id != "" do
     case scope(actor) do
       {:ok, query} ->
         Arca.Repo.Errors.with_db_rescue("Arca.PairedClients.revoke_for_user", fn ->
@@ -266,7 +270,9 @@ defmodule Arca.PairedClients do
   end
 
   defp by_user(query, nil), do: query
-  defp by_user(query, user_id) when is_binary(user_id), do: where(query, [p], p.user_id == ^user_id)
+
+  defp by_user(query, user_id) when is_binary(user_id),
+    do: where(query, [p], p.user_id == ^user_id)
 
   defp by_standing(query, :all), do: query
   defp by_standing(query, :active), do: where(query, [p], p.standing == "active")
@@ -276,7 +282,10 @@ defmodule Arca.PairedClients do
   defp retire(%PairedClient{} = row) do
     with {:ok, revoked} <-
            row
-           |> Ecto.Changeset.change(standing: "revoked", updated_at: Arca.ServerMetaStorage.now!())
+           |> Ecto.Changeset.change(
+             standing: "revoked",
+             updated_at: Arca.ServerMetaStorage.now!()
+           )
            |> Arca.Repo.update() do
       _ = retire_dependents!([revoked.id])
       {:ok, revoked}

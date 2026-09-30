@@ -267,7 +267,9 @@ defmodule Arca.UsersTest do
       {user, identity} = attrs_pair()
 
       assert {:error, :keys_unavailable} =
-               Users.mint(server(), user, identity, also: fn _person -> {:error, :keys_unavailable} end)
+               Users.mint(server(), user, identity,
+                 also: fn _person -> {:error, :keys_unavailable} end
+               )
 
       assert {:error, :not_found} = Users.get(server(), user.id)
       assert {:error, :not_found} = Users.get_by_identity(server(), identity.key)

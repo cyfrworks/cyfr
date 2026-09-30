@@ -611,7 +611,12 @@ defmodule Arca.Members do
   @spec activate_invited_identifier(Prima.Actor.t(), String.t(), String.t(), DateTime.t()) ::
           {:ok, [String.t()]} | {:error, :not_owner} | refusal()
   # arca:unscoped-ok invited rows are identifier-keyed fabric, activated across athanors.
-  def activate_invited_identifier(%Prima.Actor{scope: :platform}, user_id, identifier, %DateTime{} = now)
+  def activate_invited_identifier(
+        %Prima.Actor{scope: :platform},
+        user_id,
+        identifier,
+        %DateTime{} = now
+      )
       when is_binary(user_id) and is_binary(identifier) do
     Arca.Repo.Errors.with_db_rescue("Arca.Members.activate_invited_identifier", fn ->
       invited =

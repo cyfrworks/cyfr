@@ -148,7 +148,13 @@ defmodule Arca.StorageUnits do
   """
   @spec commit(Prima.Actor.t(), StorageUnit.t(), String.t() | nil, String.t(), identity()) ::
           StorageUnit.commit_result() | {:error, :no_athanor}
-  def commit(%Prima.Actor{} = actor, %StorageUnit{} = unit, expected_revision, writer_token, identity) do
+  def commit(
+        %Prima.Actor{} = actor,
+        %StorageUnit{} = unit,
+        expected_revision,
+        writer_token,
+        identity
+      ) do
     case stamped_commit(actor, unit, expected_revision, writer_token, identity) do
       {:committed, _generation} -> :committed
       {:error, _} = refusal -> refusal
@@ -438,7 +444,14 @@ defmodule Arca.StorageUnits do
   # the order every storage writer keeps — and the root and key the
   # generation is stamped on are the row's, never the caller's struct's.
   # The change is announced once it has committed.
-  defp move_pointer(actor, athanor, %StorageUnit{id: id}, expected_revision, writer_token, identity) do
+  defp move_pointer(
+         actor,
+         athanor,
+         %StorageUnit{id: id},
+         expected_revision,
+         writer_token,
+         identity
+       ) do
     now = DateTime.utc_now()
 
     Arca.Repo.locking_transaction(fn ->

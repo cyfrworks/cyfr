@@ -43,7 +43,8 @@ defmodule Sanctum.PairingTest do
         Context.build(%{auth_method: :oidc, authenticated: false})
       ]
 
-      for context <- nones, do: assert(Pairing.class_of(context) == :none, inspect(context.auth_method))
+      for context <- nones,
+          do: assert(Pairing.class_of(context) == :none, inspect(context.auth_method))
     end
 
     test "no client holds paired or strong yet" do

@@ -58,12 +58,21 @@ defmodule Arca.SchemaFingerprintTest do
     end
 
     athanor = "ath_fingerprint_#{System.unique_integer([:positive])}"
-    root = %{id: "spr_1", athanor_id: athanor, root: "components", epoch: 1, acknowledged_epoch: 0}
+
+    root = %{
+      id: "spr_1",
+      athanor_id: athanor,
+      root: "components",
+      epoch: 1,
+      acknowledged_epoch: 0
+    }
 
     # One root row per athanor and root, and an epoch that is a generation.
     assert :ok = insert_row("storage_projection_roots", root)
     assert :refused = insert_row("storage_projection_roots", %{root | id: "spr_2"})
-    assert :refused = insert_row("storage_projection_roots", %{root | id: "spr_3", root: "aqua", epoch: 0})
+
+    assert :refused =
+             insert_row("storage_projection_roots", %{root | id: "spr_3", root: "aqua", epoch: 0})
 
     assert :refused =
              insert_row("storage_projection_roots", %{

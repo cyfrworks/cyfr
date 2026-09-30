@@ -35,12 +35,18 @@ defmodule Sanctum.RegistryCredentialsTest do
       })
   end
 
-  defp outage!, do: Arca.Repo.query!("ALTER TABLE registry_tokens RENAME TO registry_tokens_unavailable")
+  defp outage!,
+    do: Arca.Repo.query!("ALTER TABLE registry_tokens RENAME TO registry_tokens_unavailable")
 
   describe "put_push_token and get" do
     test "stores a push token for the context's person and reads it back", %{alice: alice} do
       assert :ok =
-               RegistryCredentials.put_push_token(alice, @registry, "alice", "cyfr_pt_a", "personal",
+               RegistryCredentials.put_push_token(
+                 alice,
+                 @registry,
+                 "alice",
+                 "cyfr_pt_a",
+                 "personal",
                  label: "laptop"
                )
 
@@ -83,7 +89,10 @@ defmodule Sanctum.RegistryCredentialsTest do
 
     test "a slug or token that is not a string stores nothing", %{alice: alice} do
       assert :skipped = RegistryCredentials.put_push_token(alice, @registry, nil, "t", "personal")
-      assert :skipped = RegistryCredentials.put_push_token(alice, @registry, "alice", nil, "member")
+
+      assert :skipped =
+               RegistryCredentials.put_push_token(alice, @registry, "alice", nil, "member")
+
       assert {:ok, []} = RegistryCredentials.list(alice, @registry)
     end
 
@@ -143,7 +152,9 @@ defmodule Sanctum.RegistryCredentialsTest do
     test "a listing keeps the damaged row in its place beside the good ones", %{alice: alice} do
       :ok = RegistryCredentials.put_push_token(alice, @registry, "alice", "cyfr_pt_a", "personal")
       plant!(alice, "bob", "not json")
-      :ok = RegistryCredentials.put_push_token(alice, @registry, "stripe.com", "cyfr_pt_s", "member")
+
+      :ok =
+        RegistryCredentials.put_push_token(alice, @registry, "stripe.com", "cyfr_pt_s", "member")
 
       assert {:ok, [%{namespace: "alice"}, %{status: :corrupt}, %{namespace: "stripe.com"}]} =
                RegistryCredentials.list(alice, @registry)

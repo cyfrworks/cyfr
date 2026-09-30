@@ -207,7 +207,8 @@ defmodule Arca.DeviceCertificates do
   # (`Arca.DirectoryHeads.advance/4`).
   @spec revoke_key_epoch!(String.t(), String.t()) :: [String.t()]
   # arca:db-raise-ok a transaction step: its callers rescue around the transaction.
-  def revoke_key_epoch!(identifier, key_epoch) when is_binary(identifier) and is_binary(key_epoch) do
+  def revoke_key_epoch!(identifier, key_epoch)
+      when is_binary(identifier) and is_binary(key_epoch) do
     revoke_all(
       from(c in DeviceCertificate,
         where:
