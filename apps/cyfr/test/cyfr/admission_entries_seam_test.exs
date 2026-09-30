@@ -12,7 +12,9 @@ defmodule Cyfr.AdmissionEntriesSeamTest do
   a row, fails the seam. A row marked `pending: true` names an entry not
   built yet; it has no driver and is not driven until it is. HTTP entries are driven through the endpoint;
   the gate heads and the HostAPI entry by direct call; the scheduler by
-  a due schedule whose run admission fails.
+  a due schedule whose run admission fails; the device channel through
+  its transport callbacks, since no WebSocket client is in the
+  dependencies.
   """
 
   # Flips rate limits, ownership standing and scheduler configuration.
@@ -22,6 +24,7 @@ defmodule Cyfr.AdmissionEntriesSeamTest do
   import Prima.Test.Wait
 
   alias Cyfr.Boundaries
+  alias Emissary.Web.DeviceChannel
 
   @mcp_unknown_tool_class "not_found"
 
@@ -84,7 +87,8 @@ defmodule Cyfr.AdmissionEntriesSeamTest do
     {CyfrWeb.Plugs.WebhookRateLimit, :call} => :webhook_rate_limited,
     {Emissary.Web.ExecutionEventsController, :stream} => :execution_events_unknown,
     {Crucible.Schedules.Scheduler, :handle_info} => :schedule_fire_refused,
-    {Crucible.Host.Children, :call} => :host_api_lost_attempt
+    {Crucible.Host.Children, :call} => :host_api_lost_attempt,
+    {Emissary.Web.DeviceChannel, :handle_in} => :device_channel_unproven
   }
 
   test "every roster row has one driver and every driver a row" do
@@ -96,6 +100,13 @@ defmodule Cyfr.AdmissionEntriesSeamTest do
     undriven = Boundaries.admission_entries() -- @entries
     assert Enum.all?(undriven, &(&1.pending == true))
     refute Enum.any?(undriven, &Map.has_key?(@drivers, {&1.module, &1.site}))
+  end
+
+  test "the device channel's row is active and driven" do
+    assert [row] = Enum.filter(Boundaries.admission_entries(), &(&1.module == DeviceChannel))
+    refute Map.has_key?(row, :pending)
+    assert row in @entries
+    assert Map.fetch!(@drivers, {DeviceChannel, :handle_in}) == :device_channel_unproven
   end
 
   for %{module: module, site: site, plane: plane} <- @entries do
@@ -507,4 +518,76 @@ defmodule Cyfr.AdmissionEntriesSeamTest do
     class = Atom.to_string(Grimoire.Error.classify(reason).class)
     {{:tool, tool}, refused(class, :none)}
   end
+
+  # ==========================================================================
+  # Drivers: the device channel
+  # ==========================================================================
+
+  # A glass connects under a certificate, is challenged, and proves its key;
+  # the verifier refuses the proof, and the refusal is the decision under
+  # the call id the channel assigned the proof. The transport still
+  # delivers what arrives before the peer's close: the connect's deadline
+  # and more frames record nothing, so the connection, counted by its
+  # request id, holds that one decision.
+  def device_channel_unproven(_conn, _ctx) do
+    {device_key, device_private} = :crypto.generate_key(:eddsa, :ed25519)
+    {_live_key, live_private} = :crypto.generate_key(:eddsa, :ed25519)
+    home = Sanctum.origin()
+    now = System.system_time(:millisecond)
+    client_id = Prima.UUID7.generate_id("pcl")
+
+    {:ok, cert} =
+      Prima.DeviceCert.new(
+        device_key: device_key,
+        client_id: client_id,
+        subject: %{kind: :local, user_id: Prima.UUID7.generate_id("usr")},
+        issuer: home,
+        audience: home,
+        athanor: Prima.UUID7.generate_id("ath"),
+        not_before: now,
+        expires_at: now + 3_600_000
+      )
+
+    connect =
+      {:connect, %{client_id: client_id, certificate: Prima.DeviceCert.sign(cert, live_private)}}
+
+    {:ok, state} =
+      DeviceChannel.connect(%{
+        endpoint: CyfrWeb.Endpoint,
+        transport: :websocket,
+        options: [],
+        params: %{},
+        connect_info: %{peer_data: %{address: {127, 0, 0, 1}, port: 50_000, ssl_cert: nil}}
+      })
+
+    {:ok, state} = DeviceChannel.init(state)
+
+    {:reply, :ok, {:text, json}, state} =
+      DeviceChannel.handle_in({device_frame(connect), [opcode: :text]}, state)
+
+    {:ok, {:challenge, %{challenge: challenge}}} =
+      Prima.Device.decode(Jason.decode!(json), :home)
+
+    proof = {:proof, %{proof: Prima.DeviceCert.Proof.sign(challenge, device_private)}}
+    {deadline, _timer} = state.deadline
+
+    assert {:stop, :normal, {4401, "unauthenticated"}, closed} =
+             DeviceChannel.handle_in({device_frame(proof), [opcode: :text]}, state)
+
+    after_close = [
+      fn -> DeviceChannel.handle_info({DeviceChannel, :deadline, deadline}, closed) end,
+      fn -> DeviceChannel.handle_in({device_frame(proof), [opcode: :text]}, closed) end,
+      fn -> DeviceChannel.handle_in({"{}", [opcode: :text]}, closed) end
+    ]
+
+    for delivered <- after_close, do: assert(delivered.() == {:ok, closed})
+
+    where = {:request, closed.ctx.request_id}
+    assert [%{call_id: call_id}] = decisions(where)
+    assert call_id == closed.call_id
+
+    {where, refused("unauthenticated", :none)}
+  end
+
+  defp device_frame(message), do: message |> Prima.Device.encode() |> Jason.encode!()
 end

@@ -2081,13 +2081,11 @@ defmodule Cyfr.Boundaries do
     %{module: Crucible.Host.Children, site: :call, plane: :in_chain, origin: :inherits},
     # The device channel: a paired device's connection proof and each
     # discrete intent it sends, a person acting on an interactive surface.
-    # Pending: the channel is not built yet.
     %{
       module: Emissary.Web.DeviceChannel,
       site: :handle_in,
       plane: :external,
-      origin: :interactive,
-      pending: true
+      origin: :interactive
     }
   ]
 

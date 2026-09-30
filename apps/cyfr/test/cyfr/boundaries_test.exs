@@ -1852,11 +1852,15 @@ defmodule Cyfr.BoundariesTest do
       end
     end
 
-    test "the pending rows are the device channel's alone" do
+    test "no row is pending, and the device channel's is an interactive entry" do
       pending = for row <- Boundaries.admission_entries(), Map.get(row, :pending, false), do: row
+      assert pending == []
 
-      assert [%{module: Emissary.Web.DeviceChannel, plane: :external, origin: :interactive}] =
-               pending
+      assert %{site: :handle_in, plane: :external, origin: :interactive} =
+               Enum.find(
+                 Boundaries.admission_entries(),
+                 &(&1.module == Emissary.Web.DeviceChannel)
+               )
     end
 
     test "each entry is rostered once" do

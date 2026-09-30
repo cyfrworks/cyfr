@@ -17,6 +17,7 @@ defmodule Cyfr do
   use Boundary,
     deps: [Grimoire, Sanctum, Arca],
     exports: [
+      Admission,
       Bootstrap,
       Bus,
       Bus.ApiKeys,
