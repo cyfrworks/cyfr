@@ -247,6 +247,19 @@
     },
     {
       "message": {
+        "error": {
+          "class": "unauthenticated",
+          "message": "The device has not proven its key on this connection"
+        },
+        "id": "int_1",
+        "protocol": "cyfr-device/v1",
+        "type": "answer"
+      },
+      "name": "an answer refusing an intent before its proof",
+      "sender": "home"
+    },
+    {
+      "message": {
         "expires_at": 1790000600000,
         "grant_id": "sgr_1",
         "projection": [

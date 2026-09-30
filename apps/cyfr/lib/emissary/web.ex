@@ -5,7 +5,9 @@ defmodule Emissary.Web do
   @moduledoc """
   Emissary's HTTP adapters' `use` definitions: MCP, the HTTP API and its
   event streams, health, inbound webhooks, the vault's OAuth callback,
-  and tinctures' served files and data routes.
+  and tinctures' served files and data routes. The device channel
+  (`Emissary.Web.DeviceChannel`) is the socket the endpoint mounts beside
+  them.
 
       use Emissary.Web, :controller
 
@@ -21,6 +23,7 @@ defmodule Emissary.Web do
     top_level?: true,
     deps: [Emissary, Grimoire, Sanctum, Arca, Cyfr, Compendium, Crucible, CyfrWeb],
     exports: [
+      DeviceChannel,
       ExecutionEventsController,
       HealthController,
       MCPController,

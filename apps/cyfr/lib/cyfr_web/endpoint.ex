@@ -74,6 +74,20 @@ defmodule CyfrWeb.Endpoint do
     websocket: [connect_info: @live_connect_info],
     longpoll: [connect_info: @live_connect_info]
 
+  # A paired glass's device channel: the device protocol over a raw
+  # WebSocket at `/device/websocket`. It carries the caller's address and
+  # no session, so a cookie the browser holds never chooses the person.
+  # A frame is capped at twice the largest valid glass message (a maximal
+  # intent, 65,840 bytes), and the idle timeout sits above the channel's
+  # 60-second proof deadline, so before a proof the deadline decides first.
+  socket "/device", Emissary.Web.DeviceChannel,
+    websocket: [
+      connect_info: [:peer_data, :x_headers],
+      max_frame_size: 131_072,
+      timeout: 90_000
+    ],
+    longpoll: false
+
   # Serve at "/" the static files from "priv/static" directory.
   #
   # When code reloading is disabled (e.g., in production),

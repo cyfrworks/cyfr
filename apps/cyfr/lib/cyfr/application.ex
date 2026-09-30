@@ -77,6 +77,12 @@ defmodule Cyfr.Application do
     # its provider, the stream and the topic.
     check_stream_topics!()
 
+    # Every socket the endpoint mounts is a path an intent enters by, so
+    # each is on the admission roster (`Cyfr.Admission`) before the
+    # endpoint starts: one that is not refuses the boot, naming it. The
+    # host reads the roster; no listener asks it.
+    check_endpoint_sockets!()
+
     # One redaction vocabulary: Phoenix's inbound request-param filter is
     # fed from its owner (config/config.exs deliberately does not spell a
     # list — config files run before this module exists).
@@ -145,7 +151,95 @@ defmodule Cyfr.Application do
     children = Enum.map(layout(), &tier/1)
 
     opts = [strategy: :rest_for_one, name: Cyfr.Supervisor, max_restarts: 10, max_seconds: 60]
-    Supervisor.start_link(children, opts)
+
+    with {:ok, pid} <- Supervisor.start_link(children, opts) do
+      # A listener is known by what it runs, so the tree's are read once
+      # the tree has started them, the HostAPI's once `Crucible.Supervisor`
+      # has: each is on the admission roster, or the tree is stopped and
+      # the boot refused, naming it.
+      refuse_unrostered_listeners!(pid)
+      {:ok, pid}
+    end
+  end
+
+  @doc """
+  Refuse the boot when a socket the endpoint mounts (`sockets`, its
+  `__sockets__/0`) is on no admission path (`Cyfr.Admission.socket_findings/1`).
+  """
+  @spec check_endpoint_sockets!([{String.t(), module(), keyword()}]) :: :ok
+  def check_endpoint_sockets!(sockets \\ CyfrWeb.Endpoint.__sockets__()) do
+    case Cyfr.Admission.socket_findings(sockets) do
+      [] ->
+        :ok
+
+      findings ->
+        raise "the endpoint mounts sockets the admission roster does not name; " <>
+                "refusing to boot:\n" <> Enum.map_join(findings, "\n", &("  - " <> &1))
+    end
+  end
+
+  @doc """
+  Refuse the boot when a listener in `listeners` (`listeners/1` of the
+  running tree) is on no admission path (`Cyfr.Admission.listener_findings/1`).
+  """
+  @spec check_listeners!([term()]) :: :ok
+  def check_listeners!(listeners) do
+    case Cyfr.Admission.listener_findings(listeners) do
+      [] ->
+        :ok
+
+      findings ->
+        raise "listeners run under the supervision tree that the admission roster " <>
+                "does not name; refusing to boot:\n" <>
+                Enum.map_join(findings, "\n", &("  - " <> &1))
+    end
+  end
+
+  # The socket servers a listener runs: a Bandit server, or a bare
+  # ThousandIsland one.
+  @socket_servers [Bandit, ThousandIsland]
+
+  @doc """
+  The listeners running under `supervisor`: each supervisor in its tree
+  that runs a socket server as a direct child, named by its own child id
+  (`Crucible.HostListener`, `CyfrWeb.Endpoint`), or by `supervisor` itself
+  for a socket server started directly under it. A server's own subtree is
+  not read, and a child that is gone by the time it is asked is skipped:
+  it listens on nothing.
+  """
+  @spec listeners(Supervisor.supervisor()) :: [term()]
+  def listeners(supervisor), do: listeners(supervisor, supervisor)
+
+  defp listeners(supervisor, id) do
+    {servers, others} = supervisor |> children() |> Enum.split_with(&socket_server?/1)
+    own = if servers == [], do: [], else: [id]
+
+    own ++
+      for {child_id, pid, :supervisor, _modules} <- others,
+          is_pid(pid),
+          listener <- listeners(pid, child_id),
+          do: listener
+  end
+
+  defp children(supervisor) do
+    Supervisor.which_children(supervisor)
+  catch
+    :exit, _gone -> []
+  end
+
+  defp socket_server?({_id, _pid, _type, modules}) when is_list(modules),
+    do: Enum.any?(modules, &(&1 in @socket_servers))
+
+  defp socket_server?(_child), do: false
+
+  # Once the tree has started: a listener off the roster stops the tree
+  # this start began, then refuses the boot.
+  defp refuse_unrostered_listeners!(pid) do
+    check_listeners!(listeners(Cyfr.Supervisor))
+  rescue
+    exception ->
+      Supervisor.stop(pid)
+      reraise exception, __STACKTRACE__
   end
 
   @typedoc """
