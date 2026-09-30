@@ -6,8 +6,11 @@ defmodule Sanctum.Tenancy.Users do
   The people this server knows: each person is the plain map
   `Arca.Users` answers for their row.
 
-  A row is written on the first admitted sign-in and touched on every later
-  one; the door, invited memberships and per-person preferences key off it.
+  A row is written on the first admitted sign-in, together with the
+  person's key set on their identity row (`Sanctum.Person`), and touched on
+  every later one; the door, invited memberships and per-person
+  preferences key off it. The person's identifier is on that identity row,
+  never on the `users` row (`identifier/1`).
   `deny/1` and `allow/1` are the operator's eject and re-admit: a denied
   person loses their sessions and API keys, their own athanor is archived
   (nothing deleted), their group rows are removed and the invitations their
@@ -84,9 +87,13 @@ defmodule Sanctum.Tenancy.Users do
     end
   end
 
-  # The person and the identity that names them, minted together. A
-  # concurrent first sign-in of the same identity wins the unique index;
-  # the loser reads the person it minted.
+  # The person, the identity that names them and their live and
+  # operational key set, minted together: the keys are written by
+  # `Sanctum.Person.mint_keys/1` inside the transaction that writes the
+  # person row, after the installation guard admitted it, so no person
+  # exists without their keys and a key set that cannot be minted refuses
+  # the sign-in. A concurrent first sign-in of the same identity wins the
+  # unique index; the loser reads the person it minted.
   defp first_sign_in(key, seen, now) do
     with {:ok, %{provider: provider, issuer: issuer, subject: subject}} <- Identity.parse(key) do
       user_attrs =
@@ -97,15 +104,34 @@ defmodule Sanctum.Tenancy.Users do
           prefs: Jason.encode!(%{})
         })
 
-      Arca.Users.mint(server(), user_attrs, %{
-        key: key,
-        provider: provider,
-        issuer: issuer,
-        subject: subject,
-        first_seen_at: now,
-        last_seen_at: now
-      })
+      Arca.Users.mint(
+        server(),
+        user_attrs,
+        %{
+          key: key,
+          provider: provider,
+          issuer: issuer,
+          subject: subject,
+          first_seen_at: now,
+          last_seen_at: now
+        },
+        also: &Sanctum.Person.mint_keys/1
+      )
     end
+  end
+
+  @doc """
+  The person's identifier (`per_…`), read from their identity row beside
+  the `users` row (`Arca.PersonIdentities`), which the `users` row does not
+  carry: `{:ok, identifier}` once they are enrolled, or admitted from
+  another home; `{:ok, nil}` for a local person not yet enrolled;
+  `{:error, :not_found}` for a person with no identity row.
+  """
+  @spec identifier(String.t()) ::
+          {:ok, String.t() | nil} | {:error, :not_found | :cross_tenant | :database_error}
+  def identifier(user_id) when is_binary(user_id) do
+    with {:ok, row} <- Arca.PersonIdentities.get(server(), user_id),
+         do: {:ok, row.identifier}
   end
 
   @doc "The person an IdP identity key names, if any."

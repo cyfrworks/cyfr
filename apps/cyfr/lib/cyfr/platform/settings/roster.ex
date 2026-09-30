@@ -154,7 +154,7 @@ defmodule Cyfr.Platform.Settings.Roster do
     {"CYFR_COSIGN_KEY", "Key-based OCI signature verification: the cosign public key."},
     {"CYFR_COSIGN_PASSWORD", "The password of `CYFR_COSIGN_KEY`, when it has one."},
     {"CYFR_CRYPTO_KEYRING",
-     "The keyring sealing secrets at rest (vault entries, webhook secrets, registry tokens), as JSON `{\"primary\":\"label\",\"keys\":{\"label\":\"<base64, at least 32 bytes>\"}}`; unset, one key derived from `CYFR_SECRET_KEY_BASE`. To rotate, keep the old labels listed and re-seal with `Cyfr.Release.rotate_cipher_keys/1`."},
+     "The keyring sealing secrets at rest (vault entries, webhook secrets, registry tokens, and each person's online keys and pending recovery material), as JSON `{\"primary\":\"label\",\"keys\":{\"label\":\"<base64, at least 32 bytes>\"}}`; unset, one key derived from `CYFR_SECRET_KEY_BASE`. To rotate, keep the old labels listed and re-seal with `Cyfr.Release.rotate_cipher_keys/1`. Losing it loses every person's online keys at this home: an enrolled person restores from a printed kit on an empty installation, and an unenrolled person's keys are gone."},
     {"CYFR_CRYPTO_KEYRING_FINGERPRINT_ACCEPT",
      "The primary-key fingerprint the boot's refusal reports, set for one boot to accept a deliberate key change; re-seal, then unset it. It recovers nothing sealed with a key that is gone."},
     {"CYFR_DATABASE",

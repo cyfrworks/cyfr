@@ -490,6 +490,20 @@ defmodule PrismWeb.AuthControllerTest do
 
     test "the namespace is the identity: a push token that cannot be stored still signs the person in",
          %{conn: conn, bypass: bypass} do
+      n = System.unique_integer([:positive])
+      uid = "auth_cb_putfail_#{n}"
+      user_id = "oidcc|https://idp.test|#{uid}"
+
+      # The person exists before the keyring goes: a first sign-in seals
+      # the person's own keys, and one that cannot is refused.
+      {:ok, _person} =
+        Sanctum.Tenancy.Users.upsert_from_provider(%{
+          id: user_id,
+          provider: "oidcc",
+          email: "alice@example.com",
+          verified: true
+        })
+
       # Force at-rest encryption to fail by clearing the resolved keyring:
       # the push-token seal (`Sanctum.Cipher.encrypt`) raises without it.
       original_keyring = Application.get_env(:sanctum, :crypto_keyring)
@@ -500,10 +514,6 @@ defmodule PrismWeb.AuthControllerTest do
           do: Application.put_env(:sanctum, :crypto_keyring, original_keyring),
           else: Application.delete_env(:sanctum, :crypto_keyring)
       end)
-
-      n = System.unique_integer([:positive])
-      uid = "auth_cb_putfail_#{n}"
-      user_id = "oidcc|https://idp.test|#{uid}"
 
       Bypass.expect_once(bypass, "POST", "/v1/identity/probe", fn c ->
         json_resp(c, 200, %{
