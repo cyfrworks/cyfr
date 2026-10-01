@@ -924,10 +924,9 @@ defmodule Arca.ControlPlaneOwnPoolTest do
       renewals = stop(renewer)
 
       # Outside the audit's guarantee: every renewal answered, and what it
-      # answered is recorded, not bounded. Standalone writers wait inside
-      # the driver for the whole busy timeout, each on a dirty I/O
-      # scheduler, so enough of them can keep the lock's holder from
-      # stepping until their waits end.
+      # answered is recorded, not bounded. Standalone writers take the lock
+      # through the lock step and no turn, so a renewal waits for them as
+      # for any writer, within its lock step's deadline.
       assert renewals != []
       latencies = renewals |> Enum.map(&elem(&1, 1)) |> Enum.sort()
       failed = Enum.count(renewals, fn {answer, _ms} -> not match?({:ok, _}, answer) end)
@@ -941,9 +940,9 @@ defmodule Arca.ControlPlaneOwnPoolTest do
       )
     end
 
-    # Standalone writes until `until`, each answered or refused busy by the
-    # driver; the refusals are part of what is measured, with how long each
-    # waited first.
+    # Standalone writes until `until`, each answered or refused busy by its
+    # lock step; the refusals are part of what is measured, with how long
+    # each waited first.
     defp standalone_writes(node, until, answered) do
       if System.monotonic_time(:millisecond) >= until do
         answered
@@ -958,7 +957,8 @@ defmodule Arca.ControlPlaneOwnPoolTest do
 
             :ok
           rescue
-            _e in Exqlite.Error -> {:busy, System.monotonic_time(:millisecond) - started}
+            _e in Arca.Repo.BusyTimeoutError ->
+              {:busy, System.monotonic_time(:millisecond) - started}
           end
 
         standalone_writes(node, until, [answer | answered])
