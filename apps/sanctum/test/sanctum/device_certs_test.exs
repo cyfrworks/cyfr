@@ -255,7 +255,11 @@ defmodule Sanctum.DeviceCertsTest do
       assert ctx.credential_deadline ==
                DateTime.from_unix!(device.certificate.expires_at, :millisecond)
 
-      assert %{source_kind: :identity, focus_basis: basis} = ctx.credential_binding
+      client_id = device.client_id
+
+      assert %{source_kind: :device, source_id: ^client_id, focus_basis: basis, identity: nil} =
+               ctx.credential_binding
+
       assert {:ok, %{athanor_id: athanor_id}} = Members.get(basis)
       assert athanor_id == athanor.id
     end

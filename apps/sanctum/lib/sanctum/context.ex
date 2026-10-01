@@ -78,17 +78,44 @@ defmodule Sanctum.Context do
   admitted sign-in, which holds no credential yet, carries
   `source_kind: :identity` and `source_id: nil`.
 
+  A paired device's context carries `source_kind: :device`, its paired
+  client's id as `source_id`, and `identity`: the identity row a person
+  whose keys are at another home was resolved by when the certificate was
+  verified (`t:device_identity/0`), or nil for a certificate this home's
+  own key set signed. For such a person it also carries `key_epoch`, the
+  head's `key_epoch` the certificate was verified under; nil otherwise.
+  Only `Sanctum.Caller.establish_device/2` sets it, and `build/1` refuses
+  it on any context but that device's own (`auth_method: :device`, its
+  `client_id` the binding's `source_id`).
+
   Issuing a credential from this context locks those rows and refuses
   unless they still stand at these generations
   (`Arca.SecurityTransitions.Issuance`), so a context read before a
-  retirement cannot issue after the restore.
+  retirement cannot issue after the restore. A device's issuance also
+  locks its paired client after them and refuses unless the client and
+  what its certificate stands on still stand: for a certificate this home
+  signed, its row; for a remote person, the identity row and their cached
+  head at that `key_epoch` (`Sanctum.Issuance`).
   """
   @type credential_binding :: %{
-          source_kind: :identity | :session | :api_key,
-          source_id: String.t() | nil,
-          focus_basis: String.t() | :key | nil,
-          user_generation: pos_integer(),
-          athanor_generation: pos_integer() | nil
+          required(:source_kind) => :identity | :session | :api_key | :device,
+          required(:source_id) => String.t() | nil,
+          required(:focus_basis) => String.t() | :key | nil,
+          required(:user_generation) => pos_integer(),
+          required(:athanor_generation) => pos_integer() | nil,
+          optional(:identity) => device_identity() | nil,
+          optional(:key_epoch) => String.t() | nil
+        }
+
+  @typedoc """
+  The remote identity row a paired device's person was resolved by, as
+  `Sanctum.DeviceCerts.remote_subject/3` read it: whose row it is, its
+  `provenance` (`remote`) and the identifier the certificate names.
+  """
+  @type device_identity :: %{
+          user_id: String.t(),
+          provenance: String.t(),
+          identifier: String.t()
         }
 
   @typedoc """
@@ -156,7 +183,8 @@ defmodule Sanctum.Context do
     # What this context's credential was issued against and the
     # generations it read (`t:credential_binding/0`). Stamped together
     # with `:session_token_hash` or `:api_key_id` by the one assembly path
-    # of each credential (`Sanctum.Session`, `Sanctum.ApiKey`), and by
+    # of each credential (`Sanctum.Session`, `Sanctum.ApiKey`), with
+    # `:client_id` by `Sanctum.Caller.establish_device/2`, and by
     # `Sanctum.Tenancy.resolve_status/2` for an admitted sign-in.
     :credential_binding,
     # The absolute instant this context's authority ends when a parent
@@ -394,7 +422,7 @@ defmodule Sanctum.Context do
       call_id: Map.get(attrs, :call_id),
       api_key_id: Map.get(attrs, :api_key_id),
       session_token_hash: Map.get(attrs, :session_token_hash),
-      credential_binding: binding!(Map.get(attrs, :credential_binding)),
+      credential_binding: binding!(Map.get(attrs, :credential_binding), attrs),
       credential_deadline: deadline!(Map.get(attrs, :credential_deadline)),
       validated_at: validated_at!(Map.get(attrs, :validated_at)),
       frame: frame!(Map.get(attrs, :frame)),
@@ -418,11 +446,11 @@ defmodule Sanctum.Context do
     ctx
   end
 
-  @binding_sources [:identity, :session, :api_key]
+  @binding_sources [:identity, :session, :api_key, :device]
 
   # A binding is data the issuance check trusts, so a malformed one is a
   # construction bug caught here rather than a refusal found later.
-  defp binding!(nil), do: nil
+  defp binding!(nil, _attrs), do: nil
 
   defp binding!(
          %{
@@ -431,16 +459,50 @@ defmodule Sanctum.Context do
            focus_basis: basis,
            user_generation: user_generation,
            athanor_generation: athanor_generation
-         } = binding
+         } = binding,
+         attrs
        )
        when kind in @binding_sources and (is_binary(source_id) or is_nil(source_id)) and
               (is_binary(basis) or basis in [:key, nil]) and is_integer(user_generation) and
               user_generation > 0 and
               (is_nil(athanor_generation) or
-                 (is_integer(athanor_generation) and athanor_generation > 0)),
-       do: binding
+                 (is_integer(athanor_generation) and athanor_generation > 0)) do
+    if held_by?(binding, attrs), do: binding, else: malformed_binding!(binding)
+  end
 
-  defp binding!(other),
+  defp binding!(other, _attrs), do: malformed_binding!(other)
+
+  # A device's binding is only that device context's own: it names the
+  # paired client the context was established through, and the issuance
+  # locks that client. On any other context it would name a client the
+  # context never proved. A remote person's identity row comes with the
+  # `key_epoch` their certificate was verified under, and neither without
+  # the other; no other kind carries either.
+  defp held_by?(%{source_kind: :device, source_id: client_id} = binding, attrs)
+       when is_binary(client_id) and client_id != "" do
+    Map.get(attrs, :auth_method) == :device and Map.get(attrs, :client_id) == client_id and
+      device_identity?(Map.get(binding, :identity), Map.get(binding, :key_epoch))
+  end
+
+  defp held_by?(%{source_kind: :device}, _attrs), do: false
+
+  defp held_by?(binding, _attrs),
+    do: is_nil(Map.get(binding, :identity)) and is_nil(Map.get(binding, :key_epoch))
+
+  defp device_identity?(nil, nil), do: true
+
+  defp device_identity?(
+         %{user_id: user_id, provenance: "remote", identifier: identifier} = identity,
+         key_epoch
+       )
+       when is_binary(user_id) and is_binary(identifier) and map_size(identity) == 3 and
+              is_binary(key_epoch) and key_epoch != "",
+       do: true
+
+  defp device_identity?(_identity, _key_epoch), do: false
+
+  @spec malformed_binding!(term()) :: no_return()
+  defp malformed_binding!(other),
     do:
       raise(ArgumentError, "credential_binding is malformed: #{Prima.LoggerContext.shape(other)}")
 

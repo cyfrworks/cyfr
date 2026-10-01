@@ -12,12 +12,12 @@ defmodule Arca.PairingInvitations do
   ## Opening
 
   `open/3` runs in the issuance transaction
-  (`Arca.SecurityTransitions.Issuance`): the person, the athanor and the
-  membership are locked in the standing order, the caller's `verify`
-  closure is asked over them (the seam its fresh confirmation is consumed
-  through, so the two commit together), and only then is the invitation
-  written, its expiry set on the database's clock and its prospective
-  client id reserved.
+  (`Arca.SecurityTransitions.Issuance`): the person, the athanor, the
+  membership and the credential the opener holds are locked in the
+  standing order, the caller's `verify` closure is asked over them (the
+  seam its fresh confirmation is consumed through, so the two commit
+  together), and only then is the invitation written, its expiry set on
+  the database's clock and its prospective client id reserved.
 
   ## Redeeming
 
@@ -51,7 +51,9 @@ defmodule Arca.PairingInvitations do
   Open an invitation in the actor's athanor: `attrs` names the `:user_id`
   and `:membership_id` it is opened under, the `:secret_hash` of its
   bearer secret (`sha256:<hex>`), the `:audience_home` and its
-  `:lifetime_ms`. `verify` is handed the locked rows (and the database's
+  `:lifetime_ms`, and optionally the `:source` credential the opener holds
+  (`t:Arca.SecurityTransitions.Issuance.source/0`), locked after the
+  membership. `verify` is handed the locked rows (and the database's
   time) and answers `:ok` or a refusal that writes nothing. Answers the
   invitation, its `prospective_client_id` reserved.
   """
@@ -66,7 +68,7 @@ defmodule Arca.PairingInvitations do
             user_id: fields.user_id,
             athanor_id: athanor_id,
             membership_id: fields.membership_id,
-            source: nil
+            source: Map.get(attrs, :source)
           }
 
           Issuance.run(targets, verify, fn locked ->

@@ -11,8 +11,7 @@ defmodule Sanctum.Providers.Key do
 
   require Logger
   require Prima.ConsentSignal
-
-  @standing_refusals [:missing_generation, :stale_generation, :unauthenticated]
+  require Sanctum.Issuance
 
   # A sensitive change's own answers (`Sanctum.Consent.Authz`), which pass
   # as they are: the confirmation signal is matched apart, by its shape.
@@ -165,8 +164,8 @@ defmodule Sanctum.Providers.Key do
           {:error,
            "Scope #{inspect(scope_list)} exceeds allowed scopes for this key type: #{inspect(ceiling)}"}
 
-        {:error, reason} when reason in @standing_refusals ->
-          {:error, standing_refusal(reason)}
+        {:error, reason} when Sanctum.Issuance.standing_refusal?(reason) ->
+          {:error, Sanctum.Issuance.standing_refusal(reason)}
 
         {:error, {tag, payload} = signal} when Prima.ConsentSignal.is_signal(tag, payload) ->
           {:error, signal}
@@ -225,8 +224,8 @@ defmodule Sanctum.Providers.Key do
          "#{name} carries a consent capability and cannot be rotated — " <>
            "revoke it and mint a new key, which asks for consent again"}
 
-      {:error, reason} when reason in @standing_refusals ->
-        {:error, standing_refusal(reason)}
+      {:error, reason} when Sanctum.Issuance.standing_refusal?(reason) ->
+        {:error, Sanctum.Issuance.standing_refusal(reason)}
 
       {:error, {tag, payload} = signal} when Prima.ConsentSignal.is_signal(tag, payload) ->
         {:error, signal}
@@ -252,17 +251,6 @@ defmodule Sanctum.Providers.Key do
   end
 
   # --- helpers ---
-
-  # The issuance refusals (`Sanctum.ApiKey`): the caller's standing, as the
-  # context read it, no longer holds — or was never read.
-  defp standing_refusal(:missing_generation),
-    do: "This session cannot issue a key; sign in again"
-
-  defp standing_refusal(:stale_generation),
-    do: "Your standing changed since this session was read; sign in again"
-
-  defp standing_refusal(:unauthenticated),
-    do: "Your session, membership or athanor no longer stands; sign in again"
 
   defp parse_key_type_arg("application"), do: {:ok, :application}
   defp parse_key_type_arg("service"), do: {:ok, :service}
