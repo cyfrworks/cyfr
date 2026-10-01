@@ -63,6 +63,11 @@ if config_env() == :test do
   # be minted (`Sanctum.TinctureAuth`).
   config :arca, control_plane_claim_enabled: false
 
+  # The stored-grant check reads every athanor's consent heads at boot,
+  # outside any test's sandbox, as the umbrella's suite turns it off
+  # (`config/test.exs`); its tests drive `Sanctum.Consent.StoredGrants`.
+  config :sanctum, stored_grants_check_enabled: false
+
   # The caller bound is off: the establish memo keeps nothing, so tests
   # assert on the uncached pipeline, and a retained context is revalidated
   # before each use. A sandbox rollback is a write no invalidation ever

@@ -22,7 +22,7 @@ defmodule Crucible.AttemptRecoveryTest do
   setup tags do
     Cyfr.Test.Sandbox.setup!(tags)
     Sanctum.TestContext.athanor!()
-    {:ok, ctx: Sanctum.TestContext.local()}
+    {:ok, ctx: Sanctum.TestContext.local(:api)}
   end
 
   test "a lapsed attempt under a foreign runner is swept, refused, and succeeded", %{ctx: ctx} do

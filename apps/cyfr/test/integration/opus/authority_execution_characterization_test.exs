@@ -31,7 +31,7 @@ defmodule Opus.AuthorityExecutionCharacterizationTest do
     # The production source, not the Memory fixture: bootstrap writes real
     # rows and the loader reads them back.
 
-    ctx = Sanctum.TestContext.local()
+    ctx = Sanctum.TestContext.local(:api)
     :ok = Probe.publish_probe!(ctx)
     {:ok, %{minted: minted}} = Bootstrap.run(ctx)
     assert @probe_node in minted

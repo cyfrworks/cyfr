@@ -50,7 +50,7 @@ defmodule Aqua.Providers.NotesTest do
     {:ok, _} = Sanctum.Tenancy.Members.create(%{user_id: user, athanor_id: mine.id})
     {:ok, athanor} = Sanctum.Tenancy.Athanors.create_group(user, "Trip #{n}")
 
-    ctx = %{Sanctum.TestContext.local() | user_id: user, athanor_id: athanor.id}
+    ctx = %{Sanctum.TestContext.local(:prism) | user_id: user, athanor_id: athanor.id}
     {:ok, home} = Sanctum.Context.focus(ctx, mine.id)
     {:ok, ctx: ctx, home: home, mine: mine, athanor: athanor}
   end

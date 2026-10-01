@@ -47,6 +47,7 @@ fn [user_id, name] ->
         blob_digest: Prima.JCS.hash_binary("{}"),
         resolved_policy: "{}",
         activation: Jason.encode!(%{}),
+        admitted_origins: [:interactive],
         granted_by: user.id,
         granted_via: "interactive"
       },

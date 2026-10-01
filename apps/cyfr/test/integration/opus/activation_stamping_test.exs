@@ -21,7 +21,7 @@ defmodule Opus.ActivationStampingTest do
 
     Cyfr.Test.Sandbox.setup!(tags)
 
-    ctx = Sanctum.TestContext.local()
+    ctx = Sanctum.TestContext.local(:api)
     :ok = Probe.publish_probe!(ctx)
     {:ok, %{minted: minted}} = Bootstrap.run(ctx)
     assert @probe_node in minted

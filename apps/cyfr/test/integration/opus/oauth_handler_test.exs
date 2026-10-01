@@ -22,13 +22,14 @@ defmodule Opus.OAuthHandlerTest do
 
   setup tags do
     Cyfr.Test.Sandbox.setup!(tags)
-    {:ok, ctx: Sanctum.TestContext.local()}
+    {:ok, ctx: Sanctum.TestContext.local(:api)}
   end
 
   # The import of a guest whose attempt is attached with `opts`
   # (`Cyfr.Test.AttemptFixtures.attached!/1`), and that attempt.
   defp token_fn(opts) do
-    attempt = AttemptFixtures.attached!(opts)
+    attempt =
+      AttemptFixtures.attached!(Keyword.put_new(opts, :ctx, Sanctum.TestContext.local(:api)))
 
     client =
       Opus.HostClient.new(attempt.keys, attempt.runner, attempt.boot, %{

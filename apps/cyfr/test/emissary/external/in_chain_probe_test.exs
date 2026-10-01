@@ -55,7 +55,7 @@ defmodule Emissary.External.InChainProbeTest do
     Cyfr.Test.Sandbox.setup!(tags)
 
     # A seated member with a session, as the suite's sign-in leaves it.
-    issuer = Sanctum.TestContext.issuer!(Sanctum.TestContext.local())
+    issuer = Sanctum.TestContext.issuer!(Sanctum.TestContext.local(:api))
     {:ok, session} = Sanctum.Session.create(issuer)
 
     {:ok, server} =
@@ -137,7 +137,9 @@ defmodule Emissary.External.InChainProbeTest do
   # root's id is answered beside it for the assertions.
   defp in_chain(token, name, arguments) do
     args = %{"token" => token, "name" => name, "arguments" => arguments, "plane" => "in_chain"}
+    # The probe's chain is a run over the API.
     {:ok, ctx} = Sanctum.Caller.establish(args["token"])
+    ctx = Sanctum.TestContext.via(ctx, :api)
 
     {:ok, grant} = Sanctum.ExecutionStanding.capture(ctx)
 

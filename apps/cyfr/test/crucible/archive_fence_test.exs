@@ -94,6 +94,7 @@ defmodule Crucible.ArchiveFenceTest do
     athanor
   end
 
+  # A run over the API: the admission path every root here models.
   defp ctx(athanor_id),
     do:
       Sanctum.internal_context(
@@ -102,6 +103,7 @@ defmodule Crucible.ArchiveFenceTest do
         scope: :athanor,
         permissions: [:*]
       )
+      |> Sanctum.TestContext.via(:api)
 
   defp archive!(athanor) do
     {:ok, archived} = Athanors.archive(athanor, force: true)
@@ -246,6 +248,7 @@ defmodule Crucible.ArchiveFenceTest do
           auth_method: :oidc,
           authenticated: true
         )
+        |> Sanctum.TestContext.via(:prism)
 
       fixture =
         AttemptFixtures.attached!(
@@ -513,7 +516,8 @@ defmodule Crucible.ArchiveFenceTest do
           reference: "reagent:local.fence-root:0.1.0",
           user_id: ctx.user_id,
           athanor_id: ctx.athanor_id,
-          component_type: "formula"
+          component_type: "formula",
+          origin: ctx.origin
         },
         grant: grant,
         verify: &Sanctum.ExecutionStanding.verify/1
@@ -550,7 +554,7 @@ defmodule Crucible.ArchiveFenceTest do
     {:ok, %{turn: turn}} =
       Arca.TurnStorage.accept_message(actor(ctx), thread.id, %{
         message: %{author: ctx.user_id, content: "@aqua go"},
-        turn: %{agent: "aqua", requested_by: ctx.user_id}
+        turn: %{agent: "aqua", requested_by: ctx.user_id, origin: :interactive}
       })
 
     {:ok, %{execution: root, attempt: attempt}} =
@@ -562,7 +566,8 @@ defmodule Crucible.ArchiveFenceTest do
           athanor_id: ctx.athanor_id,
           component_type: "agent",
           kind: "turn",
-          turn_id: turn.id
+          turn_id: turn.id,
+          origin: :programmatic
         },
         reservation: %{budget_id: "bgt_#{System.unique_integer([:positive])}", cap: 4},
         grant: grant,

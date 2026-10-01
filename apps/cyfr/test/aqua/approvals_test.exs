@@ -43,7 +43,7 @@ defmodule Aqua.ApprovalsTest do
       end
     end)
 
-    ctx = Sanctum.TestContext.local()
+    ctx = Sanctum.TestContext.local(:prism)
     :ok = Sanctum.TestContext.shipped!(ctx.athanor_id)
     {:ok, %{errors: 0}} = Compendium.AutoIndexer.scan(ctx: ctx)
     {:ok, _} = Compendium.AgentIndex.sync(ctx)
@@ -78,7 +78,8 @@ defmodule Aqua.ApprovalsTest do
           athanor_id: ctx.athanor_id,
           component_type: "agent",
           kind: "turn",
-          turn_id: turn.id
+          turn_id: turn.id,
+          origin: :interactive
         },
         reservation: %{budget_id: "bgt_#{System.unique_integer([:positive])}", cap: 4},
         grant: Cyfr.Test.AttemptFixtures.grant(ctx.athanor_id),
@@ -196,6 +197,38 @@ defmodule Aqua.ApprovalsTest do
 
     assert {:error, {:scope_not_permitted, "destructive"}} =
              Approvals.resolve(ctx, destructive.id, %{decision: :approved, scope: :thread})
+  end
+
+  test "an unbounded thread-scope allow over approval.resolve stands, judged under the turn's origin",
+       %{ctx: ctx, thread: thread, pins: pins} do
+    turn = started!(ctx, thread, pins)
+    %{approval: approval} = card!(ctx, turn, @keep, standing: "thread")
+
+    # Sent over the API: the approver's line is programmatic, and the pin
+    # check reads the turn's grant under the interactive origin its row
+    # stores. An allow for this chat with no lifecycle, deadline or
+    # constraint is narrower than the agent-scope answer and stays
+    # accepted, though the console offers only its five bounded choices.
+    api = Sanctum.TestContext.via(ctx, :api)
+
+    assert {:ok, _resolved} =
+             Grimoire.call_external("approval", api, %{
+               "action" => "resolve",
+               "approval" => approval.id,
+               "decision" => "approve",
+               "scope" => "thread"
+             })
+
+    assert {:ok,
+            [
+              %{
+                effect: "allow",
+                scope: "thread",
+                lifecycle_kind: nil,
+                expires_at: nil,
+                constraint: nil
+              }
+            ]} = Aqua.ToolGrants.for_thread(ctx, thread.id, "aqua")
   end
 
   describe "a bounded standing approval" do
@@ -662,7 +695,7 @@ defmodule Aqua.ApprovalsTest do
 
   describe "ttl_seconds/1" do
     test "is the athanor's setting in hours, else the configured default, never a bad value" do
-      ctx = Sanctum.TestContext.local()
+      ctx = Sanctum.TestContext.local(:prism)
       assert Approvals.ttl_seconds(ctx) == 24 * 3600
 
       {:ok, athanor} = Sanctum.Tenancy.Athanors.get(ctx.athanor_id)

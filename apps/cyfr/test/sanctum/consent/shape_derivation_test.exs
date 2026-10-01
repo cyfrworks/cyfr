@@ -29,7 +29,7 @@ defmodule Sanctum.Consent.ShapeDerivationTest do
         else: Application.delete_env(:arca, :base_path)
     end)
 
-    {:ok, ctx: Sanctum.TestContext.local()}
+    {:ok, ctx: Sanctum.TestContext.local(:prism)}
   end
 
   defp publish!(ctx, name, version, attrs \\ %{}) do
@@ -303,6 +303,37 @@ defmodule Sanctum.Consent.ShapeDerivationTest do
 
       {:ok, explicit} = ShapeDerivation.shape_input(ctx, "reagent:local.shape-empty-blocks")
       assert Map.delete(input, :source_ref) == Map.delete(explicit, :source_ref)
+    end
+
+    test "a stored caps block the grammar no longer admits is refused, never read as empty",
+         %{ctx: ctx} do
+      publish!(ctx, "shape-respelled", "1.0.0", %{
+        manifest: Jason.encode!(%{"caps" => %{"storage" => %{"paths" => ["data/secrets/"]}}})
+      })
+
+      ref = "reagent:local.shape-respelled"
+
+      assert {:ok, %{caps: %{"storage.paths" => ["data/secrets/"]}}} =
+               ShapeDerivation.shape_input(ctx, ref)
+
+      # A release published before the grammar refused the spelling: its
+      # row reached past the publish check, as one written then is.
+      stored = Jason.encode!(%{"caps" => %{"storage" => %{"paths" => ["data//secrets/"]}}})
+
+      {1, _} =
+        Arca.Repo.update_all(
+          Ecto.Query.from(c in Arca.Schemas.Component, where: c.name == "shape-respelled"),
+          set: [manifest: stored]
+        )
+
+      Compendium.Registry.invalidate_executor_caches(ctx)
+
+      assert {:error, {:corrupt, {:manifest, ^ref}}} = ShapeDerivation.shape_input(ctx, ref)
+      assert {:error, {:corrupt, {:manifest, ^ref}}} = ShapeDerivation.manifest_blocks(ctx, ref)
+
+      # The builder reads the ask the same way: refused, not asked for nothing.
+      assert {:error, {:corrupt, {:manifest, ^ref}}} =
+               Sanctum.Consent.BlobBuilder.node_grant(ctx, ref, Jason.decode!(stored))
     end
 
     test "the reason text is not shape — editing it keeps the digest", %{ctx: ctx} do

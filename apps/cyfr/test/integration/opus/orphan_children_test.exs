@@ -56,7 +56,7 @@ defmodule Opus.OrphanChildrenTest do
     previous = Map.new(keys, &{&1, Application.get_env(:arca, &1)})
     Application.put_env(:arca, :base_path, test_path)
 
-    ctx = Sanctum.TestContext.local()
+    ctx = Sanctum.TestContext.local(:api)
 
     on_exit(fn ->
       Prima.Slots.forgive_unreaped(Crucible.Slots, ctx.athanor_id)
@@ -265,7 +265,7 @@ defmodule Opus.OrphanChildrenTest do
 
     assert Arca.Repo.all(children) == []
     assert Sanctum.Authority.budget(authority).in_flight == 0
-    assert charges(Sanctum.TestContext.local(), authority) == []
+    assert charges(Sanctum.TestContext.local(:api), authority) == []
   end
 
   defp brief_limits do

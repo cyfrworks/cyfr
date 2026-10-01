@@ -45,7 +45,7 @@ defmodule Crucible.TurnRootTest do
       end
     end)
 
-    ctx = Sanctum.TestContext.local()
+    ctx = Sanctum.TestContext.local(:prism)
     :ok = Sanctum.TestContext.shipped!(ctx.athanor_id)
     {:ok, %{errors: 0}} = Compendium.AutoIndexer.scan(ctx: ctx)
     {:ok, _} = Compendium.AgentIndex.sync(ctx)
@@ -57,7 +57,7 @@ defmodule Crucible.TurnRootTest do
     {:ok, %{turn: turn}} =
       TurnStorage.accept_message(Sanctum.Context.actor(ctx), thread.id, %{
         message: %{author: ctx.user_id, content: "@aqua go"},
-        turn: %{agent: "aqua", requested_by: ctx.user_id}
+        turn: %{agent: "aqua", requested_by: ctx.user_id, origin: :interactive}
       })
 
     {:ok, ctx: ctx, turn: turn}

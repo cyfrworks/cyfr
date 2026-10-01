@@ -34,7 +34,8 @@ defmodule Arca.ExecutionAttemptsTest do
           user_id: actor.user_id,
           athanor_id: actor.athanor_id,
           component_type: "catalyst",
-          input: "{}"
+          input: "{}",
+          origin: :programmatic
         },
         opts ++ Arca.Test.Actor.standing(actor.athanor_id)
       )

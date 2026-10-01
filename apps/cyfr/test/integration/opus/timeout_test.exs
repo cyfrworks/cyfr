@@ -21,7 +21,7 @@ defmodule Opus.TimeoutTest do
     # Checkout the Ecto sandbox to isolate SQLite data between tests
     Cyfr.Test.Sandbox.setup!(tags)
 
-    ctx = Sanctum.TestContext.local()
+    ctx = Sanctum.TestContext.local(:api)
 
     # Plant the test WASM in a private seed so bootstrap can mint it.
     Cyfr.Test.SeedBundle.isolate!()

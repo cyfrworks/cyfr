@@ -39,9 +39,11 @@ defmodule Cyfr.Cluster.ExecutionTest do
     test "has each of its three kinds of work settled by its peer, or left alone" do
       Cell.call(:a, Cyfr.Cluster.Holder, :release!, [])
 
-      intent = Cell.call(:a, Cyfr.Cluster.Holder, :attach!, [:intent, [attach: false]])
-      dispatched = Cell.call(:a, Cyfr.Cluster.Holder, :attach!, [:dispatched, []])
-      committed = Cell.call(:a, Cyfr.Cluster.Holder, :attach!, [:committed, []])
+      intent =
+        Cell.call(:a, Cyfr.Cluster.Holder, :attach!, [:intent, [ctx: api(), attach: false]])
+
+      dispatched = Cell.call(:a, Cyfr.Cluster.Holder, :attach!, [:dispatched, [ctx: api()]])
+      committed = Cell.call(:a, Cyfr.Cluster.Holder, :attach!, [:committed, [ctx: api()]])
 
       assert %{"ok" => _} = Cell.call(:a, Cyfr.Cluster.Holder, :complete, [:committed])
 
@@ -103,7 +105,7 @@ defmodule Cyfr.Cluster.ExecutionTest do
 
     test "leaves a lapsed attempt its peer settles once, however many members sweep" do
       Cell.call(:a, Cyfr.Cluster.Holder, :release!, [])
-      held = Cell.call(:a, Cyfr.Cluster.Holder, :attach!, [:swept, []])
+      held = Cell.call(:a, Cyfr.Cluster.Holder, :attach!, [:swept, [ctx: api()]])
 
       # The sweep's authority is the row: `lapse/2` matches the exact
       # `lease_until` the scan observed, so two members sweeping one
@@ -131,4 +133,7 @@ defmodule Cyfr.Cluster.ExecutionTest do
       assert row["completed_at"]
     end
   end
+
+  # The attempts here are runs started over the API.
+  defp api, do: Sanctum.TestContext.local(:api)
 end

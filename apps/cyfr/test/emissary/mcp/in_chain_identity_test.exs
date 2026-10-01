@@ -82,6 +82,7 @@ defmodule Emissary.MCP.InChainIdentityTest do
 
     ctx =
       Context.enter_guest(%Context{
+        origin: :programmatic,
         user_id: "identity_matrix_user",
         athanor_id: "ath_test",
         scope: :athanor,
@@ -114,6 +115,7 @@ defmodule Emissary.MCP.InChainIdentityTest do
 
     ctx =
       Context.enter_guest(%Context{
+        origin: :programmatic,
         user_id: "identity_matrix_user",
         athanor_id: "ath_test",
         scope: :athanor,
@@ -139,6 +141,7 @@ defmodule Emissary.MCP.InChainIdentityTest do
   test "call_external rejects a guest-plane context outright" do
     ctx =
       Context.enter_guest(%Context{
+        origin: :programmatic,
         user_id: "identity_matrix_user",
         athanor_id: "ath_test",
         permissions: MapSet.new([:*]),
@@ -154,6 +157,7 @@ defmodule Emissary.MCP.InChainIdentityTest do
 
     ctx =
       Context.enter_guest(%Context{
+        origin: :programmatic,
         user_id: "identity_matrix_user",
         athanor_id: "ath_test",
         permissions: MapSet.new([:*]),
@@ -175,6 +179,7 @@ defmodule Emissary.MCP.InChainIdentityTest do
 
     ctx =
       Context.enter_guest(%Context{
+        origin: :programmatic,
         user_id: "identity_matrix_user",
         athanor_id: "ath_test",
         permissions: MapSet.new([:*]),
@@ -212,6 +217,7 @@ defmodule Emissary.MCP.InChainIdentityTest do
 
     ctx =
       Context.enter_guest(%Context{
+        origin: :programmatic,
         user_id: "identity_matrix_user",
         athanor_id: "ath_test",
         permissions: MapSet.new([:*]),
@@ -235,6 +241,7 @@ defmodule Emissary.MCP.InChainIdentityTest do
 
     ctx =
       Context.enter_guest(%Context{
+        origin: :programmatic,
         user_id: "identity_matrix_user",
         athanor_id: "ath_test",
         permissions: MapSet.new([:*]),

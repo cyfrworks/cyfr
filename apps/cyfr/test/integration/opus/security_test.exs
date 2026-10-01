@@ -39,6 +39,7 @@ defmodule Opus.SecurityTest do
         namespace: "testns",
         authenticated: true
       )
+      |> Sanctum.TestContext.via(:api)
 
     # A run is admitted only in an athanor that stands: the test's own has a row.
     Arca.Test.Actor.athanor!(ctx.athanor_id)

@@ -23,8 +23,9 @@ defmodule Aqua.Runner do
   engine being up (`:execution_unavailable`), and the queue having room
   (`:busy`). Only then is the message accepted, atomically with the
   turn — or attached to the running turn as a steer when its own sender
-  writes again, or queued behind it. A `client_id` the thread
-  already accepted answers the same identity.
+  writes again under the origin the turn records, or queued behind it as
+  a turn of its own. A `client_id` the thread already accepted answers
+  the same identity.
 
   ## Turns
 
@@ -657,21 +658,35 @@ defmodule Aqua.Runner do
     end
   end
 
-  # The turn's own sender writing again to the same agent steers it —
-  # while it runs, or while it is paused (the row waits on the tape and
-  # is drained on resume). A line to another agent, or from another
-  # member, is a turn of its own.
-  defp steer?(%{live: %{user_id: user_id, agent: name}}, %Context{user_id: user_id}, name),
-    do: true
-
+  # The turn's own sender writing again to the same agent, under the
+  # origin the turn's row records, steers it — while it runs, or while it
+  # is paused (the row waits on the tape and is drained on resume). A line
+  # to another agent, from another member, or admitted under another
+  # origin is a turn of its own, judged by its own grant: an API key's
+  # `programmatic` line never acts inside an `interactive` turn.
   defp steer?(
-         %{live: nil, paused: %{user_id: user_id, agent: name}},
-         %Context{user_id: user_id},
+         %{live: %{user_id: user_id, agent: name} = live},
+         %Context{user_id: user_id} = ctx,
          name
        ),
-       do: true
+       do: same_origin?(ctx, live)
+
+  defp steer?(
+         %{live: nil, paused: %{user_id: user_id, agent: name} = paused},
+         %Context{user_id: user_id} = ctx,
+         name
+       ),
+       do: same_origin?(ctx, paused)
 
   defp steer?(_state, _ctx, _name), do: false
+
+  # Whether a line's admission origin is the one the turn's row records
+  # (its wire spelling). A context with no origin, or a turn that records
+  # none, drives nothing.
+  defp same_origin?(%Context{origin: origin}, %{origin: stored}) when is_binary(stored),
+    do: Prima.Origin.origin?(origin) and Prima.Origin.to_wire(origin) == stored
+
+  defp same_origin?(_ctx, _turn), do: false
 
   defp busy?(%{live: nil, paused: nil, held: held}) when map_size(held) == 0, do: false
   defp busy?(_state), do: true
@@ -681,7 +696,7 @@ defmodule Aqua.Runner do
 
     case Tape.accept(ctx, state.id, %{message: message(ctx, text, opts), steer_turn_id: turn_id}) do
       {:ok, %{message: row, replayed: replayed}} ->
-        {:reply, {:ok, result(row, turn_id, replayed, :steer)}, touch(acknowledge(state))}
+        {:reply, {:ok, result(row, turn_id, replayed, :steer)}, touch(acknowledge(state, ctx))}
 
       # The turn ended before its end reached this process: the line opens
       # the next turn, queued behind the end.
@@ -694,21 +709,23 @@ defmodule Aqua.Runner do
   end
 
   # A turn stopped on a call whose outcome is unknown continues on its
-  # sender's next line — the one past the boundary the stop moved; a
-  # replayed earlier line is not that.
-  defp acknowledge(%{live: nil, paused: %{reason: :uncertain, turn_id: turn_id} = paused} = state) do
-    case Tape.turn(state.ctx, turn_id) do
-      {:ok, %{status: "paused"} = turn} ->
-        if Tape.steer_pending?(state.ctx, turn),
-          do: continue(%{state | paused: nil}, entry_of(paused), :resume),
-          else: state
-
-      _ ->
-        state
+  # sender's next line — the one past the boundary the stop moved, sent
+  # under the origin the turn records; a replayed earlier line is not
+  # that, and neither is a line of another origin.
+  defp acknowledge(
+         %{live: nil, paused: %{reason: :uncertain, turn_id: turn_id} = paused} = state,
+         ctx
+       ) do
+    with true <- same_origin?(ctx, paused),
+         {:ok, %{status: "paused"} = turn} <- Tape.turn(state.ctx, turn_id),
+         true <- Tape.steer_pending?(state.ctx, turn) do
+      continue(%{state | paused: nil}, entry_of(paused), :resume)
+    else
+      _ -> state
     end
   end
 
-  defp acknowledge(state), do: state
+  defp acknowledge(state, _ctx), do: state
 
   defp entry_of(paused),
     do: paused |> Map.take([:turn_id, :user_id, :agent, :origin]) |> Map.put(:ctx, nil)

@@ -105,16 +105,17 @@ defmodule Emissary.MCP.ActionCoverageTest do
   # operation's caller holds the operator capability, and one that is also
   # interactive is that person signed in.
   defp external_context(%Prima.Operation{scope: :platform, consent: :interactive}),
-    do: %{Sanctum.TestContext.local() | permissions: MapSet.new([:*]), platform_admin: true}
+    do: %{Sanctum.TestContext.local(:api) | permissions: MapSet.new([:*]), platform_admin: true}
 
   defp external_context(%Prima.Operation{scope: :platform}),
     do: Sanctum.TestContext.platform(permissions: [:*], platform_admin: true)
 
   defp external_context(_operation),
-    do: %{Sanctum.TestContext.local() | permissions: MapSet.new([:*])}
+    do: %{Sanctum.TestContext.local(:api) | permissions: MapSet.new([:*])}
 
   defp chain_context do
     Context.enter_guest(%Context{
+      origin: :programmatic,
       user_id: "action_coverage_user",
       athanor_id: Sanctum.TestContext.athanor_id(),
       scope: :athanor,

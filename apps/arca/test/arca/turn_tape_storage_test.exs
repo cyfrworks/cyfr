@@ -42,7 +42,8 @@ defmodule Arca.TurnTapeStorageTest do
           athanor_id: actor.athanor_id,
           component_type: "agent",
           kind: "turn",
-          turn_id: turn_id
+          turn_id: turn_id,
+          origin: :interactive
         },
         reservation: %{budget_id: budget_id, cap: 4},
         grant: Arca.Test.Actor.grant(actor.athanor_id),
@@ -64,7 +65,8 @@ defmodule Arca.TurnTapeStorageTest do
           agent: "aqua",
           requested_by: Keyword.get(opts, :author, actor.user_id),
           model: Keyword.get(opts, :model),
-          options: %{"room" => nil}
+          options: %{"room" => nil},
+          origin: :interactive
         }
       })
 
@@ -202,7 +204,7 @@ defmodule Arca.TurnTapeStorageTest do
       assert {:error, :duplicate_client_id} =
                TurnStorage.accept_message(actor, thread.id, %{
                  message: %{author: actor.user_id, content: "@aqua do it", client_id: "c-1"},
-                 turn: %{agent: "aqua", requested_by: actor.user_id}
+                 turn: %{agent: "aqua", requested_by: actor.user_id, origin: :interactive}
                })
 
       assert {:ok, %{message: %{id: mid}, turn: %{id: tid}}} =

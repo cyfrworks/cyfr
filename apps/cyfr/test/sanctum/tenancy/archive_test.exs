@@ -115,7 +115,8 @@ defmodule Sanctum.Tenancy.ArchiveTest do
   # service, whose runner attached and hangs. Answers its execution id and
   # the process waiting on it.
   defp running!(athanor_id, user_id) do
-    ctx = member_ctx(athanor_id, user_id)
+    # A member's run over the API.
+    ctx = athanor_id |> member_ctx(user_id) |> Sanctum.TestContext.via(:api)
 
     {:ok, _} =
       Compendium.Registry.publish_bytes(ctx, File.read!(@math_wasm_path), %{

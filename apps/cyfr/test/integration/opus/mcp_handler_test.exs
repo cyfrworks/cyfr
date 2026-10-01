@@ -32,7 +32,7 @@ defmodule Opus.FormulaHandlerMcpTest do
     original_base_path = Application.get_env(:arca, :base_path)
     Application.put_env(:arca, :base_path, test_dir)
 
-    ctx = Sanctum.TestContext.local()
+    ctx = Sanctum.TestContext.local(:api)
 
     on_exit(fn ->
       File.rm_rf!(test_dir)

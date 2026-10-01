@@ -18,7 +18,7 @@ defmodule Crucible.ChargeTest do
     Arca.Cache.init()
     Cyfr.Test.Sandbox.setup!(tags)
 
-    ctx = Sanctum.TestContext.local()
+    ctx = Sanctum.TestContext.local(:api)
     auth = AuthorityFixtures.root!()
     root_id = "exec_charge_id_root_#{System.unique_integer([:positive])}"
 
@@ -29,7 +29,8 @@ defmodule Crucible.ChargeTest do
           reference: "#{AuthorityFixtures.formula_ref()}:1.0.0",
           user_id: ctx.user_id,
           athanor_id: ctx.athanor_id,
-          component_type: "formula"
+          component_type: "formula",
+          origin: :programmatic
         },
         reservation: %{budget_id: auth.budget.id, cap: 1},
         grant: Cyfr.Test.AttemptFixtures.grant(ctx.athanor_id),

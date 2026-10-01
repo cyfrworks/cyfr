@@ -37,7 +37,7 @@ defmodule Crucible.CardsTest do
     prev = Map.new(keys, fn {app, key} -> {{app, key}, Application.get_env(app, key)} end)
     Application.put_env(:arca, :base_path, base)
 
-    owner = Sanctum.TestContext.local()
+    owner = Sanctum.TestContext.local(:prism)
     _athanor = Sanctum.TestContext.athanor!()
 
     on_exit(fn ->
@@ -66,18 +66,19 @@ defmodule Crucible.CardsTest do
     {:ok, owner: owner, ctx: person, other: other}
   end
 
-  # A signed-in person of the fixture athanor, as a request establishes one.
+  # A signed-in person of the fixture athanor, as a request establishes one
+  # and Prism admits it: interactive.
   defp person!(namespace) do
     issuer =
       Sanctum.TestContext.issuer!(%{
-        Sanctum.TestContext.local()
+        Sanctum.TestContext.local(:prism)
         | user_id: "local|local|#{namespace}",
           namespace: namespace
       })
 
     {:ok, session} = Sanctum.TestContext.create_session(issuer)
     {:ok, ctx} = Sanctum.Caller.establish(session.token)
-    ctx
+    Sanctum.TestContext.via(ctx, :prism)
   end
 
   # The card tincture: a sourced card, a card whose projection breaks its

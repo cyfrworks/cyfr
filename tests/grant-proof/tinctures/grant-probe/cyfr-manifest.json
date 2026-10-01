@@ -1,0 +1,22 @@
+{
+  "name": "grant-probe",
+  "type": "tincture",
+  "version": "1.0.0",
+  "publisher": "local",
+  "description": "The grant proof's tincture: it asks for two hosts, a folder and a key it can go without.",
+  "needs": {
+    "feed": {
+      "type": "api_key:grant.test",
+      "fields": ["TOKEN"],
+      "reason": "to read the probe's feed",
+      "required": false
+    }
+  },
+  "caps": {
+    "egress": {"domains": ["alpha.grant.test", "beta.grant.test"], "methods": ["GET"]},
+    "storage": {"paths": ["data/probe/"], "actions": ["read"]}
+  },
+  "tincture": {
+    "entry": "index.html"
+  }
+}

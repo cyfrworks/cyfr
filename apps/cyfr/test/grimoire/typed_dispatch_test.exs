@@ -29,7 +29,7 @@ defmodule Grimoire.TypedDispatchTest do
         ceiling: AuthorityFixtures.ceiling()
       )
 
-    {:ok, ctx: Sanctum.TestContext.local(), authority: authority}
+    {:ok, ctx: Sanctum.TestContext.local(:api), authority: authority}
   end
 
   defp wire(ctx, args) do
@@ -106,6 +106,7 @@ defmodule Grimoire.TypedDispatchTest do
           permissions: [:execute],
           authenticated: true
         )
+        |> Sanctum.TestContext.via(:api)
 
       args = %{"action" => "admin_echo"}
 
@@ -150,7 +151,7 @@ defmodule Grimoire.TypedDispatchTest do
     authority: authority
   } do
     Catalog.with_providers([Probe.Typed], fn ->
-      Sanctum.Test.AuthorityFixtures.reserve!(authority, ctx.athanor_id)
+      Sanctum.Test.AuthorityFixtures.reserve!(authority, ctx.athanor_id, ctx.origin)
       before = Sanctum.Authority.budget(authority)
 
       assert {:error, %Refusal{stage: :admission, reason: {:invalid_argument, _}}} =

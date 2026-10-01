@@ -116,8 +116,9 @@ defmodule Arca.TurnStorage do
     and `:client_id` (the sender's retry identity).
   - `:turn` — `%{agent, requested_by, model, options, origin}` to open an
     `accepted` turn keyed by the message, `origin` the `Prima.Origin` it
-    was admitted under (a turn naming none is accepted without one), kept on the row so a turn
-    recovered after a restart resumes under it; `nil` for room content.
+    was admitted under, kept on the row so a turn recovered after a
+    restart resumes under it; `nil` for room content. A turn naming no
+    origin is refused `{:error, :no_origin}` with nothing written.
   - `:steer_turn_id` — attach the message to an open turn of the thread
     instead; a turn that has ended answers `{:error, :turn_over}`. The
     turn's row is locked before the message is written, so a steer and
@@ -249,10 +250,11 @@ defmodule Arca.TurnStorage do
   end
 
   # The origin a turn is accepted under (`Prima.Origin`, an atom or its
-  # wire spelling), stored as the spelling; none is admitted without one,
-  # and anything outside the enum rolls the acceptance back.
+  # wire spelling), stored as the spelling. A turn with none, or with
+  # anything outside the enum, rolls the acceptance back: no default
+  # stands in for the admission path that accepted it.
   # arca:db-raise-ok inside the caller's transaction
-  defp origin!(nil), do: nil
+  defp origin!(nil), do: Arca.Repo.rollback(:no_origin)
 
   defp origin!(origin) when is_atom(origin) do
     if Prima.Origin.origin?(origin),
@@ -1835,7 +1837,9 @@ defmodule Arca.TurnStorage do
                 agent_revision_digest: Map.get(attrs, :agent_revision_digest),
                 agent_capability_digest: Map.get(attrs, :agent_capability_digest),
                 recovery_limit: parent.recovery_limit,
-                origin: parent.origin,
+                # A clone runs under its parent turn's origin, and a parent
+                # that records none has no origin to hand on.
+                origin: parent.origin || Arca.Repo.rollback(:no_origin),
                 fence: 1,
                 runner_id: Prima.Boot.id(),
                 status: "running",

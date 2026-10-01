@@ -84,7 +84,10 @@ defmodule Crucible.HostTest do
   describe "attach" do
     test "claims the attempt for the runner and answers the fields its vault edge projects" do
       fixture =
-        AttemptFixtures.attached!(vault: %{kind: "api_key", fields: %{"KEY" => "sk-fixture"}})
+        AttemptFixtures.attached!(
+          ctx: Sanctum.TestContext.local(:api),
+          vault: %{kind: "api_key", fields: %{"KEY" => "sk-fixture"}}
+        )
 
       assert fixture.secrets == %{"KEY" => "sk-fixture"}
       claimed = Arca.Repo.get!(Arca.Schemas.ExecutionAttempt, fixture.attempt)
@@ -92,7 +95,7 @@ defmodule Crucible.HostTest do
     end
 
     test "a forged assignment is refused bad_mac and claims nothing" do
-      fixture = AttemptFixtures.attached!(attach: false)
+      fixture = AttemptFixtures.attached!(ctx: Sanctum.TestContext.local(:api), attach: false)
       {:ok, assignment} = Assignment.verify(fixture.assignment, Keys.assign_key(), now())
       {:ok, forged} = Assignment.sign(assignment, :crypto.strong_rand_bytes(32))
 
@@ -104,7 +107,10 @@ defmodule Crucible.HostTest do
 
     test "a repeated attach by the same runner is idempotent; a second runner is replayed" do
       fixture =
-        AttemptFixtures.attached!(vault: %{kind: "api_key", fields: %{"KEY" => "sk-fixture"}})
+        AttemptFixtures.attached!(
+          ctx: Sanctum.TestContext.local(:api),
+          vault: %{kind: "api_key", fields: %{"KEY" => "sk-fixture"}}
+        )
 
       assert %{"ok" => %{"KEY" => "sk-fixture"}} = attach(fixture)
       assert %{"error" => "replayed"} = attach(fixture, runner: "runner_second")
@@ -114,7 +120,7 @@ defmodule Crucible.HostTest do
     end
 
     test "an assignment whose claim deadline passed is refused" do
-      fixture = AttemptFixtures.attached!(attach: false)
+      fixture = AttemptFixtures.attached!(ctx: Sanctum.TestContext.local(:api), attach: false)
       {:ok, assignment} = Assignment.verify(fixture.assignment, Keys.assign_key(), now())
 
       {:ok, stale} =
@@ -125,8 +131,8 @@ defmodule Crucible.HostTest do
     end
 
     test "an assignment naming another attempt than the header is lost" do
-      fixture = AttemptFixtures.attached!(attach: false)
-      other = AttemptFixtures.attached!(attach: false)
+      fixture = AttemptFixtures.attached!(ctx: Sanctum.TestContext.local(:api), attach: false)
+      other = AttemptFixtures.attached!(ctx: Sanctum.TestContext.local(:api), attach: false)
 
       assert %{"error" => "lost"} =
                AttemptFixtures.call(fixture, "attach", %{"assignment" => other.assignment})
@@ -134,7 +140,12 @@ defmodule Crucible.HostTest do
 
     @tag :capture_log
     test "an assignment addressed to another worker service is lost and claims nothing" do
-      fixture = AttemptFixtures.attached!(attach: false, service_id: @service)
+      fixture =
+        AttemptFixtures.attached!(
+          ctx: Sanctum.TestContext.local(:api),
+          attach: false,
+          service_id: @service
+        )
 
       # The attempt as the other worker service would present it, with the
       # keys CYFR would derive for it there.
@@ -149,7 +160,12 @@ defmodule Crucible.HostTest do
 
     @tag :capture_log
     test "an attach or a call from another boot of the same worker service is lost" do
-      fixture = AttemptFixtures.attached!(attach: false, service_id: @service)
+      fixture =
+        AttemptFixtures.attached!(
+          ctx: Sanctum.TestContext.local(:api),
+          attach: false,
+          service_id: @service
+        )
 
       # The boot is signed beside the service but is no key input: the
       # header verifies, and the row's boot is what refuses it.
@@ -165,7 +181,13 @@ defmodule Crucible.HostTest do
 
     @tag :capture_log
     test "a header signed with the attempt's seal key, or another worker service's call key, is lost" do
-      fixture = AttemptFixtures.attached!(attach: false, service_id: @service)
+      fixture =
+        AttemptFixtures.attached!(
+          ctx: Sanctum.TestContext.local(:api),
+          attach: false,
+          service_id: @service
+        )
+
       {:ok, other} = Keys.attempt_keys(%{fixture.keys.attempt | service: "wrk_other"})
 
       assert capture_log(fn ->
@@ -179,6 +201,7 @@ defmodule Crucible.HostTest do
     test "an edge whose consent moved closes the run setup_required" do
       fixture =
         AttemptFixtures.attached!(
+          ctx: Sanctum.TestContext.local(:api),
           attach: false,
           vault: %{kind: "api_key", fields: %{"KEY" => "sk-fixture"}}
         )
@@ -201,7 +224,7 @@ defmodule Crucible.HostTest do
 
   describe "every call" do
     test "a header signed with another key is lost" do
-      fixture = AttemptFixtures.attached!()
+      fixture = AttemptFixtures.attached!(ctx: Sanctum.TestContext.local(:api))
 
       log =
         capture_log(fn ->
@@ -216,7 +239,7 @@ defmodule Crucible.HostTest do
     end
 
     test "a header from another generation is refused, though signed with that generation's key" do
-      fixture = AttemptFixtures.attached!()
+      fixture = AttemptFixtures.attached!(ctx: Sanctum.TestContext.local(:api))
       generation = fixture.generation + 1
       {:ok, keys} = Keys.attempt_keys(%{fixture.keys.attempt | generation: generation})
       opts = [generation: generation, call_key: keys.call]
@@ -239,7 +262,7 @@ defmodule Crucible.HostTest do
     end
 
     test "a header outside the time window is lost" do
-      fixture = AttemptFixtures.attached!()
+      fixture = AttemptFixtures.attached!(ctx: Sanctum.TestContext.local(:api))
 
       assert capture_log(fn ->
                assert %{"error" => "lost"} =
@@ -248,7 +271,7 @@ defmodule Crucible.HostTest do
     end
 
     test "a replayed nonce is refused, and the attempt keeps running" do
-      fixture = AttemptFixtures.attached!()
+      fixture = AttemptFixtures.attached!(ctx: Sanctum.TestContext.local(:api))
       :ok = Crucible.Events.subscribe(fixture.execution_id, fixture.ctx)
       body = AttemptFixtures.body("push_deltas", %{"deltas" => [delta(fixture, "once")]})
       header = AttemptFixtures.header(fixture, body)
@@ -261,7 +284,7 @@ defmodule Crucible.HostTest do
     end
 
     test "a call from a runner that is not the claimant is lost, and the attempt keeps running" do
-      fixture = AttemptFixtures.attached!()
+      fixture = AttemptFixtures.attached!(ctx: Sanctum.TestContext.local(:api))
 
       assert %{"error" => "lost"} = push(fixture, %{"type" => "note"}, runner: "runner_other")
       assert %{"ok" => %{} = renewals} = renew(%{fixture | runner: "runner_other"})
@@ -270,7 +293,7 @@ defmodule Crucible.HostTest do
     end
 
     test "a body that is not an operation is lost; one at another version is told so" do
-      fixture = AttemptFixtures.attached!()
+      fixture = AttemptFixtures.attached!(ctx: Sanctum.TestContext.local(:api))
 
       for body <- [
             "not json",
@@ -304,7 +327,7 @@ defmodule Crucible.HostTest do
 
   describe "renew" do
     test "renews the caller's own attempt, carries a cancel, and names any other attempt lost" do
-      fixture = AttemptFixtures.attached!()
+      fixture = AttemptFixtures.attached!(ctx: Sanctum.TestContext.local(:api))
 
       assert %{"ok" => %{} = renewals} = renew(fixture, [fixture.attempt, "att_other"])
       assert %{"lease_until" => until} = renewals[fixture.attempt]
@@ -316,7 +339,10 @@ defmodule Crucible.HostTest do
   describe "closing" do
     test "complete masks the output, closes the row and tells the waiter" do
       fixture =
-        AttemptFixtures.attached!(vault: %{kind: "api_key", fields: %{"KEY" => "sk-fixture"}})
+        AttemptFixtures.attached!(
+          ctx: Sanctum.TestContext.local(:api),
+          vault: %{kind: "api_key", fields: %{"KEY" => "sk-fixture"}}
+        )
 
       assert %{"ok" => %{"said" => "[REDACTED]"}} = complete(fixture, %{"said" => "sk-fixture"})
 
@@ -328,7 +354,10 @@ defmodule Crucible.HostTest do
 
     test "fail closes the row failed with the masked error" do
       fixture =
-        AttemptFixtures.attached!(vault: %{kind: "api_key", fields: %{"KEY" => "sk-fixture"}})
+        AttemptFixtures.attached!(
+          ctx: Sanctum.TestContext.local(:api),
+          vault: %{kind: "api_key", fields: %{"KEY" => "sk-fixture"}}
+        )
 
       outcome = AttemptFixtures.outcome(fixture, "failed", %{"error" => "saw sk-fixture"})
 
@@ -341,7 +370,7 @@ defmodule Crucible.HostTest do
 
     @tag :capture_log
     test "an outcome naming another attempt closes nothing" do
-      fixture = AttemptFixtures.attached!()
+      fixture = AttemptFixtures.attached!(ctx: Sanctum.TestContext.local(:api))
       outcome = %{AttemptFixtures.outcome(fixture, "completed", %{}) | "fence" => 7}
 
       assert %{"error" => "lost"} =
@@ -352,7 +381,7 @@ defmodule Crucible.HostTest do
     end
 
     test "a delta pushed after the terminal row is refused" do
-      fixture = AttemptFixtures.attached!()
+      fixture = AttemptFixtures.attached!(ctx: Sanctum.TestContext.local(:api))
       assert %{"ok" => _} = complete(fixture, %{"done" => true})
       assert {:ok, _} = Dispatch.await(fixture.pid, fixture.close)
 
@@ -364,7 +393,7 @@ defmodule Crucible.HostTest do
 
   describe "after a takeover raises the fence" do
     setup do
-      fixture = AttemptFixtures.attached!()
+      fixture = AttemptFixtures.attached!(ctx: Sanctum.TestContext.local(:api))
       :ok = Crucible.Events.subscribe(fixture.execution_id, fixture.ctx)
 
       {:ok, %{attempt: successor}} =
@@ -414,7 +443,7 @@ defmodule Crucible.HostTest do
 
   describe "a turn root" do
     test "is never claimed, and a host call naming its attempt answers lost" do
-      ctx = Sanctum.TestContext.local()
+      ctx = Sanctum.TestContext.local(:api)
 
       {:ok, %{execution: execution, attempt: attempt}} =
         Arca.Execution.admit(
@@ -424,7 +453,8 @@ defmodule Crucible.HostTest do
             user_id: ctx.user_id,
             athanor_id: ctx.athanor_id,
             component_type: "agent",
-            kind: "turn"
+            kind: "turn",
+            origin: :programmatic
           },
           Cyfr.Test.AttemptFixtures.standing(ctx.athanor_id)
         )
@@ -455,7 +485,7 @@ defmodule Crucible.HostTest do
   describe "rates and tokens" do
     test "take_rate counts the node's consented rate, only under its own bucket" do
       limits = %{Prima.Limits.defaults(:catalyst) | rate_limit: %{requests: 1, window: "1m"}}
-      fixture = AttemptFixtures.attached!(limits: limits)
+      fixture = AttemptFixtures.attached!(ctx: Sanctum.TestContext.local(:api), limits: limits)
       bucket = "http:" <> fixture.component_ref
 
       assert %{"ok" => true} = AttemptFixtures.call(fixture, "take_rate", %{"bucket" => bucket})
@@ -471,7 +501,10 @@ defmodule Crucible.HostTest do
 
     test "a dispensed token is in the masking set before it is answered" do
       fixture =
-        AttemptFixtures.attached!(vault: %{kind: "oauth", oauth: %{"access_token" => "ya29.tok"}})
+        AttemptFixtures.attached!(
+          ctx: Sanctum.TestContext.local(:api),
+          vault: %{kind: "oauth", oauth: %{"access_token" => "ya29.tok"}}
+        )
 
       assert %{"ok" => "ya29.tok"} =
                AttemptFixtures.call(fixture, "oauth_token", %{"provider" => "google"})
@@ -482,7 +515,9 @@ defmodule Crucible.HostTest do
 
   describe "a lost close after the attempt's terminal write" do
     test "leaves the completed row, its children and its telemetry as the attempt wrote them" do
-      fixture = AttemptFixtures.attached!(component_type: :formula)
+      fixture =
+        AttemptFixtures.attached!(ctx: Sanctum.TestContext.local(:api), component_type: :formula)
+
       child = child_of!(fixture)
       assert %{"ok" => %{"done" => true}} = complete(fixture, %{"done" => true})
       assert {:ok, _result} = Dispatch.await(fixture.pid, fixture.close)
@@ -518,6 +553,7 @@ defmodule Crucible.HostTest do
     test "refuses attach, unseals nothing, and its waiter's lost close writes nothing" do
       fixture =
         AttemptFixtures.attached!(
+          ctx: Sanctum.TestContext.local(:api),
           attach: false,
           vault: %{kind: "api_key", fields: %{"KEY" => "sk-fixture"}}
         )
@@ -550,7 +586,10 @@ defmodule Crucible.HostTest do
     @tag :capture_log
     test "refuses emit, renew and complete mid-run; the attempt stops and nothing closes the row" do
       fixture =
-        AttemptFixtures.attached!(vault: %{kind: "api_key", fields: %{"KEY" => "sk-fixture"}})
+        AttemptFixtures.attached!(
+          ctx: Sanctum.TestContext.local(:api),
+          vault: %{kind: "api_key", fields: %{"KEY" => "sk-fixture"}}
+        )
 
       :ok = Crucible.Events.subscribe(fixture.execution_id, fixture.ctx)
       Arca.ControlPlane.record(:lost)
@@ -573,7 +612,7 @@ defmodule Crucible.HostTest do
     end
 
     test "an open attempt stops on its own within a second, without closing its run" do
-      fixture = AttemptFixtures.attached!()
+      fixture = AttemptFixtures.attached!(ctx: Sanctum.TestContext.local(:api))
       Arca.ControlPlane.record(:lost)
 
       wait_until(fn -> not Process.alive?(fixture.pid) end, 3_000)
@@ -582,7 +621,7 @@ defmodule Crucible.HostTest do
     end
 
     test "a run refused before its runner started is left for the holder, not closed" do
-      fixture = AttemptFixtures.attached!(attach: false)
+      fixture = AttemptFixtures.attached!(ctx: Sanctum.TestContext.local(:api), attach: false)
       Arca.ControlPlane.record(:lost)
 
       assert :closed = Crucible.Attempt.refuse(fixture.pid, "not started")
@@ -593,7 +632,9 @@ defmodule Crucible.HostTest do
 
     @tag :capture_log
     test "a runner exit report lapses nothing" do
-      fixture = AttemptFixtures.attached!(service_id: @service)
+      fixture =
+        AttemptFixtures.attached!(ctx: Sanctum.TestContext.local(:api), service_id: @service)
+
       Arca.ControlPlane.record(:lost)
 
       assert %{"error" => "unavailable"} = report(fixture)
@@ -642,7 +683,13 @@ defmodule Crucible.HostTest do
     end
 
     test "lapses the reporting worker's running attempts at once and stops their attempts" do
-      fixture = AttemptFixtures.attached!(service_id: @service, component_type: :formula)
+      fixture =
+        AttemptFixtures.attached!(
+          ctx: Sanctum.TestContext.local(:api),
+          service_id: @service,
+          component_type: :formula
+        )
+
       child = child_of!(fixture)
 
       assert %{"ok" => true} = report(fixture)
@@ -674,7 +721,7 @@ defmodule Crucible.HostTest do
     end
 
     test "a waiter admitted on the guest plane answers the lapsed row's error" do
-      guest = Sanctum.Context.enter_guest(Sanctum.TestContext.local())
+      guest = Sanctum.Context.enter_guest(Sanctum.TestContext.local(:api))
       fixture = AttemptFixtures.attached!(ctx: guest, service_id: @service)
 
       assert %{"ok" => true} = report(fixture)
@@ -687,7 +734,8 @@ defmodule Crucible.HostTest do
 
     @tag :capture_log
     test "lapses nothing dispatched to another worker, boot or runner, and a forged report nothing at all" do
-      fixture = AttemptFixtures.attached!(service_id: @service)
+      fixture =
+        AttemptFixtures.attached!(ctx: Sanctum.TestContext.local(:api), service_id: @service)
 
       # Verified reports that speak for another worker service, another
       # boot of this one, or another runner name an attempt that is not
@@ -712,7 +760,8 @@ defmodule Crucible.HostTest do
 
     @tag :capture_log
     test "signed by another worker service for this one, lapses nothing" do
-      fixture = AttemptFixtures.attached!(service_id: @service)
+      fixture =
+        AttemptFixtures.attached!(ctx: Sanctum.TestContext.local(:api), service_id: @service)
 
       assert %{"error" => "lost"} = report(fixture, signer: "wrk_other")
 
@@ -730,7 +779,9 @@ defmodule Crucible.HostTest do
     end
 
     test "leaves a closed attempt's row as it closed, and is idempotent" do
-      fixture = AttemptFixtures.attached!(service_id: @service)
+      fixture =
+        AttemptFixtures.attached!(ctx: Sanctum.TestContext.local(:api), service_id: @service)
+
       assert %{"ok" => _} = complete(fixture, %{"done" => true})
       assert {:ok, _} = Dispatch.await(fixture.pid, fixture.close)
 
@@ -741,7 +792,9 @@ defmodule Crucible.HostTest do
 
     @tag :capture_log
     test "stops an attempt a caller ended, leaving its row as the caller ended it; a stale or repeated report changes nothing" do
-      fixture = AttemptFixtures.attached!(service_id: @service)
+      fixture =
+        AttemptFixtures.attached!(ctx: Sanctum.TestContext.local(:api), service_id: @service)
+
       assert {:ok, %{cancelled: true}} = Crucible.cancel(fixture.ctx, fixture.execution_id)
       ended = row(fixture)
       assert ended.status == "cancelled"
@@ -826,7 +879,9 @@ defmodule Crucible.HostTest do
     @tag :capture_log
     test "a report names its member, and one naming another member lapses nothing" do
       report = @vectors["report"]
-      fixture = AttemptFixtures.attached!(service_id: @service)
+
+      fixture =
+        AttemptFixtures.attached!(ctx: Sanctum.TestContext.local(:api), service_id: @service)
 
       assert %{"v" => 1, "op" => "runner_exited", "args" => args} = Jason.decode!(report["body"])
       args = %{args | "runner" => fixture.runner, "attempts" => [fixture.attempt]}
@@ -855,6 +910,7 @@ defmodule Crucible.HostTest do
   # rate of one request).
   defp vector_fixture("attach") do
     AttemptFixtures.attached!(
+      ctx: Sanctum.TestContext.local(:api),
       attach: false,
       vault: %{kind: "api_key", fields: %{"API_KEY" => "vector-secret-value"}}
     )
@@ -862,7 +918,7 @@ defmodule Crucible.HostTest do
 
   defp vector_fixture("take_rate") do
     limits = %{Prima.Limits.defaults(:catalyst) | rate_limit: %{requests: 1, window: "1m"}}
-    AttemptFixtures.attached!(limits: limits)
+    AttemptFixtures.attached!(ctx: Sanctum.TestContext.local(:api), limits: limits)
   end
 
   # A pin's host must be in the edge's egress domains.
@@ -870,11 +926,12 @@ defmodule Crucible.HostTest do
     egress = %{domains: ["*"], methods: [], schemes: [], private_ips: []}
 
     AttemptFixtures.attached!(
+      ctx: Sanctum.TestContext.local(:api),
       authority: %{Prima.Authority.zero() | resources: %Prima.Authority.Blob.Edge{egress: egress}}
     )
   end
 
-  defp vector_fixture(_op), do: AttemptFixtures.attached!()
+  defp vector_fixture(_op), do: AttemptFixtures.attached!(ctx: Sanctum.TestContext.local(:api))
 
   # The vector's args, with the attempt and the execution they name bound to
   # the live attempt's.

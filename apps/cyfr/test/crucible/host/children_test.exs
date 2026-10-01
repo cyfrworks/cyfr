@@ -43,7 +43,7 @@ defmodule Crucible.Host.ChildrenTest do
 
     previous = Application.get_env(:arca, :base_path)
     Application.put_env(:arca, :base_path, test_path)
-    ctx = Sanctum.TestContext.local()
+    ctx = Sanctum.TestContext.local(:api)
 
     on_exit(fn ->
       Prima.Slots.forgive_unreaped(Crucible.Slots, ctx.athanor_id)
@@ -270,7 +270,12 @@ defmodule Crucible.Host.ChildrenTest do
     end
 
     test "an assignment whose authority was widened does not attach" do
-      fixture = AttemptFixtures.attached!(authority: authority(kind: :public), attach: false)
+      fixture =
+        AttemptFixtures.attached!(
+          ctx: Sanctum.TestContext.local(:api),
+          authority: authority(kind: :public),
+          attach: false
+        )
 
       [payload, mac] = String.split(fixture.assignment, ".")
       wire = payload |> Base.url_decode64!(padding: false) |> Jason.decode!()

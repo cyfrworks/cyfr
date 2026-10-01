@@ -41,11 +41,12 @@ defmodule PrismWeb.ConnCase do
   bundle copied in, indexed, the baseline consent the soul pins minted —
   as a fill leaves it — and a key connected to the Claude catalyst, which
   its runs unseal when they attach. `user_id` is a member whose seat the
-  bootstrap runs under.
+  bootstrap runs under. The context it answers is that member in Prism,
+  so its origin is `interactive`, as a turn sent from the console is.
   """
   def ready_athanor!(athanor_id, user_id) do
     turn_env!()
-    ctx = %{Sanctum.TestContext.local() | user_id: user_id, athanor_id: athanor_id}
+    ctx = %{Sanctum.TestContext.local(:prism) | user_id: user_id, athanor_id: athanor_id}
     {:ok, _} = Sanctum.Tenancy.Members.ensure(user_id, scope: "athanor", athanor_id: athanor_id)
     :ok = Sanctum.TestContext.shipped!(athanor_id)
     {:ok, %{errors: 0}} = Compendium.AutoIndexer.scan(ctx: ctx)

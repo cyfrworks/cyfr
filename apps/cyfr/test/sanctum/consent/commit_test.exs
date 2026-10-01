@@ -4,8 +4,8 @@
 defmodule Sanctum.Consent.CommitTest do
   @moduledoc """
   The preview answers a `Prima.ConsentPreview` — typed rows, the origins the
-  grant admits and the commit digest binding them — beside the summary
-  lines; a decision names the origins it admits, `interactive` alone when
+  grant admits and the commit digest binding them — with no prose summary
+  beside them; a decision names the origins it admits, `interactive` alone when
   absent, and the revision is written with them; the digest binds the
   origins and the narrowing and never the prose a need gives as its reason.
   """
@@ -82,7 +82,7 @@ defmodule Sanctum.Consent.CommitTest do
         else: Application.delete_env(:arca, :base_path)
     end)
 
-    {:ok, ctx: Sanctum.TestContext.local()}
+    {:ok, ctx: Sanctum.TestContext.local(:prism)}
   end
 
   @caps %{
@@ -184,7 +184,7 @@ defmodule Sanctum.Consent.CommitTest do
   end
 
   describe "the preview" do
-    test "answers a ConsentPreview with the commit digest, beside the summary", %{ctx: ctx} do
+    test "answers a ConsentPreview with the commit digest, and no summary", %{ctx: ctx} do
       publish!(ctx, "commit-preview")
       entry = entry!(ctx)
       ref = "reagent:local.commit-preview"
@@ -200,8 +200,13 @@ defmodule Sanctum.Consent.CommitTest do
       assert decoded.origins == [:interactive]
       assert preview.origins == ["interactive"]
 
-      # The summary stays beside the rows, and the proof beside both.
-      assert is_list(preview.summary) and Enum.all?(preview.summary, &is_binary/1)
+      # The rows are the preview: no prose summary rides beside them, and
+      # the answer is the document, the proof and the expected revision.
+      refute Map.has_key?(preview, :summary)
+
+      assert Map.keys(preview) |> Enum.sort() ==
+               [:commit_digest, :expected_consent_revision, :origins, :proof, :rows, :v]
+
       assert is_binary(preview.proof)
       assert preview.expected_consent_revision == 0
 
@@ -541,7 +546,7 @@ defmodule Sanctum.Consent.CommitTest do
 
       assert {:ok, staged} = Commit.stage_publish(ctx, %{profile_id: owner})
       assert staged.origins == ["interactive"]
-      assert is_list(staged.summary)
+      refute Map.has_key?(staged, :summary)
 
       # A public profile writes nothing durable unless asked: read alone.
       assert [%{"values" => %{"actions" => ["read"]}}] =

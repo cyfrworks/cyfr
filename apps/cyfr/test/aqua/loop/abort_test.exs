@@ -17,13 +17,13 @@ defmodule Aqua.Loop.AbortTest do
 
   setup do
     Cyfr.Test.Sandbox.setup!()
-    ctx = Sanctum.TestContext.local()
+    ctx = Sanctum.TestContext.local(:prism)
     {:ok, thread} = Threads.create(Sanctum.Context.actor(ctx))
 
     {:ok, %{turn: turn}} =
       TurnStorage.accept_message(Sanctum.Context.actor(ctx), thread.id, %{
         message: %{author: ctx.user_id, content: "@aqua go"},
-        turn: %{agent: "aqua", requested_by: ctx.user_id}
+        turn: %{agent: "aqua", requested_by: ctx.user_id, origin: :interactive}
       })
 
     {:ok, ctx: ctx, turn: turn}

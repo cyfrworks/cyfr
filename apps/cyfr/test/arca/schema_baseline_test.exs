@@ -314,7 +314,8 @@ defmodule Arca.SchemaBaselineTest do
           user_id: "usr_schema",
           athanor_id: "ath_schema",
           component_type: "catalyst",
-          input: "{}"
+          input: "{}",
+          origin: :programmatic
         },
         Arca.Test.Actor.standing("ath_schema")
       )

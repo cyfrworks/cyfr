@@ -39,7 +39,8 @@ defmodule Crucible.AdmissionTest do
       athanor_id: Sanctum.TestContext.athanor_id(),
       scope: :athanor,
       permissions: MapSet.new([:execute]),
-      authenticated: true
+      authenticated: true,
+      origin: :interactive
     }
 
     admin_ctx = Sanctum.TestContext.local()
@@ -465,7 +466,7 @@ defmodule Crucible.AdmissionTest do
     # The registry's type decides; a caller's asserted type is checked
     # against it and refused as a rostered reason, before any row exists.
     test "an asserted type that is not the registry's is refused with both types in the reason" do
-      ctx = Sanctum.TestContext.local()
+      ctx = Sanctum.TestContext.local(:prism)
 
       assert {:error, {:component_type_mismatch, :formula, :reagent} = reason} =
                Admission.admit(ctx, "#{@target_node}:0.1.0", %{}, type: "formula")
@@ -477,7 +478,7 @@ defmodule Crucible.AdmissionTest do
     end
 
     test "a type outside the executable roster is an invalid argument" do
-      ctx = Sanctum.TestContext.local()
+      ctx = Sanctum.TestContext.local(:prism)
 
       assert {:error, :invalid_component_type} =
                Admission.admit(ctx, "#{@target_node}:0.1.0", %{}, type: "sk-not-a-type")
@@ -491,7 +492,7 @@ defmodule Crucible.AdmissionTest do
 
   describe "the component's bytes" do
     test "bytes that do not hash to the recorded digest are corrupt, never unavailable" do
-      ctx = Sanctum.TestContext.local()
+      ctx = Sanctum.TestContext.local(:prism)
       actor = Sanctum.Context.actor(ctx)
 
       {:ok, row} = Arca.ComponentStorage.get_component(actor, "chain-target", "0.1.0", "local")

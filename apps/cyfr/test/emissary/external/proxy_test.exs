@@ -8,7 +8,7 @@ defmodule Emissary.External.ProxyTest do
 
   setup tags do
     Cyfr.Test.Sandbox.setup!(tags)
-    ctx = Sanctum.TestContext.local()
+    ctx = Sanctum.TestContext.local(:api)
     {:ok, ctx: ctx}
   end
 

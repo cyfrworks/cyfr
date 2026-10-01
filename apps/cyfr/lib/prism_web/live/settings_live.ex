@@ -134,11 +134,14 @@ defmodule PrismWeb.SettingsLive do
      |> assign(:door_note, Map.get(params, "note", socket.assigns.door_note))}
   end
 
-  def handle_event("door_allow", %{"value" => value} = params, socket) do
+  # The entry rides in `door`, never `value`: for a click LiveView sends
+  # the element's own `value` under that key, a button's being empty, so
+  # an entry carried there would reach the home as nothing.
+  def handle_event("door_allow", %{"door" => value} = params, socket) do
     door_call(socket, "door/allow", %{"value" => value, "note" => params["note"]}, "Allowed.")
   end
 
-  def handle_event("door_deny", %{"value" => value} = params, socket) do
+  def handle_event("door_deny", %{"door" => value} = params, socket) do
     door_call(socket, "door/deny", %{"value" => value, "note" => params["note"]}, "Denied.")
   end
 
@@ -895,7 +898,7 @@ defmodule PrismWeb.SettingsLive do
               <.button
                 type="button"
                 phx-click="door_allow"
-                phx-value-value={@door_value}
+                phx-value-door={@door_value}
                 phx-value-note={@door_note}
               >
                 Allow
@@ -904,7 +907,7 @@ defmodule PrismWeb.SettingsLive do
                 type="button"
                 variant="ghost"
                 phx-click="door_deny"
-                phx-value-value={@door_value}
+                phx-value-door={@door_value}
                 phx-value-note={@door_note}
                 data-confirm="Deny this person? Their sessions and keys are revoked."
               >

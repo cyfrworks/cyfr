@@ -304,7 +304,7 @@ defmodule Arca.ThreadStorageTest do
     {:ok, _} =
       Arca.TurnStorage.accept_message(ctx, running.id, %{
         message: %{author: ctx.user_id, content: "@aqua go"},
-        turn: %{agent: "aqua", requested_by: ctx.user_id}
+        turn: %{agent: "aqua", requested_by: ctx.user_id, origin: :interactive}
       })
 
     {:ok, _} = Threads.update(ctx, running.id, %{last_message_at: old})

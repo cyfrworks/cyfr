@@ -61,7 +61,7 @@ defmodule Opus.BudgetConcurrencyCharacterizationTest do
 
     Cyfr.Test.Sandbox.stop_work_on_exit()
 
-    ctx = Sanctum.TestContext.local()
+    ctx = Sanctum.TestContext.local(:api)
     :ok = Probe.publish_probe!(ctx)
     {:ok, %{minted: minted}} = Bootstrap.run(ctx)
     assert @probe_node in minted

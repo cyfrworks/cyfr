@@ -945,7 +945,7 @@ defmodule Cyfr.StartupAdmissionBarrierTest do
   end
 
   defp admitting_rows! do
-    ctx = Sanctum.TestContext.local()
+    ctx = Sanctum.TestContext.local(:prism)
     actor = Sanctum.Context.actor(ctx)
     n = System.unique_integer([:positive])
 
@@ -966,7 +966,7 @@ defmodule Cyfr.StartupAdmissionBarrierTest do
     {:ok, %{turn: turn}} =
       Arca.TurnStorage.accept_message(actor, thread.id, %{
         message: %{author: ctx.user_id, content: "@aqua go"},
-        turn: %{agent: "aqua", requested_by: ctx.user_id}
+        turn: %{agent: "aqua", requested_by: ctx.user_id, origin: :interactive}
       })
 
     {:ok, backend} =

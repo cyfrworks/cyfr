@@ -241,7 +241,7 @@ defmodule Arca.StorageGCTest do
     {:ok, %{turn: turn}} =
       Arca.TurnStorage.accept_message(actor, thread.id, %{
         message: %{author: actor.user_id, content: "@aqua go"},
-        turn: %{agent: "aqua", requested_by: actor.user_id}
+        turn: %{agent: "aqua", requested_by: actor.user_id, origin: :interactive}
       })
 
     turn

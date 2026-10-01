@@ -10,7 +10,7 @@ defmodule Sanctum.VaultTest do
   setup tags do
     Cyfr.Test.Sandbox.setup!(tags)
 
-    {:ok, ctx: Sanctum.TestContext.local()}
+    {:ok, ctx: Sanctum.TestContext.local(:prism)}
   end
 
   defp create!(ctx, over \\ %{}) do
@@ -82,6 +82,7 @@ defmodule Sanctum.VaultTest do
           blob_digest: Prima.JCS.hash_binary("{}"),
           resolved_policy: "{}",
           activation: "{}",
+          admitted_origins: [:interactive],
           granted_by: "test",
           granted_via: "bootstrap"
         },

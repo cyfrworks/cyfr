@@ -23,7 +23,7 @@ defmodule Compendium.RegistryRemoveCascadeTest do
         else: Application.delete_env(:arca, :base_path)
     end)
 
-    {:ok, ctx: Sanctum.TestContext.local()}
+    {:ok, ctx: Sanctum.TestContext.local(:api)}
   end
 
   defp publish!(ctx, name, version) do
@@ -62,6 +62,7 @@ defmodule Compendium.RegistryRemoveCascadeTest do
           blob_digest: Prima.JCS.hash_binary("{}"),
           resolved_policy: "{}",
           activation: "{}",
+          admitted_origins: [:interactive],
           granted_by: "test",
           granted_via: "bootstrap"
         },

@@ -34,6 +34,7 @@ defmodule Cyfr.Cluster.ArchiveFenceTest do
         scope: :athanor,
         permissions: [:*]
       )
+      |> Sanctum.TestContext.via(:api)
 
     edge = %Edge{storage: %{paths: ["data/"], actions: ["read", "write"]}}
 
@@ -94,6 +95,7 @@ defmodule Cyfr.Cluster.ArchiveFenceTest do
         scope: :athanor,
         permissions: [:*]
       )
+      |> Sanctum.TestContext.via(:api)
 
     old = Cell.call(:a, Holder, :attach!, [:old, [ctx: ctx]])
 

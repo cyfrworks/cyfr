@@ -45,7 +45,7 @@ defmodule Arca.ExecutionAttemptsWriteTest do
         else: Application.delete_env(:arca, :base_path)
     end)
 
-    ctx = Sanctum.TestContext.local()
+    ctx = Sanctum.TestContext.local(:api)
     actor = Sanctum.Context.actor(ctx)
 
     {:ok, %{execution: execution, attempt: attempt}} =
@@ -56,7 +56,8 @@ defmodule Arca.ExecutionAttemptsWriteTest do
           user_id: actor.user_id,
           athanor_id: actor.athanor_id,
           component_type: "catalyst",
-          input: "{}"
+          input: "{}",
+          origin: :programmatic
         },
         Arca.Test.Actor.standing(actor.athanor_id)
       )

@@ -18,7 +18,7 @@ defmodule Opus.ResourceLimitsTest do
 
     Cyfr.Test.Sandbox.setup!(tags)
 
-    ctx = Sanctum.TestContext.local()
+    ctx = Sanctum.TestContext.local(:api)
 
     wasm_bytes = File.read!(@math_wasm_path)
 

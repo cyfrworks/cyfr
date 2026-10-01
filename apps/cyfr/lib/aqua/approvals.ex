@@ -366,22 +366,32 @@ defmodule Aqua.Approvals do
     end
   end
 
+  # The consent is loaded under the origin the turn's row records, not the
+  # approver's: the question is whether the run's own grant still stands,
+  # and the run continues under that origin. Whether this approver may
+  # decide is the approval's own check, made before this one.
   defp consent_holds(ctx, turn) do
-    case Crucible.authority_for(
-           ctx,
-           {:id, turn.profile_id},
-           Prima.AgentRef.soul_ref()
-         ) do
-      {:ok, %{consent_id: consent_id}} when consent_id == turn.consent_id ->
-        :ok
-
+    with {:ok, origin} <- Prima.Origin.from_wire(Map.get(turn, :origin)),
+         {:ok, %{consent_id: consent_id}} when consent_id == turn.consent_id <-
+           Crucible.authority_for(
+             %{ctx | origin: origin},
+             {:id, turn.profile_id},
+             Prima.AgentRef.soul_ref()
+           ) do
+      :ok
+    else
       {:ok, _moved} ->
         {:error, "the consent the turn ran under has moved"}
 
       {:error, reason} ->
-        {:error, "the turn's consent could not be loaded: #{Aqua.Ops.render_refusal(reason)}"}
+        {:error, "the turn's consent could not be loaded: " <> unloaded(reason)}
     end
   end
+
+  # A turn row that records no origin has no grant to be judged under: it
+  # is never judged under the caller's.
+  defp unloaded({:unknown_origin, _spelling}), do: "the turn records no origin"
+  defp unloaded(reason), do: Aqua.Ops.render_refusal(reason)
 
   defp capability_holds(_ctx, %{agent_capability_digest: nil}), do: :ok
 

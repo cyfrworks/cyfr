@@ -49,7 +49,7 @@ defmodule Aqua.LoopTest do
     # The loops' work stops before the paths it runs under are restored.
     Cyfr.Test.Sandbox.stop_work_on_exit()
 
-    ctx = Sanctum.TestContext.local()
+    ctx = Sanctum.TestContext.local(:prism)
     :ok = Sanctum.TestContext.shipped!(ctx.athanor_id)
     {:ok, %{errors: 0}} = Compendium.AutoIndexer.scan(ctx: ctx)
     {:ok, _} = Compendium.AgentIndex.sync(ctx)
@@ -531,7 +531,8 @@ defmodule Aqua.LoopTest do
             reference: "catalyst:local.files:0.5.2",
             user_id: ctx.user_id,
             athanor_id: ctx.athanor_id,
-            component_type: "catalyst"
+            component_type: "catalyst",
+            origin: :interactive
           },
           grant: Cyfr.Test.AttemptFixtures.grant(ctx.athanor_id),
           verify: &Sanctum.ExecutionStanding.verify/1

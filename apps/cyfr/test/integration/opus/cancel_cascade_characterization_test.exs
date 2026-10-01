@@ -48,7 +48,7 @@ defmodule Opus.CancelCascadeCharacterizationTest do
     previous = Map.new(keys, &{&1, Application.get_env(:arca, &1)})
     Application.put_env(:arca, :base_path, test_path)
 
-    ctx = Sanctum.TestContext.local()
+    ctx = Sanctum.TestContext.local(:api)
 
     on_exit(fn ->
       Prima.Slots.forgive_unreaped(Crucible.Slots, ctx.athanor_id)

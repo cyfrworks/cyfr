@@ -969,28 +969,36 @@ Vault mutations require an interactive session — components, tincture frames a
 Granting is a three-step walk — nothing is granted outside it:
 
 ```
-plan     {ref}                            → the component's needs + caps ask,
-                                            candidate vault entries, a plan_token
-preview  {decisions, plan_token}          → the exact rendered grant + commit_digest
+plan     {ref}                            → the component's needs + caps ask as
+                                            preview rows, candidate vault
+                                            entries, a plan_token
+preview  {decisions, plan_token}          → the grant as typed rows, the origins
+                                            it admits, commit_digest
 commit   {decisions, plan_token, proof,
           commit_digest,
           expected_consent_revision}      → an immutable consent revision
 ```
 
-`preview` exists so the approval proof binds the exact commit digest that was rendered — a decision changed after approval cannot ride on the old approval. `commit` CAS-checks the head revision, so concurrent grants conflict instead of clobbering. Decisions carry the bindings (`[{need, entry_id, fields, scopes}]`), the scope (`versionless` covers every release of the line — the default; `pinned` names one), and any limit adjustments under the platform ceiling.
+`preview` exists so the approval proof binds the exact commit digest that was rendered — a decision changed after approval cannot ride on the old approval. `commit` CAS-checks the head revision, so concurrent grants conflict instead of clobbering. Decisions carry the bindings (`[{need, entry_id, fields, scopes}]`), the scope (`versionless` covers every release of the line — the default; `pinned` names one), a `subset` that narrows the ask per node and resource kind (exact domains, methods, schemes, private ranges, storage paths and actions, tools, and limits under the ask and the ceiling; a superset is refused), and the `origins` the grant admits.
+
+**The preview is typed rows.** It answers `v`, `rows`, `origins` and `commit_digest` (the `Prima.ConsentPreview` document, whose shape `tests/fixtures/consent_preview.json` pins), beside the `proof` and `expected_consent_revision` a commit presents. Each row is one resource an edge of the grant gives — a credential and its projection, egress, storage, tools, tool servers, limits, and for a tincture its frame capabilities, placement, background permission, streams, cards and system actions — with the node it belongs to and whether a decision narrowed it. Render the rows yourself; there is no prose summary. Explanatory text, such as a need's reason, is shown but not bound, so rewording it invalidates no grant.
+
+**Origins.** Every run carries the origin of the path that admitted it, whatever credential it holds: `interactive` for Prism under a session or a paired device (a tincture's frame and a public tincture's page included), `programmatic` for the HTTP API and MCP, `schedule` for a schedule's fire, `webhook` for a webhook delivery. A child runs under its root's origin. A grant admits the origins its decisions name, and `interactive` alone when they name none; a run under an origin the grant does not name is refused with `consent_required`, so a script, an API key or a schedule runs a component only under a grant that names its origin. `cyfr profile grant <ref> --origin programmatic` names one at grant time; a re-grant keeps the origins the grant had unless `--origin` names others.
 
 | Action | Key args | Returns |
 |--------|----------|---------|
 | `plan` | `ref` | needs, caps ask, candidate vault entries, `plan_token` |
-| `preview` | `decisions` | rendered summary, `commit_digest` |
+| `preview` | `decisions` | `v`, `rows`, `origins`, `commit_digest`, `proof`, `expected_consent_revision` |
 | `commit` | `decisions`, `plan_token`, `proof`, `commit_digest`, `expected_consent_revision` | the new consent revision |
 | `grant` | `profile_id`, `bindings`, `expected_consent_revision` | the new consent revision — binds vault entries to needs on an active owner profile whose component has not changed shape, CAS-checked like `commit`; a moved shape needs the walk again |
 | `publish` | `profile_id`, `need_ids`, `durable_storage` | a `plan_token` for `preview` and `commit` — stages a public profile from an owner profile, keeping credentials only for `need_ids` |
 | `list` | `ref` | profiles + head revisions |
-| `grants` | one of `domain`, `path`, `entry_id` | the athanor's grants whose resources reach that egress domain, storage path or vault entry — declared, and refused as not built on this server |
+| `grants` | one of `domain`, `path`, `entry_id` | the athanor's active grants whose resources reach that egress domain, storage path or vault entry, read as the enforcement point admits them: wildcard domains included, a path by prefix, an entry by the revision's vault references, and a narrowed grant only as far as it was narrowed |
 | `revoke` | `profile_id` | revoked — effective on the next run |
 
 Interactive sessions and consent-capable API keys may commit; a key's consent capability comes from its own key row, never from the request.
+
+**Which runs used a grant.** `execution.usage` with a `profile_id` lists the root runs that profile admitted, newest first (`limit`, 20 by default, at most 1,000), each with its origin, its root and its time. A revoked profile's runs still answer, as history; another athanor's profile, or an unknown one, is refused as not found.
 
 ### Readiness and typed errors
 
@@ -1001,7 +1009,7 @@ Five typed errors cross every surface (MCP, HTTP, CLI, consoles) with normative 
 | Error | Payload | Meaning / next step |
 |-------|---------|---------------------|
 | `setup_required` | `{profile_id, node_ref, need, reason}` | Names the unbound need — grant a vault entry for it (`profile.plan` / `cyfr profile grant <ref>`) |
-| `consent_required` | `{profile_id, current_revision, shape_diff}` | The component's ask changed since approval — the shape diff shows exactly what; review and re-approve |
+| `consent_required` | `{profile_id, current_revision, shape_diff}` | The grant does not cover this run: the component's ask changed since approval (the shape diff shows exactly what), the grant does not admit the run's origin, or it names a storage path spelled other than the storage door reaches it. Review and grant again |
 | `consent_conflict` | `{expected_revision, actual_revision, cause}` | `stale_plan` → re-run plan; `digest_changed` → re-run preview; `race` → retry commit |
 | `restart_required` | `{profile_id, new_revision, missing}` | A new revision landed under a running execution — restart to pick it up |
 | `confirmation_required` | `{id, operation, expires_at}` | A sensitive change needs the person's fresh confirmation before `expires_at`; nothing was changed, and it is no denial. `id` is the asking client's own secret for this one request: keep it, and never log or show it. The person confirms it with a fresh proof; `confirmation/pending` lists the pending confirmation by its ref, derived one way from `id`, never by `id` itself, and names the client that asked. Over MCP the asking client then repeats the same `tools/call` with `params._meta["cyfr/confirmationId"]` set to `id`, which no request log records; a repeat before the proof answers the same `id` and opens nothing, and a repeat after it completes the change once. The CLI repeats for you on a terminal: it shows the ref and repeats each time you press Enter. A plain HTTP endpoint carries no repeat |
@@ -1015,7 +1023,7 @@ The committed consent is the runtime capability — `ask ∩ operator choices �
 - **Domains** — exact (`"api.stripe.com"`) or wildcard (`"*.stripe.com"`); deny-by-default. Schemes default to https-only.
 - **Private IPs** — all private/reserved ranges blocked (SSRF prevention) unless the ask carried `egress.private_ips` and the operator approved it. `169.254.0.0/16` (link-local / cloud metadata) is always blocked.
 - **Addresses** — the engine resolves no name. CYFR resolves each outbound host and pins the address the engine connects to, under the execution's grant (`egress_pin`); `CYFR_PRIVATE_EGRESS_TARGETS` is CYFR's own and never applies to a component. The engine follows no redirect: a component's next request to a `Location` is the redirect's next hop, pinned from the request it came from, and a hop to another scheme or host is refused as `redirect_credentials`, so a request's credentials never cross origins.
-- **Storage** — granted `storage.paths` (directory prefixes end with `/`, must start with `data/` or `components/`) and `storage.actions`; empty = hard deny.
+- **Storage** — granted `storage.paths` (directory prefixes end with `/`, must start with `data/` or `components/`) and `storage.actions`; empty = hard deny. A path is spelled as the storage door reaches it: no empty segment (`data//secrets/`), no `.` or `..` segment, and a folder ends in exactly one `/`. A manifest spelling a path otherwise is refused when it is published, and a grant already stored under such a spelling is refused at every run until it is granted again; the server lists those grants at boot and tells each athanor that holds one.
 - **Tools (formulas)** — granted patterns (`"execution.run"`, `"component.*"`, `"*"`) expand to the concrete action list at commit; a tool added to the platform later never widens an existing consent. Discovery via `{"tool": "tools", "action": "list"}`.
 - **Limits** — `timeout`, `rate_limit`, sizes, `max_concurrent_tasks`; the manifest's suggestions as adjusted by the operator, capped by the ceiling. Defaults when unasked: catalyst `"3m"`, formula `"5m"`, reagent `"1m"`, rate limit `{"requests": 100, "window": "1m"}`, memory 64 MB, request 1 MB, response 5 MB.
 

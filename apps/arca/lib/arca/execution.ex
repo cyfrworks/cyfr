@@ -134,10 +134,11 @@ defmodule Arca.Execution do
   Admit an execution: the row, its first attempt and, for a root, its
   budget reservation, in one transaction. `attrs` are the start
   changeset's. A root records the `:origin` its caller names
-  (`Prima.Origin`, an atom or its wire spelling; a root naming none is
-  still admitted without one); a child's row carries its parent's origin,
-  read in the admitting transaction, and a child naming another is refused
-  `{:error, :origin_mismatch}` with nothing written. `opts`:
+  (`Prima.Origin`, an atom or its wire spelling), and a root naming none
+  is refused `{:error, :no_origin}`; a child's row carries its parent's
+  origin, read in the admitting transaction, a child naming another is
+  refused `{:error, :origin_mismatch}`, and a child of a parent that
+  records none `{:error, :no_origin}`, each with nothing written. `opts`:
 
   - `:attempt` — the attempt id (minted when absent); `:service_id` (the
     worker service the attempt is dispatched to; nil, the default, when the
@@ -352,14 +353,15 @@ defmodule Arca.Execution do
 
   # A root records the origin its caller names; a child carries its
   # parent's, read in the admitting transaction, and one naming another is
-  # refused. A root naming none is admitted without one.
+  # refused. No default stands in for an origin: a root naming none, or a
+  # child of a parent that records none, is refused.
   # arca:db-raise-ok inside the caller's transaction
   defp origin!(athanor_id, attrs) do
     named = spelled_origin(Map.get(attrs, :origin))
 
     case Map.get(attrs, :parent_execution_id) do
       nil ->
-        attrs
+        if is_nil(named), do: Arca.Repo.rollback(:no_origin), else: attrs
 
       parent_id ->
         parent_origin =
@@ -370,9 +372,11 @@ defmodule Arca.Execution do
             )
           )
 
-        if is_nil(named) or named == parent_origin,
-          do: Map.put(attrs, :origin, parent_origin),
-          else: Arca.Repo.rollback(:origin_mismatch)
+        cond do
+          is_nil(parent_origin) -> Arca.Repo.rollback(:no_origin)
+          is_nil(named) or named == parent_origin -> Map.put(attrs, :origin, parent_origin)
+          true -> Arca.Repo.rollback(:origin_mismatch)
+        end
     end
   end
 

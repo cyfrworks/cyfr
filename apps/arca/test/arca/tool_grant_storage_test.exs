@@ -169,7 +169,8 @@ defmodule Arca.ToolGrantStorageTest do
             reference: "catalyst:local.test:1.0.0",
             user_id: "user_tg",
             athanor_id: row.athanor_id,
-            component_type: "catalyst"
+            component_type: "catalyst",
+            origin: :interactive
           },
           grant: Arca.Test.Actor.grant(row.athanor_id),
           verify: &Arca.Test.Actor.admits/1
@@ -207,7 +208,7 @@ defmodule Arca.ToolGrantStorageTest do
       {:ok, %{turn: turn}} =
         Arca.TurnStorage.accept_message(actor, thread.id, %{
           message: %{author: "user_tg", content: "go"},
-          turn: %{agent: "aqua", requested_by: "user_tg"}
+          turn: %{agent: "aqua", requested_by: "user_tg", origin: :interactive}
         })
 
       bound = Map.merge(row, %{lifecycle_kind: "turn", lifecycle_id: turn.id})

@@ -41,7 +41,7 @@ defmodule Sanctum.Consent.SelectionFlowTest do
         else: Application.delete_env(:arca, :base_path)
     end)
 
-    ctx = Sanctum.TestContext.local()
+    ctx = Sanctum.TestContext.local(:prism)
 
     # The dependency declares one credential need; each source depends on it.
     publish!(ctx, "sel-dep", %{

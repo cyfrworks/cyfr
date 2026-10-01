@@ -125,7 +125,7 @@ defmodule Crucible.WorkerWatchTest do
 
   setup tags do
     Cyfr.Test.Sandbox.setup!(tags)
-    {:ok, ctx: Sanctum.TestContext.local()}
+    {:ok, ctx: Sanctum.TestContext.local(:api)}
   end
 
   # Serve `Worker` with `script` on a loopback port; answers its endpoint.

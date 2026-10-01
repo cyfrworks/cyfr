@@ -118,7 +118,7 @@ defmodule CyfrWeb.ContextGuardTest do
                PrismWeb.Ops.call_tool(captured, "door/allow", %{"value" => email})
 
       assert {:error, {:redirect, %{to: "/login"}}} =
-               render_click(view, "door_allow", %{"value" => email})
+               render_click(view, "door_allow", %{"door" => email})
 
       refute door_has?(email)
     end
@@ -133,7 +133,7 @@ defmodule CyfrWeb.ContextGuardTest do
       bound!(0)
 
       email = "not-now-#{System.unique_integer([:positive])}@example.com"
-      render_click(view, "door_allow", %{"value" => email})
+      render_click(view, "door_allow", %{"door" => email})
 
       refute door_has?(email)
       refute :sys.get_state(view.pid).socket.assigns.context.platform_admin

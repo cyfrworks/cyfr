@@ -57,7 +57,7 @@ defmodule Opus.ExecutorMaskedOutputTest do
     Application.put_env(:arca, :base_path, Path.join(run_dir, "data"))
     Application.put_env(:arca, :seed_path, lay_seed!(Path.join(run_dir, "seed")))
 
-    ctx = Sanctum.TestContext.local()
+    ctx = Sanctum.TestContext.local(:prism)
 
     on_exit(fn ->
       Prima.Slots.forgive_unreaped(Crucible.Slots, ctx.athanor_id)

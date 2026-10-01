@@ -21,7 +21,8 @@ defmodule Crucible.EventsTest do
           reference: "reagent:local.evt:0.1.0",
           user_id: "usr_evt",
           athanor_id: athanor_id,
-          component_type: "reagent"
+          component_type: "reagent",
+          origin: :programmatic
         },
         Cyfr.Test.AttemptFixtures.standing(athanor_id)
       )
