@@ -394,6 +394,63 @@ defmodule Cyfr.RetentionSchedulerTest do
     end
   end
 
+  describe "the carry sweep" do
+    test "runs after the session sweep, and any person's expired carry is expired with its payload cleared",
+         %{key: key} do
+      expired = carry!()
+      open = carry!()
+
+      {1, _} =
+        Arca.Repo.update_all(
+          from(a in Arca.Schemas.CarryAction, where: a.id == ^expired.id),
+          set: [expires_at: DateTime.add(Arca.ServerMetaStorage.now!(), -1, :second)]
+        )
+
+      assert {:ok, summary} = RetentionScheduler.cycle(key: key, owner: "member-a")
+      assert ["sessions", "carry"] = Enum.filter(summary.steps, &(&1 in ["sessions", "carry"]))
+
+      # Neither person opened another carry, which would end only their own:
+      # the cycle reached the expired one anyway.
+      swept = Arca.Repo.get!(Arca.Schemas.CarryAction, expired.id)
+      assert swept.phase == "expired"
+      assert is_nil(swept.payload)
+      assert %DateTime{} = swept.retain_until
+
+      stands = Arca.Repo.get!(Arca.Schemas.CarryAction, open.id)
+      assert stands.phase == "pending"
+      assert is_binary(stands.payload)
+    end
+  end
+
+  # A person of their own, and a pending carry of theirs to a hub.
+  defp carry! do
+    n = System.unique_integer([:positive])
+
+    {:ok, user} =
+      Sanctum.Tenancy.Users.upsert_from_provider(%{
+        id: "github|https://github.com|carry-sweep-#{n}",
+        provider: "github",
+        email: "carry-sweep#{n}@example.com",
+        verified: true
+      })
+
+    payload = ~s({"genesis":{}})
+
+    {:ok, action} =
+      Arca.CarryActions.open(%Prima.Actor{user_id: user.id}, %{
+        user_id: user.id,
+        action_id: "car_sweep#{n}",
+        source_home: "https://a.example",
+        destination_home: "https://hub.example",
+        return_url: "https://a.example/carry",
+        payload: payload,
+        payload_digest: Prima.Digest.sha256(payload),
+        key_epoch: Prima.Digest.sha256("a head")
+      })
+
+    action
+  end
+
   defp group!(name) do
     {:ok, athanor} =
       Sanctum.Tenancy.Athanors.create(%{

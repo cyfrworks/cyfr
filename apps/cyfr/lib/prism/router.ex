@@ -262,6 +262,11 @@ defmodule Prism.Router do
           # names its athanor in the query, not the path, and mounts under the
           # session's default (`PrismWeb.Focus` passes a bare mount through).
           live "/chat", ChatLive, :index, metadata: %{auth: :browser_authenticated}
+          # The sign-in carry at the person's own home: a person signed in
+          # here begins a sign-in at another home, confirms its assertion
+          # and reads how it ended. Session-only, so a person not signed in
+          # is sent through `/login`, which keeps the carry's fragment.
+          live "/carry", CarryLive, :index, metadata: %{auth: :browser_authenticated}
 
           scope "/a/:athanor" do
             # Forward to /chat with the athanor selected.

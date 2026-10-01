@@ -68,6 +68,8 @@ defmodule Sanctum.ProviderDispatchContractTest do
       "enroll_holder",
       "carry_begin",
       "carry_complete",
+      "carry_cancel",
+      "carry_list",
       "certify",
       "assert"
     ],

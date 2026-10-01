@@ -39,7 +39,24 @@ defmodule Sanctum.Carry do
   envelope. An exact retry after a lost response answers the recorded
   outcome with nothing applied again, after the requester's standing is
   read again; another outcome under the same action, an expired or a
-  cancelled action is refused.
+  cancelled action is refused. It answers the action's destination as this
+  home's row records it, which is where the person's browser goes next:
+  never an address the return carried.
+
+  ## Listing and cancelling
+
+  `pending/1` (`person.carry_list`) answers the person's own unexpired
+  pending actions, each with its id, destination, phase, expiry, the time
+  it began and the `key_epoch` it was signed under (the public log hash its
+  envelope carries, which `person.assert` names): what they may resume or
+  cancel. It never answers a challenge, an assertion, an envelope or a
+  payload, and it is no history of the homes the person visited.
+  `cancel/2` (`person.carry_cancel`) ends one of their own open actions:
+  nothing more is signed or navigated for it, and its payload is cleared.
+  It does not undo a session the destination already admitted. Both read
+  only the context's own person's actions; another person's is
+  `:not_found`. `sweep/1` is the platform's own housekeeping over every
+  person's carries, which the retention cycle runs.
   """
 
   alias Prima.Carry
@@ -114,7 +131,7 @@ defmodule Sanctum.Carry do
   @doc """
   Record the navigation outcome `outcome` (`"admitted"` or `"refused"`) of
   the person's carry `action_id` (the module doc). Answers `%{action_id,
-  phase: "completed", outcome}`, the same for an exact retry.
+  phase: "completed", outcome, destination}`, the same for an exact retry.
 
   Refusals: `{:not_found, "carry", action_id}` (no such action of the
   person's), `{:invalid_argument, _}` (another outcome word),
@@ -138,7 +155,13 @@ defmodule Sanctum.Carry do
              payload_digest: action.payload_digest
            }) do
         {:ok, row} ->
-          {:ok, %{action_id: row.action_id, phase: row.phase, outcome: row.outcome}}
+          {:ok,
+           %{
+             action_id: row.action_id,
+             phase: row.phase,
+             outcome: row.outcome,
+             destination: row.destination_home
+           }}
 
         {:error, :changed_content} ->
           {:error, {:conflict, "This sign-in already recorded another outcome"}}
@@ -156,6 +179,87 @@ defmodule Sanctum.Carry do
           {:error, :unavailable}
       end
     end
+  end
+
+  @doc """
+  The person's own unexpired pending carries, oldest first (the module
+  doc): `%{action_id, destination, phase, expires_at, began_at,
+  key_epoch}` each, and nothing a carry signs or carries.
+
+  Refusals: `:unauthenticated`, `:unavailable`.
+  """
+  @spec pending(Context.t()) :: {:ok, [map()]} | {:error, term()}
+  def pending(%Context{} = ctx) do
+    actor = Context.actor(ctx)
+
+    with {:ok, user_id} <- person(ctx) do
+      case Arca.CarryActions.pending(actor, user_id) do
+        {:ok, rows} -> {:ok, Enum.map(rows, &listed/1)}
+        {:error, _unanswered} -> {:error, :unavailable}
+      end
+    end
+  end
+
+  @doc """
+  Housekeeping, the platform's own: every person's open carries past their
+  expiry move to expired with their payloads cleared, and terminal carries
+  and login receipts past their retention are removed, at most `limit` of
+  each (`Arca.CarryActions.sweep/2`). Opening a carry ends only its own
+  person's expired ones, so this is what reaches a person who opens none.
+  Answers the counts.
+  """
+  @spec sweep(pos_integer()) ::
+          {:ok, %{expired: non_neg_integer(), removed: non_neg_integer()}}
+          | {:error, :database_error}
+  def sweep(limit) when is_integer(limit) and limit > 0 do
+    case Arca.CarryActions.sweep(Prima.Actor.system(), limit) do
+      {:ok, counts} -> {:ok, counts}
+      {:error, _reason} -> {:error, :database_error}
+    end
+  end
+
+  @doc """
+  Cancel the person's own open carry `action_id` (the module doc). Answers
+  `%{action_id, phase: "cancelled"}`, the same for a carry already
+  cancelled.
+
+  Refusals: `{:not_found, "carry", action_id}` (no such action of the
+  person's), `{:conflict, _}` (its outcome is recorded, or it expired),
+  `:unauthenticated`, `:unavailable`.
+  """
+  @spec cancel(Context.t(), String.t()) :: {:ok, map()} | {:error, term()}
+  def cancel(%Context{} = ctx, action_id) when is_binary(action_id) do
+    actor = Context.actor(ctx)
+
+    with {:ok, _user_id} <- person(ctx),
+         {:ok, action} <- own_action(actor, action_id) do
+      case Arca.CarryActions.cancel(actor, action.id) do
+        {:ok, row} ->
+          {:ok, %{action_id: row.action_id, phase: row.phase}}
+
+        {:error, :not_open} ->
+          {:error, {:conflict, "This sign-in already ended; there is nothing to cancel"}}
+
+        {:error, reason} when reason in [:not_found, :cross_tenant] ->
+          not_found(action_id)
+
+        {:error, _unanswered} ->
+          {:error, :unavailable}
+      end
+    end
+  end
+
+  # What a listed carry shows: never its challenge, assertion, envelope or
+  # payload.
+  defp listed(row) do
+    %{
+      action_id: row.action_id,
+      destination: row.destination_home,
+      phase: row.phase,
+      expires_at: row.expires_at,
+      began_at: row.inserted_at,
+      key_epoch: row.key_epoch
+    }
   end
 
   defp person(%Context{plane: :guest}), do: {:error, :unauthenticated}

@@ -13,8 +13,9 @@ defmodule Sanctum.Auth.CyfrDoor do
   ## Where the person starts
 
   The person names their signing home by its address; `signing_home/1`
-  answers that home's `/carry` page with this home as the destination,
-  where they begin the carry themselves (`person.carry_begin`).
+  answers that home's `/carry` page with this home as the destination in
+  its fragment, where they begin the carry themselves
+  (`person.carry_begin`).
 
   ## The challenge
 
@@ -121,10 +122,13 @@ defmodule Sanctum.Auth.CyfrDoor do
   @doc """
   Where the sign-in page sends a person who names their signing home by
   its `address`: that home's `/carry` page, with this home as the
-  destination in its query, where they begin the sign-in themselves. The
-  address is read as an origin (`https://` when it names no scheme, and
-  any path dropped), and only the person supplies it: no directory says
-  where a person's home is.
+  destination in its fragment (`#destination=<this home>`), where they
+  begin the sign-in themselves. A fragment, not a query: a person not yet
+  signed in there is sent through that home's sign-in first, and a
+  redirect keeps the fragment where it drops the query. The address is
+  read as an origin (`https://` when it names no scheme, and any path
+  dropped), and only the person supplies it: no directory says where a
+  person's home is.
 
   Refusals: `:invalid_home` (no home's origin) and `:this_home`.
   """
@@ -144,13 +148,21 @@ defmodule Sanctum.Auth.CyfrDoor do
         else:
           {:ok,
            Carry.return_url(origin) <>
-             "?" <> URI.encode_query(%{"destination" => home})}
+             "#" <> URI.encode_query(%{"destination" => home})}
     else
       _unread -> {:error, :invalid_home}
     end
   end
 
   def signing_home(_address), do: {:error, :invalid_home}
+
+  @doc """
+  How long a carry lives, in milliseconds (`Arca.CarryActions.lifetime_ms/0`):
+  the bound a sign-in page holds its in-flight carry data to, which the
+  page hands its script.
+  """
+  @spec carry_lifetime_ms() :: pos_integer()
+  def carry_lifetime_ms, do: Arca.CarryActions.lifetime_ms()
 
   defp origin(scheme, host, port) do
     if port in [nil, URI.default_port(scheme)],

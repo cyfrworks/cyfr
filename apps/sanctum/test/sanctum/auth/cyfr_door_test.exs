@@ -80,11 +80,17 @@ defmodule Sanctum.Auth.CyfrDoorTest do
   # ---------------------------------------------------------------------------
 
   describe "signing_home/1" do
-    test "sends the person to their home's /carry, naming this home", %{home: home} do
+    test "sends the person to their home's /carry, naming this home in the fragment",
+         %{home: home} do
       assert {:ok, url} = CyfrDoor.signing_home("A.Example")
-      assert url == "https://a.example/carry?" <> URI.encode_query(%{"destination" => home})
+      assert url == "https://a.example/carry#" <> URI.encode_query(%{"destination" => home})
 
-      assert {:ok, "https://a.example:8443/carry?" <> _} =
+      # Nothing in the query: a redirect through that home's sign-in keeps
+      # the fragment and drops the query.
+      assert %URI{query: nil, path: "/carry", fragment: fragment} = URI.parse(url)
+      assert URI.decode_query(fragment) == %{"destination" => home}
+
+      assert {:ok, "https://a.example:8443/carry#" <> _} =
                CyfrDoor.signing_home(" https://a.example:8443/some/path ")
     end
 

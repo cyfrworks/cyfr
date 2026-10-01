@@ -730,6 +730,40 @@ defmodule Sanctum.PersonTest do
                )
     end
 
+    test "the proof's preview names the challenge's comparison code; a substituted challenge shows another",
+         %{ctx: ctx, user: user} do
+      enroll!(user.id)
+      challenge = :crypto.strong_rand_bytes(32)
+      code = Prima.PersonAssertion.comparison_code(challenge)
+      action = carry!(user.id, "https://hub.example")
+
+      assert {:error, {:confirmation_required, %{operation: "person.assert"}}} =
+               Person.sign_assertion(ctx, asked(ctx, action, challenge), [])
+
+      # Another session attaches its own challenge to another carry: the
+      # code its preview names is not the one the relying home showed.
+      substituted = :crypto.strong_rand_bytes(32)
+      other = carry!(user.id, "https://hub.example")
+
+      assert {:error, {:confirmation_required, _}} =
+               Person.sign_assertion(ctx, asked(ctx, other, substituted), [])
+
+      {:ok, records} = Arca.PendingConfirmations.list_open(Sanctum.Context.actor(ctx), user.id)
+
+      effects =
+        Enum.map(records, fn record ->
+          Jason.decode!(record.preview)["details"]["effect"]
+        end)
+
+      assert ("Signs you in at https://hub.example, which learns this home's address. " <>
+                "https://hub.example shows the code #{code}; confirm only if it matches.") in effects
+
+      other_code = Prima.PersonAssertion.comparison_code(substituted)
+      refute other_code == code
+      assert Enum.any?(effects, &(&1 =~ other_code))
+      assert Enum.count(effects, &(&1 =~ code)) == 1
+    end
+
     test "an audience no pending carry of the person's names is refused", %{ctx: ctx, user: user} do
       enroll!(user.id)
       action = carry!(user.id, "https://hub.example")

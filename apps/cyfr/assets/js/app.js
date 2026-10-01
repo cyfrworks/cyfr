@@ -13,6 +13,12 @@ import AquaChat from "./hooks/aqua_chat"
 import MarkdownContent from "./hooks/markdown_content"
 import Canvas from "./canvas/index"
 import SystemLayer from "./system_layer/index"
+import Carry, {resume as resumeCarry} from "./hooks/carry"
+
+// A sign-in carry meant for this home's `/carry` that arrived while its
+// person was signed out here was kept through their sign-in: back to
+// `/carry` to finish it, before anything else on this page starts.
+resumeCarry(window)
 
 // Optional-chained: this runs at module top level, so a page rendered without
 // the root layout (an error page, a minimal page) would otherwise throw here
@@ -31,6 +37,7 @@ Hooks.AquaChat = AquaChat
 Hooks.MarkdownContent = MarkdownContent
 Hooks.Canvas = Canvas
 Hooks.SystemLayer = SystemLayer
+Hooks.Carry = Carry
 
 Hooks.FlashAutoHide = {
   mounted() {

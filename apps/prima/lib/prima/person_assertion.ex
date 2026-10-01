@@ -24,6 +24,8 @@ defmodule Prima.PersonAssertion do
 
   @protocol "cyfr-person-assertion/v1"
   @challenge_bytes 32
+  @code_domain "cyfr/sign-in-code/v1"
+  @code_alphabet "0123456789ABCDEFGHJKMNPQRSTVWXYZ"
   @required ~w(protocol identifier audience challenge action_id key_epoch expires_at)
 
   @type t :: %__MODULE__{
@@ -57,6 +59,32 @@ defmodule Prima.PersonAssertion do
   @doc "The length of the audience's challenge, in bytes."
   @spec challenge_bytes() :: pos_integer()
   def challenge_bytes, do: @challenge_bytes
+
+  @doc """
+  The short code a person compares between the two homes of one sign-in:
+  the relying home shows it for the challenge it issued, and the signing
+  home's confirmation preview names it for the challenge it is asked to
+  sign over, so a challenge another session substituted shows another
+  code.
+
+  It is the first 40 bits of SHA-256 over `"cyfr/sign-in-code/v1"`, a
+  zero byte and the 32 raw challenge bytes, written in Crockford base32
+  (`0123456789ABCDEFGHJKMNPQRSTVWXYZ`, most significant bits first) as two
+  groups of four, `ABCD-EFGH`.
+  """
+  @spec comparison_code(binary()) :: String.t()
+  def comparison_code(challenge)
+      when is_binary(challenge) and byte_size(challenge) == @challenge_bytes do
+    <<bits::40, _rest::binary>> =
+      :crypto.hash(:sha256, [@code_domain, <<0>>, challenge])
+
+    symbols =
+      for shift <- [35, 30, 25, 20, 15, 10, 5, 0],
+          into: "",
+          do: <<:binary.at(@code_alphabet, Bitwise.band(Bitwise.bsr(bits, shift), 31))>>
+
+    binary_part(symbols, 0, 4) <> "-" <> binary_part(symbols, 4, 4)
+  end
 
   @doc """
   An unsigned assertion from its fields (atom keys; the challenge as raw

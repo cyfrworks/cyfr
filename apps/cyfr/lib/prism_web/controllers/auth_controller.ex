@@ -45,6 +45,16 @@ defmodule PrismWeb.AuthController do
   the cookie holds, or resumes the session an earlier admission under it
   minted, and sets the session as every sign-in does.
 
+  Then it sends the browser back to the person's home to report how the
+  sign-in ended (`Prima.Carry.Return`): an admitted one answers `303` to
+  that home's `/carry` with `admitted` in the fragment, and a refused one's
+  page links there with `refused`. The address is only the fixed return
+  URL of the source the carry's envelope signed
+  (`Prima.Carry.return_url/1` of the held challenge's `source`, verified
+  when the challenge was issued), never one the request names. A paused
+  sign-in (the directory could not be read) reports nothing: it may still
+  be admitted on a retry.
+
   ## Linking a door
 
   `POST /auth/link/oidcc`, under the browser's session and its forgery
@@ -215,8 +225,8 @@ defmodule PrismWeb.AuthController do
   The `cyfr` door's callback (the module doc): the assertion the sign-in
   page posts, admitted, or resumed, under the challenge this browser's
   session cookie holds. An admitted sign-in sets the session as every
-  sign-in does; a person admitted to no athanor here lands where a
-  signed-in person with none is told so.
+  sign-in does, then goes back to the person's home with `admitted`; a
+  refused one's page links back there with `refused` (the module doc).
   """
   def cyfr_callback(conn, %{"cyfr" => fragment}) when is_binary(fragment) do
     held = get_session(conn, @cyfr_challenge)
@@ -225,14 +235,18 @@ defmodule PrismWeb.AuthController do
       {:ok, %{session_token: token, outcome: outcome}} ->
         conn
         |> delete_session(@cyfr_challenge)
-        |> SignInResponse.respond(outcome, session: {:token, token})
+        |> SignInResponse.respond(outcome,
+          session: {:token, token},
+          to: carry_return(held, :admitted)
+        )
 
       {:error, {:door, _reason}} ->
         CyfrWeb.MinimalPage.send_page(
           conn,
           403,
           "Not allowed on this server",
-          "<p>#{CyfrWeb.MinimalPage.h(Sanctum.Door.refusal_message())}</p>"
+          "<p>#{CyfrWeb.MinimalPage.h(Sanctum.Door.refusal_message())}</p>" <>
+            back_home(held)
         )
 
       {:error, reason} when reason in [:identity_stale, :unavailable] ->
@@ -254,12 +268,43 @@ defmodule PrismWeb.AuthController do
           401,
           "Sign-in failed",
           "<p>That sign-in could not be completed here. Begin it again from your home.</p>" <>
-            "<p><a href=\"/login\">Back to sign-in</a></p>"
+            refused_return(reason, held) <> "<p><a href=\"/login\">Back to sign-in</a></p>"
         )
     end
   end
 
   def cyfr_callback(conn, _params), do: cyfr_expired(conn)
+
+  # A retried login whose session has since ended, or another browser's or
+  # another assertion's under a challenge already admitted, was admitted
+  # once: its home recorded that, and is told nothing else.
+  defp refused_return(reason, _held) when reason in [:session_ended, :receipt_conflict], do: ""
+  defp refused_return(_reason, held), do: back_home(held)
+
+  # Where the person's browser reports how this sign-in ended: the fixed
+  # return URL (`Prima.Carry.return_url/1`) of the source the carry's
+  # envelope signed, which `Sanctum.Auth.CyfrDoor.challenge/1` verified
+  # before this home held the challenge, with the outcome in its fragment.
+  # Never a URL the request carries; nil for a browser holding no
+  # challenge.
+  defp carry_return(%{"source" => source, "action_id" => action_id}, outcome)
+       when is_binary(source) and is_binary(action_id) do
+    with true <- Prima.Identity.Encoding.home?(source),
+         {:ok, return} <- Prima.Carry.Return.new(action_id, outcome) do
+      Prima.Carry.return_url(source) <> "#" <> Prima.Carry.Return.fragment(return)
+    else
+      _malformed -> nil
+    end
+  end
+
+  defp carry_return(_held, _outcome), do: nil
+
+  defp back_home(held) do
+    case carry_return(held, :refused) do
+      nil -> ""
+      url -> "<p><a href=\"#{CyfrWeb.MinimalPage.h(url)}\">Back to your home</a></p>"
+    end
+  end
 
   defp cyfr_expired(conn) do
     conn

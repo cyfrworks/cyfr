@@ -25,6 +25,7 @@ defmodule PrismWeb do
       AttachmentController,
       AuthController,
       BuildsLive,
+      CarryLive,
       ChatLive,
       ChatRedirectLive,
       ClaimNamespaceController,

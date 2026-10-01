@@ -148,4 +148,24 @@ defmodule Prima.PersonAssertionTest do
              unb64(v["keys"]["alice_live_1"]["public"])
            )
   end
+
+  describe "comparison_code/1" do
+    # The vector, computed apart from this module: the first 40 bits of
+    # SHA-256("cyfr/sign-in-code/v1" || 0x00 || challenge) are ca7748ec02.
+    test "is the vector's code for the vector's challenge" do
+      challenge = :binary.list_to_bin(Enum.to_list(0..31))
+      assert PersonAssertion.comparison_code(challenge) == "S9VM-HV02"
+    end
+
+    test "is two groups of four Crockford symbols, and another challenge shows another code" do
+      first = PersonAssertion.comparison_code(:binary.copy(<<0>>, 32))
+      assert first == "SG63-Q6Z0"
+      assert first =~ ~r/\A[0-9A-HJKMNP-TV-Z]{4}-[0-9A-HJKMNP-TV-Z]{4}\z/
+      refute PersonAssertion.comparison_code(:binary.copy(<<1>>, 32)) == first
+    end
+
+    test "takes only a challenge's 32 bytes" do
+      assert_raise FunctionClauseError, fn -> PersonAssertion.comparison_code("short") end
+    end
+  end
 end

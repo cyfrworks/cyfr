@@ -532,8 +532,13 @@ defmodule Sanctum.Person do
   end
 
   # What confirming an assertion approves: signing in at that home, for
-  # this carry and challenge, under this head.
+  # this carry and challenge, under this head. The effect names the
+  # challenge's comparison code, which the relying home shows for the
+  # challenge it issued: a challenge another session attached to this carry
+  # shows another code there, so the person can tell before confirming.
   defp assertion_change(action, challenge, row) do
+    code = Prima.PersonAssertion.comparison_code(challenge)
+
     %{
       operation: "person.assert",
       arguments: %{
@@ -545,7 +550,8 @@ defmodule Sanctum.Person do
       resource: action.destination_home,
       details: %{
         "effect" =>
-          "Signs you in at #{action.destination_home}, which learns this home's address."
+          "Signs you in at #{action.destination_home}, which learns this home's address. " <>
+            "#{action.destination_home} shows the code #{code}; confirm only if it matches."
       }
     }
   end
