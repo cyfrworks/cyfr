@@ -18,8 +18,8 @@ defmodule CyfrWeb.Plugs.RawBodyReader do
 
   ## Per-feature length cap
 
-  For `/hooks/*` paths we tighten the body length cap from the global 8 MB
-  (set on `Plug.Parsers` at the endpoint) to a webhook-specific limit (default
+  For `/hooks/*` paths we tighten the body length cap from the endpoint's
+  (the `:length` set on `Plug.Parsers`) to a webhook-specific limit (default
   1 MB, configurable via `:webhook_max_body_bytes`). Webhooks rarely need
   >100 KB; the tighter cap reduces memory churn from misbehaving senders.
 
@@ -36,6 +36,14 @@ defmodule CyfrWeb.Plugs.RawBodyReader do
   them is decoded: a larger body is refused 413 the same way. Their raw
   bytes are not cached. The restore ingress (`/restore…`), which takes a
   printed kit before any person exists, is bounded the same way.
+
+  ## Every parsed body
+
+  Every body the endpoint's parsers read passes through here, so these
+  caps hold for each of them. The multipart parser would read without
+  this reader, so the endpoint does not parse multipart: a multipart
+  request is refused 415 before any of its body is read
+  (`CyfrWeb.Plugs.ParserErrors`'s `:refuse`).
 
   ## Chunked reads
 
