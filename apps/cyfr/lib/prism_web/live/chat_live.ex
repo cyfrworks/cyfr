@@ -22,8 +22,9 @@ defmodule PrismWeb.ChatLive do
 
   The page owns what is the page's: the selection, the lists and what is
   followed, which athanors are unfolded, the phone drawer, the say-aloud
-  picker, and the selected athanor's own notifications. The pane owns the
-  thread. What is in view is announced (`PrismWeb.RoomFeed`) for the
+  picker, the selected athanor's own notifications, and the system layer
+  (`PrismWeb.SystemLayer`), where a grant the pane's turn needs is asked
+  under the page's context. The pane owns the thread. What is in view is announced (`PrismWeb.RoomFeed`) for the
   person's own AQUA beside the page, and told to the bar over it
   (`PrismWeb.TopbarLive.viewing/2`) so the tray follows.
 
@@ -37,6 +38,7 @@ defmodule PrismWeb.ChatLive do
   alias Phoenix.LiveView.JS
 
   alias Arca.ThreadStorage, as: Threads
+  alias PrismWeb.SystemLayer
   alias Sanctum.Tenancy.Athanors
 
   @impl true
@@ -710,6 +712,20 @@ defmodule PrismWeb.ChatLive do
     {:noreply, update(socket, :rail_open?, &(not &1))}
   end
 
+  # A grant the pane's turn needs: asked in this page's layer, under the
+  # page's context, which is focused on the pane's athanor; the outcome
+  # goes back to the pane.
+  def handle_info({:pane, _pane, {:grant, pid, prompt}}, socket) when is_pid(pid) do
+    {:noreply, SystemLayer.relay(socket, pid, prompt)}
+  end
+
+  def handle_info({:system_layer, _id, _outcome} = report, socket) do
+    case SystemLayer.relayed(socket, report) do
+      {:relayed, socket} -> {:noreply, socket}
+      :none -> {:noreply, socket}
+    end
+  end
+
   # A rename or a settings change re-reads the row; an archive sends the
   # page back to the default — the runner behind the thread has stopped.
   def handle_info(%Cyfr.Bus.Notify{kind: :athanor_changed}, socket) do
@@ -1055,6 +1071,17 @@ defmodule PrismWeb.ChatLive do
           </div>
         </div>
       </.modal>
+
+      <%!-- The page's system layer, under the page's context: what the
+            athanor's pane asks for is asked here, and the person's
+            confirmations are shown. --%>
+      <.live_component
+        module={SystemLayer}
+        id={SystemLayer.layer_id()}
+        context={@context}
+        athanor_route={assigns[:athanor_route]}
+        athanor_name={@athanor && @athanor.name}
+      />
     </div>
     """
   end

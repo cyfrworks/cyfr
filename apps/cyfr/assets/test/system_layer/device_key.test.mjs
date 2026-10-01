@@ -325,6 +325,48 @@ describe("the connection", () => {
     assert.deepEqual(socket.sent.find((m) => m.operation === "streams.open").args, {stream: CONFIRMATIONS})
   })
 
+  test("on the browser's own timers, standing schedules its renewal and opens its stream", async () => {
+    // A browser refuses its timers called as a method of anything but the
+    // window; these refuse the same way.
+    const own = {setTimeout: globalThis.setTimeout, clearTimeout: globalThis.clearTimeout}
+    const scheduled = []
+    const strict = (name, act) =>
+      function (...args) {
+        if (this !== undefined && this !== globalThis) throw new TypeError(`Illegal invocation of ${name}`)
+        return act(...args)
+      }
+    globalThis.setTimeout = strict("setTimeout", (fun, ms) => {
+      scheduled.push(ms)
+      return own.setTimeout(fun, ms)
+    })
+    globalThis.clearTimeout = strict("clearTimeout", (timer) => own.clearTimeout(timer))
+
+    try {
+      const keys = await generateKeyPair(subtle)
+      const deviceKey = await publicKeyB64(keys.publicKey, subtle)
+      const record = {privateKey: keys.privateKey, publicKey: deviceKey, clientId: certificate.client_id, certificate: {...certificate, device_key: deviceKey}}
+      const h = harness({certificate})
+      const glass = new Glass({url: "wss://alice.example/device/websocket", socket: h.makeSocket, store: memoryStore(record), subtle, now: h.now})
+      await glass.start()
+      const socket = h.socket()
+      socket.onopen()
+      home(socket, challengeFor("connect", deviceKey))
+      await new Promise((resolve) => own.setTimeout(resolve, 20))
+
+      home(socket, standing(certificate))
+      await new Promise((resolve) => own.setTimeout(resolve, 20))
+      assert.equal(glass.status, "ready")
+      assert.equal(scheduled.length, 1, "the renewal is scheduled")
+      assert.deepEqual(intents(socket), ["streams.open", "confirmation.pending"])
+
+      await glass.unpair()
+      assert.equal(glass.status, "unpaired")
+    } finally {
+      globalThis.setTimeout = own.setTimeout
+      globalThis.clearTimeout = own.clearTimeout
+    }
+  })
+
   test("after sleeping past its certificate it renews first, and sends no intent until the replacement stands", async () => {
     const {glass, h, store, deviceKey} = await glassWith({certificate, clock: certificate.expires_at + 60_000})
     await glass.start()

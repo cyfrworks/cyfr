@@ -964,6 +964,10 @@ jobs:
         env:
           RELEASE_BOOT_SKIP_BUILD: '1'
         run: tests/hostile-frame-proof/run.sh
+      - name: The pairing proof (Chromium alone, with its virtual WebAuthn authenticator)
+        env:
+          RELEASE_BOOT_SKIP_BUILD: '1'
+        run: tests/pairing-proof/run.sh
       - name: The canvas proof
         env:
           RELEASE_BOOT_SKIP_BUILD: '1'

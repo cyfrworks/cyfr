@@ -10,13 +10,20 @@ defmodule PrismWeb.SystemLayer do
   which checks the caller's standing and any fresh confirmation the
   change needs.
 
-  The shell, and each console page that asks for a sensitive change,
-  mounts it once, as `id: "system-layer"` with the page's `context`. A
-  prompt (`PrismWeb.SystemLayer.Prompt`) arrives by
-  `send_update(PrismWeb.SystemLayer, id: "system-layer", prompt: prompt)`;
-  `prompt: nil` clears the open one. A prompt that arrives while another
-  is open waits behind it in arrival order; one whose id is already open
-  or waiting is the same prompt and is taken once.
+  Each view that asks for a grant or a sensitive change mounts it once,
+  with the view's `context`, and acts under that context alone: the
+  shell, the chat and each console page that asks, as `id:
+  "system-layer"` (`layer_id/0`); the person's own panel, which sits on
+  every page beside the page's own layer, as `id: "system-layer-panel"`.
+  The component's id is its DOM id and the id every update names. A layer
+  mounted with `listen: false` opens no stream, so the records the page's
+  own layer shows are never drawn twice. `athanor_route` and
+  `athanor_name` name the athanor a grant lands in. A prompt
+  (`PrismWeb.SystemLayer.Prompt`) arrives by `show/2`, which is
+  `send_update(PrismWeb.SystemLayer, id: id, prompt: prompt)`; `prompt:
+  nil` clears the open one. A prompt that arrives while another is open
+  waits behind it in arrival order; one whose id is already open or
+  waiting is the same prompt and is taken once.
 
   Each prompt's outcome goes to the parent LiveView as
   `{:system_layer, id, :confirmed | :dismissed | {:refused, reason}}`. A
@@ -24,7 +31,9 @@ defmodule PrismWeb.SystemLayer do
   refused confirmation shows its sentence, reports `{:refused, reason}`
   and stays open, so the person can dismiss it. A confirmation prompt the
   layer opened from the stream, for another client's request, reports
-  nothing.
+  nothing. A nested view asks through the view that renders it, never
+  past it: it sends its prompt to its parent, which places it in its own
+  layer (`relay/4`) and hands the outcome back (`relayed/2`).
 
   A prompt that confirms an action (`Sanctum.Pairing`'s action table) is
   shown with a confirm control only to a client with a person behind it
@@ -39,8 +48,19 @@ defmodule PrismWeb.SystemLayer do
 
   What a confirmation dispatches, through `PrismWeb.Ops.call_tool/3`:
 
-    * a grant — `profile.commit` with the commit arguments the consent
-      sheet (`PrismWeb.ConsentSheetComponent`) sends;
+    * a grant — the prompt's body is the consent sheet
+      (`PrismWeb.ConsentSheetComponent`), which walks the grant from the
+      plan and preview the prompt arrived with (`grant_prompt/3`): the
+      vault entry each need is bound to, previewed again after each
+      pick, the warnings, what changed and what else is allowed. It hands
+      the layer the walk as it stands. Confirming asks the sheet for its
+      walk at that moment, after every pick that came before the confirm,
+      and commits exactly that walk, its decisions and bindings, through
+      `profile.commit`. A
+      commit that is refused consumed the plan's token, so the sheet
+      plans again. A grant is planned in one athanor: a prompt whose
+      athanor is no longer the layer's context's ends dismissed and
+      commits nothing;
     * a credential entry — `vault.create`, an `api_key` entry under the
       subject's name holding the one value typed, which travels on the
       shell's LiveView socket, is never assigned, rendered or logged, and
@@ -77,7 +97,8 @@ defmodule PrismWeb.SystemLayer do
   `methods` offer it.
 
   The layer listens on `confirmation.changes` while it is mounted on a
-  connected page with a person behind it: one listener process per
+  connected page with a person behind it, unless it was mounted with
+  `listen: false`, which hears no record's facts: one listener process per
   LiveView, opened through the gate's stream admission
   (`Grimoire.open_stream/3`) under the page's context, ended with the
   LiveView, opened again at its grant's deadline or when the page's focus
@@ -105,6 +126,10 @@ defmodule PrismWeb.SystemLayer do
   The browser half (`assets/js/system_layer/`) draws the prompt in the
   top layer after leaving fullscreen and pointer lock, moves focus into it
   and returns focus on close; Escape dismisses every prompt but safe mode.
+  While a modal prompt is open on any layer of the page, every frame is
+  hidden and inert, so no frame holds the pointer or the screen over it.
+  Every event the layer pushes names it (`layer`, its id), because a page
+  can hold two layers and every hook on a page hears every push.
   Every prompt but safe mode is modal and holds focus. Safe mode is a
   top-layer popover that leaves the page operable, so the assistant's
   panel, which Prism draws, is neither covered nor disabled by it.
@@ -127,14 +152,119 @@ defmodule PrismWeb.SystemLayer do
 
   # Where a page keeps the secrets of the changes it asked for.
   @asks :system_layer_asks
+  # Where a view keeps the nested views whose prompts it placed.
+  @relays :system_layer_relays
 
-  @doc "The id the layer is mounted under."
+  @doc "The id the layer is mounted under on a page that holds one."
   @spec layer_id() :: String.t()
   def layer_id, do: @layer_id
 
   @doc "The stream the layer listens on."
   @spec stream() :: String.t()
   def stream, do: @stream
+
+  @doc "Show `prompt` in the layer mounted under `id`."
+  @spec show(String.t(), Prompt.t() | nil) :: :ok
+  def show(id \\ @layer_id, prompt) do
+    send_update(__MODULE__, id: id, prompt: prompt)
+    :ok
+  end
+
+  # ---------------------------------------------------------------------------
+  # A view asking for a grant
+  # ---------------------------------------------------------------------------
+
+  @doc """
+  The `:grant` prompt `id` for the component `ref`, read under `ctx` (a
+  context, or a socket holding one, as `PrismWeb.Ops.call_tool/3` takes
+  it): the consent walk's plan as `profile.plan` answers it, its preview
+  with no vault entry bound yet, and the athanor both were read in. The
+  sheet the prompt shows takes the walk on from there. `{:error, reason}`
+  when either cannot be read, which the asker shows instead of a prompt.
+  """
+  @spec grant_prompt(Context.t() | Phoenix.LiveView.Socket.t(), String.t(), String.t()) ::
+          {:ok, Prompt.t()} | {:error, term()}
+  def grant_prompt(ctx_or_socket, id, ref) when is_binary(id) and is_binary(ref) do
+    decisions = %{"ref" => ref, "bindings" => []}
+
+    with %Context{athanor_id: athanor_id} when is_binary(athanor_id) <- context_of(ctx_or_socket),
+         {:ok, plan} <- Ops.call_tool(ctx_or_socket, "profile/plan", %{"ref" => ref}),
+         {:ok, preview} <-
+           Ops.call_tool(ctx_or_socket, "profile/preview", %{"decisions" => decisions}) do
+      {:ok,
+       %{
+         id: id,
+         kind: :grant,
+         action: :grant,
+         subject: %{
+           ref: ref,
+           athanor_id: athanor_id,
+           plan: plan,
+           preview: preview,
+           decisions: decisions
+         }
+       }}
+    else
+      {:error, reason} -> {:error, reason}
+      _no_athanor -> {:error, :no_athanor}
+    end
+  end
+
+  defp context_of(%Context{} = ctx), do: ctx
+  defp context_of(%Phoenix.LiveView.Socket{assigns: %{context: ctx}}), do: ctx
+  defp context_of(_other), do: nil
+
+  @doc """
+  Place a nested view's prompt in this view's layer `id`, under this
+  view's context; its outcome goes back to the nested view's `pid`
+  (`relayed/2`).
+  """
+  @spec relay(Phoenix.LiveView.Socket.t(), pid(), term(), String.t()) ::
+          Phoenix.LiveView.Socket.t()
+  def relay(socket, pid, prompt, id \\ @layer_id) when is_pid(pid) do
+    show(id, prompt)
+
+    case Prompt.id_of(prompt) do
+      nil ->
+        socket
+
+      prompt_id ->
+        Phoenix.Component.assign(socket, @relays, Map.put(relays(socket), prompt_id, pid))
+    end
+  end
+
+  @doc """
+  What a view does with its layer's report on a prompt it placed for a
+  nested view: the report forwarded to that view, `{:relayed, socket}`,
+  which lets go of the view once the prompt ended; `:none` for a report
+  on a prompt of this view's own.
+  """
+  @spec relayed(Phoenix.LiveView.Socket.t(), {:system_layer, String.t(), term()}) ::
+          {:relayed, Phoenix.LiveView.Socket.t()} | :none
+  def relayed(socket, {:system_layer, prompt_id, outcome} = report) do
+    case Map.fetch(relays(socket), prompt_id) do
+      {:ok, pid} ->
+        send(pid, report)
+
+        socket =
+          if ended?(outcome),
+            do: Phoenix.Component.assign(socket, @relays, Map.delete(relays(socket), prompt_id)),
+            else: socket
+
+        {:relayed, socket}
+
+      :error ->
+        :none
+    end
+  end
+
+  defp relays(socket), do: Map.get(socket.assigns, @relays, %{})
+
+  # A refused confirmation leaves its prompt open; any other outcome, a
+  # prompt never drawn included, ends it.
+  defp ended?({:refused, :invalid_prompt}), do: true
+  defp ended?({:refused, _reason}), do: false
+  defp ended?(_outcome), do: true
 
   # ---------------------------------------------------------------------------
   # A page asking for a sensitive change
@@ -158,7 +288,9 @@ defmodule PrismWeb.SystemLayer do
   `opts`: `:form`, the DOM id of the form that typed the change, when its
   values must not stay on the server: the browser resubmits it once the
   record is confirmed, and the page dispatches it again as it arrives.
-  Without one, the page repeats from `reported/2`.
+  Without one, the page repeats from `reported/2`. `:layer`, the id of
+  the page's layer (`layer_id/0` when absent). `reported/2` needs no id:
+  it reads only what this page holds.
   """
   @spec call(Phoenix.LiveView.Socket.t(), term(), String.t(), map(), keyword()) ::
           {:ok, term(), Phoenix.LiveView.Socket.t()}
@@ -177,7 +309,8 @@ defmodule PrismWeb.SystemLayer do
       {:error, {:confirmation_required, %{id: id} = signal}} when is_binary(id) ->
         form = Keyword.get(opts, :form)
         repeat = if form, do: nil, else: {tool, args}
-        {:asked, ask(socket, signal, tag, repeat, form)}
+        layer = Keyword.get(opts, :layer, @layer_id)
+        {:asked, ask(socket, signal, tag, repeat, form, layer)}
 
       {:ok, value} ->
         {:ok, value, socket}
@@ -218,12 +351,12 @@ defmodule PrismWeb.SystemLayer do
   defp held_for(socket, tag),
     do: socket |> asks() |> Map.values() |> Enum.find(&(&1.tag == tag))
 
-  defp ask(socket, %{id: id} = signal, tag, repeat, form) do
+  defp ask(socket, %{id: id} = signal, tag, repeat, form, layer) do
     ref = Prima.Confirmation.ref(id)
     prompt_id = Prompt.confirmation_id(ref)
 
     send_update(__MODULE__,
-      id: @layer_id,
+      id: layer,
       ask: %{
         ref: ref,
         operation: Map.get(signal, :operation),
@@ -232,7 +365,7 @@ defmodule PrismWeb.SystemLayer do
       }
     )
 
-    held = %{id: id, ref: ref, tag: tag, repeat: repeat, form: form}
+    held = %{id: id, ref: ref, tag: tag, repeat: repeat, form: form, layer: layer}
     Phoenix.Component.assign(socket, @asks, Map.put(asks(socket), prompt_id, held))
   end
 
@@ -244,25 +377,26 @@ defmodule PrismWeb.SystemLayer do
 
     case result do
       {:error, {:confirmation_required, %{id: id}}} when id == held.id ->
-        outcome(held.ref, :waiting)
+        outcome(held, :waiting)
         socket
 
       {:error, {:confirmation_required, _another}} ->
         _ = Ops.call_tool(socket, "confirmation/cancel", %{"ref" => held.ref})
-        outcome(held.ref, {:refused, :asked_again})
+        outcome(held, {:refused, :asked_again})
         drop_ask(socket, prompt_id)
 
       {:ok, _value} ->
-        outcome(held.ref, :completed)
+        outcome(held, :completed)
         drop_ask(socket, prompt_id)
 
       {:error, reason} ->
-        outcome(held.ref, {:refused, reason})
+        outcome(held, {:refused, reason})
         drop_ask(socket, prompt_id)
     end
   end
 
-  defp outcome(ref, outcome), do: send_update(__MODULE__, id: @layer_id, outcome: {ref, outcome})
+  defp outcome(%{ref: ref, layer: layer}, outcome),
+    do: send_update(__MODULE__, id: layer, outcome: {ref, outcome})
 
   defp drop_ask(socket, prompt_id),
     do: Phoenix.Component.assign(socket, @asks, Map.delete(asks(socket), prompt_id))
@@ -278,10 +412,13 @@ defmodule PrismWeb.SystemLayer do
        current: nil,
        queue: [],
        error: nil,
+       listen: true,
        listening: nil,
        panels: %{},
        held: %{},
-       pairing: nil
+       pairing: nil,
+       athanor_route: nil,
+       athanor_name: nil
      )}
   end
 
@@ -319,15 +456,31 @@ defmodule PrismWeb.SystemLayer do
 
   def update(%{expire: ref}, socket), do: {:ok, expire(socket, ref)}
 
+  # The grant's walk as the sheet holds it now (`walk/2`).
+  def update(%{walk: walk}, socket), do: {:ok, walk(socket, walk)}
+
+  # The sheet's walk at the moment the person confirmed, which the layer
+  # commits (`commit_walk/2`).
+  def update(%{commit: walk}, socket) do
+    {:noreply, socket} = CyfrWeb.ContextGuard.guard(socket, &commit_walk(&1, walk))
+    {:ok, socket}
+  end
+
   def update(%{listen: :ended}, socket) do
     socket = assign(socket, :listening, nil)
     {:noreply, socket} = CyfrWeb.ContextGuard.guard(socket, &{:noreply, listen(&1)})
     {:ok, socket}
   end
 
+  # The view's own assigns: its context, which may have moved to another
+  # athanor (the chat page opening another), so a grant planned in the one
+  # it left ends here.
   def update(assigns, socket) do
     socket = assign(socket, assigns)
-    {:noreply, socket} = CyfrWeb.ContextGuard.guard(socket, &{:noreply, listen(&1)})
+
+    {:noreply, socket} =
+      CyfrWeb.ContextGuard.guard(socket, &{:noreply, &1 |> end_moved_grants() |> listen()})
+
     {:ok, socket}
   end
 
@@ -343,7 +496,10 @@ defmodule PrismWeb.SystemLayer do
   # A start that was refused is remembered with its focus and tried again
   # when the focus moves. Each open, and each reopen at the grant's
   # deadline, reads the records already pending (`refresh/1`): a fact
-  # announced before the listener started is not announced again.
+  # announced before the listener started is not announced again. A
+  # layer mounted with `listen: false` opens nothing.
+  defp listen(%{assigns: %{listen: false}} = socket), do: socket
+
   defp listen(%{assigns: %{listening: %{athanor_id: athanor_id} = listening}} = socket) do
     case socket.assigns[:context] do
       %Context{athanor_id: ^athanor_id} ->
@@ -360,7 +516,7 @@ defmodule PrismWeb.SystemLayer do
       tag = CyfrWeb.ContextGuard.capture(socket)
 
       with {:ok, grant} <- Grimoire.open_stream(ctx, @stream, nil),
-           {:ok, pid} <- Listener.start(self(), ctx, grant, tag) do
+           {:ok, pid} <- Listener.start(self(), socket.assigns.id, ctx, grant, tag) do
         socket
         |> assign(:listening, %{pid: pid, grant_id: grant.grant_id, athanor_id: ctx.athanor_id})
         |> refresh()
@@ -552,12 +708,17 @@ defmodule PrismWeb.SystemLayer do
   defp mark_form(socket, nil, _prompt_id), do: socket
 
   defp mark_form(socket, form, prompt_id),
-    do: push_event(socket, "system_layer:mark", %{form: form, prompt: prompt_id})
+    do: push_layer(socket, "system_layer:mark", %{form: form, prompt: prompt_id})
 
   defp clear_forms(socket, %{form: form, prompt_id: prompt_id}) when is_binary(form),
-    do: push_event(socket, "system_layer:clear", %{prompt: prompt_id, form: form})
+    do: push_layer(socket, "system_layer:clear", %{prompt: prompt_id, form: form})
 
   defp clear_forms(socket, _panel), do: socket
+
+  # Every hook on the page hears every push, and a page may hold two
+  # layers: each event names the layer whose hook acts on it.
+  defp push_layer(socket, event, payload),
+    do: push_event(socket, event, Map.put(payload, :layer, socket.assigns.id))
 
   # ---------------------------------------------------------------------------
   # Panels: one pending confirmation as a prompt shows it
@@ -575,7 +736,7 @@ defmodule PrismWeb.SystemLayer do
         panel
       )
 
-    unless Map.has_key?(socket.assigns.panels, ref), do: expire_at(ref, panel)
+    unless Map.has_key?(socket.assigns.panels, ref), do: expire_at(socket.assigns.id, ref, panel)
     assign(socket, :panels, Map.put(socket.assigns.panels, ref, panel))
   end
 
@@ -583,14 +744,14 @@ defmodule PrismWeb.SystemLayer do
   # a request nobody repeats would wait forever on this page. Each panel
   # ends itself at its record's `expires_at` instead: the wait ends as
   # expired and a form that typed for it is emptied (`expire/2`).
-  defp expire_at(ref, %{entry: %{expires_at: at}}) do
+  defp expire_at(id, ref, %{entry: %{expires_at: at}}) do
     case remaining_ms(at) do
       nil -> :ok
-      ms -> send_update_after(__MODULE__, %{id: @layer_id, expire: ref}, ms + @expiry_grace_ms)
+      ms -> send_update_after(__MODULE__, %{id: id, expire: ref}, ms + @expiry_grace_ms)
     end
   end
 
-  defp expire_at(_ref, _panel), do: :ok
+  defp expire_at(_id, _ref, _panel), do: :ok
 
   defp remaining_ms(%DateTime{} = at),
     do: max(DateTime.diff(at, DateTime.utc_now(), :millisecond), 0)
@@ -687,7 +848,7 @@ defmodule PrismWeb.SystemLayer do
     end
   end
 
-  defp push_resubmit(socket, form), do: push_event(socket, "system_layer:resubmit", %{form: form})
+  defp push_resubmit(socket, form), do: push_layer(socket, "system_layer:resubmit", %{form: form})
 
   # ---------------------------------------------------------------------------
   # Arrival and the queue
@@ -871,7 +1032,7 @@ defmodule PrismWeb.SystemLayer do
         {:noreply,
          socket
          |> assign(:error, nil)
-         |> push_event("webauthn:get", %{purpose: "confirmation", id: ref, public_key: options})}
+         |> push_layer("webauthn:get", %{purpose: "confirmation", id: ref, public_key: options})}
 
       _none ->
         {:noreply, socket}
@@ -945,16 +1106,56 @@ defmodule PrismWeb.SystemLayer do
     {:noreply, socket |> settle(prompt, :confirmed) |> redirect(to: @sign_in_path)}
   end
 
+  # A grant commits the walk the sheet holds at the moment of the confirm,
+  # never one the sheet has moved past: the confirm asks the sheet, which
+  # answers after every pick that came before it (`commit_walk/2`). A grant
+  # planned in another athanor than the context's commits nothing.
   defp confirm(socket, %{kind: :grant, subject: subject} = prompt) do
-    args = %{
-      "decisions" => subject.decisions,
-      "plan_token" => subject.plan.plan_token,
-      "proof" => subject.preview.proof,
-      "commit_digest" => subject.preview.commit_digest,
-      "expected_consent_revision" => Map.get(subject.plan, :expected_consent_revision)
-    }
+    if subject.athanor_id != context_athanor(socket) do
+      {:noreply, end_grant(socket, prompt)}
+    else
+      send_update(PrismWeb.ConsentSheetComponent,
+        id: sheet_id(socket.assigns.id, prompt.id),
+        confirm: prompt.id
+      )
 
-    {:noreply, dispatched(socket, prompt, Ops.call_tool(socket, "profile/commit", args))}
+      {:noreply, socket}
+    end
+  end
+
+  # The walk the sheet answered the confirm with, for the grant prompt it
+  # names while that prompt is still the open one: its decisions and
+  # bindings, under the plan and the preview of exactly those. While the
+  # sheet reads a new preview there is nothing to commit yet.
+  defp commit_walk(socket, %{prompt: prompt_id} = walk) do
+    case open(socket, prompt_id, [:grant]) do
+      {:ok, _prompt} ->
+        socket = walk(socket, walk)
+        %{subject: subject} = prompt = socket.assigns.current
+
+        cond do
+          subject.athanor_id != context_athanor(socket) ->
+            {:noreply, end_grant(socket, prompt)}
+
+          is_nil(subject.preview) ->
+            {:noreply,
+             assign(socket, :error, "Nothing to grant yet: the choices are being previewed.")}
+
+          true ->
+            args = %{
+              "decisions" => subject.decisions,
+              "plan_token" => subject.plan.plan_token,
+              "proof" => subject.preview.proof,
+              "commit_digest" => subject.preview.commit_digest,
+              "expected_consent_revision" => Map.get(subject.plan, :expected_consent_revision)
+            }
+
+            {:noreply, dispatched(socket, prompt, Ops.call_tool(socket, "profile/commit", args))}
+        end
+
+      :none ->
+        {:noreply, socket}
+    end
   end
 
   defp enter_credential(socket, %{subject: subject} = prompt, secret) do
@@ -1002,8 +1203,67 @@ defmodule PrismWeb.SystemLayer do
     )
   end
 
+  # A refused commit consumed the walk's plan token whatever it answered:
+  # the sheet plans the same choices again, and the person may try again
+  # once it has.
+  defp dispatched(socket, %{kind: :grant} = prompt, {:error, reason}) do
+    send_update(PrismWeb.ConsentSheetComponent,
+      id: sheet_id(socket.assigns.id, prompt.id),
+      replan: true
+    )
+
+    socket
+    |> walk(%{prompt: prompt.id, plan: nil, preview: nil, decisions: prompt.subject.decisions})
+    |> refuse(prompt, reason, Ops.error_message(reason))
+  end
+
   defp dispatched(socket, prompt, {:error, reason}),
     do: refuse(socket, prompt, reason, Ops.error_message(reason))
+
+  # ---------------------------------------------------------------------------
+  # Grants
+  # ---------------------------------------------------------------------------
+
+  # The id of the sheet a grant prompt shows, in this layer.
+  defp sheet_id(layer, prompt_id), do: "#{layer}-grant-#{prompt_id}"
+
+  # The sheet's walk, taken into the open grant prompt it was drawn for:
+  # the decisions it holds, and the plan and preview of exactly those, the
+  # preview `nil` while the sheet reads one. A walk for a prompt no longer
+  # open is late and is dropped. Reads nothing.
+  defp walk(socket, %{prompt: prompt_id, plan: plan, preview: preview, decisions: decisions}) do
+    case socket.assigns.current do
+      %{id: ^prompt_id, kind: :grant, subject: subject} = prompt ->
+        subject = %{subject | plan: plan || subject.plan, preview: preview, decisions: decisions}
+        assign(socket, :current, %{prompt | subject: subject})
+
+      _other ->
+        socket
+    end
+  end
+
+  # Every grant prompt planned in another athanor than the context's,
+  # open or waiting, ends unconfirmed.
+  defp end_moved_grants(%{assigns: %{context: %Context{athanor_id: athanor_id}}} = socket) do
+    moved? = &match?(%{kind: :grant, subject: %{athanor_id: id}} when id != athanor_id, &1)
+    {gone, kept} = Enum.split_with(socket.assigns.queue, moved?)
+    Enum.each(gone, &report(&1.id, :dismissed))
+    socket = assign(socket, :queue, kept)
+
+    if moved?.(socket.assigns.current),
+      do: end_grant(socket, socket.assigns.current),
+      else: socket
+  end
+
+  defp end_moved_grants(socket), do: socket
+
+  defp end_grant(socket, prompt) do
+    report(prompt.id, :dismissed)
+    advance(socket)
+  end
+
+  defp context_athanor(%{assigns: %{context: %Context{athanor_id: athanor_id}}}), do: athanor_id
+  defp context_athanor(_socket), do: nil
 
   defp present(secret) when is_binary(secret) do
     if String.trim(secret) == "", do: :blank, else: :ok
@@ -1076,7 +1336,7 @@ defmodule PrismWeb.SystemLayer do
   defp repeat_held(socket, ref) do
     case Map.get(socket.assigns.held, ref) do
       %{repeat: :resubmit} ->
-        push_resubmit(socket, "#{@layer_id}-credential")
+        push_resubmit(socket, "#{socket.assigns.id}-credential")
 
       %{prompt_id: prompt_id, repeat: repeat} ->
         case socket.assigns.current do
@@ -1329,7 +1589,16 @@ defmodule PrismWeb.SystemLayer do
 
           <.standing prompt={@current} may={@may} />
 
-          <.body prompt={@current} may={@may} myself={@myself} id={@id} pairing={@pairing} />
+          <.body
+            prompt={@current}
+            may={@may}
+            myself={@myself}
+            id={@id}
+            pairing={@pairing}
+            context={assigns[:context]}
+            athanor_route={@athanor_route}
+            athanor_name={@athanor_name}
+          />
 
           <.panel :if={@panel} panel={@panel} may={@proves} myself={@myself} id={@id} />
 
@@ -1370,15 +1639,27 @@ defmodule PrismWeb.SystemLayer do
   attr :myself, :any, required: true
   attr :id, :string, required: true
   attr :pairing, :map, default: nil
+  attr :context, :any, default: nil
+  attr :athanor_route, :any, default: nil
+  attr :athanor_name, :any, default: nil
 
+  # The consent walk: the sheet starts from the plan and preview the
+  # prompt arrived with and hands each walk it makes back to this layer.
   defp body(%{prompt: %{kind: :grant}} = assigns) do
     ~H"""
-    <section aria-labelledby={"#{@id}-grant-summary"}>
-      <h3 id={"#{@id}-grant-summary"} class="text-sm font-medium">You are approving</h3>
-      <ul class="mt-1 list-disc pl-5 text-sm">
-        <li :for={line <- @prompt.subject.preview.summary}>{line}</li>
-      </ul>
-    </section>
+    <div class="max-h-[60vh] overflow-y-auto" data-test="grant-sheet">
+      <.live_component
+        module={PrismWeb.ConsentSheetComponent}
+        id={sheet_id(@id, @prompt.id)}
+        ref={@prompt.subject.ref}
+        walk={@prompt.subject}
+        context={@context}
+        athanor_route={@athanor_route}
+        athanor_name={@athanor_name}
+        layer={@id}
+        prompt_id={@prompt.id}
+      />
+    </div>
     """
   end
 
@@ -1630,7 +1911,9 @@ defmodule PrismWeb.SystemLayer do
         phx-click="confirm"
         phx-target={@myself}
         phx-value-id={@prompt.id}
-        class={button_class(true)}
+        disabled={@prompt.kind == :grant and is_nil(@prompt.subject.preview)}
+        data-test="prompt-confirm"
+        class={[button_class(true), "disabled:opacity-50"]}
       >
         {confirm_label(@prompt)}
       </button>
@@ -1789,14 +2072,15 @@ defmodule PrismWeb.SystemLayer.Listener do
 
   @doc false
   # Started subscribed, so no fact published after the grant is missed.
-  @spec start(pid(), Context.t(), Prima.StreamGrant.t(), CyfrWeb.ContextGuard.tag()) ::
+  # It hands its facts to the layer `layer` names in `view`.
+  @spec start(pid(), String.t(), Context.t(), Prima.StreamGrant.t(), CyfrWeb.ContextGuard.tag()) ::
           {:ok, pid()} | {:error, term()}
-  def start(view, %Context{} = ctx, %Prima.StreamGrant{} = grant, tag) do
+  def start(view, layer, %Context{} = ctx, %Prima.StreamGrant{} = grant, tag) do
     ready = make_ref()
     me = self()
 
     case Task.Supervisor.start_child(Prism.TaskSupervisor, fn ->
-           run(view, me, ready, ctx, grant, tag)
+           run({view, layer}, me, ready, ctx, grant, tag)
          end) do
       {:ok, pid} ->
         receive do
@@ -1828,7 +2112,7 @@ defmodule PrismWeb.SystemLayer.Listener do
     :ok
   end
 
-  defp run(view, starter, ready, ctx, grant, tag) do
+  defp run({view, _layer} = to, starter, ready, ctx, grant, tag) do
     monitor = Process.monitor(view)
     actor = Context.actor(ctx)
 
@@ -1837,7 +2121,7 @@ defmodule PrismWeb.SystemLayer.Listener do
         send(starter, {ready, :subscribed})
         remaining = max(DateTime.diff(grant.deadline, DateTime.utc_now(), :millisecond), 0)
         Process.send_after(self(), {__MODULE__, :deadline}, remaining)
-        loop(view, monitor, grant, tag, payload_struct(grant))
+        loop(to, monitor, grant, tag, payload_struct(grant))
 
       {:error, reason} ->
         send(starter, {ready, {:error, reason}})
@@ -1849,7 +2133,7 @@ defmodule PrismWeb.SystemLayer.Listener do
   defp payload_struct(%Prima.StreamGrant{topic: key}),
     do: Enum.find_value(Cyfr.Bus.topics(), fn row -> row.key == key && row.struct end)
 
-  defp loop(view, monitor, grant, tag, payload) do
+  defp loop({view, layer} = to, monitor, grant, tag, payload) do
     receive do
       {:DOWN, ^monitor, :process, _pid, _reason} ->
         :ok
@@ -1858,22 +2142,19 @@ defmodule PrismWeb.SystemLayer.Listener do
         :ok
 
       {__MODULE__, :deadline} ->
-        Phoenix.LiveView.send_update(view, PrismWeb.SystemLayer,
-          id: PrismWeb.SystemLayer.layer_id(),
-          listen: :ended
-        )
+        Phoenix.LiveView.send_update(view, PrismWeb.SystemLayer, id: layer, listen: :ended)
 
       %{__struct__: ^payload} = fact ->
         Phoenix.LiveView.send_update(view, PrismWeb.SystemLayer,
-          id: PrismWeb.SystemLayer.layer_id(),
+          id: layer,
           fact: Prima.StreamGrant.project(grant, Map.from_struct(fact)),
           tag: tag
         )
 
-        loop(view, monitor, grant, tag, payload)
+        loop(to, monitor, grant, tag, payload)
 
       _other ->
-        loop(view, monitor, grant, tag, payload)
+        loop(to, monitor, grant, tag, payload)
     end
   end
 end

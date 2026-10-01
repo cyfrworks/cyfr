@@ -314,4 +314,96 @@ defmodule PrismWeb.ThreadPaneLiveTest do
 
     refute has_element?(pane, ~s(button[phx-click="stop"]))
   end
+
+  # Minimal valid WASM with a `run` export: enough to publish a row.
+  @wasm <<0x00, 0x61, 0x73, 0x6D, 0x01, 0x00, 0x00, 0x00>> <>
+          <<0x01, 0x04, 0x01, 0x60, 0x00, 0x00>> <>
+          <<0x03, 0x02, 0x01, 0x00>> <>
+          <<0x07, 0x07, 0x01, 0x03, "run", 0x00, 0x00>> <>
+          <<0x0A, 0x04, 0x01, 0x02, 0x00, 0x0B>>
+
+  # A component in `ctx`'s athanor a turn can ask a grant for.
+  defp grantable!(ctx) do
+    name = "pane-grant-#{System.unique_integer([:positive])}"
+
+    {:ok, _} =
+      Compendium.Registry.publish_bytes(ctx, @wasm, %{
+        name: name,
+        version: "0.1.0",
+        type: "catalyst",
+        description: "A component a turn asks a grant for",
+        manifest: Jason.encode!(%{})
+      })
+
+    {"catalyst:local.#{name}", "catalyst:local.#{name}:0.1.0"}
+  end
+
+  defp consent_required(pane, thread, ref, user_id) do
+    send(pane.pid, %Cyfr.Bus.ThreadEvent{
+      athanor_id: thread.athanor_id,
+      thread_id: thread.id,
+      kind: :consent_required,
+      data: %{ref: ref, user_id: user_id}
+    })
+
+    render(pane)
+  end
+
+  test "a grant the turn needs is asked in the layer of the view that renders the pane, never on the pane",
+       %{conn: conn, user: user, room: room, thread: thread, in_room: in_room} do
+    {name_ref, ref} = grantable!(in_room)
+    {:ok, view, _} = live(conn, PrismWeb.ChatLive.chat_path(route(room), thread.id))
+    settled_render(view)
+    pane = child!(view, "pane-" <> room.id)
+
+    # Another member's turn asks them, not this person.
+    consent_required(pane, thread, ref, "someone-else")
+    refute render(view) =~ ~s(data-kind="grant")
+
+    consent_required(pane, thread, ref, user.user_id)
+    render(view)
+    assert has_element?(view, ~s(#system-layer-dialog [data-kind="grant"]))
+    assert has_element?(view, ~s(#system-layer-dialog [data-test="grant-sheet"]))
+    refute has_element?(pane, ".consent-sheet")
+
+    # Said again while it is open: the open prompt already asks it.
+    consent_required(pane, thread, ref, user.user_id)
+    refute render(view) =~ "waiting."
+
+    # Granted in the page's layer, under the page's context in the pane's
+    # athanor; the pane hears it and lets the prompt go.
+    view |> element(~s(#system-layer-dialog button[phx-click="confirm"])) |> render_click()
+
+    # The layer asks its sheet for the walk and commits; the page takes its
+    # layer's report, then the pane the one it hands on.
+    Prima.Test.Wait.wait_until(
+      fn -> :sys.get_state(pane.pid).socket.assigns.grant_prompt == nil end,
+      5_000,
+      "the pane to hear its grant"
+    )
+
+    refute render(view) =~ ~s(data-kind="grant")
+    assert {:ok, [_profile | _]} = Sanctum.Consent.profiles(in_room, name_ref)
+
+    Cyfr.Test.Sandbox.end_views()
+  end
+
+  test "a pane with no view around it has no layer to ask in, and says so", %{
+    conn: conn,
+    user: user,
+    room: room,
+    thread: thread,
+    in_room: in_room
+  } do
+    {_name_ref, ref} = grantable!(in_room)
+
+    {:ok, pane, _} =
+      live_isolated(conn, PrismWeb.ThreadPaneLive,
+        session: %{"athanor_id" => room.id, "thread_id" => thread.id}
+      )
+
+    html = consent_required(pane, thread, ref, user.user_id)
+    assert html =~ "Open the thread in the chat to give it."
+    refute html =~ ~s(data-kind="grant")
+  end
 end

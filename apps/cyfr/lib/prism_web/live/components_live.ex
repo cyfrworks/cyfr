@@ -5,9 +5,8 @@ defmodule PrismWeb.ComponentsLive do
   use PrismWeb, :live_view
   require Logger
 
-  alias Phoenix.LiveView.JS
   alias PrismWeb.ComponentsLive.Editor
-  alias PrismWeb.ConsentSheetComponent
+  alias PrismWeb.SystemLayer
 
   # The one spelling of the local namespace. Exact equality on purpose: a
   # nil publisher is a display question, not `local_publisher?/1`'s
@@ -35,7 +34,10 @@ defmodule PrismWeb.ComponentsLive do
       |> assign(:expanded_loading, false)
       |> assign(:expanded_detail, nil)
       |> assign(:expanded_plan, nil)
-      |> assign(:consent_sheet_ref, nil)
+      # The grant prompt this page asked its system layer for, and the
+      # count its prompt ids are numbered by.
+      |> assign(:grant_prompt, nil)
+      |> assign(:prompt_seq, 0)
       |> assign(:pushing, false)
       |> assign(:setup_readiness, %{})
       |> assign(:component_groups, [])
@@ -290,14 +292,9 @@ defmodule PrismWeb.ComponentsLive do
   end
 
   def handle_event("open_consent", %{"ref" => _ref}, socket) do
-    # The consent sheet plans against the latest versioned ref; the walk
-    # itself decides what the grant covers.
-    {:noreply, assign(socket, :consent_sheet_ref, latest_versioned_ref(socket))}
-  end
-
-  # The dialog's backdrop and Escape; the sheet's own Cancel arrives as a message.
-  def handle_event("close_consent", _params, socket) do
-    {:noreply, assign(socket, :consent_sheet_ref, nil)}
+    # The grant plans against the latest versioned ref; the walk itself
+    # decides what the grant covers.
+    {:noreply, ask_grant(socket, latest_versioned_ref(socket))}
   end
 
   def handle_event("push", %{"ref" => ref}, socket) do
@@ -439,15 +436,25 @@ defmodule PrismWeb.ComponentsLive do
     end
   end
 
-  def handle_info({:consent_granted, _ref, _result}, socket) do
-    {:noreply,
-     socket
-     |> assign(:consent_sheet_ref, nil)
-     |> refresh_expanded_plan()}
+  # The grant this page asked for: granted, the expanded component's
+  # plan is read again; a refused commit leaves the prompt open; anything
+  # else ended it.
+  def handle_info({:system_layer, id, outcome}, %{assigns: %{grant_prompt: id}} = socket) do
+    case outcome do
+      :confirmed ->
+        {:noreply, socket |> assign(:grant_prompt, nil) |> refresh_expanded_plan()}
+
+      {:refused, reason} when reason != :invalid_prompt ->
+        {:noreply, socket}
+
+      _ended ->
+        {:noreply, assign(socket, :grant_prompt, nil)}
+    end
   end
 
-  def handle_info({:consent_sheet_closed, _ref}, socket) do
-    {:noreply, assign(socket, :consent_sheet_ref, nil)}
+  def handle_info({:system_layer, _id, _outcome} = report, socket) do
+    {:ok, socket} = SystemLayer.reported(socket, report)
+    {:noreply, socket}
   end
 
   def handle_info(%Cyfr.Bus.Components{}, socket) do
@@ -579,8 +586,8 @@ defmodule PrismWeb.ComponentsLive do
   end
 
   def handle_info({:deep_link_setup, ref}, socket) do
-    # Find the component group matching the ref, auto-expand it, and open
-    # the consent sheet so the operator can grant access straight away.
+    # Find the component group matching the ref, auto-expand it, and ask
+    # for the grant so the operator can grant access straight away.
     socket = fetch_components(socket)
     groups = socket.assigns.component_groups
 
@@ -603,7 +610,7 @@ defmodule PrismWeb.ComponentsLive do
        |> assign(:expanded_detail, nil)
        |> assign(:expanded_plan, nil)
        |> assign(:expanded_versions, group.versions)
-       |> assign(:consent_sheet_ref, latest_ref)
+       |> ask_grant(latest_ref)
        |> assign(:loading, false)}
     else
       {:noreply,
@@ -662,6 +669,24 @@ defmodule PrismWeb.ComponentsLive do
     |> assign(:pushing, false)
     |> assign(:progress_log, [])
     |> assign(:progress_id, nil)
+  end
+
+  # The grant for `ref`, asked in the page's system layer, whose sheet
+  # binds the vault entries the component needs; a walk that cannot be
+  # read is said instead.
+  defp ask_grant(socket, ref) do
+    seq = socket.assigns.prompt_seq + 1
+    id = "grant-#{seq}"
+    socket = assign(socket, :prompt_seq, seq)
+
+    case SystemLayer.grant_prompt(socket, id, ref) do
+      {:ok, prompt} ->
+        SystemLayer.show(prompt)
+        assign(socket, :grant_prompt, id)
+
+      {:error, reason} ->
+        put_flash(socket, :error, "Cannot ask for this grant: " <> error_message(reason))
+    end
   end
 
   # Re-fetch the expanded component's setup plan after a grant so the
@@ -1630,13 +1655,13 @@ defmodule PrismWeb.ComponentsLive do
         </section>
       </div>
 
-      <%!-- The consent sheet for a model's key: the house dialog. --%>
-      <ConsentSheetComponent.consent_sheet_modal
-        ref={@consent_sheet_ref}
+      <%!-- A grant is asked here, the one place a consent is shown. --%>
+      <.live_component
+        module={SystemLayer}
+        id={SystemLayer.layer_id()}
         context={@context}
         athanor_route={@athanor_route}
         athanor_name={@athanor && @athanor.name}
-        on_cancel={JS.push("close_consent")}
       />
     </div>
     """

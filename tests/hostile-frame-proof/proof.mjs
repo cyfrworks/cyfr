@@ -24,13 +24,22 @@
 // `attacker.test`; the tinctures are published into the harness's own
 // athanor of the release under test.
 //
+// The system layer over a malicious fullscreen frame: the fullscreen probe
+// (tinctures/fullscreen-probe), which declares fullscreen and pointer lock,
+// takes both from a click and asks for them again whenever it loses them,
+// holds the screen while a grant prompt and then a confirmation prompt
+// open over it. The server's part of each — publishing a layout that
+// floats a tincture waiting for its grant, and another session of the
+// person asking for a sensitive change — is run.sh's, asked for through
+// OUT_DIR (`ask-N.json`, answered `answer-N.json`).
+//
 // Usage: node proof.mjs SERVER_URL SEGMENT COOKIE OUT_DIR PUBLIC_NEIGHBOUR_PATH
 
 import { request } from "node:http";
-import { mkdirSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import {
-  ATTACKER, BROWSERS, SITE, awaitFrame, chromium, firefox, launch, openShell, signedIn, sleep,
+  ATTACKER, BROWSERS, SITE, awaitFrame, chromium, firefox, launch, launchBrowser, openShell, signedIn, sleep,
   startProxy, startReceiver, waitFor, webkit,
 } from "../browser/lib.mjs";
 
@@ -395,11 +404,308 @@ async function frameRequestRefused(server, path, cookie) {
   return held;
 }
 
+// ---------------------------------------------------------------------------
+// The system layer over a malicious fullscreen frame
+// ---------------------------------------------------------------------------
+
+// The server's part of a step, asked of run.sh through the output
+// directory: `request` written as ask-N.json, its answer read from
+// answer-N.json.
+let asked = 0;
+async function ask(outDir, request, timeoutMs = 90_000) {
+  const id = ++asked;
+  const answer = join(outDir, `answer-${id}.json`);
+  writeFileSync(join(outDir, `ask-${id}.part`), JSON.stringify(request));
+  renameSync(join(outDir, `ask-${id}.part`), join(outDir, `ask-${id}.json`));
+  const deadline = Date.now() + timeoutMs;
+  while (!existsSync(answer)) {
+    if (Date.now() > deadline) throw new Error(`run.sh never answered ${JSON.stringify(request)}`);
+    await sleep(100);
+  }
+  return JSON.parse(readFileSync(answer, "utf8"));
+}
+
+// In the shell's own document, before any of its scripts: every time a
+// dialog is shown modally, which prompt it holds and whether the document
+// was fullscreen or pointer-locked at that instant.
+function recordShows() {
+  if (window !== window.top) return;
+  window.__shows = [];
+  const show = HTMLDialogElement.prototype.showModal;
+  HTMLDialogElement.prototype.showModal = function () {
+    const held = this.querySelector("[data-kind]");
+    const frames = Array.from(document.querySelectorAll("iframe"));
+    window.__shows.push({
+      dialog: this.id,
+      kind: held ? held.dataset.kind : null,
+      fullscreen: !!document.fullscreenElement,
+      pointer_lock: !!document.pointerLockElement,
+      frames: frames.length,
+      frames_hidden: frames.every((f) => getComputedStyle(f).visibility === "hidden" && f.inert),
+    });
+    return show.call(this);
+  };
+}
+
+const PROMPTS = [
+  { name: "grant_prompt_fullscreen", kind: "grant", request: { op: "grant" },
+    what: "a grant prompt opened over a frame holding fullscreen and pointer lock is shown only once every frame is hidden and inert and the page left fullscreen; the frame holds and takes back neither, while it shows or after" },
+  { name: "confirmation_prompt_fullscreen", kind: "confirmation", request: { op: "confirmation" },
+    what: "a confirmation prompt opened over a frame holding fullscreen and pointer lock is shown only once every frame is hidden and inert and the page left fullscreen; the frame holds and takes back neither, while it shows or after" },
+];
+
+// What the shell's document and the frame's own hold now.
+async function screenState(page, frame) {
+  const top = await page.evaluate(() => {
+    const dialog = document.getElementById("system-layer-dialog");
+    const held = dialog && dialog.querySelector("[data-kind]");
+    const frames = Array.from(document.querySelectorAll("iframe"));
+    return {
+      fullscreen: !!document.fullscreenElement,
+      pointer_lock: !!document.pointerLockElement,
+      open: !!(dialog && dialog.open),
+      modal: !!(dialog && dialog.matches(":modal")),
+      kind: held ? held.dataset.kind : null,
+      prompt: dialog && dialog.parentElement ? dialog.parentElement.dataset.promptId || null : null,
+      focus_in_prompt: !!(dialog && dialog.contains(document.activeElement)),
+      focused: document.activeElement ? (document.activeElement.id || document.activeElement.name || document.activeElement.tagName) : null,
+      frames_hidden: frames.length > 0 && frames.every((f) => getComputedStyle(f).visibility === "hidden" && f.inert),
+      shows: window.__shows || [],
+    };
+  });
+  const own = await frame.evaluate(() => window.__fullscreen.state()).catch(() => null);
+  return { ...top, frame: own };
+}
+
+// How long a person's click lets a frame ask for fullscreen without
+// another (the browsers' transient activation is about five seconds): the
+// prompt opens after it, so the fullscreen the frame asks for again over
+// the prompt has no gesture behind it. A frame needs none to take pointer
+// lock again in Chromium; the layer hides every frame while its prompt is
+// open, and the probe does not ask (README.md's `pointer_lock_retaken`).
+const ACTIVATION_MS = 6_000;
+
+// One prompt over the fullscreen frame: the frame takes the screen from a
+// click, and the pointer once it is fullscreen; the server opens the
+// prompt; the prompt is shown with neither fullscreen nor pointer lock
+// held, in the browser's top layer, and stays so while the frame keeps
+// asking for both back.
+async function promptOverFullscreen(page, frame, browserName, expected, outDir) {
+  const clicked = Date.now();
+  await frame.click("#take");
+  const before = await waitFor(async () => {
+    const state = await screenState(page, frame);
+    return state.fullscreen && state.frame && state.frame.pointer_lock ? state : null;
+  }, { timeoutMs: 5_000, what: "the frame's fullscreen and pointer lock" }).catch(() => screenState(page, frame));
+
+  if (!before.fullscreen || !(before.frame && before.frame.pointer_lock)) {
+    // Without the screen and the pointer there is nothing to leave: a
+    // browser that grants a frame neither here cannot show the attempt.
+    // Chromium must.
+    const held = browserName !== "chromium";
+    check(held, browserName, "prompts", expected.name, "the frame took fullscreen and pointer lock from a click",
+      { fullscreen: before.fullscreen, frame: before.frame });
+    if (before.fullscreen) await page.evaluate(() => document.exitFullscreen()).catch(() => null);
+    return { column: "refused", outcome: held ? "not applicable" : "FAILED",
+      detail: "this browser granted the frame no fullscreen and pointer lock from a click",
+      frame: before.frame };
+  }
+
+  await sleep(Math.max(0, clicked + ACTIVATION_MS - Date.now()));
+  const shown = (await page.evaluate(() => (window.__shows || []).length));
+  const answered = await ask(outDir, expected.request);
+  await page.waitForFunction((kind) => {
+    const dialog = document.getElementById("system-layer-dialog");
+    const held = dialog && dialog.querySelector("[data-kind]");
+    return !!(dialog && dialog.open && held && held.dataset.kind === kind);
+  }, expected.kind, { timeout: 30_000 });
+
+  // The frame keeps asking for both back, and a click aimed at it lands on
+  // the prompt's backdrop: nothing it does takes them over the prompt.
+  const box = await page.locator("iframe[phx-hook=IframeBridge]").first().boundingBox();
+  if (box) await page.mouse.click(box.x + box.width / 2, box.y + box.height / 2);
+  await sleep(1_500);
+
+  const after = await screenState(page, frame);
+  const shows = after.shows.slice(shown).filter((s) => s.dialog === "system-layer-dialog");
+  // The page's fullscreen element is what covers a prompt: a hidden frame
+  // runs no rendering steps, so the fullscreen element its own document
+  // reports is stale until it is shown again, and is recorded, not held.
+  const shownHeld = shows.length > 0 &&
+    shows.every((s) => !s.fullscreen && !s.pointer_lock && s.frames > 0 && s.frames_hidden) &&
+    after.open && after.modal && after.kind === expected.kind &&
+    !after.fullscreen && !after.pointer_lock &&
+    !!after.frame && !after.frame.pointer_lock;
+
+  // Ended, so the next step starts from no prompt: a grant prompt is
+  // dismissed; another client's request is cancelled, so no later page
+  // finds it waiting. A pointer the frame still holds would take the
+  // click, so it is let go first, as a person's Escape lets it go.
+  await frame.evaluate(() => document.exitPointerLock()).catch(() => null);
+  if (expected.kind === "confirmation") {
+    await page.locator('#system-layer-dialog [data-test="confirm-cancel"]').click();
+  } else {
+    await page.locator('#system-layer-dialog button[phx-click="dismiss"]').click();
+  }
+  await page.waitForFunction(() => {
+    const dialog = document.getElementById("system-layer-dialog");
+    return !(dialog && dialog.open);
+  }, null, { timeout: 30_000 });
+
+  // Shown again once the prompt closed, the frame asks for fullscreen with
+  // no gesture behind it, and holds neither.
+  await sleep(1_500);
+  const closed = await screenState(page, frame);
+  const closedHeld = !closed.fullscreen && !!closed.frame && !closed.frame.fullscreen && !closed.frame.pointer_lock;
+
+  const held = shownHeld && closedHeld;
+  const detail = {
+    before: { fullscreen: before.fullscreen, frame_fullscreen: before.frame.fullscreen, frame_pointer_lock: before.frame.pointer_lock },
+    shows, after: { fullscreen: after.fullscreen, pointer_lock: after.pointer_lock, open: after.open, modal: after.modal, kind: after.kind },
+    frame: after.frame, closed: { fullscreen: closed.fullscreen, frame: closed.frame }, server: answered,
+  };
+  check(held, browserName, "prompts", expected.name, expected.what, detail);
+
+  return { column: "refused", outcome: held ? "held" : "FAILED", detail };
+}
+
+// ---------------------------------------------------------------------------
+// A frame that takes the pointer back over the prompt it opened
+// ---------------------------------------------------------------------------
+
+const RETAKEN = {
+  name: "pointer_lock_retaken",
+  what: "a frame that opens a prompt inside its person's gesture takes the pointer back while hidden behind it; still it is hidden and inert, focus is in the prompt, which Tab and Escape operate, Escape ends the lock for good, and nothing the frame does confirms or dismisses the prompt",
+};
+
+// An Escape the browser itself reads, as the person's key: Chromium ends a
+// pointer lock on it. Playwright's own key press does not reach that
+// handling; the DevTools protocol's key event does.
+async function browserEscape(cdp) {
+  const key = { key: "Escape", code: "Escape", windowsVirtualKeyCode: 27, nativeVirtualKeyCode: 27 };
+  await cdp.send("Input.dispatchKeyEvent", { type: "rawKeyDown", ...key });
+  await cdp.send("Input.dispatchKeyEvent", { type: "keyUp", ...key });
+}
+
+// No document can release a pointer lock another frame holds. The frame
+// locks the pointer and asks for a credential prompt in one click; the
+// layer hides it, which ends the lock in Chromium, and the frame, still
+// holding the click's activation, takes it back while hidden. What holds
+// instead is asserted, and whether the frame held the pointer over the
+// prompt is recorded as what it is: a limitation.
+async function pointerRetaken(page, frame, browserName) {
+  if (browserName !== "chromium") {
+    return { column: "disclosure", outcome: "not applicable",
+      detail: "Escape reaches the browser's own end of a pointer lock here only through Chromium's DevTools protocol" };
+  }
+  const cdp = await page.context().newCDPSession(page);
+  try {
+    const shown = (await page.evaluate(() => (window.__shows || []).length));
+    await frame.click("#ask");
+    await page.waitForFunction(() => {
+      const dialog = document.getElementById("system-layer-dialog");
+      const held = dialog && dialog.querySelector("[data-kind]");
+      return !!(dialog && dialog.open && held && held.dataset.kind === "credential_entry");
+    }, null, { timeout: 30_000 });
+    await sleep(1_500);
+
+    // 1. Hidden and inert while the prompt shows, and the frame's hold.
+    const over = await screenState(page, frame);
+    const shows = over.shows.slice(shown).filter((s) => s.dialog === "system-layer-dialog");
+    const hiddenHeld = shows.length > 0 && shows.every((s) => s.frames > 0 && s.frames_hidden) && over.frames_hidden &&
+      over.open && over.modal && over.kind === "credential_entry";
+
+    // 2. Focus in the prompt, which Tab moves within it.
+    const focusBefore = over.focused;
+    await page.keyboard.press("Tab");
+    const tabbed = await screenState(page, frame);
+    const focusHeld = over.focus_in_prompt && tabbed.focus_in_prompt && tabbed.focused !== focusBefore;
+
+    // 4. Nothing the frame does confirms or dismisses the prompt.
+    const tried = await frame.evaluate(() => window.__fullscreen.attack());
+    await sleep(1_000);
+    const attacked = await screenState(page, frame);
+    const untouched = attacked.open && attacked.prompt === over.prompt && attacked.kind === "credential_entry" &&
+      attacked.frame && attacked.frame.credential === null;
+
+    // 3. Escape ends the lock, and it is not given back without a gesture.
+    await browserEscape(cdp);
+    await sleep(1_000);
+    const escaped = await screenState(page, frame);
+    const escapeHeld = !!escaped.frame && !escaped.frame.pointer_lock &&
+      (over.frame && over.frame.pointer_lock ? escaped.open && escaped.prompt === over.prompt : true);
+
+    // And the person's keyboard ends the prompt: the frame hears it closed
+    // unsaved, and nothing else.
+    if (escaped.open) await browserEscape(cdp);
+    await page.waitForFunction(() => {
+      const dialog = document.getElementById("system-layer-dialog");
+      return !(dialog && dialog.open);
+    }, null, { timeout: 30_000 });
+    const ended = await waitFor(async () => {
+      const state = await screenState(page, frame);
+      return state.frame && state.frame.credential ? state : null;
+    }, { timeoutMs: 10_000, what: "the frame to hear its prompt closed" }).catch(() => screenState(page, frame));
+    const closedUnsaved = !!ended.frame && !!ended.frame.credential && ended.frame.credential.saved === false;
+
+    const held = hiddenHeld && focusHeld && untouched && escapeHeld && closedUnsaved;
+    const detail = {
+      limitation: { held_pointer_over_prompt: !!(over.frame && over.frame.pointer_lock), locks: over.frame && over.frame.locks, lost: over.frame && over.frame.lost },
+      hidden_and_inert: { shows, now: over.frames_hidden },
+      keyboard: { focus: focusBefore, after_tab: tabbed.focused, in_prompt: [over.focus_in_prompt, tabbed.focus_in_prompt] },
+      frame_tried: tried, frame_answers: attacked.frame && attacked.frame.attacks, prompt_untouched: untouched,
+      escape: { pointer_lock_after: escaped.frame && escaped.frame.pointer_lock, prompt_open_after_first: escaped.open,
+        refusals: escaped.frame && escaped.frame.refusals },
+      closed: { credential: ended.frame && ended.frame.credential },
+    };
+    check(held, browserName, "prompts", RETAKEN.name, RETAKEN.what, detail);
+    return { column: "disclosure", outcome: held ? "held" : "FAILED", detail };
+  } finally {
+    await cdp.detach().catch(() => null);
+  }
+}
+
+async function prompts(browser, browserName, base, segment, cookie, outDir) {
+  const record = { attempts: {} };
+  const context = await signedIn(browser, base, cookie);
+  await context.addInitScript(recordShows);
+  try {
+    const page = await context.newPage();
+    await openShell(page, base, segment, "fullscreen-probe");
+    const { frame, attributes } = await launch(page, "fullscreen-probe");
+    await frame.waitForFunction(() => document.getElementById("state")?.dataset.ready === "yes", null, { timeout: 60_000 });
+    record.frame = { sandbox: attributes.sandbox, allow: attributes.allow };
+    for (const expected of PROMPTS) {
+      record.attempts[expected.name] = await promptOverFullscreen(page, frame, browserName, expected, outDir);
+    }
+    record.attempts[RETAKEN.name] = await pointerRetaken(page, frame, browserName);
+  } finally {
+    // The layout floats no waiting tincture for the next browser.
+    await ask(outDir, { op: "reset" });
+    await context.close();
+  }
+  return record;
+}
+
+// The prompts over the fullscreen frame run in Chromium's full build, as
+// the harness launches it elsewhere (`launchBrowser`), not the headless
+// shell the rest of the proof runs in: the shell keeps a hidden frame's
+// pointer lock, where Chrome, and the full build, release it as the frame
+// is hidden. Firefox and WebKit run as the rest of the proof does.
+async function promptsIn(browser, name, proxy, base, segment, cookie, outDir) {
+  if (name !== "chromium") return prompts(browser, name, base, segment, cookie, outDir);
+  const full = await launchBrowser("chromium", proxy);
+  try {
+    const record = await prompts(full, name, base, segment, cookie, outDir);
+    return { ...record, build: `chromium ${full.version()} (full build)` };
+  } finally {
+    await full.close();
+  }
+}
+
 const NOT_DRIVEN = [
-  ["grant_prompt_fullscreen",
-    "fullscreen reacquired while a grant prompt is up: nothing in this proof opens a grant prompt, since its probe declares nothing and the shell offers a grant only to a tincture whose owner profile needs consent again"],
   ["suspended_on_another_member",
-    "an action after the frame was suspended on another member: run at one member, the suspension made through the shell (suspended_invoke)"],
+    "an action after the frame was suspended on another member: a browser cell runs one member on SQLite, so it is proven in the cluster suite (apps/cyfr/test/cluster/frame_suspension_test.exs), the suspension made on one member and refused at the credential's next use on the other"],
 ];
 
 async function main() {
@@ -420,6 +726,7 @@ async function main() {
       record[name] = { version: browser.version() };
       record[name].private = await phase(browser, name, "private", "containment-probe", base, proxy, receiver, segment, cookie, publicNeighbour);
       record[name].public = await phase(browser, name, "public", "containment-probe-public", base, proxy, receiver, segment, cookie, publicNeighbour);
+      record[name].prompts = await promptsIn(browser, name, proxy, base, segment, cookie, outDir);
     } finally {
       await browser.close();
     }
@@ -446,6 +753,12 @@ async function main() {
     `| attempt | column | ${BROWSERS.map((b) => `${b} ${record[b].version} (private / public)`).join(" | ")} |`,
     `|---|---|${BROWSERS.map(() => "---|").join("")}`,
     ...names.map((name) => `| ${name} | ${columnOf(name)} | ${BROWSERS.map((b) => cell(b, name)).join(" | ")} |`),
+    ...PROMPTS.map((p) => `| ${p.name} | refused | ${BROWSERS.map((b) => (record[b].prompts.attempts[p.name] || {}).outcome || "not run").join(" | ")} |`),
+    `| ${RETAKEN.name} | disclosure | ${BROWSERS.map((b) => {
+      const attempt = record[b].prompts.attempts[RETAKEN.name] || {};
+      const limit = attempt.detail && attempt.detail.limitation;
+      return `${attempt.outcome || "not run"}${limit ? ` (the frame held the pointer over the prompt: ${limit.held_pointer_over_prompt ? "yes" : "no"})` : ""}`;
+    }).join(" | ")} |`,
     `| session_blind_page | disclosure | ${blind ? "held" : "FAILED"} (asked of the server, with the cookie and without) |`,
     `| frame_request_refused | refused | ${framed ? "held" : "FAILED"} (asked of the server, as a frame and not) |`,
     ...NOT_DRIVEN.map(([name, why]) => `| ${name} | not driven | ${why} |`),

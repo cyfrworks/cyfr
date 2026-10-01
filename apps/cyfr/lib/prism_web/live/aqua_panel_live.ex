@@ -28,16 +28,25 @@ defmodule PrismWeb.AquaPanelLive do
   read on the connected mount, once. `CyfrWeb.ContextGuard` establishes
   the session and keeps the panel's context current; the panel's move to
   the person's own athanor goes back through it (`refocus/2`).
+
+  A grant the pane's turn needs is asked in the panel's own system layer
+  (`PrismWeb.SystemLayer`, DOM id `system-layer-panel`), under the
+  panel's context, which is the person's own athanor whatever athanor the
+  page is on; the page's layer would commit in the page's. That layer
+  opens no stream (`listen: false`): the page's own layer shows the
+  person's confirmations, and none is drawn twice.
   """
 
   use PrismWeb, :live_view
 
   alias Arca.ThreadStorage, as: Threads
   alias Phoenix.LiveView.JS
+  alias PrismWeb.SystemLayer
   alias Sanctum.Tenancy.Athanors
   alias Sanctum.Tenancy.Users
 
   @kept_ttl_ms :timer.hours(24)
+  @layer "system-layer-panel"
 
   on_mount {CyfrWeb.ContextGuard, :protected}
 
@@ -179,7 +188,20 @@ defmodule PrismWeb.AquaPanelLive do
     {:noreply, socket |> open_on(thread_id) |> remember()}
   end
 
+  # A grant the pane's turn needs: asked in the panel's own layer, under
+  # the panel's context; the outcome goes back to the pane.
+  def handle_info({:pane, _pane, {:grant, pid, prompt}}, socket) when is_pid(pid) do
+    {:noreply, SystemLayer.relay(socket, pid, prompt, layer_id())}
+  end
+
   def handle_info({:pane, _pane, _message}, socket), do: {:noreply, socket}
+
+  def handle_info({:system_layer, _id, _outcome} = report, socket) do
+    case SystemLayer.relayed(socket, report) do
+      {:relayed, socket} -> {:noreply, socket}
+      :none -> {:noreply, socket}
+    end
+  end
 
   def handle_info(msg, socket) do
     Prima.LoggerContext.unexpected(__MODULE__, msg, :debug)
@@ -281,9 +303,23 @@ defmodule PrismWeb.AquaPanelLive do
           }
         )}
       </aside>
+
+      <.live_component
+        :if={@phase == :ready}
+        module={SystemLayer}
+        id={layer_id()}
+        context={@context}
+        listen={false}
+        athanor_route={Athanors.route_slug(@athanor)}
+        athanor_name={@athanor.name}
+      />
     </div>
     """
   end
 
   defp close_and_return, do: JS.push("close") |> JS.focus(to: "#aqua-panel-button")
+
+  @doc "The id of the panel's own system layer, beside the page's."
+  @spec layer_id() :: String.t()
+  def layer_id, do: @layer
 end

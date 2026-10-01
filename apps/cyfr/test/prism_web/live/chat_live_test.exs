@@ -142,6 +142,65 @@ defmodule PrismWeb.ChatLiveTest do
 
   defp athanor, do: Process.get(:chat_athanor)
 
+  # Minimal valid WASM with a `run` export: enough to publish a row.
+  @wasm <<0x00, 0x61, 0x73, 0x6D, 0x01, 0x00, 0x00, 0x00>> <>
+          <<0x01, 0x04, 0x01, 0x60, 0x00, 0x00>> <>
+          <<0x03, 0x02, 0x01, 0x00>> <>
+          <<0x07, 0x07, 0x01, 0x03, "run", 0x00, 0x00>> <>
+          <<0x0A, 0x04, 0x01, 0x02, 0x00, 0x0B>>
+
+  test "a grant the pane's turn needs is asked in the page's layer, and ends when the page opens another athanor",
+       %{conn: conn} do
+    alice = test_user()
+    conn = log_in_user(conn, alice, athanor_id: athanor().id)
+
+    {:ok, group} =
+      Sanctum.Tenancy.Athanors.create_group(alice.user_id, "Elsewhere #{alice.namespace}")
+
+    :ok = Sanctum.TestContext.shipped!(group.id)
+
+    here = %{Sanctum.TestContext.local() | user_id: alice.user_id, athanor_id: athanor().id}
+    name = "chat-grant-#{System.unique_integer([:positive])}"
+
+    {:ok, _} =
+      Compendium.Registry.publish_bytes(here, @wasm, %{
+        name: name,
+        version: "0.1.0",
+        type: "catalyst",
+        description: "A component a turn asks a grant for",
+        manifest: Jason.encode!(%{})
+      })
+
+    {:ok, thread} = Threads.create(Sanctum.Context.actor(here))
+    {view, _html} = mount_chat(conn, nil, thread.id)
+
+    send(pane(view).pid, %Cyfr.Bus.ThreadEvent{
+      athanor_id: athanor().id,
+      thread_id: thread.id,
+      kind: :consent_required,
+      data: %{ref: "catalyst:local.#{name}:0.1.0", user_id: alice.user_id}
+    })
+
+    # The pane asks the page, and the page places the prompt in its layer,
+    # each by a message of its own.
+    render(pane(view))
+    render(view)
+    assert has_element?(view, ~s(#system-layer-dialog [data-kind="grant"]))
+    assert has_element?(view, "#system-layer-dialog .consent-sheet", "in Chat")
+
+    # Planned in this athanor: once the page opens another, the grant is
+    # not committed there, and the prompt goes.
+    view
+    |> element("#athanor-#{group.id} button[phx-click=open_athanor]")
+    |> render_click()
+
+    assert_patch(view, chat_path(group))
+    refute has_element?(view, ~s(#system-layer-dialog [data-kind="grant"]))
+    assert {:ok, []} = Sanctum.Consent.profiles(here, "catalyst:local.#{name}")
+
+    Cyfr.Test.Sandbox.end_views()
+  end
+
   test "a thread named in the address opens under its athanor, whatever the session's default is",
        %{conn: conn} do
     alice = test_user()
@@ -793,11 +852,11 @@ defmodule PrismWeb.ChatLiveTest do
     assert render(view) =~ "soul"
     assert has_element?(view, "code", "aqua")
 
-    # "Connect a model" is the lite path to a key: the consent sheet for the
-    # agent's catalyst, from this page.
+    # "Connect a model" is the lite path to a key: the grant for the
+    # agent's catalyst, from this page, asked in its system layer.
     render_click(view, "open_consent", %{"ref" => "catalyst:local.http:1.1.2"})
-    assert has_element?(view, ".consent-sheet")
-    send(view.pid, {:consent_sheet_closed, "catalyst:local.http:1.1.2"})
+    assert has_element?(view, "#system-layer-dialog .consent-sheet")
+    view |> element(~s(#system-layer-dialog button[phx-click="dismiss"])) |> render_click()
     refute has_element?(view, ".consent-sheet")
 
     Cyfr.Test.Sandbox.end_views()

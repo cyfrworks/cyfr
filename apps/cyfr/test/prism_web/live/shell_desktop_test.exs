@@ -624,7 +624,9 @@ defmodule PrismWeb.ShellDesktopTest do
       assert html =~ "Grant tincture:local.blocked-dash"
 
       view |> element(~s(#system-layer-dialog button[phx-click="confirm"])) |> render_click()
-      _ = render(view)
+
+      # The layer asks its sheet for the walk, commits, and reports.
+      wait_until(fn -> assigns(view).grant_prompts == %{} end, 5_000, "the grant")
 
       assert %{state: :live} = Prism.Frames.get(frames(view), {:full, "iframe_blocked-dash"})
       assert assigns(view).grant_prompts == %{}

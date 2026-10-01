@@ -609,7 +609,8 @@ defmodule PrismWeb.AquaLiveTest do
       assert html =~ "the model has no key yet"
       refute has_element?(view, "button[phx-click=install_catalyst]")
 
-      # And the way on is live: the sheet opens on the release that landed.
+      # And the way on is live: the grant opens on the release that landed,
+      # in the page's system layer and nowhere on the page.
       view
       |> element("button[phx-click=open_consent]", "Connect a model")
       |> render_click()
@@ -617,6 +618,70 @@ defmodule PrismWeb.AquaLiveTest do
       html = render(view)
       assert html =~ "#{ref}:0.1.0"
       assert html =~ "to call the model with your key"
+      assert has_element?(view, ~s(#system-layer-dialog [data-test="grant-needs"]))
+    end
+
+    test "connecting a model binds the key in the system layer, and the page says it is connected",
+         %{conn: conn, ctx: ctx} do
+      ref = "catalyst:local.keyed"
+      :ok = soul_names_catalyst!(ctx, ref)
+
+      {:ok, _} =
+        Compendium.Registry.publish_bytes(ctx, @wasm, %{
+          name: "keyed",
+          version: "0.1.0",
+          type: "catalyst",
+          description: "A model catalyst",
+          manifest:
+            Jason.encode!(%{
+              "needs" => %{
+                "api_key" => %{
+                  "type" => "api_key:keyed.test",
+                  "reason" => "to call the model with your key",
+                  "fields" => ["KEYED_API_KEY"],
+                  "required" => true
+                }
+              }
+            })
+        })
+
+      params = %{name: "keyed key", kind: "api_key", fields: %{"KEYED_API_KEY" => "sk-keyed"}}
+
+      entering =
+        Sanctum.TestContext.confirmed(ctx, :credential_entry, %{
+          operation: "vault.create",
+          arguments: params,
+          resource: params.name
+        })
+
+      {:ok, entry} = Sanctum.Vault.create(entering, params)
+
+      {view, _html} = mount_athanor(conn, "/aqua")
+
+      view
+      |> element("button[phx-click=open_consent]", "Connect a model")
+      |> render_click()
+
+      # No sheet on the page itself: the grant is the layer's.
+      refute has_element?(view, "#consent-sheet-dialog")
+      assert has_element?(view, ~s(#system-layer-dialog [data-test="grant-sheet"]))
+
+      view
+      |> element(
+        ~s(#system-layer-dialog [data-test="grant-pick"][phx-value-entry_id="#{entry.id}"])
+      )
+      |> render_click()
+
+      render(view)
+      view |> element(~s(#system-layer-dialog button[phx-click="confirm"])) |> render_click()
+
+      # The layer asks its sheet for the walk, then commits.
+      Prima.Test.Wait.wait_until(fn -> render(view) =~ "Model connected." end, 5_000, "the grant")
+      refute has_element?(view, ~s(#system-layer-dialog [data-kind="grant"]))
+
+      {:ok, [%{id: profile_id} | _]} = Sanctum.Consent.profiles(ctx, ref)
+      {:ok, head} = Sanctum.Consent.head_consent(ctx, profile_id)
+      assert Enum.any?(head.vault_refs, &(&1.vault_entry_id == entry.id))
     end
 
     test "an unrelated reload does not re-enable Install while its fetch is running",
@@ -653,8 +718,21 @@ defmodule PrismWeb.AquaLiveTest do
       {view, html} = mount_athanor(conn, "/aqua")
       assert html =~ "kept-model-1"
 
-      send(view.pid, {:consent_granted, "catalyst:local.http:1.1.2", %{}})
-      assert render(view) =~ "Model connected."
+      # The grant is asked in the page's system layer; confirmed there, the
+      # page hears it.
+      {:ok, _} =
+        Compendium.Registry.publish_bytes(ctx, @wasm, %{
+          name: "kept-key",
+          version: "0.1.0",
+          type: "catalyst",
+          description: "A model catalyst",
+          manifest: Jason.encode!(%{})
+        })
+
+      render_click(view, "open_consent", %{"ref" => "catalyst:local.kept-key:0.1.0"})
+      assert has_element?(view, ~s(#system-layer-dialog [data-kind="grant"]))
+      view |> element(~s(#system-layer-dialog button[phx-click="confirm"])) |> render_click()
+      Prima.Test.Wait.wait_until(fn -> render(view) =~ "Model connected." end, 5_000, "the grant")
 
       # The kept entry is gone: a load from here finds no hit to hand back,
       # whatever a fresh run answers.

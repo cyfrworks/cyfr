@@ -1,0 +1,12 @@
+{
+  "name": "fullscreen-probe",
+  "type": "tincture",
+  "version": "1.0.0",
+  "publisher": "local",
+  "description": "The containment proof's malicious fullscreen frame: it declares fullscreen and pointer lock, takes both from a click, takes them again whenever it can, and asks the shell for a credential prompt while it holds the pointer.",
+  "tincture": {
+    "entry": "index.html",
+    "actions": ["vault.create"],
+    "frame": {"capabilities": ["fullscreen", "pointer_lock"]}
+  }
+}

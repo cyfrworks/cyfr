@@ -57,6 +57,38 @@ defmodule PrismWeb.SystemLayerTest.BareHost do
   def render(assigns), do: PrismWeb.SystemLayerTest.Relay.layer(assigns)
 end
 
+defmodule PrismWeb.SystemLayerTest.QuietHost do
+  @moduledoc false
+  # A nested view's own layer beside a page's, as the person's panel
+  # mounts it: an id of its own, and no stream.
+  use Phoenix.LiveView
+
+  on_mount {CyfrWeb.ContextGuard, :protected}
+
+  @impl true
+  def mount(_params, session, socket), do: {:ok, assign(socket, :test, session["test"])}
+
+  @impl true
+  def handle_info({:prompt, prompt}, socket) do
+    PrismWeb.SystemLayer.show("system-layer-panel", prompt)
+    {:noreply, socket}
+  end
+
+  def handle_info(message, socket), do: PrismWeb.SystemLayerTest.Relay.forward(message, socket)
+
+  @impl true
+  def render(assigns) do
+    ~H"""
+    <.live_component
+      module={PrismWeb.SystemLayer}
+      id="system-layer-panel"
+      context={@context}
+      listen={false}
+    />
+    """
+  end
+end
+
 defmodule PrismWeb.SystemLayerTest do
   @moduledoc """
   The system layer presents a prompt and never decides it: it shows no
@@ -87,7 +119,7 @@ defmodule PrismWeb.SystemLayerTest do
   import Prima.Test.Wait
 
   alias PrismWeb.SystemLayer.Prompt
-  alias PrismWeb.SystemLayerTest.{BareHost, Host}
+  alias PrismWeb.SystemLayerTest.{BareHost, Host, QuietHost}
   alias Sanctum.Context
   alias Sanctum.TestContext.Authenticator
 
@@ -163,7 +195,10 @@ defmodule PrismWeb.SystemLayerTest do
   defp prove_here!(view, ref, authenticator) do
     view |> element(~s([data-test="confirm-passkey"][phx-value-ref="#{ref}"])) |> render_click()
 
+    # The ceremony names the layer that asks for it: every hook on a page
+    # hears every push.
     assert_push_event(view, "webauthn:get", %{
+      layer: "system-layer",
       purpose: "confirmation",
       id: ^ref,
       public_key: %{"challenge" => challenge}
@@ -217,7 +252,8 @@ defmodule PrismWeb.SystemLayerTest do
   defp restore_env(app, key, nil), do: Application.delete_env(app, key)
   defp restore_env(app, key, value), do: Application.put_env(app, key, value)
 
-  defp grant(id, attrs \\ %{}) do
+  # A grant planned in the athanor of `ctx`, the host's context.
+  defp grant(ctx, id, attrs \\ %{}) do
     ref = "tincture:local.system-layer-probe"
 
     Map.merge(
@@ -227,6 +263,7 @@ defmodule PrismWeb.SystemLayerTest do
         action: :grant,
         subject: %{
           ref: ref,
+          athanor_id: ctx.athanor_id,
           plan: %{plan_token: "not-a-plan-token", expected_consent_revision: 0},
           preview: %{
             summary: ["Talks to api.example.com", "Keeps its own private storage"],
@@ -245,8 +282,10 @@ defmodule PrismWeb.SystemLayerTest do
   defp credential(id, name),
     do: %{id: id, kind: :credential_entry, action: :credential_entry, subject: %{name: name}}
 
+  # A grant's confirm is answered in a later message (the layer asks its
+  # sheet for the walk, then commits), so an outcome is waited for.
   defp outcome(id) do
-    assert_receive {:host, {:system_layer, ^id, outcome}}
+    assert_receive {:host, {:system_layer, ^id, outcome}}, 2_000
     outcome
   end
 
@@ -268,8 +307,11 @@ defmodule PrismWeb.SystemLayerTest do
   describe "presentation" do
     setup :signed_in
 
-    test "a prompt is a labelled, described modal dialog with real buttons", %{view: view} do
-      html = prompt(view, grant("g1"))
+    test "a prompt is a labelled, described modal dialog with real buttons", %{
+      view: view,
+      ctx: ctx
+    } do
+      html = prompt(view, grant(ctx, "g1"))
 
       assert html =~ ~s(role="dialog")
       assert html =~ ~s(aria-modal="true")
@@ -316,11 +358,12 @@ defmodule PrismWeb.SystemLayerTest do
     setup :signed_in
 
     test "is offered the control for every action of the table; no action names a rank", %{
-      view: view
+      view: view,
+      ctx: ctx
     } do
       for action <- Sanctum.Pairing.actions() do
         id = "act-#{action}"
-        html = prompt(view, grant(id, %{action: action}))
+        html = prompt(view, grant(ctx, id, %{action: action}))
 
         assert has_element?(view, ~s(button[phx-click="confirm"]), "Grant"), inspect(action)
         refute html =~ ~s(data-standing="none")
@@ -331,15 +374,17 @@ defmodule PrismWeb.SystemLayerTest do
     end
 
     test "a confirmation is decided by the operation it dispatches, not by the layer", %{
-      view: view
+      view: view,
+      ctx: ctx
     } do
       # A sensitive action: the layer dispatches it like any other, and
       # the commit, not the layer, refuses the stale plan token.
-      prompt(view, grant("sensitive", %{action: :home_transfer}))
+      prompt(view, grant(ctx, "sensitive", %{action: :home_transfer}))
 
-      html = view |> element(~s(button[phx-click="confirm"])) |> render_click()
+      view |> element(~s(button[phx-click="confirm"])) |> render_click()
 
       assert {:refused, reason} = outcome("sensitive")
+      html = render(view)
       sentence = reason |> PrismWeb.Ops.error_message() |> Phoenix.HTML.html_escape()
       assert html =~ Phoenix.HTML.safe_to_string(sentence)
       assert open_prompt(view) == "sensitive"
@@ -349,8 +394,8 @@ defmodule PrismWeb.SystemLayerTest do
   describe "a client with no person behind it" do
     setup :none_client
 
-    test "is shown no confirm control and told where to confirm", %{view: view} do
-      html = prompt(view, grant("n1"))
+    test "is shown no confirm control and told where to confirm", %{view: view, ctx: ctx} do
+      html = prompt(view, grant(ctx, "n1"))
 
       refute has_element?(view, ~s([phx-click="confirm"]))
       assert html =~ ~s(data-standing="none")
@@ -358,12 +403,16 @@ defmodule PrismWeb.SystemLayerTest do
       assert html =~ "signed-in browser."
     end
 
-    test "a confirmation sent anyway is dispatched, and the operation refuses it", %{view: view} do
-      prompt(view, grant("n2"))
+    test "a confirmation sent anyway is dispatched, and the operation refuses it", %{
+      view: view,
+      ctx: ctx
+    } do
+      prompt(view, grant(ctx, "n2"))
 
-      html = view |> layer() |> render_click("confirm", %{"id" => "n2"})
+      view |> layer() |> render_click("confirm", %{"id" => "n2"})
 
       assert {:refused, reason} = outcome("n2")
+      html = render(view)
       sentence = reason |> PrismWeb.Ops.error_message() |> Phoenix.HTML.html_escape()
       assert html =~ Phoenix.HTML.safe_to_string(sentence)
       assert open_prompt(view) == "n2"
@@ -421,12 +470,16 @@ defmodule PrismWeb.SystemLayerTest do
   describe "a confirmation the operation refuses" do
     setup :signed_in
 
-    test "shows the refusal's sentence, reports it, and stays dismissable", %{view: view} do
-      prompt(view, grant("g-refused"))
+    test "shows the refusal's sentence, reports it, and stays dismissable", %{
+      view: view,
+      ctx: ctx
+    } do
+      prompt(view, grant(ctx, "g-refused"))
 
-      html = view |> element(~s(button[phx-click="confirm"])) |> render_click()
+      view |> element(~s(button[phx-click="confirm"])) |> render_click()
 
       assert {:refused, reason} = outcome("g-refused")
+      html = render(view)
       assert html =~ ~s(role="alert")
       sentence = reason |> PrismWeb.Ops.error_message() |> Phoenix.HTML.html_escape()
       assert html =~ Phoenix.HTML.safe_to_string(sentence)
@@ -437,15 +490,301 @@ defmodule PrismWeb.SystemLayerTest do
     end
   end
 
+  # ---------------------------------------------------------------------------
+  # Grants
+  # ---------------------------------------------------------------------------
+
+  # Minimal valid WASM with a `run` export: enough to publish a row.
+  @wasm <<0x00, 0x61, 0x73, 0x6D, 0x01, 0x00, 0x00, 0x00>> <>
+          <<0x01, 0x04, 0x01, 0x60, 0x00, 0x00>> <>
+          <<0x03, 0x02, 0x01, 0x00>> <>
+          <<0x07, 0x07, 0x01, 0x03, "run", 0x00, 0x00>> <>
+          <<0x0A, 0x04, 0x01, 0x02, 0x00, 0x0B>>
+
+  # A component in the person's athanor whose one credential need no
+  # grant has bound yet, and a vault entry that can meet it.
+  defp needing_key(%{ctx: ctx}) do
+    local = %{Sanctum.TestContext.local() | user_id: ctx.user_id, athanor_id: ctx.athanor_id}
+    name = "layer-needs-key-#{System.unique_integer([:positive])}"
+
+    {:ok, _} =
+      Compendium.Registry.publish_bytes(local, @wasm, %{
+        name: name,
+        version: "0.1.0",
+        type: "catalyst",
+        description: "A component that needs a key",
+        manifest:
+          Jason.encode!(%{
+            "needs" => %{
+              "api_key" => %{
+                "type" => "api_key:layer.test",
+                "reason" => "to call the service with your key",
+                "fields" => ["LAYER_API_KEY"],
+                "required" => true
+              }
+            }
+          })
+      })
+
+    params = %{
+      name: "layer key #{System.unique_integer([:positive])}",
+      kind: "api_key",
+      fields: %{"LAYER_API_KEY" => "sk-layer-not-shown"}
+    }
+
+    entering =
+      Sanctum.TestContext.confirmed(local, :credential_entry, %{
+        operation: "vault.create",
+        arguments: params,
+        resource: params.name
+      })
+
+    {:ok, entry} = Sanctum.Vault.create(entering, params)
+
+    %{
+      local: local,
+      name_ref: "catalyst:local.#{name}",
+      ref: "catalyst:local.#{name}:0.1.0",
+      entry: entry
+    }
+  end
+
+  defp view_context(view), do: :sys.get_state(view.pid).socket.assigns.context
+
+  # The assigns of the layer `id` holds in the view's process.
+  defp layer_assigns(view, id \\ "system-layer") do
+    {by_cid, _ids, _next} = :sys.get_state(view.pid).components
+
+    Enum.find_value(by_cid, fn {_cid, entry} ->
+      if elem(entry, 0) == PrismWeb.SystemLayer and elem(entry, 1) == id, do: elem(entry, 2)
+    end)
+  end
+
+  defp head_refs(local, name_ref) do
+    {:ok, [%{id: profile_id} | _]} = Sanctum.Consent.profiles(local, name_ref)
+    {:ok, head} = Sanctum.Consent.head_consent(local, profile_id)
+    Enum.map(head.vault_refs, & &1.vault_entry_id)
+  end
+
+  describe "the grant" do
+    setup [:signed_in, :needing_key]
+
+    test "its body is the consent sheet: an entry bound to the need is previewed again and committed with it",
+         %{view: view, ref: ref, name_ref: name_ref, entry: entry, local: local} do
+      {:ok, grant} = PrismWeb.SystemLayer.grant_prompt(view_context(view), "g-bind", ref)
+      html = prompt(view, grant)
+
+      # The walk as the prompt arrived with it, drawn in the layer: the
+      # need, the entries that can meet it, nothing bound yet.
+      assert html =~ ~s(data-kind="grant")
+      assert has_element?(view, ~s(#system-layer-dialog [data-test="grant-sheet"]))
+
+      assert has_element?(
+               view,
+               ~s([data-test="grant-needs"]),
+               "to call the service with your key"
+             )
+
+      assert has_element?(view, ~s([data-test="grant-pick"]), entry.name)
+      refute has_element?(view, ~s([data-test="grant-pick"][aria-pressed="true"]))
+      refute html =~ "sk-layer-not-shown"
+
+      # Picked: previewed again, and the layer holds the walk it commits.
+      view
+      |> element(~s([data-test="grant-pick"][phx-value-entry_id="#{entry.id}"]))
+      |> render_click()
+
+      render(view)
+      assert has_element?(view, ~s([data-test="grant-pick"][aria-pressed="true"]), entry.name)
+      refute has_element?(view, ~s(button[phx-click="confirm"][disabled]))
+
+      view |> element(~s(button[phx-click="confirm"])) |> render_click()
+      assert outcome("g-bind") == :confirmed
+      assert open_prompt(view) == nil
+      assert entry.id in head_refs(local, name_ref)
+    end
+
+    test "a commit the home refuses is planned again, and the next confirmation commits",
+         %{view: view, ref: ref, name_ref: name_ref, entry: entry, local: local} do
+      ctx = view_context(view)
+      {:ok, grant} = PrismWeb.SystemLayer.grant_prompt(ctx, "g-again", ref)
+      prompt(view, grant)
+
+      view
+      |> element(~s([data-test="grant-pick"][phx-value-entry_id="#{entry.id}"]))
+      |> render_click()
+
+      render(view)
+
+      # The walk's plan token is spent before the person confirms: the
+      # commit is refused, and consumed nothing of the person's choice.
+      %{current: %{subject: %{plan: %{plan_token: token}}}} = layer_assigns(view)
+
+      _spent =
+        Sanctum.Consent.Proof.consume(token, %{
+          kind: :plan,
+          commit_digest: "sha256:spent",
+          athanor_id: ctx.athanor_id
+        })
+
+      view |> element(~s(button[phx-click="confirm"])) |> render_click()
+      assert {:refused, _reason} = outcome("g-again")
+      html = render(view)
+      assert html =~ ~s(role="alert")
+      assert open_prompt(view) == "g-again"
+
+      # The sheet planned again, the same entry still bound, and the layer
+      # holds the new walk.
+      render(view)
+      %{current: %{subject: %{plan: %{plan_token: again}}}} = layer_assigns(view)
+      assert again != token
+      refute has_element?(view, ~s(button[phx-click="confirm"][disabled]))
+      assert has_element?(view, ~s([data-test="grant-pick"][aria-pressed="true"]), entry.name)
+
+      view |> element(~s(button[phx-click="confirm"])) |> render_click()
+      assert outcome("g-again") == :confirmed
+      assert entry.id in head_refs(local, name_ref)
+    end
+
+    test "a confirm that arrives with a pick commits the entry the sheet holds then",
+         %{view: view, ref: ref, name_ref: name_ref, entry: first, local: local} do
+      params = %{
+        name: "second key #{System.unique_integer([:positive])}",
+        kind: "api_key",
+        fields: %{"LAYER_API_KEY" => "sk-second-not-shown"}
+      }
+
+      entering =
+        Sanctum.TestContext.confirmed(local, :credential_entry, %{
+          operation: "vault.create",
+          arguments: params,
+          resource: params.name
+        })
+
+      {:ok, second} = Sanctum.Vault.create(entering, params)
+
+      {:ok, grant} = PrismWeb.SystemLayer.grant_prompt(view_context(view), "g-race", ref)
+      prompt(view, grant)
+
+      # The person picks the first entry; it is previewed and shown.
+      view
+      |> element(~s([data-test="grant-pick"][phx-value-entry_id="#{first.id}"]))
+      |> render_click()
+
+      render(view)
+      assert has_element?(view, ~s([data-test="grant-pick"][aria-pressed="true"]), first.name)
+
+      # Then changes to the second and confirms before the page answered:
+      # both events wait in the view's mailbox, in the order a browser sent
+      # them, as the client sends them without waiting for a reply.
+      {by_cid, _ids, _next} = :sys.get_state(view.pid).components
+
+      cid_of = fn module ->
+        Enum.find_value(by_cid, fn {cid, entry} -> if elem(entry, 0) == module, do: cid end)
+      end
+
+      {_ref, topic, proxy} = view.proxy
+      join_ref = :sys.get_state(proxy).join_ref
+
+      event = fn ref, cid, name, value ->
+        %Phoenix.Socket.Message{
+          join_ref: join_ref,
+          topic: topic,
+          event: "event",
+          ref: ref,
+          payload: %{"type" => "click", "event" => name, "value" => value, "cid" => cid}
+        }
+      end
+
+      [_, need] = Regex.run(~r/phx-value-need="([^"]+)"/, render(view))
+      :ok = :sys.suspend(view.pid)
+
+      send(
+        view.pid,
+        event.("990001", cid_of.(PrismWeb.ConsentSheetComponent), "pick_entry", %{
+          "need" => need,
+          "entry_id" => second.id
+        })
+      )
+
+      send(
+        view.pid,
+        event.("990002", cid_of.(PrismWeb.SystemLayer), "confirm", %{"id" => "g-race"})
+      )
+
+      :ok = :sys.resume(view.pid)
+
+      assert outcome("g-race") == :confirmed
+      refs = head_refs(local, name_ref)
+
+      assert second.id in refs,
+             "the sheet held the second entry; the layer committed #{inspect(refs)}"
+
+      refute first.id in refs, "the entry the person changed away from was bound"
+    end
+
+    test "a grant planned in another athanor commits nothing and ends", %{view: view, ctx: ctx} do
+      elsewhere = grant(%{ctx | athanor_id: "ath_elsewhere"}, "g-elsewhere")
+      prompt(view, elsewhere)
+
+      view |> element(~s(button[phx-click="confirm"])) |> render_click()
+      assert outcome("g-elsewhere") == :dismissed
+      assert open_prompt(view) == nil
+      no_outcome("g-elsewhere")
+    end
+  end
+
+  describe "a nested view's own layer" do
+    test "has its own id, opens no stream, and draws what it is shown", %{conn: conn} do
+      user = test_user()
+      conn = log_in_user(conn, user)
+      athanor = seated_athanor()
+      ctx = person_context(user, athanor)
+      other = other_session!(ctx)
+
+      # A record already waiting, and one asked once the layer is up: a
+      # listening layer shows both; this one shows neither.
+      ask = fn ->
+        PrismWeb.Ops.call_tool(other, "vault/create", %{
+          "name" => "quiet-#{System.unique_integer([:positive])}",
+          "kind" => "api_key",
+          "fields" => %{"KEY" => "sk-quiet"}
+        })
+      end
+
+      assert {:error, {:confirmation_required, _}} = ask.()
+
+      {:ok, view, html} =
+        live_isolated(conn, QuietHost, session: %{"athanor_id" => athanor.id, "test" => self()})
+
+      assert html =~ ~s(id="system-layer-panel")
+      assert html =~ ~s(id="system-layer-panel-dialog")
+      refute html =~ ~s(id="system-layer")
+      assert {:error, {:confirmation_required, _}} = ask.()
+      render(view)
+      assert open_prompt(view) == nil
+
+      assert %{listen: false, listening: nil} = layer_assigns(view, "system-layer-panel")
+
+      # What it is shown, it draws and reports, under its own id.
+      prompt(view, sign_in("quiet-sign-in"))
+      assert has_element?(view, ~s(#system-layer-panel-dialog [data-kind="sign_in"]))
+      view |> element(~s(#system-layer-panel button[phx-click="dismiss"])) |> render_click()
+      assert outcome("quiet-sign-in") == :dismissed
+      end_views()
+    end
+  end
+
   describe "a malformed prompt" do
     setup :signed_in
 
-    test "is not drawn and is refused as :invalid_prompt", %{view: view} do
+    test "is not drawn and is refused as :invalid_prompt", %{view: view, ctx: ctx} do
       malformed = [
         {"m1", %{id: "m1", kind: :grant, action: :grant, subject: %{}}},
         {"m2", %{id: "m2", kind: :teleport, action: nil, subject: %{}}},
         {"m3", %{id: "m3", kind: :sign_in, action: :grant, subject: %{}}},
-        {"m4", %{id: "m4", kind: :grant, action: :everything, subject: grant("x").subject}},
+        {"m4", %{id: "m4", kind: :grant, action: :everything, subject: grant(ctx, "x").subject}},
+        {"m4a", grant(ctx, "m4a") |> update_in([:subject], &Map.delete(&1, :athanor_id))},
         {"m5", %{id: "m5", kind: :credential_entry, action: :credential_entry, subject: %{}}},
         {"m6", %{id: "m6", kind: :safe_mode, action: nil, subject: %{reason: :crashed}}},
         {"m7", Map.put(sign_in("m7"), :operation, "vault.delete")},
@@ -464,9 +803,12 @@ defmodule PrismWeb.SystemLayerTest do
   describe "a second prompt" do
     setup :signed_in
 
-    test "waits behind the open one in arrival order and never replaces it", %{view: view} do
+    test "waits behind the open one in arrival order and never replaces it", %{
+      view: view,
+      ctx: ctx
+    } do
       prompt(view, sign_in("first"))
-      prompt(view, grant("second"))
+      prompt(view, grant(ctx, "second"))
       html = prompt(view, credential("third", "queued-entry"))
 
       assert open_prompt(view) == "first"

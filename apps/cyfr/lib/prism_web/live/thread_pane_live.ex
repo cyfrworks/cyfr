@@ -3,9 +3,9 @@
 
 defmodule PrismWeb.ThreadPaneLive do
   @moduledoc """
-  One thread on screen: the tape, the composer, the approval cards,
-  the consent sheet and the uploads — a window onto `Aqua.Runner`
-  for one thread, under one focused context.
+  One thread on screen: the tape, the composer, the approval cards
+  and the uploads — a window onto `Aqua.Runner` for one thread, under
+  one focused context.
 
   Each nested LiveView has its own mailbox, authenticated session context,
   and membership-checked athanor focus. Runner calls, row reads, and
@@ -19,6 +19,14 @@ defmodule PrismWeb.ThreadPaneLive do
   as `{:pane, id, message}` to `socket.parent_pid`, first of all
   `{:ready, pid, thread_id}` once the pane is live, which is how
   the host learns where to send the switch.
+
+  A turn that needs a grant asks for it as a `:grant` prompt read under
+  the pane's own context and sent to the view that renders the pane,
+  never past it: `{:grant, pid, prompt}`. That view places it in its own
+  system layer, under its own context in the same athanor, and hands the
+  outcome back as `{:system_layer, id, outcome}`
+  (`PrismWeb.SystemLayer.relay/4`). Granted, the running turn is cut for
+  the new consent and the sender re-sends.
 
   In the person's own panel (`PrismWeb.AquaPanelLive`, session `"panel"`)
   the pane sits beside a room: it hears what the host page shows
@@ -232,7 +240,7 @@ defmodule PrismWeb.ThreadPaneLive do
     |> assign(:token_usage, %{input: 0, output: 0})
     |> assign(:grants, MapSet.new())
     |> assign(:announcement, "")
-    |> assign(:consent_sheet_ref, nil)
+    |> assign(:grant_prompt, nil)
     |> assign(:restart_prompt, nil)
     |> assign(:cancel_requested, false)
   end
@@ -463,7 +471,7 @@ defmodule PrismWeb.ThreadPaneLive do
   end
 
   # ============================================================================
-  # The pane's mailbox: runner broadcasts, card decisions, the consent sheet
+  # The pane's mailbox: runner broadcasts, card decisions, the grant's outcome
   # ============================================================================
 
   @impl true
@@ -486,31 +494,25 @@ defmodule PrismWeb.ThreadPaneLive do
     {:noreply, decide(socket, decision)}
   end
 
-  # The consent sheet closes itself once the grant lands; the running turn
-  # is cut for the delta and the sender re-sends.
-  def handle_info({:consent_granted, _ref, result}, socket) do
-    socket = assign(socket, :consent_sheet_ref, nil)
+  # The grant this pane asked for, as the host's layer reported it.
+  # Granted, the running turn is cut for the new consent and the sender
+  # re-sends; a refused commit leaves the prompt open; anything else
+  # ended it.
+  def handle_info({:system_layer, id, outcome}, %{assigns: %{grant_prompt: id}} = socket)
+      when is_binary(id) do
+    case outcome do
+      :confirmed ->
+        {:noreply, socket |> assign(:grant_prompt, nil) |> restart_for_consent()}
 
-    case socket.assigns.thread do
-      nil ->
+      {:refused, reason} when reason != :invalid_prompt ->
         {:noreply, socket}
 
-      thread ->
-        {:noreply,
-         run(
-           socket,
-           &PrismWeb.Ops.call_tool(&1, "thread/restart_for_consent", %{
-             "thread" => thread.id,
-             "profile_id" => Map.get(result, :profile_id),
-             "revision" => Map.get(result, :revision)
-           })
-         )}
+      _ended ->
+        {:noreply, assign(socket, :grant_prompt, nil)}
     end
   end
 
-  def handle_info({:consent_sheet_closed, _ref}, socket) do
-    {:noreply, assign(socket, :consent_sheet_ref, nil)}
-  end
+  def handle_info({:system_layer, _id, _outcome}, socket), do: {:noreply, socket}
 
   # The catalogue, for the focus it was read under.
   def handle_info({:list_models_result, tag, result}, socket),
@@ -732,15 +734,17 @@ defmodule PrismWeb.ThreadPaneLive do
   defp handle_thread_event(socket, :usage, usage), do: assign(socket, :token_usage, usage)
   defp handle_thread_event(socket, :grants, grants), do: assign(socket, :grants, grants)
 
-  # Client intents and the consent sheet are the sender's alone: another
-  # member's browser must not navigate because this one asked.
+  # Client intents and the grant prompt are the sender's alone: another
+  # member's browser must not navigate or be asked because this one asked.
   defp handle_thread_event(socket, :intents, %{intents: intents, user_id: user_id}) do
     if user_id == socket.assigns.context.user_id, do: push_intents(socket, intents), else: socket
   end
 
+  # One grant asked at a time: the turn says it again while the prompt is
+  # open, and the open prompt already asks it.
   defp handle_thread_event(socket, :consent_required, %{ref: ref, user_id: user_id}) do
-    if user_id == socket.assigns.context.user_id,
-      do: assign(socket, :consent_sheet_ref, ref),
+    if user_id == socket.assigns.context.user_id and is_nil(socket.assigns.grant_prompt),
+      do: ask_grant(socket, ref),
       else: socket
   end
 
@@ -1018,6 +1022,43 @@ defmodule PrismWeb.ThreadPaneLive do
 
   defp pending_in(messages) do
     Enum.filter(messages, &(&1.kind == "approval" and &1.status == "pending"))
+  end
+
+  # The grant for `ref`, read under the pane's context and asked in the
+  # system layer of the view that renders the pane. A pane with no host
+  # has no layer to ask in, and says so.
+  defp ask_grant(%{parent_pid: host} = socket, ref) when is_pid(host) do
+    id = "grant-#{socket.id}-#{System.unique_integer([:positive])}"
+
+    case PrismWeb.SystemLayer.grant_prompt(socket, id, ref) do
+      {:ok, prompt} ->
+        tell_host(socket, {:grant, self(), prompt})
+        assign(socket, :grant_prompt, id)
+
+      {:error, reason} ->
+        put_flash(socket, :error, "Cannot ask for this grant: #{error_message(reason)}")
+    end
+  end
+
+  defp ask_grant(socket, _ref),
+    do:
+      put_flash(
+        socket,
+        :error,
+        "This turn needs a grant. Open the thread in the chat to give it."
+      )
+
+  defp restart_for_consent(socket) do
+    case socket.assigns.thread do
+      nil ->
+        socket
+
+      thread ->
+        run(
+          socket,
+          &PrismWeb.Ops.call_tool(&1, "thread/restart_for_consent", %{"thread" => thread.id})
+        )
+    end
   end
 
   # A pane mounted on its own (a test's isolated mount) has no host to tell.
@@ -1500,20 +1541,6 @@ defmodule PrismWeb.ThreadPaneLive do
             A message from you waits behind this turn.
           </span>
         </div>
-      </div>
-
-      <div
-        :if={@consent_sheet_ref}
-        class="border-t border-emerald-800/60 bg-emerald-900/10 px-3 py-3 max-h-[50vh] overflow-y-auto"
-      >
-        <.live_component
-          module={PrismWeb.ConsentSheetComponent}
-          id={"consent-#{@consent_sheet_ref}"}
-          ref={@consent_sheet_ref}
-          context={@context}
-          athanor_route={@athanor_route}
-          athanor_name={@athanor && @athanor.name}
-        />
       </div>
 
       <div
