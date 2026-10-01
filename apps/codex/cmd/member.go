@@ -5,6 +5,9 @@ package cmd
 
 import (
 	"fmt"
+	"regexp"
+	"strings"
+
 	"github.com/cyfr/codex/internal/ops"
 
 	"github.com/cyfr/codex/internal/output"
@@ -25,9 +28,10 @@ var memberCmd = &cobra.Command{
 	Use:     "member",
 	Short:   "Who is in an athanor",
 	GroupID: "identity",
-	Long: "Every member is the athanor's admin: anyone may add (by email or user id), " +
-		"remove, or leave. Adding an email the server has not seen leaves an " +
-		"invitation that activates on that person's first sign-in.",
+	Long: "Every member is the athanor's admin: anyone may add or remove someone, " +
+		"named by email, user id or person identifier (per_…), or leave. Adding an " +
+		"email or identifier the server has not seen leaves an invitation that " +
+		"activates on that person's first sign-in here.",
 }
 
 func memberAthanor(cmd *cobra.Command) ops.Field[string] {
@@ -66,17 +70,11 @@ var memberListCmd = &cobra.Command{
 }
 
 var memberAddCmd = &cobra.Command{
-	Use:   "add <email|user_id>",
-	Short: "Add someone",
+	Use:   "add <email|user_id|identifier>",
+	Short: "Add someone, by email, user id or person identifier (per_…)",
 	Args:  cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
-		payload := ops.MemberAddArgs{Athanor: memberAthanor(cmd)}
-		if memberKey(args[0]) == "email" {
-			payload.Email = ops.Value(args[0])
-		} else {
-			payload.UserId = ops.Value(args[0])
-		}
-		result, err := newClient().CallTool(cmd.Context(), ops.Member, payload)
+		result, err := newClient().CallTool(cmd.Context(), ops.Member, memberAddArgs(memberAthanor(cmd), args[0]))
 		if err != nil {
 			return handleToolError(err)
 		}
@@ -90,17 +88,11 @@ var memberAddCmd = &cobra.Command{
 }
 
 var memberRemoveCmd = &cobra.Command{
-	Use:   "remove <email|user_id>",
-	Short: "Remove someone",
+	Use:   "remove <email|user_id|identifier>",
+	Short: "Remove someone, or withdraw their invitation, by email, user id or person identifier (per_…)",
 	Args:  cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
-		payload := ops.MemberRemoveArgs{Athanor: memberAthanor(cmd)}
-		if memberKey(args[0]) == "email" {
-			payload.Email = ops.Value(args[0])
-		} else {
-			payload.UserId = ops.Value(args[0])
-		}
-		result, err := newClient().CallTool(cmd.Context(), ops.Member, payload)
+		result, err := newClient().CallTool(cmd.Context(), ops.Member, memberRemoveArgs(memberAthanor(cmd), args[0]))
 		if err != nil {
 			return handleToolError(err)
 		}
@@ -130,12 +122,42 @@ var memberLeaveCmd = &cobra.Command{
 	},
 }
 
-// An `@` makes an email; anything else is an IdP subject.
+// personIdentifier is the person identifier grammar Prima.Identity holds a
+// `per_…` value to: `per_` and 64 lowercase hexadecimal digits.
+var personIdentifier = regexp.MustCompile(`\Aper_[0-9a-f]{64}\z`)
+
+// How an argument names a person: a person identifier by its grammar, an
+// email by its `@`, and anything else an IdP subject or a user id.
 func memberKey(target string) string {
-	for _, c := range target {
-		if c == '@' {
-			return "email"
-		}
+	switch {
+	case personIdentifier.MatchString(target):
+		return "identifier"
+	case strings.Contains(target, "@"):
+		return "email"
+	default:
+		return "user_id"
 	}
-	return "user_id"
+}
+
+// memberPerson is the one field an argument fills, by its key.
+func memberPerson(target string) (email, userID, identifier ops.Field[string]) {
+	switch memberKey(target) {
+	case "identifier":
+		identifier = ops.Value(target)
+	case "email":
+		email = ops.Value(target)
+	default:
+		userID = ops.Value(target)
+	}
+	return email, userID, identifier
+}
+
+func memberAddArgs(athanor ops.Field[string], target string) ops.MemberAddArgs {
+	email, userID, identifier := memberPerson(target)
+	return ops.MemberAddArgs{Athanor: athanor, Email: email, UserId: userID, Identifier: identifier}
+}
+
+func memberRemoveArgs(athanor ops.Field[string], target string) ops.MemberRemoveArgs {
+	email, userID, identifier := memberPerson(target)
+	return ops.MemberRemoveArgs{Athanor: athanor, Email: email, UserId: userID, Identifier: identifier}
 }

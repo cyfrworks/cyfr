@@ -31,8 +31,11 @@ defmodule PrismWeb.AuthenticatedMountTest do
   test "a mounted view lets go when the person loses the athanor in focus", %{conn: conn} do
     user = test_user()
     {:ok, group} = Sanctum.Tenancy.Athanors.create_group(user.user_id, "Let go #{user.namespace}")
-    conn = log_in_user(conn, user, athanor_id: group.id)
-    {view, _html} = mount_athanor(conn, "/settings")
+    # The session is the person's own athanor's and the group is in focus by
+    # its address: a leave ends only the sessions bound to the group, so this
+    # one stands and the view lets go of the focus alone.
+    conn = log_in_user(conn, user)
+    {view, _html} = mount_athanor(conn, "/settings", group)
 
     # A person's own athanor never loses its owner, so the seat that can be
     # taken away is a group's.

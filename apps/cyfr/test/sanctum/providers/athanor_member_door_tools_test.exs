@@ -387,6 +387,142 @@ defmodule Sanctum.Providers.AthanorMemberDoorToolsTest do
     assert Enum.any?(entries, &(&1.kind == "identifier" and &1.value == identifier))
   end
 
+  test "member.add and member.remove take an identifier: an invite waits at the door, list shows it, remove withdraws it",
+       %{alice: alice, ctx: ctx, n: n} do
+    a = ctx.(alice, Sanctum.TestContext.athanor_id(), [])
+    {:ok, group} = call(a, "athanor", %{"action" => "create", "name" => "Ids #{n}"})
+    identifier = "per_" <> Prima.Digest.sha256_hex("member-id-#{n}")
+
+    # Nobody here holds it: the seat waits for their first cyfr sign-in,
+    # the door queues the identifier for the operator, and the answer is
+    # the one a known person's identifier gets.
+    assert {:ok, %{state: "added", member: %{identifier: ^identifier}}} =
+             call(a, "member", %{
+               "action" => "add",
+               "athanor" => group.id,
+               "identifier" => identifier
+             })
+
+    assert {:ok, %{members: members}} =
+             call(a, "member", %{"action" => "list", "athanor" => group.id})
+
+    assert [%{status: "invited", user_id: nil, email: nil}] =
+             Enum.filter(members, &(&1.identifier == identifier))
+
+    assert [%{kind: "identifier", status: "requested"}] =
+             Enum.filter(Sanctum.Door.Store.requests(), &(&1.value == identifier))
+
+    assert {:error, {:invalid_argument, message}} =
+             call(a, "member", %{
+               "action" => "add",
+               "athanor" => group.id,
+               "identifier" => "per_x"
+             })
+
+    assert message =~ "person identifier"
+
+    # Removing by identifier withdraws the invitation; once gone, there is
+    # nobody to remove.
+    assert {:ok, %{state: "removed", member: %{identifier: ^identifier}}} =
+             call(a, "member", %{
+               "action" => "remove",
+               "athanor" => group.id,
+               "identifier" => identifier
+             })
+
+    refute Enum.any?(
+             rows!(Members.list_by_athanor(group.id)),
+             &(&1.person_identifier == identifier)
+           )
+
+    assert {:error, {:not_found, "Member", ^identifier}} =
+             call(a, "member", %{
+               "action" => "remove",
+               "athanor" => group.id,
+               "identifier" => identifier
+             })
+  end
+
+  test "a person here is added and removed by their identifier, and keeps their identity",
+       %{alice: alice, ctx: ctx, n: n} do
+    a = ctx.(alice, Sanctum.TestContext.athanor_id(), [])
+    {:ok, group} = call(a, "athanor", %{"action" => "create", "name" => "Known #{n}"})
+    identifier = "per_" <> Prima.Digest.sha256_hex("member-known-#{n}")
+
+    {:ok, user} =
+      Sanctum.SignIn.admitted(
+        %{
+          id: Sanctum.Auth.Identity.cyfr_key("https://dir.example", identifier),
+          provider: "cyfr",
+          email: nil,
+          verified: :unknown,
+          name: nil,
+          remote: %{identifier: identifier, directory_url: "https://dir.example"}
+        },
+        :allowed
+      )
+
+    assert {:ok, %{state: "added"}} =
+             call(a, "member", %{
+               "action" => "add",
+               "athanor" => group.id,
+               "identifier" => identifier
+             })
+
+    assert Members.member?(user.id, group.id)
+
+    assert {:ok, %{state: "removed"}} =
+             call(a, "member", %{
+               "action" => "remove",
+               "athanor" => group.id,
+               "identifier" => identifier
+             })
+
+    refute Members.member?(user.id, group.id)
+    assert {:ok, %{status: "active"}} = Users.get(user.id)
+
+    assert {:ok, %{provenance: "remote", identifier: ^identifier}} =
+             Arca.PersonIdentities.get(Prima.Actor.system(), user.id)
+  end
+
+  test "door.deny of an identifier withdraws the seats its invitations were holding",
+       %{alice: alice, ops: ops, ctx: ctx, n: n} do
+    a = ctx.(alice, Sanctum.TestContext.athanor_id(), [])
+    {:ok, group} = call(a, "athanor", %{"action" => "create", "name" => "Pending id #{n}"})
+    {:ok, other} = call(a, "athanor", %{"action" => "create", "name" => "Pending id 2 #{n}"})
+    identifier = "per_" <> Prima.Digest.sha256_hex("pending-id-#{n}")
+
+    for athanor <- [group, other] do
+      {:ok, _} =
+        call(a, "member", %{
+          "action" => "add",
+          "athanor" => athanor.id,
+          "identifier" => identifier
+        })
+    end
+
+    admin = ctx.(ops, Sanctum.TestContext.athanor_id(), platform_admin: true)
+
+    # Nobody holds the identifier here, so the seats are the whole of what
+    # the deny has to reach; the next allow seats nobody it threw out.
+    assert {:ok, %{ejected: 0, invites_withdrawn: 2}} =
+             call(admin, "door", %{"action" => "deny", "value" => identifier})
+
+    for athanor <- [group, other] do
+      refute Enum.any?(
+               rows!(Members.list_by_athanor(athanor.id)),
+               &(&1.person_identifier == identifier)
+             )
+    end
+
+    assert {:error, :denied} =
+             Sanctum.Door.admit(
+               Sanctum.Auth.Identity.cyfr_key("https://dir.example", identifier),
+               nil,
+               :unknown
+             )
+  end
+
   test "session.use repoints the session and refuses what focus refuses",
        %{alice: alice, bob: bob, ctx: ctx, n: n} do
     a = ctx.(alice, Sanctum.TestContext.athanor_id(), [])

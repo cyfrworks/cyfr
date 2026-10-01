@@ -4,6 +4,7 @@
 defmodule Sanctum.Tenancy.MembersTest do
   use ExUnit.Case, async: false
 
+  alias Arca.Schemas.{DeviceCertificate, PairedClient}
   alias Arca.ThreadSubscriptionStorage, as: Subs
   alias Sanctum.Tenancy.{Athanors, Members}
 
@@ -393,6 +394,234 @@ defmodule Sanctum.Tenancy.MembersTest do
       :ok = Members.remove_member(athanor, user_id: user.id)
       assert {:ok, %{status: "archived"}} = Athanors.get(athanor.id)
     end
+
+    test "retires in one transition the person's sessions bound to it and their clients and certificates there",
+         %{athanor: athanor} do
+      n = System.unique_integer([:positive])
+      leaver = person(n)
+      stayer = person(n + 1)
+      other = group!(n)
+      {:ok, :added} = Members.add(athanor, [user_id: leaver.id], "system")
+      {:ok, :added} = Members.add(athanor, [user_id: stayer.id], "system")
+      {:ok, :added} = Members.add(other, [user_id: leaver.id], "system")
+
+      bound = session!(leaver.id, athanor.id)
+      elsewhere = session!(leaver.id, other.id)
+      client = paired!(athanor.id, leaver.id)
+      cert = certificate!(athanor.id, leaver.id, client)
+      kept_client = paired!(other.id, leaver.id)
+      kept_cert = certificate!(other.id, leaver.id, kept_client)
+      stayer_session = session!(stayer.id, athanor.id)
+      leaver_id = leaver.id
+      Cyfr.Bus.subscribe_global(Cyfr.Bus.sessions())
+
+      assert :ok = Members.remove_member(athanor, user_id: leaver.id)
+
+      refute Members.member?(leaver.id, athanor.id)
+      refute session?(bound)
+      assert standing(PairedClient, client) == "revoked"
+      assert state(DeviceCertificate, cert) == "revoked"
+      assert_receive %Cyfr.Bus.Session{kind: :revoked, user_id: ^leaver_id}
+
+      # The other athanor's seat, session, client and certificate stand, as
+      # do the identity and everyone else's.
+      assert Members.member?(leaver.id, other.id)
+      assert session?(elsewhere)
+      assert standing(PairedClient, kept_client) == "active"
+      assert state(DeviceCertificate, kept_cert) == "active"
+      assert session?(stayer_session)
+      assert {:ok, %{provenance: "local"}} = Arca.PersonIdentities.get(server(), leaver.id)
+      assert {:ok, %{status: "active"}} = Athanors.get(athanor.id)
+    end
+
+    test "a removal that fails to retire one certificate rolls back whole, and its retry goes through",
+         %{athanor: athanor} do
+      n = System.unique_integer([:positive])
+      leaver = person(n)
+      stayer = person(n + 1)
+      {:ok, :added} = Members.add(athanor, [user_id: leaver.id], "system")
+      {:ok, :added} = Members.add(athanor, [user_id: stayer.id], "system")
+      bound = session!(leaver.id, athanor.id)
+      client = paired!(athanor.id, leaver.id)
+      cert = certificate!(athanor.id, leaver.id, client)
+      failure = fail_on!("device_certificates", "UPDATE")
+
+      assert {:error, :database_error} = Members.remove_member(athanor, user_id: leaver.id)
+
+      assert Members.member?(leaver.id, athanor.id)
+      assert session?(bound)
+      assert standing(PairedClient, client) == "active"
+      assert state(DeviceCertificate, cert) == "active"
+
+      clear_failure!(failure)
+
+      assert :ok = Members.remove_member(athanor, user_id: leaver.id)
+      refute Members.member?(leaver.id, athanor.id)
+      refute session?(bound)
+      assert state(DeviceCertificate, cert) == "revoked"
+    end
+
+    test "a person who holds no seat there is not found, and a person's own athanor keeps its owner",
+         %{athanor: athanor} do
+      n = System.unique_integer([:positive])
+      stranger = person(n)
+      assert {:error, :not_found} = Members.remove_member(athanor, user_id: stranger.id)
+
+      {:ok, own} =
+        Athanors.create(%{
+          kind: "person",
+          name: "Own #{n}",
+          slug: "own-#{n}",
+          owner_user_id: stranger.id,
+          created_by: stranger.id
+        })
+
+      {:ok, _} = Members.ensure(stranger.id, scope: "athanor", athanor_id: own.id)
+      assert {:error, :person_athanor} = Members.remove_member(own, user_id: stranger.id)
+
+      # A caller's copy that misnames the kind is decided again on the
+      # locked row, and the owner stays.
+      assert {:error, :person_athanor} =
+               Members.remove_member(%{own | kind: "group"}, user_id: stranger.id)
+
+      assert Members.member?(stranger.id, own.id)
+    end
+  end
+
+  describe "membership by identifier" do
+    test "an identifier a person here holds seats them; an unknown one is invited and waits at the door",
+         %{athanor: athanor} do
+      known = identifier()
+      user = remote!(known)
+
+      assert {:ok, :added} = Members.add(athanor, [identifier: known], "system")
+      assert Members.member?(user.id, athanor.id)
+
+      # Unknown here: invited, and queued for the operator by the door; the
+      # directory it names is not asked, since only the person's own
+      # sign-in carries their genesis.
+      unknown = identifier()
+      assert {:ok, :invited} = Members.add(athanor, [identifier: unknown], "system")
+      assert {:ok, :invited} = Members.add(athanor, [identifier: unknown], "system")
+
+      assert [%{status: "invited", user_id: nil, email: nil}] =
+               Enum.filter(
+                 rows!(Members.list_by_athanor(athanor.id)),
+                 &(&1.person_identifier == unknown)
+               )
+
+      assert [%{kind: "identifier", status: "requested"}] =
+               Enum.filter(Sanctum.Door.Store.requests(), &(&1.value == unknown))
+
+      # An identifier the door already admits queues nothing.
+      admitted = identifier()
+      {:ok, _} = Sanctum.Door.Store.allow("identifier", admitted, "ops")
+      assert Sanctum.Door.identifier_admitted?(admitted)
+      assert {:ok, :invited} = Members.add(athanor, [identifier: admitted], "system")
+      refute Enum.any?(Sanctum.Door.Store.requests(), &(&1.value == admitted))
+
+      # `*` admits every identifier but a denied one: the deny outranks it.
+      {:ok, _} = Sanctum.Door.Store.deny("identifier", admitted, "ops")
+      {:ok, _} = Sanctum.Door.Store.allow("wildcard", "*", "ops")
+      refute Sanctum.Door.identifier_admitted?(admitted)
+      assert Sanctum.Door.identifier_admitted?(identifier())
+
+      assert {:error, :invalid_identifier} =
+               Members.add(athanor, [identifier: "per_not-an-identifier"], "system")
+    end
+
+    test "only a cyfr identity claims an identifier invitation: another door's subject spelled as one claims nothing",
+         %{athanor: athanor} do
+      identifier = identifier()
+      {:ok, :invited} = Members.add(athanor, [identifier: identifier], "system")
+
+      # The subject another door asserts is that door's to choose; spelled
+      # as an identifier, it proves no identifier.
+      for {provider, issuer} <- [
+            {"github", "https://github.com"},
+            {"oidcc", "https://idp.example"}
+          ] do
+        {:ok, user} =
+          Sanctum.Tenancy.Users.upsert_from_provider(%{
+            id: "#{provider}|#{issuer}|#{identifier}",
+            provider: provider,
+            verified: :unknown
+          })
+
+        assert {:ok, 0} = Members.activate_invited(user), provider
+        refute Members.member?(user.id, athanor.id), provider
+      end
+
+      assert [%{status: "invited", user_id: nil}] =
+               Enum.filter(
+                 rows!(Members.list_by_athanor(athanor.id)),
+                 &(&1.person_identifier == identifier)
+               )
+    end
+
+    test "the first cyfr sign-in claims every invitation its identifier holds, as an email invite is claimed",
+         %{athanor: athanor} do
+      n = System.unique_integer([:positive])
+      id = identifier()
+      other = group!(n)
+      {:ok, :invited} = Members.add(athanor, [identifier: id], "system")
+      {:ok, :invited} = Members.add(other, [identifier: id], "system")
+
+      # Someone whose cyfr identity names another identifier claims none.
+      stranger = remote!(identifier())
+      assert {:ok, 0} = Members.activate_invited(stranger)
+
+      user = remote!(id)
+      Cyfr.Bus.subscribe_global(Cyfr.Bus.memberships(user.id))
+      assert {:ok, 2} = Members.activate_invited(user)
+
+      assert Members.member?(user.id, athanor.id)
+      assert Members.member?(user.id, other.id)
+      assert_receive %Cyfr.Bus.Membership{change: :joined}
+      refute Enum.any?(rows!(Members.list_by_athanor(athanor.id)), &(&1.status == "invited"))
+
+      assert {:ok, 0} = Members.activate_invited(user)
+    end
+
+    test "remove_member/2 by identifier withdraws its invitation, or removes the person who holds it",
+         %{athanor: athanor} do
+      pending = identifier()
+      {:ok, :invited} = Members.add(athanor, [identifier: pending], "system")
+      assert :ok = Members.remove_member(athanor, identifier: pending)
+
+      refute Enum.any?(
+               rows!(Members.list_by_athanor(athanor.id)),
+               &(&1.person_identifier == pending)
+             )
+
+      assert {:error, :not_found} = Members.remove_member(athanor, identifier: pending)
+
+      held = identifier()
+      user = remote!(held)
+      {:ok, :added} = Members.add(athanor, [user_id: user.id], "system")
+
+      {:ok, :added} =
+        Members.add(athanor, [user_id: person(System.unique_integer([:positive])).id], "system")
+
+      assert :ok = Members.remove_member(athanor, identifier: held)
+      refute Members.member?(user.id, athanor.id)
+    end
+
+    test "withdraw_invites_for_identifier/1 drops every invitation the identifier holds",
+         %{athanor: athanor} do
+      n = System.unique_integer([:positive])
+      id = identifier()
+      other = group!(n)
+      {:ok, :invited} = Members.add(athanor, [identifier: id], "system")
+      {:ok, :invited} = Members.add(other, [identifier: id], "system")
+
+      assert Members.withdraw_invites_for_identifier(id) == 2
+      assert Members.withdraw_invites_for_identifier(id) == 0
+      assert Members.withdraw_invites_for_identifier(nil) == 0
+
+      user = remote!(id)
+      assert {:ok, 0} = Members.activate_invited(user)
+    end
   end
 
   # Thread follows must be removed when membership ends.
@@ -456,4 +685,152 @@ defmodule Sanctum.Tenancy.MembersTest do
   end
 
   defp rows!({:ok, rows}), do: rows
+
+  defp server, do: Prima.Actor.system()
+
+  defp group!(n) do
+    {:ok, group} =
+      Athanors.create(%{
+        kind: "group",
+        name: "Other #{n}",
+        slug: "other-#{n}-#{System.unique_integer([:positive])}",
+        created_by: "system"
+      })
+
+    group
+  end
+
+  defp identifier, do: "per_" <> Prima.Digest.sha256_hex("mem-#{System.unique_integer()}")
+
+  # A person the `cyfr` door admitted: their identity names `identifier`
+  # and its directory, and holds no key.
+  defp remote!(identifier) do
+    {:ok, user} =
+      Sanctum.Tenancy.Users.upsert_from_provider(
+        %{
+          id: Sanctum.Auth.Identity.cyfr_key("https://dir.example", identifier),
+          provider: "cyfr",
+          verified: :unknown
+        },
+        remote: %{identifier: identifier, directory_url: "https://dir.example"}
+      )
+
+    user
+  end
+
+  # A session of the person, bound to the athanor; answers its row key.
+  defp session!(user_id, athanor_id) do
+    {:ok, session} =
+      Sanctum.TestContext.create_session(
+        Sanctum.Context.build(
+          user_id: user_id,
+          athanor_id: athanor_id,
+          provider: "github",
+          permissions: [:*],
+          scope: :athanor,
+          auth_method: :oidc,
+          authenticated: true
+        )
+      )
+
+    Sanctum.Session.token_hash(session.token)
+  end
+
+  defp session?(hash), do: match?({:ok, _}, Arca.SessionStorage.get_session(hash))
+
+  # A paired client and its certificate, inserted as their stores write
+  # them: recording them is fenced by the member's slot and proved by a
+  # device key, which is not what these cases are about.
+  defp paired!(athanor_id, user_id) do
+    now = DateTime.utc_now()
+    id = Prima.UUID7.generate_id("pcl")
+
+    {1, _} =
+      Arca.Repo.insert_all(PairedClient, [
+        %{
+          id: id,
+          athanor_id: athanor_id,
+          user_id: user_id,
+          source_kind: "session",
+          source_id: "src_#{System.unique_integer([:positive])}",
+          standing: "active",
+          label: "a browser",
+          inserted_at: now,
+          updated_at: now
+        }
+      ])
+
+    id
+  end
+
+  defp certificate!(athanor_id, user_id, paired_client_id) do
+    now = DateTime.utc_now()
+    id = Prima.UUID7.generate_id("dct")
+    n = System.unique_integer([:positive])
+
+    {1, _} =
+      Arca.Repo.insert_all(DeviceCertificate, [
+        %{
+          id: id,
+          athanor_id: athanor_id,
+          paired_client_id: paired_client_id,
+          user_id: user_id,
+          subject_kind: "local",
+          device_public_key: :crypto.strong_rand_bytes(32),
+          issuing_home: "https://home.example",
+          audience_home: "https://home.example",
+          not_before: now,
+          expires_at: DateTime.add(now, 3600, :second),
+          certificate: "cert-#{n}",
+          digest: Prima.Digest.sha256("cert-#{n}"),
+          state: "active",
+          inserted_at: now,
+          updated_at: now
+        }
+      ])
+
+    id
+  end
+
+  defp standing(schema, id), do: Arca.Repo.get(schema, id).standing
+  defp state(schema, id), do: Arca.Repo.get(schema, id).state
+
+  # A trigger that makes one statement fail inside the transition, spelled
+  # per adapter; the sandbox rolls it back with the test, and
+  # `clear_failure!/1` drops it within one.
+  defp fail_on!(table, event) do
+    name = "mem_fail_#{table}_#{String.downcase(event)}"
+
+    case Arca.Repo.adapter() do
+      Ecto.Adapters.SQLite3 ->
+        Arca.Repo.query!(
+          "CREATE TRIGGER #{name} BEFORE #{event} ON #{table} " <>
+            "BEGIN SELECT RAISE(ABORT, 'injected #{event} failure'); END"
+        )
+
+      _postgres ->
+        Arca.Repo.query!(
+          "CREATE FUNCTION #{name}() RETURNS trigger LANGUAGE plpgsql AS " <>
+            "$$ BEGIN RAISE EXCEPTION 'injected #{event} failure'; END $$"
+        )
+
+        Arca.Repo.query!(
+          "CREATE TRIGGER #{name} BEFORE #{event} ON #{table} " <>
+            "FOR EACH ROW EXECUTE FUNCTION #{name}()"
+        )
+    end
+
+    {name, table}
+  end
+
+  defp clear_failure!({name, table}) do
+    case Arca.Repo.adapter() do
+      Ecto.Adapters.SQLite3 ->
+        Arca.Repo.query!("DROP TRIGGER #{name}")
+
+      _postgres ->
+        Arca.Repo.query!("DROP TRIGGER #{name} ON #{table}")
+        Arca.Repo.query!("DROP FUNCTION #{name}()")
+    end
+  end
 end

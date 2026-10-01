@@ -96,7 +96,9 @@ defmodule Arca.SecurityTransitions.Fixtures do
     row
   end
 
-  def session!(user_id, athanor_id \\ nil) do
+  # A session of the person, bound to `athanor_id` when one is named; a
+  # remote person's binds their cached head's `key_epoch`.
+  def session!(user_id, athanor_id \\ nil, key_epoch \\ nil) do
     hash = :crypto.strong_rand_bytes(32)
 
     :ok =
@@ -106,6 +108,7 @@ defmodule Arca.SecurityTransitions.Fixtures do
           user_id: user_id,
           provider: "github",
           athanor_id: athanor_id,
+          identity_key_epoch: key_epoch,
           expires_at: DateTime.add(DateTime.utc_now(), 3600, :second)
         },
         Arca.Test.Actor.issuance(user_id)
@@ -113,6 +116,56 @@ defmodule Arca.SecurityTransitions.Fixtures do
 
     hash
   end
+
+  # The person made remote here, as the `cyfr` door admits one: their
+  # identity row names an identifier and its directory and holds no key,
+  # and the identifier's head is cached. Answers the identifier and the
+  # head's `key_epoch`. Both rows are inserted directly, for the reason a
+  # frame is: their stores fence each write by the member's slot.
+  def remote!(user_id) do
+    identifier = "per_" <> Prima.Digest.sha256_hex("st-remote-#{uniq()}")
+    epoch = Prima.Digest.sha256("st-head-#{uniq()}")
+    {1, _} = Arca.Repo.insert_all(Arca.Schemas.PersonIdentity, [remote_row(user_id, identifier)])
+    {1, _} = Arca.Repo.insert_all(Arca.Schemas.DirectoryHead, [head_row(identifier, epoch)])
+    %{identifier: identifier, epoch: epoch}
+  end
+
+  def remote_row(user_id, identifier) do
+    now = DateTime.utc_now()
+
+    %{
+      id: Prima.UUID7.generate_id("pid"),
+      user_id: user_id,
+      identifier: identifier,
+      provenance: "remote",
+      enrollment: "none",
+      directory_url: "https://dir.example",
+      revision: 1,
+      inserted_at: now,
+      updated_at: now
+    }
+  end
+
+  def head_row(identifier, epoch) do
+    now = DateTime.utc_now()
+
+    %{
+      identifier: identifier,
+      genesis: "genesis-bytes",
+      directory_url: "https://dir.example",
+      head_hash: epoch,
+      key_epoch: epoch,
+      recovery_epoch: epoch,
+      state: ~s({"head":"#{epoch}"}),
+      verified_at: now,
+      revision: 1,
+      inserted_at: now,
+      updated_at: now
+    }
+  end
+
+  def head(identifier), do: Arca.Repo.get(Arca.Schemas.DirectoryHead, identifier)
+  def identity(user_id), do: Arca.Repo.get_by(Arca.Schemas.PersonIdentity, user_id: user_id)
 
   def key!(athanor_id, created_by) do
     n = uniq()
@@ -352,6 +405,35 @@ defmodule Arca.SecurityTransitions.Fixtures do
     name
   end
 
+  # A trigger that makes one statement skip every row it would change
+  # without failing, spelled per adapter: what the statement answers then
+  # leaves the row standing, which only the transition's postcondition
+  # can catch. The sandbox rolls it back with the test.
+  def skip_on!(table, event) do
+    name = "st_skip_#{table}_#{String.downcase(event)}"
+
+    case Arca.Repo.adapter() do
+      Ecto.Adapters.SQLite3 ->
+        Arca.Repo.query!(
+          "CREATE TRIGGER #{name} BEFORE #{event} ON #{table} " <>
+            "BEGIN SELECT RAISE(IGNORE); END"
+        )
+
+      _postgres ->
+        Arca.Repo.query!(
+          "CREATE FUNCTION #{name}() RETURNS trigger LANGUAGE plpgsql AS " <>
+            "$$ BEGIN RETURN NULL; END $$"
+        )
+
+        Arca.Repo.query!(
+          "CREATE TRIGGER #{name} BEFORE #{event} ON #{table} " <>
+            "FOR EACH ROW EXECUTE FUNCTION #{name}()"
+        )
+    end
+
+    name
+  end
+
   def clear_failure!(name) do
     case Arca.Repo.adapter() do
       Ecto.Adapters.SQLite3 ->
@@ -359,7 +441,7 @@ defmodule Arca.SecurityTransitions.Fixtures do
 
       _postgres ->
         table =
-          Regex.replace(~r/_(delete|update)$/, String.replace_prefix(name, "st_fail_", ""), "")
+          Regex.replace(~r/_(delete|update)$/, Regex.replace(~r/^st_(fail|skip)_/, name, ""), "")
 
         Arca.Repo.query!("DROP TRIGGER #{name} ON #{table}")
         Arca.Repo.query!("DROP FUNCTION #{name}()")
@@ -371,10 +453,12 @@ defmodule Arca.SecurityTransitionsTest do
   @moduledoc """
   The five standing transitions, each one transaction: what a denial
   retires, what an allow restores and what it never does, archive and
-  reopen, leaving one athanor, the generation every real change raises,
-  and a failed statement rolling back everything — the injected session
-  DELETE, key UPDATE and certificate UPDATE failures included, after which
-  an allow revives nothing.
+  reopen, leaving one athanor and the retirement of a remote person it
+  leaves with no membership here, the generation every real change
+  raises, and a failed statement rolling back everything — the injected
+  session DELETE, key UPDATE and certificate UPDATE failures included,
+  after which an allow revives nothing — or a skipped one failing the
+  postcondition.
   """
 
   use ExUnit.Case, async: false
@@ -1061,6 +1145,176 @@ defmodule Arca.SecurityTransitionsTest do
 
       assert seats(person.id) == []
     end
+
+    test "a remote person it leaves with no membership here is retired here, head and all" do
+      group = group!()
+      elsewhere = group!()
+      person = person!()
+      %{identifier: identifier, epoch: epoch} = remote!(person.id)
+      seat!(group.id, person.id)
+      peer = person!()
+      seat!(group.id, peer.id)
+
+      bound = session!(person.id, group.id, epoch)
+      unbound = session!(person.id, nil, epoch)
+      key = key!(group.id, person.id)
+      client = paired!(group.id, person.id)
+      cert = certificate!(group.id, person.id, client)
+      # What they still hold in an athanor they no longer sit in goes too.
+      frame = frame!(elsewhere.id, person.id)
+      stray = paired!(elsewhere.id, person.id)
+      invitation = invitation!(elsewhere.id, person.id)
+      passkey = passkey!(person.id)
+      by_passkey = confirmation!(elsewhere.id, person.id, passkey: passkey)
+      own = confirmation!(group.id, person.id)
+      peer_session = session!(peer.id, group.id)
+      peer_client = paired!(group.id, peer.id)
+
+      assert {:ok, change} =
+               SecurityTransitions.leave_athanor(Prima.Actor.in_athanor(group.id), person.id,
+                 verify: admit()
+               )
+
+      assert change.dropped_head_identifier == identifier
+      assert Enum.sort(change.revoked_session_hashes) == Enum.sort([bound, unbound])
+      assert change.revoked_passkey_ids == [passkey]
+      assert change.revoked_paired_client_ids == Enum.sort([client, stray])
+      assert change.revoked_device_certificate_ids == [cert]
+      assert change.revoked_frame_credential_ids == [frame]
+      assert change.revoked_pairing_invitation_ids == [invitation]
+      assert change.voided_confirmation_ids == Enum.sort([by_passkey, own])
+
+      # Nothing of theirs is left to ask about a head this home dropped.
+      assert is_nil(head(identifier))
+      refute session?(bound)
+      refute session?(unbound)
+      assert passkey_state(passkey) == "revoked"
+      assert paired_standing(client) == "revoked"
+      assert paired_standing(stray) == "revoked"
+      assert certificate_state(cert) == "revoked"
+      assert frame_state(frame) == "revoked"
+      assert invitation_state(invitation) == "revoked"
+      assert confirmation_state(by_passkey) == "voided"
+      assert confirmation_state(own) == "voided"
+      assert seats(person.id) == []
+
+      # What stands: the person row and its standing, the identity row,
+      # the key (a standing channel of its athanor) and everyone else's.
+      assert user(person.id).status == "active"
+      assert user(person.id).security_generation == 1
+      assert identity(person.id).identifier == identifier
+      refute revoked?(key)
+      assert session?(peer_session)
+      assert paired_standing(peer_client) == "active"
+    end
+
+    test "a remote person with another seat or a platform row here, or a local one, keeps the rest" do
+      group = group!()
+      other = group!()
+
+      # Another seat here.
+      seated = person!()
+      %{identifier: seated_id, epoch: seated_epoch} = remote!(seated.id)
+      seat!(group.id, seated.id)
+      seat!(other.id, seated.id)
+
+      # A platform row here.
+      operator = person!()
+      %{identifier: operator_id, epoch: operator_epoch} = remote!(operator.id)
+      seat!(group.id, operator.id)
+      {:ok, _} = Arca.Members.grant_platform(server(), %{user_id: operator.id, added_by: "x"})
+
+      # A local person: no identity row of provenance remote.
+      local = person!()
+      seat!(group.id, local.id)
+
+      for {person, identifier, epoch} <- [
+            {seated, seated_id, seated_epoch},
+            {operator, operator_id, operator_epoch},
+            {local, nil, nil}
+          ] do
+        unbound = session!(person.id, nil, epoch)
+        passkey = passkey!(person.id)
+        client = paired!(other.id, person.id)
+
+        assert {:ok, change} =
+                 SecurityTransitions.leave_athanor(Prima.Actor.in_athanor(group.id), person.id,
+                   verify: admit()
+                 )
+
+        assert is_nil(change.dropped_head_identifier)
+        assert change.revoked_passkey_ids == []
+        assert session?(unbound)
+        assert passkey_state(passkey) == "active"
+        assert paired_standing(client) == "active"
+        if identifier, do: assert(head(identifier))
+      end
+    end
+
+    for {table, event} <- [
+          {"directory_heads", "DELETE"},
+          {"passkeys", "UPDATE"},
+          {"device_certificates", "UPDATE"}
+        ] do
+      test "an injected #{table} #{event} failure rolls a retiring leave back, head and all" do
+        group = group!()
+        person = person!()
+        %{identifier: identifier, epoch: epoch} = remote!(person.id)
+        seat!(group.id, person.id)
+        session = session!(person.id, nil, epoch)
+        client = paired!(group.id, person.id)
+        cert = certificate!(group.id, person.id, client)
+        passkey = passkey!(person.id)
+        failure = fail_on!(unquote(table), unquote(event))
+        actor = Prima.Actor.in_athanor(group.id)
+
+        assert {:error, :database_error} =
+                 SecurityTransitions.leave_athanor(actor, person.id, verify: admit())
+
+        assert length(seats(person.id)) == 1
+        assert head(identifier)
+        assert session?(session)
+        assert passkey_state(passkey) == "active"
+        assert paired_standing(client) == "active"
+        assert certificate_state(cert) == "active"
+
+        clear_failure!(failure)
+
+        assert {:ok, %{dropped_head_identifier: ^identifier}} =
+                 SecurityTransitions.leave_athanor(actor, person.id, verify: admit())
+
+        assert is_nil(head(identifier))
+        refute session?(session)
+      end
+    end
+
+    test "a certificate the statement skips fails the postcondition, and nothing commits" do
+      group = group!()
+      person = person!()
+      %{identifier: identifier, epoch: epoch} = remote!(person.id)
+      seat!(group.id, person.id)
+      session = session!(person.id, nil, epoch)
+      client = paired!(group.id, person.id)
+      cert = certificate!(group.id, person.id, client)
+      passkey = passkey!(person.id)
+      skip = skip_on!("device_certificates", "UPDATE")
+      actor = Prima.Actor.in_athanor(group.id)
+
+      assert {:error, :postcondition_failed} =
+               SecurityTransitions.leave_athanor(actor, person.id, verify: admit())
+
+      assert length(seats(person.id)) == 1
+      assert head(identifier)
+      assert session?(session)
+      assert passkey_state(passkey) == "active"
+      assert paired_standing(client) == "active"
+      assert certificate_state(cert) == "active"
+
+      clear_failure!(skip)
+
+      assert {:ok, %{revoked_device_certificate_ids: [^cert]}} =
+               SecurityTransitions.leave_athanor(actor, person.id, verify: admit())
+    end
   end
 
   describe "the standing columns" do
@@ -1095,9 +1349,10 @@ defmodule Arca.SecurityTransitionsLockTest do
   The transitions under two real connections, outside the sandbox: a
   transition waiting behind another acts on what that one committed — on
   PostgreSQL by waiting on the row, on SQLite by waiting at the lock its transaction takes at entry
-  — and never on a read taken before the wait; and a denial whose
-  membership set moves while it locks the athanors runs again on the set
-  as it now stands.
+  — and never on a read taken before the wait; a seat and a leave of one
+  person serialize on the person, so a leave never retires a person a
+  seat it did not see has seated; and a denial whose membership set moves
+  while it locks the athanors runs again on the set as it now stands.
   """
 
   use ExUnit.Case, async: false
@@ -1109,7 +1364,17 @@ defmodule Arca.SecurityTransitionsLockTest do
   import Arca.SecurityTransitions.Fixtures,
     only: [server: 0, admit: 0, uniq: 0]
 
-  alias Arca.Schemas.{ApiKey, Athanor, ExternalIdentity, Membership, Session, User}
+  alias Arca.Schemas.{
+    ApiKey,
+    Athanor,
+    DirectoryHead,
+    ExternalIdentity,
+    Membership,
+    PersonIdentity,
+    Session,
+    User
+  }
+
   alias Arca.SecurityTransitions
   alias Ecto.Adapters.SQL.Sandbox
 
@@ -1202,6 +1467,93 @@ defmodule Arca.SecurityTransitionsLockTest do
   defp seat(athanor_id, user_id) do
     unboxed(fn ->
       Arca.Members.seat(Prima.Actor.in_athanor(athanor_id), %{user_id: user_id, added_by: "x"})
+    end)
+  end
+
+  # A seat's row written past `Arca.Members.seat/2`, which takes the
+  # person's lock first and so waits for a denial holding them: no writer
+  # in the tree seats a person without that lock, and the denial's replan
+  # is the guard should one ever appear, shown here on such a writer.
+  defp seat_row(athanor_id, user_id) do
+    now = DateTime.utc_now()
+
+    %{
+      id: Prima.UUID7.generate_id("mem"),
+      user_id: user_id,
+      scope: "athanor",
+      status: "active",
+      athanor_id: athanor_id,
+      added_by: "x",
+      created_at: now,
+      updated_at: now
+    }
+  end
+
+  # A remote person seated in `group_id`, as the `cyfr` door admits one:
+  # their identity row names an identifier and holds no key, and its head
+  # is cached. Removed, with everything naming them, on exit.
+  defp remote_person!(group_id) do
+    n = uniq()
+    now = DateTime.utc_now()
+    id = Prima.UUID7.generate_id(Prima.PersonId.prefix())
+    identifier = "per_" <> Prima.Digest.sha256_hex("stl-remote-#{n}")
+    epoch = Prima.Digest.sha256("stl-head-#{n}")
+
+    on_exit(fn ->
+      unboxed(fn ->
+        Arca.Repo.delete_all(where(Membership, user_id: ^id))
+        Arca.Repo.delete_all(where(DirectoryHead, identifier: ^identifier))
+        Arca.Repo.delete_all(where(PersonIdentity, user_id: ^id))
+        Arca.Repo.delete_all(where(ExternalIdentity, user_id: ^id))
+        Arca.Repo.delete_all(where(User, id: ^id))
+      end)
+    end)
+
+    unboxed(fn ->
+      {:ok, _} =
+        Arca.Users.mint(
+          server(),
+          %{
+            id: id,
+            provider: "cyfr",
+            first_seen_at: now,
+            last_seen_at: now,
+            created_at: now,
+            updated_at: now
+          },
+          %{
+            key: "cyfr|https://dir.example|#{identifier}",
+            provider: "cyfr",
+            issuer: "https://dir.example",
+            subject: identifier,
+            first_seen_at: now,
+            last_seen_at: now
+          },
+          also: fn person ->
+            {1, _} =
+              Arca.Repo.insert_all(PersonIdentity, [
+                Arca.SecurityTransitions.Fixtures.remote_row(person.id, identifier)
+              ])
+
+            :ok
+          end
+        )
+
+      {1, _} =
+        Arca.Repo.insert_all(DirectoryHead, [
+          Arca.SecurityTransitions.Fixtures.head_row(identifier, epoch)
+        ])
+
+      {:ok, _} =
+        Arca.Members.seat(Prima.Actor.in_athanor(group_id), %{user_id: id, added_by: "x"})
+    end)
+
+    %{id: id, identifier: identifier}
+  end
+
+  defp leave(group_id, user_id, verify) do
+    unboxed(fn ->
+      SecurityTransitions.leave_athanor(Prima.Actor.in_athanor(group_id), user_id, verify: verify)
     end)
   end
 
@@ -1438,11 +1790,7 @@ defmodule Arca.SecurityTransitionsLockTest do
                 :seat -> :ok
               end
 
-              {:ok, _} =
-                Arca.Members.seat(Prima.Actor.in_athanor(pair_id), %{
-                  user_id: user_id,
-                  added_by: "x"
-                })
+              {1, _} = Arca.Repo.insert_all(Membership, [seat_row(pair_id, user_id)])
             end)
           end)
         end)
@@ -1480,11 +1828,19 @@ defmodule Arca.SecurityTransitionsLockTest do
       {:ok, agent} = Agent.start_link(fn -> groups end)
 
       # Every time the policy is asked, a second connection seats the
-      # person in one more group: the set the denial planned has moved by
-      # the time it would write.
+      # person in one more group, past the person's lock (`seat_row/2`):
+      # the set the denial planned has moved by the time it would write.
       verify = fn _rows ->
         next = Agent.get_and_update(agent, fn [next | rest] -> {next, rest} end)
-        {:ok, _} = Task.await(Task.async(fn -> seat(next, user_id) end), 25_000)
+
+        {1, _} =
+          Task.await(
+            Task.async(fn ->
+              unboxed(fn -> Arca.Repo.insert_all(Membership, [seat_row(next, user_id)]) end)
+            end),
+            25_000
+          )
+
         :ok
       end
 
@@ -1539,6 +1895,90 @@ defmodule Arca.SecurityTransitionsLockTest do
     unboxed(fn ->
       refute Arca.Repo.exists?(where(Membership, user_id: ^other))
       assert Arca.Repo.get(Athanor, group_id).status == "archived"
+    end)
+  end
+
+  @tag :postgres
+  test "a seat elsewhere waits for a leave holding the person, and lands after it retired them" do
+    group_id = group!()
+    other_id = group!()
+    on_exit(fn -> remove_athanors!([group_id, other_id]) end)
+    remote = remote_person!(group_id)
+    test = self()
+
+    # The leave found the person with no other row and retires them here;
+    # it holds the person while its policy is asked.
+    leaver =
+      Task.async(fn ->
+        leave(group_id, remote.id, fn _rows ->
+          send(test, :leave_holds)
+
+          receive do
+            :go -> :ok
+          end
+        end)
+      end)
+
+    assert_receive :leave_holds, 5_000
+
+    seater = Task.async(fn -> seat(other_id, remote.id) end)
+    refute Task.yield(seater, 300), "the seat was written while the leave held the person"
+
+    send(leaver.pid, :go)
+    assert {:ok, %{dropped_head_identifier: dropped}} = Task.await(leaver, 25_000)
+    assert dropped == remote.identifier
+    assert {:ok, %{athanor_id: ^other_id}} = Task.await(seater, 25_000)
+
+    unboxed(fn ->
+      assert [%{athanor_id: ^other_id}] = Arca.Repo.all(where(Membership, user_id: ^remote.id))
+      refute Arca.Repo.get(DirectoryHead, remote.identifier)
+    end)
+  end
+
+  @tag :postgres
+  test "a leave waiting behind a seat elsewhere sees it, and retires no one" do
+    group_id = group!()
+    other_id = group!()
+    on_exit(fn -> remove_athanors!([group_id, other_id]) end)
+    remote = remote_person!(group_id)
+    test = self()
+
+    # The seat is written and not yet committed: it holds the person.
+    seater =
+      Task.async(fn ->
+        unboxed(fn ->
+          Arca.Repo.transaction(fn ->
+            {:ok, row} =
+              Arca.Members.seat(Prima.Actor.in_athanor(other_id), %{
+                user_id: remote.id,
+                added_by: "x"
+              })
+
+            send(test, :seat_holds)
+
+            receive do
+              :commit -> row
+            end
+          end)
+        end)
+      end)
+
+    assert_receive :seat_holds, 5_000
+
+    leaver = Task.async(fn -> leave(group_id, remote.id, admit()) end)
+    refute Task.yield(leaver, 300), "the leave decided while the seat held the person"
+
+    send(seater.pid, :commit)
+    assert {:ok, %{athanor_id: ^other_id}} = Task.await(seater, 25_000)
+
+    # Had the leave read the person's rows before the seat committed, it
+    # would have retired a person who now sits elsewhere.
+    assert {:ok, change} = Task.await(leaver, 25_000)
+    assert is_nil(change.dropped_head_identifier)
+
+    unboxed(fn ->
+      assert [%{athanor_id: ^other_id}] = Arca.Repo.all(where(Membership, user_id: ^remote.id))
+      assert Arca.Repo.get(DirectoryHead, remote.identifier)
     end)
   end
 end

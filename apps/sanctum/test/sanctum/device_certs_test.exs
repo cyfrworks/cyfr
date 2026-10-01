@@ -733,14 +733,15 @@ defmodule Sanctum.DeviceCertsTest do
       {:ok, _row} = revoke!(session_ctx, revoked.client_id)
       assert DeviceCerts.verify_request(revoked.certificate, ctx, []) == {:error, :revoked}
 
-      # Left: a second member keeps the group open while the person leaves.
+      # Left: a second member keeps the group open while the person leaves,
+      # and the leave revokes the client they paired there with the seat.
       left = pair!(session_ctx)
       {:ok, ctx} = connect(left)
       other = seated!()
       {:ok, _} = Members.ensure(other.user.id, scope: "athanor", athanor_id: athanor.id)
       :ok = Members.remove_member(athanor, user_id: user.id)
-      assert DeviceCerts.verify_request(left.certificate, ctx, []) == {:error, :not_standing}
-      assert DeviceCerts.client_standing(ctx) == {:error, :not_standing}
+      assert DeviceCerts.verify_request(left.certificate, ctx, []) == {:error, :revoked}
+      assert DeviceCerts.client_standing(ctx) == {:error, :revoked}
     end
 
     test "a denied person's device stands for nothing", %{session_ctx: session_ctx, user: user} do

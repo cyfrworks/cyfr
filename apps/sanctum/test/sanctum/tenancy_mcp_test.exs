@@ -207,7 +207,8 @@ defmodule Sanctum.TenancyMCPTest do
     test "a target that is neither an email nor a user id is refused", %{ctx: ctx} do
       created = group!(ctx)
 
-      assert {:error, {:invalid_argument, "Missing required argument: email or user_id"}} =
+      assert {:error,
+              {:invalid_argument, "Missing required argument: email, user_id or identifier"}} =
                Provider.handle("member", ctx, %{"action" => "add", "athanor" => created.id})
 
       assert {:error, {:invalid_argument, "That is not an email address"}} =

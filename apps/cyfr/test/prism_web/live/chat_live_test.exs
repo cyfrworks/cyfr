@@ -535,7 +535,9 @@ defmodule PrismWeb.ChatLiveTest do
     bob_id = bob.user_id
 
     assert_receive %Cyfr.Bus.Membership{user_id: ^bob_id, change: :left}, 5_000
-    assert_redirect(bob_view, "/", 5_000)
+    # His session was bound to the group, so the leave ended it with the
+    # seat: his tab is sent to sign in again.
+    assert_redirect(bob_view, "/login", 5_000)
 
     {:ok, _view, redirected_html} =
       case live(bob_conn, chat_path(group, thread.id)) do

@@ -834,10 +834,11 @@ defmodule Sanctum.PairingTest do
       {:ok, _} = Members.ensure(other.user.id, scope: "athanor", athanor_id: athanor.id)
       :ok = Members.remove_member(athanor, user_id: user.id)
 
+      # The leave revoked the pending invitation with the seat.
       assert Pairing.complete(glass(), invitation.invitation_secret, %{
                device_key: device_key,
                proof: Proof.sign(challenge, private)
-             }) == {:error, :not_standing}
+             }) == {:error, :invalid_invitation}
 
       assert clients(user.id) == []
       assert Arca.Repo.all(from(c in DeviceCertificate, where: c.user_id == ^user.id)) == []

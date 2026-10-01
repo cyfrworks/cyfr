@@ -4,11 +4,10 @@
 defmodule Cyfr.DeclaredOperationsTest do
   @moduledoc """
   The operations declared ahead of the work that fills them: each is on
-  the operation table with the annotations it will be admitted under, and
-  answers `{:error, :not_built}` through the gate — a refusal, never a
-  success — until that work lands. So does each new argument of an
-  operation that exists: given, it refuses rather than being dropped, so
-  nothing reads as narrower, bounded or admitted when it is not.
+  the operation table with the annotations it is admitted under. Each new
+  argument of an operation that exists is decided, never dropped and never
+  refused as not built, so nothing reads as narrower, bounded or admitted
+  when it is not.
   """
 
   use ExUnit.Case, async: false
@@ -21,12 +20,6 @@ defmodule Cyfr.DeclaredOperationsTest do
 
   @seed String.duplicate("A", 43)
   @digest "sha256:" <> String.duplicate("ab", 32)
-
-  # Each declared action, or new argument, not yet built, with arguments
-  # its declaration accepts.
-  @stubs [
-    {"member", "add", %{"identifier" => "per_" <> String.duplicate("ab", 32)}}
-  ]
 
   defp operation(tool, action) do
     {_provider, meta} = Map.fetch!(Grimoire.Catalog.operations(), tool)
@@ -70,30 +63,6 @@ defmodule Cyfr.DeclaredOperationsTest do
       assert operation("passkey", "revoke").kind == :destructive
     end
 
-    test "answer not built through the gate, never a success", %{ctx: ctx} do
-      for {tool, action, args} <- @stubs do
-        assert call(ctx, tool, action, args) == {:error, :not_built}, "#{tool}.#{action}"
-      end
-    end
-
-    test "a stub's answer reads as unavailable, in its own sentence, and logs nothing unexpected",
-         %{ctx: ctx} do
-      log =
-        ExUnit.CaptureLog.capture_log(fn ->
-          for {tool, action, args} <- @stubs do
-            {:error, reason} = call(ctx, tool, action, args)
-
-            assert %Prima.Refusal{
-                     class: :unavailable,
-                     message: "This operation is not built yet."
-                   } = Prima.Refusal.classify(reason),
-                   "#{tool}.#{action}"
-          end
-        end)
-
-      refute log =~ "unexpected message: :not_built"
-    end
-
     test "a platform-scoped one refuses an ordinary member before its handler", %{ctx: ctx} do
       assert {:error, reason} =
                call(ctx, "passkey", "recover_admin", %{
@@ -120,16 +89,21 @@ defmodule Cyfr.DeclaredOperationsTest do
   end
 
   describe "a new argument of an operation that exists" do
-    test "an identifier adds no member yet, and stands alone", %{ctx: ctx} do
+    test "a member's identifier is decided, never refused as not built, and stands alone",
+         %{ctx: ctx} do
       identifier = "per_" <> String.duplicate("ab", 32)
 
-      assert call(ctx, "member", "add", %{"identifier" => identifier}) == {:error, :not_built}
+      for action <- ~w(add remove) do
+        refute call(ctx, "member", action, %{"identifier" => identifier}) ==
+                 {:error, :not_built},
+               "member.#{action}"
 
-      assert {:error, {:invalid_argument, _}} =
-               call(ctx, "member", "add", %{
-                 "identifier" => identifier,
-                 "email" => "someone@example.com"
-               })
+        for other <- [%{"email" => "someone@example.com"}, %{"user_id" => "usr_1"}] do
+          assert {:error, {:invalid_argument, "Name one of email, user_id or identifier" <> _}} =
+                   call(ctx, "member", action, Map.put(other, "identifier", identifier)),
+                 "member.#{action}"
+        end
+      end
     end
 
     test "a grant's origins and narrowing are decided, never refused as not built",
