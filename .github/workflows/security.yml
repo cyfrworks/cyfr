@@ -69,21 +69,18 @@ jobs:
         run: mix compile
 
       - name: Check retired packages
-        # Suppress the same decimal advisory aliases as deps.audit below, and
-        # the two cowlib advisories, which have no fixed release: 2.20.0 is
-        # the newest and still carries them. cowlib is test-only here — it
-        # arrives through `bypass` (`only: :test`) and the server speaks HTTP
-        # through Bandit, so no cowboy code ships. Remove each when cowlib
-        # publishes a fix, or when `bypass` no longer pulls it.
+        # Suppress the two cowlib advisories, which have no fixed release:
+        # 2.20.0 is the newest and still carries them. cowlib is test-only
+        # here — it arrives through `bypass` (`only: :test`) and the server
+        # speaks HTTP through Bandit, so no cowboy code ships. Remove the
+        # suppression when cowlib publishes a fix, or when `bypass` no
+        # longer pulls it.
         env:
-          HEX_IGNORE_ADVISORIES: "CVE-2026-32686,CVE-2026-43966,CVE-2026-43969"
+          HEX_IGNORE_ADVISORIES: "CVE-2026-43966,CVE-2026-43969"
         run: mix hex.audit
 
       - name: Check vulnerable dependencies
-        # Suppress decimal advisory GHSA-rhv4-8758-jx7v / EEF-CVE-2026-32686.
-        # The fix requires decimal 3.x; the installed Ecto dependency requires 2.x.
-        # Remove the suppression when the dependency constraint permits the fix.
-        run: mix deps.audit --ignore-advisory-ids "GHSA-rhv4-8758-jx7v,EEF-CVE-2026-32686"
+        run: mix deps.audit
 
       - name: Check unused dependencies
         run: mix deps.unlock --check-unused
