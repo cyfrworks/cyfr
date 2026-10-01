@@ -6,7 +6,8 @@ defmodule Emissary.Router do
   Emissary's routes, with the pipelines they pass through: MCP, the HTTP
   API's sign-out and session read, the vault's OAuth grant callback,
   tincture serving and the tincture data routes, health, the
-  execution-events stream, inbound webhooks and the identity directory.
+  execution-events stream, inbound webhooks, the identity directory and
+  the restore ingress.
 
   The composition router invokes `routes/0` where the adapter's routes
   stand, so its `__routes__/0` stays the total table. The quoted calls
@@ -163,6 +164,23 @@ defmodule Emissary.Router do
         plug CyfrWeb.Plugs.WebhookIdempotency
       end
 
+      # The restore ingress: JSON, no CSRF token, since the installation
+      # capability is an authorization header no cross-site form can set and
+      # no CORS answer admits; the cookie session is fetched only to hand the
+      # restored person their session. Metered per address, before Sanctum
+      # checks the capability.
+      pipeline :restore do
+        plug :accepts, ["json"]
+        plug CyfrWeb.Plugs.ApiSecurityHeaders
+        plug CyfrWeb.Plugs.FrameRequest
+        plug :fetch_session
+
+        plug CyfrWeb.Plugs.AuthRateLimit,
+          bucket: :restore,
+          max_requests: 10,
+          window_ms: 60_000
+      end
+
       # MCP endpoint. POST is the only verb this revision defines: a request's own
       # response stream carries its progress, so there is no standalone stream to
       # open, and there is no session to terminate.
@@ -286,6 +304,21 @@ defmodule Emissary.Router do
 
         get "/:identifier/requests/:request_id", DirectoryController, :outcome,
           metadata: %{auth: :public_directory}
+      end
+
+      # Restore (`Sanctum.Recovery`): an identity brought back onto this
+      # empty node from its printed kit, under the installation capability
+      # (`CYFR_RESTORE_TOKEN`) in the authorization header. Its body is
+      # bounded to 16 KiB before it is decoded (`CyfrWeb.Plugs.RawBodyReader`).
+      scope "/restore", Emissary.Web do
+        pipe_through :restore
+
+        post "/", RestoreController, :restore, metadata: %{auth: :installation_capability}
+
+        post "/challenge", RestoreController, :challenge,
+          metadata: %{auth: :installation_capability}
+
+        post "/reproof", RestoreController, :reproof, metadata: %{auth: :installation_capability}
       end
     end
   end

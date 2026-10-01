@@ -28,6 +28,12 @@ defmodule Sanctum.Auth.Identity do
   # Derived, not typed again: the hosts a generic-OIDC deployment may not use.
   @builtin_hosts @builtin |> Map.values() |> Enum.map(&URI.parse(&1).host) |> Enum.sort()
 
+  # The session providers no identity provider may name. `restore` is the
+  # installation-authorized restore's own (`Sanctum.Recovery`): a session it
+  # issues may initialize a restored person's first fresh method, so no
+  # external identity claim can arrive under that name.
+  @reserved_providers ~w(restore)
+
   @doc """
   Build the identity key `"<provider>|<iss>|<subject>"`.
 
@@ -37,6 +43,11 @@ defmodule Sanctum.Auth.Identity do
   @spec key(String.t() | atom(), String.t(), String.t()) :: String.t()
   def key(provider, iss, sub) when is_atom(provider),
     do: key(Atom.to_string(provider), iss, sub)
+
+  def key(provider, _iss, _sub) when provider in @reserved_providers do
+    raise ArgumentError,
+          "the provider #{provider} is reserved for a session no identity provider issues"
+  end
 
   def key(provider, iss, sub)
       when is_binary(provider) and is_binary(iss) and is_binary(sub) and
@@ -82,6 +93,9 @@ defmodule Sanctum.Auth.Identity do
           | {:error, :not_an_identity}
   def parse(key) when is_binary(key) do
     case String.split(key, "|", parts: 3) do
+      [provider, _iss, _sub] when provider in @reserved_providers ->
+        {:error, :not_an_identity}
+
       [provider, iss, sub] when provider != "" and iss != "" and sub != "" ->
         {:ok, %{provider: provider, issuer: iss, subject: sub}}
 
@@ -167,6 +181,23 @@ defmodule Sanctum.Auth.Identity do
   """
   @spec reserved_issuer?(term()) :: boolean()
   def reserved_issuer?(iss), do: issuer_host(iss) in @builtin_hosts
+
+  @doc """
+  Whether `provider` is a session provider no identity provider may name:
+  `restore`, which only the installation-authorized restore issues
+  (`Sanctum.Recovery`). No identity key is built or read under it.
+
+      iex> Sanctum.Auth.Identity.reserved_provider?("restore")
+      true
+
+      iex> Sanctum.Auth.Identity.reserved_provider?("github")
+      false
+  """
+  @spec reserved_provider?(term()) :: boolean()
+  def reserved_provider?(provider) when is_atom(provider) and not is_nil(provider),
+    do: reserved_provider?(Atom.to_string(provider))
+
+  def reserved_provider?(provider), do: provider in @reserved_providers
 
   @doc "The built-in providers, by name."
   @spec builtin_providers() :: [String.t()]

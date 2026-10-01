@@ -34,7 +34,8 @@ defmodule CyfrWeb.Plugs.RawBodyReader do
   stands behind, so their bodies are bounded to the largest entry
   (`Prima.Identity.max_entry_bytes/0`, 16 KiB) here, before any byte of
   them is decoded: a larger body is refused 413 the same way. Their raw
-  bytes are not cached.
+  bytes are not cached. The restore ingress (`/restore…`), which takes a
+  printed kit before any person exists, is bounded the same way.
 
   ## Chunked reads
 
@@ -61,8 +62,8 @@ defmodule CyfrWeb.Plugs.RawBodyReader do
   chunk is appended to `conn.assigns[:raw_body]` so downstream plugs can
   verify HMAC signatures against the complete body, and the `:length` opt
   is tightened to the webhook-specific cap so oversized bodies surface as 413.
-  Under `/directory/*` the `:length` opt is tightened to the directory's
-  16 KiB write-body limit the same way.
+  Under `/directory/*` and `/restore*` the `:length` opt is tightened to
+  the directory's 16 KiB write-body limit the same way.
   """
   def read_body(conn, opts) do
     opts = conn |> maybe_cap_length_for_webhook(opts) |> cap_length_for_directory(conn)
@@ -88,7 +89,10 @@ defmodule CyfrWeb.Plugs.RawBodyReader do
   defp hooks_path?(%Plug.Conn{path_info: ["hooks" | _]}), do: true
   defp hooks_path?(_), do: false
 
-  defp directory_path?(%Plug.Conn{path_info: ["directory" | _]}), do: true
+  defp directory_path?(%Plug.Conn{path_info: [family | _]})
+       when family in ["directory", "restore"],
+       do: true
+
   defp directory_path?(_), do: false
 
   defp append_raw_body(conn, chunk) do

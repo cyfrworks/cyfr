@@ -605,6 +605,15 @@ defmodule Prima.Refusal do
       {:unauthenticated,
        "Your first passkey needs a recent sign-in here: sign in again, then register it."}
 
+  # An installation reserved for a restore: its first person comes back
+  # through the restore, so no ordinary first sign-in is admitted, whoever
+  # signs in. Not a denial of the person.
+  defp row(:restore_reserved),
+    do:
+      {:forbidden,
+       "This installation is waiting for its owner to restore their identity; no one signs " <>
+         "in here until that restore finishes or the operator ends it."}
+
   # A remote person's identity whose head this home could not confirm
   # fresh within its bound: their work here pauses and their session
   # stands, so it is no sign-out and no denial.

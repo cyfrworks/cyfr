@@ -321,4 +321,83 @@ defmodule Sanctum.SessionTest do
       assert {:error, :invalid_session} = Session.load(expired_session.token, surface: :console)
     end
   end
+
+  describe "the reserved provider restore" do
+    # A restore attempt of the person's, at `phase`: the row the restore's
+    # mint leaves, written as it is for the session store to read.
+    defp restore_attempt!(user_id, phase) do
+      id = Prima.UUID7.generate_id("iat")
+      now = DateTime.utc_now()
+
+      {1, _} =
+        Arca.Repo.insert_all(Arca.Schemas.IdentityAttempt, [
+          %{
+            id: id,
+            kind: "restore",
+            request_id: Prima.UUID7.generate_id("rst"),
+            user_id: user_id,
+            identifier: "per_" <> String.duplicate("c", 64),
+            directory_url: "https://dir.example",
+            phase: phase,
+            entry: "recover-request",
+            request_digest: Prima.Digest.sha256("recover-#{id}"),
+            expected_revision: 0,
+            token_digest: Prima.Digest.sha256("token-#{id}"),
+            staged_live_public_key: :crypto.strong_rand_bytes(32),
+            staged_operational_public_key: :crypto.strong_rand_bytes(32),
+            revision: 1,
+            inserted_at: now,
+            updated_at: now
+          }
+        ])
+
+      id
+    end
+
+    test "an ordinary session request cannot select it", %{ctx: ctx} do
+      assert {:error, :reserved_provider} = Session.create(%{ctx | provider: "restore"})
+
+      assert {:error, :reserved_provider} =
+               Session.create(%{ctx | provider: "restore"}, restore: "iat_nothing")
+    end
+
+    test "it stands only on the restore attempt that minted this very person", %{ctx: ctx} do
+      restore = %{ctx | provider: "restore"}
+
+      other =
+        Sanctum.TestContext.issuer!(
+          Context.build(
+            user_id: "github|https://github.com|other-#{System.unique_integer([:positive])}",
+            provider: "github"
+          )
+        )
+
+      assert {:error, :reserved_provider} =
+               Session.create(restore, restore: restore_attempt!(other.user_id, "minted"))
+
+      assert {:error, :reserved_provider} =
+               Session.create(restore, restore: restore_attempt!(ctx.user_id, "accepted"))
+
+      assert {:ok, %{provider: "restore"} = session} =
+               Session.create(restore, restore: restore_attempt!(ctx.user_id, "minted"))
+
+      assert {:ok, %{provider: "restore"}} =
+               Session.create(restore, restore: restore_attempt!(ctx.user_id, "completed"))
+
+      # The session's original creation time is what the first-method rule
+      # reads; a refresh moves only its sliding expiry.
+      {:ok, row} = Arca.SessionStorage.get_session(:crypto.hash(:sha256, session.token))
+      {:ok, _} = Session.refresh(session.token)
+      {:ok, again} = Arca.SessionStorage.get_session(:crypto.hash(:sha256, session.token))
+      assert again.inserted_at == row.inserted_at
+    end
+
+    test "no external identity arrives under it" do
+      assert {:error, :not_an_identity} =
+               Sanctum.Tenancy.Users.upsert_from_provider(%{
+                 id: "restore|https://idp.test|someone",
+                 provider: "restore"
+               })
+    end
+  end
 end

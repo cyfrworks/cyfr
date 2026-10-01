@@ -31,7 +31,9 @@ defmodule Arca.Passkeys do
       person's lock), and a change of that epoch revokes it
       (`revoke_key_epoch!/2`); a local person's names none.
     * **Revocation** is terminal, and voids the pending confirmations the
-      credential confirmed (`Arca.PendingConfirmations`).
+      credential confirmed (`Arca.PendingConfirmations`). It locks the
+      person's row first, as unlinking a door does, and runs the caller's
+      `also:` check under that lock.
 
   Every function takes the actor first: a person reaches their own
   credentials, the platform's own actor any. Registration and activation
@@ -180,23 +182,27 @@ defmodule Arca.Passkeys do
 
   @doc """
   Revoke the credential `id`, and void the pending confirmations it
-  confirmed, in one transaction. Revoking a revoked credential answers it
-  as it is. Answers `{:ok, %{passkey: row, voided_confirmation_ids: ids}}`.
+  confirmed, in one locking transaction that locks the credential's
+  person first, as unlinking a door does (`Arca.Users.unlink_identity/4`),
+  so the two serialize on that row and neither decides on a way in the
+  other is removing. Revoking a revoked credential answers it as it is.
+  `opts[:also]` runs after the revocation, inside the transaction, handed
+  `%{passkey: row, was: state}`, the state the credential stood in under
+  the lock; it answers `:ok` or `{:error, reason}`, which leaves the
+  credential and its confirmations as they were and refuses with that
+  reason. Answers `{:ok, %{passkey: row, voided_confirmation_ids: ids}}`.
   """
-  @spec revoke(Prima.Actor.t(), String.t()) ::
+  @spec revoke(Prima.Actor.t(), String.t(), keyword()) ::
           {:ok, %{passkey: row(), voided_confirmation_ids: [String.t()]}}
-          | {:error, :not_found | :cross_tenant | :database_error}
-  def revoke(%Prima.Actor{} = actor, id) when is_binary(id) do
+          | {:error, :not_found | :cross_tenant | :database_error | term()}
+  def revoke(%Prima.Actor{} = actor, id, opts \\ []) when is_binary(id) and is_list(opts) do
+    also = Keyword.get(opts, :also, fn _revoked -> :ok end)
+
     Arca.Repo.Errors.with_db_rescue("Arca.Passkeys.revoke", fn ->
       Arca.Repo.locking_transaction(fn ->
         case held(actor, id) do
-          {:ok, passkey} ->
-            ids = revoke_all(from(p in Passkey, where: p.id == ^passkey.id))
-            voided = PendingConfirmations.void_confirmed_by!(:passkey, ids)
-            %{passkey: Arca.Repo.get!(Passkey, passkey.id), voided_confirmation_ids: voided}
-
-          {:error, reason} ->
-            Arca.Repo.rollback(reason)
+          {:ok, passkey} -> committed(revoke_in(passkey, also))
+          {:error, reason} -> Arca.Repo.rollback(reason)
         end
       end)
     end)
@@ -301,6 +307,22 @@ defmodule Arca.Passkeys do
   end
 
   defp activate_in(%Passkey{}, _opts), do: {:error, :not_pending}
+
+  # The person's row first, as every change to a person's ways in locks
+  # it, then the credential read again under that lock, so `was` is the
+  # state no concurrent revocation or unlinking can still be changing.
+  defp revoke_in(passkey, also) do
+    Arca.DirectoryHeads.lock_person!(passkey.user_id)
+    %Passkey{state: was} = Arca.Repo.get!(Passkey, passkey.id)
+    ids = revoke_all(from(p in Passkey, where: p.id == ^passkey.id))
+    voided = PendingConfirmations.void_confirmed_by!(:passkey, ids)
+    revoked = Arca.Repo.get!(Passkey, passkey.id)
+
+    case also.(%{passkey: Arca.Data.project(revoked), was: was}) do
+      :ok -> {:ok, %{passkey: revoked, voided_confirmation_ids: voided}}
+      {:error, _reason} = refusal -> refusal
+    end
+  end
 
   defp moved_active(passkey, now, admin_confirmation_id) do
     {count, _} =

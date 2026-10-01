@@ -3,7 +3,7 @@
 
 defmodule Arca.IdentityAttempts do
   @moduledoc """
-  Enrollment, restore and rotation attempts (`Arca.Schemas.IdentityAttempt`),
+  Enrollment, added-kit, restore and rotation attempts (`Arca.Schemas.IdentityAttempt`),
   keyed by request id, each persisted with its immutable submission before
   any remote call and advanced through named phases, each durable before
   the next begins, so a killed attempt resumes from the phase it reached.
@@ -21,6 +21,12 @@ defmodule Arca.IdentityAttempts do
       person's identity row in the same transaction; completion is the
       kit's acknowledgment (`acknowledge_kit/2`), which erases the sealed
       seed with it.
+    * **holder** (another printed kit, added by a `recover` an existing
+      kit signs, keeping the online keys) — `staged → submitted →
+      accepted → completed`, or `submitted → refused`. Acceptance names
+      the committed entry's hash and moves the person's head to it, only
+      while the row still reads the head the attempt was staged at;
+      completion is the kit's acknowledgment, as an enrollment's.
     * **rotation** — `staged → submitted → accepted → keys_active →
       completed`, or `submitted → refused | superseded` and `accepted →
       superseded`. `keys_active` replaces the person's live key and head
@@ -38,20 +44,25 @@ defmodule Arca.IdentityAttempts do
   ## One attempt in progress
 
   One enrollment and one rotation per person may be in progress at once,
-  and one restore per installation token. Opening one again with the exact
-  same submission answers the attempt that stands, so a lost response
-  resumes rather than stages a second key set; a different submission is
-  refused `:attempt_in_progress` (or `:token_claimed` for a restore).
+  and one restore per installation token. A rotation and an added kit
+  each move the person's head, and an added kit's `recover` names the
+  online keys it keeps, so neither opens while the other is in flight
+  (an added kit staged or submitted, a rotation not yet ended): both
+  decide that under the person's row lock. Opening one again with the
+  exact same submission answers the attempt that stands, so a lost
+  response resumes rather than stages a second key set; a different
+  submission is refused `:attempt_in_progress` (or `:token_claimed` for a
+  restore).
 
   `open/3` takes an `also:` closure run inside its transaction after the
-  attempt is written, the seam an enrollment consumes its confirmation
-  through, so the two commit or roll back together.
+  attempt is written, the seam an enrollment or an added kit consumes its
+  confirmation through, so the two commit or roll back together.
 
   ## Who writes
 
   Every function takes the actor first: a person reaches their own
-  enrollment and rotation attempts, the platform's own actor reaches any,
-  and a restore is the platform's alone. Opening and advancing an attempt
+  enrollment, added-kit and rotation attempts, the platform's own actor
+  reaches any, and a restore is the platform's alone. Opening and advancing an attempt
   prove first that this member still owns its slot; a stale member writes
   nothing (`:not_owner`). Rows are plain maps (`Arca.Data`), sealed bytes
   included.
@@ -64,6 +75,10 @@ defmodule Arca.IdentityAttempts do
 
   @paths %{
     "enrollment" => %{
+      "staged" => ["submitted"],
+      "submitted" => ["accepted", "refused"]
+    },
+    "holder" => %{
       "staged" => ["submitted"],
       "submitted" => ["accepted", "refused"]
     },
@@ -83,6 +98,10 @@ defmodule Arca.IdentityAttempts do
   }
 
   @terminal ~w(refused superseded completed)
+  # The phases in which an added kit or a rotation still moves the
+  # person's head: neither opens while the other holds one.
+  @holder_moving ~w(staged submitted)
+  @rotation_moving ~w(staged submitted accepted keys_active)
   @staged_columns [
     :staged_live_public_key,
     :staged_operational_public_key,
@@ -106,19 +125,29 @@ defmodule Arca.IdentityAttempts do
       hash) and the sealed `:kit_seed_sealed`. The person's identity row
       moves `none → pending` with it; a person with no local identity row,
       or one already enrolled, is refused `:not_enrollable`.
+    * **holder** — `:user_id`, `:identifier`, `:directory_url`, the signed
+      recover request's `:entry` bytes and `:request_digest`, the
+      `:expected_revision` it names, the `:expected_head` the person's row
+      reads as it is staged, and the added kit's sealed `:kit_seed_sealed`.
+      The person must be enrolled under that identifier at that head
+      (`:not_enrollable` or `:stale_head` otherwise), with no rotation in
+      flight (`:attempt_in_progress`).
     * **rotation** — `:user_id`, the candidate `:entry` bytes and
       `:entry_hash` (also its `:request_digest`), the `:expected_head` it
       extends, and the staged `:staged_live_public_key` and
       `:staged_live_key_sealed`. The person must be enrolled at that head
-      (`:stale_head` otherwise).
+      (`:stale_head` otherwise), with no added kit in flight
+      (`:attempt_in_progress`).
     * **restore** — only the platform's actor: `:identifier`,
       `:directory_url`, the recover request's `:entry` bytes and
       `:request_digest`, the `:expected_revision`, the installation
-      `:token_digest`, and the staged live and operational keys, public and
-      sealed. The open claims the empty installation for this request and
-      token in its own transaction: `:claimed` while another restore holds
-      it, `:token_spent` for a token any claim was ever bound to,
-      `:not_empty` on a node that holds a person.
+      `:token_digest`, the staged live and operational keys, public and
+      sealed, and the identifier's immutable `:genesis` bytes, which the
+      restored person's identity rests on (`genesis/2`). The open claims
+      the empty installation for this request and token in its own
+      transaction: `:claimed` while another restore holds it,
+      `:token_spent` for a token any claim was ever bound to, `:not_empty`
+      on a node that holds a person.
 
   `opts[:also]` is run after the row is written, inside the transaction,
   with the attempt as a plain map; `{:error, reason}` rolls both back.
@@ -148,14 +177,18 @@ defmodule Arca.IdentityAttempts do
   Move the attempt `id` from `from` to `to`, a move its kind's path has,
   in one conditional write: nothing is written unless the row still holds
   `from`. `attrs` may record the directory's `:outcome` (text); a restore
-  moving to `minted` names the `:user_id` it minted.
+  moving to `minted` names the `:user_id` it minted; an added kit or a
+  restore moving to `accepted` names the committed `:entry_hash`, which an
+  added kit requires.
 
   The move's own writes commit with it: an enrollment's acceptance writes
   the identifier onto the person's row, and its refusal returns them to
-  unenrolled; a rotation's `keys_active` replaces the live key while the
-  person's head is still the one it extended (`:stale_head` otherwise); a
-  restore's end ends its installation claim; every terminal move clears
-  the staged keys.
+  unenrolled; an added kit's acceptance moves the person's head to its
+  entry while the row still reads the head it was staged at
+  (`:stale_head` otherwise); a rotation's `keys_active` replaces the live
+  key while the person's head is still the one it extended (`:stale_head`
+  otherwise); a restore's end ends its installation claim; every terminal
+  move clears the staged keys.
 
   Refusals: `:out_of_order` (a move the path lacks), `:stale` (the row no
   longer holds `from`), `:stale_head`, `:not_found`, `:not_owner`,
@@ -177,11 +210,12 @@ defmodule Arca.IdentityAttempts do
   end
 
   @doc """
-  The person acknowledged saving their kit: an accepted enrollment moves
-  to `completed` and its sealed seed is erased in the same write. Asked
-  again, it answers the completed attempt with no seed; the seed is never
-  restored. An enrollment not yet accepted is refused `:not_accepted`.
-  Narrows only, so a member that lost its slot may still acknowledge.
+  The person acknowledged saving their kit: an accepted enrollment or
+  added kit moves to `completed` and its sealed seed is erased in the
+  same write. Asked again, it answers the completed attempt with no seed;
+  the seed is never restored. One not yet accepted is refused
+  `:not_accepted`. Narrows only, so a member that lost its slot may still
+  acknowledge.
   """
   @spec acknowledge_kit(Prima.Actor.t(), String.t()) ::
           {:ok, row()} | {:error, :not_accepted | :not_found | :cross_tenant | :database_error}
@@ -210,6 +244,25 @@ defmodule Arca.IdentityAttempts do
     |> Arca.Data.project()
   end
 
+  @doc """
+  The restore attempt bound to an installation token's digest, which
+  names at most one: the platform's own actor only.
+  """
+  @spec get_by_token(Prima.Actor.t(), String.t()) ::
+          {:ok, row()} | {:error, :not_found | :cross_tenant | :database_error}
+  def get_by_token(%Prima.Actor{scope: :platform, system: true}, token_digest)
+      when is_binary(token_digest) do
+    Arca.Repo.Errors.with_db_rescue("Arca.IdentityAttempts.get_by_token", fn ->
+      case Arca.Repo.get_by(IdentityAttempt, token_digest: token_digest, kind: "restore") do
+        nil -> {:error, :not_found}
+        attempt -> {:ok, attempt}
+      end
+    end)
+    |> Arca.Data.project()
+  end
+
+  def get_by_token(%Prima.Actor{}, _token_digest), do: {:error, :cross_tenant}
+
   @doc "The attempt a request id names, if the actor may read it."
   @spec get_by_request(Prima.Actor.t(), String.t()) ::
           {:ok, row()} | {:error, :not_found | :cross_tenant | :database_error}
@@ -230,7 +283,7 @@ defmodule Arca.IdentityAttempts do
   @spec in_progress(Prima.Actor.t(), String.t(), String.t()) ::
           {:ok, row()} | {:error, :not_found | :cross_tenant | :database_error}
   def in_progress(%Prima.Actor{} = actor, user_id, kind)
-      when is_binary(user_id) and kind in ["enrollment", "rotation"] do
+      when is_binary(user_id) and kind in ["enrollment", "holder", "rotation"] do
     if person?(actor, user_id) do
       Arca.Repo.Errors.with_db_rescue("Arca.IdentityAttempts.in_progress", fn ->
         from(a in IdentityAttempt,
@@ -289,10 +342,12 @@ defmodule Arca.IdentityAttempts do
 
   @doc """
   Hold a single-use first-method reproof challenge on a completed restore:
-  the digest of a fresh server challenge and its expiry, replacing any
-  earlier one. Only while the restored person has never had a fresh
-  confirmation method (`:first_method_used` otherwise). The platform's
-  actor only.
+  the digest of a fresh server challenge and its expiry, an instant on
+  the database's clock (`Arca.ServerMetaStorage.now!/0`), which is the
+  clock `reproof_held/3` and `consume_reproof/3` read it against,
+  replacing any earlier one. Only while the restored person has never had
+  a fresh confirmation method (`:first_method_used` otherwise). The
+  platform's actor only.
   """
   @spec put_reproof(Prima.Actor.t(), String.t(), String.t(), DateTime.t()) ::
           {:ok, row()} | {:error, term()}
@@ -314,6 +369,26 @@ defmodule Arca.IdentityAttempts do
   end
 
   def put_reproof(%Prima.Actor{}, _id, _digest, _expires_at), do: {:error, :cross_tenant}
+
+  @doc """
+  Whether the restore `id` holds the reproof challenge `digest`, before its
+  expiry on the database's clock, without consuming it: a reproof asks
+  before it reads the directory and consumes the challenge last
+  (`consume_reproof/3`). Answers `:ok` or `{:error, :no_challenge}`. The
+  platform's actor only.
+  """
+  @spec reproof_held(Prima.Actor.t(), String.t(), String.t()) ::
+          :ok | {:error, :no_challenge | :cross_tenant | :database_error}
+  def reproof_held(%Prima.Actor{scope: :platform, system: true}, id, digest)
+      when is_binary(id) and is_binary(digest) do
+    Arca.Repo.Errors.with_db_rescue("Arca.IdentityAttempts.reproof_held", fn ->
+      if Arca.Repo.exists?(live_reproof(id, digest, Arca.ServerMetaStorage.now!())),
+        do: :ok,
+        else: {:error, :no_challenge}
+    end)
+  end
+
+  def reproof_held(%Prima.Actor{}, _id, _digest), do: {:error, :cross_tenant}
 
   @doc """
   Consume the restore's reproof challenge: only the digest it holds, before
@@ -374,7 +449,12 @@ defmodule Arca.IdentityAttempts do
     with {:ok, _claim} <- InstallationClaims.claim!(claim), do: :ok
   end
 
+  # A rotation and an added kit each move the person's head. Each decides
+  # under the person's row lock, the first of the standing order, so of
+  # two racing opens the second sees the first.
   defp precondition(%{kind: "rotation", user_id: user_id, expected_head: head}) do
+    _locked = Arca.DirectoryHeads.lock_person!(user_id)
+
     enrolled =
       from(p in PersonIdentity,
         where:
@@ -382,10 +462,48 @@ defmodule Arca.IdentityAttempts do
             p.head_hash == ^head
       )
 
-    if Arca.Repo.exists?(enrolled), do: :ok, else: {:error, :stale_head}
+    cond do
+      not Arca.Repo.exists?(enrolled) -> {:error, :stale_head}
+      moving?(user_id, "holder", @holder_moving) -> {:error, :attempt_in_progress}
+      true -> :ok
+    end
+  end
+
+  defp precondition(%{
+         kind: "holder",
+         user_id: user_id,
+         identifier: identifier,
+         expected_head: head
+       }) do
+    _locked = Arca.DirectoryHeads.lock_person!(user_id)
+
+    identity =
+      Arca.Repo.one(
+        from(p in PersonIdentity,
+          where:
+            p.user_id == ^user_id and p.provenance == "local" and p.enrollment == "enrolled" and
+              p.identifier == ^identifier
+        )
+      )
+
+    cond do
+      is_nil(identity) -> {:error, :not_enrollable}
+      identity.head_hash != head -> {:error, :stale_head}
+      moving?(user_id, "rotation", @rotation_moving) -> {:error, :attempt_in_progress}
+      moving?(user_id, "holder", @holder_moving) -> {:error, :attempt_in_progress}
+      true -> :ok
+    end
   end
 
   defp precondition(%{kind: "enrollment"}), do: :ok
+
+  defp moving?(user_id, kind, phases) do
+    Arca.Repo.exists?(
+      from(a in IdentityAttempt,
+        where: a.user_id == ^user_id and a.kind == ^kind and a.phase in ^phases
+      )
+    )
+  end
 
   # The partial unique indexes decide a race between two opens; the loser
   # reads what won and answers it or refuses.
@@ -470,8 +588,8 @@ defmodule Arca.IdentityAttempts do
 
       case count do
         1 ->
-          with :ok <- consequence(attempt, to),
-               do: {:ok, Arca.Repo.get!(IdentityAttempt, attempt.id)}
+          moved = Arca.Repo.get!(IdentityAttempt, attempt.id)
+          with :ok <- consequence(moved, to), do: {:ok, moved}
 
         0 ->
           {:error, :stale}
@@ -507,6 +625,14 @@ defmodule Arca.IdentityAttempts do
       {"restore", "minted", _attrs} ->
         {:error, {:invalid, %{user_id: ["names the person the restore minted"]}}}
 
+      {kind, "accepted", %{entry_hash: hash}} when kind in ["holder", "restore"] ->
+        if Prima.Identity.Encoding.digest?(hash),
+          do: {:ok, Keyword.put(set, :entry_hash, hash)},
+          else: {:error, {:invalid, %{entry_hash: ["is not a sha256 digest"]}}}
+
+      {"holder", "accepted", _attrs} ->
+        {:error, {:invalid, %{entry_hash: ["names the entry the directory committed"]}}}
+
       _ ->
         {:ok, set}
     end
@@ -531,6 +657,18 @@ defmodule Arca.IdentityAttempts do
     :ok
   end
 
+  # An added kit's committed `recover` is the person's new head: the keys
+  # it names are the ones the row holds, so only the head moves.
+  defp consequence(%IdentityAttempt{kind: "holder"} = attempt, "accepted") do
+    if PersonIdentities.recovered_head!(
+         attempt.user_id,
+         attempt.expected_head,
+         attempt.entry_hash
+       ) == 1,
+       do: :ok,
+       else: {:error, :stale_head}
+  end
+
   defp consequence(%IdentityAttempt{kind: "rotation"} = attempt, "keys_active") do
     set = [
       live_public_key: attempt.staged_live_public_key,
@@ -550,10 +688,12 @@ defmodule Arca.IdentityAttempts do
 
   defp consequence(_attempt, _to), do: :ok
 
-  defp acknowledged(%IdentityAttempt{kind: "enrollment", phase: "completed"} = attempt),
-    do: {:ok, attempt}
+  defp acknowledged(%IdentityAttempt{kind: kind, phase: "completed"} = attempt)
+       when kind in ["enrollment", "holder"],
+       do: {:ok, attempt}
 
-  defp acknowledged(%IdentityAttempt{kind: "enrollment", phase: "accepted"} = attempt) do
+  defp acknowledged(%IdentityAttempt{kind: kind, phase: "accepted"} = attempt)
+       when kind in ["enrollment", "holder"] do
     now = Arca.ServerMetaStorage.now!()
 
     {count, _} =
@@ -602,11 +742,7 @@ defmodule Arca.IdentityAttempts do
     now = Arca.ServerMetaStorage.now!()
 
     {count, _} =
-      from(a in IdentityAttempt,
-        where:
-          a.id == ^attempt.id and a.reproof_challenge_digest == ^digest and
-            a.reproof_expires_at > ^now
-      )
+      live_reproof(attempt.id, digest, now)
       |> Arca.Repo.update_all(
         set: [reproof_challenge_digest: nil, reproof_expires_at: nil, updated_at: now],
         inc: [revision: 1]
@@ -615,6 +751,14 @@ defmodule Arca.IdentityAttempts do
     if count == 1,
       do: {:ok, Arca.Repo.get!(IdentityAttempt, attempt.id)},
       else: {:error, :no_challenge}
+  end
+
+  # The restore's challenge `digest`, held and alive at `now`, the
+  # database's clock its expiry was set from (`Sanctum.Recovery`).
+  defp live_reproof(id, digest, now) do
+    from(a in IdentityAttempt,
+      where: a.id == ^id and a.reproof_challenge_digest == ^digest and a.reproof_expires_at > ^now
+    )
   end
 
   defp no_method_yet(user_id) do
@@ -650,6 +794,23 @@ defmodule Arca.IdentityAttempts do
     |> row(attrs, ~w(user_id identifier directory_url genesis request_digest kit_seed_sealed)a)
   end
 
+  defp build(%{kind: "holder"} = attrs) do
+    []
+    |> required(attrs, :request_id, &Prima.Identity.Encoding.id?/1)
+    |> required(attrs, :user_id, &nonempty?/1)
+    |> required(attrs, :identifier, &Prima.Identity.Encoding.identifier?/1)
+    |> required(attrs, :directory_url, &Prima.Identity.Encoding.directory_url?/1)
+    |> required(attrs, :entry, &bytes?/1)
+    |> required(attrs, :request_digest, &Prima.Identity.Encoding.digest?/1)
+    |> required(attrs, :expected_revision, &(is_integer(&1) and &1 >= 0))
+    |> required(attrs, :expected_head, &Prima.Identity.Encoding.digest?/1)
+    |> required(attrs, :kit_seed_sealed, &nonempty_binary?/1)
+    |> row(
+      attrs,
+      ~w(user_id identifier directory_url entry request_digest expected_revision expected_head kit_seed_sealed)a
+    )
+  end
+
   defp build(%{kind: "rotation"} = attrs) do
     []
     |> required(attrs, :request_id, &Prima.Identity.Encoding.id?/1)
@@ -678,15 +839,16 @@ defmodule Arca.IdentityAttempts do
     |> required(attrs, :staged_operational_public_key, &key?/1)
     |> required(attrs, :staged_live_key_sealed, &nonempty_binary?/1)
     |> required(attrs, :staged_operational_key_sealed, &nonempty_binary?/1)
+    |> optional(attrs, :genesis, &bytes?/1)
     |> row(
       attrs,
-      ~w(identifier directory_url entry request_digest expected_revision token_digest)a ++
+      ~w(identifier directory_url entry request_digest expected_revision token_digest genesis)a ++
         @staged_columns
     )
   end
 
   defp build(_attrs),
-    do: {:error, {:invalid, %{kind: ["is enrollment, restore or rotation"]}}}
+    do: {:error, {:invalid, %{kind: ["is enrollment, holder, restore or rotation"]}}}
 
   defp row([], attrs, fields) do
     now = DateTime.utc_now()
@@ -724,6 +886,13 @@ defmodule Arca.IdentityAttempts do
 
   defp required(errors, attrs, field, valid?) do
     if valid?.(Map.get(attrs, field)), do: errors, else: [{field, ["is required"]} | errors]
+  end
+
+  defp optional(errors, attrs, field, valid?) do
+    case Map.get(attrs, field) do
+      nil -> errors
+      value -> if valid?.(value), do: errors, else: [{field, ["is malformed"]} | errors]
+    end
   end
 
   defp nonempty?(value), do: is_binary(value) and value != ""

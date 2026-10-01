@@ -13,7 +13,9 @@ defmodule Arca.CarryActions do
   the fixed return URL, the operation (`join`), the immutable payload and
   its digest, the `key_epoch` and a five-minute lifetime on the database's
   clock. A person holds at most 20 unexpired pending actions, and a
-  payload is at most 8 KiB (`:carry_too_large`).
+  payload is at most 8 KiB (`:carry_too_large`). Opening one first ends
+  the person's own actions past their expiry, in the same transaction,
+  clearing their payloads before the bound is counted.
 
   Its phases are `pending | delivered | completed | cancelled | expired`,
   each move a conditional write on the phase and revision the caller read.
@@ -312,6 +314,11 @@ defmodule Arca.CarryActions do
       |> Arca.QueryHelpers.for_update()
       |> Arca.Repo.one()
 
+    # The person's own actions past their expiry end here, under the same
+    # lock and before the bound is read, so expiry releases their payloads
+    # whether or not a sweep has come by.
+    expire_own(row.user_id, now)
+
     pending_count =
       Arca.Repo.one(
         from(a in CarryAction,
@@ -342,6 +349,20 @@ defmodule Arca.CarryActions do
           {0, _} -> {:error, :conflict}
         end
     end
+  end
+
+  defp expire_own(user_id, now) do
+    retain = DateTime.add(now, @retention_ms, :millisecond)
+
+    from(a in CarryAction,
+      where:
+        a.kind == "source" and a.user_id == ^user_id and a.phase in ^@open and
+          a.expires_at <= ^now
+    )
+    |> Arca.Repo.update_all(
+      set: [phase: "expired", payload: nil, retain_until: retain, updated_at: now],
+      inc: [revision: 1]
+    )
   end
 
   defp receipt_in(row) do

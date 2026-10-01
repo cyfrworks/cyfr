@@ -763,9 +763,9 @@ defmodule Cyfr.BoundariesTest do
     test "a pending function is on a module that exists, apart from the settled roster" do
       pending = Boundaries.pending_sanctum_exports()
 
-      assert pending == %{
-               "Sanctum.Recovery" => [restore: 2]
-             }
+      # The restore ingress was the last pending call, and it is settled.
+      assert pending == %{}
+      assert {:restore, 2} in Map.fetch!(Boundaries.sanctum_exports(), "Sanctum.Recovery")
 
       for {module, functions} <- pending do
         assert String.starts_with?(module, "Sanctum.")
@@ -778,11 +778,12 @@ defmodule Cyfr.BoundariesTest do
         end
       end
 
-      # A call the host makes to one is admitted, and one nothing calls is
-      # not stale.
+      # The settled restore calls are admitted, and the host makes each.
       reaches = host_sanctum_reaches()
       assert Boundaries.sanctum_export_violations([{"Sanctum.Recovery", :restore, 2}]) == []
-      refute "Sanctum.Recovery.restore/2" in Boundaries.stale_sanctum_exports(reaches)
+
+      for call <- [{"Sanctum.Recovery", :restore, 2}, {"Sanctum.Recovery", :reproof, 2}],
+          do: assert(call in reaches)
     end
 
     test "every rostered function is a public function of a Sanctum module, listed once in order" do

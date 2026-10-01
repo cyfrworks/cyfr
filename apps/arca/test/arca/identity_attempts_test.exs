@@ -326,6 +326,165 @@ defmodule Arca.IdentityAttemptsTest do
     end
   end
 
+  describe "an added kit (holder)" do
+    defp holder(person, accepted, overrides \\ %{}) do
+      Map.merge(
+        %{
+          kind: "holder",
+          request_id: request_id(),
+          user_id: person.id,
+          identifier: accepted.identifier,
+          directory_url: "https://dir.example",
+          entry: "recover-request",
+          request_digest: digest("holder"),
+          expected_revision: 0,
+          expected_head: accepted.request_digest,
+          kit_seed_sealed: "sealed-added-seed"
+        },
+        overrides
+      )
+    end
+
+    test "opens at the person's head, and acceptance moves the head to its entry alone" do
+      person = person!()
+      accepted = enrolled!(person)
+      {:ok, before} = PersonIdentities.get(server(), person.id)
+
+      assert {:ok, %{phase: "staged"} = attempt} =
+               IdentityAttempts.open(as(person), holder(person, accepted))
+
+      {:ok, _} = IdentityAttempts.advance(as(person), attempt.id, "staged", "submitted")
+
+      # An acceptance names the entry the directory committed.
+      assert {:error, {:invalid, %{entry_hash: _}}} =
+               IdentityAttempts.advance(as(person), attempt.id, "submitted", "accepted")
+
+      entry_hash = digest("committed recover")
+
+      assert {:ok, %{phase: "accepted", entry_hash: ^entry_hash}} =
+               IdentityAttempts.advance(as(person), attempt.id, "submitted", "accepted", %{
+                 entry_hash: entry_hash
+               })
+
+      assert {:ok, row} = PersonIdentities.get(server(), person.id)
+      assert row.head_hash == entry_hash
+      assert row.live_public_key == before.live_public_key
+      assert row.operational_public_key == before.operational_public_key
+      assert row.live_key_sealed == before.live_key_sealed
+    end
+
+    test "a head that moved since staging refuses it, and acceptance moves no head" do
+      person = person!()
+      accepted = enrolled!(person)
+
+      assert {:error, :stale_head} =
+               IdentityAttempts.open(
+                 as(person),
+                 holder(person, accepted, %{expected_head: digest("elsewhere")})
+               )
+
+      {:ok, attempt} = IdentityAttempts.open(as(person), holder(person, accepted))
+      {:ok, _} = IdentityAttempts.advance(as(person), attempt.id, "staged", "submitted")
+
+      {1, _} =
+        Arca.Repo.update_all(
+          from(p in Arca.Schemas.PersonIdentity, where: p.user_id == ^person.id),
+          set: [head_hash: digest("rotated")]
+        )
+
+      assert {:error, :stale_head} =
+               IdentityAttempts.advance(as(person), attempt.id, "submitted", "accepted", %{
+                 entry_hash: digest("committed")
+               })
+
+      assert {:ok, %{phase: "submitted"}} = IdentityAttempts.get(as(person), attempt.id)
+    end
+
+    test "a person not enrolled under that identifier opens none" do
+      person = person!()
+
+      assert {:error, :not_enrollable} =
+               IdentityAttempts.open(
+                 as(person),
+                 holder(person, %{
+                   identifier: "per_" <> String.duplicate("a", 64),
+                   request_digest: digest("g")
+                 })
+               )
+    end
+
+    test "a rotation and an added kit never fly together" do
+      person = person!()
+      accepted = enrolled!(person)
+
+      rotation = %{
+        kind: "rotation",
+        request_id: request_id(),
+        user_id: person.id,
+        entry: "rotate-entry",
+        entry_hash: digest("rotate"),
+        expected_head: accepted.request_digest,
+        staged_live_public_key: key(),
+        staged_live_key_sealed: "sealed-new-live"
+      }
+
+      {:ok, added} = IdentityAttempts.open(as(person), holder(person, accepted))
+      assert {:error, :attempt_in_progress} = IdentityAttempts.open(as(person), rotation)
+
+      assert {:error, :attempt_in_progress} =
+               IdentityAttempts.open(as(person), holder(person, accepted))
+
+      # Once the added kit is accepted, its head is the one a rotation extends.
+      {:ok, _} = IdentityAttempts.advance(as(person), added.id, "staged", "submitted")
+      head = digest("accepted kit")
+
+      {:ok, _} =
+        IdentityAttempts.advance(as(person), added.id, "submitted", "accepted", %{
+          entry_hash: head
+        })
+
+      assert {:ok, rotating} =
+               IdentityAttempts.open(as(person), %{rotation | expected_head: head})
+
+      assert {:error, :attempt_in_progress} =
+               IdentityAttempts.open(as(person), holder(person, accepted, %{expected_head: head}))
+
+      assert {:ok, %{phase: "staged"}} = IdentityAttempts.get(as(person), rotating.id)
+    end
+
+    test "its kit is acknowledged as an enrollment's, erasing the seed for good" do
+      person = person!()
+      accepted = enrolled!(person)
+      {:ok, attempt} = IdentityAttempts.open(as(person), holder(person, accepted))
+      assert {:error, :not_accepted} = IdentityAttempts.acknowledge_kit(as(person), attempt.id)
+      {:ok, _} = IdentityAttempts.advance(as(person), attempt.id, "staged", "submitted")
+
+      {:ok, _} =
+        IdentityAttempts.advance(as(person), attempt.id, "submitted", "accepted", %{
+          entry_hash: digest("committed")
+        })
+
+      assert {:ok, %{phase: "completed", kit_seed_sealed: nil}} =
+               IdentityAttempts.acknowledge_kit(as(person), attempt.id)
+
+      assert {:ok, %{kit_seed_sealed: nil}} =
+               IdentityAttempts.acknowledge_kit(as(person), attempt.id)
+    end
+
+    test "a refused one ends with its seed erased and the head unmoved" do
+      person = person!()
+      accepted = enrolled!(person)
+      {:ok, attempt} = IdentityAttempts.open(as(person), holder(person, accepted))
+      {:ok, _} = IdentityAttempts.advance(as(person), attempt.id, "staged", "submitted")
+
+      assert {:ok, %{phase: "refused", kit_seed_sealed: nil}} =
+               IdentityAttempts.advance(as(person), attempt.id, "submitted", "refused")
+
+      assert {:ok, %{head_hash: head}} = PersonIdentities.get(server(), person.id)
+      assert head == accepted.request_digest
+    end
+  end
+
   describe "rotation" do
     test "activates the staged key only at the head it extended" do
       person = person!()
@@ -478,6 +637,162 @@ defmodule Arca.IdentityAttemptsTest do
                IdentityAttempts.advance(server(), attempt.id, "minted", "completed")
 
       assert {:ok, %{state: "ended", outcome: "completed"}} = InstallationClaims.get(server())
+    end
+
+    test "keeps its genesis, which the restored person's identity rests on",
+         %{restore: restore} do
+      attrs = Map.put(restore_attrs(restore), :genesis, "the restored genesis")
+      {:ok, attempt} = IdentityAttempts.open(server(), attrs)
+      assert attempt.genesis == "the restored genesis"
+
+      assert {:ok, %{id: id}} = IdentityAttempts.get_by_token(server(), restore.token)
+      assert id == attempt.id
+      assert {:error, :not_found} = IdentityAttempts.get_by_token(server(), digest("other"))
+
+      assert {:error, :cross_tenant} =
+               IdentityAttempts.get_by_token(%Prima.Actor{user_id: "usr_x"}, restore.token)
+
+      for {from, to, attrs} <- [
+            {"staged", "submitted", %{}},
+            {"submitted", "accepted", %{entry_hash: digest("recovered")}},
+            {"accepted", "keys_active", %{}}
+          ] do
+        {:ok, _} = IdentityAttempts.advance(server(), attempt.id, from, to, attrs)
+      end
+
+      now = DateTime.utc_now()
+
+      {:ok, person} =
+        Users.mint(
+          server(),
+          %{
+            id: Prima.UUID7.generate_id(Prima.PersonId.prefix()),
+            provider: "restore",
+            first_seen_at: now,
+            last_seen_at: now,
+            created_at: now,
+            updated_at: now
+          },
+          nil,
+          restore: %{request_id: restore.request, token_digest: restore.token},
+          also: fn minted ->
+            {:ok, _} =
+              IdentityAttempts.advance(server(), attempt.id, "keys_active", "minted", %{
+                user_id: minted.id
+              })
+
+            :ok
+          end
+        )
+
+      assert {:ok, %{genesis: "the restored genesis", identifier: identifier}} =
+               IdentityAttempts.genesis(server(), person.id)
+
+      assert identifier == restore.identifier
+
+      assert {:error, {:invalid, %{genesis: _}}} =
+               IdentityAttempts.open(
+                 server(),
+                 %{
+                   restore_attrs(%{restore | request: request_id()})
+                   | token_digest: digest("t")
+                 }
+                 |> Map.put(:genesis, "")
+               )
+    end
+
+    test "a reproof challenge lives until its expiry on the database's clock, and is used once",
+         %{restore: restore} do
+      {:ok, attempt} = IdentityAttempts.open(server(), restore_attrs(restore))
+
+      for {from, to} <- [
+            {"staged", "submitted"},
+            {"submitted", "accepted"},
+            {"accepted", "keys_active"}
+          ] do
+        {:ok, _} = IdentityAttempts.advance(server(), attempt.id, from, to)
+      end
+
+      now = DateTime.utc_now()
+
+      {:ok, _person} =
+        Users.mint(
+          server(),
+          %{
+            id: Prima.UUID7.generate_id(Prima.PersonId.prefix()),
+            provider: "restore",
+            first_seen_at: now,
+            last_seen_at: now,
+            created_at: now,
+            updated_at: now
+          },
+          nil,
+          restore: %{request_id: restore.request, token_digest: restore.token},
+          also: fn minted ->
+            {:ok, _} =
+              IdentityAttempts.advance(server(), attempt.id, "keys_active", "minted", %{
+                user_id: minted.id
+              })
+
+            :ok
+          end
+        )
+
+      {:ok, _} = IdentityAttempts.advance(server(), attempt.id, "minted", "completed")
+
+      # Issued for five minutes from the database's clock, as the restore
+      # issues it.
+      five_minutes = 5 * 60 * 1000
+      challenge = digest("challenge")
+      issued = Arca.ServerMetaStorage.now!()
+      expires_at = DateTime.add(issued, five_minutes, :millisecond)
+
+      assert {:ok, _held} =
+               IdentityAttempts.put_reproof(server(), attempt.id, challenge, expires_at)
+
+      assert :ok = IdentityAttempts.reproof_held(server(), attempt.id, challenge)
+
+      assert {:error, :no_challenge} =
+               IdentityAttempts.reproof_held(server(), attempt.id, digest("another"))
+
+      assert {:error, :cross_tenant} =
+               IdentityAttempts.reproof_held(
+                 %Prima.Actor{user_id: "usr_x"},
+                 attempt.id,
+                 challenge
+               )
+
+      # The five minutes pass: the database's clock is past the expiry the
+      # row holds. Neither the check nor the consumption accepts it.
+      Arca.Repo.update_all(
+        from(a in Arca.Schemas.IdentityAttempt, where: a.id == ^attempt.id),
+        set: [reproof_expires_at: DateTime.add(issued, -1, :millisecond)]
+      )
+
+      assert {:error, :no_challenge} =
+               IdentityAttempts.reproof_held(server(), attempt.id, challenge)
+
+      assert {:error, :no_challenge} =
+               IdentityAttempts.consume_reproof(server(), attempt.id, challenge)
+
+      # A new one, alive, is consumed once.
+      fresh = digest("challenge")
+
+      {:ok, _} =
+        IdentityAttempts.put_reproof(
+          server(),
+          attempt.id,
+          fresh,
+          DateTime.add(Arca.ServerMetaStorage.now!(), five_minutes, :millisecond)
+        )
+
+      assert {:ok, %{reproof_challenge_digest: nil}} =
+               IdentityAttempts.consume_reproof(server(), attempt.id, fresh)
+
+      assert {:error, :no_challenge} =
+               IdentityAttempts.consume_reproof(server(), attempt.id, fresh)
+
+      assert {:error, :no_challenge} = IdentityAttempts.reproof_held(server(), attempt.id, fresh)
     end
 
     test "a superseded restore activates nothing and ends its claim", %{restore: restore} do

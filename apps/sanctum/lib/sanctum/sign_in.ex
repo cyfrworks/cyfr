@@ -41,12 +41,57 @@ defmodule Sanctum.SignIn do
   Providers call `admitted/2` between `Sanctum.Door.admit/3` and building
   the context. `Sanctum.Caller.establish/2` — which runs per request —
   only ever reads what this wrote.
+
+  ## Linking a door
+
+  A sign-in can also prove control of a new door for a person already
+  signed in, instead of signing anyone in. `link_ticket/2` is minted by the
+  surface that completed that sign-in (the OpenID Connect callback in link
+  mode, or `Sanctum.Auth.DeviceFlow.poll_for_link/4`), only after the door
+  admits the identity and only for a standing, non-guest session: 32
+  random bytes, held in `Arca.Cache` under their SHA-256 for ten minutes
+  on the node that minted them, bound to the person, their session's
+  token hash, the identity (provider, issuer and subject) and the email
+  claim the door judged. The ticket travels in the browser's cookie
+  session or to the page that polled, never in a URL.
+
+  `link_door/3` (`person.link_door`) reads the ticket without taking it:
+  the person, the session and the provider must be the ticket's, or one
+  sentence refuses it, whichever was wrong. It then decides
+  `sign_in_methods` (`Sanctum.Consent.Authz.check/3`), whose preview names
+  the door by provider and subject with the issuer and email as details;
+  asking for a confirmation leaves the ticket in place. On the repeat it
+  takes the ticket and links the identity (`Arca.Users.link_identity/4`)
+  with the confirmation consumed in the same transaction; a failed write
+  spends the ticket. An identity already the person's answers linked with
+  no write; one another person holds is a conflict. Linking writes no
+  email: a matching email never links anyone. Only `github`, `google` and
+  `oidcc` doors are linked this way; an email address and a passkey are
+  not doors to link.
+
+  `unlink_door/2` (`person.unlink_door`) removes one of the person's own
+  identities under the same confirmation, consumed inside the delete, and
+  refuses to remove the last one unless the person holds an active
+  passkey here and the door admits them without it: by their own id, an
+  email entry for their verified email, or `*`
+  (`Sanctum.Door.admit_person/1`). Either missing would leave no way to
+  sign in. The check runs again under the person's lock, where revoking a
+  passkey takes the same lock (`Sanctum.Passkeys.revoke/2`).
   """
 
   require Logger
 
+  alias Prima.Identity.Encoding
+  alias Sanctum.Auth.Identity
+  alias Sanctum.Consent.Authz
+  alias Sanctum.Context
   alias Sanctum.Slug
   alias Sanctum.Tenancy.{Members, Users}
+
+  @linkable ~w(github google oidcc)
+  @link_ticket_ms 600_000
+  @link_refused "This sign-in link is not yours, has expired or was already used; sign in " <>
+                  "with that door again"
 
   @typedoc """
   What a sign-in reports. The person always proceeds; `unsynced` names
@@ -220,6 +265,364 @@ defmodule Sanctum.SignIn do
   def suggested_slug(%{display_name: name, email: email}, provider) do
     Slug.from_name(name) || Slug.from_email(email) || Slug.from_name("user-#{provider}")
   end
+
+  # ---------------------------------------------------------------------------
+  # Linking a door
+  # ---------------------------------------------------------------------------
+
+  @typedoc """
+  An identity a completed sign-in proved, to link to the person signed in:
+  its key (`Sanctum.Auth.Identity.key/3`), provider, and the email and
+  verification the provider asserted.
+  """
+  @type link_identity :: %{
+          required(:key) => String.t(),
+          required(:provider) => String.t() | atom(),
+          optional(:email) => String.t() | nil,
+          optional(:verified) => boolean() | :unknown
+        }
+
+  @doc """
+  Mint a link ticket (the module doc) for `identity`, the identity a
+  sign-in just completed, bound to the person and session of `ctx`, a
+  session context the surface established. The session must still stand
+  (`Sanctum.Caller.revalidate_session/1`) and be no guest's, the provider
+  linkable, and the door must admit the identity
+  (`Sanctum.Door.admit_identity/2`, which records a refusal the operator
+  can act on).
+
+  Refusals: `:unauthenticated` (no standing session), `:not_linkable`,
+  `{:door, reason}`, `:unavailable`.
+  """
+  @spec link_ticket(Context.t(), link_identity()) :: {:ok, String.t()} | {:error, term()}
+  def link_ticket(%Context{} = ctx, %{key: key, provider: provider} = identity)
+      when is_binary(key) do
+    provider = to_string(provider)
+
+    with {:ok, standing} <- linking_session(ctx),
+         {:ok, parts} <- linkable_key(key, provider),
+         {:ok, _verdict} <-
+           Sanctum.Door.admit_identity(key, %{
+             email: identity[:email],
+             verified: Map.get(identity, :verified, :unknown)
+           }) do
+      ticket = Encoding.b64(:crypto.strong_rand_bytes(32))
+
+      Arca.Cache.put(
+        ticket_key(ticket),
+        %{
+          user_id: standing.user_id,
+          session: standing.session_token_hash,
+          key: key,
+          provider: parts.provider,
+          issuer: parts.issuer,
+          subject: parts.subject,
+          email: identity[:email],
+          verified: Map.get(identity, :verified, :unknown)
+        },
+        @link_ticket_ms
+      )
+
+      {:ok, ticket}
+    end
+  end
+
+  @doc """
+  Link the door `provider` the ticket `ticket` proves to the person of
+  `ctx` (`person.link_door`, the module doc). Answers `%{linked: true |
+  false, door: %{key, provider, issuer, subject}}`, `linked: false` for an
+  identity already the person's.
+
+  Refusals: `{:invalid_argument, _}` (a ticket missing, expired, spent,
+  another person's or another session's, or naming another provider; a
+  door that is not linkable), the consent signal `{:confirmation_required,
+  _}` and the confirmation's other refusals (`Sanctum.Consent.Authz`),
+  `{:conflict, _}` (another person's identity), `{:door, reason}` (the door
+  no longer admits it), `:not_standing`, `:unavailable`.
+  """
+  @spec link_door(Context.t(), String.t(), String.t()) :: {:ok, map()} | {:error, term()}
+  def link_door(%Context{} = ctx, provider, ticket)
+      when is_binary(provider) and is_binary(ticket) do
+    with :ok <- linkable(provider),
+         {:ok, held} <- held_ticket(ctx, provider, ticket) do
+      door = Map.take(held, [:key, :provider, :issuer, :subject])
+
+      case Users.get_by_identity(held.key) do
+        {:ok, %{id: user_id}} when user_id == ctx.user_id ->
+          _spent = Arca.Cache.take(ticket_key(ticket))
+          {:ok, %{linked: false, door: door}}
+
+        {:ok, _another} ->
+          _spent = Arca.Cache.take(ticket_key(ticket))
+          {:error, {:conflict, "That sign-in already belongs to another person here"}}
+
+        {:error, :not_found} ->
+          link_confirmed(ctx, provider, ticket, held, door)
+
+        {:error, _unanswered} ->
+          {:error, :unavailable}
+      end
+    end
+  end
+
+  def link_door(%Context{}, _provider, _ticket), do: {:error, {:invalid_argument, @link_refused}}
+
+  defp link_confirmed(ctx, provider, ticket, held, door) do
+    change = link_change(provider, ticket, held)
+
+    with :ok <- Authz.check(ctx, :sign_in_methods, change),
+         {:ok, held} <- taken_ticket(ctx, provider, ticket),
+         {:ok, _verdict} <- door_admits(held) do
+      case Arca.Users.link_identity(
+             Prima.Actor.system(),
+             ctx.user_id,
+             door,
+             also: fn _linked -> Authz.consume(ctx, {:sign_in_methods, change}) end
+           ) do
+        {:ok, %{linked: linked}} ->
+          if linked, do: Authz.consumed(ctx)
+          {:ok, %{linked: linked, door: door}}
+
+        {:error, :conflict} ->
+          {:error, {:conflict, "That sign-in already belongs to another person here"}}
+
+        {:error, reason} when reason in [:not_active, :not_found] ->
+          {:error, :not_standing}
+
+        {:error, :database_error} ->
+          {:error, :unavailable}
+
+        {:error, reason} ->
+          {:error, reason}
+      end
+    end
+  end
+
+  # What confirming a link approves: this door, by provider and subject,
+  # proven by this ticket.
+  defp link_change(provider, ticket, held) do
+    details =
+      %{"issuer" => held.issuer, "subject" => held.subject}
+      |> Prima.MapUtil.put_present("email", held.email)
+
+    %{
+      operation: "person.link_door",
+      arguments: %{"provider" => provider, "ticket" => ticket},
+      resource: provider <> " sign-in " <> held.subject,
+      details: details
+    }
+  end
+
+  @doc """
+  Unlink the person's own door `key` (`person.unlink_door`, the module
+  doc). Answers `%{unlinked: %{key, provider, issuer, subject}}`.
+
+  Refusals: `{:not_found, "door", key}` (no identity of the person's),
+  `{:conflict, _}` (their last door while they hold no active passkey
+  here, or while this server admits them only through that door), the
+  consent signal and the confirmation's other refusals, `:not_standing`,
+  `:unavailable`.
+  """
+  @spec unlink_door(Context.t(), String.t()) :: {:ok, map()} | {:error, term()}
+  def unlink_door(%Context{user_id: user_id} = ctx, key) when is_binary(key) do
+    with {:ok, _person} <- signed_in_person(ctx),
+         {:ok, identities} <- own_identities(user_id),
+         %{} = identity <-
+           Enum.find(identities, &(&1.key == key)) || {:error, {:not_found, "door", key}},
+         :ok <- keeps_a_door(ctx, length(identities) - 1) do
+      door = Map.take(identity, [:key, :provider, :issuer, :subject])
+
+      change = %{
+        operation: "person.unlink_door",
+        arguments: %{"door" => key},
+        resource: identity.provider <> " sign-in " <> identity.subject,
+        details: %{"issuer" => identity.issuer, "subject" => identity.subject}
+      }
+
+      with :ok <- Authz.check(ctx, :sign_in_methods, change) do
+        also = fn %{remaining: remaining} ->
+          with :ok <- keeps_a_door(ctx, remaining),
+               do: Authz.consume(ctx, {:sign_in_methods, change})
+        end
+
+        case Arca.Users.unlink_identity(Prima.Actor.system(), user_id, key, also: also) do
+          {:ok, _unlinked} ->
+            Authz.consumed(ctx)
+            {:ok, %{unlinked: door}}
+
+          {:error, :not_found} ->
+            {:error, {:not_found, "door", key}}
+
+          {:error, :not_active} ->
+            {:error, :not_standing}
+
+          {:error, :database_error} ->
+            {:error, :unavailable}
+
+          {:error, reason} ->
+            {:error, reason}
+        end
+      end
+    end
+  end
+
+  def unlink_door(%Context{}, _key),
+    do: {:error, {:invalid_argument, "The door to unlink is named by its identity key"}}
+
+  # The last door goes only while the person keeps a way in without it: an
+  # active passkey here, and a door that admits them as a person with no
+  # linked door (`Sanctum.Door.admit_person/1`), which is what the passkey
+  # door asks of them once it is gone. An entry naming only this door's
+  # identity admits no one after it.
+  defp keeps_a_door(_ctx, remaining) when remaining > 0, do: :ok
+
+  defp keeps_a_door(%Context{user_id: user_id} = ctx, _none_left) do
+    with :ok <- holds_a_passkey(ctx, user_id), do: admitted_without_doors(user_id)
+  end
+
+  defp holds_a_passkey(ctx, user_id) do
+    case Arca.Passkeys.list(Context.actor(ctx), user_id, state: :active) do
+      {:ok, rows} ->
+        if Enum.any?(rows, &(&1.rp_id == Sanctum.Passkeys.rp_id())),
+          do: :ok,
+          else:
+            {:error,
+             {:conflict,
+              "This is your last door here and you hold no passkey to sign in with; " <>
+                "register a passkey or link another door before you unlink it"}}
+
+      {:error, _unanswered} ->
+        {:error, :unavailable}
+    end
+  end
+
+  defp admitted_without_doors(user_id) do
+    case Users.get(user_id) do
+      {:ok, user} ->
+        case Sanctum.Door.admit_person(user) do
+          {:ok, _admitted} ->
+            :ok
+
+          {:error, :unavailable} ->
+            {:error, :unavailable}
+
+          {:error, _refused} ->
+            {:error,
+             {:conflict,
+              "This server admits you only through this door; link another door first, or " <>
+                "ask the operator to allow your account, before you unlink it"}}
+        end
+
+      {:error, :not_found} ->
+        {:error, :not_standing}
+
+      {:error, _unanswered} ->
+        {:error, :unavailable}
+    end
+  end
+
+  defp own_identities(user_id) do
+    case Arca.Users.identities(Prima.Actor.system(), user_id) do
+      {:ok, identities} -> {:ok, identities}
+      {:error, _unanswered} -> {:error, :unavailable}
+    end
+  end
+
+  # A person signed in through a stored session, on the external plane: a
+  # door belongs to a person, and a ticket to the session that asked.
+  defp signed_in_person(%Context{plane: :guest}), do: {:error, :unauthenticated}
+
+  defp signed_in_person(%Context{user_id: user_id, session_token_hash: hash} = ctx)
+       when is_binary(user_id) and is_binary(hash) do
+    if ctx.authenticated and not ctx.anonymous and Prima.PersonId.person?(user_id),
+      do: {:ok, ctx},
+      else: {:error, :unauthenticated}
+  end
+
+  defp signed_in_person(%Context{}), do: {:error, :unauthenticated}
+
+  defp linking_session(ctx) do
+    with {:ok, ctx} <- signed_in_person(ctx) do
+      case Sanctum.Caller.revalidate_session(ctx) do
+        {:ok, %Context{session_token_hash: hash} = standing} when is_binary(hash) ->
+          {:ok, standing}
+
+        {:ok, _no_session} ->
+          {:error, :unauthenticated}
+
+        {:error, reason} when reason in [:unavailable, :identity_stale] ->
+          {:error, :unavailable}
+
+        {:error, _gone} ->
+          {:error, :unauthenticated}
+      end
+    end
+  end
+
+  defp linkable(provider) when provider in @linkable, do: :ok
+
+  defp linkable(_provider),
+    do:
+      {:error,
+       {:invalid_argument,
+        "Only a GitHub, Google or OpenID Connect sign-in is linked as a door; an email address " <>
+          "or a passkey is not"}}
+
+  defp linkable_key(key, provider) do
+    with :ok <- linkable(provider),
+         {:ok, %{provider: ^provider} = parts} <- Identity.parse(key) do
+      {:ok, parts}
+    else
+      {:error, {:invalid_argument, _}} -> {:error, :not_linkable}
+      _other -> {:error, :not_linkable}
+    end
+  end
+
+  # The ticket, read and not taken, held to the person, the session and
+  # the provider asked for. One sentence answers every way it does not hold.
+  defp held_ticket(ctx, provider, ticket) do
+    with {:ok, ctx} <- signed_in_person(ctx),
+         {:ok, held} <- Arca.Cache.get(ticket_key(ticket)) |> found(),
+         :ok <- bound(held, ctx, provider) do
+      {:ok, held}
+    else
+      {:error, :unauthenticated} -> {:error, :unauthenticated}
+      _refused -> {:error, {:invalid_argument, @link_refused}}
+    end
+  end
+
+  # The ticket taken, once, and held to the same bindings: of two repeats
+  # presenting it, one links.
+  defp taken_ticket(ctx, provider, ticket) do
+    with {:ok, held} <- Arca.Cache.take(ticket_key(ticket)) |> found(),
+         :ok <- bound(held, ctx, provider) do
+      {:ok, held}
+    else
+      _refused -> {:error, {:invalid_argument, @link_refused}}
+    end
+  end
+
+  defp found({:ok, %{user_id: _, session: _, key: _, provider: _} = held}), do: {:ok, held}
+  defp found(_miss), do: {:error, :missing}
+
+  defp bound(held, %Context{user_id: user_id, session_token_hash: hash}, provider) do
+    if held.user_id == user_id and held.provider == provider and is_binary(hash) and
+         Plug.Crypto.secure_compare(held.session, hash),
+       do: :ok,
+       else: {:error, :mismatch}
+  end
+
+  # The door is asked again as the link is written: an identity the
+  # operator closed the door on since the ticket was minted is not linked.
+  defp door_admits(held) do
+    case Sanctum.Door.admit(held.key, held.email, held.verified) do
+      {:ok, verdict} -> {:ok, verdict}
+      {:error, :unavailable} -> {:error, :unavailable}
+      {:error, reason} -> {:error, {:door, reason}}
+    end
+  end
+
+  defp ticket_key(ticket), do: {:link_ticket, :crypto.hash(:sha256, ticket)}
 
   # Push tokens are cached best-effort: a failed write costs a re-probe,
   # never the sign-in. `:skipped` (no token in the body) is not a failure —

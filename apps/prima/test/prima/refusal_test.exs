@@ -130,6 +130,7 @@ defmodule Prima.RefusalTest do
     {:email_unavailable, :unavailable},
     {:reauth_required, :unauthenticated},
     {:identity_stale, :unavailable},
+    {:restore_reserved, :forbidden},
     {:execution_failed, :internal},
     {:invalid_session, :unauthenticated},
     {:missing_token, :unauthenticated},
@@ -404,6 +405,13 @@ defmodule Prima.RefusalTest do
 
       for reason <- [:remote_identity_unavailable, :email_unavailable, :reauth_required],
           do: assert(Refusal.reason?(reason))
+    end
+
+    test "an installation reserved for a restore says so, and denies no one" do
+      assert %Refusal{class: :forbidden, message: message} = Refusal.classify(:restore_reserved)
+      assert message =~ "waiting for its owner to restore"
+      refute message =~ "not admitted"
+      assert Refusal.reason?(:restore_reserved)
     end
 
     test "an identity that could not be confirmed fresh pauses: retryable, no sign-out" do

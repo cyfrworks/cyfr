@@ -36,6 +36,13 @@
         ],
         "oauth_callback" => [":accepts", "CyfrWeb.Plugs.ApiSecurityHeaders"],
         "oauth_callback_throttle" => ["CyfrWeb.Plugs.AuthRateLimit"],
+        "restore" => [
+          ":accepts",
+          "CyfrWeb.Plugs.ApiSecurityHeaders",
+          "CyfrWeb.Plugs.FrameRequest",
+          ":fetch_session",
+          "CyfrWeb.Plugs.AuthRateLimit"
+        ],
         "tincture" => [
           "CyfrWeb.Plugs.CallIdentity",
           ":accepts",
@@ -263,6 +270,33 @@
           auth: "authenticate_plug",
           live_view: nil,
           pipe_through: ["mcp"]
+        },
+        %{
+          verb: "POST",
+          path: "/restore",
+          plug: "Emissary.Web.RestoreController",
+          plug_opts: ":restore",
+          auth: "installation_capability",
+          live_view: nil,
+          pipe_through: ["restore"]
+        },
+        %{
+          verb: "POST",
+          path: "/restore/challenge",
+          plug: "Emissary.Web.RestoreController",
+          plug_opts: ":challenge",
+          auth: "installation_capability",
+          live_view: nil,
+          pipe_through: ["restore"]
+        },
+        %{
+          verb: "POST",
+          path: "/restore/reproof",
+          plug: "Emissary.Web.RestoreController",
+          plug_opts: ":reproof",
+          auth: "installation_capability",
+          live_view: nil,
+          pipe_through: ["restore"]
         },
         %{
           verb: "GET",
@@ -567,6 +601,15 @@
           auth: "browser_oauth_flow",
           live_view: nil,
           pipe_through: ["auth_browser", "device_complete_throttle"]
+        },
+        %{
+          verb: "POST",
+          path: "/auth/link/oidcc",
+          plug: "PrismWeb.AuthController",
+          plug_opts: ":link_start",
+          auth: "browser_session",
+          live_view: nil,
+          pipe_through: ["auth_browser", "oauth_start_throttle"]
         },
         %{
           verb: "POST",

@@ -24,131 +24,13 @@ defmodule Sanctum.Directory.ClientTest do
   alias Prima.Identity
   alias Prima.Identity.{Entry, RecoverRequest}
   alias Sanctum.Directory.Client
+  alias Sanctum.Test.DirectoryServer
+  alias Sanctum.Test.DirectoryServer.{Resolver, Server}
 
   @hosts ~w(dir-a.test dir-b.test loopback.test metadata.test)
 
-  defmodule Resolver do
-    @moduledoc false
-    # Names every test directory answers at, and tells the running test
-    # each name it was asked, so a case can show no lookup was made.
-    def getaddr(name, :inet) do
-      name = to_string(name)
-
-      case :persistent_term.get({__MODULE__, :observer}, nil) do
-        pid when is_pid(pid) -> send(pid, {:resolved, name})
-        nil -> :ok
-      end
-
-      case name do
-        "metadata.test" -> {:ok, {169, 254, 169, 254}}
-        "dir-" <> _ -> {:ok, {127, 0, 0, 1}}
-        "loopback.test" -> {:ok, {127, 0, 0, 1}}
-        _ -> {:error, :nxdomain}
-      end
-    end
-
-    def getaddr(_name, :inet6), do: {:error, :nxdomain}
-  end
-
-  defmodule Server do
-    @moduledoc false
-    # A TLS listener on loopback that reads one HTTP/1.1 request per
-    # connection, reports it to the test and answers `handler.(request)`:
-    # `{status, headers, body}`, or `:hang` to answer nothing.
-
-    def start(ssl_options, handler, observer) do
-      {:ok, listen} =
-        :ssl.listen(
-          0,
-          ssl_options ++ [ip: {127, 0, 0, 1}, active: false, mode: :binary, reuseaddr: true]
-        )
-
-      {:ok, {_address, port}} = :ssl.sockname(listen)
-      pid = spawn(fn -> accept(listen, handler, observer) end)
-      %{port: port, pid: pid, listen: listen}
-    end
-
-    def stop(%{pid: pid, listen: listen}) do
-      Process.exit(pid, :kill)
-      :ssl.close(listen)
-    end
-
-    defp accept(listen, handler, observer) do
-      case :ssl.transport_accept(listen) do
-        {:ok, socket} ->
-          serve(socket, handler, observer)
-          accept(listen, handler, observer)
-
-        {:error, _closed} ->
-          :ok
-      end
-    end
-
-    defp serve(socket, handler, observer) do
-      with {:ok, socket} <- :ssl.handshake(socket, 5_000),
-           {:ok, request} <- read(socket, "") do
-        send(observer, {:request, request})
-
-        case handler.(request) do
-          :hang ->
-            Process.sleep(30_000)
-
-          {status, headers, body} ->
-            headers = [{"content-length", byte_size(body)}, {"connection", "close"} | headers]
-            head = Enum.map_join(headers, "", fn {name, value} -> "#{name}: #{value}\r\n" end)
-            :ssl.send(socket, "HTTP/1.1 #{status} Answer\r\n" <> head <> "\r\n" <> body)
-        end
-
-        :ssl.close(socket)
-      end
-    end
-
-    defp read(socket, acc) do
-      case :binary.split(acc, "\r\n\r\n") do
-        [head, rest] ->
-          [line | lines] = String.split(head, "\r\n")
-          [method, target, _version] = String.split(line, " ", parts: 3)
-
-          headers =
-            for line <- lines, [name, value] = String.split(line, ":", parts: 2) do
-              {String.downcase(name), String.trim(value)}
-            end
-
-          length =
-            case List.keyfind(headers, "content-length", 0) do
-              {_name, value} -> String.to_integer(value)
-              nil -> 0
-            end
-
-          with {:ok, body} <- body(socket, rest, length) do
-            {:ok, %{method: method, target: target, headers: headers, body: body}}
-          end
-
-        [_partial] ->
-          with {:ok, data} <- :ssl.recv(socket, 0, 5_000), do: read(socket, acc <> data)
-      end
-    end
-
-    defp body(_socket, acc, length) when byte_size(acc) >= length, do: {:ok, acc}
-
-    defp body(socket, acc, length) do
-      with {:ok, data} <- :ssl.recv(socket, 0, 5_000), do: body(socket, acc <> data, length)
-    end
-  end
-
   setup_all do
-    san =
-      {:Extension, {2, 5, 29, 17}, false, Enum.map(@hosts, &{:dNSName, String.to_charlist(&1)})}
-
-    key = [key: {:namedCurve, :secp256r1}, digest: :sha256]
-
-    tls =
-      :public_key.pkix_test_data(%{
-        server_chain: %{root: key, intermediates: [], peer: key ++ [extensions: [san]]},
-        client_chain: %{root: key, intermediates: [], peer: key}
-      })
-
-    %{tls: tls}
+    %{tls: DirectoryServer.tls(@hosts)}
   end
 
   setup tags do
@@ -630,6 +512,55 @@ defmodule Sanctum.Directory.ClientTest do
       assert String.starts_with?(bob_path, bob.identifier)
       assert {"host", "dir-a.test:" <> _} = List.keyfind(alice_headers, "host", 0)
       assert {"host", "dir-b.test:" <> _} = List.keyfind(bob_headers, "host", 0)
+    end
+  end
+
+  describe "genesis/3" do
+    test "reads the log's first entry and holds it to the identifier and the directory", ctx do
+      dir = directory(ctx, "dir-a.test", serving(ctx))
+      alice = ctx |> publish(person(dir.url) |> rotated(2))
+
+      assert {:ok, bytes} = Client.genesis(alice.identifier, dir.url, opts(ctx))
+      assert bytes == Identity.canonical(alice.genesis)
+      assert {:ok, _} = Client.resolve(alice.identifier, bytes, opts(ctx))
+
+      assert [%{target: "/directory/v1/" <> rest} | _] = requests()
+      assert rest == alice.identifier <> "?after=-1"
+    end
+
+    test "a genesis naming another directory than the one given is refused", ctx do
+      dir = directory(ctx, "dir-a.test", serving(ctx))
+      elsewhere = person("https://dir-b.test")
+      Agent.update(ctx.logs, &Map.put(&1, elsewhere.identifier, {elsewhere.log, nil}))
+
+      assert {:error, :directory_mismatch} =
+               Client.genesis(elsewhere.identifier, dir.url, opts(ctx))
+    end
+
+    test "a log whose first entry does not hash to the identifier is refused", ctx do
+      dir = directory(ctx, "dir-a.test", serving(ctx))
+      alice = person(dir.url)
+      bob = person(dir.url)
+      Agent.update(ctx.logs, &Map.put(&1, alice.identifier, {bob.log, nil}))
+
+      assert {:error, :identifier_mismatch} =
+               Client.genesis(alice.identifier, dir.url, opts(ctx))
+    end
+
+    test "an unknown identifier is not found, and a malformed locator makes no request", ctx do
+      dir = directory(ctx, "dir-a.test", serving(ctx))
+      alice = person(dir.url)
+
+      assert {:error, :not_found} = Client.genesis(alice.identifier, dir.url, opts(ctx))
+
+      _ = requests()
+      assert {:error, :invalid_locator} = Client.genesis("per_nope", dir.url, opts(ctx))
+      assert {:error, :invalid_locator} = Client.genesis(alice.identifier, "ftp://x", opts(ctx))
+
+      assert {:error, :insecure_directory} =
+               Client.genesis(alice.identifier, "http://dir-a.test", opts(ctx))
+
+      assert requests() == []
     end
   end
 

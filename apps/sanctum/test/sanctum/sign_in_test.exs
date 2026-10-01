@@ -447,6 +447,311 @@ defmodule Sanctum.SignInTest do
     end
   end
 
+  describe "linking a door" do
+    setup do
+      Arca.Cache.init()
+      {:ok, _} = Sanctum.Door.Store.allow("wildcard", "*", "test")
+      on_exit(fn -> Arca.Cache.delete_match({:established, :_, :_, :_}) end)
+      :ok
+    end
+
+    # A person seated in a group of their own, and a context their own
+    # session establishes there.
+    defp seated! do
+      n = System.unique_integer([:positive])
+      {:ok, user} = Users.upsert_from_provider(info(n))
+      {:ok, athanor} = Athanors.create_group(user.id, "Link #{n}")
+      {:ok, _} = Members.ensure(user.id, scope: "athanor", athanor_id: athanor.id)
+      %{user: user, athanor: athanor, ctx: session_ctx(user, athanor)}
+    end
+
+    defp session_ctx(user, athanor) do
+      built =
+        Sanctum.Context.build(
+          user_id: user.id,
+          email: user.email,
+          provider: "github",
+          athanor_id: athanor.id,
+          permissions: [:*],
+          auth_method: :oidc,
+          authenticated: true
+        )
+
+      {:ok, session} = Sanctum.TestContext.create_session(built)
+
+      {:ok, ctx} =
+        Sanctum.Caller.establish(session.token, focus: athanor.id, task_supervisor: nil)
+
+      ctx
+    end
+
+    defp oidc(n, overrides \\ %{}) do
+      Map.merge(
+        %{
+          key: "oidcc|https://idp.test|link-#{n}",
+          provider: "oidcc",
+          email: "link-#{n}@idp.test",
+          verified: true
+        },
+        overrides
+      )
+    end
+
+    defp ticket!(person, identity) do
+      {:ok, ticket} = SignIn.link_ticket(person.ctx, identity)
+      ticket
+    end
+
+    test "a ticket is minted for a standing session and a linkable door the door admits" do
+      person = seated!()
+      n = System.unique_integer([:positive])
+
+      assert {:ok, ticket} = SignIn.link_ticket(person.ctx, oidc(n))
+      assert byte_size(ticket) == 43
+
+      assert {:error, :not_linkable} =
+               SignIn.link_ticket(person.ctx, oidc(n, %{key: "email|x|y", provider: "email"}))
+
+      assert {:error, :not_linkable} =
+               SignIn.link_ticket(
+                 person.ctx,
+                 oidc(n, %{key: "github|https://github.com|#{n}", provider: "oidcc"})
+               )
+
+      assert {:error, :unauthenticated} =
+               SignIn.link_ticket(%{person.ctx | session_token_hash: nil}, oidc(n))
+
+      assert {:error, :unauthenticated} =
+               SignIn.link_ticket(%{person.ctx | plane: :guest}, oidc(n))
+
+      # The door is asked, and its refusal is the operator's to act on.
+      [entry] = Sanctum.Door.Store.list()
+      :ok = Sanctum.Door.Store.remove(entry.id)
+      assert {:error, {:door, :not_allowed}} = SignIn.link_ticket(person.ctx, oidc(n))
+      assert Enum.any?(Sanctum.Door.Store.requests(), &(&1.value == oidc(n).key))
+    end
+
+    test "under a fresh proof the door is linked once, and the ticket is spent" do
+      person = seated!()
+      n = System.unique_integer([:positive])
+      ticket = ticket!(person, oidc(n))
+
+      assert {:ok, %{linked: true, door: door}} =
+               Sanctum.TestContext.confirming(
+                 person.ctx,
+                 &SignIn.link_door(&1, "oidcc", ticket)
+               )
+
+      assert door == %{
+               key: oidc(n).key,
+               provider: "oidcc",
+               issuer: "https://idp.test",
+               subject: "link-#{n}"
+             }
+
+      assert {:ok, %{id: user_id}} = Users.get_by_identity(oidc(n).key)
+      assert user_id == person.user.id
+
+      # The ticket is spent, and the person's email is the one they had.
+      assert {:error, {:invalid_argument, _}} = SignIn.link_door(person.ctx, "oidcc", ticket)
+      assert {:ok, %{email: email}} = Users.get(person.user.id)
+      assert email == person.user.email
+    end
+
+    test "a session alone is asked to confirm, and the ticket stays for the repeat" do
+      person = seated!()
+      n = System.unique_integer([:positive])
+      ticket = ticket!(person, oidc(n))
+
+      assert {:error, {:confirmation_required, %{operation: "person.link_door"}}} =
+               SignIn.link_door(person.ctx, "oidcc", ticket)
+
+      assert {:error, {:confirmation_required, _}} =
+               SignIn.link_door(person.ctx, "oidcc", ticket)
+
+      assert {:error, :not_found} = Users.get_by_identity(oidc(n).key)
+    end
+
+    test "a ticket answers only its person, their session and its provider" do
+      person = seated!()
+      n = System.unique_integer([:positive])
+      ticket = ticket!(person, oidc(n))
+      other = seated!()
+      same_person_other_session = session_ctx(person.user, person.athanor)
+      made_up = Prima.Identity.Encoding.b64(:crypto.strong_rand_bytes(32))
+
+      for {ctx, provider, presented} <- [
+            {other.ctx, "oidcc", ticket},
+            {same_person_other_session, "oidcc", ticket},
+            {person.ctx, "github", ticket},
+            {person.ctx, "oidcc", made_up}
+          ] do
+        assert {:error, {:invalid_argument, message}} =
+                 SignIn.link_door(ctx, provider, presented)
+
+        assert message =~ "not yours, has expired or was already used"
+      end
+
+      # A door is linked by its ticket, never by a matching email.
+      assert {:error, :not_found} = Users.get_by_identity(oidc(n).key)
+      assert {:error, {:invalid_argument, _}} = SignIn.link_door(person.ctx, "email", ticket)
+      assert {:error, {:invalid_argument, _}} = SignIn.link_door(person.ctx, "passkey", ticket)
+
+      assert {:error, :not_linkable} =
+               SignIn.link_ticket(
+                 person.ctx,
+                 oidc(n, %{key: "passkey|https://idp.test|#{n}", provider: "passkey"})
+               )
+    end
+
+    test "another person's identity is a conflict, and a door closed since is not linked" do
+      person = seated!()
+      other = seated!()
+      {:ok, [taken]} = Arca.Users.identities(Prima.Actor.system(), other.user.id)
+
+      ticket =
+        ticket!(person, %{key: taken.key, provider: "github", email: nil, verified: :unknown})
+
+      assert {:error, {:conflict, _}} = SignIn.link_door(person.ctx, "github", ticket)
+
+      n = System.unique_integer([:positive])
+      ticket = ticket!(person, oidc(n, %{verified: :unknown}))
+      [entry] = Enum.filter(Sanctum.Door.Store.list(), &(&1.kind == "wildcard"))
+      :ok = Sanctum.Door.Store.remove(entry.id)
+
+      assert {:error, {:door, :not_allowed}} =
+               Sanctum.TestContext.confirming(
+                 person.ctx,
+                 &SignIn.link_door(&1, "oidcc", ticket)
+               )
+
+      assert {:error, :not_found} = Users.get_by_identity(oidc(n).key)
+    end
+
+    test "a remote person's session alone attaches no door" do
+      person = seated!()
+      n = System.unique_integer([:positive])
+      ticket = ticket!(person, oidc(n))
+
+      {1, _} =
+        Arca.Repo.update_all(from(p in PersonIdentity, where: p.user_id == ^person.user.id),
+          set: [
+            provenance: "remote",
+            identifier: "per_" <> String.duplicate("b", 64),
+            enrollment: "enrolled",
+            directory_url: "https://dir.example",
+            live_key_sealed: nil,
+            operational_key_sealed: nil
+          ]
+        )
+
+      assert {:error, :remote_identity_unavailable} =
+               SignIn.link_door(person.ctx, "oidcc", ticket)
+
+      assert {:error, :not_found} = Users.get_by_identity(oidc(n).key)
+    end
+
+    test "unlinking takes the person's own door under proof, never their last while no passkey" do
+      person = seated!()
+      {:ok, [github]} = Arca.Users.identities(Prima.Actor.system(), person.user.id)
+
+      assert {:error, {:conflict, message}} = SignIn.unlink_door(person.ctx, github.key)
+      assert message =~ "hold no passkey"
+      assert message =~ "link another door"
+
+      other = seated!()
+      {:ok, [theirs]} = Arca.Users.identities(Prima.Actor.system(), other.user.id)
+      assert {:error, {:not_found, "door", _}} = SignIn.unlink_door(person.ctx, theirs.key)
+
+      # With a second door linked, the first goes under its own proof.
+      n = System.unique_integer([:positive])
+      ticket = ticket!(person, oidc(n))
+
+      {:ok, _} =
+        Sanctum.TestContext.confirming(person.ctx, &SignIn.link_door(&1, "oidcc", ticket))
+
+      assert {:error, {:confirmation_required, %{operation: "person.unlink_door"}}} =
+               SignIn.unlink_door(person.ctx, github.key)
+
+      assert {:ok, %{unlinked: %{key: key}}} =
+               Sanctum.TestContext.confirming(person.ctx, &SignIn.unlink_door(&1, github.key))
+
+      assert key == github.key
+      assert {:error, :not_found} = Users.get_by_identity(github.key)
+
+      # The person holds a passkey here now, so the last door may go too.
+      assert {:ok, %{unlinked: _}} =
+               Sanctum.TestContext.confirming(
+                 person.ctx,
+                 &SignIn.unlink_door(&1, oidc(n).key)
+               )
+
+      assert {:ok, []} = Arca.Users.identities(Prima.Actor.system(), person.user.id)
+    end
+
+    test "the last door goes only while the door admits the person without it" do
+      person = seated!()
+      {:ok, [github]} = Arca.Users.identities(Prima.Actor.system(), person.user.id)
+      # A passkey here, so only the door's admission is in question.
+      auth = Sanctum.TestContext.passkey!(person.user.id)
+
+      [wildcard] = Enum.filter(Sanctum.Door.Store.list(), &(&1.kind == "wildcard"))
+      :ok = Sanctum.Door.Store.remove(wildcard.id)
+
+      # An entry naming only this door's identity admits no one once the
+      # door is gone, so it is refused before any proof is asked.
+      {:ok, _} = Sanctum.Door.Store.allow("user_id", github.key, "ops")
+      assert {:error, {:conflict, message}} = SignIn.unlink_door(person.ctx, github.key)
+      assert message =~ "ask the operator"
+      assert message =~ "link another door"
+      assert {:ok, _person} = Users.get_by_identity(github.key)
+
+      admits? = fn ->
+        case SignIn.unlink_door(person.ctx, github.key) do
+          {:error, {:confirmation_required, _}} -> true
+          {:error, {:conflict, _}} -> false
+        end
+      end
+
+      verified = fn claim ->
+        {1, _} =
+          Arca.Repo.update_all(from(u in User, where: u.id == ^person.user.id),
+            set: [email_verified: claim]
+          )
+      end
+
+      # An email entry admits the address only while it is verified.
+      {:ok, email} = Sanctum.Door.Store.allow("email", person.user.email, "ops")
+      assert admits?.()
+      verified.(false)
+      refute admits?.()
+      :ok = Sanctum.Door.Store.remove(email.id)
+
+      # `*` admits an address not known to be unverified.
+      {:ok, wildcard} = Sanctum.Door.Store.allow("wildcard", "*", "ops")
+      refute admits?.()
+      verified.(nil)
+      assert admits?.()
+      :ok = Sanctum.Door.Store.remove(wildcard.id)
+      refute admits?.()
+
+      # Their own id: the door goes, and the passkey door admits them by it.
+      {:ok, _} = Sanctum.Door.Store.allow("user_id", person.user.id, "ops")
+
+      assert {:ok, %{unlinked: %{key: key}}} =
+               Sanctum.TestContext.confirming(person.ctx, &SignIn.unlink_door(&1, github.key))
+
+      assert key == github.key
+      held = Sanctum.Passkeys.sign_in_challenge()
+
+      assert {:ok, %{session_token: _}} =
+               Sanctum.Passkeys.sign_in(
+                 held,
+                 Sanctum.TestContext.Authenticator.assertion(auth, held.challenge)
+               )
+    end
+  end
+
   describe "concurrent sign-ins, on connections of their own" do
     setup do
       # These race on real connections: the shared sandbox connection would

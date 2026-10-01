@@ -110,4 +110,28 @@ defmodule Sanctum.Auth.IdentityTest do
       refute Identity.reserved_issuer?(nil)
     end
   end
+
+  describe "the reserved session provider" do
+    test "restore is reserved, and no door's name is" do
+      assert Identity.reserved_provider?("restore")
+      assert Identity.reserved_provider?(:restore)
+
+      for provider <- ["github", "google", "oidcc", "passkey", "cyfr", nil] do
+        refute Identity.reserved_provider?(provider)
+      end
+    end
+
+    test "no identity key is built or read under it" do
+      assert_raise ArgumentError, ~r/reserved/, fn ->
+        Identity.key("restore", "https://idp.test", "someone")
+      end
+
+      assert_raise ArgumentError, ~r/reserved/, fn ->
+        Identity.key(:restore, "https://idp.test", "someone")
+      end
+
+      assert {:error, :not_an_identity} = Identity.parse("restore|https://idp.test|someone")
+      refute Identity.key?("restore|https://idp.test|someone")
+    end
+  end
 end

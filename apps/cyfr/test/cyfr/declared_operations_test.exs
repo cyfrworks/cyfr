@@ -24,26 +24,6 @@ defmodule Cyfr.DeclaredOperationsTest do
 
   # Each declared action with arguments its declaration accepts.
   @stubs [
-    {"person", "enroll", %{"recovery_secret" => @seed, "request_id" => "req_1"}},
-    {"person", "kit", %{"attempt_id" => "att_1"}},
-    {"person", "kit_ack", %{"attempt_id" => "att_1"}},
-    {"person", "link_door", %{"provider" => "github", "ticket" => "tkt_1"}},
-    {"person", "unlink_door", %{"door" => "github|https://github.com|1"}},
-    {"person", "enroll_holder",
-     %{
-       "recovery_secret" => @seed,
-       "holder" => %{"kind" => "kit", "recovery_secret" => @seed},
-       "request_id" => "req_1"
-     }},
-    {"person", "carry_begin", %{"destination" => "https://hub.example.com"}},
-    {"person", "carry_complete", %{"action_id" => "act_1", "outcome" => "admitted"}},
-    {"person", "certify",
-     %{
-       "device_key" => @seed,
-       "audience" => "https://hub.example.com",
-       "athanor" => "ath_1",
-       "client_id" => "pcl_1"
-     }},
     {"person", "assert",
      %{
        "audience" => "https://hub.example.com",

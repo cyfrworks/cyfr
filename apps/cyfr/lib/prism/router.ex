@@ -6,7 +6,8 @@ defmodule Prism.Router do
   The console's routes: the browser pipeline under the console's root
   layout, the browser sign-in pipelines and their throttles, the claim,
   legal-acceptance and attachment pipelines, browser sign-in and
-  sign-out with their callbacks, passkey sign-in's completion, the
+  sign-out with their callbacks, linking an OpenID Connect door, passkey
+  sign-in's completion, the
   OpenID Connect re-authentication's callback, the claim and legal pages, the
   attachment and file downloads and the `:athanor` LiveView session.
 
@@ -155,6 +156,16 @@ defmodule Prism.Router do
             metadata: %{auth: :browser_oauth_callback}
 
           post "/oidcc/reauth", ReauthController, :decide, metadata: %{auth: :browser_oauth_flow}
+        end
+
+        # Linking an OpenID Connect door to the person signed in: a POST the
+        # browser pipeline's CSRF token guards, under the browser's own
+        # session, which holds the link intent and starts the issuer's
+        # sign-in. Above `/:provider` so it is never read as a provider.
+        scope "/" do
+          pipe_through :oauth_start_throttle
+
+          post "/link/oidcc", AuthController, :link_start, metadata: %{auth: :browser_session}
         end
 
         scope "/" do
