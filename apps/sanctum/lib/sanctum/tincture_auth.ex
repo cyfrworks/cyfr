@@ -91,6 +91,7 @@ defmodule Sanctum.TinctureAuth do
           | :not_member
           | :ip_not_allowed
           | :expired_credential
+          | :identity_stale
           | :unavailable
 
   # The two credentials of the frame protocol, each under its own salt, so
@@ -256,7 +257,8 @@ defmodule Sanctum.TinctureAuth do
   sign as an asset credential, `:expired_credential` past its window, and
   as `Sanctum.Caller.derived_standing/2` refuses when its source was
   retired or its person or athanor changed standing since: a retirement
-  refuses every later fetch.
+  refuses every later fetch. A remote person's session source pauses it
+  as `:identity_stale` while their identity cannot be confirmed fresh.
   """
   @spec verify_asset_credential(String.t(), keyword()) ::
           {:ok, asset_authority()}
@@ -266,6 +268,7 @@ defmodule Sanctum.TinctureAuth do
              | :not_standing
              | :not_member
              | :ip_not_allowed
+             | :identity_stale
              | :unavailable}
   def verify_asset_credential(credential, opts \\ [])
       when is_binary(credential) and is_list(opts) do
@@ -488,8 +491,10 @@ defmodule Sanctum.TinctureAuth do
   the source binding — or `:invalid_credential` for a bearer this server
   did not sign as one, `:suspended`, `:revoked`, `:expired_credential`
   past its deadline, and a source's or a standing's refusal
-  (`:not_standing`, `:not_member`, `:ip_not_allowed`); `:unavailable`
-  when the store cannot answer.
+  (`:not_standing`, `:not_member`, `:ip_not_allowed`, and
+  `:identity_stale` while a remote person's session source cannot have
+  their identity confirmed fresh); `:unavailable` when the store cannot
+  answer.
   """
   @spec verify_frame_credential(String.t(), keyword()) ::
           {:ok, frame_authority()}
@@ -501,6 +506,7 @@ defmodule Sanctum.TinctureAuth do
              | :not_standing
              | :not_member
              | :ip_not_allowed
+             | :identity_stale
              | :unavailable}
   def verify_frame_credential(bearer, opts \\ []) when is_binary(bearer) and is_list(opts) do
     with {:ok, id, athanor_id, bound} <- frame_bearer(bearer),

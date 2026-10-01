@@ -100,6 +100,80 @@ defmodule CyfrWeb.Plugs.AuthenticateTest do
     end
   end
 
+  # A person whose keys are at another home, admitted here: their identity
+  # row is `remote`, their head cached as verified now from a genesis naming
+  # a directory nothing answers at (a loopback port nothing listens on),
+  # and a session bound to that head's `key_epoch`. Answers its token.
+  defp remote_session! do
+    n = System.unique_integer([:positive])
+    directory = "https://localhost:1"
+
+    {:ok, user} =
+      Sanctum.Tenancy.Users.upsert_from_provider(%{
+        id: "github|https://github.com|remote-bearer-#{n}",
+        provider: "github",
+        email: "remote-bearer#{n}@example.com",
+        verified: true
+      })
+
+    {:ok, athanor} = Sanctum.Tenancy.Athanors.create_group(user.id, "Remote bearer #{n}")
+    {:ok, _} = Sanctum.Tenancy.Members.ensure(user.id, scope: "athanor", athanor_id: athanor.id)
+    Arca.Repo.delete_all(from(p in Arca.Schemas.PersonIdentity, where: p.user_id == ^user.id))
+
+    {live, _} = :crypto.generate_key(:eddsa, :ed25519)
+    {operational_pub, operational} = :crypto.generate_key(:eddsa, :ed25519)
+    {recovery, _} = :crypto.generate_key(:eddsa, :ed25519)
+
+    {:ok, genesis} =
+      Prima.Identity.Entry.genesis(
+        live_key: live,
+        operational_key: operational_pub,
+        recovery_keys: [recovery],
+        directory: directory
+      )
+
+    genesis = Prima.Identity.sign(genesis, operational)
+    identifier = Prima.Identity.identifier(genesis)
+    head = Prima.Identity.hash(genesis)
+
+    {:ok, _} =
+      Arca.PersonIdentities.create(Prima.Actor.system(), %{
+        user_id: user.id,
+        provenance: "remote",
+        identifier: identifier,
+        directory_url: directory
+      })
+
+    {:ok, _} =
+      Arca.DirectoryHeads.put(Prima.Actor.system(), %{
+        identifier: identifier,
+        genesis: Prima.Identity.canonical(genesis),
+        directory_url: directory,
+        head_hash: head,
+        key_epoch: head,
+        state: ~s({"head":"#{head}"})
+      })
+
+    token = Base.url_encode64(:crypto.strong_rand_bytes(32), padding: false)
+    now = DateTime.utc_now()
+
+    Arca.Repo.insert_all(Arca.Schemas.Session, [
+      %{
+        id: Prima.UUID7.generate_id("ses"),
+        token_hash: Sanctum.Session.token_hash(token),
+        token_prefix: String.slice(token, 0, 8),
+        user_id: user.id,
+        provider: "cyfr",
+        athanor_id: athanor.id,
+        identity_key_epoch: head,
+        expires_at: DateTime.add(now, 30 * 86_400, :second),
+        inserted_at: now
+      }
+    ])
+
+    %{user_id: user.id, identifier: identifier, token: token}
+  end
+
   # The Mcp-Session-Id header must not authenticate or change the resolved caller.
   describe "call/2 — the retired session header" do
     test "a request with no credential still gets a context", %{conn: conn} do
@@ -250,6 +324,51 @@ defmodule CyfrWeb.Plugs.AuthenticateTest do
 
       assert conn.halted
       assert conn.status == 503
+    end
+
+    test "a remote person's session stands on their identity's fresh head", %{conn: conn} do
+      remote = remote_session!()
+
+      conn =
+        conn
+        |> put_req_header("authorization", "Bearer " <> remote.token)
+        |> Authenticate.call([])
+
+      refute conn.halted
+      assert conn.assigns[:context].user_id == remote.user_id
+    end
+
+    test "a remote person whose identity could not be confirmed fresh is a 503 with its sentence",
+         %{conn: conn} do
+      remote = remote_session!()
+
+      Arca.Repo.update_all(
+        from(h in Arca.Schemas.DirectoryHead, where: h.identifier == ^remote.identifier),
+        set: [verified_at: DateTime.add(DateTime.utc_now(), -400, :second)]
+      )
+
+      {conn, log} =
+        ExUnit.CaptureLog.with_log(fn ->
+          conn
+          |> put_req_header("authorization", "Bearer " <> remote.token)
+          |> Map.put(:body_params, %{"method" => "tools/call"})
+          |> Authenticate.call([])
+        end)
+
+      assert log =~ "freshness bound"
+      assert conn.halted
+      assert conn.status == 503
+
+      assert Jason.decode!(conn.resp_body) == %{
+               "code" => "unavailable",
+               "message" => Prima.Refusal.message(:identity_stale)
+             }
+
+      # A pause, never a dead credential: no challenge to sign in again, and
+      # the session stands.
+      assert get_resp_header(conn, "www-authenticate") == []
+      hash = Sanctum.Session.token_hash(remote.token)
+      assert Arca.Repo.exists?(from(s in Arca.Schemas.Session, where: s.token_hash == ^hash))
     end
 
     # Reject unrecognized credentials after configured providers have had a chance to resolve them.

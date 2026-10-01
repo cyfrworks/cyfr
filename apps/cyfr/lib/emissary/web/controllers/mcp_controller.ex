@@ -366,7 +366,11 @@ defmodule Emissary.Web.MCPController do
   end
 
   # The listen request answered with the refusal its credential now earns:
-  # retryable when the store could not answer, a sign-in otherwise.
+  # retryable when the store could not answer or a remote person's identity
+  # could not be confirmed fresh, a sign-in otherwise.
+  defp refuse_stream(conn, id, :identity_stale),
+    do: refuse_stream(conn, id, Grimoire.classify(:identity_stale))
+
   defp refuse_stream(conn, id, :unavailable) do
     refusal = Grimoire.classify(:auth_provider_error)
 

@@ -108,6 +108,13 @@ defmodule Emissary.Web.TinctureController do
       {:error, :unavailable} ->
         unavailable(conn)
 
+      # A remote person whose identity could not be confirmed fresh: their
+      # files wait with their session, retryable, and are not gone.
+      {:error, :identity_stale} ->
+        conn
+        |> put_resp_header("retry-after", "5")
+        |> CyfrWeb.ApiError.send(503, :identity_stale, nil)
+
       _not_found ->
         CyfrWeb.ApiError.send(conn, 404, :not_found, nil)
     end

@@ -172,14 +172,17 @@ defmodule PrismWeb.ClaimNamespaceController do
 
   # The session the cookie names, established and revalidated against the
   # stored session and the person's standing: the claim writes on that
-  # person's row, so a look at who the cookie names is not enough.
+  # person's row, so a look at who the cookie names is not enough. A store
+  # that cannot answer, and a remote person whose identity could not be
+  # confirmed fresh, are a "try again" — the session stands — never a
+  # sign-out.
   defp standing_caller(conn) do
     token = get_session(conn, CyfrWeb.SignInResponse.session_key())
 
     with {:ok, ctx} <- Sanctum.Caller.establish(token, refresh: false) do
       still_standing(conn, ctx)
     else
-      {:error, :unavailable} -> {:unavailable, conn}
+      {:error, reason} when reason in [:unavailable, :identity_stale] -> {:unavailable, conn}
       _ -> {:not_logged_in, conn}
     end
   end
@@ -187,7 +190,7 @@ defmodule PrismWeb.ClaimNamespaceController do
   defp still_standing(conn, ctx) do
     case Sanctum.Caller.revalidate_session(ctx) do
       {:ok, %Sanctum.Context{user_id: id} = fresh} when is_binary(id) -> {:ok, fresh}
-      {:error, :unavailable} -> {:unavailable, conn}
+      {:error, reason} when reason in [:unavailable, :identity_stale] -> {:unavailable, conn}
       _ -> {:not_logged_in, conn}
     end
   end

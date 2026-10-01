@@ -274,7 +274,9 @@ defmodule PrismWeb.ClaimNamespaceControllerTest do
       {person_id, session.token, "claimed#{n}"}
     end
 
-    defp submit(username, session_token) do
+    # `remote_ip`: the claim route is rate limited per address, so a case
+    # past the file's budget submits from an address of its own.
+    defp submit(username, session_token, remote_ip \\ {127, 0, 0, 1}) do
       csrf = get_csrf_from_form(build_conn())
       endpoint_secret = CyfrWeb.Endpoint.config(:secret_key_base)
 
@@ -285,10 +287,61 @@ defmodule PrismWeb.ClaimNamespaceControllerTest do
         |> Map.fetch!(:resp_cookies)
         |> Map.fetch!("_cyfr_pending_probe")
 
-      build_conn()
+      %{build_conn() | remote_ip: remote_ip}
       |> Plug.Test.init_test_session(%{sanctum_session_token: session_token})
       |> Plug.Test.put_req_cookie("_cyfr_pending_probe", cookie_value)
       |> post(~p"/claim-namespace/submit", %{"_csrf_token" => csrf, "username" => username})
+    end
+
+    # `person_id` made a person whose keys are at another home: their
+    # identity row `remote`, their head cached but past its bound, and their
+    # directory a loopback port nothing listens on, so it cannot be
+    # refreshed.
+    defp stale_remote!(person_id) do
+      directory = "https://localhost:1"
+
+      Arca.Repo.delete_all(from(p in Arca.Schemas.PersonIdentity, where: p.user_id == ^person_id))
+
+      {live, _} = :crypto.generate_key(:eddsa, :ed25519)
+      {operational_pub, operational} = :crypto.generate_key(:eddsa, :ed25519)
+      {recovery, _} = :crypto.generate_key(:eddsa, :ed25519)
+
+      {:ok, genesis} =
+        Prima.Identity.Entry.genesis(
+          live_key: live,
+          operational_key: operational_pub,
+          recovery_keys: [recovery],
+          directory: directory
+        )
+
+      genesis = Prima.Identity.sign(genesis, operational)
+      identifier = Prima.Identity.identifier(genesis)
+      head = Prima.Identity.hash(genesis)
+
+      {:ok, _} =
+        Arca.PersonIdentities.create(Prima.Actor.system(), %{
+          user_id: person_id,
+          provenance: "remote",
+          identifier: identifier,
+          directory_url: directory
+        })
+
+      {:ok, _} =
+        Arca.DirectoryHeads.put(Prima.Actor.system(), %{
+          identifier: identifier,
+          genesis: Prima.Identity.canonical(genesis),
+          directory_url: directory,
+          head_hash: head,
+          key_epoch: head,
+          state: ~s({"head":"#{head}"})
+        })
+
+      Arca.Repo.update_all(
+        from(h in Arca.Schemas.DirectoryHead, where: h.identifier == ^identifier),
+        set: [verified_at: DateTime.add(DateTime.utc_now(), -400, :second)]
+      )
+
+      :ok
     end
 
     test "the claim lands on the users row first; the session becomes a working one", %{
@@ -335,6 +388,29 @@ defmodule PrismWeb.ClaimNamespaceControllerTest do
 
       assert {:error, :not_found} =
                Compendium.Registry.CredentialStore.get(as(user_id), "registry.test", slug)
+    end
+
+    test "a remote person whose identity could not be confirmed fresh is told to try again",
+         %{bypass: bypass} do
+      {user_id, token, slug} = unclaimed_person()
+      stale_remote!(user_id)
+
+      # The registry is never asked: the claim pauses at the session.
+      Bypass.pass(bypass)
+
+      {conn, log} =
+        ExUnit.CaptureLog.with_log(fn -> submit(slug, token, {198, 51, 100, 41}) end)
+
+      assert log =~ "freshness bound"
+      assert conn.status == 503
+      assert conn.resp_body =~ "We could not confirm your session just now"
+
+      # Never a sign-out: no redirect to sign in, the session stands, and
+      # nothing was recorded.
+      assert get_resp_header(conn, "location") == []
+      hash = Sanctum.Session.token_hash(token)
+      assert Arca.Repo.exists?(from(s in Arca.Schemas.Session, where: s.token_hash == ^hash))
+      assert {:ok, %{namespace: nil}} = Sanctum.Tenancy.Users.get(user_id)
     end
 
     test "a session revoked while the registry answered records nothing", %{bypass: bypass} do

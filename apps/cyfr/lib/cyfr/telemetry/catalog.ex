@@ -79,6 +79,19 @@ defmodule Cyfr.Telemetry.Catalog do
       consumers: [:audit],
       note: "a provider answered a different namespace than the stored identity"
     },
+    [:cyfr, :sanctum, :identity, :not_descendant] => %{
+      consumers: [:audit],
+      note:
+        "a directory served a log that does not contain the head this home verified; " <>
+          "the cache was left as it was, and the trail keeps the evidence"
+    },
+    [:cyfr, :sanctum, :identity, :stale] => %{
+      consumers: [:operator],
+      note:
+        "a remote person's protected work paused past the identity freshness bound, " <>
+          "naming the bound: for an operator's outage alarm, kept off the audit trail " <>
+          "since an unreachable directory raises it on every paused request"
+    },
     [:cyfr, :sanctum, :tenancy, :platform_admin_bootstrap] => %{consumers: [:audit]},
     [:cyfr, :sanctum, :platform_context] => %{consumers: [:audit]},
     [:cyfr, :sanctum, :notify] => %{

@@ -285,6 +285,149 @@ defmodule CyfrWeb.ContextGuardTest do
     end
   end
 
+  # A directory this home cannot reach: a loopback port nothing listens on.
+  @unreachable "https://localhost:1"
+
+  # `user`, signed in, made a person whose keys are at another home: their
+  # identity row is `remote`, their head cached as verified now from a
+  # genesis naming a directory nothing answers at, and the conn holds a
+  # session of theirs bound to that head's `key_epoch`. The athanor is the
+  # one the sign-in seated them in.
+  defp remote!(conn, user) do
+    {conn, _token, _hash} = signed_in(conn, user)
+    athanor_id = Process.get(:prism_test_athanor_id)
+
+    Arca.Repo.delete_all(
+      from(p in Arca.Schemas.PersonIdentity, where: p.user_id == ^user.user_id)
+    )
+
+    {live, _} = :crypto.generate_key(:eddsa, :ed25519)
+    {operational_pub, operational} = :crypto.generate_key(:eddsa, :ed25519)
+    {recovery, _} = :crypto.generate_key(:eddsa, :ed25519)
+
+    {:ok, genesis} =
+      Prima.Identity.Entry.genesis(
+        live_key: live,
+        operational_key: operational_pub,
+        recovery_keys: [recovery],
+        directory: @unreachable
+      )
+
+    genesis = Prima.Identity.sign(genesis, operational)
+    identifier = Prima.Identity.identifier(genesis)
+    head = Prima.Identity.hash(genesis)
+
+    {:ok, _} =
+      Arca.PersonIdentities.create(Prima.Actor.system(), %{
+        user_id: user.user_id,
+        provenance: "remote",
+        identifier: identifier,
+        directory_url: @unreachable
+      })
+
+    {:ok, _} =
+      Arca.DirectoryHeads.put(Prima.Actor.system(), %{
+        identifier: identifier,
+        genesis: Prima.Identity.canonical(genesis),
+        directory_url: @unreachable,
+        head_hash: head,
+        key_epoch: head,
+        state: ~s({"head":"#{head}"})
+      })
+
+    token = Base.url_encode64(:crypto.strong_rand_bytes(32), padding: false)
+    now = DateTime.utc_now()
+
+    Arca.Repo.insert_all(Arca.Schemas.Session, [
+      %{
+        id: Prima.UUID7.generate_id("ses"),
+        token_hash: Sanctum.Session.token_hash(token),
+        token_prefix: String.slice(token, 0, 8),
+        user_id: user.user_id,
+        provider: "cyfr",
+        athanor_id: athanor_id,
+        identity_key_epoch: head,
+        expires_at: DateTime.add(now, 30 * 86_400, :second),
+        inserted_at: now
+      }
+    ])
+
+    conn = Plug.Test.init_test_session(conn, %{session_key() => token})
+    {conn, identifier, Sanctum.Session.token_hash(token)}
+  end
+
+  defp stale!(identifier) do
+    past = DateTime.add(DateTime.utc_now(), -400, :second)
+
+    Arca.Repo.update_all(
+      from(h in Arca.Schemas.DirectoryHead, where: h.identifier == ^identifier),
+      set: [verified_at: past]
+    )
+  end
+
+  defp session_stands?(hash),
+    do: Arca.Repo.exists?(from(s in Arca.Schemas.Session, where: s.token_hash == ^hash))
+
+  describe "a remote person whose identity could not be confirmed fresh" do
+    test "an action halts with the refusal's sentence, and the person stays on the page",
+         %{conn: conn} do
+      user = test_user()
+      {conn, identifier, hash} = remote!(conn, user)
+      {view, html} = mount_athanor(conn, "/settings")
+      assert html =~ "Settings"
+
+      stale!(identifier)
+      bound!(0)
+
+      {html, log} =
+        ExUnit.CaptureLog.with_log(fn ->
+          view |> element("button[phx-click=set_mode][phx-value-mode=lite]") |> render_click()
+        end)
+
+      assert log =~ "freshness bound"
+      assert html =~ Prima.Refusal.message(:identity_stale)
+
+      # Paused, not signed out: the view stands, the session too, and
+      # nothing was written.
+      assert Process.alive?(view.pid)
+      assert session_stands?(hash)
+      {:ok, row} = Sanctum.Tenancy.Users.get(user.user_id)
+      refute Sanctum.Tenancy.Users.prefs(row)["mode"] == "lite"
+    end
+
+    test "a mount has no page to stay on: it says why where it lands, and the session stands",
+         %{conn: conn} do
+      user = test_user()
+      {conn, identifier, hash} = remote!(conn, user)
+      stale!(identifier)
+      bound!(0)
+
+      {result, _log} =
+        ExUnit.CaptureLog.with_log(fn -> live(conn, athanor_path("/settings")) end)
+
+      assert {:error, {:redirect, %{to: "/login", flash: flash}}} = result
+      assert flash["error"] == Prima.Refusal.message(:identity_stale)
+      assert session_stands?(hash)
+    end
+
+    test "a bare context is refused as stale, never as signed out", %{conn: conn} do
+      user = test_user()
+      {conn, identifier, _hash} = remote!(conn, user)
+      token = Plug.Conn.get_session(conn, session_key())
+      {:ok, ctx} = Caller.establish(token, task_supervisor: nil)
+
+      stale!(identifier)
+      bound!(0)
+
+      ExUnit.CaptureLog.capture_log(fn ->
+        assert {:error, :identity_stale} = ContextGuard.check(ctx)
+        assert {:error, :identity_stale} = ContextGuard.authenticate(token)
+      end)
+
+      assert PrismWeb.AuthHelpers.disposition(:identity_stale) == :unavailable
+    end
+  end
+
   test "no socket, nested or not, holds the raw session token", %{conn: conn} do
     user = test_user()
     {conn, token, _hash} = signed_in(conn, user)

@@ -129,6 +129,7 @@ defmodule Prima.RefusalTest do
     {:remote_identity_unavailable, :unavailable},
     {:email_unavailable, :unavailable},
     {:reauth_required, :unauthenticated},
+    {:identity_stale, :unavailable},
     {:execution_failed, :internal},
     {:invalid_session, :unauthenticated},
     {:missing_token, :unauthenticated},
@@ -403,6 +404,16 @@ defmodule Prima.RefusalTest do
 
       for reason <- [:remote_identity_unavailable, :email_unavailable, :reauth_required],
           do: assert(Refusal.reason?(reason))
+    end
+
+    test "an identity that could not be confirmed fresh pauses: retryable, no sign-out" do
+      assert %Refusal{class: :unavailable, message: message} =
+               Refusal.classify(:identity_stale)
+
+      assert message =~ "could not be confirmed fresh"
+      assert message =~ "try again shortly"
+      refute message =~ "sign in"
+      assert Refusal.reason?(:identity_stale)
     end
 
     test "a binary is internal and keeps its words" do

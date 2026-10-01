@@ -38,7 +38,11 @@ defmodule CyfrWeb.ContextGuard do
   `:not_standing`) sends the person to sign in, a focus that no longer
   stands (`:not_member`) sends them to the root, and a store that cannot
   answer (`:unavailable`) halts the action with "try again shortly" —
-  never a success and never a sign-out.
+  never a success and never a sign-out. A remote person whose identity
+  could not be confirmed fresh (`:identity_stale`) is paused the same
+  way: the action halts with the refusal's own sentence and the person
+  stays signed in on the page. A mount, which has no page to stay on,
+  shows the sentence where it lands, and the session stands.
 
   A context this module establishes — a mounted console's, and a
   per-request read's (`authenticate/2`) — is a person acting on an
@@ -69,6 +73,7 @@ defmodule CyfrWeb.ContextGuard do
 
   @unavailable "Your session could not be checked just now. Try again shortly."
   @focus_lost "That athanor is no longer open to you."
+  @identity_stale Prima.Refusal.message(:identity_stale)
 
   @typedoc "Why a retained context was refused."
   @type refusal :: Caller.revalidation_refusal()
@@ -120,13 +125,24 @@ defmodule CyfrWeb.ContextGuard do
       {:ok, ctx} ->
         case admit(socket, ctx) do
           {:ok, socket} -> {:cont, attach(socket)}
-          {:error, reason} -> {:halt, LiveView.redirect(socket, to: mount_refusal(reason))}
+          {:error, reason} -> {:halt, refuse_mount(socket, reason)}
         end
 
       {:error, refusal} ->
-        {:halt, LiveView.redirect(socket, to: mount_refusal(refusal))}
+        {:halt, refuse_mount(socket, refusal)}
     end
   end
+
+  # A mount that cannot stand has no page to stay on. A paused identity
+  # keeps its session: the person is told why on the page they land on,
+  # and nothing signs them out.
+  defp refuse_mount(socket, :identity_stale) do
+    socket
+    |> LiveView.put_flash(:error, @identity_stale)
+    |> LiveView.redirect(to: mount_refusal(:identity_stale))
+  end
+
+  defp refuse_mount(socket, refusal), do: LiveView.redirect(socket, to: mount_refusal(refusal))
 
   defp admit(socket, ctx) do
     if LiveView.connected?(socket) do
@@ -219,6 +235,10 @@ defmodule CyfrWeb.ContextGuard do
 
   defp refuse(socket, :unavailable), do: LiveView.put_flash(socket, :error, @unavailable)
 
+  # A paused identity is no sign-out: the person stays on the page, told
+  # why, and acts again once their identity is confirmed fresh.
+  defp refuse(socket, :identity_stale), do: LiveView.put_flash(socket, :error, @identity_stale)
+
   defp refuse(socket, :not_member) do
     socket
     |> LiveView.put_flash(:error, @focus_lost)
@@ -287,6 +307,9 @@ defmodule CyfrWeb.ContextGuard do
 
           {:error, :unavailable} ->
             {:noreply, LiveView.put_flash(socket, :error, @unavailable)}
+
+          {:error, :identity_stale} ->
+            {:noreply, LiveView.put_flash(socket, :error, @identity_stale)}
 
           {:error, _refused} ->
             send(self(), @recheck)
@@ -463,6 +486,7 @@ defmodule CyfrWeb.ContextGuard do
   # the reason is theirs to know. A nested view's page focus refused is
   # the focus lost.
   defp mount_refusal(:unavailable), do: "/login?error=unavailable"
+  defp mount_refusal(:identity_stale), do: "/login"
   defp mount_refusal(:no_athanor), do: "/login?error=no_athanor"
   defp mount_refusal(reason) when reason in [:not_member, :archived, :not_found], do: "/"
   defp mount_refusal(_refused), do: "/login"

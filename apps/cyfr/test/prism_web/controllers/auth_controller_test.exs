@@ -764,5 +764,71 @@ defmodule PrismWeb.AuthControllerTest do
       assert conn.status == 503
       assert conn.resp_body =~ "Try again shortly"
     end
+
+    test "a remote person whose identity could not be confirmed fresh is told to try again, " <>
+           "their session standing",
+         %{session: session} do
+      stale_remote!(session.user_id)
+
+      {conn, log} = ExUnit.CaptureLog.with_log(fn -> post_legal_accept(session.token) end)
+
+      assert log =~ "freshness bound"
+      assert conn.status == 503
+      assert conn.resp_body =~ "Try again shortly"
+
+      hash = Sanctum.Session.token_hash(session.token)
+      assert Arca.Repo.exists?(from(s in Arca.Schemas.Session, where: s.token_hash == ^hash))
+    end
+
+    # `person_id` made a person whose keys are at another home: their
+    # identity row `remote`, their head cached but past its bound, and their
+    # directory a loopback port nothing listens on, so it cannot be
+    # refreshed.
+    defp stale_remote!(person_id) do
+      directory = "https://localhost:1"
+
+      Arca.Repo.delete_all(from(p in Arca.Schemas.PersonIdentity, where: p.user_id == ^person_id))
+
+      {live, _} = :crypto.generate_key(:eddsa, :ed25519)
+      {operational_pub, operational} = :crypto.generate_key(:eddsa, :ed25519)
+      {recovery, _} = :crypto.generate_key(:eddsa, :ed25519)
+
+      {:ok, genesis} =
+        Prima.Identity.Entry.genesis(
+          live_key: live,
+          operational_key: operational_pub,
+          recovery_keys: [recovery],
+          directory: directory
+        )
+
+      genesis = Prima.Identity.sign(genesis, operational)
+      identifier = Prima.Identity.identifier(genesis)
+      head = Prima.Identity.hash(genesis)
+
+      {:ok, _} =
+        Arca.PersonIdentities.create(Prima.Actor.system(), %{
+          user_id: person_id,
+          provenance: "remote",
+          identifier: identifier,
+          directory_url: directory
+        })
+
+      {:ok, _} =
+        Arca.DirectoryHeads.put(Prima.Actor.system(), %{
+          identifier: identifier,
+          genesis: Prima.Identity.canonical(genesis),
+          directory_url: directory,
+          head_hash: head,
+          key_epoch: head,
+          state: ~s({"head":"#{head}"})
+        })
+
+      Arca.Repo.update_all(
+        from(h in Arca.Schemas.DirectoryHead, where: h.identifier == ^identifier),
+        set: [verified_at: DateTime.add(DateTime.utc_now(), -400, :second)]
+      )
+
+      :ok
+    end
   end
 end

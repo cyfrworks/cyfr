@@ -438,7 +438,9 @@ defmodule Prism.Frames do
 
   @doc "The refusal class an open, a resume or a mint refusal is shown as."
   @spec refusal(term()) :: refusal()
-  def refusal(reason) when reason in [:unavailable, :not_owner], do: :unavailable
+  def refusal(reason) when reason in [:unavailable, :not_owner, :identity_stale],
+    do: :unavailable
+
   def refusal({:undeclared_capability, _names}), do: :undeclared
   def refusal({:invalid_tincture, _sentence}), do: :undeclared
   def refusal(:not_a_desktop), do: :undeclared

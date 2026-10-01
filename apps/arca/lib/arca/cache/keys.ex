@@ -11,7 +11,9 @@ defmodule Arca.Cache.Keys do
   pattern-matches the compiled-component key) all agree on the shape
   because none of them spell it themselves. (Keys that carry no athanor —
   a legal-bodies version, a device-login ticket, an OAuth pending state —
-  stay spelled at their single owner.)
+  stay spelled at their single owner, except the identity domain's two
+  per-person entries, the established-caller memo and the unreachable
+  identity's pause.)
 
   Every athanor-keyed shape takes the `Prima.Actor` first and reads the
   tenant out of it, so a key is built from the caller the identity domain
@@ -173,4 +175,17 @@ defmodule Arca.Cache.Keys do
 
   @doc "Match spec shape for every established memo of one session hash."
   def match_established(token_hash), do: {:established, token_hash, :_, :_}
+
+  @doc """
+  An identity whose directory this member could not reach, or which timed
+  out, when it last tried to refresh the identity's head: while the entry
+  lives, `Sanctum.IdentityFreshness.fresh?/2` pauses that identity's work
+  without reading the directory again. Keyed by the person identifier,
+  which names no athanor: a person's identity is no tenant's row.
+  """
+  def identity_unreachable(identifier) when is_binary(identifier),
+    do: {:identity_unreachable, identifier}
+
+  @doc "Match spec shape for every unreachable-identity entry."
+  def match_identity_unreachable, do: {:identity_unreachable, :_}
 end

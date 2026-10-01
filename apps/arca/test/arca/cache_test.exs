@@ -5,6 +5,7 @@ defmodule Arca.CacheTest do
   use ExUnit.Case, async: false
 
   alias Arca.Cache
+  alias Arca.Cache.Keys
 
   setup do
     Cache.init()
@@ -116,6 +117,40 @@ defmodule Arca.CacheTest do
 
     test "succeeds for absent key" do
       assert :ok = Cache.invalidate({:test, "nonexistent"})
+    end
+  end
+
+  describe "the unreachable-identity key (Arca.Cache.Keys)" do
+    @identifier "per_" <> String.duplicate("a", 64)
+    @other "per_" <> String.duplicate("b", 64)
+
+    test "is one entry per identifier, matched by its family alone" do
+      key = Keys.identity_unreachable(@identifier)
+      :ok = Cache.delete_match(Keys.match_identity_unreachable())
+      on_exit(fn -> Cache.delete_match(Keys.match_identity_unreachable()) end)
+
+      assert key == Keys.identity_unreachable(@identifier)
+      refute key == Keys.identity_unreachable(@other)
+
+      :ok = Cache.put(key, :unreachable, 15_000)
+      :ok = Cache.put(Keys.identity_unreachable(@other), :unreachable, 15_000)
+      :ok = Cache.put({:test, "key1"}, "kept")
+
+      assert {:ok, :unreachable} = Cache.get(key)
+
+      assert Cache.match(Keys.match_identity_unreachable())
+             |> Enum.map(&elem(&1, 0))
+             |> Enum.sort() ==
+               Enum.sort([key, Keys.identity_unreachable(@other)])
+
+      :ok = Cache.delete_match(Keys.match_identity_unreachable())
+      assert :miss = Cache.get(key)
+      assert {:ok, "kept"} = Cache.get({:test, "key1"})
+    end
+
+    test "names the identifier alone, in a family of its own" do
+      assert Keys.identity_unreachable(@identifier) == {:identity_unreachable, @identifier}
+      assert Keys.match_identity_unreachable() == {:identity_unreachable, :_}
     end
   end
 end

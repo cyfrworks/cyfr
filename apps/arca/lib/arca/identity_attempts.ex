@@ -251,6 +251,43 @@ defmodule Arca.IdentityAttempts do
   end
 
   @doc """
+  The genesis a person's identity rests on, and the directory it names:
+  the immutable genesis bytes of their accepted or completed enrollment,
+  or of the restore that minted them, with its identifier and directory
+  URL. What the person's own home hands its directory client, and the one
+  locator a rotation or a sign-in carry reads, never this home's
+  enrollment setting. Read-only.
+
+  `{:error, :not_found}` for a person with no such attempt: one never
+  enrolled, or whose enrollment is still pending or was refused.
+  """
+  @spec genesis(Prima.Actor.t(), String.t()) ::
+          {:ok, %{genesis: binary(), identifier: String.t(), directory_url: String.t()}}
+          | {:error, :not_found | :cross_tenant | :database_error}
+  def genesis(%Prima.Actor{} = actor, user_id) when is_binary(user_id) do
+    if person?(actor, user_id) do
+      Arca.Repo.Errors.with_db_rescue("Arca.IdentityAttempts.genesis", fn ->
+        from(a in IdentityAttempt,
+          where:
+            a.user_id == ^user_id and not is_nil(a.genesis) and
+              ((a.kind == "enrollment" and a.phase in ["accepted", "completed"]) or
+                 (a.kind == "restore" and a.phase in ["minted", "completed"])),
+          order_by: [desc: a.inserted_at],
+          limit: 1,
+          select: %{genesis: a.genesis, identifier: a.identifier, directory_url: a.directory_url}
+        )
+        |> Arca.Repo.one()
+        |> case do
+          nil -> {:error, :not_found}
+          binding -> {:ok, binding}
+        end
+      end)
+    else
+      {:error, :cross_tenant}
+    end
+  end
+
+  @doc """
   Hold a single-use first-method reproof challenge on a completed restore:
   the digest of a fresh server challenge and its expiry, replacing any
   earlier one. Only while the restored person has never had a fresh

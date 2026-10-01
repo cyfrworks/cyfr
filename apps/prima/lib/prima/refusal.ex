@@ -605,6 +605,14 @@ defmodule Prima.Refusal do
       {:unauthenticated,
        "Your first passkey needs a recent sign-in here: sign in again, then register it."}
 
+  # A remote person's identity whose head this home could not confirm
+  # fresh within its bound: their work here pauses and their session
+  # stands, so it is no sign-out and no denial.
+  defp row(:identity_stale),
+    do:
+      {:unavailable,
+       "Your identity could not be confirmed fresh with its directory just now; try again shortly."}
+
   defp row(:execution_failed), do: {:internal, "The execution failed"}
 
   # Webhook ingress.

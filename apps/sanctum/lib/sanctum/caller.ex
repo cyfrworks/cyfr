@@ -27,7 +27,9 @@ defmodule Sanctum.Caller do
       `client_ip:` for a key's allowlist). Its row and its source's rows
       are read at every establish, never from the memo, so each use is
       within the session-freshness bound; a suspended, revoked or expired
-      row, or a retired source, refuses it. The context acts as the person
+      row, or a retired source, refuses it, and a remote person's session
+      source pauses it as the session is paused (`:identity_stale`,
+      `derived_standing/2`). The context acts as the person
       in the row's athanor, bound to the frame (`Sanctum.Context`'s
       `frame`: the tincture version and its digest, the grant revision,
       the frame id and the row's id), with the frame's deadline as its
@@ -72,6 +74,30 @@ defmodule Sanctum.Caller do
     * `:unavailable` — a transient store failure. Retryable: it must
       never read as "signed out" or bounce a person into a claim they
       already made.
+    * `:identity_stale` — a session of a person whose identity is
+      `remote`, whose head is past its freshness bound and could not be
+      refreshed from their directory (`Sanctum.IdentityFreshness`). Their
+      work pauses and the session stands: retryable, never a sign-out and
+      never a denial.
+
+  ## A remote person's session
+
+  A session of a person whose identity provenance is `remote` stands, at
+  every establish and every revalidation alike, only on that identity's
+  fresh head (`Sanctum.IdentityFreshness.fresh?/2`) and only while the
+  session's `identity_key_epoch` is that head's `key_epoch`. A session
+  bound to another epoch, or to none, is revoked there and then and
+  refused as `:unauthenticated`; a head that cannot be confirmed fresh
+  pauses the work as `:identity_stale`. A refresh that moves the head to
+  a new `key_epoch` has already deleted the sessions bound to the old one
+  in its own transaction, and their memos are dropped once it committed
+  (`drop_retired/2`). A local person's session never reads a directory.
+
+  Inside a caller's transaction (a revalidation a write makes under its
+  locks) the check reads the cached head alone and writes nothing: a head
+  past its bound pauses the work without a directory read, and a session
+  bound to another epoch is refused without being revoked there, which
+  the next revalidation outside a transaction does.
   """
 
   alias Sanctum.Context
@@ -92,6 +118,7 @@ defmodule Sanctum.Caller do
           | :archived
           | :not_found
           | :unavailable
+          | :identity_stale
 
   @typedoc """
   A paired device as `Sanctum.DeviceCerts` verified it: the certificate
@@ -164,7 +191,7 @@ defmodule Sanctum.Caller do
         :miss ->
           result = do_establish(token, opts)
 
-          with {:ok, ctx} <- result, do: Arca.Cache.put(key, ctx, ttl)
+          with {:ok, ctx} <- result, do: memoize(key, ctx, ttl)
           result
       end
     else
@@ -384,6 +411,8 @@ defmodule Sanctum.Caller do
   # The frame credential's refusals, in this module's vocabulary: a source
   # or standing that no longer holds is a presented credential that opens
   # nothing.
+  # A paused identity pauses the frame its session minted: retryable, and
+  # no more a retired source than the session is.
   defp frame_refusal(reason)
        when reason in [
               :invalid_credential,
@@ -391,6 +420,7 @@ defmodule Sanctum.Caller do
               :suspended,
               :revoked,
               :ip_not_allowed,
+              :identity_stale,
               :unavailable
             ],
        do: reason
@@ -420,14 +450,23 @@ defmodule Sanctum.Caller do
       seat (a rejoin is a new row); a key's focus is the key, so its
       creator leaving the athanor does not end it.
 
+  A session source of a remote person stands, as the session itself does
+  (the module doc), only on that person's fresh identity head and while
+  bound to its `key_epoch`. The head is read after the locked check and
+  outside its transaction, since a head past its bound reads the
+  directory. A head that cannot be confirmed fresh pauses the credential
+  as `:identity_stale`; a session bound to another epoch is revoked and
+  refused as a retired source is, `:not_standing`.
+
   `{:ok, %{now: now, source_expires_at: expiry | nil}}`, or a refusal:
   `:not_standing`, `:not_member` (the focus membership is gone),
-  `:ip_not_allowed`, or `:unavailable` when the store cannot answer —
-  never read as either verdict.
+  `:ip_not_allowed`, `:identity_stale`, or `:unavailable` when the store
+  cannot answer — never read as either verdict.
   """
   @spec derived_standing(map(), keyword()) ::
           {:ok, %{now: DateTime.t(), source_expires_at: DateTime.t() | nil}}
-          | {:error, :not_standing | :not_member | :ip_not_allowed | :unavailable}
+          | {:error,
+             :not_standing | :not_member | :ip_not_allowed | :identity_stale | :unavailable}
   def derived_standing(claims, opts \\ []) do
     binding = %{
       user_id: claims.user_id,
@@ -439,11 +478,26 @@ defmodule Sanctum.Caller do
     case Arca.CredentialBindings.check(Prima.Actor.system(), binding,
            verify: &derived_policy(&1, claims, Keyword.get(opts, :client_ip))
          ) do
-      {:ok, standing} -> {:ok, standing}
+      {:ok, standing} -> derived_identity(claims, standing)
       {:error, :database_error} -> {:error, :unavailable}
       {:error, reason} -> {:error, reason}
     end
   end
+
+  # A session source is its person's: a remote person's stands on their
+  # identity's fresh head, as their session does at its revalidation. A
+  # key source is the athanor's channel and survives a `key_epoch` change.
+  defp derived_identity(%{source_kind: :session, user_id: user_id} = claims, standing) do
+    with {:session, hash} when hash != <<>> <- source_row(claims),
+         :ok <- identity_current(user_id, hash) do
+      {:ok, standing}
+    else
+      {:error, reason} when reason in [:identity_stale, :unavailable] -> {:error, reason}
+      _retired -> {:error, :not_standing}
+    end
+  end
+
+  defp derived_identity(_claims, standing), do: {:ok, standing}
 
   defp source_row(%{source_kind: :session, source_id: id}) do
     case Base.url_decode64(id, padding: false) do
@@ -534,7 +588,8 @@ defmodule Sanctum.Caller do
   defp do_establish(token, opts) do
     case Session.load_sliding(token, surface: Keyword.get(opts, :surface, :console)) do
       {:ok, %Context{} = ctx, slide_due?} ->
-        with {:ok, established} <- establish_context(ctx, opts) do
+        with {:ok, established} <- establish_context(ctx, opts),
+             :ok <- identity_current(established.user_id, established.session_token_hash) do
           if slide_due?, do: maybe_refresh(token, opts)
           {:ok, validated(established)}
         end
@@ -580,7 +635,8 @@ defmodule Sanctum.Caller do
   end
 
   @typedoc "Why a retained session context no longer stands."
-  @type revalidation_refusal :: :unauthenticated | :not_standing | :not_member | :unavailable
+  @type revalidation_refusal ::
+          :unauthenticated | :not_standing | :not_member | :unavailable | :identity_stale
 
   @doc """
   Revalidate a context a holder has kept since it was established: the
@@ -608,6 +664,13 @@ defmodule Sanctum.Caller do
       the caller's to focus. The session's own default athanor is never
       substituted.
     * `:unavailable` — the store could not answer; never a verdict.
+    * `:identity_stale` — a remote person's identity head could not be
+      confirmed fresh (the module doc): the work pauses, and the session
+      stands.
+
+  A remote person's session is held to their identity's fresh head as
+  well, as the module doc says: one bound to a `key_epoch` the fresh head
+  does not name is revoked here and refused as `:unauthenticated`.
 
   An API-key context is held to its key the same way: the key row, its
   creator and its athanor are reread under the same lock — the key
@@ -728,8 +791,75 @@ defmodule Sanctum.Caller do
     with :ok <- stored_standing(ctx, hash),
          {:ok, rebuilt} <- reload(hash, surface),
          :ok <- same_person(rebuilt, ctx),
+         :ok <- identity_current(rebuilt.user_id, hash),
          {:ok, focused} <- refocus(rebuilt, ctx.athanor_id) do
       {:ok, carried(focused, ctx)}
+    end
+  end
+
+  # A remote person's session stands only on their identity's fresh head
+  # (`Sanctum.IdentityFreshness.fresh?/2`): past the bound with the
+  # directory unable to refresh it, the work pauses as `:identity_stale`,
+  # and the session stays. A session bound to another `key_epoch` than
+  # the fresh head's, or to none, is revoked here and then: a refresh that
+  # retired its epoch deleted it already, and one minted against an epoch
+  # the head no longer names never stands. A local person's session reads
+  # no directory.
+  defp identity_current(user_id, hash) when is_binary(user_id) and is_binary(hash) do
+    case Arca.PersonIdentities.get(Prima.Actor.system(), user_id) do
+      {:ok, %{provenance: "remote", identifier: identifier}} when is_binary(identifier) ->
+        remote_current(identifier, hash)
+
+      {:ok, %{provenance: "remote"}} ->
+        {:error, :unauthenticated}
+
+      {:ok, _local} ->
+        :ok
+
+      {:error, :not_found} ->
+        :ok
+
+      {:error, _unanswered} ->
+        {:error, :unavailable}
+    end
+  end
+
+  defp identity_current(_user_id, _hash), do: {:error, :unauthenticated}
+
+  defp remote_current(identifier, hash) do
+    case Sanctum.IdentityFreshness.fresh?(identifier, []) do
+      {:ok, %{key_epoch: epoch}} -> session_epoch(hash, epoch)
+      {:refused, :identity_stale} -> {:error, :identity_stale}
+      {:error, :unavailable} -> {:error, :unavailable}
+    end
+  end
+
+  defp session_epoch(hash, epoch) do
+    case Arca.SessionStorage.get_session(hash) do
+      {:ok, %{identity_key_epoch: ^epoch}} when is_binary(epoch) ->
+        :ok
+
+      # Refused either way. Revoked only outside a transaction: a caller's
+      # transaction is no place to delete a session and announce it, so the
+      # next revalidation outside one revokes it.
+      {:ok, _retired_or_unbound} ->
+        if Arca.in_transaction?() do
+          {:error, :unauthenticated}
+        else
+          Logger.warning(
+            "[Sanctum.Caller] a remote person's session is bound to no key_epoch, or to " <>
+              "one the fresh head no longer names; revoking it"
+          )
+
+          _ = Session.destroy_by_hash(hash)
+          {:error, :unauthenticated}
+        end
+
+      {:error, :not_found} ->
+        {:error, :unauthenticated}
+
+      {:error, _unanswered} ->
+        {:error, :unavailable}
     end
   end
 
@@ -987,6 +1117,21 @@ defmodule Sanctum.Caller do
   end
 
   @doc """
+  Let go of the sessions a refreshed identity head retired: the head's
+  advance deleted every session bound to the `key_epoch` it replaced, in
+  its own transaction (`Arca.DirectoryHeads`), and once that committed
+  each one's memo is dropped on this member and announced to the rest
+  (`invalidate_hash/1`), and the revocation is announced for each person
+  in `user_ids`, so their mounted views let go. Called by
+  `Sanctum.IdentityFreshness` after every refresh that retired sessions.
+  """
+  @spec drop_retired([String.t()], [binary()]) :: :ok
+  def drop_retired(user_ids, hashes) when is_list(user_ids) and is_list(hashes) do
+    Enum.each(hashes, &invalidate_hash/1)
+    Enum.each(user_ids, &Sanctum.Telemetry.sessions_revoked/1)
+  end
+
+  @doc """
   Drop this member's established-context memos for a session row key,
   announcing nothing.
 
@@ -998,6 +1143,21 @@ defmodule Sanctum.Caller do
   def drop_memo(hash) when is_binary(hash) do
     Arca.Cache.delete_match(Arca.Cache.Keys.match_established(hash))
     :ok
+  end
+
+  # The memo is kept for what remains of the bound `fresh?/1` holds the
+  # context to, never longer: the bound runs on this node's wall clock
+  # from `validated_at`, whole milliseconds truncated, while the memo runs
+  # on the monotonic clock from the put. So it is kept for the bound less
+  # the time already elapsed since the validation and less one millisecond
+  # for that truncation, and a context with nothing left is not memoized.
+  # The elapsed time is never less than zero: a wall clock stepped back
+  # since the validation shortens the memo, never keeps it past the TTL.
+  # Every establish stamps `validated_at` (`validated/1`).
+  defp memoize(key, %Context{validated_at: %DateTime{} = at} = ctx, ttl) do
+    elapsed = max(DateTime.diff(now(), at, :millisecond), 0)
+    left = ttl - elapsed - 1
+    if left > 0, do: Arca.Cache.put(key, ctx, left), else: :ok
   end
 
   defp memo_key(token, opts) do
