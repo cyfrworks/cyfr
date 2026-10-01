@@ -2,8 +2,11 @@
 #
 #   everything → cyfr:{$CYFR_PORT:4000} (the one endpoint: Prism, /mcp, /api, /auth, /t)
 #
-# Set CYFR_HOST and CADDY_ACME_EMAIL in .env. With CYFR_HOST=localhost Caddy
-# serves plain HTTP on :80 (no ACME); with a real domain it auto-provisions TLS.
+# Set CYFR_HOST and CADDY_ACME_EMAIL in .env. Caddy serves TLS and redirects
+# plain HTTP to it. With CYFR_HOST=localhost, the default, the certificate
+# comes from Caddy's own local CA, with no ACME; with a real domain Caddy
+# obtains one over ACME, registered under CADDY_ACME_EMAIL when it is set
+# and under no email when it is empty.
 #
 # This service only runs when the `tls` compose profile is active — `cyfr
 # init` sets CYFR_BEHIND_PROXY=true when you answer "yes" to the TLS prompt
@@ -18,18 +21,40 @@
 # or client IPs will resolve to that proxy and IP allowlists will fail closed.
 #
 # Every route is proxied to cyfr's one endpoint, which sets its own security
-# headers (CSP/XFO/HSTS) per pipeline.
-
+# headers (CSP/XFO) per pipeline. HSTS is this proxy's: the endpoint sees plain
+# HTTP from Caddy and so sends none, and the site block sets the endpoint's own
+# value on every response it serves for any host but a loopback one.
+# tests/proxy-hsts/run.sh holds the two values equal.
 {
-	email {$CADDY_ACME_EMAIL}
+	# Quoted, so an empty or unset CADDY_ACME_EMAIL is an empty argument and
+	# registers no email, where a bare placeholder would leave `email` with
+	# none and Caddy would refuse the file.
+	email "{$CADDY_ACME_EMAIL}"
 }
 
 {$CYFR_HOST:localhost} {
 	encode zstd gzip
 
+	# HSTS, the endpoint's value (CyfrWeb.Plugs.ApiSecurityHeaders), on every
+	# response this site serves, Caddy's own errors included. A loopback host
+	# gets none: its certificate is from Caddy's local CA, and a browser that
+	# trusted that root would pin HTTPS for two years on every port of
+	# localhost and, by includeSubDomains, on every *.localhost name.
+	# Loopback is localhost, a name ending in .localhost at any depth,
+	# 127.0.0.1 and ::1, in any case. The pattern is a regexp because the host
+	# matcher's *.localhost matches one label only, and it allows the brackets
+	# {http.request.host} keeps on an IPv6 host sent without a port.
+	@hsts not vars_regexp {http.request.host} `(?i)^(localhost|.+\.localhost|127\.0\.0\.1|\[?::1\]?)$`
+	header @hsts Strict-Transport-Security "max-age=63072000; includeSubDomains"
+
 	# Everything: cyfr's one endpoint (Prism, /mcp, /api, /auth, /t). cyfr sets
-	# its own CSP/XFO/HSTS on every response it serves.
+	# its own CSP/XFO on every response it serves.
 	handle {
-		reverse_proxy cyfr:{$CYFR_PORT:4000}
+		reverse_proxy cyfr:{$CYFR_PORT:4000} {
+			# The header above is set before the upstream's headers are added
+			# to the response, so an upstream's own HSTS is dropped here, for
+			# every host, and no response carries two.
+			header_down -Strict-Transport-Security
+		}
 	}
 }

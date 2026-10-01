@@ -28,6 +28,11 @@ defmodule CyfrWeb.Plugs.ApiSecurityHeaders do
   @doc """
   HSTS over TLS, skipped on plain HTTP. The one spelling of the policy —
   `BrowserCSP` applies the same header from here.
+
+  Behind the shipped proxy the endpoint sees plain HTTP and sets none: the
+  proxy sets HSTS, this value, on every response it serves for any host but
+  a loopback one (`Caddyfile`), and `tests/proxy-hsts/run.sh` fails when its
+  value differs from this one.
   """
   def maybe_hsts(%Plug.Conn{scheme: :https} = conn) do
     put_resp_header(conn, "strict-transport-security", "max-age=63072000; includeSubDomains")
