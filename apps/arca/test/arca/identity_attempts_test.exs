@@ -8,7 +8,8 @@ defmodule Arca.IdentityAttemptsTest do
   phases only in order and only from the phase the row holds, one in
   progress per person and kind (and per installation token), with the
   confirmation an enrollment consumes committed or rolled back with its
-  attempt, the kit's acknowledgment erasing the seed for good, and a stale
+  attempt, an enrollment abandoned only before its acceptance, the kit's
+  acknowledgment erasing the seed for good, and a stale
   member advancing nothing.
   """
 
@@ -69,6 +70,15 @@ defmodule Arca.IdentityAttemptsTest do
   defp key, do: :crypto.strong_rand_bytes(32)
   defp digest(seed), do: Prima.Digest.sha256("#{seed}-#{System.unique_integer()}")
   defp request_id, do: "req_#{System.unique_integer([:positive])}"
+
+  # The statements a telemetry handler sent this process, in order.
+  defp statements(acc \\ []) do
+    receive do
+      {:statement, source, query} -> statements([{source, query} | acc])
+    after
+      0 -> Enum.reverse(acc)
+    end
+  end
 
   defp person! do
     n = System.unique_integer([:positive])
@@ -323,6 +333,107 @@ defmodule Arca.IdentityAttemptsTest do
       {:ok, _} = IdentityAttempts.advance(as(person), attempt.id, "submitted", "refused")
 
       assert {:error, :not_found} = IdentityAttempts.genesis(as(person), person.id)
+    end
+
+    for from <- ["staged", "submitted"] do
+      test "an enrollment abandoned at #{from} ends superseded, its seed erased and the person unenrolled" do
+        person = person!()
+        {:ok, attempt} = IdentityAttempts.open(as(person), enrollment(person.id))
+
+        if unquote(from) == "submitted",
+          do: {:ok, _} = IdentityAttempts.advance(as(person), attempt.id, "staged", "submitted")
+
+        assert {:ok, abandoned} =
+                 IdentityAttempts.advance(as(person), attempt.id, unquote(from), "superseded")
+
+        assert abandoned.phase == "superseded"
+        assert is_nil(abandoned.kit_seed_sealed)
+
+        assert {:ok, %{enrollment: "none", identifier: nil}} =
+                 PersonIdentities.get(server(), person.id)
+
+        assert {:error, :not_found} =
+                 IdentityAttempts.in_progress(as(person), person.id, "enrollment")
+
+        assert {:error, :not_found} = IdentityAttempts.genesis(as(person), person.id)
+
+        # An acceptance that read the phase before the abandonment writes
+        # nothing, and the person is not enrolled under the abandoned genesis.
+        assert {:error, :stale} =
+                 IdentityAttempts.advance(as(person), attempt.id, "submitted", "accepted")
+
+        assert {:ok, %{enrollment: "none"}} = PersonIdentities.get(server(), person.id)
+
+        # The person enrolls again under another genesis, so another identifier.
+        assert {:ok, fresh} =
+                 IdentityAttempts.open(as(person), enrollment(person.id, "the next genesis"))
+
+        assert fresh.identifier != attempt.identifier
+        assert {:ok, %{enrollment: "pending"}} = PersonIdentities.get(server(), person.id)
+      end
+    end
+
+    test "an abandonment locks the person's row before it writes the attempt" do
+      person = person!()
+      {:ok, attempt} = IdentityAttempts.open(as(person), enrollment(person.id))
+      test = self()
+      sources = ~w(users identity_attempts person_identities)
+      handler = "identity-attempts-order-#{System.unique_integer([:positive])}"
+
+      :ok =
+        :telemetry.attach(
+          handler,
+          [:arca, :repo, :query],
+          fn _event, _measurements, meta, _config ->
+            if self() == test and meta[:source] in sources,
+              do: send(test, {:statement, meta[:source], meta[:query]})
+          end,
+          nil
+        )
+
+      on_exit(fn -> :telemetry.detach(handler) end)
+
+      assert {:ok, %{phase: "superseded"}} =
+               IdentityAttempts.advance(as(person), attempt.id, "staged", "superseded")
+
+      :telemetry.detach(handler)
+      statements = statements()
+
+      # The person's row, then the attempt's write, then the person's
+      # identity row: the standing order. Reading the attempt locks nothing.
+      ordered =
+        for {source, query} <- statements,
+            source == "users" or not String.starts_with?(query, "SELECT"),
+            do: {source, query |> String.split(" ", parts: 2) |> hd()}
+
+      assert ordered == [
+               {"users", "SELECT"},
+               {"identity_attempts", "UPDATE"},
+               {"person_identities", "UPDATE"}
+             ]
+
+      if Arca.Repo.adapter() == Ecto.Adapters.Postgres do
+        assert [{"users", lock}] = Enum.filter(statements, &(elem(&1, 0) == "users"))
+        assert lock =~ "FOR UPDATE", "the person's row is not locked: #{lock}"
+      end
+    end
+
+    test "an accepted or completed enrollment is not abandoned, and stays enrolled" do
+      person = person!()
+      accepted = enrolled!(person)
+
+      assert {:error, :out_of_order} =
+               IdentityAttempts.advance(as(person), accepted.id, "accepted", "superseded")
+
+      {:ok, _} = IdentityAttempts.acknowledge_kit(as(person), accepted.id)
+
+      assert {:error, :out_of_order} =
+               IdentityAttempts.advance(as(person), accepted.id, "completed", "superseded")
+
+      assert {:ok, %{enrollment: "enrolled", identifier: identifier}} =
+               PersonIdentities.get(server(), person.id)
+
+      assert identifier == accepted.identifier
     end
   end
 
@@ -837,6 +948,8 @@ defmodule Arca.IdentityAttemptsRaceTest do
   person's active enrollment makes the second wait for the first and then
   refuse, so one durable attempt stands. On PostgreSQL the second blocks
   inserting its row; on SQLite at the lock its transaction takes at entry.
+  An abandonment, on its own connection, waits behind the person's row
+  lock before it writes the attempt.
   """
 
   use ExUnit.Case, async: false
@@ -1029,5 +1142,51 @@ defmodule Arca.IdentityAttemptsRaceTest do
 
     assert [%{request_id: ^request}] =
              unboxed(fn -> Arca.Repo.all(where(IdentityAttempt, user_id: ^user_id)) end)
+  end
+
+  test "an abandonment waits behind the person's row lock before it writes the attempt",
+       %{user_id: user_id} do
+    test = self()
+    as = %Prima.Actor{user_id: user_id}
+    attrs = enrollment(user_id, "genesis-abandoned-#{System.unique_integer()}")
+    {:ok, attempt} = unboxed(fn -> IdentityAttempts.open(as, attrs) end)
+
+    holder =
+      Task.async(fn ->
+        unboxed(fn ->
+          Arca.Repo.locking_transaction(fn ->
+            _locked = Arca.DirectoryHeads.lock_person!(user_id)
+            send(test, :person_held)
+
+            receive do
+              :go -> :ok
+            end
+          end)
+        end)
+      end)
+
+    assert_receive :person_held, 5_000
+
+    abandon =
+      Task.async(fn ->
+        unboxed(fn ->
+          send(test, {:abandon, backend()})
+          IdentityAttempts.advance(as, attempt.id, "staged", "superseded")
+        end)
+      end)
+
+    assert_receive {:abandon, pid}, 5_000
+    if postgres?(), do: await_wait!(pid, [~s(FROM "users"), "FOR UPDATE"])
+    refute Task.yield(abandon, 300), "the abandonment decided while the person's row was held"
+
+    assert %{phase: "staged"} =
+             unboxed(fn -> Arca.Repo.get!(IdentityAttempt, attempt.id) end)
+
+    send(holder.pid, :go)
+    assert {:ok, :ok} = Task.await(holder, 25_000)
+    assert {:ok, %{phase: "superseded"}} = Task.await(abandon, 25_000)
+
+    assert {:ok, %{enrollment: "none"}} =
+             unboxed(fn -> PersonIdentities.get(server(), user_id) end)
   end
 end

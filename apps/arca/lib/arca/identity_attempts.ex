@@ -17,10 +17,12 @@ defmodule Arca.IdentityAttempts do
   the row no longer holds, writes nothing.
 
     * **enrollment** — `staged → submitted → accepted → completed`, or
-      `submitted → refused`. Acceptance writes the identifier onto the
-      person's identity row in the same transaction; completion is the
-      kit's acknowledgment (`acknowledge_kit/2`), which erases the sealed
-      seed with it.
+      `submitted → refused`, or `staged | submitted → superseded` (the
+      person abandoned it before the directory's acceptance). Acceptance
+      writes the identifier onto the person's identity row in the same
+      transaction, and a refusal or an abandonment returns the person to
+      unenrolled; completion is the kit's acknowledgment
+      (`acknowledge_kit/2`), which erases the sealed seed with it.
     * **holder** (another printed kit, added by a `recover` an existing
       kit signs, keeping the online keys) — `staged → submitted →
       accepted → completed`, or `submitted → refused`. Acceptance names
@@ -75,8 +77,8 @@ defmodule Arca.IdentityAttempts do
 
   @paths %{
     "enrollment" => %{
-      "staged" => ["submitted"],
-      "submitted" => ["accepted", "refused"]
+      "staged" => ["submitted", "superseded"],
+      "submitted" => ["accepted", "refused", "superseded"]
     },
     "holder" => %{
       "staged" => ["submitted"],
@@ -182,9 +184,10 @@ defmodule Arca.IdentityAttempts do
   added kit requires.
 
   The move's own writes commit with it: an enrollment's acceptance writes
-  the identifier onto the person's row, and its refusal returns them to
-  unenrolled; an added kit's acceptance moves the person's head to its
-  entry while the row still reads the head it was staged at
+  the identifier onto the person's row, and its refusal or its abandonment
+  (`superseded`, which takes the person's row lock before the attempt's)
+  returns them to unenrolled; an added kit's acceptance moves the person's
+  head to its entry while the row still reads the head it was staged at
   (`:stale_head` otherwise); a rotation's `keys_active` replaces the live
   key while the person's head is still the one it extended (`:stale_head`
   otherwise); a restore's end ends its installation claim; every terminal
@@ -201,7 +204,8 @@ defmodule Arca.IdentityAttempts do
     Arca.Repo.Errors.with_db_rescue("Arca.IdentityAttempts.advance", fn ->
       fenced(fn ->
         with {:ok, attempt} <- held(actor, id),
-             :ok <- allowed(attempt, from, to) do
+             :ok <- allowed(attempt, from, to),
+             :ok <- person_first(attempt, to) do
           move(attempt, from, to, Map.new(attrs))
         end
       end)
@@ -574,6 +578,16 @@ defmodule Arca.IdentityAttempts do
     end
   end
 
+  # An abandoned enrollment returns the person to unenrolled, so it takes
+  # the person's row lock before it writes the attempt, the first of the
+  # standing order, as the opens that move a person's identity do.
+  defp person_first(%IdentityAttempt{kind: "enrollment", user_id: user_id}, "superseded") do
+    _locked = Arca.DirectoryHeads.lock_person!(user_id)
+    :ok
+  end
+
+  defp person_first(_attempt, _to), do: :ok
+
   defp allowed(%IdentityAttempt{kind: kind}, from, to) do
     if to in (@paths |> Map.fetch!(kind) |> Map.get(from, [])),
       do: :ok,
@@ -652,7 +666,8 @@ defmodule Arca.IdentityAttempts do
       else: {:error, :stale}
   end
 
-  defp consequence(%IdentityAttempt{kind: "enrollment"} = attempt, "refused") do
+  defp consequence(%IdentityAttempt{kind: "enrollment"} = attempt, to)
+       when to in ["refused", "superseded"] do
     PersonIdentities.unenrolled!(attempt.user_id)
     :ok
   end

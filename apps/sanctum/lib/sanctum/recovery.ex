@@ -34,10 +34,24 @@ defmodule Sanctum.Recovery do
   one and the attempt recorded. A retry resumes the attempt with the
   authorization it committed, and only for the seed it holds.
 
+  An enrollment the directory has not accepted waits on the seed of the
+  browser that began it. A person whose browser lost that seed abandons it
+  (`abandon_enrollment/1`): the attempt ends `superseded` and the person
+  is unenrolled again, free to enroll under a new seed, so a new
+  identifier. A genesis the directory may already have registered stays
+  there unused, under an identifier nobody holds a kit for. A retry under
+  the abandoned request id answers `:enrollment_abandoned` and registers
+  nothing.
+
   The accepted attempt answers the kit, until `kit_ack/2` acknowledges it
   and erases the sealed seed in the same write. `kit/2` delivers it again,
   each time under a fresh `recovery_material` confirmation; an
   acknowledged kit's seed is gone and is never printed again.
+
+  `status/1` reads what the person's own settings show: the identity row,
+  the attempts still in progress and the doors, never a seed or a sealed
+  value. `enrollment_effect/1` is the sentence the enrollment preview
+  stores.
 
   ## Another printed kit
 
@@ -127,6 +141,8 @@ defmodule Sanctum.Recovery do
 
   @seed_bytes 32
   @reproof_ms 5 * 60 * 1000
+  # A preview's longest text (`Prima.Confirmation`).
+  @max_effect_bytes 1024
 
   @typedoc "The directory client's options: `:resolver` and `:cacerts`."
   @type opts :: [resolver: module(), cacerts: [binary()]]
@@ -152,7 +168,8 @@ defmodule Sanctum.Recovery do
   `:already_enrolled`, `{:attempt_in_progress, request_id}`,
   `:request_id_reused`, the consent signal `{:confirmation_required, _}`
   and the confirmation's other refusals, `:enrollment_refused` (the
-  directory refused the genesis), and the retryable
+  directory refused the genesis), `:enrollment_abandoned` (the person
+  abandoned the attempt this request id names), and the retryable
   `:directory_unavailable` and `:unavailable`, after which a retry under
   the same request id resumes the attempt.
   """
@@ -205,11 +222,38 @@ defmodule Sanctum.Recovery do
         "directory" => directory,
         "recovery_key" => Encoding.b64(recovery_key),
         "genesis" => genesis.genesis_hash,
-        "effect" =>
-          "Registers your identity at this directory and prints its recovery kit. Anyone " <>
-            "holding the kit can replace your keys; if every kit is lost, nothing can add one."
+        "effect" => enrollment_effect(directory)
       }
     }
+  end
+
+  @doc """
+  What enrolling at `directory` means, in the words the stored preview
+  and the trusted enrollment form both say: the directory pinned, what
+  its unavailability means, what losing every kit means, and that a
+  recovery restores the identity alone.
+  """
+  @spec enrollment_effect(String.t()) :: String.t()
+  def enrollment_effect(directory) when is_binary(directory) do
+    effect = effect_at(directory)
+
+    # A preview's text is bounded (`Prima.Confirmation`); a directory URL
+    # too long to sit in the sentence as well is named by the preview's
+    # `directory` detail alone.
+    if byte_size(effect) <= @max_effect_bytes,
+      do: effect,
+      else: effect_at("named under directory")
+  end
+
+  defp effect_at(directory) do
+    "Registers your identity at the directory #{directory}, which this home pins, and " <>
+      "prints its recovery kit. Anyone holding a kit can replace your keys. While that " <>
+      "directory cannot be reached, rotating your key, recovering and other homes' checks " <>
+      "of your identity wait; if it is gone for good, they end, and no identity moves to " <>
+      "another directory. If every kit is lost, nothing can add one: your identity keeps " <>
+      "working here with no way to recover it. A recovery restores your identity alone, " <>
+      "never your private data or the homes your devices saved: you add those addresses " <>
+      "again from surviving devices or invitations."
   end
 
   defp begin_enrollment(ctx, user_id, request_id, seed, recovery_key, opts) do
@@ -281,9 +325,11 @@ defmodule Sanctum.Recovery do
 
   defp continue_enrollment(ctx, %{phase: "submitted"} = attempt, opts) do
     case Client.register(attempt.identifier, attempt.genesis, opts) do
+      # The phase the attempt holds after the move decides the answer: an
+      # abandonment that committed first leaves it `superseded`.
       {:ok, %{entry_hash: hash}} when hash == attempt.request_digest ->
         with {:ok, accepted} <- move(ctx, attempt, "accepted", %{outcome: "accepted"}),
-             do: enrolled(accepted)
+             do: continue_enrollment(ctx, accepted, opts)
 
       {:ok, _other} ->
         refuse(ctx, attempt, "invalid_response", :enrollment_refused)
@@ -300,6 +346,48 @@ defmodule Sanctum.Recovery do
        do: enrolled(attempt)
 
   defp continue_enrollment(_ctx, %{phase: "refused"}, _opts), do: {:error, :enrollment_refused}
+
+  defp continue_enrollment(_ctx, %{phase: "superseded"}, _opts),
+    do: {:error, :enrollment_abandoned}
+
+  @doc """
+  Abandon the person's enrollment the directory has not accepted
+  (`person.enroll_abandon`, the module doc): a `staged` or `submitted`
+  attempt ends `superseded`, its sealed seed erased, and the person is
+  unenrolled in the same write (`Arca.IdentityAttempts.advance/5`). It
+  discards an unfinished attempt and mints nothing, so it asks no
+  confirmation. Answers `%{request_id, phase: "superseded"}`, the
+  abandoned request id.
+
+  Refusals: `:registered` (the directory accepted it: the identity stands
+  and `kit/2` delivers its kit), `:not_found` (no enrollment of the
+  person's in progress: none begun, or it completed, was refused or was
+  abandoned), `:unauthenticated`, `:guest_plane`, `:unavailable`.
+  """
+  @spec abandon_enrollment(Context.t()) :: {:ok, map()} | {:error, term()}
+  def abandon_enrollment(%Context{} = ctx) do
+    with {:ok, user_id} <- person(ctx),
+         {:ok, attempt} <- in_progress(ctx, user_id, "enrollment"),
+         do: abandon(ctx, attempt)
+  end
+
+  # Decided on the phase the attempt holds; a move that met a later phase
+  # decides again on the one it read back.
+  defp abandon(ctx, %{phase: phase} = attempt) when phase in ["staged", "submitted"] do
+    case move(ctx, attempt, "superseded") do
+      {:ok, %{phase: "superseded", request_id: request_id}} ->
+        {:ok, %{request_id: request_id, phase: "superseded"}}
+
+      {:ok, moved} ->
+        abandon(ctx, moved)
+
+      {:error, _reason} = refusal ->
+        refusal
+    end
+  end
+
+  defp abandon(_ctx, %{phase: "accepted"}), do: {:error, :registered}
+  defp abandon(_ctx, _ended_or_none), do: {:error, :not_found}
 
   defp enrolled(attempt) do
     with {:ok, kit} <- kit_lines(attempt) do
@@ -422,6 +510,98 @@ defmodule Sanctum.Recovery do
   end
 
   defp kit_lines(_attempt), do: {:ok, nil}
+
+  # ===========================================================================
+  # The person's identity, as their settings show it
+  # ===========================================================================
+
+  @doc """
+  The identity of the person of `ctx` as their own settings read it
+  (`person.status`): `provenance` and `identifier`; `directory_url`, the
+  directory this home pins for enrollment (`CYFR_DIRECTORY_URL`), or nil
+  when it pins none; `enrollment` (`none`, `pending` or `enrolled`) and
+  `key_epoch`, the head their row names; `kits`, each enrollment or
+  added-kit attempt still in progress (`Arca.IdentityAttempts.in_progress/3`)
+  as `%{attempt_id, kind, phase, request_id, deliverable}`, `deliverable`
+  while its kit's seed is still sealed for delivery; `rotation`, the
+  rotation in progress as `%{request_id, phase}`, or nil; and `doors`, each
+  linked door as `%{key, provider, issuer, subject}`.
+
+  Nothing in it is a seed, a sealed value or a staged key. A person with
+  no identity row is local and unenrolled. Refusals: `:unauthenticated`,
+  `:guest_plane`, `:unavailable`.
+  """
+  @spec status(Context.t()) :: {:ok, map()} | {:error, term()}
+  def status(%Context{} = ctx) do
+    with {:ok, user_id} <- person(ctx),
+         {:ok, identity} <- status_identity(ctx, user_id),
+         {:ok, enrollment} <- in_progress(ctx, user_id, "enrollment"),
+         {:ok, holder} <- in_progress(ctx, user_id, "holder"),
+         {:ok, rotation} <- in_progress(ctx, user_id, "rotation"),
+         {:ok, doors} <- doors(user_id) do
+      {:ok,
+       %{
+         provenance: identity.provenance,
+         identifier: identity.identifier,
+         directory_url: pinned_or_nil(),
+         enrollment: identity.enrollment,
+         key_epoch: identity.head_hash,
+         kits: for(attempt <- [enrollment, holder], attempt != nil, do: kit_status(attempt)),
+         rotation: rotation && %{request_id: rotation.request_id, phase: rotation.phase},
+         doors: doors
+       }}
+    end
+  end
+
+  defp status_identity(ctx, user_id) do
+    case Arca.PersonIdentities.get(Context.actor(ctx), user_id) do
+      {:ok, row} ->
+        {:ok, Map.take(row, [:provenance, :identifier, :enrollment, :head_hash])}
+
+      {:error, :not_found} ->
+        {:ok, %{provenance: "local", identifier: nil, enrollment: "none", head_hash: nil}}
+
+      {:error, _unanswered} ->
+        {:error, :unavailable}
+    end
+  end
+
+  defp in_progress(ctx, user_id, kind) do
+    case Arca.IdentityAttempts.in_progress(Context.actor(ctx), user_id, kind) do
+      {:ok, attempt} -> {:ok, attempt}
+      {:error, :not_found} -> {:ok, nil}
+      {:error, _unanswered} -> {:error, :unavailable}
+    end
+  end
+
+  defp kit_status(attempt) do
+    %{
+      attempt_id: attempt.id,
+      kind: attempt.kind,
+      phase: attempt.phase,
+      request_id: attempt.request_id,
+      deliverable: deliverable(attempt) == :ok
+    }
+  end
+
+  # The doors the person signs in through, read as the platform reads them
+  # (`Arca.Users.identities/2`) for the person the context names.
+  defp doors(user_id) do
+    case Arca.Users.identities(system(), user_id) do
+      {:ok, identities} ->
+        {:ok, Enum.map(identities, &Map.take(&1, [:key, :provider, :issuer, :subject]))}
+
+      {:error, _unanswered} ->
+        {:error, :unavailable}
+    end
+  end
+
+  defp pinned_or_nil do
+    case pinned_directory() do
+      {:ok, url} -> url
+      {:error, :no_directory} -> nil
+    end
+  end
 
   # ===========================================================================
   # Another printed kit

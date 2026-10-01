@@ -4,7 +4,7 @@
 defmodule Sanctum.Providers.PersonTest do
   @moduledoc """
   The `person` tool through the gate, as the wire reaches it: enrollment
-  and its kit, another printed kit, a door's link and unlink, a device
+  and its kit, an unfinished enrollment abandoned, another printed kit, a door's link and unlink, a device
   certificate for another home, and the sign-in carry. Each sensitive
   action meets its confirmation before it changes anything, each refusal
   reads as the refusal table's sentence, and no declared action answers
@@ -211,6 +211,125 @@ defmodule Sanctum.Providers.PersonTest do
                refusal(call(person.ctx, enroll_args(:crypto.strong_rand_bytes(32), request_id())))
 
       assert message =~ "CYFR_DIRECTORY_URL"
+    end
+
+    test "the preview it asks under says what enrolling commits to, at the pinned directory" do
+      person = seated!()
+
+      assert {:error, {:confirmation_required, _}} =
+               call(person.ctx, enroll_args(:crypto.strong_rand_bytes(32), request_id()))
+
+      [preview] =
+        Arca.Repo.all(
+          from(c in "pending_confirmations",
+            where: c.user_id == ^person.user.id,
+            select: c.preview
+          )
+        )
+
+      %{"details" => %{"directory" => directory, "effect" => effect}} = Jason.decode!(preview)
+      assert directory == @unreachable
+      assert effect =~ @unreachable
+      assert effect =~ "cannot be reached"
+      assert effect =~ "If every kit is lost, nothing can add one"
+      assert effect =~ "never your private data or the homes your devices saved"
+    end
+  end
+
+  describe "person.status" do
+    test "reads the identity as its settings show it, and no seed or sealed value" do
+      person = seated!()
+
+      assert {:ok, status} = call(person.ctx, %{"action" => "status"})
+      assert status.provenance == "local"
+      assert status.identifier == nil
+      assert status.enrollment == "none"
+      assert status.key_epoch == nil
+      assert status.directory_url == @unreachable
+      assert status.kits == []
+      assert status.rotation == nil
+      assert [%{provider: "github", key: "github|" <> _, subject: _, issuer: _}] = status.doors
+
+      enrolled = enrolled!()
+
+      assert {:ok, status} = call(enrolled.ctx, %{"action" => "status"})
+      assert status.enrollment == "enrolled"
+      assert status.identifier == enrolled.identifier
+      assert is_binary(status.key_epoch)
+
+      assert [%{kind: "enrollment", phase: "accepted", deliverable: true, attempt_id: id}] =
+               status.kits
+
+      refute inspect(status) =~ "sealed-kit-seed"
+      refute Enum.any?(status.kits, &Map.has_key?(&1, :kit_seed_sealed))
+
+      # Acknowledged, the kit is no longer in progress.
+      assert {:ok, %{phase: "completed"}} =
+               call(enrolled.ctx, %{"action" => "kit_ack", "attempt_id" => id})
+
+      assert {:ok, %{kits: []}} = call(enrolled.ctx, %{"action" => "status"})
+    end
+
+    test "names no directory where this home pins none, and reads only the person's own" do
+      person = seated!()
+      _other = enrolled!()
+      Application.delete_env(:sanctum, :directory_url)
+
+      assert {:ok, %{directory_url: nil, kits: [], identifier: nil}} =
+               call(person.ctx, %{"action" => "status"})
+    end
+  end
+
+  describe "person.enroll_abandon" do
+    test "ends an enrollment the directory has not accepted, asking nothing, and names it" do
+      person = seated!()
+      seed = :crypto.strong_rand_bytes(32)
+      id = request_id()
+
+      # Begun under its proof, the directory's answer lost.
+      {_answer, _log} =
+        with_log(fn -> TestContext.confirming(person.ctx, &call(&1, enroll_args(seed, id))) end)
+
+      assert [%{phase: "submitted"}] = attempts(person.user.id, "enrollment")
+      asked = confirmations(person.user.id)
+
+      assert {:ok, %{request_id: ^id, phase: "superseded"}} =
+               call(person.ctx, %{"action" => "enroll_abandon"})
+
+      assert confirmations(person.user.id) == asked
+
+      assert [%{phase: "superseded", kit_seed_sealed: nil}] =
+               attempts(person.user.id, "enrollment")
+
+      assert {:ok, %{enrollment: "none", identifier: nil, kits: []}} =
+               call(person.ctx, %{"action" => "status"})
+
+      # A retry under the abandoned request id is told so.
+      assert %Prima.Refusal{class: :conflict, message: abandoned} =
+               refusal(call(person.ctx, enroll_args(seed, id)))
+
+      assert abandoned =~ "was abandoned"
+
+      # Nothing is left to abandon.
+      assert %Prima.Refusal{class: :not_found, message: nothing} =
+               refusal(call(person.ctx, %{"action" => "enroll_abandon"}))
+
+      assert nothing =~ "no unfinished enrollment"
+    end
+
+    test "an accepted enrollment is registered: refused, its kit still offered" do
+      person = enrolled!()
+
+      assert %Prima.Refusal{class: :conflict, message: message} =
+               refusal(call(person.ctx, %{"action" => "enroll_abandon"}))
+
+      assert message == "Your identity is registered; show its kit with person.kit."
+
+      assert {:ok, %{enrollment: "enrolled", identifier: identifier, kits: [kit]}} =
+               call(person.ctx, %{"action" => "status"})
+
+      assert identifier == person.identifier
+      assert %{kind: "enrollment", phase: "accepted", deliverable: true} = kit
     end
   end
 

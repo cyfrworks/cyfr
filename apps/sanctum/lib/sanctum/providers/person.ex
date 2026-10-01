@@ -23,12 +23,22 @@ defmodule Sanctum.Providers.Person do
 
   What each action answers:
 
+    * `person.status` (`Sanctum.Recovery.status/1`) — the person's identity
+      as their settings show it: `provenance`, `identifier`, the
+      `directory_url` this home pins (or nil), `enrollment`, `key_epoch`,
+      the `kits` and `rotation` still in progress, and the linked `doors`;
+      never a seed, a sealed value or a staged key.
     * `person.enroll` (`Sanctum.Recovery.enroll/3`) — the attempt's
       `attempt_id`, `request_id`, `phase` and `identifier`, and once the
       directory accepted it the `kit`, `%{identifier, directory_url,
       recovery_secret}`, the three lines a restore takes, until the kit is
       acknowledged. A retry under the same `request_id` resumes the
       attempt and registers the same genesis.
+    * `person.enroll_abandon` (`Sanctum.Recovery.abandon_enrollment/1`) —
+      the abandoned enrollment's `request_id` and `phase: "superseded"`:
+      an enrollment the directory has not accepted ends, and the person
+      may enroll again under a new kit. It asks no confirmation: it
+      discards an unfinished attempt and mints nothing.
     * `person.kit` (`Sanctum.Recovery.kit/2`) — the same `kit` again, under
       a fresh confirmation, until `person.kit_ack` erases its seed.
     * `person.kit_ack` (`Sanctum.Recovery.kit_ack/2`) — `attempt_id` and
@@ -69,13 +79,18 @@ defmodule Sanctum.Providers.Person do
     Operation.tool(
       operations() ++ Assertion.operations(),
       description:
-        "A person's identity at their own home: enroll and print the recovery kit, add another kit, rotate the live key, link or unlink a sign-in door, certify a device for another home, and begin, list, cancel or complete a sign-in carry to another home.",
+        "A person's identity at their own home: read its status, enroll and print the recovery kit, abandon an unfinished enrollment, add another kit, rotate the live key, link or unlink a sign-in door, certify a device for another home, and begin, list, cancel or complete a sign-in carry to another home.",
       title: "Person"
     )
   end
 
   defp operations do
     [
+      Operation.new("person", "status", "Read the person's identity", [],
+        kind: :read,
+        planes: [:external],
+        consent: :interactive
+      ),
       Operation.new(
         "person",
         "enroll",
@@ -84,6 +99,15 @@ defmodule Sanctum.Providers.Person do
           recovery_secret("enroll: the new kit's recovery seed, drawn by the trusted form"),
           request_id()
         ],
+        kind: :write,
+        planes: [:external],
+        consent: :interactive
+      ),
+      Operation.new(
+        "person",
+        "enroll_abandon",
+        "Abandon an unfinished enrollment",
+        [],
         kind: :write,
         planes: [:external],
         consent: :interactive
@@ -279,8 +303,17 @@ defmodule Sanctum.Providers.Person do
 
   def handle(%Context{} = ctx, %{"action" => "assert"} = args), do: Assertion.handle(ctx, args)
 
+  def handle(%Context{} = ctx, %{"action" => "status"}), do: answer(Recovery.status(ctx))
+
   def handle(%Context{} = ctx, %{"action" => "enroll"} = args),
     do: answer(Recovery.enroll(ctx, args))
+
+  def handle(%Context{} = ctx, %{"action" => "enroll_abandon"}) do
+    case Recovery.abandon_enrollment(ctx) do
+      {:ok, abandoned} -> {:ok, abandoned}
+      {:error, reason} -> {:error, abandon_refusal(reason)}
+    end
+  end
 
   def handle(%Context{} = ctx, %{"action" => "kit", "attempt_id" => id}) when is_binary(id),
     do: answer(Recovery.kit(ctx, id))
@@ -476,6 +509,11 @@ defmodule Sanctum.Providers.Person do
   defp refusal(:enrollment_refused),
     do: {:conflict, "The directory refused this identity, so you have none yet; enroll again."}
 
+  defp refusal(:enrollment_abandoned),
+    do:
+      {:conflict,
+       "This enrollment was abandoned, so it gives you no identity; enroll again with a new kit."}
+
   defp refusal(:holder_refused),
     do: {:conflict, "The directory refused this kit, so none was added."}
 
@@ -539,6 +577,16 @@ defmodule Sanctum.Providers.Person do
 
   defp refused(class, reason, message),
     do: %Prima.Refusal{class: class, reason: reason, message: message}
+
+  # An abandonment's own refusals: the accepted enrollment stands, and
+  # with none in progress there is nothing to abandon.
+  defp abandon_refusal(:registered),
+    do: {:conflict, "Your identity is registered; show its kit with person.kit."}
+
+  defp abandon_refusal(:not_found),
+    do: refused(:not_found, :not_found, "You have no unfinished enrollment to abandon.")
+
+  defp abandon_refusal(reason), do: refusal(reason)
 
   # A rotation's own refusals, in the refusal table's words. Nothing
   # rotated in any of them; the retryable ones resume under the same

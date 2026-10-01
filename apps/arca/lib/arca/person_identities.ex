@@ -125,7 +125,7 @@ defmodule Arca.PersonIdentities do
 
   @doc false
   @spec unenrolled!(String.t()) :: non_neg_integer()
-  # A refused enrollment returns the person to `none`.
+  # A refused or abandoned enrollment returns the person to `none`.
   # arca:db-raise-ok a transaction step: its caller rescues around the transaction.
   def unenrolled!(user_id) do
     step(

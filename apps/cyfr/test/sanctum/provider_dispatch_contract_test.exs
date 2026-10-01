@@ -59,7 +59,9 @@ defmodule Sanctum.ProviderDispatchContractTest do
     ],
     "profile" => ["plan", "preview", "commit", "grant", "publish", "list", "grants", "revoke"],
     "person" => [
+      "status",
       "enroll",
+      "enroll_abandon",
       "rotate",
       "kit",
       "kit_ack",
@@ -149,9 +151,8 @@ defmodule Sanctum.ProviderDispatchContractTest do
   end
 
   describe "session.read_resource — contract" do
-    setup do
-      :ok = Ecto.Adapters.SQL.Sandbox.checkout(Arca.Repo)
-      Ecto.Adapters.SQL.Sandbox.mode(Arca.Repo, {:shared, self()})
+    setup tags do
+      Cyfr.Test.Sandbox.setup!(tags)
       {:ok, ctx: Sanctum.TestContext.local()}
     end
 
@@ -196,9 +197,8 @@ defmodule Sanctum.ProviderDispatchContractTest do
       })
 
   describe "handle/3 — terminal clauses (the split tripwires)" do
-    setup do
-      :ok = Ecto.Adapters.SQL.Sandbox.checkout(Arca.Repo)
-      Ecto.Adapters.SQL.Sandbox.mode(Arca.Repo, {:shared, self()})
+    setup tags do
+      Cyfr.Test.Sandbox.setup!(tags)
       {:ok, ctx: Sanctum.TestContext.local()}
     end
 

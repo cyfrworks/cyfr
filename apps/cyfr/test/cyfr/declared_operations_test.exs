@@ -12,9 +12,8 @@ defmodule Cyfr.DeclaredOperationsTest do
 
   use ExUnit.Case, async: false
 
-  setup do
-    :ok = Ecto.Adapters.SQL.Sandbox.checkout(Arca.Repo)
-    Ecto.Adapters.SQL.Sandbox.mode(Arca.Repo, {:shared, self()})
+  setup tags do
+    Cyfr.Test.Sandbox.setup!(tags)
     {:ok, ctx: Sanctum.TestContext.local()}
   end
 
@@ -54,14 +53,18 @@ defmodule Cyfr.DeclaredOperationsTest do
             {"passkey", "list"},
             {"confirmation", "pending"},
             {"person", "kit"},
-            {"person", "carry_list"}
+            {"person", "carry_list"},
+            {"person", "status"}
           ] do
         assert operation(tool, action).kind == :read, "#{tool}.#{action}"
       end
 
       # A carry is cancelled and listed as it is completed: on the same
-      # plane and consent class, the list a read.
-      for action <- ~w(carry_cancel carry_complete) do
+      # plane and consent class, the list a read. Abandoning an unfinished
+      # enrollment is a write that takes no arguments.
+      assert operation("person", "enroll_abandon").args == []
+
+      for action <- ~w(carry_cancel carry_complete enroll_abandon) do
         assert operation("person", action).kind == :write, "person.#{action}"
       end
 

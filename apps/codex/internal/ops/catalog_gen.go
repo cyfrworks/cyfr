@@ -183,11 +183,13 @@ const (
 	PersonCarryList         = "carry_list"
 	PersonCertify           = "certify"
 	PersonEnroll            = "enroll"
+	PersonEnrollAbandon     = "enroll_abandon"
 	PersonEnrollHolder      = "enroll_holder"
 	PersonKit               = "kit"
 	PersonKitAck            = "kit_ack"
 	PersonLinkDoor          = "link_door"
 	PersonRotate            = "rotate"
+	PersonStatus            = "status"
 	PersonUnlinkDoor        = "unlink_door"
 	PolicyLogCorrelate      = "correlate"
 	PolicyLogGet            = "get"
@@ -307,7 +309,7 @@ var Actions = map[string][]string{
 	"oauth":               {"delete_client", "list", "set_client"},
 	"pairing":             {"begin", "complete", "list", "renew", "revoke"},
 	"passkey":             {"list", "recover_admin", "register", "revoke"},
-	"person":              {"assert", "carry_begin", "carry_cancel", "carry_complete", "carry_list", "certify", "enroll", "enroll_holder", "kit", "kit_ack", "link_door", "rotate", "unlink_door"},
+	"person":              {"assert", "carry_begin", "carry_cancel", "carry_complete", "carry_list", "certify", "enroll", "enroll_abandon", "enroll_holder", "kit", "kit_ack", "link_door", "rotate", "status", "unlink_door"},
 	"policy_log":          {"correlate", "get", "list"},
 	"profile":             {"commit", "grant", "grants", "list", "plan", "preview", "publish", "revoke"},
 	"record":              {"get", "list", "payload"},
@@ -2694,6 +2696,19 @@ func (args PersonEnrollArgs) MarshalJSON() ([]byte, error) {
 	}{Action: PersonEnroll, fields: fields(args)})
 }
 
+// PersonEnrollAbandonArgs carries arguments for person.enroll_abandon.
+type PersonEnrollAbandonArgs struct {
+}
+
+// MarshalJSON supplies the operation's fixed action discriminator.
+func (args PersonEnrollAbandonArgs) MarshalJSON() ([]byte, error) {
+	type fields PersonEnrollAbandonArgs
+	return json.Marshal(struct {
+		Action string `json:"action"`
+		fields
+	}{Action: PersonEnrollAbandon, fields: fields(args)})
+}
+
 // PersonEnrollHolderArgs carries arguments for person.enroll_holder.
 type PersonEnrollHolderArgs struct {
 	// enroll_holder: an existing kit's recovery seed, which signs the change (32 bytes, unpadded base64url)
@@ -2791,6 +2806,19 @@ func (args PersonRotateArgs) MarshalJSON() ([]byte, error) {
 		Action string `json:"action"`
 		fields
 	}{Action: PersonRotate, fields: fields(args)})
+}
+
+// PersonStatusArgs carries arguments for person.status.
+type PersonStatusArgs struct {
+}
+
+// MarshalJSON supplies the operation's fixed action discriminator.
+func (args PersonStatusArgs) MarshalJSON() ([]byte, error) {
+	type fields PersonStatusArgs
+	return json.Marshal(struct {
+		Action string `json:"action"`
+		fields
+	}{Action: PersonStatus, fields: fields(args)})
 }
 
 // PersonUnlinkDoorArgs carries arguments for person.unlink_door.

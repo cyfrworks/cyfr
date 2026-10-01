@@ -27,9 +27,9 @@ defmodule CyfrWeb.ContextGuardRosterTest do
     SchedulesLive SettingsLive McpServersLive ShellLive LegalLive CarryLive
   )
 
-  # The sign-in page and the pairing page are what an anonymous caller
-  # comes for; neither holds a session's context.
-  @public ~w(LoginLive PairLive)
+  # The sign-in page, the pairing page and the restore page are what an
+  # anonymous caller comes for; none holds a session's context.
+  @public ~w(LoginLive PairLive RestoreLive)
 
   # Rendered by the layout or a page with `live_render/3`; each mounts the guard itself.
   @nested ~w(TopbarLive AquaPanelLive ThreadPaneLive)

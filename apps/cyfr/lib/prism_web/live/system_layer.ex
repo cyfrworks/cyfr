@@ -78,7 +78,19 @@ defmodule PrismWeb.SystemLayer do
     * a sign-in — nothing: identity is established at the authentication
       boundary, so confirming leaves for the sign-in page;
     * an unlock — no operation unlocks the vault, so an unlock prompt has
-      no confirm control and can only be dismissed.
+      no confirm control and can only be dismissed;
+    * recovery material (`PrismWeb.SystemLayer.Recovery`) — enrollment
+      through `person.enroll`, a kit again through `person.kit`, another
+      kit through `person.enroll_holder`, and the kit's acknowledgment
+      through `person.kit_ack`. The seed is the browser's, drawn there and
+      submitted (`recovery_submit`) and submitted again once confirmed,
+      never assigned; a kit's lines go to the browser in a push and are
+      erased there when the prompt ends.
+
+  A page registers a passkey through the layer's `webauthn:create`
+  ceremony (`create_passkey/4`): the browser answers the layer, which
+  hands the credential to the page (`{:system_layer_passkey, {:ok,
+  credential} | :error}`) to register through `passkey.register`.
 
   ## Fresh confirmation
 
@@ -141,7 +153,7 @@ defmodule PrismWeb.SystemLayer do
   alias Phoenix.LiveView.JS
   alias Prism.SafeMode
   alias PrismWeb.Ops
-  alias PrismWeb.SystemLayer.{Listener, Pairing, Prompt}
+  alias PrismWeb.SystemLayer.{Listener, Pairing, Prompt, Recovery}
   alias Sanctum.Context
 
   @layer_id "system-layer"
@@ -169,6 +181,26 @@ defmodule PrismWeb.SystemLayer do
   def show(id \\ @layer_id, prompt) do
     send_update(__MODULE__, id: id, prompt: prompt)
     :ok
+  end
+
+  @doc """
+  Ask the browser of the page `socket` is to create a passkey with the
+  creation options `public_key` and the home's `registration` token, both
+  as `passkey.register` answered them, through the layer `layer`'s hook
+  (`webauthn:create`). The layer hands the page the answer as
+  `{:system_layer_passkey, {:ok, credential}}`, or `{:system_layer_passkey,
+  :error}` when the ceremony did not finish.
+  """
+  @spec create_passkey(Phoenix.LiveView.Socket.t(), map(), String.t(), String.t()) ::
+          Phoenix.LiveView.Socket.t()
+  def create_passkey(socket, public_key, registration, layer \\ @layer_id)
+      when is_map(public_key) and is_binary(registration) do
+    push_event(socket, "webauthn:create", %{
+      layer: layer,
+      purpose: "passkey",
+      public_key: public_key,
+      registration: registration
+    })
   end
 
   # ---------------------------------------------------------------------------
@@ -476,6 +508,7 @@ defmodule PrismWeb.SystemLayer do
        panels: %{},
        held: %{},
        pairing: nil,
+       recovery: nil,
        athanor_route: nil,
        athanor_name: nil
      )}
@@ -967,15 +1000,39 @@ defmodule PrismWeb.SystemLayer do
   defp advance(socket), do: socket |> step() |> load_shown()
 
   defp step(%{assigns: %{queue: [next | rest]}} = socket),
-    do: socket |> assign(current: next, queue: rest, error: nil) |> mark_shown()
+    do:
+      socket
+      |> forget_recovery()
+      |> assign(current: next, queue: rest, error: nil)
+      |> mark_shown()
 
-  defp step(socket), do: assign(socket, current: nil, queue: [], error: nil, pairing: nil)
+  defp step(socket) do
+    socket
+    |> forget_recovery()
+    |> assign(current: nil, queue: [], error: nil, pairing: nil, recovery: nil)
+  end
 
-  # The pairing prompt, as it is shown, has its list still to read.
+  # A recovery prompt that ends, however it ends, has the browser forget
+  # its material and empty the prompt.
+  defp forget_recovery(%{assigns: %{recovery: %{prompt_id: prompt_id}}} = socket),
+    do: socket |> push_layer("recovery:clear", %{prompt: prompt_id}) |> assign(:recovery, nil)
+
+  defp forget_recovery(socket), do: socket
+
+  # The pairing prompt, as it is shown, has its list still to read; a
+  # recovery prompt starts at its form.
   defp mark_shown(%{assigns: %{current: %{kind: :pairing, id: id}}} = socket),
-    do: assign(socket, :pairing, %{prompt_id: id, clients: :unread, invitation: nil})
+    do:
+      assign(socket,
+        pairing: %{prompt_id: id, clients: :unread, invitation: nil},
+        recovery: nil
+      )
 
-  defp mark_shown(socket), do: assign(socket, :pairing, nil)
+  defp mark_shown(%{assigns: %{current: %{kind: kind, id: id}}} = socket)
+       when kind in [:enrollment, :kit, :holder],
+       do: assign(socket, pairing: nil, recovery: Recovery.start(id))
+
+  defp mark_shown(socket), do: assign(socket, pairing: nil, recovery: nil)
 
   # What a shown prompt reads: the pairing prompt, the person's paired
   # clients.
@@ -1083,6 +1140,44 @@ defmodule PrismWeb.SystemLayer do
         :none -> {:noreply, socket}
       end
     end)
+  end
+
+  # The material is read out of the event and handed to the dispatch;
+  # nothing here assigns, renders or logs it (`recovery_secret` is on the
+  # redaction roster, `Prima.Sanitizer`).
+  def handle_event("recovery_submit", %{"prompt_id" => id} = params, socket) do
+    CyfrWeb.ContextGuard.guard(socket, fn socket ->
+      case open(socket, id, Prompt.recovery_kinds()) do
+        {:ok, prompt} -> {:noreply, recovery_submit(socket, prompt, params)}
+        :none -> {:noreply, socket}
+      end
+    end)
+  end
+
+  def handle_event("recovery_ack", %{"id" => id}, socket) do
+    CyfrWeb.ContextGuard.guard(socket, fn socket ->
+      case open(socket, id, Prompt.recovery_kinds()) do
+        {:ok, prompt} -> {:noreply, recovery_ack(socket, prompt)}
+        :none -> {:noreply, socket}
+      end
+    end)
+  end
+
+  # A page's passkey ceremony (`create_passkey/4`): the answer is the
+  # page's to register.
+  def handle_event(
+        "webauthn_result",
+        %{"purpose" => "passkey", "credential" => credential},
+        socket
+      )
+      when is_map(credential) do
+    send(self(), {:system_layer_passkey, {:ok, credential}})
+    {:noreply, socket}
+  end
+
+  def handle_event("webauthn_error", %{"purpose" => "passkey"}, socket) do
+    send(self(), {:system_layer_passkey, :error})
+    {:noreply, socket}
   end
 
   def handle_event("prove_passkey", %{"ref" => ref}, socket) do
@@ -1397,6 +1492,9 @@ defmodule PrismWeb.SystemLayer do
       %{repeat: :resubmit} ->
         push_resubmit(socket, "#{socket.assigns.id}-credential")
 
+      %{repeat: :recovery_resubmit, prompt_id: prompt_id} ->
+        push_layer(socket, "recovery:resubmit", %{prompt: prompt_id})
+
       %{prompt_id: prompt_id, repeat: repeat} ->
         case socket.assigns.current do
           %{id: ^prompt_id, kind: :pairing} = prompt ->
@@ -1404,6 +1502,9 @@ defmodule PrismWeb.SystemLayer do
               :pairing_begin -> pairing_begin(socket, prompt)
               {:pairing_revoke, client_id} -> pairing_revoke(socket, prompt, client_id)
             end
+
+          %{id: ^prompt_id, kind: :kit} = prompt ->
+            recovery_submit(socket, prompt, %{})
 
           _gone ->
             socket
@@ -1573,6 +1674,59 @@ defmodule PrismWeb.SystemLayer do
   end
 
   # ---------------------------------------------------------------------------
+  # Recovery material
+  # ---------------------------------------------------------------------------
+
+  # The material the browser submitted, dispatched as the prompt's change;
+  # once confirmed, the browser submits it again (`:recovery_resubmit`) or,
+  # for a kit, the layer asks again (`{:recovery_kit, attempt_id}`).
+  defp recovery_submit(socket, prompt, params) do
+    case Recovery.request(prompt, params) do
+      {:ok, tool, args, repeat} ->
+        case layer_call(socket, prompt, repeat, tool, args) do
+          {:asked, socket} -> socket
+          {:done, result, socket} -> recovered(socket, prompt, result)
+        end
+
+      {:error, sentence} ->
+        assign(socket, :error, sentence)
+    end
+  end
+
+  # A kit answered goes to the browser alone, which draws its three lines;
+  # the layer keeps the attempt it belongs to, which the acknowledgment
+  # names, and nothing of the kit.
+  defp recovered(socket, prompt, {:ok, %{attempt_id: attempt_id} = answer}) do
+    case Recovery.kit_lines(answer) do
+      nil ->
+        settle(socket, prompt, :confirmed)
+
+      lines ->
+        socket
+        |> push_layer("recovery:kit", %{prompt: prompt.id, kit: lines})
+        |> assign(:recovery, %{Recovery.start(prompt.id) | phase: :kit, attempt_id: attempt_id})
+        |> assign(:error, nil)
+    end
+  end
+
+  defp recovered(socket, prompt, {:ok, _answer}), do: settle(socket, prompt, :confirmed)
+
+  defp recovered(socket, prompt, {:error, reason}),
+    do: refuse(socket, prompt, reason, Ops.error_message(reason))
+
+  # The person saved the kit: its seed is erased at the home, and the
+  # browser forgets the lines as the prompt ends.
+  defp recovery_ack(%{assigns: %{recovery: %{phase: :kit, attempt_id: id}}} = socket, prompt)
+       when is_binary(id) do
+    case Ops.call_tool(socket, "person/kit_ack", %{"attempt_id" => id}) do
+      {:ok, _acknowledged} -> settle(socket, prompt, :confirmed)
+      {:error, reason} -> assign(socket, :error, Ops.error_message(reason))
+    end
+  end
+
+  defp recovery_ack(socket, _prompt), do: socket
+
+  # ---------------------------------------------------------------------------
   # Who can confirm
   # ---------------------------------------------------------------------------
 
@@ -1654,6 +1808,7 @@ defmodule PrismWeb.SystemLayer do
             myself={@myself}
             id={@id}
             pairing={@pairing}
+            recovery={@recovery}
             context={assigns[:context]}
             athanor_route={@athanor_route}
             athanor_name={@athanor_name}
@@ -1698,6 +1853,7 @@ defmodule PrismWeb.SystemLayer do
   attr :myself, :any, required: true
   attr :id, :string, required: true
   attr :pairing, :map, default: nil
+  attr :recovery, :map, default: nil
   attr :context, :any, default: nil
   attr :athanor_route, :any, default: nil
   attr :athanor_name, :any, default: nil
@@ -1765,6 +1921,20 @@ defmodule PrismWeb.SystemLayer do
       pairing={@pairing}
       may={@may}
       myself={@myself}
+      button_class={button_class(false)}
+      primary_class={button_class(true)}
+    />
+    """
+  end
+
+  defp body(%{prompt: %{kind: kind}} = assigns) when kind in [:enrollment, :kit, :holder] do
+    ~H"""
+    <Recovery.body
+      prompt={@prompt}
+      recovery={@recovery}
+      may={@may}
+      myself={@myself}
+      id={@id}
       button_class={button_class(false)}
       primary_class={button_class(true)}
     />
@@ -2011,6 +2181,9 @@ defmodule PrismWeb.SystemLayer do
   defp title(%{kind: :pairing}), do: "Your devices"
   defp title(%{kind: :confirmation, subject: %{operation: operation}}), do: "Confirm #{operation}"
 
+  defp title(%{kind: kind} = prompt) when kind in [:enrollment, :kit, :holder],
+    do: Recovery.title(prompt)
+
   defp description(%{kind: :grant}),
     do:
       "Approve what this app may use and reach, as listed below. Nothing is granted until you do."
@@ -2053,6 +2226,9 @@ defmodule PrismWeb.SystemLayer do
     do:
       "A client of yours asked for a change that needs a fresh confirmation. Check what it " <>
         "would change and who asked before you confirm."
+
+  defp description(%{kind: kind} = prompt) when kind in [:enrollment, :kit, :holder],
+    do: Recovery.description(prompt)
 
   defp confirm_label(%{kind: :grant}), do: "Grant"
   defp confirm_label(%{kind: :sign_in}), do: "Sign in"
