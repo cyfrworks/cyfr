@@ -16,9 +16,8 @@ defmodule Cyfr.ControlPlaneWorkersTest do
 
   alias Arca.ControlPlane
 
-  setup do
-    :ok = Ecto.Adapters.SQL.Sandbox.checkout(Arca.Repo)
-    Ecto.Adapters.SQL.Sandbox.mode(Arca.Repo, {:shared, self()})
+  setup tags do
+    Cyfr.Test.Sandbox.setup!(tags)
     on_exit(fn -> ControlPlane.record(:unclaimed) end)
     :ok
   end

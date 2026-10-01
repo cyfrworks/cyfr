@@ -13,9 +13,8 @@ defmodule Sanctum.CipherIntegrationTest do
 
   @key :crypto.strong_rand_bytes(32)
 
-  setup do
-    :ok = Ecto.Adapters.SQL.Sandbox.checkout(Arca.Repo)
-    Ecto.Adapters.SQL.Sandbox.mode(Arca.Repo, {:shared, self()})
+  setup tags do
+    Cyfr.Test.Sandbox.setup!(tags)
 
     orig_kr = Application.get_env(:sanctum, :crypto_keyring)
     Application.put_env(:sanctum, :crypto_keyring, %{primary: "k1", keys: %{"k1" => @key}})

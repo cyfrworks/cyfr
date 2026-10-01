@@ -23,9 +23,8 @@ defmodule Sanctum.ProvisioningTest do
 
   @valid_wasm File.read!(Path.join([File.cwd!(), "test/support/test_wasm/math.wasm"]))
 
-  setup do
-    :ok = Ecto.Adapters.SQL.Sandbox.checkout(Arca.Repo)
-    Ecto.Adapters.SQL.Sandbox.mode(Arca.Repo, {:shared, self()})
+  setup tags do
+    Cyfr.Test.Sandbox.setup!(tags)
 
     test_dir = Path.join(System.tmp_dir!(), "cyfr_provisioning_#{:rand.uniform(100_000)}")
     seed_dir = Path.join(test_dir, "seed")

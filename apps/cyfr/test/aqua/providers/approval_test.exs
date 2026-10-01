@@ -15,9 +15,8 @@ defmodule Aqua.Providers.ApprovalTest do
   alias Grimoire.Visibility
   alias Sanctum.Context
 
-  setup do
-    :ok = Ecto.Adapters.SQL.Sandbox.checkout(Arca.Repo)
-    Ecto.Adapters.SQL.Sandbox.mode(Arca.Repo, {:shared, self()})
+  setup tags do
+    Cyfr.Test.Sandbox.setup!(tags)
     Sanctum.TestContext.athanor!()
     ctx = Sanctum.TestContext.local()
     {:ok, thread} = Threads.create(Sanctum.Context.actor(ctx))

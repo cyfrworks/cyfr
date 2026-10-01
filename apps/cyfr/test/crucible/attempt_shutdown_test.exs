@@ -50,9 +50,8 @@ defmodule Crucible.AttemptShutdownTest do
          }}
   end
 
-  setup do
-    :ok = Ecto.Adapters.SQL.Sandbox.checkout(Arca.Repo)
-    Ecto.Adapters.SQL.Sandbox.mode(Arca.Repo, {:shared, self()})
+  setup tags do
+    Cyfr.Test.Sandbox.setup!(tags)
     Process.register(self(), __MODULE__)
 
     handler = "unreaped-kill-#{System.unique_integer([:positive])}"

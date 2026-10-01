@@ -17,10 +17,7 @@ defmodule Arca.BuildRecordsTest do
   alias Arca.BuildRecords
 
   setup context do
-    unless context[:no_connection] do
-      :ok = Ecto.Adapters.SQL.Sandbox.checkout(Arca.Repo)
-      Ecto.Adapters.SQL.Sandbox.mode(Arca.Repo, {:shared, self()})
-    end
+    unless context[:no_connection], do: Arca.Test.Sandbox.setup!(context)
 
     rand = :rand.uniform(100_000)
 

@@ -24,10 +24,9 @@ defmodule Crucible.AdmissionTest do
   @root_node "reagent:local.chain-root"
   @target_node "reagent:local.chain-target"
 
-  setup do
+  setup tags do
     Arca.Cache.init()
-    :ok = Ecto.Adapters.SQL.Sandbox.checkout(Arca.Repo)
-    Ecto.Adapters.SQL.Sandbox.mode(Arca.Repo, {:shared, self()})
+    Cyfr.Test.Sandbox.setup!(tags)
 
     test_path =
       Path.join(System.tmp_dir!(), "admission_test_#{System.unique_integer([:positive])}")

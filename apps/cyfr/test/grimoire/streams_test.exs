@@ -116,9 +116,8 @@ defmodule Grimoire.StreamsTest do
       ]
   end
 
-  setup do
-    :ok = Ecto.Adapters.SQL.Sandbox.checkout(Arca.Repo)
-    Ecto.Adapters.SQL.Sandbox.mode(Arca.Repo, {:shared, self()})
+  setup tags do
+    Cyfr.Test.Sandbox.setup!(tags)
     on_exit(fn -> Arca.ControlPlane.record(:unclaimed) end)
     {:ok, ctx: %{Sanctum.TestContext.local() | request_id: Prima.UUID7.request_id()}}
   end

@@ -35,10 +35,9 @@ defmodule Emissary.MCP.ActionCoverageTest do
   # config:compile-runtime-ok — cases require the live registry’s roster at compile time.
   @providers Application.compile_env(:cyfr, :tool_providers, [])
 
-  setup do
+  setup tags do
     Arca.Cache.init()
-    :ok = Ecto.Adapters.SQL.Sandbox.checkout(Arca.Repo)
-    Ecto.Adapters.SQL.Sandbox.mode(Arca.Repo, {:shared, self()})
+    Cyfr.Test.Sandbox.setup!(tags)
     :ok
   end
 

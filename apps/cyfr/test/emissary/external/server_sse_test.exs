@@ -22,9 +22,8 @@ defmodule Emissary.External.ServerSseTest do
 
   alias Emissary.External.Server
 
-  setup do
-    :ok = Ecto.Adapters.SQL.Sandbox.checkout(Arca.Repo)
-    Ecto.Adapters.SQL.Sandbox.mode(Arca.Repo, {:shared, self()})
+  setup tags do
+    Cyfr.Test.Sandbox.setup!(tags)
     bypass = Bypass.open()
     {:ok, bypass: bypass, url: "http://127.0.0.1:#{bypass.port}/mcp"}
   end

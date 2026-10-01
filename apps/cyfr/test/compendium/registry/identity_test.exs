@@ -14,9 +14,8 @@ defmodule Compendium.Registry.IdentityTest do
   # at compile time cannot see any of them.
   defp registry, do: Compendium.RegistryHost.canonical_host()
 
-  setup do
-    :ok = Ecto.Adapters.SQL.Sandbox.checkout(Arca.Repo)
-    Ecto.Adapters.SQL.Sandbox.mode(Arca.Repo, {:shared, self()})
+  setup tags do
+    Cyfr.Test.Sandbox.setup!(tags)
 
     ctx =
       Context.build(

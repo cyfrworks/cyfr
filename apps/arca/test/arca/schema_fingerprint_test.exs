@@ -11,8 +11,8 @@ defmodule Arca.SchemaFingerprintTest do
   alias Arca.SchemaFingerprint
   alias Arca.Schemas.ServerMeta
 
-  setup do
-    :ok = Ecto.Adapters.SQL.Sandbox.checkout(Arca.Repo)
+  setup tags do
+    Arca.Test.Sandbox.setup!(tags)
     :ok
   end
 

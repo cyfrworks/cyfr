@@ -14,9 +14,8 @@ defmodule Compendium.Providers.AquaConsentTest do
   @writes ~w(create update delete reset skill_create skill_update skill_delete skill_reset)
   @reads ~w(list get status skill_list skill_get)
 
-  setup do
-    :ok = Ecto.Adapters.SQL.Sandbox.checkout(Arca.Repo)
-    Ecto.Adapters.SQL.Sandbox.mode(Arca.Repo, {:shared, self()})
+  setup tags do
+    Cyfr.Test.Sandbox.setup!(tags)
     {:ok, ctx: Sanctum.TestContext.local()}
   end
 

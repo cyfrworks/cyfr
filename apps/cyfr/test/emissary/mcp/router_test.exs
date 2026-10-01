@@ -43,9 +43,8 @@ defmodule Emissary.MCP.RouterTest do
   alias Emissary.MCP.Router
   alias Prima.MCP.Message
 
-  setup do
-    :ok = Ecto.Adapters.SQL.Sandbox.checkout(Arca.Repo)
-    Ecto.Adapters.SQL.Sandbox.mode(Arca.Repo, {:shared, self()})
+  setup tags do
+    Cyfr.Test.Sandbox.setup!(tags)
 
     ctx = Sanctum.TestContext.local()
 

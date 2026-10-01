@@ -12,9 +12,8 @@ defmodule Arca.DoorsTest do
 
   alias Arca.Doors
 
-  setup do
-    :ok = Ecto.Adapters.SQL.Sandbox.checkout(Arca.Repo)
-    Ecto.Adapters.SQL.Sandbox.mode(Arca.Repo, {:shared, self()})
+  setup tags do
+    Arca.Test.Sandbox.setup!(tags)
     {:ok, actor: Prima.Actor.system()}
   end
 

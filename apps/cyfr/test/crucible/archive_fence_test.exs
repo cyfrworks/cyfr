@@ -53,9 +53,8 @@ defmodule Crucible.ArchiveFenceTest do
   alias Cyfr.Test.AttemptFixtures
   alias Sanctum.Tenancy.Athanors
 
-  setup do
-    :ok = Ecto.Adapters.SQL.Sandbox.checkout(Arca.Repo)
-    Ecto.Adapters.SQL.Sandbox.mode(Arca.Repo, {:shared, self()})
+  setup tags do
+    Cyfr.Test.Sandbox.setup!(tags)
     Arca.Cache.init()
 
     test_dir =

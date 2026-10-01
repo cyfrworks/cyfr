@@ -19,10 +19,9 @@ defmodule Compendium.RegisterMintsNothingTest do
 
   @wasm File.read!(Path.join(__DIR__, "../support/test_wasm/math.wasm"))
 
-  setup do
+  setup tags do
     Arca.Cache.init()
-    :ok = Ecto.Adapters.SQL.Sandbox.checkout(Arca.Repo)
-    Ecto.Adapters.SQL.Sandbox.mode(Arca.Repo, {:shared, self()})
+    Cyfr.Test.Sandbox.setup!(tags)
 
     test_path = Path.join(System.tmp_dir!(), "register_no_mint_#{:rand.uniform(1_000_000)}")
     original_base_path = Application.get_env(:arca, :base_path)

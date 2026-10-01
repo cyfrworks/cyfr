@@ -16,9 +16,8 @@ defmodule Arca.StorageUnitsTest do
 
   @root "components"
 
-  setup do
-    :ok = Ecto.Adapters.SQL.Sandbox.checkout(Arca.Repo)
-    Ecto.Adapters.SQL.Sandbox.mode(Arca.Repo, {:shared, self()})
+  setup tags do
+    Arca.Test.Sandbox.setup!(tags)
 
     key = "catalysts/local/unit-#{System.unique_integer([:positive])}/1.0.0"
     {:ok, actor: actor("ath_a"), other: actor("ath_b"), key: key}

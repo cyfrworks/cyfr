@@ -17,8 +17,8 @@ defmodule Arca.StorageProjectionRootsTest do
   alias Arca.Schemas.{StorageProjectionChange, StorageProjectionRoot}
   alias Arca.{StorageProjectionChanges, StorageProjectionRoots}
 
-  setup do
-    :ok = Ecto.Adapters.SQL.Sandbox.checkout(Arca.Repo)
+  setup tags do
+    Arca.Test.Sandbox.setup!(tags)
     athanor = "ath_roots_#{System.unique_integer([:positive])}"
     {:ok, actor: %Prima.Actor{athanor_id: athanor, user_id: "usr_roots"}, athanor: athanor}
   end
@@ -169,7 +169,7 @@ defmodule Arca.StorageProjectionRootsTest do
     # the transactions the test is about. Every row is this case's athanor's
     # and goes with it.
     setup %{athanor: athanor} do
-      Ecto.Adapters.SQL.Sandbox.checkin(Arca.Repo)
+      Ecto.Adapters.SQL.Sandbox.mode(Arca.Repo, :manual)
 
       on_exit(fn ->
         unboxed(fn ->

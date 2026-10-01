@@ -20,9 +20,8 @@ defmodule Arca.StorageProjectionChangesTest do
 
   @root "components"
 
-  setup do
-    :ok = Ecto.Adapters.SQL.Sandbox.checkout(Arca.Repo)
-    Ecto.Adapters.SQL.Sandbox.mode(Arca.Repo, {:shared, self()})
+  setup tags do
+    Arca.Test.Sandbox.setup!(tags)
 
     base =
       Path.join(System.tmp_dir!(), "projection_changes_#{System.unique_integer([:positive])}")

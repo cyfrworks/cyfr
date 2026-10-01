@@ -15,10 +15,10 @@ defmodule Arca.StorageAuthorizePathTest do
 
   alias Prima.Actor
 
-  setup do
+  setup tags do
     # A write inside a unit stamps the unit's pending generation for the
     # root's projection before its bytes move.
-    :ok = Ecto.Adapters.SQL.Sandbox.checkout(Arca.Repo)
+    Arca.Test.Sandbox.setup!(tags)
 
     base = Path.join(System.tmp_dir!(), "arca_authz_#{System.unique_integer([:positive])}")
     File.mkdir_p!(base)

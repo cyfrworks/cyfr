@@ -19,10 +19,9 @@ defmodule Emissary.MCP.InChainIdentityTest do
 
   @plane_refusal ~r/guest-plane context cannot/
 
-  setup do
+  setup tags do
     Arca.Cache.init()
-    :ok = Ecto.Adapters.SQL.Sandbox.checkout(Arca.Repo)
-    Ecto.Adapters.SQL.Sandbox.mode(Arca.Repo, {:shared, self()})
+    Cyfr.Test.Sandbox.setup!(tags)
     :ok
   end
 

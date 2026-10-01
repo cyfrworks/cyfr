@@ -14,9 +14,8 @@ defmodule Crucible.UsageTest do
   alias Crucible.Provider
   alias Sanctum.Test.ConsentFixtures
 
-  setup do
-    :ok = Ecto.Adapters.SQL.Sandbox.checkout(Arca.Repo)
-    Ecto.Adapters.SQL.Sandbox.mode(Arca.Repo, {:shared, self()})
+  setup tags do
+    Cyfr.Test.Sandbox.setup!(tags)
     {mine, theirs} = Sanctum.TestContext.two_contexts()
     {:ok, mine: mine, theirs: theirs}
   end

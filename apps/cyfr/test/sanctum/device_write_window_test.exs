@@ -27,10 +27,9 @@ defmodule Sanctum.DeviceWriteWindowTest do
   @provider "google"
   @scopes ["https://www.googleapis.com/auth/gmail.readonly"]
 
-  setup do
+  setup tags do
     Arca.Cache.init()
-    :ok = Ecto.Adapters.SQL.Sandbox.checkout(Arca.Repo)
-    Ecto.Adapters.SQL.Sandbox.mode(Arca.Repo, {:shared, self()})
+    Cyfr.Test.Sandbox.setup!(tags)
     Prima.RateLimiter.reset()
     on_exit(&Prima.RateLimiter.reset/0)
 

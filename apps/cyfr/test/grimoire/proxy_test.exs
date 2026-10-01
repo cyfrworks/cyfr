@@ -92,9 +92,8 @@ defmodule Grimoire.ProxyTest do
   end
 
   describe "the operation table asks the installed port" do
-    setup do
-      :ok = Ecto.Adapters.SQL.Sandbox.checkout(Arca.Repo)
-      Ecto.Adapters.SQL.Sandbox.mode(Arca.Repo, {:shared, self()})
+    setup tags do
+      Cyfr.Test.Sandbox.setup!(tags)
       Proxy.install!(Stub)
       {:ok, ctx: Sanctum.TestContext.local()}
     end

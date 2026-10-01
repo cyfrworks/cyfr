@@ -23,10 +23,9 @@ defmodule Crucible.BarrierRefusalTest do
   @lifecycle [[:cyfr, :opus, :execute, :start], [:cyfr, :opus, :execute, :exception]]
   @parent_ended "Execution refused: its parent execution is no longer running"
 
-  setup do
+  setup tags do
     Arca.Cache.init()
-    :ok = Ecto.Adapters.SQL.Sandbox.checkout(Arca.Repo)
-    Ecto.Adapters.SQL.Sandbox.mode(Arca.Repo, {:shared, self()})
+    Cyfr.Test.Sandbox.setup!(tags)
 
     test_path = Path.join(System.tmp_dir!(), "barrier_#{System.unique_integer([:positive])}")
     original_base_path = Application.get_env(:arca, :base_path)

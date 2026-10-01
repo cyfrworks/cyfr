@@ -29,9 +29,8 @@ defmodule Compendium.SignInSyncTest do
   alias Sanctum.SignIn
   alias Sanctum.Tenancy.{Athanors, Users}
 
-  setup do
-    :ok = Ecto.Adapters.SQL.Sandbox.checkout(Arca.Repo)
-    Ecto.Adapters.SQL.Sandbox.mode(Arca.Repo, {:shared, self()})
+  setup tags do
+    Cyfr.Test.Sandbox.setup!(tags)
 
     bypass = Bypass.open()
     original_url = Application.get_env(:cyfr, :registry_url)

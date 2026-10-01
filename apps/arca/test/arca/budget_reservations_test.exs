@@ -17,9 +17,8 @@ defmodule Arca.BudgetReservationsTest do
   alias Arca.BudgetReservations
   alias Arca.ExecutionAttempts
 
-  setup do
-    :ok = Ecto.Adapters.SQL.Sandbox.checkout(Arca.Repo)
-    Ecto.Adapters.SQL.Sandbox.mode(Arca.Repo, {:shared, self()})
+  setup tags do
+    Arca.Test.Sandbox.setup!(tags)
     Arca.Test.Actor.athanor!()
     actor = Arca.Test.Actor.local()
     budget_id = "bgt_#{System.unique_integer([:positive])}"

@@ -265,9 +265,8 @@ defmodule Emissary.External.ServerTest do
   end
 
   describe "header vault resolution" do
-    setup do
-      :ok = Ecto.Adapters.SQL.Sandbox.checkout(Arca.Repo)
-      Ecto.Adapters.SQL.Sandbox.mode(Arca.Repo, {:shared, self()})
+    setup tags do
+      Cyfr.Test.Sandbox.setup!(tags)
       :ok
     end
 
@@ -518,9 +517,8 @@ defmodule Emissary.External.ServerTest do
     # A connect reads the revision token of every vault entry the server's
     # header and backend env templates name before it resolves any of them,
     # and refuses when the store cannot answer.
-    setup do
-      :ok = Ecto.Adapters.SQL.Sandbox.checkout(Arca.Repo)
-      Ecto.Adapters.SQL.Sandbox.mode(Arca.Repo, {:shared, self()})
+    setup tags do
+      Cyfr.Test.Sandbox.setup!(tags)
       {:ok, ctx: Sanctum.TestContext.local()}
     end
 

@@ -10,9 +10,8 @@ defmodule Aqua.AgentConfigTest do
 
   alias Aqua.AgentConfig
 
-  setup do
-    :ok = Ecto.Adapters.SQL.Sandbox.checkout(Arca.Repo)
-    Ecto.Adapters.SQL.Sandbox.mode(Arca.Repo, {:shared, self()})
+  setup tags do
+    Cyfr.Test.Sandbox.setup!(tags)
 
     test_path = Path.join(System.tmp_dir!(), "agent_config_#{:rand.uniform(1_000_000)}")
     original_base_path = Application.get_env(:arca, :base_path)

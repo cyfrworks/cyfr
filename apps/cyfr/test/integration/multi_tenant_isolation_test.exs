@@ -20,9 +20,8 @@ defmodule MultiTenantIsolationTest do
 
   @permissions [:execute, :storage_read, :storage_write, :vault_read, :admin]
 
-  setup do
-    :ok = Ecto.Adapters.SQL.Sandbox.checkout(Arca.Repo)
-    Ecto.Adapters.SQL.Sandbox.mode(Arca.Repo, {:shared, self()})
+  setup tags do
+    Cyfr.Test.Sandbox.setup!(tags)
 
     {:ok, athanor_a} =
       Athanors.create(%{kind: "group", name: "Alpha", slug: "alpha", created_by: "u_a"})

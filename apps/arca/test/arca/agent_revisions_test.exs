@@ -11,8 +11,8 @@ defmodule Arca.AgentRevisionsTest do
 
   alias Arca.AgentRevisions
 
-  setup do
-    :ok = Ecto.Adapters.SQL.Sandbox.checkout(Arca.Repo)
+  setup tags do
+    Arca.Test.Sandbox.setup!(tags)
     :ok
   end
 

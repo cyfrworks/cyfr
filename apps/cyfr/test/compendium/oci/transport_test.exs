@@ -124,9 +124,8 @@ defmodule Compendium.OCI.TransportTest do
   end
 
   describe "the caller's push token" do
-    setup do
-      :ok = Ecto.Adapters.SQL.Sandbox.checkout(Arca.Repo)
-      Ecto.Adapters.SQL.Sandbox.mode(Arca.Repo, {:shared, self()})
+    setup tags do
+      Cyfr.Test.Sandbox.setup!(tags)
 
       user_id = "oci_transport_#{System.unique_integer([:positive])}"
       ctx = Sanctum.Context.build(user_id: user_id, authenticated: true, auth_method: :oidc)

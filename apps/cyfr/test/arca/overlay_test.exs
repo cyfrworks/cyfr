@@ -91,10 +91,9 @@ defmodule Arca.OverlayTest do
   @version_dir ["components", "catalysts", "local", "bundled", "1.0.0"]
   @sentinel "cyfr-manifest.json"
 
-  setup do
+  setup tags do
     # Shared: a unit's row is read and written by the tasks a test spawns.
-    :ok = Ecto.Adapters.SQL.Sandbox.checkout(Arca.Repo)
-    Ecto.Adapters.SQL.Sandbox.mode(Arca.Repo, {:shared, self()})
+    Cyfr.Test.Sandbox.setup!(tags)
 
     base = Path.join(System.tmp_dir!(), "overlay_#{System.unique_integer([:positive])}")
     seed = Path.join(base, "seed")

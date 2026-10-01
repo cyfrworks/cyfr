@@ -9,9 +9,8 @@ defmodule Arca.ThreadSubscriptionStorageTest do
   alias Arca.ThreadStorage, as: Threads
   alias Arca.ThreadSubscriptionStorage, as: Subs
 
-  setup do
-    :ok = Ecto.Adapters.SQL.Sandbox.checkout(Arca.Repo)
-    Ecto.Adapters.SQL.Sandbox.mode(Arca.Repo, {:shared, self()})
+  setup tags do
+    Cyfr.Test.Sandbox.setup!(tags)
 
     alice_ctx = Sanctum.TestContext.local()
     alice = Sanctum.Context.actor(alice_ctx)

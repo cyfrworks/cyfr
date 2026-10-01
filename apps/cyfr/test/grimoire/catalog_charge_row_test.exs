@@ -20,10 +20,9 @@ defmodule Grimoire.CatalogChargeRowTest do
   @athanor "ath_test"
   @user "charge_row_user"
 
-  setup do
+  setup tags do
     Arca.Cache.init()
-    :ok = Ecto.Adapters.SQL.Sandbox.checkout(Arca.Repo)
-    Ecto.Adapters.SQL.Sandbox.mode(Arca.Repo, {:shared, self()})
+    Cyfr.Test.Sandbox.setup!(tags)
 
     graph = %{
       "canonical" => "jcs-1",

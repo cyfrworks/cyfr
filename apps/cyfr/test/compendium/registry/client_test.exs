@@ -8,9 +8,8 @@ defmodule Compendium.Registry.ClientTest do
   alias Compendium.Provider
   alias Compendium.OCI.Errors
 
-  setup do
-    :ok = Ecto.Adapters.SQL.Sandbox.checkout(Arca.Repo)
-    Ecto.Adapters.SQL.Sandbox.mode(Arca.Repo, {:shared, self()})
+  setup tags do
+    Cyfr.Test.Sandbox.setup!(tags)
 
     # Point API URL at a non-routable address so tests don't hit the real API.
     # Use a random high port on localhost that (almost certainly) has no listener.

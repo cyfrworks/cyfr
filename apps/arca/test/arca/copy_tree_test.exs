@@ -41,10 +41,10 @@ defmodule Arca.CopyTreeTest do
 
   use ExUnit.Case, async: false
 
-  setup do
+  setup tags do
     # A copy into a unit is a plain write inside it, and stamps the unit's
     # pending generation for the root's projection first.
-    :ok = Ecto.Adapters.SQL.Sandbox.checkout(Arca.Repo)
+    Arca.Test.Sandbox.setup!(tags)
 
     base = Path.join(System.tmp_dir!(), "copy_tree_#{System.unique_integer([:positive])}")
     seed = Path.join(base, "seed")

@@ -25,9 +25,8 @@ defmodule Sanctum.Consent.BootstrapGoldenTest do
   @bundle Path.join(@repo_root, "seed/components")
   @golden Path.expand("../../support/fixtures/consent_golden.json", __DIR__)
 
-  setup do
-    :ok = Ecto.Adapters.SQL.Sandbox.checkout(Arca.Repo)
-    Ecto.Adapters.SQL.Sandbox.mode(Arca.Repo, {:shared, self()})
+  setup tags do
+    Cyfr.Test.Sandbox.setup!(tags)
 
     test_dir = Path.join(System.tmp_dir!(), "cyfr_golden_#{:rand.uniform(1_000_000)}")
     seed_dir = Path.join(test_dir, "seed")

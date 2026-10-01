@@ -41,9 +41,8 @@ defmodule Arca.TurnStorageTest do
   end
 
   describe "the stored limit" do
-    setup do
-      :ok = Sandbox.checkout(Arca.Repo)
-      Sandbox.mode(Arca.Repo, {:shared, self()})
+    setup tags do
+      Arca.Test.Sandbox.setup!(tags)
       Arca.Test.Actor.athanor!()
       actor = Arca.Test.Actor.local()
       {:ok, thread} = Threads.create(actor)
@@ -134,9 +133,8 @@ defmodule Arca.TurnStorageTest do
   end
 
   describe "the origin" do
-    setup do
-      :ok = Sandbox.checkout(Arca.Repo)
-      Sandbox.mode(Arca.Repo, {:shared, self()})
+    setup tags do
+      Arca.Test.Sandbox.setup!(tags)
       Arca.Test.Actor.athanor!()
       actor = Arca.Test.Actor.local()
       {:ok, thread} = Threads.create(actor)

@@ -39,9 +39,8 @@ defmodule Aqua.AttachmentsTest do
 
   alias Aqua.Attachments
 
-  setup do
-    :ok = Ecto.Adapters.SQL.Sandbox.checkout(Arca.Repo)
-    Ecto.Adapters.SQL.Sandbox.mode(Arca.Repo, {:shared, self()})
+  setup tags do
+    Cyfr.Test.Sandbox.setup!(tags)
 
     test_path = Path.join(System.tmp_dir!(), "attachments_#{:rand.uniform(1_000_000)}")
     prev = Application.get_env(:arca, :base_path)

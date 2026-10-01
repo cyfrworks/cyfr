@@ -7,10 +7,9 @@ defmodule Sanctum.SessionTest do
   alias Sanctum.Context
   alias Sanctum.Session
 
-  setup do
+  setup tags do
     # Use Arca.Repo sandbox for test isolation
-    :ok = Ecto.Adapters.SQL.Sandbox.checkout(Arca.Repo)
-    Ecto.Adapters.SQL.Sandbox.mode(Arca.Repo, {:shared, self()})
+    Cyfr.Test.Sandbox.setup!(tags)
 
     # A session is issued only to a person this server knows, against the
     # standing their row was read at.

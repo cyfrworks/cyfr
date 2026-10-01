@@ -36,10 +36,9 @@ defmodule Sanctum.Tenancy.ArchiveTest do
   # ends.
   @reaction_ms 30_000
 
-  setup do
+  setup tags do
     Arca.Cache.init()
-    :ok = Ecto.Adapters.SQL.Sandbox.checkout(Arca.Repo)
-    Ecto.Adapters.SQL.Sandbox.mode(Arca.Repo, {:shared, self()})
+    Cyfr.Test.Sandbox.setup!(tags)
 
     test_path = Path.join(System.tmp_dir!(), "archive_#{System.unique_integer([:positive])}")
     keys = [cyfr: :opus_workers, arca: :base_path]
@@ -84,7 +83,7 @@ defmodule Sanctum.Tenancy.ArchiveTest do
   end
 
   # The execution domain's reaction to an archive, started for the cases
-  # that assert a cancel. Under `{:shared, self()}` it reads on this
+  # that assert a cancel. Under the shared sandbox it reads on this
   # test's connection, and `start_supervised!` stops it before the test
   # gives that connection back.
   defp watch_archives! do

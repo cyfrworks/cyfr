@@ -9,9 +9,8 @@ defmodule Prism.TinctureRegistryTest do
   # The registry resolves every tincture's athanor to a route segment, so the
   # rows behind the athanor ids used here must exist: the test context's own
   # (`ath_test`, slug "test") plus the ones each test creates.
-  setup do
-    :ok = Ecto.Adapters.SQL.Sandbox.checkout(Arca.Repo)
-    Ecto.Adapters.SQL.Sandbox.mode(Arca.Repo, {:shared, self()})
+  setup tags do
+    Cyfr.Test.Sandbox.setup!(tags)
     athanor = Sanctum.TestContext.athanor!()
 
     # Create a temp tincture structure under an isolated storage root

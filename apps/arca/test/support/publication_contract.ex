@@ -178,10 +178,9 @@ defmodule Arca.PublicationContract do
 
       @sentinel "cyfr-manifest.json"
 
-      setup %{adapter: adapter} do
+      setup %{adapter: adapter} = tags do
         # Shared: the writers a case parks or kills are processes of their own.
-        :ok = Ecto.Adapters.SQL.Sandbox.checkout(Arca.Repo)
-        Ecto.Adapters.SQL.Sandbox.mode(Arca.Repo, {:shared, self()})
+        Arca.Test.Sandbox.setup!(tags)
 
         base = Path.join(System.tmp_dir!(), "publication_#{System.unique_integer([:positive])}")
         prev_base = Application.fetch_env!(:arca, :base_path)

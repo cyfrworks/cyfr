@@ -23,10 +23,9 @@ defmodule Aqua.ApprovalsTest do
   @seed_root Path.expand("../../../../seed", __DIR__)
   @soul "agent:local.aqua"
 
-  setup do
+  setup tags do
     Arca.Cache.init()
-    :ok = Ecto.Adapters.SQL.Sandbox.checkout(Arca.Repo)
-    Ecto.Adapters.SQL.Sandbox.mode(Arca.Repo, {:shared, self()})
+    Cyfr.Test.Sandbox.setup!(tags)
 
     test_path = Path.join(System.tmp_dir!(), "approvals_#{System.unique_integer([:positive])}")
     keys = [:base_path, :seed_path]

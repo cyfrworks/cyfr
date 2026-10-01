@@ -20,10 +20,9 @@ defmodule Emissary.MCP.ChainLoggingTest do
 
   @node "formula:local.chain-logging"
 
-  setup do
+  setup tags do
     Arca.Cache.init()
-    :ok = Ecto.Adapters.SQL.Sandbox.checkout(Arca.Repo)
-    Ecto.Adapters.SQL.Sandbox.mode(Arca.Repo, {:shared, self()})
+    Cyfr.Test.Sandbox.setup!(tags)
 
     # Two of these tests read an athanor's whole log to prove what a call did
     # or did not write, so each works in a furnace of its own. The suite's

@@ -229,10 +229,9 @@ defmodule Compendium.ManifestNeedsCapsTest do
   end
 
   describe "registration refuses malformed blocks" do
-    setup do
+    setup tags do
       Arca.Cache.init()
-      :ok = Ecto.Adapters.SQL.Sandbox.checkout(Arca.Repo)
-      Ecto.Adapters.SQL.Sandbox.mode(Arca.Repo, {:shared, self()})
+      Cyfr.Test.Sandbox.setup!(tags)
 
       test_path = Path.join(System.tmp_dir!(), "needs_caps_#{:rand.uniform(1_000_000)}")
       original = Application.get_env(:arca, :base_path)

@@ -6,9 +6,8 @@ defmodule Arca.ComponentStorageTest do
 
   alias Arca.ComponentStorage
 
-  setup do
-    :ok = Ecto.Adapters.SQL.Sandbox.checkout(Arca.Repo)
-    Ecto.Adapters.SQL.Sandbox.mode(Arca.Repo, {:shared, self()})
+  setup tags do
+    Cyfr.Test.Sandbox.setup!(tags)
 
     actor = Sanctum.Context.actor(Sanctum.TestContext.local())
 

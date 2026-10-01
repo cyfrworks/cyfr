@@ -13,9 +13,8 @@ defmodule Aqua.ModelsTest do
 
   alias Sanctum.Context
 
-  setup do
-    :ok = Ecto.Adapters.SQL.Sandbox.checkout(Arca.Repo)
-    Ecto.Adapters.SQL.Sandbox.mode(Arca.Repo, {:shared, self()})
+  setup tags do
+    Cyfr.Test.Sandbox.setup!(tags)
     :ok
   end
 

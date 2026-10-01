@@ -432,9 +432,8 @@ defmodule Cyfr.TelemetryBridgeTest do
   end
 
   describe "a close whose row write did not land" do
-    setup do
-      :ok = Ecto.Adapters.SQL.Sandbox.checkout(Arca.Repo)
-      Ecto.Adapters.SQL.Sandbox.mode(Arca.Repo, {:shared, self()})
+    setup tags do
+      Cyfr.Test.Sandbox.setup!(tags)
       :ok
     end
 

@@ -19,9 +19,8 @@ defmodule Crucible.AttemptRecoveryTest do
   alias Arca.ExecutionAttempts
   alias Crucible.Record
 
-  setup do
-    :ok = Ecto.Adapters.SQL.Sandbox.checkout(Arca.Repo)
-    Ecto.Adapters.SQL.Sandbox.mode(Arca.Repo, {:shared, self()})
+  setup tags do
+    Cyfr.Test.Sandbox.setup!(tags)
     Sanctum.TestContext.athanor!()
     {:ok, ctx: Sanctum.TestContext.local()}
   end

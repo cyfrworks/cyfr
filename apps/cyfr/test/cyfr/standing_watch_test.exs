@@ -18,10 +18,9 @@ defmodule Cyfr.StandingWatchTest do
   alias Sanctum.Context
   alias Sanctum.Tenancy.{Athanors, Users}
 
-  setup do
+  setup tags do
     Arca.Cache.init()
-    :ok = Ecto.Adapters.SQL.Sandbox.checkout(Arca.Repo)
-    Ecto.Adapters.SQL.Sandbox.mode(Arca.Repo, {:shared, self()})
+    Cyfr.Test.Sandbox.setup!(tags)
 
     original = Application.get_env(:sanctum, :caller_memo_ttl_ms)
     Application.put_env(:sanctum, :caller_memo_ttl_ms, 60_000)

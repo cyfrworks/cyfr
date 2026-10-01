@@ -34,9 +34,8 @@ defmodule Compendium.RegistryTest do
                 <<0x07, 0x07, 0x01, 0x03, "run", 0x00, 0x00>> <>
                 <<0x0A, 0x04, 0x01, 0x02, 0x00, 0x0B>>
 
-  setup do
-    :ok = Ecto.Adapters.SQL.Sandbox.checkout(Arca.Repo)
-    Ecto.Adapters.SQL.Sandbox.mode(Arca.Repo, {:shared, self()})
+  setup tags do
+    Cyfr.Test.Sandbox.setup!(tags)
 
     test_dir = Path.join(System.tmp_dir!(), "cyfr_registry_test_#{:rand.uniform(100_000)}")
     File.mkdir_p!(test_dir)

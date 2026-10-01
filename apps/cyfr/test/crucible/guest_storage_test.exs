@@ -28,9 +28,8 @@ defmodule Crucible.GuestStorageTest do
 
   @every_action ["read", "write", "append", "list", "delete", "exists"]
 
-  setup do
-    :ok = Ecto.Adapters.SQL.Sandbox.checkout(Arca.Repo)
-    Ecto.Adapters.SQL.Sandbox.mode(Arca.Repo, {:shared, self()})
+  setup tags do
+    Cyfr.Test.Sandbox.setup!(tags)
     Arca.Cache.init()
 
     # The public-quota counters are keyed by athanor and scope; each test

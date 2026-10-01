@@ -20,9 +20,8 @@ defmodule Emissary.Web.TinctureAssetsTest do
 
   @sdk File.read!(Path.join(:code.priv_dir(:cyfr), "static/sdk/cyfr.js"))
 
-  setup do
-    :ok = Ecto.Adapters.SQL.Sandbox.checkout(Arca.Repo)
-    Ecto.Adapters.SQL.Sandbox.mode(Arca.Repo, {:shared, self()})
+  setup tags do
+    Cyfr.Test.Sandbox.setup!(tags)
 
     root =
       Path.join(System.tmp_dir!(), "tincture_assets_test_#{System.unique_integer([:positive])}")

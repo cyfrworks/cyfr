@@ -7,9 +7,8 @@ defmodule Arca.RecordSinkTest do
 
   alias Arca.RecordSink
 
-  setup do
-    :ok = Ecto.Adapters.SQL.Sandbox.checkout(Arca.Repo)
-    Ecto.Adapters.SQL.Sandbox.mode(Arca.Repo, {:shared, self()})
+  setup tags do
+    Cyfr.Test.Sandbox.setup!(tags)
 
     Application.put_env(:arca, :record_sink_inline, false)
     on_exit(fn -> Application.put_env(:arca, :record_sink_inline, true) end)

@@ -15,9 +15,8 @@ defmodule Compendium.Providers.LayoutTest do
   alias Compendium.Providers.Layout
   alias Sanctum.Context
 
-  setup do
-    :ok = Ecto.Adapters.SQL.Sandbox.checkout(Arca.Repo)
-    Ecto.Adapters.SQL.Sandbox.mode(Arca.Repo, {:shared, self()})
+  setup tags do
+    Cyfr.Test.Sandbox.setup!(tags)
 
     base = Path.join(System.tmp_dir!(), "layout_tool_#{System.unique_integer([:positive])}")
     prev = Application.get_env(:arca, :base_path)

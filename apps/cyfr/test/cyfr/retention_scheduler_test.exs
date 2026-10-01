@@ -21,7 +21,7 @@ defmodule Cyfr.RetentionSchedulerTest do
 
   @kind "retention"
 
-  setup do
+  setup tags do
     # Ensure no lingering scheduler
     case GenServer.whereis(RetentionScheduler) do
       nil -> :ok
@@ -29,8 +29,7 @@ defmodule Cyfr.RetentionSchedulerTest do
     end
 
     # handle_continue(:first_run, ...) runs a cycle, which hits the DB
-    :ok = Ecto.Adapters.SQL.Sandbox.checkout(Arca.Repo)
-    Ecto.Adapters.SQL.Sandbox.mode(Arca.Repo, {:shared, self()})
+    Cyfr.Test.Sandbox.setup!(tags)
 
     {:ok, key: "cell-retention-#{System.unique_integer([:positive])}"}
   end
