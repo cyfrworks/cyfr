@@ -212,11 +212,14 @@ defmodule PrismWeb.ToolSeamTest do
   end
 
   # The chat's verbs go through the tool surface: the same `thread`
-  # actions a headless client calls, from the page.
+  # actions a headless client calls, from the page. A card is decided
+  # through `approval.resolve`, the one door that carries a standing
+  # answer's bounds, as the wire's `approval` tool does.
   @chat_verbs %{
     "apps/cyfr/lib/prism_web/live/thread_pane_live.ex" =>
-      ~w(create send stop approve decline revoke_grant restart_for_consent),
-    "apps/cyfr/lib/prism_web/live/chat_live.ex" => ~w(follow unfollow delete)
+      ~w(thread/create thread/send thread/stop approval/resolve thread/revoke_grant
+         thread/restart_for_consent),
+    "apps/cyfr/lib/prism_web/live/chat_live.ex" => ~w(thread/follow thread/unfollow thread/delete)
   }
 
   test "the chat's turn writes go through the thread tool" do
@@ -224,17 +227,20 @@ defmodule PrismWeb.ToolSeamTest do
       source = Prima.Test.SourceTree.read(Path.join(root(), rel))
 
       assert source =~ ~s(call_tool(#{if rel =~ "chat_live", do: "focus", else: ""}) or
-               source =~ "thread/#{verb}",
-             "#{rel} does not call thread/#{verb} through PrismWeb.Ops"
+               source =~ verb,
+             "#{rel} does not call #{verb} through PrismWeb.Ops"
 
-      assert source =~ "\"thread/#{verb}\"",
-             "#{rel} does not name thread/#{verb}"
+      assert source =~ "\"#{verb}\"",
+             "#{rel} does not name #{verb}"
     end
 
     pane =
       Prima.Test.SourceTree.read(
         Path.join(root(), "apps/cyfr/lib/prism_web/live/thread_pane_live.ex")
       )
+
+    refute pane =~ ~s("thread/approve") or pane =~ ~s("thread/decline"),
+           "a card is decided through approval/resolve, which carries its bounds"
 
     refute pane =~ "RoomExcerpt.read",
            "the pane passes the room reference, never the excerpt text"

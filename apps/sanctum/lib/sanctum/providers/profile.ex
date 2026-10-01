@@ -629,24 +629,19 @@ defmodule Sanctum.Providers.Profile do
   # pattern as written and then reaches the physical path with its empty
   # segments trimmed, so `data//secrets/` serves `data/secrets/key.txt`
   # through `data//secrets/key.txt`: the pattern reaches what its trimmed
-  # spelling names, `*` and a trailing `/` kept. A pattern under which the
-  # door's path check refuses every spelling (`Prima.PathSafety`: an unsafe
-  # segment, or an absolute path) reaches nothing, and so does one that
-  # names no segment, which no read can name either.
+  # spelling names (`Prima.ComponentPath.door_path/1`), `*` and a trailing
+  # `/` kept. A pattern under which the door's path check refuses every
+  # spelling (`Prima.PathSafety`: an unsafe segment, or an absolute path)
+  # reaches nothing, and so does one that names no segment, which no read
+  # can name either.
   defp door_pattern("*"), do: ["*"]
 
-  defp door_pattern(pattern) when is_binary(pattern) do
-    segments = String.split(pattern, "/", trim: true)
-
-    if segments != [] and Prima.PathSafety.validate_relative_path(pattern) == :ok do
-      trimmed = Enum.join(segments, "/")
-      [if(String.ends_with?(pattern, "/"), do: trimmed <> "/", else: trimmed)]
-    else
-      []
+  defp door_pattern(pattern) do
+    case Prima.ComponentPath.door_path(pattern) do
+      nil -> []
+      spelled -> [spelled]
     end
   end
-
-  defp door_pattern(_pattern), do: []
 
   defp resource_answer({kind, value}), do: %{kind: Atom.to_string(kind), value: value}
 
@@ -890,6 +885,25 @@ defmodule Sanctum.Providers.Profile do
     do:
       "preview_unrepresentable: what this grant would give cannot be shown as preview rows, " <>
         "so it is not offered"
+
+  # The closure the grant would cover does not resolve: the refusal names
+  # what is missing, so the person knows what to install first.
+  defp fmt({:activation_unresolvable, {:incomplete, {:unresolvable_dependency, ref}}})
+       when is_binary(ref),
+       do:
+         "activation_unresolvable: #{ref} cannot be resolved — it is not installed, or its " <>
+           "dependencies cannot be read; install it, then plan again"
+
+  defp fmt({:activation_unresolvable, {:incomplete, {:missing_release_digest, ref}}})
+       when is_binary(ref),
+       do:
+         "activation_unresolvable: #{ref} has no release digest — publish it again, " <>
+           "then plan again"
+
+  defp fmt({:activation_unresolvable, _reason}),
+    do:
+      "activation_unresolvable: this component's dependencies cannot be resolved, " <>
+        "so nothing can be granted"
 
   defp fmt(:grant_requires_owner_profile), do: "grant_requires_owner_profile"
   defp fmt(:profile_revoked), do: "profile_revoked"

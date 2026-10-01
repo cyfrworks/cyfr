@@ -20,11 +20,14 @@ defmodule PrismWeb.SystemLayer.Prompt do
       (`PrismWeb.ConsentSheetComponent`), starts from and keeps in step:
       `ref`, the `athanor_id` it was planned in, the `plan` as
       `profile.plan` answers it (`plan_token`, `expected_consent_revision`,
-      the needs and the vault entries that can meet them), the `preview`
-      of the decisions (`summary`, `proof`, `commit_digest`) and the
-      `decisions` payload (`%{"ref" => ref, "bindings" => [...]}`),
-      committed through `profile.commit` (`PrismWeb.SystemLayer.grant_prompt/3`
-      builds it);
+      the needs and the vault entries that can meet them, its rows), the
+      `preview` of the decisions — a `Prima.ConsentPreview` (`v`, `rows`,
+      `origins`, `commit_digest`) with the `proof` a commit presents, or
+      `nil` for a plan whose closure is `unresolved`, which has nothing to
+      preview or commit — and the `decisions` payload (`%{"ref" => ref,
+      "bindings" => [...]}`, with the `origins`, `subset` and `label` it
+      names), committed through `profile.commit`
+      (`PrismWeb.SystemLayer.grant_prompt/4` builds it);
     * `:credential_entry` — `name`, the vault entry to create, and
       optionally `field`, the name its one field is stored under
       (`API_KEY` when absent), created through `vault.create` as an `api_key`
@@ -154,12 +157,12 @@ defmodule PrismWeb.SystemLayer.Prompt do
            ref: ref,
            athanor_id: athanor_id,
            plan: %{} = plan,
-           preview: %{} = preview,
+           preview: preview,
            decisions: decisions
          }
        )
        when is_binary(ref) and ref != "" and is_binary(athanor_id) and athanor_id != "" do
-    if plan?(plan) and preview?(preview) and decisions?(decisions, ref),
+    if plan?(plan) and preview?(preview, plan) and decisions?(decisions, ref),
       do:
         {:ok,
          %{ref: ref, athanor_id: athanor_id, plan: plan, preview: preview, decisions: decisions}},
@@ -241,12 +244,38 @@ defmodule PrismWeb.SystemLayer.Prompt do
 
   defp plan?(_plan), do: false
 
-  defp preview?(%{summary: summary, proof: proof, commit_digest: digest})
-       when is_list(summary) and is_binary(proof) and is_binary(digest),
-       do: Enum.all?(summary, &is_binary/1)
+  # The preview a grant prompt opens with: a `Prima.ConsentPreview`, held
+  # to its typed rows, with the proof the commit presents beside it. A
+  # plan whose closure is unresolved has none, and offers nothing to
+  # commit.
+  defp preview?(nil, %{unresolved: %{}}), do: true
 
-  defp preview?(_preview), do: false
+  defp preview?(%{v: v, rows: rows, origins: origins, commit_digest: digest, proof: proof}, _plan)
+       when is_binary(proof) and proof != "" do
+    match?(
+      {:ok, %Prima.ConsentPreview{}},
+      Prima.ConsentPreview.decode(%{
+        "v" => v,
+        "rows" => rows,
+        "origins" => origins,
+        "commit_digest" => digest
+      })
+    )
+  end
 
-  defp decisions?(%{"ref" => ref, "bindings" => bindings}, ref) when is_list(bindings), do: true
+  defp preview?(_preview, _plan), do: false
+
+  defp decisions?(%{"ref" => ref, "bindings" => bindings} = decisions, ref)
+       when is_list(bindings) do
+    origins?(Map.get(decisions, "origins")) and is_map(Map.get(decisions, "subset", %{})) and
+      label?(Map.get(decisions, "label"))
+  end
+
   defp decisions?(_decisions, _ref), do: false
+
+  defp origins?(nil), do: true
+  defp origins?(origins), do: match?({:ok, _origins}, Prima.Origin.parse_list(origins))
+
+  defp label?(nil), do: true
+  defp label?(label), do: is_binary(label) and label != ""
 end

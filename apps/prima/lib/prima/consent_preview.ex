@@ -18,25 +18,33 @@ defmodule Prima.ConsentPreview do
   and their values:
 
     * `credential` — `name`, the vault entry; `fields` and `scopes`, its
-      projection; `label`, when it is lent by a profile of that label.
-      One row per credential.
+      projection; `edge`, the consent edge it rides, from the row's node
+      to the node that uses the entry: `"@ingress"` for the node's own
+      key, otherwise the dependency's name-level ref, spelled `ref|need`
+      for a named need (`Prima.Authority.Blob.edge_key/2`); `label`, when
+      it is lent by a profile of that label. One row per credential and
+      edge, so one entry lent on two edges is two rows.
     * `egress` — `domains`, `methods`, `schemes`, `private_ips`.
     * `storage` — `paths`, `actions`.
-    * `tools` — `tools`, the expanded `tool.action` names.
+    * `tools` — `tools`, the expanded `tool.action` names, or `["*"]`
+      alone when the ask names every tool and the grant is the whole ask.
     * `tool_servers` — `name`, `digest`, `tool_patterns`. One row per server.
     * `limits` — the seven fields of `Prima.Limits`, as `Prima.Limits.to_map/1` writes them.
     * `frame` — a tincture's `capabilities`, `placement` (absent for the
       shell's default) and `background`.
-    * `streams` — `name` and `subject` (a literal, `"*"`, or absent). One row per stream.
+    * `streams` — `name` and `subject` (a literal, `"*"`, or absent). One
+      row per stream and subject, so one stream declared under two
+      subjects is two rows.
     * `cards` — `name`, and the `component`, `operation` and `args` its
       data comes from, all three or, for a static card, none. One row per card.
     * `system_actions` — `actions`, the `tool.action` names.
 
   Only `egress`, `storage`, `tools` and `limits` can be narrowed
   (`narrowable_kinds/0`); a row of another kind is granted whole or not at
-  all and is never marked narrowed. Lists of names are sets: no name twice.
-  A kind outside these ten is refused, and so is a field a kind does not
-  carry.
+  all and is never marked narrowed, and neither is a wildcard tools row,
+  which is the whole ask. Lists of names are sets: no name twice, and at
+  most 256. A kind outside these ten is refused, and so is a field a kind
+  does not carry.
   """
 
   alias Prima.ConsentPreview.Row
@@ -184,6 +192,7 @@ defmodule Prima.ConsentPreview.Row do
   @max_text 1024
   @max_set 256
   @max_args_bytes 4096
+  @wildcard "*"
 
   @type t :: %__MODULE__{
           kind: Prima.ConsentPreview.kind(),
@@ -203,7 +212,8 @@ defmodule Prima.ConsentPreview.Row do
          {:ok, node} <- Encoding.check(map, "node", &Encoding.text?(&1, @max_text)),
          {:ok, narrowed} <- Encoding.check(map, "narrowed", &is_boolean/1),
          :ok <- narrowable(kind, narrowed),
-         {:ok, values} <- values(kind, map["values"]) do
+         {:ok, values} <- values(kind, map["values"]),
+         :ok <- whole_ask(kind, values, narrowed) do
       {:ok, %__MODULE__{kind: kind, node: node, values: values, narrowed: narrowed}}
     end
   end
@@ -223,13 +233,25 @@ defmodule Prima.ConsentPreview.Row do
 
   @doc """
   What makes a row one of a kind: its kind and node, and for a kind with
-  one row per resource, the resource's name too. A preview holds each once.
+  one row per resource, the resource's name too, with the edge a
+  credential rides and the subject a stream names. A preview holds each
+  once.
   """
   @spec identity(t()) :: tuple()
   def identity(%__MODULE__{kind: kind, node: node}) when kind in @one_per_node, do: {kind, node}
 
+  def identity(%__MODULE__{kind: :credential, node: node, values: values}),
+    do: {:credential, node, values["name"], values["edge"]}
+
+  def identity(%__MODULE__{kind: :streams, node: node, values: values}),
+    do: {:streams, node, values["name"], values["subject"]}
+
   def identity(%__MODULE__{kind: kind, node: node, values: values}),
     do: {kind, node, values["name"]}
+
+  @doc "The tools a wildcard row names: every tool, as the grant states it."
+  @spec wildcard() :: [String.t()]
+  def wildcard, do: [@wildcard]
 
   defp kind(name) do
     case Map.fetch(@kinds, name) do
@@ -240,6 +262,10 @@ defmodule Prima.ConsentPreview.Row do
 
   defp narrowable(kind, true) when kind not in @narrowable, do: {:error, {:not_narrowable, kind}}
   defp narrowable(_kind, _narrowed), do: :ok
+
+  # A wildcard tools row is the whole ask, which a narrowing never is.
+  defp whole_ask(:tools, %{"tools" => [@wildcard]}, true), do: {:error, {:invalid_field, "tools"}}
+  defp whole_ask(_kind, _values, _narrowed), do: :ok
 
   defp values(kind, values) when is_map(values) and not is_struct(values) do
     {required, optional, checks} = spec(kind)
@@ -256,8 +282,14 @@ defmodule Prima.ConsentPreview.Row do
   # {required fields, optional fields, a check per field}
   defp spec(:credential),
     do:
-      {~w(name fields scopes), ~w(label),
-       %{"name" => &text?/1, "fields" => &set?/1, "scopes" => &set?/1, "label" => &text?/1}}
+      {~w(name fields scopes edge), ~w(label),
+       %{
+         "name" => &text?/1,
+         "fields" => &set?/1,
+         "scopes" => &set?/1,
+         "edge" => &edge?/1,
+         "label" => &text?/1
+       }}
 
   defp spec(:egress) do
     fields = ~w(domains methods schemes private_ips)
@@ -265,7 +297,7 @@ defmodule Prima.ConsentPreview.Row do
   end
 
   defp spec(:storage), do: {~w(paths actions), [], %{"paths" => &set?/1, "actions" => &set?/1}}
-  defp spec(:tools), do: {~w(tools), [], %{"tools" => &set?/1}}
+  defp spec(:tools), do: {~w(tools), [], %{"tools" => &tools?/1}}
 
   defp spec(:tool_servers),
     do:
@@ -329,6 +361,28 @@ defmodule Prima.ConsentPreview.Row do
   end
 
   defp operations?(values), do: set?(values) and Enum.all?(values, &Tincture.operation_name?/1)
+
+  # The wildcard stands alone: beside a named tool it would read as both
+  # every tool and a list of some.
+  defp tools?([@wildcard]), do: true
+  defp tools?(values), do: set?(values) and @wildcard not in values
+
+  # The edge a credential rides, spelled as the blob keys it: the ingress
+  # literal, or a name-level ref with an optional named need.
+  defp edge?("@ingress"), do: true
+
+  defp edge?(edge) when is_binary(edge) do
+    text?(edge) and
+      case String.split(edge, "|", parts: 2) do
+        [ref] -> name_level?(ref)
+        [ref, need] -> name_level?(ref) and need != "" and not String.contains?(need, "|")
+      end
+  end
+
+  defp edge?(_edge), do: false
+
+  defp name_level?(ref),
+    do: match?({:ok, %Prima.ComponentRef{version: nil}}, Prima.ComponentRef.parse(ref))
 
   defp subject?("*"), do: true
   defp subject?(subject), do: Tincture.literal_subject?(subject)

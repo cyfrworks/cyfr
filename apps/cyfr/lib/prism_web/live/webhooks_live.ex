@@ -17,6 +17,13 @@ defmodule PrismWeb.WebhooksLive do
   (`PrismWeb.SystemLayer.call/5`), which shows the request as this page's
   own, and the page repeats the change once its record is confirmed,
   wherever the person proved it.
+
+  A delivery starts a run with the `webhook` origin. Creating a webhook
+  for a profile whose grant does not admit that origin raises the grant
+  prompt for that profile first, in the same layer: once the grant is
+  confirmed the page reads the profile's grant again and creates the
+  webhook only if it now admits webhooks. A grant dismissed, or confirmed
+  without that origin, creates nothing.
   """
 
   use PrismWeb, :live_view
@@ -57,7 +64,8 @@ defmodule PrismWeb.WebhooksLive do
      |> assign(:form_rate_limit, "")
      |> assign(:form_input_template, "{}")
      |> assign(:form_error, nil)
-     |> assign(:new_secret, nil)}
+     |> assign(:new_secret, nil)
+     |> assign(:origin_grant, nil)}
   end
 
   @impl true
@@ -77,6 +85,25 @@ defmodule PrismWeb.WebhooksLive do
 
   def handle_info(%Cyfr.Bus.Webhooks{}, socket) do
     {:noreply, fetch_webhooks(socket)}
+  end
+
+  # The grant prompt a webhook waited for. A refused commit leaves the
+  # prompt open for the person to try again or dismiss; any other end
+  # makes no webhook.
+  def handle_info({:system_layer, id, outcome}, %{assigns: %{origin_grant: {id, args}}} = socket) do
+    case outcome do
+      :confirmed ->
+        socket |> assign(:origin_grant, nil) |> origin_granted(args)
+
+      {:refused, reason} when reason != :invalid_prompt ->
+        {:noreply, socket}
+
+      _ended ->
+        {:noreply,
+         socket
+         |> assign(:origin_grant, nil)
+         |> assign(:form_error, "No webhook was made: the grant was not changed.")}
+    end
   end
 
   # A change this page asked for was confirmed: made again, once.
@@ -228,8 +255,60 @@ defmodule PrismWeb.WebhooksLive do
   # Submission helpers
   # ============================================================================
 
-  defp submit_create(socket, params, template_map),
-    do: create(socket, build_args(params, template_map))
+  # A webhook is made only under a grant that admits its deliveries: one
+  # whose profile's grant lacks the `webhook` origin raises the grant
+  # prompt for that profile first, and the webhook waits for its outcome.
+  defp submit_create(socket, params, template_map) do
+    args = build_args(params, template_map)
+
+    case admitted(socket, args) do
+      {:missing, label} -> {:noreply, ask_origin(socket, args, label)}
+      _admitted_or_unknown -> create(socket, args)
+    end
+  end
+
+  defp admitted(socket, %{"target_ref" => ref, "profile_id" => profile_id})
+       when is_binary(ref) and is_binary(profile_id),
+       do: SystemLayer.admits_origin(socket, ref, profile_id, :webhook)
+
+  defp admitted(_socket, _args), do: :unknown
+
+  defp ask_origin(socket, %{"target_ref" => ref} = args, label) do
+    id = "grant-webhook-#{System.unique_integer([:positive])}"
+
+    case SystemLayer.grant_prompt(socket, id, ref, label: label) do
+      {:ok, prompt} ->
+        SystemLayer.show(prompt)
+
+        socket
+        |> assign(:origin_grant, {id, args})
+        |> assign(
+          :form_error,
+          "This profile's grant does not let webhooks start it. " <>
+            "Grant it \"Also from webhooks\" to make this webhook."
+        )
+
+      {:error, reason} ->
+        assign(socket, :form_error, "No webhook was made: #{format_tool_error(reason)}")
+    end
+  end
+
+  # The grant the webhook waited for, confirmed: its profile's grant is
+  # read again, and the webhook made only if it now admits webhooks.
+  defp origin_granted(socket, args) do
+    case admitted(socket, args) do
+      {:missing, _label} ->
+        {:noreply,
+         assign(
+           socket,
+           :form_error,
+           "No webhook was made: the grant does not let webhooks start this profile."
+         )}
+
+      _admitted_or_unknown ->
+        create(socket, args)
+    end
+  end
 
   # Minting a webhook's secret needs a fresh confirmation: asked for
   # through the system layer, and repeated from `handle_info/2` once

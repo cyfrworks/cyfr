@@ -221,13 +221,27 @@ defmodule Aqua.ToolGrantsTest do
       assert Enum.map(kept, & &1.scope) |> Enum.sort() == ["agent", "thread"]
     end
 
-    test "is no pair the thread auto-approves" do
-      assert ToolGrants.allowed_keys([bounded(%{})]) == MapSet.new()
+    test "is listed among the thread's standing answers, so it can be withdrawn" do
+      assert ToolGrants.allowed_keys([bounded(%{})]) == MapSet.new([{"files", "write"}])
 
       assert ToolGrants.allowed_keys([
                bounded(%{}),
                %{effect: "allow", scope: "thread", tool: "component", action: "list"}
-             ]) == MapSet.new([{"component", "list"}])
+             ]) == MapSet.new([{"component", "list"}, {"files", "write"}])
+
+      # Listed is not automatic: the guest still asks for it.
+      assert ToolGrants.resolve(%{}, [bounded(%{})]) == %{"files.write" => "ask"}
+
+      # A deny for the pair subtracts, and an allow the action's current
+      # declaration refuses (a deadline gone) no longer stands.
+      assert ToolGrants.allowed_keys([
+               bounded(%{}),
+               %{effect: "deny", scope: "agent", tool: "files", action: "write"}
+             ]) == MapSet.new()
+
+      assert ToolGrants.allowed_keys([
+               bounded(%{expires_at: DateTime.add(DateTime.utc_now(), -1, :second)})
+             ]) == MapSet.new()
     end
 
     test "that the action's current declaration refuses counts for nothing" do
@@ -346,9 +360,9 @@ defmodule Aqua.ToolGrantsTest do
          %{ctx: ctx} do
       # A row written before `notes.pin` declared `standing: false` (or by
       # a surface that never went through `put/2`). It must not auto-run
-      # anything — neither on the runner's fast path (`allowed_keys/1`)
-      # nor by becoming `auto` in the policy the formula is handed
-      # (`resolve/2`). A deny still counts.
+      # anything — neither by being listed as a standing answer
+      # (`allowed_keys/1`) nor by becoming `auto` in the policy the formula
+      # is handed (`resolve/2`). A deny still counts.
       stale =
         %{
           athanor_id: ctx.athanor_id,
@@ -496,6 +510,32 @@ defmodule Aqua.ToolGrantsTest do
       assert :ok = ToolGrants.revoke(ctx, key)
       assert [] = rows(ctx, "thread_1", ctx.athanor_id, "aqua")
       assert :ok = ToolGrants.revoke(ctx, key)
+    end
+
+    test "a bounded allow the thread lists is withdrawn by its pair", %{ctx: ctx} do
+      until = DateTime.add(DateTime.utc_now(), 3600, :second)
+
+      {:ok, _} =
+        grant(ctx, %{
+          tool: "files",
+          action: "write",
+          expires_at: until,
+          constraint: %{kind: "storage_path", patterns: ["data/notes/"]}
+        })
+
+      listed = ctx |> rows("thread_1", ctx.athanor_id, "aqua") |> ToolGrants.allowed_keys()
+      assert listed == MapSet.new([{"files", "write"}])
+
+      assert :ok =
+               ToolGrants.revoke(ctx, %{
+                 scope: "thread",
+                 thread_id: "thread_1",
+                 agent_name: "aqua",
+                 tool: "files",
+                 action: "write"
+               })
+
+      assert [] = rows(ctx, "thread_1", ctx.athanor_id, "aqua")
     end
   end
 

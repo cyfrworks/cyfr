@@ -2,7 +2,22 @@
 # Copyright 2026 CYFR Works Inc.
 
 defmodule PrismWeb.SchedulesLive do
+  @moduledoc """
+  Cron schedules: list, create, pause, resume and delete through the
+  `schedule` tool.
+
+  A schedule runs its component under the profile it names, and a run a
+  schedule starts carries the `schedule` origin. Making one for a profile
+  whose grant does not admit that origin raises the grant prompt for that
+  profile first, in the page's system layer (`PrismWeb.SystemLayer`):
+  once the grant is confirmed the page reads the profile's grant again
+  and makes the schedule only if it now admits schedules. A grant
+  dismissed, or confirmed without that origin, makes no schedule.
+  """
+
   use PrismWeb, :live_view
+
+  alias PrismWeb.SystemLayer
 
   require Logger
 
@@ -49,6 +64,7 @@ defmodule PrismWeb.SchedulesLive do
       |> assign(:cron_custom, "")
       |> assign(:form, to_form(@empty_form))
       |> assign(:focused_id, nil)
+      |> assign(:origin_grant, nil)
 
     {:ok, socket}
   end
@@ -84,28 +100,19 @@ defmodule PrismWeb.SchedulesLive do
       |> assign(:form, to_form(Map.merge(@empty_form, Map.take(params, Map.keys(@empty_form)))))
       |> assign(:cron_custom, params["cron_custom"] || socket.assigns.cron_custom)
 
-    with {:ok, input_args} <- create_input(params, cron),
-         {:ok, _} <-
-           call_tool(
-             socket,
-             "schedule",
-             Map.merge(input_args, %{
-               "action" => "create",
-               "name" => name,
-               "cron_expression" => cron,
-               "reference" => ref,
-               "profile_id" => params["profile_id"]
-             })
-           ) do
-      {:noreply,
-       socket
-       |> assign(:show_create, false)
-       |> assign(:cron_preset, "")
-       |> assign(:cron_custom, "")
-       |> assign(:form, to_form(@empty_form))
-       |> fetch_schedules()
-       |> put_flash(:info, "Schedule created")}
-    else
+    case create_input(params, cron) do
+      {:ok, input_args} ->
+        args =
+          Map.merge(input_args, %{
+            "action" => "create",
+            "name" => name,
+            "cron_expression" => cron,
+            "reference" => ref,
+            "profile_id" => params["profile_id"]
+          })
+
+        {:noreply, create_admitted(socket, args)}
+
       {:error, reason} ->
         {:noreply, put_flash(socket, :error, "Failed: #{error_message(reason)}")}
     end
@@ -185,9 +192,92 @@ defmodule PrismWeb.SchedulesLive do
     {:noreply, fetch_components(socket)}
   end
 
+  # The grant prompt a schedule waited for. A refused commit leaves the
+  # prompt open for the person to try again or dismiss; any other end
+  # makes no schedule.
+  def handle_info({:system_layer, id, outcome}, %{assigns: %{origin_grant: {id, args}}} = socket) do
+    case outcome do
+      :confirmed ->
+        {:noreply, socket |> assign(:origin_grant, nil) |> origin_granted(args)}
+
+      {:refused, reason} when reason != :invalid_prompt ->
+        {:noreply, socket}
+
+      _ended ->
+        {:noreply,
+         socket
+         |> assign(:origin_grant, nil)
+         |> put_flash(:error, "No schedule was made: the grant was not changed.")}
+    end
+  end
+
+  def handle_info({:system_layer, _id, _outcome}, socket), do: {:noreply, socket}
+
   def handle_info(msg, socket) do
     Prima.LoggerContext.unexpected(__MODULE__, msg, :debug)
     {:noreply, socket}
+  end
+
+  # A schedule is made only under a grant that admits its runs: one whose
+  # profile's grant lacks the `schedule` origin raises the grant prompt
+  # for that profile first, and the schedule waits for its outcome.
+  defp create_admitted(socket, %{"reference" => ref, "profile_id" => profile_id} = args) do
+    case SystemLayer.admits_origin(socket, ref, profile_id, :schedule) do
+      {:missing, label} -> ask_origin(socket, args, label)
+      _admitted_or_unknown -> create_schedule(socket, args)
+    end
+  end
+
+  defp ask_origin(socket, %{"reference" => ref} = args, label) do
+    id = "grant-schedule-#{System.unique_integer([:positive])}"
+
+    case SystemLayer.grant_prompt(socket, id, ref, label: label) do
+      {:ok, prompt} ->
+        SystemLayer.show(prompt)
+
+        socket
+        |> assign(:origin_grant, {id, args})
+        |> put_flash(
+          :info,
+          "This profile's grant does not let it run on a schedule. " <>
+            "Grant it \"Also on a schedule\" to make this schedule."
+        )
+
+      {:error, reason} ->
+        put_flash(socket, :error, "No schedule was made: #{error_message(reason)}")
+    end
+  end
+
+  defp create_schedule(socket, args) do
+    case call_tool(socket, "schedule", args) do
+      {:ok, _} ->
+        socket
+        |> assign(:show_create, false)
+        |> assign(:cron_preset, "")
+        |> assign(:cron_custom, "")
+        |> assign(:form, to_form(@empty_form))
+        |> fetch_schedules()
+        |> put_flash(:info, "Schedule created")
+
+      {:error, reason} ->
+        put_flash(socket, :error, "Failed: #{error_message(reason)}")
+    end
+  end
+
+  # The grant the schedule waited for, confirmed: its profile's grant is
+  # read again, and the schedule made only if it now admits schedules.
+  defp origin_granted(socket, %{"reference" => ref, "profile_id" => profile_id} = args) do
+    case SystemLayer.admits_origin(socket, ref, profile_id, :schedule) do
+      {:missing, _label} ->
+        put_flash(
+          socket,
+          :error,
+          "No schedule was made: the grant does not let this profile run on a schedule."
+        )
+
+      _admitted_or_unknown ->
+        create_schedule(socket, args)
+    end
   end
 
   defp create_input(params, cron) do
@@ -497,6 +587,7 @@ defmodule PrismWeb.SchedulesLive do
           </table>
         </div>
       </.card>
+      <.live_component module={SystemLayer} id={SystemLayer.layer_id()} context={@context} />
     </div>
     """
   end

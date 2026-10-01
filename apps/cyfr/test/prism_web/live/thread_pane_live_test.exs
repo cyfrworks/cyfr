@@ -8,6 +8,8 @@ defmodule PrismWeb.ThreadPaneLiveTest do
   # run. On a group's room.
   use PrismWeb.ConnCase, async: false
 
+  import Ecto.Query, only: [from: 2]
+
   alias Arca.ThreadStorage, as: Threads
   alias Sanctum.Tenancy.Athanors
 
@@ -49,7 +51,7 @@ defmodule PrismWeb.ThreadPaneLiveTest do
 
   # A card as the loop opens it: a turn with its root, the model step,
   # the call, and the approval on the tape.
-  defp card!(ctx, thread, proposal) do
+  defp card!(ctx, thread, proposal, intent_over \\ %{}) do
     alias Aqua.Tape
 
     {:ok, %{turn: turn}} =
@@ -100,14 +102,18 @@ defmodule PrismWeb.ThreadPaneLiveTest do
         ]
       })
 
-    intent = %{
-      "kind" => "request_approval",
-      "title" => "Pin the plan",
-      "action_kind" => "write",
-      "standing" => false,
-      "tool_call_id" => "c1",
-      "proposal" => proposal
-    }
+    intent =
+      Map.merge(
+        %{
+          "kind" => "request_approval",
+          "title" => "Pin the plan",
+          "action_kind" => "write",
+          "standing" => false,
+          "tool_call_id" => "c1",
+          "proposal" => proposal
+        },
+        intent_over
+      )
 
     {:ok, %{card: card}} =
       Tape.open_approval(ctx, turn, step, %{
@@ -163,11 +169,178 @@ defmodule PrismWeb.ThreadPaneLiveTest do
     pane = room_pane(conn, room, thread)
 
     # What the card dispatches for "always".
-    send(pane.pid, {:approval_approve, card.id, :always})
+    send(pane.pid, {:approval_approve, card.approval_id, %{scope: :always}})
     html = render(pane)
 
     assert html =~ Aqua.ToolGrants.refusal_message({:scope_not_permitted, :never_standing})
     refute html =~ "never_standing"
+  end
+
+  test "a card is decided through approval.resolve by its approval, with the bounds chosen",
+       %{conn: conn, room: room, in_room: in_room, thread: thread} do
+    card =
+      card!(
+        in_room,
+        thread,
+        %{
+          "tool" => "files",
+          "action" => "write",
+          "args" => %{"path" => "data//notes/today.md", "content" => "x"}
+        },
+        %{"standing" => nil}
+      )
+
+    pane = room_pane(conn, room, thread)
+    card_dom = ~s([id$="-card-#{card.id}"])
+
+    # Its run was started by no schedule, so no answer can end with one.
+    assert has_element?(pane, ~s(#{card_dom} [phx-value-lifecycle="execution"]))
+    refute has_element?(pane, ~s(#{card_dom} [phx-value-lifecycle="schedule"]))
+
+    pane |> element(~s(#{card_dom} input[phx-click="approval:toggle_limit"])) |> render_click()
+    pane |> element(~s(#{card_dom} button[phx-value-lifecycle="execution"])) |> render_click()
+    render(pane)
+
+    [input] =
+      Arca.Repo.all(
+        from(l in Arca.Schemas.McpLog,
+          where: l.tool == "approval" and l.action == "resolve",
+          select: l.input
+        )
+      )
+
+    assert input =~ card.approval_id
+    assert input =~ ~s("lifecycle":"execution")
+    assert input =~ ~s("scope":"thread")
+    assert input =~ ~s("patterns":["data/notes/today.md"])
+    assert input =~ ~s("kind":"storage_path")
+  end
+
+  @write %{
+    "tool" => "files",
+    "action" => "write",
+    "args" => %{"path" => "data/notes/today.md", "content" => "x"}
+  }
+
+  # A card of its own in a thread of its own: deciding a card settles it.
+  # A scheduled card's run row names the schedule it was started by.
+  defp offer!(conn, room, in_room, scheduled?) do
+    {:ok, thread} = Threads.create(Sanctum.Context.actor(in_room))
+    card = card!(in_room, thread, @write, %{"standing" => nil})
+
+    if scheduled? do
+      {1, _} =
+        Arca.Repo.update_all(
+          from(e in Arca.Schemas.Execution, where: e.id == ^card.execution_id),
+          set: [schedule_id: "sched_offer_#{System.unique_integer([:positive])}"]
+        )
+    end
+
+    {room_pane(conn, room, thread), card}
+  end
+
+  # The grant that reached `approval.resolve` for `card`, as it was asked.
+  defp resolved(card) do
+    inputs =
+      Arca.Repo.all(
+        from(l in Arca.Schemas.McpLog,
+          where: l.tool == "approval" and l.action == "resolve",
+          select: l.input
+        )
+      )
+
+    assert [input] =
+             inputs
+             |> Enum.map(&Jason.decode!/1)
+             |> Enum.filter(&(&1["approval"] == card.approval_id))
+
+    input
+  end
+
+  defp click_offer(pane, card, selector) do
+    pane |> element(~s([id$="-card-#{card.id}"] #{selector})) |> render_click()
+    render(pane)
+  end
+
+  describe "each offer of a card" do
+    test "once, for this run and always reach approval.resolve with their scope and lifecycle",
+         %{conn: conn, room: room, in_room: in_room} do
+      for {selector, scope, lifecycle} <- [
+            {~s(button[phx-value-scope="once"]), "once", nil},
+            {~s(button[phx-value-lifecycle="execution"]), "thread", "execution"},
+            {~s|button[phx-value-scope="always"]:not([phx-value-lifecycle])|, "always", nil}
+          ] do
+        {pane, card} = offer!(conn, room, in_room, false)
+        click_offer(pane, card, selector)
+        input = resolved(card)
+
+        assert input["decision"] == "approve"
+        assert input["scope"] == scope, selector
+        assert input["lifecycle"] == lifecycle, selector
+        refute Map.has_key?(input, "until"), selector
+        refute Map.has_key?(input, "constraint"), selector
+      end
+    end
+
+    test "for this thread until ends 1, 8 or 24 hours from the click",
+         %{conn: conn, room: room, in_room: in_room} do
+      for hours <- [1, 8, 24] do
+        {pane, card} = offer!(conn, room, in_room, false)
+        before = DateTime.utc_now()
+        click_offer(pane, card, ~s(button[phx-value-hours="#{hours}"]))
+        later = DateTime.utc_now()
+        input = resolved(card)
+
+        assert input["scope"] == "thread"
+        refute Map.has_key?(input, "lifecycle")
+        assert is_binary(input["until"]), "#{hours}h reached approval.resolve with no until"
+        assert {:ok, until, 0} = DateTime.from_iso8601(input["until"])
+
+        assert DateTime.compare(until, DateTime.add(before, hours * 3600 - 1, :second)) != :lt,
+               "#{hours}h: #{input["until"]}"
+
+        assert DateTime.compare(until, DateTime.add(later, hours * 3600 + 1, :second)) != :gt,
+               "#{hours}h: #{input["until"]}"
+      end
+    end
+
+    test "for this schedule is offered only for a scheduled run, and ends with its schedule",
+         %{conn: conn, room: room, in_room: in_room} do
+      {unscheduled, plain} = offer!(conn, room, in_room, false)
+
+      refute has_element?(
+               unscheduled,
+               ~s([id$="-card-#{plain.id}"] [phx-value-lifecycle="schedule"])
+             )
+
+      {pane, card} = offer!(conn, room, in_room, true)
+      click_offer(pane, card, ~s(button[phx-value-lifecycle="schedule"]))
+      input = resolved(card)
+
+      assert input["scope"] == "always"
+      assert input["lifecycle"] == "schedule"
+      refute Map.has_key?(input, "until")
+    end
+  end
+
+  test "the thread's standing answers are listed, bounded ones too, each to withdraw",
+       %{conn: conn, room: room, thread: thread} do
+    pane = room_pane(conn, room, thread)
+
+    send(pane.pid, %Cyfr.Bus.ThreadEvent{
+      athanor_id: thread.athanor_id,
+      thread_id: thread.id,
+      kind: :grants,
+      data: MapSet.new([{"aqua", "files", "write"}])
+    })
+
+    render(pane)
+    assert has_element?(pane, ~s([data-test="standing-answers"]), "standing answers in this chat")
+
+    assert has_element?(
+             pane,
+             ~s([data-test="standing-answers"] button[phx-click="revoke_grant"][phx-value-tool="files"][phx-value-action="write"])
+           )
   end
 
   test "what the pane pushes names the pane it is for", %{

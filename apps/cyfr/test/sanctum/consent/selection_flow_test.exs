@@ -164,10 +164,22 @@ defmodule Sanctum.Consent.SelectionFlowTest do
         selections: [%{dep: @dep, label: "default"}]
       })
 
-    assert Enum.any?(
-             preview.summary,
-             &(&1 =~ "runs with home key, the key bound on its 'default' profile (KEY, ORG)")
-           )
+    # The lent key is a typed row on the source, on the edge into the
+    # dependency, naming the entry, its fields and the lending label.
+    assert [
+             %{
+               "kind" => "credential",
+               "node" => "reagent:local.sel-source",
+               "narrowed" => false,
+               "values" => %{
+                 "name" => "home key",
+                 "edge" => @dep,
+                 "label" => "default",
+                 "fields" => ["KEY", "ORG"],
+                 "scopes" => []
+               }
+             }
+           ] = Enum.filter(preview.rows, &(&1["kind"] == "credential"))
 
     {{:ok, _}, _} =
       walk!(ctx, "reagent:local.sel-source-two", %{
@@ -421,6 +433,72 @@ defmodule Sanctum.Consent.SelectionFlowTest do
 
     assert %{entry_id: ^home_id, projection: %{fields: ["KEY", "ORG"]}} =
              root_edge_vault(ctx, @role_b)
+  end
+
+  test "one entry lent on two edges of one node is two rows, one per edge", %{ctx: ctx} do
+    lenders = lenders!(ctx)
+    dep_two = "reagent:local.sel-dep-two"
+
+    publish!(ctx, "sel-dep-two", %{
+      "needs" => %{
+        "api_key" => %{
+          "type" => "api_key:example.com",
+          "reason" => "to call the example API too",
+          "required" => true,
+          "fields" => ["KEY", "ORG"]
+        }
+      }
+    })
+
+    {{:ok, _}, _} =
+      walk!(ctx, dep_two, %{bindings: [%{need: "api_key", entry_id: lenders.home_entry.id}]})
+
+    publish!(ctx, "sel-source-both", %{
+      "dependencies" => %{"static" => [%{"ref" => @dep}, %{"ref" => dep_two}]}
+    })
+
+    # The same key, lent by one node into two dependencies under two
+    # projections: each edge is its own row, neither hidden nor refused.
+    {{:ok, _}, preview} =
+      walk!(ctx, "reagent:local.sel-source-both", %{
+        selections: [
+          %{dep: @dep, label: "default", fields: ["KEY"]},
+          %{dep: dep_two, label: "default"}
+        ]
+      })
+
+    credentials =
+      for %{"kind" => "credential", "node" => "reagent:local.sel-source-both"} = row <-
+            preview.rows,
+          do: row["values"]
+
+    assert [
+             %{"name" => "home key", "edge" => @dep, "fields" => ["KEY"]},
+             %{"name" => "home key", "edge" => ^dep_two, "fields" => ["KEY", "ORG"]}
+           ] = Enum.sort_by(credentials, & &1["edge"])
+  end
+
+  test "a bound credential riding a dependency edge is the row of that edge", %{ctx: ctx} do
+    # A closure with a cycle: the source depends on a component that
+    # depends on the source back, so the edge into the source from it
+    # carries the source's own bound key.
+    source = "reagent:local.sel-cycle-source"
+    back = "reagent:local.sel-cycle-back"
+    publish!(ctx, "sel-cycle-source", %{"dependencies" => %{"static" => [%{"ref" => back}]}})
+    publish!(ctx, "sel-cycle-back", %{"dependencies" => %{"static" => [%{"ref" => source}]}})
+    key = entry!(ctx, "cycle key", %{"KEY" => "k-cycle"})
+
+    {:ok, preview} =
+      Commit.preview(ctx, %{ref: source, bindings: [%{need: "@ingress", entry_id: key.id}]})
+
+    credentials =
+      for %{"kind" => "credential", "values" => values} = row <- preview.rows,
+          do: {row["node"], values["edge"], values["name"]}
+
+    assert Enum.sort(credentials) == [
+             {back, source, "cycle key"},
+             {source, "@ingress", "cycle key"}
+           ]
   end
 
   defp tree!(ctx) do

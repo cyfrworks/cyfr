@@ -50,17 +50,18 @@ defmodule PrismWeb.SystemLayer do
 
     * a grant — the prompt's body is the consent sheet
       (`PrismWeb.ConsentSheetComponent`), which walks the grant from the
-      plan and preview the prompt arrived with (`grant_prompt/3`): the
-      vault entry each need is bound to, previewed again after each
-      pick, the warnings, what changed and what else is allowed. It hands
-      the layer the walk as it stands. Confirming asks the sheet for its
-      walk at that moment, after every pick that came before the confirm,
-      and commits exactly that walk, its decisions and bindings, through
-      `profile.commit`. A
-      commit that is refused consumed the plan's token, so the sheet
-      plans again. A grant is planned in one athanor: a prompt whose
-      athanor is no longer the layer's context's ends dismissed and
-      commits nothing;
+      plan and preview the prompt arrived with (`grant_prompt/4`) and
+      draws the preview's typed rows itself: the vault entry each need is
+      bound to, the narrowing and the origins the person chooses, each
+      previewed again after each choice, the warnings and what changed.
+      It hands the layer the walk as it stands. Confirming asks the sheet
+      for its walk at that moment, after every choice that came before
+      the confirm, and commits exactly that walk, its decisions, through
+      `profile.commit`. A commit that is refused consumed the plan's
+      token, so the sheet plans again. A plan whose closure is unresolved
+      has no preview and nothing to confirm. A grant is planned in one
+      athanor: a prompt whose athanor is no longer the layer's context's
+      ends dismissed and commits nothing;
     * a credential entry — `vault.create`, an `api_key` entry under the
       subject's name holding the one value typed, which travels on the
       shell's LiveView socket, is never assigned, rendered or logged, and
@@ -177,20 +178,32 @@ defmodule PrismWeb.SystemLayer do
   @doc """
   The `:grant` prompt `id` for the component `ref`, read under `ctx` (a
   context, or a socket holding one, as `PrismWeb.Ops.call_tool/3` takes
-  it): the consent walk's plan as `profile.plan` answers it, its preview
-  with no vault entry bound yet, and the athanor both were read in. The
-  sheet the prompt shows takes the walk on from there. `{:error, reason}`
-  when either cannot be read, which the asker shows instead of a prompt.
+  it): the consent walk's plan as `profile.plan` answers it, with what its
+  head holds (`head_origins`, and `shape_diff` when the shape moved), its
+  preview with no vault entry bound yet and the origins the head admits
+  (`interactive` alone on a first grant), and the athanor both were read
+  in. `opts[:label]` names the profile label the grant is for (the
+  `"default"` profile when absent). The sheet the prompt shows takes the
+  walk on from there. A plan whose closure is unresolved opens with no
+  preview, naming what is missing, and offers nothing to commit.
+  `{:error, reason}` when either cannot be read, which the asker shows
+  instead of a prompt.
   """
-  @spec grant_prompt(Context.t() | Phoenix.LiveView.Socket.t(), String.t(), String.t()) ::
-          {:ok, Prompt.t()} | {:error, term()}
-  def grant_prompt(ctx_or_socket, id, ref) when is_binary(id) and is_binary(ref) do
-    decisions = %{"ref" => ref, "bindings" => []}
+  @spec grant_prompt(
+          Context.t() | Phoenix.LiveView.Socket.t(),
+          String.t(),
+          String.t(),
+          keyword()
+        ) :: {:ok, Prompt.t()} | {:error, term()}
+  def grant_prompt(ctx_or_socket, id, ref, opts \\ []) when is_binary(id) and is_binary(ref) do
+    label = Keyword.get(opts, :label)
+    plan_args = Prima.MapUtil.put_present(%{"ref" => ref}, "label", label)
 
-    with %Context{athanor_id: athanor_id} when is_binary(athanor_id) <- context_of(ctx_or_socket),
-         {:ok, plan} <- Ops.call_tool(ctx_or_socket, "profile/plan", %{"ref" => ref}),
-         {:ok, preview} <-
-           Ops.call_tool(ctx_or_socket, "profile/preview", %{"decisions" => decisions}) do
+    with %Context{athanor_id: athanor_id} when is_binary(athanor_id) <-
+           context_of(ctx_or_socket),
+         {:ok, plan} <- Ops.call_tool(ctx_or_socket, "profile/plan", plan_args),
+         decisions = first_decisions(ref, label, plan),
+         {:ok, preview} <- first_preview(ctx_or_socket, plan, decisions) do
       {:ok,
        %{
          id: id,
@@ -209,6 +222,52 @@ defmodule PrismWeb.SystemLayer do
       _no_athanor -> {:error, :no_athanor}
     end
   end
+
+  # No entry bound yet, the origins the head admits, or `interactive`
+  # alone on a first grant.
+  defp first_decisions(ref, label, plan) do
+    %{"ref" => ref, "bindings" => [], "origins" => plan[:head_origins] || ["interactive"]}
+    |> Prima.MapUtil.put_present("label", label)
+  end
+
+  defp first_preview(_ctx_or_socket, %{unresolved: %{}}, _decisions), do: {:ok, nil}
+
+  defp first_preview(ctx_or_socket, _plan, decisions),
+    do: Ops.call_tool(ctx_or_socket, "profile/preview", %{"decisions" => decisions})
+
+  @doc """
+  Whether the grant a run would start under admits `origin`: the profile
+  `profile_id` of the component `ref`, read under `ctx` (a context, or a
+  socket holding one) through `Sanctum.Consent.profiles/2` and its head
+  through `Sanctum.Consent.head_consent/2`. `:admitted` when its head
+  admits it; `{:missing, label}` when an owner profile's head does not,
+  `label` the profile's, for the grant prompt that asks for it
+  (`grant_prompt/4`'s `label:`); `:unknown` when the profile is not one of
+  `ref`'s owner profiles with a head, or cannot be read, which leaves the
+  decision to the operation itself.
+  """
+  @spec admits_origin(
+          Context.t() | Phoenix.LiveView.Socket.t(),
+          String.t(),
+          String.t(),
+          Prima.Origin.t()
+        ) :: :admitted | {:missing, String.t()} | :unknown
+  def admits_origin(ctx_or_socket, ref, profile_id, origin)
+      when is_binary(ref) and is_binary(profile_id) do
+    with %Context{} = ctx <- context_of(ctx_or_socket),
+         {:ok, name_ref} <- Prima.ComponentRef.to_name_ref(ref),
+         {:ok, entries} <- Sanctum.Consent.profiles(ctx, name_ref),
+         %{kind: :owner, label: label} <- Enum.find(entries, &(&1.id == profile_id)),
+         {:ok, head} <- Sanctum.Consent.head_consent(ctx, profile_id) do
+      if origin in (head.admitted_origins || [:interactive]),
+        do: :admitted,
+        else: {:missing, label}
+    else
+      _unknown -> :unknown
+    end
+  end
+
+  def admits_origin(_ctx_or_socket, _ref, _profile_id, _origin), do: :unknown
 
   defp context_of(%Context{} = ctx), do: ctx
   defp context_of(%Phoenix.LiveView.Socket{assigns: %{context: ctx}}), do: ctx

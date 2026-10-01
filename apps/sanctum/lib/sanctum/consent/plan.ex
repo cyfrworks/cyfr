@@ -28,9 +28,23 @@ defmodule Sanctum.Consent.Plan do
   in their JSON form, one per resource each node of the closure asks for,
   its limits, and a tincture's frame, streams, cards and system actions:
   what a narrowing is chosen from, none of it narrowed yet. `origins` is
-  the default a decision that names none admits, `interactive` alone. A
-  closure that cannot be resolved asks for its source's resources alone
-  here; the preview refuses it.
+  the default a decision that names none admits, `interactive` alone.
+
+  A plan for a profile with a head says what the head holds:
+  `head_origins`, the origins it admits (`interactive` alone for a head
+  written without them), so a re-grant starts from them rather than
+  quietly dropping one; and, when the component's shape moved since the
+  head, `shape_diff`, the head as the person narrowed it against the live
+  ask (`Sanctum.Consent.ShapeDiff`). With no head, `head_origins` is nil
+  and `shape_diff` empty.
+
+  A closure that cannot be resolved is `unresolved`: `%{reason, missing}`,
+  the reason's tag (`"unresolvable_dependency"`, `"missing_release_digest"`
+  or the resolution's own) and the name-level ref of what is missing,
+  `nil` when the resolution names none. Its `rows` are empty, since the
+  source's rows alone are not the ask, and it offers no selection; the
+  preview and the commit refuse it. A resolved closure is `unresolved:
+  nil`.
   """
 
   alias Prima.Authority.RootSelect
@@ -63,7 +77,10 @@ defmodule Sanctum.Consent.Plan do
           caps: map(),
           limits: map(),
           rows: [BlobBuilder.row()],
+          unresolved: %{reason: String.t(), missing: String.t() | nil} | nil,
           origins: [String.t(), ...],
+          head_origins: [String.t(), ...] | nil,
+          shape_diff: [map()],
           candidates: [map()],
           tool_server_candidates: [Sanctum.Grimoire.tool_server_candidate()],
           warnings: [String.t()],
@@ -90,12 +107,14 @@ defmodule Sanctum.Consent.Plan do
          manifest = manifest(component, source_ref),
          {:ok, resources, limits} <-
            Sanctum.Consent.BlobBuilder.node_grant(ctx, source_ref, manifest),
-         graph = closure(ctx, component),
-         {:ok, rows} <- ask_rows(ctx, graph, source_ref),
+         closure = closure(ctx, component),
+         {:ok, rows} <- ask_rows(ctx, closure),
          {:ok, candidates} <- candidates(ctx),
          needs = need_rows(manifest),
          {:ok, plan_token} <-
            mint_token(ctx, shape_digest, profile_id, expected_revision) do
+      head = head_facts(ctx, profile_id, shape_digest, source_ref)
+
       {:ok,
        %{
          plan_token: plan_token,
@@ -104,11 +123,14 @@ defmodule Sanctum.Consent.Plan do
          profile_id: profile_id,
          source_ref: source_ref,
          needs: needs,
-         dependency_needs: dependency_needs(ctx, graph),
+         dependency_needs: dependency_needs(ctx, closure),
          caps: resources,
          limits: limits,
          rows: rows,
+         unresolved: unresolved(closure),
          origins: Prima.Origin.to_wire_list(@default_origins),
+         head_origins: head.origins,
+         shape_diff: head.shape_diff,
          candidates: candidates,
          tool_server_candidates: Sanctum.Grimoire.tool_server_candidates(ctx),
          warnings: need_warnings(needs, candidates),
@@ -222,20 +244,59 @@ defmodule Sanctum.Consent.Plan do
     end
   end
 
-  # The activation closure's graph, or nil for one that cannot be resolved.
-  defp closure(ctx, component) do
-    case Components.resolve(ctx, component) do
-      {:ok, %{graph: graph}} when is_map(graph) -> graph
-      _unresolvable -> nil
+  # What the profile's head holds: the origins it admits, and what changed
+  # against it when the shape moved. A head that cannot be read answers as
+  # none, which the commit's own revision check still fences.
+  defp head_facts(_ctx, nil, _shape_digest, _source_ref), do: %{origins: nil, shape_diff: []}
+
+  defp head_facts(ctx, profile_id, shape_digest, source_ref) do
+    case Arca.ConsentStorage.head_consent(Context.actor(ctx), profile_id) do
+      {:ok, head} ->
+        %{
+          origins: Prima.Origin.to_wire_list(head.admitted_origins || @default_origins),
+          shape_diff:
+            if(head.shape_digest == shape_digest,
+              do: [],
+              else: Sanctum.Consent.ShapeDiff.compute(ctx, source_ref, head.resolved_policy)
+            )
+        }
+
+      {:error, _no_head} ->
+        %{origins: nil, shape_diff: []}
     end
   end
 
-  # The ask of every node of the closure, or of the source alone when the
-  # closure cannot be resolved; each row held to its shape, each once.
-  defp ask_rows(ctx, graph, source_ref) do
-    node_keys = if graph, do: Map.keys(graph), else: [source_ref]
+  # The activation closure's graph, or what keeps it from resolving: the
+  # reason's tag and the ref the resolution names as missing, if any.
+  defp closure(ctx, component) do
+    case Components.resolve(ctx, component) do
+      {:ok, %{graph: graph}} -> {:ok, graph}
+      {:error, reason} -> {:unresolved, unresolved_reason(reason)}
+    end
+  end
 
-    with {:ok, rows} <- BlobBuilder.ask_rows(ctx, node_keys) do
+  defp unresolved_reason({:incomplete, {tag, missing}}) when is_atom(tag) and is_binary(missing),
+    do: %{reason: Atom.to_string(tag), missing: missing}
+
+  defp unresolved_reason({:incomplete, tag}) when is_atom(tag),
+    do: %{reason: Atom.to_string(tag), missing: nil}
+
+  defp unresolved_reason({tag, _detail}) when is_atom(tag),
+    do: %{reason: Atom.to_string(tag), missing: nil}
+
+  defp unresolved_reason(tag) when is_atom(tag), do: %{reason: Atom.to_string(tag), missing: nil}
+  defp unresolved_reason(_reason), do: %{reason: "unresolvable", missing: nil}
+
+  defp unresolved({:ok, _graph}), do: nil
+  defp unresolved({:unresolved, unresolved}), do: unresolved
+
+  # The ask of every node of the closure, each row held to its shape, each
+  # once. A closure that cannot be resolved has no ask to show: the
+  # source's own rows would read as the whole of it.
+  defp ask_rows(_ctx, {:unresolved, _unresolved}), do: {:ok, []}
+
+  defp ask_rows(ctx, {:ok, graph}) do
+    with {:ok, rows} <- BlobBuilder.ask_rows(ctx, Map.keys(graph)) do
       rows = BlobBuilder.order_rows(rows)
 
       case BlobBuilder.check_rows(rows) do
@@ -249,9 +310,9 @@ defmodule Sanctum.Consent.Plan do
   # need, each with the owner profiles of that target that bind one —
   # what a selection may name. A closure that cannot be resolved offers
   # none; the commit refuses a selection it cannot place anyway.
-  defp dependency_needs(_ctx, nil), do: []
+  defp dependency_needs(_ctx, {:unresolved, _unresolved}), do: []
 
-  defp dependency_needs(ctx, graph) do
+  defp dependency_needs(ctx, {:ok, graph}) do
     graph
     |> Map.keys()
     |> Enum.sort()

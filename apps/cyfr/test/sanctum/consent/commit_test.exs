@@ -208,8 +208,9 @@ defmodule Sanctum.Consent.CommitTest do
 
       rows = Enum.group_by(decoded.rows, &{&1.kind, &1.node}, & &1.values)
 
+      # The credential names the edge it rides: the source's own ingress.
       assert rows[{:credential, ref}] == [
-               %{"name" => entry.name, "fields" => ["url"], "scopes" => []}
+               %{"name" => entry.name, "edge" => "@ingress", "fields" => ["url"], "scopes" => []}
              ]
 
       assert rows[{:egress, ref}] == [
