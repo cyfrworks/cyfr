@@ -337,6 +337,33 @@ defmodule Sanctum.Door do
     if platform_admin_email?(email), do: {:ok, :admin}, else: :no
   end
 
+  @doc """
+  Would an invite of the person identifier `identifier` (`per_…`) admit
+  that person on their first `cyfr` sign-in? True when no deny names the
+  identifier and the door is `*` or names it; a request is queued
+  otherwise (`Sanctum.Door.Store.request/4`). The arms of `admit/3` a
+  `cyfr` identity meets, in the same order: an identifier carries no
+  email, so neither the operator list nor an email entry is asked.
+
+  An identifier the store could not be asked about is not admitted, as
+  `email_admitted?/1` answers for an address.
+  """
+  @spec identifier_admitted?(String.t()) :: boolean()
+  def identifier_admitted?(identifier) when is_binary(identifier) do
+    case admit_identifier(identifier) do
+      {:ok, :allowed} -> true
+      {:error, _reason} -> false
+    end
+  end
+
+  defp admit_identifier(identifier) do
+    with :no <- deny_arm(nil, nil, identifier),
+         :no <- wildcard_arm(:unknown),
+         :no <- identifier_arm(identifier) do
+      {:error, :not_allowed}
+    end
+  end
+
   @doc "The one refusal a stranger sees, whichever branch refused."
   @spec refusal_message() :: String.t()
   def refusal_message, do: "not allowed on this server — ask the operator"

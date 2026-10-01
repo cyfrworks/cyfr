@@ -101,12 +101,15 @@ defmodule Arca.Members do
   without naming it, so the changeset could not translate it. Reading the
   athanor first answers `:unknown_athanor` the same way on both adapters.
 
-  The athanor row is locked before the seat is written, in one
-  `Arca.Repo.locking_transaction/2`: a denial or an archive that is
-  retiring the athanor (`Arca.SecurityTransitions`) holds that lock, so a
-  seat waits for it and then reads what it committed. A seat never lands
-  in an archived athanor: `{:error, :athanor_archived}`, the answer adding
-  a member to one already gets.
+  The person an active seat names is locked first, then the athanor row,
+  before the seat is written, in one `Arca.Repo.locking_transaction/2`,
+  the standing order (`Arca.SecurityTransitions`). A denial or a leave
+  holding the person, or a denial or an archive retiring the athanor,
+  holds one of those locks, so a seat waits for it and then reads what it
+  committed: a leave that found the person with no other seat is never
+  overtaken by one landing elsewhere, and a seat never lands in an
+  archived athanor: `{:error, :athanor_archived}`, the answer adding a
+  member to one already gets.
 
   An invitation held for a person identifier (`:person_identifier`) is
   claimed by whoever proves that identity, so it widens who may sit here:
@@ -119,7 +122,8 @@ defmodule Arca.Members do
       when is_binary(athanor_id) and athanor_id != "" and is_map(attrs) do
     Arca.Repo.Errors.with_db_rescue("Arca.Members.seat", fn ->
       write = fn ->
-        with :ok <- seatable(athanor_id),
+        with :ok <- hold_person(Map.get(attrs, :user_id)),
+             :ok <- seatable(athanor_id),
              {:ok, row} <-
                attrs |> defaults() |> Map.put(:athanor_id, athanor_id) |> do_insert() do
           row
@@ -309,16 +313,27 @@ defmodule Arca.Members do
 
   # ---- across tenants --------------------------------------------------------
 
-  @doc "Write the platform row for a person — the grant that names no athanor."
+  @doc """
+  Write the platform row for a person — the grant that names no athanor —
+  with the person's row locked first, as a seat locks it.
+  """
   @spec grant_platform(Prima.Actor.t(), map()) ::
           {:ok, map()} | refusal() | write_refusal()
   def grant_platform(%Prima.Actor{scope: :platform}, attrs) when is_map(attrs) do
     Arca.Repo.Errors.with_db_rescue("Arca.Members.grant_platform", fn ->
-      attrs
-      |> defaults()
-      |> Map.put(:scope, "platform")
-      |> Map.put(:athanor_id, nil)
-      |> do_insert()
+      Arca.Repo.locking_transaction(fn ->
+        :ok = hold_person(Map.get(attrs, :user_id))
+
+        attrs
+        |> defaults()
+        |> Map.put(:scope, "platform")
+        |> Map.put(:athanor_id, nil)
+        |> do_insert()
+        |> case do
+          {:ok, row} -> row
+          {:error, reason} -> Arca.Repo.rollback(reason)
+        end
+      end)
     end)
     |> Arca.Data.project()
   end
@@ -430,9 +445,10 @@ defmodule Arca.Members do
     end
 
     Arca.Repo.Errors.with_db_rescue("Arca.Members.ensure_platform", fn ->
-      # A writer that does not take the person's lock (`grant_platform/2`)
-      # can still win the assignment index between the read and the
-      # insert; the one retry reads the row it wrote.
+      # Every writer of a platform row takes the person's lock, so the
+      # assignment index is not expected to refuse here; should a writer
+      # win it between the read and the insert all the same, the one
+      # retry reads the row it wrote.
       case Arca.Repo.locking_transaction(grant) do
         {:error, :conflict} -> Arca.Repo.locking_transaction(grant)
         other -> other
@@ -552,12 +568,14 @@ defmodule Arca.Members do
   Turn every invitation held for `email` into this person's active
   membership, and answer the athanors that changed.
 
-  Two set-based statements in ONE transaction, so two first sign-ins of
-  the same identity cannot both claim a row: invitations for athanors
-  where the person is already active are dropped, the rest are activated
-  with the email consumed — after which the assignment index admits no
-  second row for that person and athanor. An invitation already activated
-  or already withdrawn is not there to find, so neither produces a second
+  Two set-based statements in ONE transaction, with the person's row
+  locked first as a seat locks it, so two first sign-ins of the same
+  identity cannot both claim a row and a claim never overtakes a leave
+  holding the person: invitations for athanors where the person is
+  already active are dropped, the rest are activated with the email
+  consumed — after which the assignment index admits no second row for
+  that person and athanor. An invitation already activated or already
+  withdrawn is not there to find, so neither produces a second
   membership.
   """
   @spec activate_invited(Prima.Actor.t(), String.t(), String.t(), DateTime.t()) ::
@@ -585,7 +603,8 @@ defmodule Arca.Members do
             )
         )
 
-      Arca.Repo.transaction(fn ->
+      Arca.Repo.locking_transaction(fn ->
+        :ok = hold_person(user_id)
         Arca.Repo.delete_all(superseded)
 
         {_count, athanor_ids} =
@@ -603,10 +622,10 @@ defmodule Arca.Members do
   @doc """
   `activate_invited/4` for the invitations held for a person identifier
   (`per_…`): each becomes this person's active membership, the identifier
-  consumed, in one transaction, and an invitation for an athanor the
-  person already sits in is dropped. Seating a person widens what they
-  reach, so the transaction first proves this member still owns its slot
-  (`{:error, :not_owner}` otherwise).
+  consumed, in one transaction with the person's row locked first, and an
+  invitation for an athanor the person already sits in is dropped.
+  Seating a person widens what they reach, so the transaction first proves
+  this member still owns its slot (`{:error, :not_owner}` otherwise).
   """
   @spec activate_invited_identifier(Prima.Actor.t(), String.t(), String.t(), DateTime.t()) ::
           {:ok, [String.t()]} | {:error, :not_owner} | refusal()
@@ -637,6 +656,7 @@ defmodule Arca.Members do
         )
 
       fenced(fn ->
+        :ok = hold_person(user_id)
         Arca.Repo.delete_all(superseded)
 
         {_count, athanor_ids} =
@@ -890,6 +910,18 @@ defmodule Arca.Members do
       end)
     end
   end
+
+  # The person a membership row names, locked: the first lock of the
+  # standing order (`Arca.SecurityTransitions`), so a seat, a claim or a
+  # grant waits for a leave or a denial holding the person, or it for them.
+  # A person with no row has nothing to hold; an invitation names no
+  # person.
+  defp hold_person(user_id) when is_binary(user_id) do
+    _held = lock_people([user_id])
+    :ok
+  end
+
+  defp hold_person(_none), do: :ok
 
   # The athanor a seat is written into, locked: an athanor being retired
   # holds this row until it commits.

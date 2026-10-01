@@ -643,7 +643,10 @@ defmodule Arca.MembersLockTest do
   sandbox: two concurrent grants of one person write one row, and a
   grant waiting behind a change to the person's row acts on what that
   change committed — on PostgreSQL by waiting on the row, on SQLite by
-  waiting at the lock its transaction takes at entry.
+  waiting at the lock its transaction takes at entry. Every writer of a
+  row naming a person — a seat, an email or identifier claim, a platform
+  grant — takes the person's lock first, so none overtakes a leave or a
+  denial holding them.
   """
 
   use ExUnit.Case, async: false
@@ -651,7 +654,7 @@ defmodule Arca.MembersLockTest do
   import Ecto.Query
 
   alias Arca.Members
-  alias Arca.Schemas.{ExternalIdentity, Membership, User}
+  alias Arca.Schemas.{Athanor, ExternalIdentity, Membership, User}
   alias Ecto.Adapters.SQL.Sandbox
 
   defp unboxed(fun), do: Sandbox.unboxed_run(Arca.Repo, fun)
@@ -764,6 +767,118 @@ defmodule Arca.MembersLockTest do
     assert {:error, :stale_identity} = Task.await(granter, 25_000)
 
     assert {:error, :not_found} = unboxed(fn -> Members.find_platform(server(), user.id) end)
+  end
+
+  @tag :postgres
+  test "a seat, a claim and a grant each wait for whoever holds the person", %{user: user} do
+    # An identifier invitation and its claim are fenced by the member's
+    # slot; no claimant runs here, so none is held and none is asked for.
+    claim = Application.get_env(:arca, :control_plane_claim_enabled)
+    Application.put_env(:arca, :control_plane_claim_enabled, false)
+
+    on_exit(fn ->
+      if is_nil(claim),
+        do: Application.delete_env(:arca, :control_plane_claim_enabled),
+        else: Application.put_env(:arca, :control_plane_claim_enabled, claim)
+    end)
+
+    n = System.unique_integer([:positive])
+    identifier = "per_" <> Prima.Digest.sha256_hex("lock-#{n}")
+    email = "lock-invited#{n}@example.com"
+
+    [seated, by_email, by_identifier] =
+      ids =
+      for i <- 1..3 do
+        {:ok, athanor} =
+          unboxed(fn ->
+            Arca.Athanors.insert(server(), %{
+              kind: "group",
+              name: "L#{n}-#{i}",
+              slug: "mem-lock-#{n}-#{i}",
+              created_by: "system"
+            })
+          end)
+
+        athanor.id
+      end
+
+    on_exit(fn ->
+      unboxed(fn ->
+        Arca.Repo.delete_all(from(m in Membership, where: m.athanor_id in ^ids))
+        Arca.Repo.delete_all(from(a in Athanor, where: a.id in ^ids))
+      end)
+    end)
+
+    # The invitations a claim takes: neither names a person, so writing
+    # them locks none.
+    {:ok, _} =
+      unboxed(fn ->
+        Members.seat(in_athanor(by_email), %{email: email, status: "invited", added_by: "x"})
+      end)
+
+    {:ok, _} =
+      unboxed(fn ->
+        Members.seat(in_athanor(by_identifier), %{
+          person_identifier: identifier,
+          status: "invited",
+          added_by: "x"
+        })
+      end)
+
+    writers = [
+      seat: fn -> Members.seat(in_athanor(seated), %{user_id: user.id, added_by: "x"}) end,
+      email_claim: fn ->
+        Members.activate_invited(server(), user.id, email, DateTime.utc_now())
+      end,
+      identifier_claim: fn ->
+        Members.activate_invited_identifier(server(), user.id, identifier, DateTime.utc_now())
+      end,
+      grant: fn -> Members.grant_platform(server(), %{user_id: user.id, added_by: "x"}) end
+    ]
+
+    for {name, write} <- writers do
+      holder = hold_person(user.id)
+      writer = Task.async(fn -> unboxed(write) end)
+      refute Task.yield(writer, 300), "#{name} was written while the person was held"
+      send(holder.pid, :release)
+      assert {:ok, _} = Task.await(holder, 25_000)
+      assert {:ok, _} = Task.await(writer, 25_000), "#{name}"
+    end
+
+    unboxed(fn ->
+      seats =
+        Arca.Repo.all(from(m in Membership, where: m.user_id == ^user.id, select: m.athanor_id))
+
+      assert Enum.sort(seats) == Enum.sort([nil | ids])
+    end)
+  end
+
+  defp in_athanor(id), do: %{Prima.Actor.system() | athanor_id: id, scope: :athanor}
+
+  # A transaction holding the person's row, as a leave or a denial holds it
+  # (`Arca.SecurityTransitions`), until the test says release.
+  defp hold_person(user_id) do
+    test = self()
+
+    holder =
+      Task.async(fn ->
+        unboxed(fn ->
+          Arca.Repo.locking_transaction(fn ->
+            from(u in User, where: u.id == ^user_id)
+            |> Arca.QueryHelpers.for_update()
+            |> Arca.Repo.one()
+
+            send(test, :person_held)
+
+            receive do
+              :release -> :ok
+            end
+          end)
+        end)
+      end)
+
+    assert_receive :person_held, 5_000
+    holder
   end
 end
 

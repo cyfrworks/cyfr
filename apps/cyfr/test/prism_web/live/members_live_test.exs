@@ -3,9 +3,10 @@
 
 defmodule PrismWeb.MembersLiveTest do
   @moduledoc """
-  The members page of a group: any member adds by email (a seat that waits
-  when the person has never signed in), removes, and creates a group — all
-  through the same verbs Codex uses.
+  The members page of a group: any member adds by email or by person
+  identifier (a seat that waits when the person has never signed in),
+  removes, withdraws an invitation, and creates a group — all through the
+  same verbs Codex uses.
   """
   use PrismWeb.ConnCase, async: false
 
@@ -26,7 +27,7 @@ defmodule PrismWeb.MembersLiveTest do
     stranger = "newcomer-#{System.unique_integer([:positive])}@example.com"
 
     view
-    |> form("form[phx-submit=add]", %{"email" => stranger})
+    |> form("form[phx-submit=add]", %{"person" => stranger})
     |> render_submit()
 
     assert render(view) =~ stranger
@@ -42,6 +43,66 @@ defmodule PrismWeb.MembersLiveTest do
 
     refute Members.member?(bob.user_id, group.id)
     refute render(view) =~ bob.email
+  end
+
+  test "an identifier invites from the same form, shows on the roster, and is withdrawn by it",
+       %{conn: conn} do
+    alice = test_user()
+    conn = log_in_user(conn, alice)
+    {:ok, group} = Athanors.create_group(alice.user_id, "Ids #{alice.namespace}")
+    identifier = "per_" <> Prima.Digest.sha256_hex("members-live-#{alice.namespace}")
+
+    {view, _html} = mount_athanor(conn, "/members", group)
+
+    view
+    |> form("form[phx-submit=add]", %{"person" => "  #{identifier} "})
+    |> render_submit()
+
+    assert render(view) =~ identifier
+
+    assert [%{status: "invited", email: nil}] =
+             Enum.filter(
+               rows!(Members.list_by_athanor(group.id)),
+               &(&1.person_identifier == identifier)
+             )
+
+    # A malformed one is refused in its own sentence, and nothing is held.
+    view
+    |> form("form[phx-submit=add]", %{"person" => "per_nope"})
+    |> render_submit()
+
+    assert render(view) =~ "not a person identifier"
+
+    view
+    |> element("button[phx-click=remove_invite][phx-value-identifier='#{identifier}']")
+    |> render_click()
+
+    refute render(view) =~ identifier
+
+    refute Enum.any?(
+             rows!(Members.list_by_athanor(group.id)),
+             &(&1.person_identifier == identifier)
+           )
+  end
+
+  test "an address that starts with per_ is an address, invited by email", %{conn: conn} do
+    alice = test_user()
+    conn = log_in_user(conn, alice)
+    {:ok, group} = Athanors.create_group(alice.user_id, "Per #{alice.namespace}")
+    address = "per_hansen-#{System.unique_integer([:positive])}@example.com"
+
+    {view, _html} = mount_athanor(conn, "/members", group)
+
+    view
+    |> form("form[phx-submit=add]", %{"person" => address})
+    |> render_submit()
+
+    html = render(view)
+    assert html =~ address
+    refute html =~ "not a person identifier"
+
+    assert [%{status: "invited", person_identifier: nil}] =
+             Enum.filter(rows!(Members.list_by_athanor(group.id)), &(&1.email == address))
   end
 
   test "a group is created from the page and its creator is its only member", %{conn: conn} do

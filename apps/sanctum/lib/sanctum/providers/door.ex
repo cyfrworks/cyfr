@@ -11,7 +11,7 @@ defmodule Sanctum.Providers.Door do
   door judges a person the `cyfr` door presents. `deny` writes a sticky
   exclusion, ejects the person when they are already known
   (`Sanctum.Tenancy.Users.deny/1`) and withdraws the group invitations the
-  address was holding either way; `remove` deletes an entry — and, when it was
+  address or identifier was holding either way; `remove` deletes an entry — and, when it was
   an allow, ejects everyone the door would now refuse
   (`Sanctum.Door.reconcile/0`), which is the only way `*` is covered, since
   it names nobody;
@@ -273,11 +273,15 @@ defmodule Sanctum.Providers.Door do
     })
   end
 
-  # Every invitation the address still holds, dropped once. `Users.deny/1`
-  # already did this for each identity that has signed in with it, and the
-  # sweep is idempotent, so the count is what a *pending* seat cost.
+  # Every invitation the address or identifier still holds, dropped once.
+  # `Users.deny/1` already did this for each person it names who has signed
+  # in, and the sweep is idempotent, so the count is what a *pending* seat
+  # cost.
   defp withdraw_pending("email", value),
     do: Sanctum.Tenancy.Members.withdraw_invites_for_email(value)
+
+  defp withdraw_pending("identifier", value),
+    do: Sanctum.Tenancy.Members.withdraw_invites_for_identifier(value)
 
   defp withdraw_pending(_kind, _value), do: 0
 

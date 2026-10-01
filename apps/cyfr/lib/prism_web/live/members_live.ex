@@ -4,8 +4,9 @@
 defmodule PrismWeb.MembersLive do
   @moduledoc """
   Who is in the focused athanor: the members, the pending invites, and the
-  controls every member has — add by email, remove, leave. A person's own
-  athanor has one member and no controls beyond the list.
+  controls every member has — add by email or by person identifier
+  (`per_…`), remove, withdraw an invite, leave. A person's own athanor has
+  one member and no controls beyond the list.
   """
 
   use PrismWeb, :live_view
@@ -29,7 +30,7 @@ defmodule PrismWeb.MembersLive do
      |> assign(:athanor_label, nil)
      |> assign(:members, [])
      |> assign(:groups, [])
-     |> assign(:new_email, "")
+     |> assign(:new_person, "")
      |> assign(:new_group_name, "")
      |> assign(:loading, true)}
   end
@@ -41,17 +42,17 @@ defmodule PrismWeb.MembersLive do
   end
 
   @impl true
-  def handle_event("add", %{"email" => email}, socket) do
-    case call_tool(socket, "member/add", %{"email" => String.trim(email)}) do
+  def handle_event("add", %{"person" => person}, socket) do
+    case call_tool(socket, "member/add", target(person)) do
       {:ok, _} ->
         {:noreply,
          socket
-         |> assign(:new_email, "")
+         |> assign(:new_person, "")
          |> load()
          |> put_flash(
            :info,
            "Added. If they have never signed in here the seat waits for them; if the " <>
-             "operator has not allowed their address yet, it waits for that too."
+             "operator has not allowed their address or identifier yet, it waits for that too."
          )}
 
       {:error, reason} ->
@@ -69,8 +70,8 @@ defmodule PrismWeb.MembersLive do
     end
   end
 
-  def handle_event("remove_invite", %{"email" => email}, socket) do
-    case call_tool(socket, "member/remove", %{"email" => email}) do
+  def handle_event("remove_invite", params, socket) do
+    case call_tool(socket, "member/remove", Map.take(params, ["identifier", "email"])) do
       {:ok, _} ->
         {:noreply, socket |> load() |> put_flash(:info, "Invitation withdrawn.")}
 
@@ -92,8 +93,8 @@ defmodule PrismWeb.MembersLive do
   # Growing a DM is a NEW open group with the three of you — the pair's
   # door stays closed and its history stays where it was said. The partner
   # is seated by user id (an active seat at once); the new person arrives
-  # by email, the ordinary first contact on an open athanor.
-  def handle_event("add_third", %{"email" => email}, socket) do
+  # by email or identifier, the ordinary first contact on an open athanor.
+  def handle_event("add_third", %{"person" => person}, socket) do
     %{athanor: pair, members: members, context: ctx} = socket.assigns
 
     partner =
@@ -109,10 +110,7 @@ defmodule PrismWeb.MembersLive do
          {:ok, _} <-
            call_tool(socket, "member/add", %{"user_id" => partner, "athanor" => group_id}),
          {:ok, _} <-
-           call_tool(socket, "member/add", %{
-             "email" => String.trim(email),
-             "athanor" => group_id
-           }),
+           call_tool(socket, "member/add", Map.put(target(person), "athanor", group_id)),
          {:ok, %{athanor: %{route: route}}} <-
            call_tool(socket, "session/use", %{"athanor" => group_id}) do
       {:noreply,
@@ -164,7 +162,7 @@ defmodule PrismWeb.MembersLive do
   def handle_event("form_changed", params, socket) do
     {:noreply,
      socket
-     |> assign(:new_email, Map.get(params, "email", socket.assigns.new_email))
+     |> assign(:new_person, Map.get(params, "person", socket.assigns.new_person))
      |> assign(:new_group_name, Map.get(params, "name", socket.assigns.new_group_name))}
   end
 
@@ -207,6 +205,18 @@ defmodule PrismWeb.MembersLive do
 
   defp frozen?(%{roster: "frozen"}), do: true
   defp frozen?(_), do: false
+
+  # Who the add form names: a person identifier when it starts `per_` and
+  # holds no `@`, else an email, so an address such as
+  # `per_hansen@example.com` stays an address. A malformed identifier with
+  # no `@` is still sent as one, so the refusal names what was wrong with it.
+  defp target(person) do
+    person = String.trim(person)
+
+    if String.starts_with?(person, "per_") and not String.contains?(person, "@"),
+      do: %{"identifier" => person},
+      else: %{"email" => person}
+  end
 
   defp load(socket) do
     ctx = socket.assigns.context
@@ -278,7 +288,9 @@ defmodule PrismWeb.MembersLive do
           <div :if={@members == []} class="py-8"><.empty_state message="No members" /></div>
           <.table :if={@members != []} id="members" rows={@members}>
             <:col :let={m} label="Who">{PrismWeb.People.label(m, @context)}</:col>
-            <:col :let={m} label="Email">{m[:email] || "-"}</:col>
+            <:col :let={m} label="Email or identifier">
+              {m[:email] || m[:identifier] || "-"}
+            </:col>
             <:col :let={m} label="Status">
               <.badge color={if m[:status] == "active", do: "green", else: "yellow"}>
                 {m[:status]}
@@ -300,7 +312,15 @@ defmodule PrismWeb.MembersLive do
                   Remove
                 </.button>
                 <.button
-                  :if={m[:status] == "invited"}
+                  :if={m[:status] == "invited" && m[:identifier]}
+                  variant="ghost"
+                  phx-click="remove_invite"
+                  phx-value-identifier={m[:identifier]}
+                >
+                  Withdraw
+                </.button>
+                <.button
+                  :if={m[:status] == "invited" && !m[:identifier]}
                   variant="ghost"
                   phx-click="remove_invite"
                   phx-value-email={m[:email]}
@@ -319,11 +339,11 @@ defmodule PrismWeb.MembersLive do
           >
             <div class="flex-1">
               <.input
-                name="email"
-                value={@new_email}
-                type="email"
+                name="person"
+                value={@new_person}
+                type="text"
                 required
-                placeholder="someone@example.com"
+                placeholder="someone@example.com or per_…"
               />
             </div>
             <.button type="submit">Add member</.button>
@@ -339,11 +359,11 @@ defmodule PrismWeb.MembersLive do
           >
             <div class="flex-1">
               <.input
-                name="email"
-                value={@new_email}
-                type="email"
+                name="person"
+                value={@new_person}
+                type="text"
                 required
-                placeholder="someone@example.com"
+                placeholder="someone@example.com or per_…"
               />
             </div>
             <.button type="submit">Add someone — starts a new group</.button>

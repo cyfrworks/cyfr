@@ -2151,7 +2151,7 @@ type MemberAddArgs struct {
 	Email Field[string] `json:"email,omitzero"`
 	// The person's user id, when already on this server (add, remove)
 	UserId Field[string] `json:"user_id,omitzero"`
-	// add: the person's identifier (per_…), in place of an email or a user id
+	// The person's identifier (per_…), in place of an email or a user id (add, remove)
 	Identifier Field[string] `json:"identifier,omitzero"`
 }
 
@@ -2206,6 +2206,8 @@ type MemberRemoveArgs struct {
 	Email Field[string] `json:"email,omitzero"`
 	// The person's user id, when already on this server (add, remove)
 	UserId Field[string] `json:"user_id,omitzero"`
+	// The person's identifier (per_…), in place of an email or a user id (add, remove)
+	Identifier Field[string] `json:"identifier,omitzero"`
 }
 
 // MarshalJSON supplies the operation's fixed action discriminator.
