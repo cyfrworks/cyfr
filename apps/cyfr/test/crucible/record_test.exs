@@ -18,6 +18,8 @@ defmodule Crucible.RecordTest do
 
     rand_id = :rand.uniform(100_000)
 
+    # A run over the API: the admission path every case here models but the
+    # missing-origin refusal below.
     ctx =
       Context.build(
         user_id: "exec_rec_user_#{rand_id}",
@@ -30,6 +32,7 @@ defmodule Crucible.RecordTest do
         namespace: "testns",
         authenticated: true
       )
+      |> Sanctum.TestContext.via(:api)
 
     # A run is admitted only in an athanor that stands: the test's own has a row.
     Arca.Test.Actor.athanor!(ctx.athanor_id)
@@ -48,6 +51,19 @@ defmodule Crucible.RecordTest do
   # ============================================================================
   # Record Creation
   # ============================================================================
+
+  describe "the origin a root records" do
+    test "a root whose context names no origin is refused, with nothing written", %{ctx: ctx} do
+      record = Record.new(Sanctum.TestContext.via(ctx, nil), "reagent:local.test:0.1.0", %{})
+
+      assert {:error, :no_origin} = Record.write_started(record)
+      refute Arca.Repo.get(Arca.Schemas.Execution, record.id)
+
+      named = Record.new(ctx, "reagent:local.test:0.1.0", %{})
+      assert :ok = Record.write_started(named)
+      assert %{origin: "programmatic"} = Arca.Repo.get!(Arca.Schemas.Execution, named.id)
+    end
+  end
 
   describe "new/4" do
     test "creates a record with UUID execution_id", %{ctx: ctx} do
@@ -279,7 +295,8 @@ defmodule Crucible.RecordTest do
             user_id: ctx.user_id,
             athanor_id: ctx.athanor_id,
             component_type: "agent",
-            kind: "turn"
+            kind: "turn",
+            origin: :programmatic
           },
           Cyfr.Test.AttemptFixtures.standing(ctx.athanor_id)
         )

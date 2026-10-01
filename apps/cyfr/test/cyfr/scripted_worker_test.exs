@@ -59,7 +59,7 @@ defmodule Cyfr.Test.ScriptedWorkerTest do
 
     # An athanor of this test's own: the unreaped kills, rate windows and
     # slots its runs are counted under are keyed by athanor and node-global.
-    ctx = ScriptedWorker.athanor!(Sanctum.TestContext.local())
+    ctx = ScriptedWorker.athanor!(Sanctum.TestContext.local(:api))
 
     on_exit(fn ->
       Prima.Slots.forgive_unreaped(Crucible.Slots, ctx.athanor_id)
@@ -88,7 +88,8 @@ defmodule Cyfr.Test.ScriptedWorkerTest do
           reference: "#{AuthorityFixtures.formula_ref()}:1.0.0",
           user_id: ctx.user_id,
           athanor_id: ctx.athanor_id,
-          component_type: "formula"
+          component_type: "formula",
+          origin: :programmatic
         },
         reservation: %{budget_id: auth.budget.id, cap: 2},
         grant: Cyfr.Test.AttemptFixtures.grant(ctx.athanor_id),
@@ -591,7 +592,13 @@ defmodule Cyfr.Test.ScriptedWorkerTest do
   describe "the host listener its runners reach" do
     setup do
       start_supervised!({ScriptedWorker, ref: @scripted, script: []})
-      fixture = AttemptFixtures.attached!(service_id: ScriptedWorker.service())
+
+      fixture =
+        AttemptFixtures.attached!(
+          ctx: Sanctum.TestContext.local(:api),
+          service_id: ScriptedWorker.service()
+        )
+
       {:ok, fixture: fixture, url: ScriptedWorker.host_url()}
     end
 

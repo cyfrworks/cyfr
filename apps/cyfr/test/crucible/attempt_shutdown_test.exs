@@ -59,7 +59,7 @@ defmodule Crucible.AttemptShutdownTest do
 
     on_exit(fn ->
       :telemetry.detach(handler)
-      Slots.forgive_unreaped(@slots, Sanctum.TestContext.local().athanor_id)
+      Slots.forgive_unreaped(@slots, Sanctum.TestContext.local(:api).athanor_id)
     end)
 
     listener =
@@ -79,7 +79,13 @@ defmodule Crucible.AttemptShutdownTest do
 
     waiter =
       spawn(fn ->
-        fixture = AttemptFixtures.attached!(service_id: @service, worker: endpoint)
+        fixture =
+          AttemptFixtures.attached!(
+            ctx: Sanctum.TestContext.local(:api),
+            service_id: @service,
+            worker: endpoint
+          )
+
         send(test, {:opened, fixture})
         receive do: (:exit -> :ok)
       end)

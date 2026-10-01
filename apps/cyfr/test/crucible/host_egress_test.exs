@@ -109,7 +109,11 @@ defmodule Crucible.Host.EgressTest do
   end
 
   defp attached!(domains, private_ips \\ []),
-    do: AttemptFixtures.attached!(authority: egress(domains, private_ips))
+    do:
+      AttemptFixtures.attached!(
+        ctx: Sanctum.TestContext.local(:api),
+        authority: egress(domains, private_ips)
+      )
 
   defp now, do: System.system_time(:millisecond)
 
@@ -335,7 +339,9 @@ defmodule Crucible.Host.EgressTest do
             %{Authority.zero() | resources: :none},
             %{Authority.zero() | resources: %Edge{}}
           ] do
-        fixture = AttemptFixtures.attached!(authority: authority)
+        fixture =
+          AttemptFixtures.attached!(ctx: Sanctum.TestContext.local(:api), authority: authority)
+
         assert {:error, :denied} = pin(fixture, "https://203.0.113.10/", :fetch)
         assert {:error, :denied} = pin(fixture, "http://[2001:db8::20]:8080/", :stream)
         assert [_, _] = denials(fixture)

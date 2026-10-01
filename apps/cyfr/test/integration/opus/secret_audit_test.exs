@@ -76,7 +76,7 @@ defmodule Opus.SecretAuditTest do
 
     on_exit(fn -> :telemetry.detach(attach_id) end)
 
-    ctx = Sanctum.TestContext.local()
+    ctx = Sanctum.TestContext.local(:api)
 
     on_exit(fn ->
       Prima.Slots.forgive_unreaped(Crucible.Slots, ctx.athanor_id)
@@ -279,8 +279,8 @@ defmodule Opus.SecretAuditTest do
       {authority, _entry} =
         AttemptFixtures.vault_authority!(ctx, %{kind: "api_key", fields: %{"KEY" => @canary}})
 
-      mine = AttemptFixtures.attached!(authority: authority)
-      other = AttemptFixtures.attached!()
+      mine = AttemptFixtures.attached!(ctx: Sanctum.TestContext.local(:api), authority: authority)
+      other = AttemptFixtures.attached!(ctx: Sanctum.TestContext.local(:api))
       {:ok, mine: mine, other: other}
     end
 

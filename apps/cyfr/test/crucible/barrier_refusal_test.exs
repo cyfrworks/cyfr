@@ -39,7 +39,7 @@ defmodule Crucible.BarrierRefusalTest do
         else: Application.delete_env(:arca, :base_path)
     end)
 
-    ctx = Sanctum.TestContext.local()
+    ctx = Sanctum.TestContext.local(:api)
 
     {:ok, _component} =
       Compendium.Registry.publish_bytes(ctx, File.read!(@math_wasm_path), %{
@@ -78,7 +78,8 @@ defmodule Crucible.BarrierRefusalTest do
           reference: "formula:local.barrier-parent:0.1.0",
           user_id: ctx.user_id,
           athanor_id: ctx.athanor_id,
-          component_type: "formula"
+          component_type: "formula",
+          origin: :programmatic
         },
         Cyfr.Test.AttemptFixtures.standing(ctx.athanor_id)
       )

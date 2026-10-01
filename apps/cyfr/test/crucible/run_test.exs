@@ -37,6 +37,7 @@ defmodule Crucible.RunTest do
         namespace: "testns",
         authenticated: true
       )
+      |> Sanctum.TestContext.via(:prism)
 
     # Register the test WASM in Compendium so string references resolve
     wasm_bytes = File.read!(@math_wasm_path)

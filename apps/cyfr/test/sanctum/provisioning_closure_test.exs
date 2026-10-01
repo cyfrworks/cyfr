@@ -66,6 +66,7 @@ defmodule Sanctum.ProvisioningClosureTest do
           auth_method: :oidc,
           authenticated: true
         )
+        |> Sanctum.TestContext.via(:prism)
 
       assert {:ok, group} = Athanors.create_group(ctx.user_id, "Offline #{n}")
       in_group = %{ctx | athanor_id: group.id}

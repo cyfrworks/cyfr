@@ -20,7 +20,7 @@ defmodule Emissary.MCP.McpServersConsentTest do
 
   setup tags do
     Cyfr.Test.Sandbox.setup!(tags)
-    {:ok, ctx: Sanctum.TestContext.local()}
+    {:ok, ctx: Sanctum.TestContext.local(:api)}
   end
 
   defp admin_key(ctx, permissions) do

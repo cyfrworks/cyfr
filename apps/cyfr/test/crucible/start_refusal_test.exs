@@ -85,7 +85,7 @@ defmodule Crucible.StartRefusalTest do
       end
     end)
 
-    ctx = Sanctum.TestContext.local()
+    ctx = Sanctum.TestContext.local(:api)
 
     {:ok, _component} =
       Compendium.Registry.publish_bytes(ctx, File.read!(@math_wasm_path), %{

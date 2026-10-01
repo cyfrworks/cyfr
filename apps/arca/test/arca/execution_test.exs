@@ -4,6 +4,8 @@
 defmodule Arca.ExecutionTest do
   use ExUnit.Case, async: false
 
+  require Ecto.Query
+
   alias Arca.Execution
   alias Arca.Schemas.Execution, as: Row
 
@@ -171,15 +173,44 @@ defmodule Arca.ExecutionTest do
       )
     end
 
-    test "a root records the origin its caller names, and one naming none is admitted" do
+    test "a root records the origin its caller names, and one naming none is refused" do
       assert {:ok, %{execution: root}} = admit_origin(%{origin: :programmatic})
       assert root.origin == "programmatic"
       assert Arca.Repo.get!(Row, root.id).origin == "programmatic"
 
-      assert {:ok, %{execution: bare}} = admit_origin(%{})
-      assert is_nil(bare.origin)
+      # No default stands in for the admission path: nothing is written.
+      bare = "exec_origin_bare_#{System.unique_integer([:positive])}"
+      assert {:error, :no_origin} = admit_origin(%{id: bare})
+      assert {:error, :no_origin} = admit_origin(%{id: bare, origin: nil})
+      assert is_nil(Arca.Repo.get(Row, bare))
+      refute Arca.Repo.get_by(Arca.Schemas.ExecutionAttempt, execution_id: bare)
 
       assert {:error, {:invalid, %{origin: _}}} = admit_origin(%{origin: "batch"})
+    end
+
+    test "a child of a parent that records no origin is refused, with nothing written" do
+      {:ok, %{execution: parent}} = admit_origin(%{origin: :webhook})
+
+      # Past every writer's guard, as a hand edit or a restored row reaches it.
+      {1, _} =
+        Arca.Repo.update_all(
+          Ecto.Query.from(e in Row, where: e.id == ^parent.id),
+          set: [origin: nil]
+        )
+
+      id = "exec_origin_orphan_#{System.unique_integer([:positive])}"
+
+      for named <- [nil, :interactive] do
+        assert {:error, :no_origin} =
+                 admit_origin(%{
+                   id: id,
+                   parent_execution_id: parent.id,
+                   root_execution_id: parent.id,
+                   origin: named
+                 })
+      end
+
+      assert is_nil(Arca.Repo.get(Row, id))
     end
 
     test "a child carries its parent's origin, and one naming another is refused" do
@@ -480,7 +511,8 @@ defmodule Arca.ExecutionTest do
             user_id: "user_test",
             athanor_id: @athanor,
             started_at: now,
-            component_type: "catalyst"
+            component_type: "catalyst",
+            origin: :programmatic
           },
           Arca.Test.Actor.standing(@athanor)
         )
@@ -564,7 +596,8 @@ defmodule Arca.ExecutionTest do
             reference: "catalyst:local.test:1.0.0",
             user_id: "user_test",
             athanor_id: @athanor,
-            component_type: "catalyst"
+            component_type: "catalyst",
+            origin: :programmatic
           },
           attempt: Keyword.get(opts, :attempt),
           boot_id: "node@test",

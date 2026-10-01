@@ -32,7 +32,7 @@ defmodule PrismWeb.ThreadPaneLiveTest do
     n = System.unique_integer([:positive])
     {:ok, room} = Athanors.create_group(user.user_id, "Team #{n}")
     conn = log_in_user(conn, user, athanor_id: room.id)
-    in_room = %{Sanctum.TestContext.local() | user_id: user.user_id, athanor_id: room.id}
+    in_room = %{Sanctum.TestContext.local(:prism) | user_id: user.user_id, athanor_id: room.id}
 
     {:ok, thread} = Threads.create(Sanctum.Context.actor(in_room))
 
@@ -69,7 +69,8 @@ defmodule PrismWeb.ThreadPaneLiveTest do
           athanor_id: ctx.athanor_id,
           component_type: "agent",
           kind: "turn",
-          turn_id: turn.id
+          turn_id: turn.id,
+          origin: :interactive
         },
         reservation: %{budget_id: "bgt_#{System.unique_integer([:positive])}", cap: 4},
         grant: Cyfr.Test.AttemptFixtures.grant(ctx.athanor_id),

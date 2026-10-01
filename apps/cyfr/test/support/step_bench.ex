@@ -218,8 +218,9 @@ defmodule Cyfr.Test.StepBench do
     }
   end
 
+  # A person chatting in Prism: each bench turn is an interactive one.
   defp athanor! do
-    ctx = Sanctum.TestContext.local()
+    ctx = Sanctum.TestContext.local(:prism)
     :ok = Sanctum.TestContext.shipped!(ctx.athanor_id)
     {:ok, %{errors: 0}} = Compendium.AutoIndexer.scan(ctx: ctx)
     {:ok, _} = Compendium.AgentIndex.sync(ctx)

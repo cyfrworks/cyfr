@@ -270,7 +270,7 @@ defmodule Grimoire.ProviderContractTest do
           ceiling: AuthorityFixtures.ceiling()
         )
 
-      {:ok, ctx: Sanctum.TestContext.local(), authority: authority}
+      {:ok, ctx: Sanctum.TestContext.local(:api), authority: authority}
     end
 
     test "an :actor handler is given the actor alone, on the external plane", %{ctx: ctx} do

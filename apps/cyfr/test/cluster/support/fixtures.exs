@@ -98,7 +98,8 @@ defmodule Cyfr.Cluster.Fixtures do
   @doc """
   Accept a message on `thread_id` that opens an `accepted` turn, and answer
   the turn and the thread's consumed sequence — what a claimant names in
-  its compare-and-set.
+  its compare-and-set. The turn is a person's message from the console, so
+  its origin is `interactive`.
   """
   @spec accept!(String.t(), String.t(), String.t()) :: map()
   def accept!(athanor_id, thread_id, text) do
@@ -111,7 +112,13 @@ defmodule Cyfr.Cluster.Fixtures do
           # Unique across the cell: the counter restarts on every member.
           client_id: "cluster-#{node()}-#{System.unique_integer([:positive])}"
         },
-        turn: %{agent: "agent:local.aqua", requested_by: "system", model: nil, options: %{}}
+        turn: %{
+          agent: "agent:local.aqua",
+          requested_by: "system",
+          model: nil,
+          options: %{},
+          origin: :interactive
+        }
       })
 
     {:ok, thread} = Arca.ThreadStorage.get(actor(athanor_id), thread_id)
@@ -149,7 +156,8 @@ defmodule Cyfr.Cluster.Fixtures do
 
   # A turn that will be suspended needs the root execution a real one
   # carries: `suspend/3` closes the attempt's running interval, and a turn
-  # with no attempt has none to close.
+  # with no attempt has none to close. The root records the origin the
+  # turn was accepted under (`accept!/3`'s).
   defp with_root(attrs, false, _athanor_id), do: attrs
 
   defp with_root(attrs, true, {athanor_id, turn_id}) do
@@ -162,7 +170,8 @@ defmodule Cyfr.Cluster.Fixtures do
           athanor_id: athanor_id,
           component_type: "agent",
           kind: "turn",
-          turn_id: turn_id
+          turn_id: turn_id,
+          origin: :interactive
         },
         standing(athanor_id)
       )
@@ -336,6 +345,7 @@ defmodule Cyfr.Cluster.Fixtures do
   @doc """
   A root execution of `athanor_id` carrying the invocation reservation its
   authority's budget names, so both members can charge against one cap.
+  It is a run started over the API, so its origin is `programmatic`.
   """
   @spec budget!(String.t(), pos_integer()) :: map()
   def budget!(athanor_id, cap) do
@@ -348,7 +358,8 @@ defmodule Cyfr.Cluster.Fixtures do
           reference: "formula:local.cluster:1.0.0",
           user_id: "usr_cluster",
           athanor_id: athanor_id,
-          component_type: "formula"
+          component_type: "formula",
+          origin: :programmatic
         },
         [reservation: %{budget_id: budget_id, cap: cap}] ++ standing(athanor_id)
       )
@@ -647,7 +658,10 @@ defmodule Cyfr.Cluster.Fixtures do
     reopened.status
   end
 
-  @doc "An execution of `athanor_id` with `n` durable events after its start."
+  @doc """
+  An execution of `athanor_id` with `n` durable events after its start: a
+  run started over the API, so its origin is `programmatic`.
+  """
   @spec stream!(String.t(), pos_integer()) :: map()
   def stream!(athanor_id, n) do
     {:ok, %{execution: execution}} =
@@ -657,7 +671,8 @@ defmodule Cyfr.Cluster.Fixtures do
           reference: "reagent:local.cluster-stream:0.1.0",
           user_id: "usr_cluster",
           athanor_id: athanor_id,
-          component_type: "reagent"
+          component_type: "reagent",
+          origin: :programmatic
         },
         standing(athanor_id)
       )

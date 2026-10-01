@@ -204,6 +204,10 @@ config :arca, write_turn: false
 # verifies the schema before it starts and exercises each check directly.
 config :cyfr, database_checks_enabled: false
 
+# The stored-grant check reads every athanor's consent heads at boot,
+# outside any test's sandbox; the suite drives it directly.
+config :sanctum, stored_grants_check_enabled: false
+
 # Default storage roots for tests (individual tests may override), two
 # throwaway SIBLING roots — the topology dev and prod use ("two trees, two
 # lifetimes", Arca.Storage): `base_path` holds all tenant storage, and the

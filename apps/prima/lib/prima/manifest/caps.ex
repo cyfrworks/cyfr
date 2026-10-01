@@ -29,7 +29,7 @@ defmodule Prima.Manifest.Caps do
   the platform ceiling, operator-adjustable at commit. `schemes` absent
   means `["https"]` at consent.
 
-  ## The storage-path check is the caller's
+  ## Storage paths
 
   `caps.storage.paths` must name a guest scope, or no runtime would
   honour the grant. Which roots a guest may name is the storage
@@ -38,6 +38,12 @@ defmodule Prima.Manifest.Caps do
   `Prima.Manifest.validate/2` for the write boundaries and the consent
   derivation for a stored manifest. A predicate is required — there is no
   default that quietly admits a path no runtime would serve.
+
+  Each path is also spelled as the storage door reaches it
+  (`canonical_storage_path?/1`): no empty segment (`data//secrets/`), no
+  `.` or `..`, no leading `/`, and a folder ending in exactly one `/`. The
+  door trims what this grammar refuses, so a path spelled otherwise would
+  be shown in a preview as one thing and served as another.
   """
 
   @egress_keys ~w(domains methods schemes private_ips)
@@ -85,6 +91,35 @@ defmodule Prima.Manifest.Caps do
   def validate(manifest, storage_path_ok?)
       when is_map(manifest) and is_function(storage_path_ok?, 1),
       do: :ok
+
+  @doc """
+  Whether a storage grant's path is spelled as the storage door reaches
+  it: `"*"` (the grant grammar's wildcard), or a path
+  `Prima.ComponentPath.door_path/1` answers unchanged. The one reading the
+  manifest grammar, the consent loader and the stored-grant check share.
+
+  ## Examples
+
+      iex> Prima.Manifest.Caps.canonical_storage_path?("data/secrets/")
+      true
+
+      iex> Prima.Manifest.Caps.canonical_storage_path?("data//secrets/")
+      false
+
+      iex> Prima.Manifest.Caps.canonical_storage_path?("data/notes//")
+      false
+
+      iex> Prima.Manifest.Caps.canonical_storage_path?("*")
+      true
+
+  """
+  @spec canonical_storage_path?(term()) :: boolean()
+  def canonical_storage_path?("*"), do: true
+
+  def canonical_storage_path?(path) when is_binary(path),
+    do: Prima.ComponentPath.door_path(path) == path
+
+  def canonical_storage_path?(_path), do: false
 
   @doc """
   The normalized caps for a decoded manifest: string sets sorted and
@@ -172,13 +207,20 @@ defmodule Prima.Manifest.Caps do
   # A grant no runtime would honor is refused at parse: every path must
   # name a guest scope (the caller's predicate — `Arca.Storage.valid_guest_path?/1`,
   # which `Crucible.GuestStorage` gates requests with), or be the
-  # wildcard `"*"` (grant grammar, not a path).
+  # wildcard `"*"` (grant grammar, not a path); and every path is spelled
+  # as the door reaches it.
   defp validate_storage_paths(nil, _storage_path_ok?), do: :ok
 
   defp validate_storage_paths(paths, storage_path_ok?) when is_list(paths) do
     case Enum.find(paths, fn path -> path != "*" and not storage_path_ok?.(path) end) do
-      nil -> :ok
-      bad -> {:error, {:invalid_caps, {:invalid_storage_path, bad}}}
+      nil ->
+        case Enum.find(paths, &(not canonical_storage_path?(&1))) do
+          nil -> :ok
+          bad -> {:error, {:invalid_caps, {:non_canonical_storage_path, bad}}}
+        end
+
+      bad ->
+        {:error, {:invalid_caps, {:invalid_storage_path, bad}}}
     end
   end
 

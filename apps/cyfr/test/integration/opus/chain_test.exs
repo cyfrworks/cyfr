@@ -34,12 +34,15 @@ defmodule Opus.ChainTest do
     original_base_path = Application.get_env(:arca, :base_path)
     Application.put_env(:arca, :base_path, test_path)
 
+    # A person running a component: its runs are interactive, as the
+    # grants this file seeds admit.
     ctx = %Context{
       user_id: "chain_test_user_#{:rand.uniform(100_000)}",
       athanor_id: Sanctum.TestContext.athanor_id(),
       scope: :athanor,
       permissions: MapSet.new([:execute]),
-      authenticated: true
+      authenticated: true,
+      origin: :interactive
     }
 
     admin_ctx = Sanctum.TestContext.local()
@@ -718,7 +721,8 @@ defmodule Opus.ChainTest do
             reference: "formula:local.root:1.0.0",
             user_id: ctx.user_id,
             athanor_id: ctx.athanor_id,
-            component_type: "formula"
+            component_type: "formula",
+            origin: :programmatic
           },
           reservation: %{budget_id: auth.budget.id, cap: 1},
           grant: Cyfr.Test.AttemptFixtures.grant(ctx.athanor_id),
@@ -782,7 +786,8 @@ defmodule Opus.ChainTest do
             reference: "formula:local.root:1.0.0",
             user_id: ctx.user_id,
             athanor_id: ctx.athanor_id,
-            component_type: "formula"
+            component_type: "formula",
+            origin: :programmatic
           },
           reservation: %{budget_id: auth.budget.id, cap: 2},
           grant: Cyfr.Test.AttemptFixtures.grant(ctx.athanor_id),

@@ -8,7 +8,7 @@ defmodule Crucible.LeaseWatchTest do
 
   setup tags do
     Cyfr.Test.Sandbox.setup!(tags)
-    ctx = Sanctum.TestContext.local()
+    ctx = Sanctum.TestContext.local(:api)
 
     {:ok, %{execution: execution, attempt: attempt}} =
       Arca.Execution.admit(
@@ -18,7 +18,8 @@ defmodule Crucible.LeaseWatchTest do
           user_id: ctx.user_id,
           athanor_id: ctx.athanor_id,
           component_type: "tool_server",
-          kind: "tool_call"
+          kind: "tool_call",
+          origin: :programmatic
         },
         Cyfr.Test.AttemptFixtures.standing(ctx.athanor_id)
       )

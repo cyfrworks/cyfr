@@ -57,7 +57,11 @@ defmodule Sanctum.Supervisor do
         # (config.exs pins Proof.DB); the in-memory GenServer starts only
         # when a deployment explicitly configures it, so production does
         # not carry a live, never-called singleton.
-        maybe_proof_memory()
+        maybe_proof_memory(),
+        # Says once, at boot, which stored grants name a storage path the
+        # grammar no longer admits; the loader refuses them regardless.
+        # It runs alone and may end, so a failure costs only its notice.
+        stored_grants_check()
       ]
       |> List.flatten()
 
@@ -104,6 +108,15 @@ defmodule Sanctum.Supervisor do
       Sanctum.Consent.Proof.Memory -> [Sanctum.Consent.Proof.Memory]
       _ -> []
     end
+  end
+
+  # A one-shot read of every athanor's heads, outside any test's sandbox:
+  # the suite turns it off and drives `Sanctum.Consent.StoredGrants`
+  # directly.
+  defp stored_grants_check do
+    if Application.get_env(:sanctum, :stored_grants_check_enabled, true),
+      do: [Sanctum.Consent.StoredGrants],
+      else: []
   end
 
   # A registry and the processes that hold references into it restart

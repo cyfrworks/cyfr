@@ -172,7 +172,8 @@ defmodule Sanctum.TelemetryTest do
                :approval_resolved,
                :schedule_failed,
                :passkey_registered,
-               :passkey_recovered
+               :passkey_recovered,
+               :regrant_required
              ]
 
       refute function_exported?(Sanctum.Notify, :topic, 1)

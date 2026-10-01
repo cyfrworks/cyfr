@@ -135,6 +135,34 @@ defmodule Sanctum.Consent.ShapeDiffTest do
              Enum.find(diff, &(&1.capability == "storage.actions"))
   end
 
+  test "a host the ask still covers is never reported as dropped", %{ctx: ctx} do
+    # The ask moved to a wildcard: the plain host the person was granted is
+    # still inside it, as the egress pin reads a domain grant.
+    publish_live!(ctx, "1.0.6", %{"egress" => %{"domains" => ["*.covered.example"]}})
+
+    granted =
+      blob(%{
+        "egress" => %{"domains" => ["api.covered.example", "gone.elsewhere.example"]}
+      })
+
+    diff = ShapeDiff.compute(ctx, @source, granted)
+    entry = Enum.find(diff, &(&1.capability == "egress.domains"))
+
+    assert entry.removed == ["gone.elsewhere.example"]
+    refute "api.covered.example" in entry.removed
+    assert entry.added == ["*.covered.example"]
+
+    # A grant every host of which the ask still covers drops nothing.
+    covered =
+      ShapeDiff.compute(
+        ctx,
+        @source,
+        blob(%{"egress" => %{"domains" => ["api.covered.example"]}})
+      )
+
+    refute Enum.any?(covered, &(&1.capability == "egress.domains" and &1.removed != []))
+  end
+
   test "an underivable side yields no diff, never a wrong one", %{ctx: ctx} do
     assert ShapeDiff.compute(ctx, @source, "not a blob") == []
     assert ShapeDiff.compute(ctx, "reagent:local.never-published", blob(%{})) == []

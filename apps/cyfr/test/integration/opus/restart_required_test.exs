@@ -10,7 +10,7 @@ defmodule Opus.RestartRequiredTest do
   setup tags do
     Cyfr.Test.Sandbox.setup!(tags)
 
-    {:ok, ctx: Sanctum.TestContext.local()}
+    {:ok, ctx: Sanctum.TestContext.local(:api)}
   end
 
   defp running!(ctx) do

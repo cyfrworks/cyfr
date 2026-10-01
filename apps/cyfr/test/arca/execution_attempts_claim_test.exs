@@ -20,7 +20,7 @@ defmodule Arca.ExecutionAttemptsClaimTest do
 
   setup tags do
     Cyfr.Test.Sandbox.setup!(tags)
-    {:ok, actor: Sanctum.Context.actor(Sanctum.TestContext.local())}
+    {:ok, actor: Sanctum.Context.actor(Sanctum.TestContext.local(:api))}
   end
 
   defp admit!(actor, attrs \\ %{}) do
@@ -33,7 +33,8 @@ defmodule Arca.ExecutionAttemptsClaimTest do
             user_id: actor.user_id,
             athanor_id: actor.athanor_id,
             component_type: "catalyst",
-            input: "{}"
+            input: "{}",
+            origin: :programmatic
           },
           attrs
         ),

@@ -57,7 +57,6 @@ defmodule Sanctum.Consent.BlobBuilder do
   servers, and `order_rows/1` puts every row in one order.
   """
 
-  alias Prima.Manifest.Caps
   alias Prima.Manifest.Tincture
   alias Sanctum.Consent.Components
   alias Prima.JCS
@@ -366,11 +365,13 @@ defmodule Sanctum.Consent.BlobBuilder do
 
   @doc false
   # The manifest's declared caps are the grant; an absent block is the
-  # empty ask. Public for the plan verb, which must show the same grant
-  # this builder would freeze.
+  # empty ask, and a block that no longer meets the grammar is refused
+  # (`ShapeDerivation.declared_caps/2`). Public for the plan verb, which
+  # must show the same grant this builder would freeze.
   def node_grant(_ctx, node_key, manifest) do
-    caps = Caps.from_manifest(manifest, &Arca.Storage.valid_guest_path?/1) || Caps.empty()
-    {:ok, resource_map_from_caps(caps), limits_map_from_caps(node_key, caps)}
+    with {:ok, caps} <- Sanctum.Consent.ShapeDerivation.declared_caps(manifest, node_key) do
+      {:ok, resource_map_from_caps(caps), limits_map_from_caps(node_key, caps)}
+    end
   end
 
   # The declared ask becomes the granted resources at this grain (the
@@ -709,8 +710,9 @@ defmodule Sanctum.Consent.BlobBuilder do
       with {:ok, row} <- node_row(ctx, node_key),
            manifest = manifest(row, node_key),
            {:ok, resources, limits} <- node_grant(ctx, node_key, manifest),
+           {:ok, wildcard} <- wildcard_ask(node_key, manifest),
            {:ok, declared} <- tincture_rows(node_key, manifest) do
-        {:ok, node_rows(node_key, {resources, wildcard_ask(manifest)}, limits, []) ++ declared}
+        {:ok, node_rows(node_key, {resources, wildcard}, limits, []) ++ declared}
       end
     end)
   end
@@ -726,8 +728,9 @@ defmodule Sanctum.Consent.BlobBuilder do
     collect_rows(nodes |> Map.keys() |> Enum.sort(), fn node_key ->
       with {:ok, row} <- node_row(ctx, node_key),
            manifest = manifest(row, node_key),
+           {:ok, wildcard} <- wildcard_ask(node_key, manifest),
            {:ok, declared} <- tincture_rows(node_key, manifest) do
-        resources = {node_resources(nodes, source_ref, node_key), wildcard_ask(manifest)}
+        resources = {node_resources(nodes, source_ref, node_key), wildcard}
         limits = get_in(nodes, [node_key, "limits"])
         {:ok, node_rows(node_key, resources, limits, Map.get(narrowed, node_key, [])) ++ declared}
       end
@@ -819,11 +822,10 @@ defmodule Sanctum.Consent.BlobBuilder do
   end
 
   # What a manifest's ask expands to when it names every tool, or nil.
-  defp wildcard_ask(manifest) do
-    caps = Caps.from_manifest(manifest, &Arca.Storage.valid_guest_path?/1) || Caps.empty()
-
-    if "*" in caps.tools,
-      do: Sanctum.Consent.ShapeDerivation.expand_tools(caps.tools)
+  defp wildcard_ask(node_key, manifest) do
+    with {:ok, caps} <- Sanctum.Consent.ShapeDerivation.declared_caps(manifest, node_key) do
+      {:ok, if("*" in caps.tools, do: Sanctum.Consent.ShapeDerivation.expand_tools(caps.tools))}
+    end
   end
 
   # A tincture's frame, streams, cards and system actions, from the

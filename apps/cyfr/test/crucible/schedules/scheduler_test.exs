@@ -51,12 +51,13 @@ defmodule Crucible.Schedules.SchedulerTest do
 
     Cyfr.Test.Sandbox.stop_work_on_exit()
 
-    consented!(ctx)
-    {:ok, ctx: ctx}
+    component = consented!(ctx)
+    {:ok, ctx: ctx, component: component}
   end
 
   # The scheduled component, registered, and the profile schedules name
   # with its head consent: the component's node under the fixture limits.
+  # The grant admits the runs a schedule starts and the person's own.
   defp consented!(ctx) do
     {:ok, component} =
       Compendium.Registry.publish_bytes(ctx, File.read!(@math_wasm_path), %{
@@ -65,6 +66,13 @@ defmodule Crucible.Schedules.SchedulerTest do
         type: "reagent"
       })
 
+    granted!(ctx, component, [:interactive, :schedule])
+    component
+  end
+
+  # The profile's head consent, admitting `origins`, written again over
+  # whatever head it had.
+  defp granted!(ctx, component, origins) do
     profile = %{
       id: @profile_id,
       kind: :owner,
@@ -93,6 +101,7 @@ defmodule Crucible.Schedules.SchedulerTest do
             }
           }),
         activation: %{@reference => component.release_digest},
+        admitted_origins: origins,
         vault_refs: []
       })
   end
@@ -459,6 +468,37 @@ defmodule Crucible.Schedules.SchedulerTest do
       assert request_id == decision.request_id
     end
 
+    test "a fire under a grant that does not name schedule invokes nothing until it does",
+         %{ctx: ctx, component: component} do
+      # The person's grant admits interactive alone.
+      granted!(ctx, component, [:interactive])
+      script!([%{"ran" => true}])
+      schedule = due!(create_schedule(ctx))
+      pid = scheduler!()
+
+      wait_until(fn ->
+        match?({:ok, %{error_count: 1}}, CronSchedule.get_for_daemon(schedule.id))
+      end)
+
+      assert [%{state: "failed", execution_id: nil, attempts: 0}] = occurrences(ctx, schedule)
+      assert [] = Arca.Repo.all(Arca.Schemas.Execution)
+      assert ScriptedWorker.calls() == []
+
+      # Granted again naming schedule: the next fire runs, as a scheduled run.
+      granted!(ctx, component, [:interactive, :schedule])
+      _ = due!(schedule)
+      send(pid, {:fire, schedule.id})
+
+      wait_until(fn ->
+        Enum.any?(occurrences(ctx, schedule), &(&1.state == "completed"))
+      end)
+
+      assert [%{origin: "schedule", schedule_id: schedule_id}] =
+               Arca.Repo.all(Arca.Schemas.Execution)
+
+      assert schedule_id == schedule.id
+    end
+
     test "a fire whose admission fails is closed once, failed", %{ctx: ctx} do
       script!([%{"ran" => true}])
       schedule = due!(create_schedule(ctx, %{profile_id: "prof_unconsented"}))
@@ -551,7 +591,8 @@ defmodule Crucible.Schedules.SchedulerTest do
           user_id: ctx.user_id,
           athanor_id: ctx.athanor_id,
           component_type: "reagent",
-          schedule_id: schedule.id
+          schedule_id: schedule.id,
+          origin: :schedule
         },
         [occurrence_id: "occ_started"] ++ Cyfr.Test.AttemptFixtures.standing(ctx.athanor_id)
       )

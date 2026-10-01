@@ -32,7 +32,8 @@ defmodule Crucible.MCPCutoverTest do
       scope: :athanor,
       permissions: MapSet.new([:execute]),
       authenticated: true,
-      request_id: "req_cutover"
+      request_id: "req_cutover",
+      origin: :interactive
     }
 
     admin_ctx = Sanctum.TestContext.local()

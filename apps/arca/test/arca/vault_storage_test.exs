@@ -60,6 +60,7 @@ defmodule Arca.VaultStorageTest do
           blob_digest: Prima.JCS.hash_binary("{}"),
           resolved_policy: "{}",
           activation: "{}",
+          admitted_origins: [:interactive],
           granted_by: "test",
           granted_via: "bootstrap"
         },

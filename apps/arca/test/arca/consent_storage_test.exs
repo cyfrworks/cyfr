@@ -55,6 +55,7 @@ defmodule Arca.ConsentStorageTest do
       blob_digest: Prima.JCS.hash_binary("{}"),
       resolved_policy: "{}",
       activation: "{}",
+      admitted_origins: [:interactive],
       granted_by: "test",
       granted_via: "bootstrap"
     }
@@ -318,7 +319,7 @@ defmodule Arca.ConsentStorageTest do
     } do
       profile = profile!(athanor, "prof_bad_origins")
 
-      for origins <- [[], ["interactive", "interactive"], ["batch"], "interactive"] do
+      for origins <- [nil, [], ["interactive", "interactive"], ["batch"], "interactive"] do
         attrs = Map.put(consent_attrs(athanor, profile.id, 1), :admitted_origins, origins)
 
         assert {:error, {:invalid, %{admitted_origins: [_]}}} =
@@ -328,12 +329,46 @@ defmodule Arca.ConsentStorageTest do
       assert Arca.Repo.aggregate(Arca.Schemas.Consent, :count) == 0
     end
 
-    test "a revision written without them stores none", %{athanor: athanor} do
+    test "a revision written without them is refused, and a stored one with none does not decode",
+         %{athanor: athanor} do
       profile = profile!(athanor, "prof_no_origins")
-      {:ok, _} = ConsentStorage.insert_revision(consent_attrs(athanor, profile.id, 1), [], nil)
+      attrs = Map.delete(consent_attrs(athanor, profile.id, 1), :admitted_origins)
 
-      assert {:ok, %{admitted_origins: nil}} =
+      assert {:error, {:invalid, %{admitted_origins: [_]}}} =
+               ConsentStorage.insert_revision(attrs, [], nil)
+
+      assert {:error, {:invalid, %{admitted_origins: [_]}}} =
+               ConsentStorage.mint_profile_with_revision(
+                 %{
+                   id: "prof_no_origins_minted",
+                   athanor_id: athanor,
+                   source_ref: "reagent:local.storage-test-minted",
+                   kind: "owner",
+                   label: "default",
+                   status: "active"
+                 },
+                 Map.put(attrs, :profile_id, "prof_no_origins_minted"),
+                 []
+               )
+
+      assert Arca.Repo.aggregate(Arca.Schemas.Consent, :count) == 0
+      refute Arca.Repo.get(Arca.Schemas.Profile, "prof_no_origins_minted")
+
+      # A row reached past the writer — a hand edit, a restored backup —
+      # admits nothing: no reader meets a revision with no origins.
+      {:ok, consent} =
+        ConsentStorage.insert_revision(consent_attrs(athanor, profile.id, 1), [], nil)
+
+      {1, _} =
+        Arca.Repo.update_all(
+          Ecto.Query.from(c in Arca.Schemas.Consent, where: c.id == ^consent.id),
+          set: [admitted_origins: nil]
+        )
+
+      assert {:error, {:invalid_stored_value, :admitted_origins}} =
                ConsentStorage.head_consent(Prima.Actor.in_athanor(athanor), profile.id)
+
+      assert {:ok, []} = ConsentStorage.active_heads(Prima.Actor.in_athanor(athanor))
     end
 
     test "a stored list that does not parse refuses the consent", %{athanor: athanor} do
@@ -453,6 +488,55 @@ defmodule Arca.ConsentStorageTest do
       for nobody <- [%Prima.Actor{}, %Prima.Actor{athanor_id: ""}] do
         assert {:error, :no_athanor} = ConsentStorage.active_heads(nobody)
       end
+    end
+  end
+
+  describe "active_head_policies/2" do
+    defp head_in!(athanor, id, status) do
+      {:ok, _profile} =
+        ProfileStorage.put(%{
+          id: id,
+          athanor_id: athanor,
+          source_ref: "reagent:local.#{id}",
+          kind: "owner",
+          label: "default",
+          status: "active"
+        })
+
+      {:ok, _consent} =
+        ConsentStorage.insert_revision(consent_attrs(athanor, id, 1), [], nil)
+
+      if status != "active",
+        do: :ok = ProfileStorage.set_status(Prima.Actor.in_athanor(athanor), id, status)
+
+      :ok
+    end
+
+    test "pages every athanor's active heads in profile-id order, each naming its own athanor",
+         %{athanor: athanor} do
+      :ok = head_in!(athanor, "prof_pol_a", "active")
+      :ok = head_in!("ath_pol_other", "prof_pol_b", "active")
+      :ok = head_in!(athanor, "prof_pol_c", "active")
+      :ok = head_in!(athanor, "prof_pol_d", "revoked")
+      :ok = head_in!("ath_pol_other", "prof_pol_e", "needs_consent")
+      _headless = profile!(athanor, "prof_pol_f")
+
+      assert {:ok, [first, second]} = ConsentStorage.active_head_policies(nil, 2)
+
+      assert %{
+               athanor_id: ^athanor,
+               profile_id: "prof_pol_a",
+               source_ref: "reagent:local.prof_pol_a",
+               revision: 1,
+               resolved_policy: "{}"
+             } = first
+
+      assert %{athanor_id: "ath_pol_other", profile_id: "prof_pol_b"} = second
+
+      assert {:ok, [%{athanor_id: ^athanor, profile_id: "prof_pol_c"}]} =
+               ConsentStorage.active_head_policies("prof_pol_b", 2)
+
+      assert {:ok, []} = ConsentStorage.active_head_policies("prof_pol_c", 2)
     end
   end
 

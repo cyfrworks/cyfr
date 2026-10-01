@@ -108,7 +108,11 @@ defmodule Crucible.Host.StorageTest do
 
   defp attached(paths, actions \\ ["read", "write", "append", "list", "delete", "exists"]) do
     edge = %Edge{storage: %{paths: paths, actions: actions}}
-    AttemptFixtures.attached!(authority: %{Authority.zero() | resources: edge})
+
+    AttemptFixtures.attached!(
+      ctx: Sanctum.TestContext.local(:api),
+      authority: %{Authority.zero() | resources: edge}
+    )
   end
 
   defp write(path, text),
@@ -370,7 +374,7 @@ defmodule Crucible.Host.StorageTest do
 
   describe "fetch_artifact" do
     test "answers the bytes of the attempt's own component, and nothing by another digest" do
-      ctx = Sanctum.TestContext.local()
+      ctx = Sanctum.TestContext.local(:api)
       wasm = File.read!(@math_wasm_path)
 
       {:ok, _component} =
@@ -411,7 +415,7 @@ defmodule Crucible.Host.StorageTest do
     end
 
     test "records a policy refusal for the attempt's component, bounded, and ignores any other" do
-      fixture = AttemptFixtures.attached!()
+      fixture = AttemptFixtures.attached!(ctx: Sanctum.TestContext.local(:api))
 
       assert %{"ok" => true} =
                AttemptFixtures.call(fixture, "record_denial", %{

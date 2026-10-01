@@ -44,7 +44,7 @@ defmodule Aqua.LaunchTest do
       end
     end)
 
-    ctx = Sanctum.TestContext.local()
+    ctx = Sanctum.TestContext.local(:prism)
     :ok = Sanctum.TestContext.shipped!(ctx.athanor_id)
     {:ok, %{errors: 0}} = Compendium.AutoIndexer.scan(ctx: ctx)
     {:ok, _} = Compendium.AgentIndex.sync(ctx)
@@ -122,6 +122,19 @@ defmodule Aqua.LaunchTest do
   # A launch card for the application, as the loop opens it, approved by
   # `approver`: the step the loop hands the dispatcher.
   defp approved_launch!(ctx, turn, approver) do
+    {resolved, step_id} = launch_card(ctx, turn, approver)
+    assert {:ok, %{decision: "approved", resolution_kind: "launch"}} = resolved
+    {:ok, step} = Tape.step(ctx, step_id)
+    step
+  end
+
+  # What `approver`'s approval of a launch card answers.
+  defp approve_launch(ctx, turn, approver) do
+    {resolved, _step_id} = launch_card(ctx, turn, approver)
+    resolved
+  end
+
+  defp launch_card(ctx, turn, approver) do
     proposal = %{
       "tool" => "execution",
       "action" => "run",
@@ -162,11 +175,7 @@ defmodule Aqua.LaunchTest do
         expires_at: nil
       })
 
-    assert {:ok, %{decision: "approved", resolution_kind: "launch"}} =
-             Approvals.resolve(approver, approval.id, %{decision: :approved})
-
-    {:ok, step} = Tape.step(ctx, step.id)
-    step
+    {Approvals.resolve(approver, approval.id, %{decision: :approved}), step.id}
   end
 
   defp launched(ctx) do
@@ -213,13 +222,49 @@ defmodule Aqua.LaunchTest do
     pins: pins,
     approver: approver
   } do
-    turn = started!(%{ctx | origin: nil}, thread, pins)
-    assert is_nil(turn.origin)
+    # No entry builds a context without an origin, so no turn row is
+    # written without one: this one is cleared past every writer's guard,
+    # as a hand edit or a restored row reaches it.
+    assert {:error, :no_origin} =
+             Tape.accept(%{ctx | origin: nil}, thread.id, %{
+               message: %{author: ctx.user_id, content: "@aqua launch it"},
+               turn: %{agent: "aqua", requested_by: ctx.user_id}
+             })
 
+    turn = started!(ctx, thread, pins)
     step = approved_launch!(ctx, turn, approver)
+
+    # The row loses its origin after the card was approved under it.
+    {1, _} =
+      Arca.Repo.update_all(from(t in Arca.Schemas.Turn, where: t.id == ^turn.id),
+        set: [origin: nil]
+      )
+
+    assert {:ok, %{origin: nil}} = Tape.turn(ctx, turn.id)
 
     # Never guessed from the person who approved it.
     assert {:error, {:approver_unavailable, :no_origin}} = Launch.dispatch(ctx, step)
+    assert launched(ctx) == []
+  end
+
+  test "a card on a turn whose row stores no origin is refused: no grant to judge it under", %{
+    ctx: ctx,
+    thread: thread,
+    pins: pins,
+    approver: approver
+  } do
+    turn = started!(ctx, thread, pins)
+
+    {1, _} =
+      Arca.Repo.update_all(from(t in Arca.Schemas.Turn, where: t.id == ^turn.id),
+        set: [origin: nil]
+      )
+
+    {:ok, turn} = Tape.turn(ctx, turn.id)
+
+    # The pin check reads the turn's grant under the origin its row
+    # stores, never the approver's: with none it cannot hold.
+    assert {:error, :turn_superseded} = approve_launch(ctx, turn, approver)
     assert launched(ctx) == []
   end
 

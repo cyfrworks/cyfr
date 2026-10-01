@@ -38,6 +38,7 @@ defmodule Crucible.ProviderTest do
         namespace: "testns",
         authenticated: true
       )
+      |> Sanctum.TestContext.via(:api)
 
     # A run is admitted only in an athanor that stands: the test's own has a row.
     Arca.Test.Actor.athanor!(ctx.athanor_id)
@@ -153,6 +154,38 @@ defmodule Crucible.ProviderTest do
   # the Executor still writes started + failed records to SQLite, so we can
   # verify record-keeping behavior by inspecting the failed records.
   # ============================================================================
+
+  describe "the origin a run over the API runs under" do
+    test "a grant naming interactive alone refuses it, recording nothing; naming programmatic admits it",
+         %{ctx: ctx, ref: ref} do
+      {:ok, %{profile_id: profile_id}} = Crucible.authority_for(ctx, :default, ref)
+
+      run = fn ->
+        Provider.handle("execution", ctx, %{
+          "action" => "run",
+          "reference" => ref,
+          "input" => %{"a" => 1, "b" => 2}
+        })
+      end
+
+      # The person's grant, as a first grant leaves it: interactive alone.
+      Sanctum.Test.ConsentFixtures.regrant_origins!(ctx, profile_id, [:interactive])
+
+      assert {:error, {:consent_required, %{profile_id: ^profile_id}}} = run.()
+      assert {:ok, %{count: 0}} = Provider.handle("execution", ctx, %{"action" => "list"})
+
+      # Granted again naming programmatic: the run is admitted as one.
+      Sanctum.Test.ConsentFixtures.regrant_origins!(ctx, profile_id, [:interactive, :programmatic])
+
+      _ = run.()
+
+      assert {:ok, %{executions: [%{execution_id: id}]}} =
+               Provider.handle("execution", ctx, %{"action" => "list"})
+
+      assert %{origin: "programmatic", profile_id: ^profile_id} =
+               Arca.Repo.get!(Arca.Schemas.Execution, id)
+    end
+  end
 
   describe "execution tool - run action" do
     test "executes registered component and creates failed record", %{ctx: ctx, ref: ref} do
@@ -435,7 +468,7 @@ defmodule Crucible.ProviderTest do
       # `scope: :platform` annotation admits platform admins alone at
       # dispatch (the gate); the handler itself does not
       # re-check, so a direct call releases.
-      admin_ctx = %{Sanctum.TestContext.local() | platform_admin: true}
+      admin_ctx = %{Sanctum.TestContext.local(:api) | platform_admin: true}
 
       {:ok, result} = Provider.handle("execution", admin_ctx, %{"action" => "force_release"})
       assert result.force_released == true

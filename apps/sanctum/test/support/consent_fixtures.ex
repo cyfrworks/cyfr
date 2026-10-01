@@ -31,14 +31,20 @@ defmodule Sanctum.Test.ConsentFixtures do
   a second call for the same target answers the first one's id rather than
   minting a row the active-identity index would refuse. `:profile_id`
   spells the id and replaces whatever is there.
+
+  `:origins` are the origins the head admits (`Prima.Origin`), as a
+  commit's decisions name them; `[:interactive]` when absent, which is
+  what a commit writes when its decisions name none. A case whose runs
+  start from a schedule or a webhook names that origin.
   """
   def bindable_profile(%Context{} = ctx, target_ref, opts \\ []) do
     {:ok, name_ref} = Prima.ComponentRef.to_name_ref(target_ref)
     policy = "{}"
+    origins = Keyword.get(opts, :origins, [:interactive])
 
     case {opts[:profile_id], existing_owner(ctx, name_ref)} do
       {nil, id} when is_binary(id) -> id
-      {given, _} -> mint_bindable(ctx, name_ref, given, policy)
+      {given, _} -> mint_bindable(ctx, name_ref, given, policy, origins)
     end
   end
 
@@ -54,7 +60,7 @@ defmodule Sanctum.Test.ConsentFixtures do
     end
   end
 
-  defp mint_bindable(%Context{} = ctx, name_ref, given_id, policy) do
+  defp mint_bindable(%Context{} = ctx, name_ref, given_id, policy, origins) do
     profile_id = given_id || "prof-#{System.unique_integer([:positive])}"
     forget!(ctx, profile_id)
 
@@ -82,6 +88,7 @@ defmodule Sanctum.Test.ConsentFixtures do
           blob_digest: Prima.JCS.hash_binary(policy),
           resolved_policy: policy,
           activation: Jason.encode!(%{name_ref => "sha256:act"}),
+          admitted_origins: origins,
           granted_by: "system:fixture",
           granted_via: "bootstrap"
         },
@@ -95,7 +102,9 @@ defmodule Sanctum.Test.ConsentFixtures do
   Connect a key to `ref` as a person does: a new vault entry holding
   `fields`, bound to the component's `api_key` need through the consent
   walk (plan, preview, commit) under the profile `opts[:label]` (default
-  `"default"`). Answers the entry.
+  `"default"`). `opts[:origins]` names the origins the grant admits, as a
+  person ticks them; absent, the commit admits `interactive` alone.
+  Answers the entry.
   """
   def bind_key!(%Context{} = ctx, ref, fields, opts \\ []) when is_map(fields) do
     label = Keyword.get(opts, :label, "default")
@@ -118,7 +127,11 @@ defmodule Sanctum.Test.ConsentFixtures do
     {:ok, entry} = Sanctum.Vault.create(entering, params)
 
     {:ok, plan} = Sanctum.Consent.Plan.plan(ctx, %{ref: ref, label: label})
-    decisions = %{ref: ref, label: label, bindings: [%{need: "api_key", entry_id: entry.id}]}
+
+    decisions =
+      %{ref: ref, label: label, bindings: [%{need: "api_key", entry_id: entry.id}]}
+      |> Prima.MapUtil.put_present(:origins, Keyword.get(opts, :origins))
+
     {:ok, preview} = Sanctum.Consent.Commit.preview(ctx, decisions)
 
     {:ok, _} =
@@ -139,6 +152,10 @@ defmodule Sanctum.Test.ConsentFixtures do
   mode, and the activation as a graph. This is the one place those become
   the stored strings, so a case spells the shape it asserts on rather than
   the columns underneath it.
+
+  `admitted_origins` is `[:interactive]` when the case does not spell it,
+  as a commit whose decisions name no origins writes it; a case whose
+  runs start from another admission path spells the origins it admits.
 
   `blob_digest` is derived from the policy when the case does not spell
   one — the loader refuses a row whose digest and bytes disagree, and a
@@ -172,6 +189,40 @@ defmodule Sanctum.Test.ConsentFixtures do
       )
 
     :ok
+  end
+
+  @doc """
+  The head of `profile_id` granted again admitting `origins` alone: its
+  revision written once more with every other column as it was, as a
+  person re-granting with other origins ticked leaves it. Answers the new
+  revision.
+  """
+  def regrant_origins!(%Context{} = ctx, profile_id, origins) when is_list(origins) do
+    {:ok, head} = Arca.ConsentStorage.head_consent(Context.actor(ctx), profile_id)
+
+    {:ok, consent} =
+      Arca.ConsentStorage.insert_revision(
+        %{
+          athanor_id: ctx.athanor_id,
+          profile_id: profile_id,
+          revision: head.revision + 1,
+          scope: Atom.to_string(head.scope),
+          pinned_version: head.pinned_version,
+          invoke_mode: Atom.to_string(head.invoke_mode),
+          shape_digest: head.shape_digest,
+          commit_digest: head.commit_digest,
+          blob_digest: head.blob_digest,
+          resolved_policy: head.resolved_policy,
+          activation: Jason.encode!(head.activation),
+          admitted_origins: origins,
+          granted_by: ctx.user_id,
+          granted_via: "interactive"
+        },
+        head.vault_refs,
+        head.id
+      )
+
+    consent
   end
 
   @doc """
@@ -293,6 +344,9 @@ defmodule Sanctum.Test.ConsentFixtures do
       blob_digest: consent.blob_digest,
       resolved_policy: consent.resolved_policy,
       activation: Jason.encode!(consent.activation),
+      # What a commit writes when its decisions name no origins; a case
+      # whose runs start elsewhere spells the origins it admits.
+      admitted_origins: Map.get(consent, :admitted_origins, [:interactive]),
       granted_by: "system:fixture",
       granted_via: "bootstrap"
     }

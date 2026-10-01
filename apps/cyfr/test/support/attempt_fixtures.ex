@@ -30,7 +30,9 @@ defmodule Cyfr.Test.AttemptFixtures do
   @doc """
   Admit, open, sign and attach. Options:
 
-  - `:ctx` — the admission context (default `Sanctum.TestContext.local/0`);
+  - `:ctx` — the admission context, required: the root records its origin
+    (`Sanctum.TestContext.via/2` names the admission path a case models),
+    and there is no default origin;
   - `:authority` — default `Prima.Authority.zero/0`;
   - `:vault` — attributes of a vault entry to create
     (`Sanctum.Vault.create/2`); the authority's edge is bound to it and
@@ -63,7 +65,12 @@ defmodule Cyfr.Test.AttemptFixtures do
   """
   @spec attached!(keyword()) :: map()
   def attached!(opts \\ []) do
-    ctx = Keyword.get_lazy(opts, :ctx, &Sanctum.TestContext.local/0)
+    ctx =
+      Keyword.get(opts, :ctx) ||
+        raise ArgumentError,
+              "attached!/1 needs :ctx, a context naming the admission path its root " <>
+                "was started through (Sanctum.TestContext.via/2)"
+
     {authority, entry} = authority(ctx, opts)
 
     component_type = Keyword.get(opts, :component_type, :catalyst)
@@ -197,10 +204,11 @@ defmodule Cyfr.Test.AttemptFixtures do
 
   @doc """
   The host-stamped lineage of an in-chain call from a real execution: a
-  root admitted in `ctx`'s athanor under its standing grant, answered as
-  `Grimoire.call_in_chain/5`'s `:lineage` — the execution as
-  parent and root, and the attempt that owns it — with `extra` merged in.
-  An in-chain call is admitted only under such an attempt.
+  root admitted in `ctx`'s athanor under its standing grant and with its
+  origin, answered as `Grimoire.call_in_chain/5`'s `:lineage` — the
+  execution as parent and root, and the attempt that owns it — with
+  `extra` merged in. An in-chain call is admitted only under such an
+  attempt.
   """
   @spec lineage!(Sanctum.Context.t(), map()) :: map()
   def lineage!(ctx, extra \\ %{}) do

@@ -47,7 +47,7 @@ defmodule Opus.BootstrapFirstRunTest do
         else: Application.delete_env(:arca, :seed_path)
     end)
 
-    {:ok, ctx: Sanctum.TestContext.local()}
+    {:ok, ctx: Sanctum.TestContext.local(:prism)}
   end
 
   # Copy a tracked bundle version in and register it, the way a fill does.

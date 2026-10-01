@@ -31,11 +31,10 @@ defmodule Sanctum.Consent.Plan do
   the default a decision that names none admits, `interactive` alone.
 
   A plan for a profile with a head says what the head holds:
-  `head_origins`, the origins it admits (`interactive` alone for a head
-  written without them), so a re-grant starts from them rather than
-  quietly dropping one; and, when the component's shape moved since the
-  head, `shape_diff`, the head as the person narrowed it against the live
-  ask (`Sanctum.Consent.ShapeDiff`). With no head, `head_origins` is nil
+  `head_origins`, the origins it admits, so a re-grant starts from them
+  rather than quietly dropping one; and, when the component's shape moved
+  since the head, `shape_diff`, the head as the person narrowed it against
+  the live ask (`Sanctum.Consent.ShapeDiff`). With no head, `head_origins` is nil
   and `shape_diff` empty.
 
   A closure that cannot be resolved is `unresolved`: `%{reason, missing}`,
@@ -253,7 +252,7 @@ defmodule Sanctum.Consent.Plan do
     case Arca.ConsentStorage.head_consent(Context.actor(ctx), profile_id) do
       {:ok, head} ->
         %{
-          origins: Prima.Origin.to_wire_list(head.admitted_origins || @default_origins),
+          origins: Prima.Origin.to_wire_list(head.admitted_origins),
           shape_diff:
             if(head.shape_digest == shape_digest,
               do: [],

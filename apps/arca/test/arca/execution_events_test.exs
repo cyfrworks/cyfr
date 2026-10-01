@@ -24,7 +24,8 @@ defmodule Arca.ExecutionEventsTest do
           reference: "catalyst:local.files:0.1.0",
           user_id: actor.user_id,
           athanor_id: actor.athanor_id,
-          component_type: "catalyst"
+          component_type: "catalyst",
+          origin: :programmatic
         },
         Arca.Test.Actor.standing(actor.athanor_id)
       )

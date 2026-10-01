@@ -22,7 +22,7 @@ defmodule Opus.ExecutionProvenanceTest do
 
     Cyfr.Test.Sandbox.setup!(tags)
 
-    ctx = Sanctum.TestContext.local()
+    ctx = Sanctum.TestContext.local(:api)
     :ok = Probe.publish_probe!(ctx)
     {:ok, _} = Bootstrap.run(ctx)
 

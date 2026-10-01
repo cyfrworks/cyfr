@@ -214,9 +214,15 @@ defmodule PrismWeb.ConsentSheetComponent do
   # One value of a set the enforcement point narrows: chosen or not, from
   # the values the ask names. Anything else is not a choice the sheet
   # offered and changes nothing.
+  #
+  # The value rides in `choice`, never `value`: for a checkbox LiveView
+  # sends the box's own value under `value`, overwriting any attribute
+  # naming that key, and sends no `value` at all for a box unticked, so
+  # a choice carried there would reach the home as nothing while the box
+  # shows it changed.
   def handle_event(
         "toggle_value",
-        %{"node" => node, "kind" => kind, "field" => field, "value" => value},
+        %{"node" => node, "kind" => kind, "field" => field, "choice" => value},
         socket
       ) do
     CyfrWeb.ContextGuard.guard(socket, fn socket ->
@@ -237,7 +243,7 @@ defmodule PrismWeb.ConsentSheetComponent do
     end)
   end
 
-  def handle_event("toggle_tool", %{"node" => node, "value" => value}, socket) do
+  def handle_event("toggle_tool", %{"node" => node, "choice" => value}, socket) do
     CyfrWeb.ContextGuard.guard(socket, fn socket ->
       asked = asked_tools(socket.assigns.plan, node)
 
@@ -845,7 +851,7 @@ defmodule PrismWeb.ConsentSheetComponent do
             phx-value-node={@row["node"]}
             phx-value-kind={@row["kind"]}
             phx-value-field={field}
-            phx-value-value={value}
+            phx-value-choice={value}
             checked={on?}
           />
           <span class="font-mono">{value}</span>
@@ -901,7 +907,7 @@ defmodule PrismWeb.ConsentSheetComponent do
             phx-click="toggle_tool"
             phx-target={@myself}
             phx-value-node={@row["node"]}
-            phx-value-value={tool}
+            phx-value-choice={tool}
             checked={on?}
           />
           <span class="font-mono">{tool}</span>

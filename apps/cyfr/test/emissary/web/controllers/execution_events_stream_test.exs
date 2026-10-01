@@ -11,7 +11,7 @@ defmodule Emissary.Web.ExecutionEventsStreamTest do
   alias Crucible.Events
 
   setup %{conn: conn} do
-    ctx = Sanctum.TestContext.local()
+    ctx = Sanctum.TestContext.local(:api)
 
     {:ok, %{execution: execution}} =
       Arca.Execution.admit(
@@ -20,7 +20,8 @@ defmodule Emissary.Web.ExecutionEventsStreamTest do
           reference: "reagent:local.sse:0.1.0",
           user_id: ctx.user_id,
           athanor_id: ctx.athanor_id,
-          component_type: "reagent"
+          component_type: "reagent",
+          origin: :programmatic
         },
         Cyfr.Test.AttemptFixtures.standing(ctx.athanor_id)
       )
@@ -143,7 +144,7 @@ defmodule Emissary.Web.ExecutionEventsStreamTest do
 
   describe "an open stream holds its credential to its standing" do
     setup %{exec: exec} do
-      ctx = Sanctum.TestContext.issuer!(Sanctum.TestContext.local())
+      ctx = Sanctum.TestContext.issuer!(Sanctum.TestContext.local(:api))
       {:ok, session} = Sanctum.Session.create(ctx)
       {:ok, session: session, person: ctx, exec: exec}
     end

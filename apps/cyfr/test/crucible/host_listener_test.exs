@@ -175,6 +175,7 @@ defmodule Crucible.HostListenerTest do
     test "reaches Host, which answers as it does in process", %{url: url} do
       fixture =
         AttemptFixtures.attached!(
+          ctx: Sanctum.TestContext.local(:api),
           attach: false,
           service_id: @service,
           vault: %{kind: "api_key", fields: %{"KEY" => "sk-fixture"}}
@@ -201,7 +202,13 @@ defmodule Crucible.HostListenerTest do
 
     @tag :capture_log
     test "a refusal Host answers is an answer, not a transport failure", %{url: url} do
-      fixture = AttemptFixtures.attached!(attach: false, service_id: @service)
+      fixture =
+        AttemptFixtures.attached!(
+          ctx: Sanctum.TestContext.local(:api),
+          attach: false,
+          service_id: @service
+        )
+
       {:ok, other} = Keys.attempt_keys(%{fixture.keys.attempt | service: "wrk_other"})
 
       # The boot is signed beside the service but is no key input: the
@@ -223,7 +230,8 @@ defmodule Crucible.HostListenerTest do
     end
 
     test "a report lapses the reporting service's attempts", %{url: url} do
-      fixture = AttemptFixtures.attached!(service_id: @service)
+      fixture =
+        AttemptFixtures.attached!(ctx: Sanctum.TestContext.local(:api), service_id: @service)
 
       assert {200, %{"ok" => true}} = report(url, fixture)
 
@@ -243,7 +251,13 @@ defmodule Crucible.HostListenerTest do
     test "a wrong key, another service's key for this attempt, or a stale generation", %{
       url: url
     } do
-      fixture = AttemptFixtures.attached!(attach: false, service_id: @service)
+      fixture =
+        AttemptFixtures.attached!(
+          ctx: Sanctum.TestContext.local(:api),
+          attach: false,
+          service_id: @service
+        )
+
       {:ok, other} = Keys.attempt_keys(%{fixture.keys.attempt | service: "wrk_other"})
 
       {:ok, stale} =
@@ -276,7 +290,13 @@ defmodule Crucible.HostListenerTest do
 
     @tag :capture_log
     test "no header, or more than one", %{url: url} do
-      fixture = AttemptFixtures.attached!(attach: false, service_id: @service)
+      fixture =
+        AttemptFixtures.attached!(
+          ctx: Sanctum.TestContext.local(:api),
+          attach: false,
+          service_id: @service
+        )
+
       fields = fields(fixture, [])
       json = AttemptFixtures.body("attach", %{"assignment" => fixture.assignment})
       {:ok, body} = WorkerAuth.seal_call(fixture.keys.seal, :body, fields, json)
@@ -290,7 +310,9 @@ defmodule Crucible.HostListenerTest do
 
     @tag :capture_log
     test "a reused nonce on a call that is not idempotent; an idempotent one repeats", %{url: url} do
-      fixture = AttemptFixtures.attached!(service_id: @service)
+      fixture =
+        AttemptFixtures.attached!(ctx: Sanctum.TestContext.local(:api), service_id: @service)
+
       :ok = Crucible.Events.subscribe(fixture.execution_id, fixture.ctx)
 
       nonce = "n_reused"
@@ -313,7 +335,8 @@ defmodule Crucible.HostListenerTest do
 
     @tag :capture_log
     test "a report signed by another worker service, or with the assign key", %{url: url} do
-      fixture = AttemptFixtures.attached!(service_id: @service)
+      fixture =
+        AttemptFixtures.attached!(ctx: Sanctum.TestContext.local(:api), service_id: @service)
 
       assert {401, %{"error" => "lost"}} = report(url, fixture, signer: "wrk_other")
 
@@ -342,7 +365,13 @@ defmodule Crucible.HostListenerTest do
 
     @tag :capture_log
     test "a boot that does not hold the control plane refuses every route", %{url: url} do
-      fixture = AttemptFixtures.attached!(attach: false, service_id: @service)
+      fixture =
+        AttemptFixtures.attached!(
+          ctx: Sanctum.TestContext.local(:api),
+          attach: false,
+          service_id: @service
+        )
+
       on_exit(fn -> Arca.ControlPlane.record(:unclaimed) end)
       Arca.ControlPlane.record(:lost)
 
@@ -364,7 +393,9 @@ defmodule Crucible.HostListenerTest do
     @tag :capture_log
     test "a call naming another runner than the attempt's claim is refused before its body is read",
          %{listener: listener, url: url} do
-      fixture = AttemptFixtures.attached!(service_id: @service)
+      fixture =
+        AttemptFixtures.attached!(ctx: Sanctum.TestContext.local(:api), service_id: @service)
+
       port = HostListener.port(listener)
       assert claimed_by(fixture) == fixture.runner
 
@@ -398,7 +429,12 @@ defmodule Crucible.HostListenerTest do
     @tag :capture_log
     test "attach is the claim: no call is taken before it, and the claiming runner's are after it",
          %{url: url} do
-      fixture = AttemptFixtures.attached!(attach: false, service_id: @service)
+      fixture =
+        AttemptFixtures.attached!(
+          ctx: Sanctum.TestContext.local(:api),
+          attach: false,
+          service_id: @service
+        )
 
       assert {200, %{"error" => "lost"}} = renew(url, fixture)
       assert {200, %{"error" => "lost"}} = push(url, fixture, "too early")
@@ -414,7 +450,8 @@ defmodule Crucible.HostListenerTest do
 
     @tag :capture_log
     test "a call on an attempt no longer running is refused before its body", %{url: url} do
-      fixture = AttemptFixtures.attached!(service_id: @service)
+      fixture =
+        AttemptFixtures.attached!(ctx: Sanctum.TestContext.local(:api), service_id: @service)
 
       assert {200, %{"ok" => true}} = report(url, fixture)
 
@@ -431,6 +468,7 @@ defmodule Crucible.HostListenerTest do
     } do
       fixture =
         AttemptFixtures.attached!(
+          ctx: Sanctum.TestContext.local(:api),
           attach: false,
           service_id: @service,
           vault: %{kind: "api_key", fields: %{"KEY" => "sk-fixture"}}
@@ -455,7 +493,12 @@ defmodule Crucible.HostListenerTest do
     @tag :capture_log
     test "a body that does not open under the attempt's seal key is refused, and nothing of it is logged",
          %{url: url} do
-      fixture = AttemptFixtures.attached!(attach: false, service_id: @service)
+      fixture =
+        AttemptFixtures.attached!(
+          ctx: Sanctum.TestContext.local(:api),
+          attach: false,
+          service_id: @service
+        )
 
       log =
         capture_log(fn ->
@@ -479,7 +522,13 @@ defmodule Crucible.HostListenerTest do
 
     @tag :capture_log
     test "a body sealed for another call than the header's is refused", %{url: url} do
-      fixture = AttemptFixtures.attached!(attach: false, service_id: @service)
+      fixture =
+        AttemptFixtures.attached!(
+          ctx: Sanctum.TestContext.local(:api),
+          attach: false,
+          service_id: @service
+        )
+
       other = fields(fixture, nonce: "n_other")
 
       assert {401, %{"error" => "lost"}} = attach(url, fixture, sealed_as: other)
@@ -496,7 +545,9 @@ defmodule Crucible.HostListenerTest do
     test "a body that is not the one the header names is refused, and nothing of it is logged", %{
       url: url
     } do
-      fixture = AttemptFixtures.attached!(service_id: @service)
+      fixture =
+        AttemptFixtures.attached!(ctx: Sanctum.TestContext.local(:api), service_id: @service)
+
       :ok = Crucible.Events.subscribe(fixture.execution_id, fixture.ctx)
 
       {:ok, tampered} =
@@ -523,7 +574,9 @@ defmodule Crucible.HostListenerTest do
     @tag :capture_log
     test "a body over the bound is refused by its declared length, or as it streams past the bound",
          %{url: url} do
-      fixture = AttemptFixtures.attached!(service_id: @service)
+      fixture =
+        AttemptFixtures.attached!(ctx: Sanctum.TestContext.local(:api), service_id: @service)
+
       :ok = Crucible.Events.subscribe(fixture.execution_id, fixture.ctx)
       max = Prima.HostAPI.max_body_bytes()
       text = String.duplicate("x", max)
@@ -566,7 +619,9 @@ defmodule Crucible.HostListenerTest do
 
     @tag :capture_log
     test "a body naming another operation than its route", %{url: url} do
-      fixture = AttemptFixtures.attached!(service_id: @service)
+      fixture =
+        AttemptFixtures.attached!(ctx: Sanctum.TestContext.local(:api), service_id: @service)
+
       outcome = AttemptFixtures.outcome(fixture, "completed", %{"output" => %{}})
 
       assert {400, %{"error" => "malformed"}} =
@@ -581,7 +636,13 @@ defmodule Crucible.HostListenerTest do
 
   describe "a route that is no host route" do
     test "is not found, whatever it carries", %{url: url} do
-      fixture = AttemptFixtures.attached!(attach: false, service_id: @service)
+      fixture =
+        AttemptFixtures.attached!(
+          ctx: Sanctum.TestContext.local(:api),
+          attach: false,
+          service_id: @service
+        )
+
       fields = fields(fixture, [])
       json = AttemptFixtures.body("attach", %{"assignment" => fixture.assignment})
       {:ok, body} = WorkerAuth.seal_call(fixture.keys.seal, :body, fields, json)
@@ -619,7 +680,9 @@ defmodule Crucible.HostListenerTest do
       listener: listener,
       url: url
     } do
-      fixture = AttemptFixtures.attached!(service_id: @service)
+      fixture =
+        AttemptFixtures.attached!(ctx: Sanctum.TestContext.local(:api), service_id: @service)
+
       port = HostListener.port(listener)
       vectors = @vectors["pre_body_refusals"]
 
@@ -656,7 +719,9 @@ defmodule Crucible.HostListenerTest do
       listener: listener,
       url: url
     } do
-      fixture = AttemptFixtures.attached!(service_id: @service)
+      fixture =
+        AttemptFixtures.attached!(ctx: Sanctum.TestContext.local(:api), service_id: @service)
+
       port = HostListener.port(listener)
       renew = WorkerWire.host_route(:renew)
 
@@ -734,7 +799,9 @@ defmodule Crucible.HostListenerTest do
     test "every body refusal is answered once the body is opened, before its op is read", %{
       url: url
     } do
-      fixture = AttemptFixtures.attached!(service_id: @service)
+      fixture =
+        AttemptFixtures.attached!(ctx: Sanctum.TestContext.local(:api), service_id: @service)
+
       vectors = @vectors["body_refusals"]
 
       assert Enum.map(vectors, & &1["error"]) ==
@@ -761,7 +828,9 @@ defmodule Crucible.HostListenerTest do
     end
 
     test "a call's answer and a report's carry the wire's version first", %{url: url} do
-      fixture = AttemptFixtures.attached!(service_id: @service)
+      fixture =
+        AttemptFixtures.attached!(ctx: Sanctum.TestContext.local(:api), service_id: @service)
+
       fields = fields(fixture, [])
 
       json =

@@ -18,7 +18,7 @@ defmodule Aqua.Providers.ApprovalTest do
   setup tags do
     Cyfr.Test.Sandbox.setup!(tags)
     Sanctum.TestContext.athanor!()
-    ctx = Sanctum.TestContext.local()
+    ctx = Sanctum.TestContext.local(:prism)
     {:ok, thread} = Threads.create(Sanctum.Context.actor(ctx))
     {:ok, ctx: ctx, thread: thread}
   end
@@ -39,7 +39,8 @@ defmodule Aqua.Providers.ApprovalTest do
           athanor_id: ctx.athanor_id,
           component_type: "agent",
           kind: "turn",
-          turn_id: turn.id
+          turn_id: turn.id,
+          origin: :interactive
         },
         reservation: %{budget_id: "bgt_#{System.unique_integer([:positive])}", cap: 4},
         grant: Cyfr.Test.AttemptFixtures.grant(ctx.athanor_id),

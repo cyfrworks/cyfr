@@ -65,7 +65,8 @@ defmodule Grimoire.CatalogChargeRowTest do
           reference: "#{@node}:1.0.0",
           user_id: @user,
           athanor_id: @athanor,
-          component_type: "formula"
+          component_type: "formula",
+          origin: :programmatic
         },
         reservation: %{budget_id: auth.budget.id, cap: 1},
         grant: Cyfr.Test.AttemptFixtures.grant(@athanor),

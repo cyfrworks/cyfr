@@ -29,7 +29,7 @@ defmodule Sanctum.Consent.FlowTest do
         else: Application.delete_env(:arca, :base_path)
     end)
 
-    {:ok, ctx: Sanctum.TestContext.local()}
+    {:ok, ctx: Sanctum.TestContext.local(:prism)}
   end
 
   defp publish!(ctx, name, version \\ "1.0.0", attrs \\ %{}) do

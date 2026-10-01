@@ -33,7 +33,7 @@ defmodule Arca.TurnFenceRaceTest do
         {:ok, %{turn: turn}} =
           TurnStorage.accept_message(actor, thread.id, %{
             message: %{author: actor.user_id, content: "@aqua go"},
-            turn: %{agent: "aqua", requested_by: actor.user_id}
+            turn: %{agent: "aqua", requested_by: actor.user_id, origin: :interactive}
           })
 
         {thread, turn}
@@ -130,7 +130,7 @@ defmodule Arca.TurnFenceRaceTest do
       unboxed(fn ->
         TurnStorage.accept_message(actor, thread.id, %{
           message: %{author: actor.user_id, content: "@aqua again"},
-          turn: %{agent: "aqua", requested_by: actor.user_id}
+          turn: %{agent: "aqua", requested_by: actor.user_id, origin: :interactive}
         })
       end)
 

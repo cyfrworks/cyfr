@@ -162,7 +162,7 @@ defmodule PrismWeb.ActivitiesLiveTest do
   # A context in the seated athanor under a request of its own.
   defp athanor_context do
     %{
-      Sanctum.TestContext.local()
+      Sanctum.TestContext.local(:prism)
       | athanor_id: seated_athanor().id,
         request_id: Prima.UUID7.request_id()
     }

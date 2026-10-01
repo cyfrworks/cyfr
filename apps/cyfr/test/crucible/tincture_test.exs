@@ -37,7 +37,7 @@ defmodule Crucible.TinctureTest do
     prev = Map.new(keys, fn {app, key} -> {{app, key}, Application.get_env(app, key)} end)
     Application.put_env(:arca, :base_path, base)
 
-    ctx = Sanctum.TestContext.local()
+    ctx = Sanctum.TestContext.local(:prism)
     _athanor = Sanctum.TestContext.athanor!()
 
     on_exit(fn ->
@@ -209,8 +209,22 @@ defmodule Crucible.TinctureTest do
       _public = profile!(ctx, node, :public)
       worker!([%{"answer" => 7}])
       ScriptedWorker.fresh_limits!(ctx, [@dep_ref])
-      anonymous = Sanctum.Context.build(authenticated: false, client_ip: "198.51.100.7")
+      # A person at the public page: the tincture data routes admit the
+      # page's call as interactive, which the public profile admits alone.
+      anonymous =
+        Sanctum.Context.build(authenticated: false, client_ip: "198.51.100.7")
+        |> Sanctum.TestContext.via(:prism)
+
       assert anonymous.athanor_id == nil
+
+      # A public path that is not a person at a page is programmatic, and
+      # a public profile that names it not is asked to grant again.
+      assert {:error, %Prima.Refusal{class: :consent_required}} =
+               Crucible.invoke_tincture(
+                 Sanctum.TestContext.via(anonymous, :api),
+                 args("tinc-public", :public),
+                 :public
+               )
 
       assert {:ok, %{status: :completed}} =
                Crucible.invoke_tincture(anonymous, args("tinc-public", :public), :public)

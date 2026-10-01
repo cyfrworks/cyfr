@@ -35,7 +35,7 @@ defmodule Sanctum.Consent.Commit do
   A `Prima.ConsentPreview` (`t:Sanctum.Consent.preview/0`): the typed
   rows of what the revision would grant, the origins it would admit and the
   commit digest binding both, with the proof and the expected revision
-  beside them, and the rendered `summary` lines the rows replace.
+  beside them. Every surface renders the rows itself.
   """
 
   require Logger
@@ -89,8 +89,7 @@ defmodule Sanctum.Consent.Commit do
   # ---------------------------------------------------------------------------
 
   @doc """
-  Recompute live, answer the structured preview with the summary, mint the
-  commit proof. Two previews of the same decisions over the same world
+  Recompute live, answer the structured preview, mint the commit proof. Two previews of the same decisions over the same world
   answer the same rows and the same digest.
   """
   @spec preview(Context.t(), decisions()) ::
@@ -109,7 +108,6 @@ defmodule Sanctum.Consent.Commit do
          rows: document["rows"],
          origins: document["origins"],
          commit_digest: document["commit_digest"],
-         summary: render_summary(prep),
          proof: proof,
          expected_consent_revision: prep.expected_revision
        }}
@@ -220,8 +218,7 @@ defmodule Sanctum.Consent.Commit do
 
   # The head's decisions, with the new bindings in place of its own: an
   # owner profile, the label it carries, and the scope, invoke mode and
-  # origins the head was committed under. A head written without origins
-  # admits interactive alone.
+  # origins the head was committed under.
   defp grant_decisions(profile, head, bindings) do
     %{
       ref: profile.source_ref,
@@ -229,7 +226,7 @@ defmodule Sanctum.Consent.Commit do
       kind: :owner,
       scope: head.scope,
       invoke_mode: head.invoke_mode,
-      origins: Map.get(head, :admitted_origins) || Plan.default_origins(),
+      origins: head.admitted_origins,
       bindings: bindings,
       selections: head_selections(head),
       tool_servers: []
@@ -385,8 +382,7 @@ defmodule Sanctum.Consent.Commit do
          expected_consent_revision: prep.expected_revision,
          source_ref: prep.source_ref,
          rows: rows,
-         origins: Prima.Origin.to_wire_list(prep.origins),
-         summary: render_summary(prep)
+         origins: Prima.Origin.to_wire_list(prep.origins)
        }}
     end
   end
@@ -1559,154 +1555,6 @@ defmodule Sanctum.Consent.Commit do
       )
     end)
   end
-
-  # Render grants from the same blob covered by the approved digest.
-  defp render_summary(prep) do
-    header =
-      "Grant #{prep.source_ref} — #{prep.kind}, #{prep.scope}, revision #{prep.expected_revision + 1}"
-
-    bindings =
-      Enum.map(prep.bindings, fn binding ->
-        entry = Map.fetch!(prep.entries, binding.entry_id)
-
-        "Uses #{entry.name} (#{render_projection(binding)})"
-      end)
-
-    selections =
-      Enum.map(prep.selections, fn selection ->
-        fields = if selection.fields == [], do: selection.lent_fields, else: selection.fields
-
-        "#{selection.dep} runs with #{selection.entry_name}, the key bound on its " <>
-          "'#{selection.label}' profile (#{Enum.join(fields, ", ")})"
-      end)
-
-    [header | bindings ++ selections] ++ render_grants(prep)
-  end
-
-  # The fields and scopes the edge's projection names, as written. A
-  # binding on a manifest with no need names only what its caller named.
-  defp render_projection(binding) do
-    case {binding.fields, binding.scopes} do
-      {[], []} -> "no projection"
-      {fields, []} -> Enum.join(fields, ", ")
-      {[], scopes} -> "scopes " <> Enum.join(scopes, ", ")
-      {fields, scopes} -> Enum.join(fields, ", ") <> "; scopes " <> Enum.join(scopes, ", ")
-    end
-  end
-
-  defp render_grants(prep) do
-    case Prima.Authority.Blob.parse(prep.blob_json) do
-      {:ok, blob} ->
-        blob.nodes
-        |> Enum.sort_by(fn {ref, _node} -> ref end)
-        |> Enum.flat_map(&render_node/1)
-
-      # The blob was just built from this prep, so a parse failure is a
-      # construction bug — say so rather than rendering a shorter, quieter
-      # sheet that reads like a narrower grant.
-      {:error, reason} ->
-        Logger.error("[Sanctum.Consent.Commit] the grants did not parse: #{inspect(reason)}")
-        ["Grants could not be rendered — do not approve"]
-    end
-  end
-
-  defp render_node({ref, node}) do
-    grants =
-      node.edges
-      |> Enum.sort_by(fn {key, _edge} -> key end)
-      |> Enum.flat_map(fn {_key, edge} -> render_edge(edge) end)
-      |> Enum.uniq()
-
-    # Include each node’s limits in the consent summary.
-    lines = grants ++ render_limits(node.limits)
-
-    case lines do
-      [] -> ["#{ref}: no capabilities"]
-      lines -> Enum.map(lines, fn line -> "#{ref}: #{line}" end)
-    end
-  end
-
-  defp render_limits(nil), do: []
-
-  defp render_limits(%Prima.Limits{} = limits) do
-    rate =
-      case limits.rate_limit do
-        %{requests: requests, window: window} -> "#{requests}/#{window}"
-        _ -> nil
-      end
-
-    parts =
-      [
-        limits.timeout && "timeout #{limits.timeout}",
-        limits.max_memory_bytes && "memory #{limits.max_memory_bytes}B",
-        rate && "rate #{rate}",
-        limits.max_concurrent_tasks && "concurrency #{limits.max_concurrent_tasks}"
-      ]
-      |> Enum.reject(&is_nil/1)
-
-    case parts do
-      [] -> []
-      parts -> ["limits #{Enum.join(parts, ", ")}"]
-    end
-  end
-
-  defp render_edge(edge) do
-    Enum.concat([
-      render_egress(edge.egress),
-      render_storage(edge.storage),
-      render_tools(edge.tools),
-      render_tool_servers(edge.tool_servers)
-    ])
-  end
-
-  defp render_egress(nil), do: []
-
-  defp render_egress(%{domains: []}), do: []
-
-  defp render_egress(%{domains: domains} = egress) do
-    methods = egress |> Map.get(:methods, []) |> render_list("any method")
-
-    # Schemes and private_ips were computed into the blob and shown
-    # nowhere. `private_ips` is the one that matters: an operator
-    # approving "network internal.corp (GET)" was not told the grant
-    # reaches RFC1918 space, which is the whole SSRF question.
-    schemes =
-      case Map.get(egress, :schemes, []) do
-        [] -> nil
-        schemes -> "via #{Enum.join(Enum.sort(schemes), ", ")}"
-      end
-
-    private =
-      case Map.get(egress, :private_ips, []) do
-        [] -> nil
-        ranges -> "INCLUDING PRIVATE #{Enum.join(Enum.sort(ranges), ", ")}"
-      end
-
-    qualifiers = Enum.reject([methods, schemes, private], &is_nil/1)
-
-    ["network #{Enum.join(domains, ", ")} (#{Enum.join(qualifiers, "; ")})"]
-  end
-
-  defp render_storage(nil), do: []
-  defp render_storage(%{paths: []}), do: []
-
-  defp render_storage(%{paths: paths, actions: actions}) do
-    ["storage #{Enum.join(paths, ", ")} (#{render_list(actions, "no actions")})"]
-  end
-
-  defp render_tools([]), do: []
-  defp render_tools(tools), do: ["tools #{Enum.join(Enum.sort(tools), ", ")}"]
-
-  defp render_tool_servers([]), do: []
-
-  defp render_tool_servers(servers) do
-    Enum.map(servers, fn server ->
-      "tool server #{server.server_name} (#{render_list(server.tool_patterns, "no tools")})"
-    end)
-  end
-
-  defp render_list([], empty), do: empty
-  defp render_list(values, _empty), do: values |> Enum.sort() |> Enum.join(", ")
 
   defp conflict(cause, expected, actual) do
     {:error,

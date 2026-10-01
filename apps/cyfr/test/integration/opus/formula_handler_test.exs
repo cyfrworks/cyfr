@@ -52,7 +52,7 @@ defmodule Opus.FormulaHandlerTest do
     Cyfr.Test.Sandbox.setup!(tags)
     TwoServices.watch!()
 
-    ctx = Sanctum.TestContext.local()
+    ctx = Sanctum.TestContext.local(:api)
 
     wasm_bytes = File.read!(@math_wasm_path)
 

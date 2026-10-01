@@ -39,7 +39,7 @@ defmodule Emissary.MCP.ChainLoggingTest do
         created_by: "system"
       })
 
-    {:ok, ctx: %{Sanctum.TestContext.local() | athanor_id: athanor.id}}
+    {:ok, ctx: %{Sanctum.TestContext.local(:api) | athanor_id: athanor.id}}
   end
 
   defp authority_granting(pairs) do

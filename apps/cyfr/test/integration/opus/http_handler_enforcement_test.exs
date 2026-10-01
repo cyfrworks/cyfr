@@ -31,6 +31,7 @@ defmodule Opus.HttpHandlerEnforcementTest do
 
     attempt =
       AttemptFixtures.attached!(
+        ctx: Sanctum.TestContext.local(:api),
         component_ref: component_ref,
         authority: %{
           Prima.Authority.zero()

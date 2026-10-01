@@ -134,6 +134,52 @@ defmodule Sanctum.TestContext do
     )
   end
 
+  # The admission path a case models, and the origin each one gives the
+  # context it builds (`Prima.Origin`), whatever credential is behind it.
+  @admission_paths %{
+    prism: :interactive,
+    device: :interactive,
+    api: :programmatic,
+    mcp: :programmatic,
+    schedule: :schedule,
+    webhook: :webhook
+  }
+
+  @doc """
+  `local/0` admitted through `path` (`via/2`): the context a run started
+  there carries.
+  """
+  @spec local(atom() | nil) :: Context.t()
+  def local(path), do: via(local(), path)
+
+  @doc """
+  `ctx` as the admission path `path` builds it: `:prism` and `:device`
+  give `interactive`, `:api` and `:mcp` give `programmatic`, `:schedule`
+  and `:webhook` give their own. The origin is the path's, never the
+  credential's, so the context's authentication is left as it is. `nil`
+  is a context with no origin, for the cases a missing origin must
+  refuse.
+
+  `local/0` names no path, so a root a case runs without saying how it
+  was admitted is refused, as it is in production.
+  """
+  @spec via(Context.t(), atom() | nil) :: Context.t()
+  def via(%Context{} = ctx, nil), do: %{ctx | origin: nil}
+
+  def via(%Context{} = ctx, path) when is_map_key(@admission_paths, path),
+    do: %{ctx | origin: Map.fetch!(@admission_paths, path)}
+
+  def via(%Context{}, path),
+    do:
+      raise(
+        ArgumentError,
+        "no admission path #{inspect(path)}: one of #{inspect(Map.keys(@admission_paths))}"
+      )
+
+  @doc "The admission paths `via/2` knows, each with the origin it gives."
+  @spec admission_paths() :: %{atom() => Prima.Origin.t()}
+  def admission_paths, do: @admission_paths
+
   @doc """
   The context's identity signed in: the `users` row minted (or found)
   for `ctx.user_id` read as an IdP identity key, and the context re-named

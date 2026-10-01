@@ -37,7 +37,7 @@ defmodule Opus.ModelsCatalogueTest do
       end
     end)
 
-    {:ok, ctx: Sanctum.TestContext.local()}
+    {:ok, ctx: Sanctum.TestContext.local(:api)}
   end
 
   test "every contract catalyst is listed; one without a key is an error, not a provider", %{

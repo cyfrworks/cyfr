@@ -163,9 +163,35 @@ defmodule Arca.TurnStorageTest do
       assert clone.origin == "programmatic"
     end
 
-    test "a turn naming none is accepted without one; one outside the enum is refused",
+    test "a clone of a turn whose row records no origin is refused, with nothing written",
          %{actor: actor, thread: thread} do
-      assert %{origin: nil} = accept!(actor, thread)
+      turn = accept!(actor, thread)
+      {:ok, started} = TurnStorage.start(actor, turn.id, %{fence: turn.fence, recovery_limit: 1})
+
+      # Past every writer's guard, as a hand edit or a restored row reaches it.
+      {1, _} = Arca.Repo.update_all(from(t in Turn, where: t.id == ^turn.id), set: [origin: nil])
+
+      assert {:error, :no_origin} =
+               TurnStorage.open_clone_turn(actor, turn.id, %{role: "helper", fence: started.fence})
+
+      assert [] = Arca.Repo.all(from(t in Turn, where: t.parent_turn_id == ^turn.id))
+    end
+
+    test "a turn naming none is refused with nothing written; one outside the enum is refused",
+         %{actor: actor, thread: thread} do
+      before = length(Threads.messages(actor, thread.id))
+
+      for named <- [%{}, %{origin: nil}] do
+        assert {:error, :no_origin} =
+                 TurnStorage.accept_message(actor, thread.id, %{
+                   message: %{author: actor.user_id, content: "@aqua go"},
+                   turn: Map.merge(%{agent: "aqua", requested_by: actor.user_id}, named)
+                 })
+      end
+
+      # The message and the turn are one acceptance: neither was written.
+      assert length(Threads.messages(actor, thread.id)) == before
+      assert {:ok, []} = TurnStorage.open_turns(actor, thread.id)
 
       assert {:error, {:invalid, %{origin: _}}} =
                TurnStorage.accept_message(actor, thread.id, %{
@@ -179,7 +205,7 @@ defmodule Arca.TurnStorageTest do
     {:ok, %{turn: turn}} =
       TurnStorage.accept_message(actor, thread.id, %{
         message: %{author: actor.user_id, content: "@aqua go"},
-        turn: %{agent: "aqua", requested_by: actor.user_id}
+        turn: %{agent: "aqua", requested_by: actor.user_id, origin: :interactive}
       })
 
     turn

@@ -606,7 +606,8 @@ defmodule Cyfr.Test.TwoServices do
   @doc """
   Admit a synthetic root under `authority`: a running row with the
   invocation reservation the authority's budget names, as a root's
-  admission mints it, and no guest. `opts[:cap]` is the reservation's cap
+  admission mints it, and no guest. The root records `ctx`'s origin, the
+  admission path the case models. `opts[:cap]` is the reservation's cap
   (default the budget's).
   """
   @spec root!(Sanctum.Context.t(), Authority.t(), keyword()) :: root()
@@ -621,7 +622,8 @@ defmodule Cyfr.Test.TwoServices do
           reference: "#{AuthorityFixtures.formula_ref()}:1.0.0",
           user_id: ctx.user_id,
           athanor_id: ctx.athanor_id,
-          component_type: "formula"
+          component_type: "formula",
+          origin: ctx.origin
         },
         reservation: %{budget_id: budget.id, cap: Keyword.get(opts, :cap, budget.cap)},
         grant: grant,

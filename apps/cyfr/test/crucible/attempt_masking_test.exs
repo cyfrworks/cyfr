@@ -35,7 +35,7 @@ defmodule Crucible.AttemptMaskingTest do
   setup tags do
     Cyfr.Test.Sandbox.setup!(tags)
 
-    ctx = Sanctum.TestContext.local()
+    ctx = Sanctum.TestContext.local(:api)
     fixture = attached!()
     :ok = Crucible.Events.subscribe(fixture.execution_id, ctx)
 
@@ -242,6 +242,7 @@ defmodule Crucible.AttemptMaskingTest do
   # bundle whose access token is the token.
   defp attached! do
     AttemptFixtures.attached!(
+      ctx: Sanctum.TestContext.local(:api),
       vault: %{kind: "oauth", fields: %{"KEY" => @field}, oauth: %{"access_token" => @token}}
     )
   end

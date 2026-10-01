@@ -123,6 +123,7 @@ defmodule Sanctum.ConsentAfterInstallTest do
         auth_method: :oidc,
         authenticated: true
       )
+      |> Sanctum.TestContext.via(:prism)
 
     # Filled offline: each consent covers the closure that exists, and a
     # turn can pin it.

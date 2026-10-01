@@ -56,7 +56,7 @@ defmodule Emissary.MCP.ResourceAdmissionTest do
   defp key(permissions) do
     Context.build(
       user_id: "user_resource_key",
-      athanor_id: Sanctum.TestContext.local().athanor_id,
+      athanor_id: Sanctum.TestContext.local(:api).athanor_id,
       permissions: permissions,
       auth_method: :api_key,
       authenticated: true
@@ -97,7 +97,7 @@ defmodule Emissary.MCP.ResourceAdmissionTest do
     setup tags do
       Cyfr.Test.Sandbox.setup!(tags)
 
-      ctx = Sanctum.TestContext.local()
+      ctx = Sanctum.TestContext.local(:api)
       actor = Context.actor(ctx)
       :ok = Arca.put(actor, ["data", "reach.txt"], "data bytes")
       :ok = Arca.put(actor, ["threads", "thread_r", "reach.bin"], "thread bytes")

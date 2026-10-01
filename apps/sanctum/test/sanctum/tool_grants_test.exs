@@ -455,7 +455,7 @@ defmodule Sanctum.ToolGrantsTest do
       {:ok, %{turn: turn}} =
         Arca.TurnStorage.accept_message(actor, thread.id, %{
           message: %{author: ctx.user_id, content: "go"},
-          turn: %{agent: "aqua", requested_by: ctx.user_id}
+          turn: %{agent: "aqua", requested_by: ctx.user_id, origin: :interactive}
         })
 
       {:ok, thread: thread.id, turn: turn.id, a: running!(ctx), b: running!(ctx)}
@@ -471,7 +471,8 @@ defmodule Sanctum.ToolGrantsTest do
             reference: "catalyst:local.test:1.0.0",
             user_id: ctx.user_id,
             athanor_id: ctx.athanor_id,
-            component_type: "catalyst"
+            component_type: "catalyst",
+            origin: :interactive
           },
           grant: Arca.Test.Actor.grant(ctx.athanor_id),
           verify: &Arca.Test.Actor.admits/1

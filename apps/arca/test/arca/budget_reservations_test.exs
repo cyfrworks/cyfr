@@ -30,7 +30,8 @@ defmodule Arca.BudgetReservationsTest do
           reference: "formula:local.demo:1.0.0",
           user_id: actor.user_id,
           athanor_id: actor.athanor_id,
-          component_type: "formula"
+          component_type: "formula",
+          origin: :programmatic
         },
         reservation: %{budget_id: budget_id, cap: 3},
         grant: Arca.Test.Actor.grant(actor.athanor_id),

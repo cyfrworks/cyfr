@@ -54,7 +54,7 @@ defmodule Aqua.Loop.StreamOrderTest do
     # The loops' work stops before the paths it runs under are restored.
     Cyfr.Test.Sandbox.stop_work_on_exit()
 
-    ctx = Sanctum.TestContext.local()
+    ctx = Sanctum.TestContext.local(:prism)
     :ok = Sanctum.TestContext.shipped!(ctx.athanor_id)
     {:ok, %{errors: 0}} = Compendium.AutoIndexer.scan(ctx: ctx)
     {:ok, _} = Compendium.AgentIndex.sync(ctx)

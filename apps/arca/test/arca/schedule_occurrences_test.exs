@@ -249,7 +249,8 @@ defmodule Arca.ScheduleOccurrencesTest do
           user_id: actor.user_id,
           athanor_id: actor.athanor_id,
           component_type: "reagent",
-          schedule_id: running.id
+          schedule_id: running.id,
+          origin: :schedule
         },
         occurrence_id: started.id,
         grant: Arca.Test.Actor.grant(actor.athanor_id),
@@ -355,7 +356,8 @@ defmodule Arca.ScheduleOccurrencesTest do
                  user_id: actor.user_id,
                  athanor_id: actor.athanor_id,
                  component_type: "reagent",
-                 schedule_id: schedule.id
+                 schedule_id: schedule.id,
+                 origin: :schedule
                },
                occurrence_id: occurrence.id,
                grant: Arca.Test.Actor.grant(actor.athanor_id),

@@ -14,11 +14,14 @@ defmodule Sanctum.Consent.LoaderTest do
     :ok = Ecto.Adapters.SQL.Sandbox.checkout(Arca.Repo)
     Ecto.Adapters.SQL.Sandbox.mode(Arca.Repo, {:shared, self()})
 
+    # A person at Prism: the admission path every case here models but the
+    # origin cases below.
     ctx = %Context{
       user_id: "loader_test_user",
       athanor_id: "ath_test",
       scope: :athanor,
-      permissions: MapSet.new([:execute])
+      permissions: MapSet.new([:execute]),
+      origin: :interactive
     }
 
     {:ok, ctx: ctx}
@@ -291,5 +294,82 @@ defmodule Sanctum.Consent.LoaderTest do
 
     assert {:error, {:consent_required, _}} =
              Loader.load_root(ctx, profile, live: live_for(drifted))
+  end
+
+  describe "the origin a run is admitted under" do
+    test "a context with no origin, or one the revision does not name, is asked to grant again",
+         %{ctx: ctx} do
+      profile = profile_summary()
+      consent = consent()
+      seed(ctx, profile, consent)
+      live = live_for(consent.activation)
+
+      for origin <- [nil, :programmatic, :schedule, :webhook] do
+        assert {:error,
+                {:consent_required,
+                 %{profile_id: "prof-1", current_revision: 1, shape_diff: []} = payload}} =
+                 Loader.load_root(%{ctx | origin: origin}, profile, live: live)
+
+        # The signal's payload, unchanged: what every surface already reads.
+        assert Map.keys(payload) |> Enum.sort() == [:current_revision, :profile_id, :shape_diff]
+      end
+
+      assert {:ok, %Authority{}, _stamp} = Loader.load_root(ctx, profile, live: live)
+    end
+
+    test "a revision that names an origin admits a run under it", %{ctx: ctx} do
+      profile = profile_summary()
+      consent = consent(%{admitted_origins: [:interactive, :programmatic]})
+      seed(ctx, profile, consent)
+      live = live_for(consent.activation)
+
+      assert {:ok, %Authority{}, _} =
+               Loader.load_root(%{ctx | origin: :programmatic}, profile, live: live)
+
+      assert {:error, {:consent_required, _}} =
+               Loader.load_root(%{ctx | origin: :schedule}, profile, live: live)
+    end
+  end
+
+  describe "a storage path spelled other than the door reaches it" do
+    defp with_paths(paths) do
+      graph =
+        put_in(
+          Fixtures.graph_map(),
+          ["nodes", Fixtures.formula_ref(), "edges", "@ingress", "storage"],
+          %{"paths" => paths, "actions" => ["read"]}
+        )
+
+      {:ok, policy} = Jason.encode(graph)
+      consent(%{resolved_policy: policy})
+    end
+
+    test "is refused at admission with consent_required, never rewritten", %{ctx: ctx} do
+      profile = profile_summary()
+
+      for path <- ["data//secrets/", "data/./secrets/", "data/../secrets/", "data/notes//"] do
+        consent = with_paths(["data/ok/", path])
+        seed(ctx, profile, consent)
+
+        assert {:error, {:consent_required, %{profile_id: "prof-1", shape_diff: []}}} =
+                 Loader.load_root(ctx, profile, live: live_for(consent.activation)),
+               "#{path} was admitted"
+
+        # The stored grant is as it was written.
+        assert {:ok, %{resolved_policy: stored}} =
+                 Arca.ConsentStorage.head_consent(Context.actor(ctx), "prof-1")
+
+        assert stored == consent.resolved_policy
+      end
+    end
+
+    test "a canonical spelling, a folder and the wildcard load", %{ctx: ctx} do
+      profile = profile_summary()
+      consent = with_paths(["data/notes/", "data/report.md", "data", "*"])
+      seed(ctx, profile, consent)
+
+      assert {:ok, %Authority{}, _} =
+               Loader.load_root(ctx, profile, live: live_for(consent.activation))
+    end
   end
 end

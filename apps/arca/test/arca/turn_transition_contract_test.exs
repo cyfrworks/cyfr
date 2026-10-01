@@ -37,7 +37,7 @@ defmodule Arca.TurnTransitionContractTest do
     {:ok, %{turn: turn}} =
       TurnStorage.accept_message(actor, thread.id, %{
         message: %{author: actor.user_id, content: "@aqua go"},
-        turn: %{agent: "aqua", requested_by: actor.user_id}
+        turn: %{agent: "aqua", requested_by: actor.user_id, origin: :interactive}
       })
 
     turn
@@ -57,7 +57,8 @@ defmodule Arca.TurnTransitionContractTest do
             component_type: "agent",
             kind: "turn",
             turn_id: turn_id,
-            profile_id: "prof_root"
+            profile_id: "prof_root",
+            origin: :interactive
           },
           attrs
         ),
@@ -913,7 +914,8 @@ defmodule Arca.TurnTransitionContractTest do
                    user_id: actor.user_id,
                    athanor_id: actor.athanor_id,
                    component_type: "reagent",
-                   schedule_id: "sched_x"
+                   schedule_id: "sched_x",
+                   origin: :schedule
                  },
                  Arca.Test.Actor.standing()
                )

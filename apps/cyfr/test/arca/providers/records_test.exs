@@ -29,7 +29,7 @@ defmodule Arca.Providers.RecordsTest do
         else: Application.delete_env(:arca, :base_path)
     end)
 
-    {:ok, ctx: Sanctum.TestContext.local(), test_path: test_path}
+    {:ok, ctx: Sanctum.TestContext.local(:api), test_path: test_path}
   end
 
   # ============================================================================

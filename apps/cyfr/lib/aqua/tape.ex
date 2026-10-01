@@ -58,8 +58,8 @@ defmodule Aqua.Tape do
   A turn opened here is recorded with the origin `ctx` carries
   (`Prima.Origin`), which the admission entry that built the context
   set, so a turn recovered after a restart resumes under it; an origin
-  named in `:turn` is not read. A context that carries none opens a turn
-  with none, which recovery cancels rather than resumes.
+  named in `:turn` is not read. A turn asked for under a context that
+  carries none is refused `{:error, :no_origin}` with nothing written.
 
   A `client_id` this thread already accepted answers the existing
   acceptance as `replayed: true` when it is the same send — same actor,

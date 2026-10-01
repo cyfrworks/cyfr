@@ -826,16 +826,22 @@ defmodule PrismWeb.SystemLayerTest do
       # The wildcard ask is one row, every tool, whole or none.
       assert has_element?(view, ~s([data-row="tools"]), "Every tool of the catalog (*)")
 
+      # A browser sends a checkbox's own value under `value` and none for a
+      # box unticked, so no box carries its choice there: the test client
+      # sends `phx-value-value` as written, and would hide that loss.
+      assert has_element?(view, ~s(input[type="checkbox"][phx-value-choice]))
+      refute has_element?(view, ~s(input[type="checkbox"][phx-value-value]))
+
       click(view, ~s(input[phx-click="toggle_origin"][phx-value-origin="programmatic"]))
 
       click(
         view,
-        ~s(input[phx-click="toggle_value"][phx-value-field="domains"][phx-value-value="b.layer.example"])
+        ~s(input[phx-click="toggle_value"][phx-value-field="domains"][phx-value-choice="b.layer.example"])
       )
 
       click(
         view,
-        ~s(input[phx-click="toggle_value"][phx-value-field="actions"][phx-value-value="write"])
+        ~s(input[phx-click="toggle_value"][phx-value-field="actions"][phx-value-choice="write"])
       )
 
       click(view, ~s(input[phx-click="toggle_every_tool"]))
@@ -957,7 +963,7 @@ defmodule PrismWeb.SystemLayerTest do
         "node" => node,
         "kind" => "egress",
         "field" => "domains",
-        "value" => "evil.example"
+        "choice" => "evil.example"
       })
 
       render_click(sheet, "toggle_origin", %{"origin" => "interactive"})

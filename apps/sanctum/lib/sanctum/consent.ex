@@ -34,8 +34,8 @@ defmodule Sanctum.Consent do
                  the ask as preview rows, the default origins
 
       preview  {plan_token, decisions}
-               → the structured preview (rows, origins, commit digest),
-                 the proof, rendered summary
+               → the structured preview (rows, origins, commit digest)
+                 and the proof
 
       commit   {plan_token, decisions, commit_digest, expected_revision, proof}
                → verify the proof binds THIS commit digest, recompute the
@@ -128,7 +128,6 @@ defmodule Sanctum.Consent do
       `Prima.ConsentPreview.decode/1` reads these four back.
     * `proof` and `expected_consent_revision` — what the commit presents
       with the digest.
-    * `summary` — the rendered lines the rows replace.
   """
   @type preview :: %{
           v: pos_integer(),
@@ -136,8 +135,7 @@ defmodule Sanctum.Consent do
           origins: [String.t(), ...],
           commit_digest: String.t(),
           proof: String.t(),
-          expected_consent_revision: non_neg_integer(),
-          summary: [String.t()]
+          expected_consent_revision: non_neg_integer()
         }
 
   @type error ::

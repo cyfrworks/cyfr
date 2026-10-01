@@ -58,7 +58,7 @@ defmodule Cyfr.SharedLimitsTest do
     previous = Map.new(keys, fn {app, key} -> {{app, key}, Application.get_env(app, key)} end)
     Application.put_env(:arca, :base_path, Path.join(run_dir, "data"))
 
-    ctx = Sanctum.TestContext.local()
+    ctx = Sanctum.TestContext.local(:prism)
 
     on_exit(fn ->
       fresh_limits!(ctx)

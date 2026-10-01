@@ -51,7 +51,8 @@ defmodule Sanctum.ExecutionStandingTest do
           reference: "reagent:local.standing:0.1.0",
           user_id: "usr_standing",
           athanor_id: athanor_id,
-          component_type: "reagent"
+          component_type: "reagent",
+          origin: :programmatic
         },
         grant: grant,
         verify: &ExecutionStanding.verify/1

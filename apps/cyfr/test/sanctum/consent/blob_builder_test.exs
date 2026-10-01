@@ -60,7 +60,7 @@ defmodule Sanctum.Consent.BlobBuilderTest do
         else: Application.delete_env(:sanctum, :platform_ceiling)
     end)
 
-    ctx = Sanctum.TestContext.local()
+    ctx = Sanctum.TestContext.local(:prism)
     publish!(ctx, "narrow-source", %{"caps" => @ask})
     {:ok, ctx: ctx}
   end

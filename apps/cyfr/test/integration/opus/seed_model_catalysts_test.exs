@@ -51,7 +51,7 @@ defmodule Opus.SeedModelCatalystsTest do
       end
     end)
 
-    {:ok, ctx: Sanctum.TestContext.local()}
+    {:ok, ctx: Sanctum.TestContext.local(:prism)}
   end
 
   for {name, field, _window} <- @models do

@@ -124,7 +124,7 @@ defmodule Crucible.Providers.TinctureTest do
     end
 
     test "an authenticated caller is shown both" do
-      assert %{"inputSchema" => schema} = listed(Sanctum.TestContext.local())
+      assert %{"inputSchema" => schema} = listed(Sanctum.TestContext.local(:prism))
 
       assert Enum.sort(schema["properties"]["action"]["enum"]) ==
                ["invoke_protected", "invoke_public"]
@@ -146,7 +146,7 @@ defmodule Crucible.Providers.TinctureTest do
     end
 
     test "a guest-planed context is refused both actions before any handler" do
-      guest = %{Sanctum.TestContext.local() | plane: :guest}
+      guest = %{Sanctum.TestContext.local(:prism) | plane: :guest}
 
       for action <- ["invoke_public", "invoke_protected"] do
         assert {:error, %Prima.Refusal{class: :forbidden, stage: :admission}} =
@@ -155,7 +155,7 @@ defmodule Crucible.Providers.TinctureTest do
     end
 
     test "no argument selects a tenant, a profile or a route" do
-      ctx = Sanctum.TestContext.local()
+      ctx = Sanctum.TestContext.local(:prism)
 
       for {action, extra} <- [
             {"invoke_protected", %{"athanor" => "other"}},
@@ -190,7 +190,7 @@ defmodule Crucible.Providers.TinctureTest do
     end
 
     test "the gate files one row per call, naming the action" do
-      ctx = Sanctum.TestContext.local()
+      ctx = Sanctum.TestContext.local(:prism)
 
       assert {:error, %Prima.Refusal{class: :not_found}} =
                Grimoire.call_external("tincture", ctx, args("invoke_protected"))
@@ -254,7 +254,7 @@ defmodule Crucible.Providers.TinctureTest do
       keys = [cyfr: :opus_workers, arca: :base_path]
       prev = Map.new(keys, fn {app, key} -> {{app, key}, Application.get_env(app, key)} end)
       Application.put_env(:arca, :base_path, base)
-      ctx = Sanctum.TestContext.local()
+      ctx = Sanctum.TestContext.local(:prism)
       _athanor = Sanctum.TestContext.athanor!()
 
       on_exit(fn ->
@@ -292,7 +292,8 @@ defmodule Crucible.Providers.TinctureTest do
 
     test "is served under the address's active public profile", %{ctx: ctx} do
       node = tincture!(ctx, "tinc-mcp-public")
-      public_profile!(ctx, node)
+      # An anonymous call over /mcp is programmatic: the public profile names it.
+      public_profile!(ctx, node, [:interactive, :programmatic])
       start_supervised!({ScriptedWorker, ref: @dep_ref, script: [%{"answer" => 3}]})
       ScriptedWorker.fresh_limits!(ctx, [@dep_ref])
 
@@ -372,8 +373,8 @@ defmodule Crucible.Providers.TinctureTest do
   end
 
   # An active public profile for the tincture `node`, with a head consent
-  # binding its edge to the dependency.
-  defp public_profile!(ctx, node) do
+  # binding its edge to the dependency and admitting `origins`.
+  defp public_profile!(ctx, node, origins) do
     id = "prof_public_#{System.unique_integer([:positive])}"
     {:ok, _ref, _type, component} = Crucible.Admission.inspect_component(ctx, node)
     {:ok, %{graph: activation}} = Compendium.Activation.resolve_verified(ctx, component)
@@ -403,6 +404,7 @@ defmodule Crucible.Providers.TinctureTest do
               }
             }),
           activation: activation,
+          admitted_origins: origins,
           vault_refs: []
         }
       )
@@ -410,7 +412,9 @@ defmodule Crucible.Providers.TinctureTest do
 
   test "an action the tool does not declare falls to its catch-all" do
     assert {:error, {:invalid_argument, message}} =
-             Tincture.handle("tincture", Sanctum.TestContext.local(), %{"action" => "invoke"})
+             Tincture.handle("tincture", Sanctum.TestContext.local(:prism), %{
+               "action" => "invoke"
+             })
 
     assert message =~ "Invalid tincture action"
   end

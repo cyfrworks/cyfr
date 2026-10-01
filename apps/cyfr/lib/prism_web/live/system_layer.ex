@@ -291,7 +291,7 @@ defmodule PrismWeb.SystemLayer do
          {:ok, entries} <- Sanctum.Consent.profiles(ctx, name_ref),
          %{kind: :owner, label: label} <- Enum.find(entries, &(&1.id == profile_id)),
          {:ok, head} <- Sanctum.Consent.head_consent(ctx, profile_id) do
-      if origin in (head.admitted_origins || [:interactive]),
+      if origin in head.admitted_origins,
         do: :admitted,
         else: {:missing, label}
     else

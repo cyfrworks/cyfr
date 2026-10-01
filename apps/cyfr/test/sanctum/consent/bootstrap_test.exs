@@ -27,7 +27,7 @@ defmodule Sanctum.Consent.BootstrapTest do
         else: Application.delete_env(:arca, :base_path)
     end)
 
-    {:ok, ctx: Sanctum.TestContext.local()}
+    {:ok, ctx: Sanctum.TestContext.local(:prism)}
   end
 
   defp ship!(ctx, name, type) do

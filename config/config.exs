@@ -73,6 +73,12 @@ config :sanctum, :consent_proof_store, Sanctum.Consent.Proof.DB
 # reached can go unread anywhere in the cell.
 config :sanctum, :caller_memo_ttl_ms, 2_000
 
+# The boot check of stored grants (`Sanctum.Consent.StoredGrants`): once
+# per boot, the grants that name a storage path the grammar no longer
+# admits are listed and announced to their athanors. A notice; the loader
+# refuses such a grant whether or not it runs. The suite turns it off.
+config :sanctum, :stored_grants_check_enabled, true
+
 # Where this deployment is reachable when the operator declared nothing:
 # the endpoint's own scheme, host and port. `CYFR_PUBLIC_URL` overrides it
 # (`:sanctum, :public_url`); an OAuth `redirect_uri` needs an absolute

@@ -14,7 +14,7 @@ defmodule Emissary.MCP.ToolServerGrantTest do
     Cyfr.Test.Sandbox.setup!(tags)
     Arca.Cache.init()
 
-    ctx = Sanctum.TestContext.local()
+    ctx = Sanctum.TestContext.local(:api)
 
     {:ok, server} =
       Arca.McpServerStorage.insert(Sanctum.Context.actor(ctx), %{

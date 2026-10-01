@@ -314,9 +314,10 @@ defmodule Cyfr.Cluster.HostRoutingTest do
   end
 
   # An attempt held open on `id` under `label`, with nothing of an earlier
-  # case still held there.
+  # case still held there: a run started over the API.
   defp attempt(id, label, opts \\ []) do
     Cell.call(id, Cyfr.Cluster.Holder, :release!, [])
+    opts = Keyword.put_new_lazy(opts, :ctx, fn -> Sanctum.TestContext.local(:api) end)
     Cell.call(id, Cyfr.Cluster.Holder, :attach!, [label, opts])
   end
 

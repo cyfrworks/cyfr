@@ -101,9 +101,8 @@ defmodule Sanctum.Consent.ShapeDerivation do
          {:ok, releases} <- dependency_releases(ctx, row, source_ref),
          needs = Needs.from_manifest(manifest) || [],
          :ok <- check_vault_projections(needs, source_ref),
-         {:ok, tincture_digest} <- tincture_digest(manifest, source_ref) do
-      caps = Caps.from_manifest(manifest, &Arca.Storage.valid_guest_path?/1) || Caps.empty()
-
+         {:ok, tincture_digest} <- tincture_digest(manifest, source_ref),
+         {:ok, caps} <- declared_caps(manifest, source_ref) do
       {:ok,
        %{
          scope: :versionless,
@@ -208,16 +207,37 @@ defmodule Sanctum.Consent.ShapeDerivation do
   @doc """
   The declared manifest blocks for a source ref's latest release:
   `{:ok, needs, caps}` with `nil` for an absent block, or an error when
-  the row cannot be read or its manifest does not decode. The blocks are
-  validated at registration, so `nil` from a present-but-invalid block
-  cannot occur on a stored row.
+  the row cannot be read, its manifest does not decode, or its caps block
+  no longer meets the grammar (`declared_caps/2`).
   """
   @spec manifest_blocks(Sanctum.Context.t(), String.t()) ::
           {:ok, [map()] | nil, map() | nil} | {:error, term()}
   def manifest_blocks(ctx, source_ref) do
-    with {:ok, _row, manifest} <- manifest_row(ctx, source_ref) do
-      {:ok, Needs.from_manifest(manifest),
-       Caps.from_manifest(manifest, &Arca.Storage.valid_guest_path?/1)}
+    with {:ok, _row, manifest} <- manifest_row(ctx, source_ref),
+         {:ok, caps} <- declared_caps(manifest, source_ref) do
+      {:ok, Needs.from_manifest(manifest), if(Map.has_key?(manifest, "caps"), do: caps)}
+    end
+  end
+
+  @doc """
+  What a stored manifest's `caps` block asks for: the block normalized,
+  `Prima.Manifest.Caps.empty/0` for a manifest that declares none, and
+  `{:error, {:corrupt, {:manifest, source_ref}}}` for a block that is
+  present but does not meet the grammar — a release published before a
+  rule it now breaks (a storage path spelled other than the door reaches
+  it, say). Such a block is refused, never read as asking for nothing.
+  """
+  @spec declared_caps(map(), String.t()) ::
+          {:ok, map()} | {:error, {:corrupt, {:manifest, String.t()}}}
+  def declared_caps(manifest, source_ref) when is_map(manifest) do
+    case Caps.from_manifest(manifest, &Arca.Storage.valid_guest_path?/1) do
+      %{} = caps ->
+        {:ok, caps}
+
+      nil ->
+        if Map.has_key?(manifest, "caps"),
+          do: {:error, {:corrupt, {:manifest, source_ref}}},
+          else: {:ok, Caps.empty()}
     end
   end
 

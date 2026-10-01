@@ -548,8 +548,7 @@ defmodule Sanctum.Providers.Profile do
             label: profile.label,
             consent_id: consent.id,
             revision: consent.revision,
-            admitted_origins:
-              consent.admitted_origins && Prima.Origin.to_wire_list(consent.admitted_origins),
+            admitted_origins: Prima.Origin.to_wire_list(consent.admitted_origins),
             edges: edges
           }
         ]

@@ -60,7 +60,7 @@ defmodule Opus.WorkerServiceWireTest do
     previous = Map.new(keys, &{&1, Application.get_env(:arca, &1)})
     Application.put_env(:arca, :base_path, test_path)
 
-    ctx = Sanctum.TestContext.local()
+    ctx = Sanctum.TestContext.local(:api)
 
     on_exit(fn ->
       Slots.forgive_unreaped(@slots, ctx.athanor_id)
@@ -90,7 +90,8 @@ defmodule Opus.WorkerServiceWireTest do
           reference: Probe.probe_ref(),
           user_id: ctx.user_id,
           athanor_id: ctx.athanor_id,
-          component_type: "formula"
+          component_type: "formula",
+          origin: :programmatic
         },
         reservation: %{budget_id: authority.budget.id, cap: 2},
         grant: Cyfr.Test.AttemptFixtures.grant(ctx.athanor_id),
@@ -257,7 +258,12 @@ defmodule Opus.WorkerServiceWireTest do
       assert service != "wrk_other"
 
       other_service =
-        AttemptFixtures.attached!(service_id: "wrk_other", boot_id: boot, attach: false)
+        AttemptFixtures.attached!(
+          ctx: Sanctum.TestContext.local(:api),
+          service_id: "wrk_other",
+          boot_id: boot,
+          attach: false
+        )
 
       assert {:error, :malformed} =
                OpusService.start!(
@@ -267,7 +273,12 @@ defmodule Opus.WorkerServiceWireTest do
                )
 
       other_boot =
-        AttemptFixtures.attached!(service_id: service, boot_id: "boot_other", attach: false)
+        AttemptFixtures.attached!(
+          ctx: Sanctum.TestContext.local(:api),
+          service_id: service,
+          boot_id: "boot_other",
+          attach: false
+        )
 
       assert {:error, :malformed} =
                OpusService.start!(
@@ -281,7 +292,13 @@ defmodule Opus.WorkerServiceWireTest do
     end
 
     test "refuses input its assignment's digest does not bind", %{service: service, boot: boot} do
-      fixture = AttemptFixtures.attached!(service_id: service, boot_id: boot, attach: false)
+      fixture =
+        AttemptFixtures.attached!(
+          ctx: Sanctum.TestContext.local(:api),
+          service_id: service,
+          boot_id: boot,
+          attach: false
+        )
 
       assert {:error, :malformed} =
                OpusService.start!(fixture.assignment, ~s({"fixture":false}), sealed(fixture))
@@ -293,8 +310,22 @@ defmodule Opus.WorkerServiceWireTest do
       service: service,
       boot: boot
     } do
-      fixture = AttemptFixtures.attached!(service_id: service, boot_id: boot, attach: false)
-      other = AttemptFixtures.attached!(service_id: service, boot_id: boot, attach: false)
+      fixture =
+        AttemptFixtures.attached!(
+          ctx: Sanctum.TestContext.local(:api),
+          service_id: service,
+          boot_id: boot,
+          attach: false
+        )
+
+      other =
+        AttemptFixtures.attached!(
+          ctx: Sanctum.TestContext.local(:api),
+          service_id: service,
+          boot_id: boot,
+          attach: false
+        )
+
       elsewhere = Prima.WorkerAuth.dispatch_seal_key(worker_key!("wrk_other"))
       signing = Prima.WorkerAuth.dispatch_key(worker_key!(service))
 

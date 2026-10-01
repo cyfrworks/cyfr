@@ -13,7 +13,7 @@ defmodule Crucible.ChainScopeTest do
   setup tags do
     Cyfr.Test.Sandbox.setup!(tags)
 
-    {:ok, ctx: Sanctum.TestContext.local()}
+    {:ok, ctx: Sanctum.TestContext.local(:api)}
   end
 
   defp record!(ctx, opts) do

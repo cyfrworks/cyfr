@@ -44,7 +44,7 @@ defmodule Opus.ExecutorCancelPenaltyTest do
     previous = Map.new(keys, &{&1, Application.get_env(:arca, &1)})
     Application.put_env(:arca, :base_path, test_path)
 
-    ctx = Sanctum.TestContext.local()
+    ctx = Sanctum.TestContext.local(:api)
 
     # The penalty box outlives a force-release: what this suite fills for
     # its tenant, it empties.
