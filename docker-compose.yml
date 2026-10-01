@@ -426,6 +426,9 @@ services:
       - caddy_config:/config
     environment:
       - CYFR_HOST=${CYFR_HOST:-localhost}
+      # The port the Caddyfile proxies to: cyfr's own listener, with its
+      # default.
+      - CYFR_PORT=${CYFR_PORT:-4000}
       - CADDY_ACME_EMAIL=${CADDY_ACME_EMAIL:-}
     depends_on:
       cyfr:

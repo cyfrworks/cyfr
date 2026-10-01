@@ -968,6 +968,13 @@ jobs:
         env:
           RELEASE_BOOT_SKIP_BUILD: '1'
         run: tests/canvas-proof/run.sh
+      # The shipped Caddyfile in the Caddy image docker-compose.yml names, in
+      # front of a stub upstream: HSTS, the endpoint's value, once on every
+      # response over TLS for a real host and never for localhost, the
+      # upstream's headers through, plain HTTP redirected, and the file
+      # loading with CADDY_ACME_EMAIL empty. Docker alone; no release.
+      - name: HSTS behind the shipped proxy
+        run: tests/proxy-hsts/run.sh
 
   seed-guards:
     name: Seed media (clean, immutable versions)
