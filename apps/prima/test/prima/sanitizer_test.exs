@@ -203,5 +203,53 @@ defmodule Prima.SanitizerTest do
       assert Prima.Sanitizer.sensitive_key?("set-cookie")
       assert Prima.Sanitizer.sensitive_key?("x-hub-signature-256")
     end
+
+    test "a pairing link is redacted as a whole key, and a plain url stays readable" do
+      link = "https://home.example/pair#code=q2mTb0yU7aKpXv1ZcR4n8w"
+
+      assert Prima.Sanitizer.sanitize(%{
+               "invitation_url" => link,
+               "client_id" => "pcl_1",
+               "url" => "https://home.example/"
+             }) == %{
+               "invitation_url" => "[REDACTED]",
+               "client_id" => "pcl_1",
+               "url" => "https://home.example/"
+             }
+
+      assert Prima.Sanitizer.sanitize(%{invitation_url: link}) == %{invitation_url: "[REDACTED]"}
+      assert Prima.Sanitizer.sensitive_key?("invitationUrl")
+      refute Prima.Sanitizer.sensitive_key?("url")
+      refute Prima.Sanitizer.sensitive_key?("invitation_url_label")
+    end
+  end
+
+  # A pending confirmation's secret travels as a context's `confirmation_id`
+  # and as the MCP request metadata key `cyfr/confirmationId`.
+  describe "a pending confirmation's secret" do
+    @secret "cnf_AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8"
+
+    test "is redacted under either spelling" do
+      version = "io.modelcontextprotocol/protocolVersion"
+
+      assert Prima.Sanitizer.sanitize(%{
+               "confirmation_id" => @secret,
+               "_meta" => %{"cyfr/confirmationId" => @secret, version => "2026-07-28"}
+             }) == %{
+               "confirmation_id" => "[REDACTED]",
+               "_meta" => %{"cyfr/confirmationId" => "[REDACTED]", version => "2026-07-28"}
+             }
+
+      assert Prima.Sanitizer.sensitive_key?(:confirmation_id)
+    end
+
+    # Phoenix filters a parameter whose key contains a listed term, compared
+    # case-sensitively.
+    test "is reachable by Phoenix's substring match under either spelling" do
+      for key <- ["cyfr/confirmationId", "confirmation_id"] do
+        assert Enum.any?(Prima.Sanitizer.filter_parameters(), &String.contains?(key, &1)),
+               "#{key} must be reachable by Phoenix's substring match"
+      end
+    end
   end
 end

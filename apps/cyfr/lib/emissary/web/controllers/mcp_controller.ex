@@ -16,6 +16,10 @@ defmodule Emissary.Web.MCPController do
   controller
   runs.
 
+  A `tools/call` repeating a sensitive change carries the confirmation's
+  secret id in `params._meta["cyfr/confirmationId"]`; the call runs with it
+  as its context's `confirmation_id`, and no other method reads it.
+
   ## Response
 
   Two shapes:
@@ -105,7 +109,7 @@ defmodule Emissary.Web.MCPController do
     # dispatcher gate this method skips is where every other caller meets it.
     case params["method"] do
       "subscriptions/listen" -> listen(conn, ctx, params, request_id)
-      _ -> handle_message(conn, ctx, params, request_id, start_time)
+      _ -> handle_message(conn, confirming(ctx, conn, params), params, request_id, start_time)
     end
   rescue
     # An authorization refusal that raised in the request process itself
@@ -154,6 +158,20 @@ defmodule Emissary.Web.MCPController do
         "response stream, and there is no session to terminate."
     )
   end
+
+  # A `tools/call` that repeats a sensitive change names the confirmation it
+  # repeats under, which `Emissary.Web.Plugs.MCPRequestMetadata` read from
+  # `params._meta` and checked for its spelling. It rides this call's own
+  # context, as `PrismWeb.Ops` and the device channel carry it, where the
+  # deciding site consumes it (`Sanctum.Consent.Authz`). Every other method,
+  # and a call that names none, carries none.
+  defp confirming(context, %Plug.Conn{assigns: %{mcp_confirmation_id: id}}, %{
+         "method" => "tools/call"
+       })
+       when is_binary(id),
+       do: %{context | confirmation_id: id}
+
+  defp confirming(context, _conn, _params), do: %{context | confirmation_id: nil}
 
   defp handle_message(conn, context, params, request_id, start_time) do
     method = params["method"]

@@ -131,6 +131,17 @@ defmodule Sanctum.ContextTest do
     end
   end
 
+  describe "the confirmation secret" do
+    test "is left out of the context's inspection, so no crash report carries it" do
+      secret = "cnf_" <> String.duplicate("A", 43)
+      ctx = Context.build(user_id: "u1", athanor_id: "ath_1", confirmation_id: secret)
+
+      assert ctx.confirmation_id == secret
+      refute inspect(ctx) =~ secret
+      assert inspect(ctx) =~ "Sanctum.Context"
+    end
+  end
+
   describe "has_permission?/2" do
     test "returns true for any permission with the wildcard an admin key may hold" do
       ctx = Context.build(user_id: "usr_admin_key", permissions: [:*], authenticated: true)

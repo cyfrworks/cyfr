@@ -248,8 +248,8 @@ defmodule Cyfr.CrossLanguageDriftTest do
     end
 
     # A pending confirmation's payload is its id, operation and expiry; the
-    # CLI renders the id and sends the person to Prism to confirm, since the
-    # command line carries no confirmation.
+    # CLI names the record by the id's ref, never the id, and sends the
+    # person to Prism to confirm it before repeating the change.
     [confirmation_go] =
       Regex.run(~r/case "confirmation_required":(.*?)\n\t(?:case |\})/s, root_go,
         capture: :all_but_first
@@ -381,6 +381,7 @@ defmodule Cyfr.CrossLanguageDriftTest do
     client_go = read!("apps/codex/internal/mcp/client.go")
     types_go = read!("apps/codex/internal/mcp/types.go")
     go = client_go <> types_go
+    request_metadata = read!("apps/cyfr/lib/emissary/web/plugs/mcp_request_metadata.ex")
 
     # {literal, [sources that must carry it]} — a source is listed only
     # where it genuinely speaks that part of the vocabulary (the backends
@@ -391,6 +392,10 @@ defmodule Cyfr.CrossLanguageDriftTest do
       {"io.modelcontextprotocol/clientCapabilities", [protocol, fixture, go]},
       {"io.modelcontextprotocol/clientInfo", [protocol, go]},
       {"io.modelcontextprotocol/serverInfo", [protocol, go]},
+      # The key a repeated change carries its confirmation's secret under:
+      # spelled apart, the server would ignore it and every repeat would
+      # open a new record.
+      {"cyfr/confirmationId", [request_metadata, go]},
       {"=?base64?", [protocol, go]},
       {"-32020", [message, service]},
       {"-32022", [message, service]},

@@ -21,11 +21,32 @@ defmodule Emissary.Web.Plugs.MCPRequestMetadata do
   knowledge and also serves routes that do not speak MCP. Keeping the two apart
   is what stops a non-JSON-RPC endpoint from inheriting these rules along with
   its credential handling.
+
+  ## A confirmation's repeat
+
+  A `tools/call` repeats a sensitive change under
+  `params._meta["cyfr/confirmationId"]` (`confirmation_id_key/0`), whose value
+  is the secret id the `confirmation_required` signal answered. The secret
+  rides the request metadata because no request-log row records it; its key
+  is in the redaction vocabulary (`Prima.Sanitizer`), so no log line does
+  either. A present value that is not spelled as a secret, `cnf_` and 43
+  base64url characters, is refused `-32602` at `400` on any message, before
+  any handler runs, so a mistyped value never reads as no repeat and opens a
+  new record; the refusal never echoes the value. A well-spelled value is
+  assigned as `:mcp_confirmation_id`, which
+  `Emissary.Web.MCPController` carries into a `tools/call`'s context alone.
   """
 
   import Plug.Conn
 
   alias Prima.MCP.Protocol
+
+  @confirmation_id_key "cyfr/confirmationId"
+  @confirmation_id ~r/\Acnf_[A-Za-z0-9_-]{43}\z/
+
+  @doc "The request metadata key a `tools/call` repeats a sensitive change under."
+  @spec confirmation_id_key() :: String.t()
+  def confirmation_id_key, do: @confirmation_id_key
 
   def init(opts), do: opts
 
@@ -39,17 +60,53 @@ defmodule Emissary.Web.Plugs.MCPRequestMetadata do
       is_nil(body["id"]) ->
         # A notification, not a request. This revision defines no header
         # requirement for them, and a notification carries no id to answer an
-        # error on.
-        conn
+        # error on. A malformed confirmation is refused all the same.
+        check_confirmation_id(conn, body)
 
       true ->
         with %Plug.Conn{halted: false} = conn <- check_declared_version(conn, body),
              %Plug.Conn{halted: false} = conn <- check_client_capabilities(conn, body),
              %Plug.Conn{halted: false} = conn <- check_mirrored_headers(conn, body) do
-          conn
+          check_confirmation_id(conn, body)
         end
     end
   end
+
+  # The secret a repeat names, checked for its spelling alone: whether it
+  # names a record of this caller's is the deciding site's question
+  # (`Sanctum.Consent.Authz`). The value is never written into the refusal.
+  defp check_confirmation_id(conn, body) do
+    case confirmation_id(body) do
+      :none ->
+        conn
+
+      {:ok, id} when is_binary(id) ->
+        if Regex.match?(@confirmation_id, id),
+          do: assign(conn, :mcp_confirmation_id, id),
+          else: refuse_confirmation_id(conn)
+
+      {:ok, _not_a_string} ->
+        refuse_confirmation_id(conn)
+    end
+  end
+
+  defp confirmation_id(%{"params" => %{"_meta" => %{} = meta}}) do
+    case Map.fetch(meta, @confirmation_id_key) do
+      {:ok, value} -> {:ok, value}
+      :error -> :none
+    end
+  end
+
+  defp confirmation_id(_body), do: :none
+
+  defp refuse_confirmation_id(conn),
+    do:
+      reject(
+        conn,
+        :invalid_params,
+        "#{@confirmation_id_key} in params._meta must be the id a confirmation_required " <>
+          "answer carried: cnf_ and 43 base64url characters."
+      )
 
   # `clientCapabilities` is a required `_meta` field, and a missing required
   # field is `-32602`.

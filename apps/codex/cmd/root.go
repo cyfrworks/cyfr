@@ -4,13 +4,18 @@
 package cmd
 
 import (
+	"bufio"
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"strings"
+	"sync"
+	"time"
 
 	"github.com/cyfr/codex/internal/config"
+	"github.com/cyfr/codex/internal/confirmation"
 	"github.com/cyfr/codex/internal/mcp"
 	"github.com/cyfr/codex/internal/output"
 	"github.com/cyfr/codex/internal/prompt"
@@ -120,6 +125,15 @@ func newClient() *mcp.Client {
 	client := mcp.NewClient(url)
 	activeClient = client
 
+	// A change answered confirmation_required waits here and repeats, for
+	// every command alike.
+	client.Confirm = (&confirmationWait{
+		out:         os.Stderr,
+		interactive: confirmationTerminal,
+		lines:       confirmationInput,
+		now:         time.Now,
+	}).wait
+
 	// The credential authenticates every request; there is nothing to
 	// establish up front. Precedence: --token, then CYFR_TOKEN (the CI
 	// path — no config file to hand-write), then the stored context.
@@ -143,6 +157,11 @@ func newClient() *mcp.Client {
 // result so Execute prints it and main exits non-zero.
 // Pass an optional prefix string (e.g. "Register failed") for the fallback.
 func handleToolError(err error, prefix ...string) error {
+	// Leaving a wait for a fresh confirmation is the person's own Ctrl-C:
+	// Execute prints nothing for it and main exits 130.
+	if errors.Is(err, prompt.ErrAborted) {
+		return prompt.ErrAborted
+	}
 	// Capitalized, punctuated messages are deliberate here (staticcheck
 	// ST1005 would object): these errors ARE the CLI's user-facing output —
 	// Execute prints them verbatim as the command's final line.
@@ -204,22 +223,108 @@ func formatConsentError(tag string, payload map[string]any) string {
 		return fmt.Sprintf("Approved (consent rev %.0f) — re-run the command to continue.\n  The run that was in flight was stopped rather than re-bound mid-execution.", rev)
 
 	case "confirmation_required":
-		// Never a success: nothing was changed. The command line carries no
-		// confirmation, so the change is confirmed and completed in Prism.
+		// Never a success: nothing was changed. The payload's id is this
+		// request's secret: the CLI repeats the change under it and never
+		// shows it. The person confirms the record in Prism, which names it
+		// by its ref and names this key or client as the one asking.
 		operation, _ := payload["operation"].(string)
 		if operation == "" {
 			operation = "this change"
 		}
-		confirmation := ""
+		record := "it"
 		if id, _ := payload["id"].(string); id != "" {
-			confirmation = fmt.Sprintf(" (confirmation %s)", id)
+			record = confirmation.Ref(id)
 		}
 		expiry := ""
 		if expiresAt, _ := payload["expires_at"].(string); expiresAt != "" {
 			expiry = fmt.Sprintf(" before %s", expiresAt)
 		}
-		return fmt.Sprintf("Confirmation required: %s needs a fresh confirmation%s; nothing was changed.\n  Confirm and complete it in Prism%s.", operation, confirmation, expiry)
+		return fmt.Sprintf("Confirmation required: %s needs a fresh confirmation; nothing was changed.\n  Confirm %s in Prism%s, where this key or client is named as the one asking.", operation, record, expiry)
 	}
 
 	return ""
+}
+
+// The terminal a wait for a fresh confirmation talks to: whether there is
+// one to wait on (--no-interactive and CYFR_NO_INTERACTIVE say there is
+// not), and the lines read from it. Tests stand in for both.
+var (
+	confirmationTerminal = func() bool { return prompt.IsInteractive(flagNoInteractive) }
+	confirmationInput    = stdinLines
+)
+
+// stdinLines is the person's Enter presses on standard input, read by one
+// reader for the whole process: a read cannot be cancelled, so a second
+// reader would race the first for the next line. The channel closes at end
+// of input.
+var stdinLines = sync.OnceValue(func() <-chan string {
+	lines := make(chan string)
+	go func() {
+		defer close(lines)
+		scanner := bufio.NewScanner(os.Stdin)
+		for scanner.Scan() {
+			lines <- scanner.Text()
+		}
+	}()
+	return lines
+})
+
+// confirmationWait is how a command meets a change answered
+// confirmation_required (mcp.Client.Confirm). On a terminal it prints the
+// sentence, which names the record by its ref, and waits: each Enter repeats
+// the call once, a repeat answered with the same id waits again, and the
+// wait ends at the record's expiry. Off a terminal, or past the expiry, it
+// ends at once with the signal itself, which the command prints before
+// exiting 1: nothing was changed, and the id is dropped with the process.
+// Ctrl-C leaves it (exit 130).
+type confirmationWait struct {
+	out         io.Writer
+	interactive func() bool
+	lines       func() <-chan string
+	now         func() time.Time
+}
+
+func (w *confirmationWait) wait(ctx context.Context, pending *mcp.ConsentError, again bool) error {
+	expiresAt, expires := confirmationExpiry(pending.Payload)
+	if !w.interactive() || (expires && !w.now().Before(expiresAt)) {
+		return pending
+	}
+
+	if again {
+		id, _ := pending.Payload["id"].(string)
+		fmt.Fprintf(w.out, "Not confirmed yet: %s is still waiting in Prism.\n", confirmation.Ref(id))
+	} else {
+		fmt.Fprintln(w.out, formatConsentError(pending.Tag, pending.Payload))
+	}
+	fmt.Fprintln(w.out, "  Press Enter once confirmed, Ctrl-C to leave it.")
+
+	var expired <-chan time.Time
+	if expires {
+		timer := time.NewTimer(expiresAt.Sub(w.now()))
+		defer timer.Stop()
+		expired = timer.C
+	}
+
+	select {
+	case <-ctx.Done():
+		return prompt.ErrAborted
+	case <-expired:
+		return pending
+	case _, open := <-w.lines():
+		if !open {
+			return pending
+		}
+		return nil
+	}
+}
+
+// confirmationExpiry is when the pending confirmation expires, if its
+// payload says.
+func confirmationExpiry(payload map[string]any) (time.Time, bool) {
+	raw, _ := payload["expires_at"].(string)
+	expiresAt, err := time.Parse(time.RFC3339, raw)
+	if err != nil {
+		return time.Time{}, false
+	}
+	return expiresAt, true
 }

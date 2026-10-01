@@ -4,12 +4,14 @@
 package mcp
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
 )
 
@@ -249,16 +251,15 @@ func TestCallTool_AuthRequired(t *testing.T) {
 }
 
 // A sensitive change answers -33505: never a success, and the pending
-// confirmation's id survives to the command that renders it. The body is
-// the one the server writes, a JSON-RPC error at HTTP 400.
+// confirmation's secret id survives, in the payload alone, to the wait that
+// repeats under it. The body is the one the server writes, a JSON-RPC error
+// at HTTP 400, whose sentence names no id.
 func TestCallTool_ConfirmationRequired(t *testing.T) {
-	const id = "confirmation-7f3a"
+	const id = secretA
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusBadRequest)
-		io.WriteString(w, `{"jsonrpc":"2.0","id":1,"error":{"code":-33505,`+
-			`"message":"Confirmation required: vault/create needs a fresh confirmation — confirm it in Prism (confirmation `+id+`)",`+
-			`"data":{"tag":"confirmation_required","payload":{"id":"`+id+`","operation":"vault/create","expires_at":"2026-09-29T12:05:00Z"}}}}`)
+		io.WriteString(w, confirmationBody(id))
 	}))
 	defer srv.Close()
 
@@ -284,11 +285,11 @@ func TestCallTool_ConfirmationRequired(t *testing.T) {
 	if got, _ := ce.Payload["id"].(string); got != id {
 		t.Errorf("expected the confirmation id %q in the payload, got %q", id, got)
 	}
-	if got, _ := ce.Payload["operation"].(string); got != "vault/create" {
+	if got, _ := ce.Payload["operation"].(string); got != "vault.create" {
 		t.Errorf("expected the operation in the payload, got %q", got)
 	}
-	if !strings.Contains(err.Error(), id) {
-		t.Errorf("expected the server's sentence, which names the id, got %q", err.Error())
+	if strings.Contains(err.Error(), id) {
+		t.Errorf("the error's text is the server's sentence, which names no id, got %q", err.Error())
 	}
 }
 
@@ -561,4 +562,287 @@ func TestRequestHeaders(t *testing.T) {
 	c := NewClient(srv.URL)
 	c.SessionID = "my-session"
 	_, _ = c.ListTools(t.Context())
+}
+
+// ---------------------------------------------------------------------------
+// The repeat of a change that waits for a fresh confirmation
+// ---------------------------------------------------------------------------
+
+// Two secrets, spelled as the home spells one: cnf_ and 43 base64url
+// characters.
+const (
+	secretA = "cnf_AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8"
+	secretB = "cnf_HyAhIiMkJSYnKCkqKywtLi8wMTIzNDU2Nzg5Ojs8PT4"
+)
+
+// confirmationBody is the server's -33505 for a change waiting on the
+// confirmation whose secret is id: the sentence names no id, the payload
+// carries it.
+func confirmationBody(id string) string {
+	return `{"jsonrpc":"2.0","id":1,"error":{"code":-33505,` +
+		`"message":"Confirmation required: vault.create needs a fresh confirmation; nothing was changed.",` +
+		`"data":{"tag":"confirmation_required","payload":{"id":"` + id +
+		`","operation":"vault.create","expires_at":"2099-01-01T00:00:00Z"}}}}`
+}
+
+// scriptedServer answers each tools/call with the next of its answers (a
+// confirmation secret answers -33505 naming it, "auth" an auth refusal,
+// anything else a tool result) and records each request's params.
+type scriptedServer struct {
+	*httptest.Server
+	mu       sync.Mutex
+	answers  []string
+	requests []map[string]any
+}
+
+func newScriptedServer(t *testing.T, answers ...string) *scriptedServer {
+	t.Helper()
+	s := &scriptedServer{answers: answers}
+	s.Server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		var req struct {
+			Params map[string]any `json:"params"`
+		}
+		if err := json.Unmarshal(body, &req); err != nil {
+			t.Errorf("unreadable request: %v", err)
+		}
+
+		s.mu.Lock()
+		s.requests = append(s.requests, req.Params)
+		answer := "ok"
+		if n := len(s.requests); n <= len(s.answers) {
+			answer = s.answers[n-1]
+		}
+		s.mu.Unlock()
+
+		w.Header().Set("Content-Type", "application/json")
+		switch {
+		case strings.HasPrefix(answer, "cnf_"):
+			w.WriteHeader(http.StatusBadRequest)
+			io.WriteString(w, confirmationBody(answer))
+		case answer == "auth":
+			w.WriteHeader(http.StatusUnauthorized)
+			io.WriteString(w, `{"jsonrpc":"2.0","id":1,"error":{"code":-33001,"message":"Not signed in"}}`)
+		default:
+			io.WriteString(w, `{"jsonrpc":"2.0","id":1,"result":{"content":[{"type":"text","text":"{\"entry\":\"created\"}"}]}}`)
+		}
+	}))
+	t.Cleanup(s.Close)
+	return s
+}
+
+// sent is the confirmation id each request carried in its _meta, "" for
+// none. Every request must be the first one's call: the same tool and the
+// same arguments.
+func (s *scriptedServer) sent(t *testing.T) []string {
+	t.Helper()
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	ids := make([]string, len(s.requests))
+	first, _ := json.Marshal(s.requests[0]["arguments"])
+	for i, params := range s.requests {
+		meta, _ := params["_meta"].(map[string]any)
+		ids[i], _ = meta[ConfirmationIDKey].(string)
+		if args, _ := json.Marshal(params["arguments"]); string(args) != string(first) {
+			t.Errorf("request %d repeated other arguments: %s, not %s", i, args, first)
+		}
+		if name, _ := params["name"].(string); name != "vault" {
+			t.Errorf("request %d called %q, not the same tool", i, name)
+		}
+	}
+	return ids
+}
+
+// confirmer records what the wait was asked and answers from its script: nil
+// repeats, an error ends the wait.
+type confirmer struct {
+	asked   []string
+	answers []error
+}
+
+func (c *confirmer) confirm(_ context.Context, pending *ConsentError, again bool) error {
+	id, _ := pending.Payload["id"].(string)
+	label := id
+	if again {
+		label = "again:" + id
+	}
+	c.asked = append(c.asked, label)
+	if len(c.answers) == 0 {
+		return nil
+	}
+	answer := c.answers[0]
+	c.answers = c.answers[1:]
+	return answer
+}
+
+func equal(a, b []string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
+}
+
+// Once the person confirmed, the same call is sent again under the signal's
+// id, in _meta and never in the arguments, and completes.
+func TestCallTool_RepeatsTheSameCallUnderTheIdInMeta(t *testing.T) {
+	srv := newScriptedServer(t, secretA, "ok")
+	waited := &confirmer{}
+	c := NewClient(srv.URL)
+	c.Confirm = waited.confirm
+
+	result, err := c.CallTool(t.Context(), "vault", map[string]any{"action": "create", "name": "prod"})
+	if err != nil {
+		t.Fatalf("the confirmed repeat failed: %v", err)
+	}
+	if result["entry"] != "created" {
+		t.Errorf("expected the repeat's result, got %v", result)
+	}
+
+	if got := srv.sent(t); !equal(got, []string{"", secretA}) {
+		t.Errorf("the first call carries no id and the repeat its id, got %q", got)
+	}
+	if !equal(waited.asked, []string{secretA}) {
+		t.Errorf("the wait was asked %q", waited.asked)
+	}
+
+	srv.mu.Lock()
+	defer srv.mu.Unlock()
+	if args, _ := json.Marshal(srv.requests[1]["arguments"]); strings.Contains(string(args), secretA) {
+		t.Errorf("the id rode the arguments: %s", args)
+	}
+}
+
+// A repeat answered with the same id came before the proof: the record is
+// still waiting, so the wait is asked again, and the next repeat completes.
+func TestCallTool_TheSameIdIsStillWaiting(t *testing.T) {
+	srv := newScriptedServer(t, secretA, secretA, "ok")
+	waited := &confirmer{}
+	c := NewClient(srv.URL)
+	c.Confirm = waited.confirm
+
+	if _, err := c.CallTool(t.Context(), "vault", map[string]any{"action": "create"}); err != nil {
+		t.Fatalf("the confirmed repeat failed: %v", err)
+	}
+	if got := srv.sent(t); !equal(got, []string{"", secretA, secretA}) {
+		t.Errorf("each repeat carries the one id, got %q", got)
+	}
+	if !equal(waited.asked, []string{secretA, "again:" + secretA}) {
+		t.Errorf("the wait was asked %q", waited.asked)
+	}
+}
+
+// Any other answer ends the wait as that answer: a new id is a new record,
+// which this wait never confirmed, and is not repeated.
+func TestCallTool_AnotherAnswerEndsTheWait(t *testing.T) {
+	for name, tc := range map[string]struct {
+		answers []string
+		check   func(t *testing.T, err error)
+	}{
+		"a new id": {
+			answers: []string{secretA, secretB},
+			check: func(t *testing.T, err error) {
+				pending, id := pendingConfirmation(err)
+				if pending == nil || id != secretB {
+					t.Errorf("expected the new record's answer, got %v", err)
+				}
+			},
+		},
+		"an auth refusal": {
+			answers: []string{secretA, "auth"},
+			check: func(t *testing.T, err error) {
+				if !errors.Is(err, ErrAuthRequired) {
+					t.Errorf("expected the refusal itself, got %v", err)
+				}
+			},
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			srv := newScriptedServer(t, tc.answers...)
+			waited := &confirmer{}
+			c := NewClient(srv.URL)
+			c.Confirm = waited.confirm
+
+			_, err := c.CallTool(t.Context(), "vault", map[string]any{"action": "create"})
+			tc.check(t, err)
+			if got := srv.sent(t); !equal(got, []string{"", secretA}) {
+				t.Errorf("one repeat, then the answer: got %q", got)
+			}
+			if len(waited.asked) != 1 {
+				t.Errorf("the wait was asked %q", waited.asked)
+			}
+		})
+	}
+}
+
+// A wait that ends repeats nothing: the call answers the wait's own error.
+func TestCallTool_AWaitThatEndsRepeatsNothing(t *testing.T) {
+	srv := newScriptedServer(t, secretA)
+	left := errors.New("left it")
+	c := NewClient(srv.URL)
+	c.Confirm = (&confirmer{answers: []error{left}}).confirm
+
+	if _, err := c.CallTool(t.Context(), "vault", map[string]any{"action": "create"}); !errors.Is(err, left) {
+		t.Fatalf("expected the wait's error, got %v", err)
+	}
+	if got := srv.sent(t); !equal(got, []string{""}) {
+		t.Errorf("nothing is repeated, got %q", got)
+	}
+}
+
+// Without a wait, or without an id to repeat under, the signal is the
+// call's answer and nothing is sent again.
+func TestCallTool_NoWaitOrNoIdRepeatsNothing(t *testing.T) {
+	t.Run("no wait installed", func(t *testing.T) {
+		srv := newScriptedServer(t, secretA)
+		_, err := NewClient(srv.URL).CallTool(t.Context(), "vault", map[string]any{"action": "create"})
+		if pending, _ := pendingConfirmation(err); pending == nil {
+			t.Errorf("expected the signal, got %v", err)
+		}
+		if got := srv.sent(t); len(got) != 1 {
+			t.Errorf("one request, got %d", len(got))
+		}
+	})
+
+	t.Run("data stripped", func(t *testing.T) {
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.WriteHeader(http.StatusBadRequest)
+			io.WriteString(w, `{"jsonrpc":"2.0","id":1,"error":{"code":-33505,"message":"Confirmation required"}}`)
+		}))
+		defer srv.Close()
+
+		waited := &confirmer{}
+		c := NewClient(srv.URL)
+		c.Confirm = waited.confirm
+		_, err := c.CallTool(t.Context(), "vault", map[string]any{"action": "create"})
+
+		var ce *ConsentError
+		if !errors.As(err, &ce) || ce.Tag != "confirmation_required" {
+			t.Errorf("expected the signal, got %v", err)
+		}
+		if len(waited.asked) != 0 {
+			t.Errorf("no id to repeat under, yet the wait was asked %q", waited.asked)
+		}
+	})
+}
+
+// Only a repeat names a confirmation: discovery and listing carry none.
+func TestWithMeta_CarriesAConfirmationIdOnlyWhenGiven(t *testing.T) {
+	meta := withMeta(map[string]any{}, "", "")["_meta"].(map[string]any)
+	if _, ok := meta[ConfirmationIDKey]; ok {
+		t.Errorf("a request with no confirmation carries the key: %v", meta)
+	}
+
+	meta = withMeta(map[string]any{}, "", secretA)["_meta"].(map[string]any)
+	if meta[ConfirmationIDKey] != secretA {
+		t.Errorf("a repeat carries its id under %s: %v", ConfirmationIDKey, meta)
+	}
+	if meta["io.modelcontextprotocol/protocolVersion"] != protocolVersion {
+		t.Errorf("a repeat still declares its version: %v", meta)
+	}
 }
