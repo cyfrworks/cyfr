@@ -29,8 +29,12 @@ defmodule Sanctum.Providers.Confirmation do
       the home stored, so another of their devices shows the home's record
       rather than the asking client's word; with the asker, a name for the
       client that asked, so the person tells their own request from
-      another's; and with the WebAuthn request options a passkey proves
-      each with.
+      another's; with the WebAuthn request options a passkey proves each
+      with; and with `methods`, the proofs this person can give here, from
+      `passkey` (a passkey of theirs is registered at this home), `oidc`
+      (a fresh sign-in at the identity provider of their linked door) and
+      `email` (a code can reach their verified email). A client offers only
+      those it can carry out.
     * `cancel` ends one.
 
   Every action is the person's own, on the external plane, through an
@@ -40,11 +44,11 @@ defmodule Sanctum.Providers.Confirmation do
   The stream `confirmation.changes` rides the bus's `confirmations` topic
   (`Cyfr.Bus.confirmations/2`), bound to its holder, the context's own
   person: a client of theirs hears each record of theirs opened,
-  confirmed, consumed, cancelled, voided or expired, as its `ref`, its
-  `operation` and its `expires_at`, never the secret, the arguments or the
-  preview, which it reads through `pending` under its own session. The
-  asking client knows its own record's events by the `ref` of the secret
-  it holds.
+  confirmed, consumed, cancelled, voided or expired, as its `ref`, what
+  happened to it (`kind`), its `operation` and its `expires_at`, never the
+  secret, the arguments or the preview, which it reads through `pending`
+  under its own session. The asking client knows its own record's events
+  by the `ref` of the secret it holds.
   """
 
   alias Prima.{Arg, Operation}
@@ -125,7 +129,7 @@ defmodule Sanctum.Providers.Confirmation do
       %Prima.Provider.Stream{
         name: "confirmation.changes",
         topic: :confirmations,
-        projection: ["ref", "operation", "expires_at"],
+        projection: ["ref", "kind", "operation", "expires_at"],
         subject: ~S"\Ausr_[A-Za-z0-9_-]{1,128}\z",
         bind: :holder,
         deadline_bound: 86_400
@@ -161,7 +165,8 @@ defmodule Sanctum.Providers.Confirmation do
     with {:ok, user_id} <- person(ctx),
          {:ok, rows} <- open(ctx, user_id),
          {:ok, credentials} <- credentials(ctx, user_id) do
-      {:ok, %{confirmations: Enum.map(rows, &pending(&1, credentials))}}
+      methods = methods(user_id, credentials)
+      {:ok, %{confirmations: Enum.map(rows, &pending(&1, credentials, methods))}}
     else
       {:error, reason} -> {:error, refusal(reason)}
     end
@@ -229,6 +234,20 @@ defmodule Sanctum.Providers.Confirmation do
     end
   end
 
+  # The proofs this person can give here, the same for each of their
+  # records: a passkey registered at this home, a fresh sign-in at their
+  # linked door's identity provider, a code their verified email can
+  # receive.
+  defp methods(user_id, credentials) do
+    [
+      {"passkey", credentials != []},
+      {"oidc", OIDC.reauth_available?(user_id)},
+      {"email", EmailVerification.code_available?(user_id)}
+    ]
+    |> Enum.filter(fn {_method, available} -> available end)
+    |> Enum.map(fn {method, _available} -> method end)
+  end
+
   # The record `ref` names, in the context's athanor, of the context's own
   # person: a ref of another person, another athanor or none is not found.
   defp own(actor, ref, user_id) do
@@ -241,10 +260,10 @@ defmodule Sanctum.Providers.Confirmation do
   end
 
   # An open record as a client of its person reads it: its ref, what it
-  # would change, as the home stored it, which client asked, and how a
-  # passkey proves it — the challenge is the raw bytes of the record's
-  # digest.
-  defp pending(row, credentials) do
+  # would change, as the home stored it, which client asked, which proofs
+  # the person can give, and how a passkey proves it — the challenge is the
+  # raw bytes of the record's digest.
+  defp pending(row, credentials, methods) do
     "sha256:" <> hex = row.digest
 
     %{
@@ -255,6 +274,7 @@ defmodule Sanctum.Providers.Confirmation do
       asker: Jason.decode!(row.asker),
       state: row.state,
       expires_at: row.expires_at,
+      methods: methods,
       webauthn: %{
         "challenge" => Prima.Identity.Encoding.b64(Base.decode16!(hex, case: :lower)),
         "rpId" => row.rp_id,

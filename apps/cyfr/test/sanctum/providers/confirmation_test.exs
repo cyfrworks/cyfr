@@ -16,9 +16,10 @@ defmodule Sanctum.Providers.ConfirmationTest do
   repeats a change, and no tool takes the secret as an argument, so no
   request-log row, decision or log line keeps it. A plain OAuth sign-in is
   no proof. A code is bound to its record, used once, and five wrong ones
-  cancel the record. The stream `confirmation.changes` is declared beside
-  the operations, projecting the ref. No secret, code or assertion reaches
-  a log.
+  cancel the record. `pending` names the proofs the person can give
+  (`methods`). The stream `confirmation.changes` is declared beside the
+  operations, projecting the ref and what happened to the record. No
+  secret, code or assertion reaches a log.
   """
 
   use ExUnit.Case, async: false
@@ -79,6 +80,9 @@ defmodule Sanctum.Providers.ConfirmationTest do
 
   defp ref(id), do: Prima.Confirmation.ref(id)
 
+  defp restore(app, key, nil), do: Application.delete_env(app, key)
+  defp restore(app, key, value), do: Application.put_env(app, key, value)
+
   # A credential entry asked for through the gate, as a page asks for it.
   defp entry(name, secret \\ "sk-confirmation-secret"),
     do: %{"name" => name, "kind" => "api_key", "fields" => %{"KEY" => secret}}
@@ -111,12 +115,33 @@ defmodule Sanctum.Providers.ConfirmationTest do
   # The stream
   # ---------------------------------------------------------------------------
 
-  test "the stream is declared beside the operations, bound to its holder, projecting the ref and no preview" do
+  test "the stream is declared beside the operations, bound to its holder, projecting the ref, its kind and no preview" do
     assert {:ok, stream} = Prima.Provider.fetch_stream(Grimoire.streams(), "confirmation.changes")
     assert stream.topic == :confirmations
-    assert stream.projection == ["ref", "operation", "expires_at"]
+    assert stream.projection == ["ref", "kind", "operation", "expires_at"]
     assert stream.bind == :holder
     assert Cyfr.Bus.grantable?(stream.topic, true)
+  end
+
+  test "a fact of the stream says what happened to the record, and carries nothing else", %{
+    session_ctx: session_ctx
+  } do
+    {:ok, stream} = Prima.Provider.fetch_stream(Grimoire.streams(), "confirmation.changes")
+    {:ok, grant} = Grimoire.open_stream(session_ctx, "confirmation.changes")
+    actor = Context.actor(session_ctx)
+    :ok = Cyfr.Bus.subscribe(actor, Cyfr.Bus.granted_topic(actor, grant))
+
+    id = asked!(session_ctx)
+    {:ok, %{state: "cancelled"}} = call(session_ctx, "cancel", %{"ref" => ref(id)})
+
+    for kind <- [:opened, :cancelled] do
+      assert_receive %Cyfr.Bus.Confirmation{kind: ^kind} = fact, 2_000
+      projected = Prima.StreamGrant.project(grant, Map.from_struct(fact))
+      assert Map.keys(projected) |> Enum.sort() == Enum.sort(stream.projection)
+      assert projected["ref"] == ref(id)
+      assert projected["kind"] == kind
+      refute inspect(projected) =~ id
+    end
   end
 
   test "confirm, reauth and cancel take the ref alone: the secret is never an argument" do
@@ -280,6 +305,67 @@ defmodule Sanctum.Providers.ConfirmationTest do
 
       "sha256:" <> hex = row!(session_ctx, id).digest
       assert Encoding.b64(Base.decode16!(hex, case: :lower)) == webauthn["challenge"]
+
+      # The proofs this person can give: their passkey here and a code to
+      # their verified email; no identity provider signs them in here.
+      assert record.methods == ["passkey", "email"]
+    end
+
+    test "pending names only the proofs the person can give", %{session_ctx: session_ctx} do
+      # No passkey yet: the emailed code alone.
+      id = asked!(session_ctx)
+      assert pending!(session_ctx, id).methods == ["email"]
+
+      # No transport for the code: nothing this home can carry out.
+      transport = Application.get_env(:sanctum, :confirmation_code_transport)
+      Application.delete_env(:sanctum, :confirmation_code_transport)
+      on_exit(fn -> Application.put_env(:sanctum, :confirmation_code_transport, transport) end)
+      assert pending!(session_ctx, id).methods == []
+      Application.put_env(:sanctum, :confirmation_code_transport, transport)
+
+      # A person with no verified email is offered no code.
+      %{session_ctx: unverified} = seated!(verified: false)
+      other = asked!(unverified)
+      assert pending!(unverified, other).methods == []
+    end
+
+    test "pending offers a fresh sign-in to a person whose door is this home's identity provider" do
+      issuer = "https://issuer.confirmation.example"
+
+      previous =
+        {Application.get_env(:sanctum, :oidc_issuer), Application.get_env(:ueberauth, Ueberauth)}
+
+      Application.put_env(:sanctum, :oidc_issuer, issuer)
+
+      Application.put_env(:ueberauth, Ueberauth,
+        providers: [
+          oidcc:
+            {Ueberauth.Strategy.Oidcc,
+             issuer: :cyfr_oidc, client_id: "cid", client_secret: "csec"}
+        ]
+      )
+
+      on_exit(fn ->
+        {oidc, ueberauth} = previous
+        restore(:sanctum, :oidc_issuer, oidc)
+        restore(:ueberauth, Ueberauth, ueberauth)
+      end)
+
+      n = System.unique_integer([:positive])
+
+      {:ok, user} =
+        Users.upsert_from_provider(%{
+          id: Sanctum.Auth.Identity.key(:oidcc, issuer, "sub-#{n}"),
+          provider: "oidcc",
+          email: "confirmation-oidc#{n}@example.com",
+          verified: true
+        })
+
+      {:ok, athanor} = Athanors.create_group(user.id, "Confirmation oidc #{n}")
+      ctx = session_ctx(user, athanor)
+      id = asked!(ctx)
+
+      assert pending!(ctx, id).methods == ["oidc", "email"]
     end
 
     test "two identical requests open two records, each listed with its own ref",

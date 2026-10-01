@@ -19,6 +19,14 @@ defmodule Emissary.Web.DeviceChannelTest do
   seconds, reads the standing again at each ping, and closes when its
   certificate expires unrenewed.
 
+  A client's intent `streams.open` is admitted by the gate's stream entry
+  and answered with its grant; each fact of the granted topic is an
+  `event`, and a stream ends with `revoke` naming its grant at its
+  deadline, on overflow, and when the client's standing ends, which also
+  revokes the client's pairing and closes the channel `4403`; a
+  certificate that expires ends its streams and closes `4408`. A glass
+  that slept past its certificate renews before any intent is admitted.
+
   A refused connection is one decision, counted by the connection's
   request id, under the call id the channel assigned the refused message,
   with its refusal class, no request-log row of the transport's, and the
@@ -692,6 +700,409 @@ defmodule Emissary.Web.DeviceChannelTest do
   # Refusals: 4401, a connection that has not proven its key
   # ==========================================================================
 
+  # ==========================================================================
+  # Streams
+  # ==========================================================================
+
+  describe "streams" do
+    setup [:seated]
+
+    test "streams.open is admitted by the gate's stream entry, answered with its grant, and each fact is an event",
+         %{session_ctx: session_ctx, user: user} do
+      device = pair!(session_ctx)
+      state = proven(device)
+
+      {grant_id, grant, state} = open_stream!(state, "s1")
+
+      assert grant.stream == "confirmation.changes"
+      assert grant.subject == user.id
+      assert grant.projection == ["ref", "kind", "operation", "expires_at"]
+      # Never later than the certificate it was opened under.
+      assert grant.expires_at <= device.cert.expires_at
+
+      # The gate recorded the open, as a stream's.
+      assert Enum.any?(
+               decisions_of(state.ctx.request_id),
+               &(&1.tool == "stream:confirmation.changes" and &1.admission == "admitted")
+             )
+
+      # A record of the person's opens: its fact arrives as an event under
+      # the grant, projected, and never carries the secret.
+      assert {:error, {:confirmation_required, %{id: id}}} =
+               Sanctum.Pairing.begin(session_ctx, %{})
+
+      {payload, state} = event!(state, grant_id)
+      assert payload["ref"] == Prima.Confirmation.ref(id)
+      assert payload["kind"] == "opened"
+      assert payload["operation"] == "pairing.begin"
+      assert Map.keys(payload) |> Enum.sort() == ["expires_at", "kind", "operation", "ref"]
+      refute inspect(payload) =~ id
+      refute state.closed
+    end
+
+    test "the glass reads the preview and the asker, and confirms another client's request by its ref",
+         %{session_ctx: session_ctx, user: user} do
+      authenticator = Sanctum.TestContext.passkey!(user.id)
+      device = pair!(session_ctx)
+      state = proven(device)
+
+      assert {:error, {:confirmation_required, %{id: id}}} =
+               Sanctum.Pairing.begin(session_ctx, %{})
+
+      ref = Prima.Confirmation.ref(id)
+
+      {%{"confirmations" => entries}, state} =
+        answer!(state, intent_message("p1", "confirmation.pending", %{}))
+
+      entry = Enum.find(entries, &(&1["ref"] == ref))
+      assert entry["preview"]["operation"] == "pairing.begin"
+      assert entry["asker"]["kind"] == "session"
+      assert "passkey" in entry["methods"]
+      refute inspect(entries) =~ id
+
+      {:ok, digest} = Prima.Identity.Encoding.unb64(entry["webauthn"]["challenge"], 32)
+      assertion = Sanctum.TestContext.Authenticator.assertion(authenticator, digest)
+
+      {confirmed, _state} =
+        answer!(
+          state,
+          intent_message("p2", "confirmation.confirm", %{"ref" => ref, "assertion" => assertion})
+        )
+
+      assert confirmed["state"] == "confirmed"
+
+      # Only the session that asked repeats it, under its secret.
+      assert {:ok, _invitation} =
+               Sanctum.Pairing.begin(%{session_ctx | confirmation_id: id}, %{})
+    end
+
+    test "a refused open is answered with its error, and the channel stays open", %{
+      session_ctx: session_ctx
+    } do
+      state = proven(pair!(session_ctx))
+
+      {error, state} =
+        answer_error!(
+          state,
+          intent_message("s1", "streams.open", %{"stream" => "nobody.declares"})
+        )
+
+      assert error["class"] == "not_found"
+      refute state.closed
+      assert state.grants == %{}
+
+      # Arguments that name no stream are refused here, recorded once.
+      {error, state} =
+        answer_error!(state, intent_message("s2", "streams.open", %{"stream" => 7}))
+
+      assert error["class"] == "invalid_argument"
+
+      {error, state} =
+        answer_error!(
+          state,
+          intent_message("s3", "streams.open", %{"stream" => "confirmation.changes", "extra" => 1})
+        )
+
+      assert error["class"] == "invalid_argument"
+      refute state.closed
+
+      refused = Enum.filter(decisions_of(state.ctx.request_id), &(&1.admission == "refused"))
+      assert length(refused) == 3
+    end
+
+    test "a connection holds at most 16 grants", %{session_ctx: session_ctx} do
+      state = proven(pair!(session_ctx))
+
+      state =
+        Enum.reduce(1..16, state, fn n, state ->
+          {_grant_id, _grant, state} = open_stream!(state, "s#{n}")
+          state
+        end)
+
+      {error, state} =
+        answer_error!(
+          state,
+          intent_message("s17", "streams.open", %{"stream" => "confirmation.changes"})
+        )
+
+      assert error["class"] == "rate_limited"
+      assert map_size(state.grants) == 16
+    end
+
+    test "a stream ends with revoke at its deadline, and the channel stays", %{
+      session_ctx: session_ctx
+    } do
+      device = pair!(session_ctx)
+      state = proven(device)
+      {grant_id, _grant, state} = open_stream!(state, "s1")
+      %{timer: {token, _timer}, forwarder: forwarder} = state.grants[grant_id]
+      monitor = Process.monitor(forwarder)
+
+      assert {:push, [{:text, json}], state} =
+               DeviceChannel.handle_info({DeviceChannel, {:grant, grant_id}, token}, state)
+
+      assert {:ok, {:revoke, %{client_id: client_id, grant_id: ^grant_id}}} =
+               Device.decode(Jason.decode!(json), :home)
+
+      assert client_id == device.client_id
+      assert state.grants == %{}
+      refute state.closed
+      assert_receive {:DOWN, ^monitor, :process, ^forwarder, _reason}, 2_000
+
+      # Nothing of that stream is delivered after its end.
+      {:ok, _} = Sanctum.TestContext.confirming(session_ctx, &Sanctum.Pairing.begin(&1, %{}))
+      refute_receive {DeviceChannel, :fact, ^grant_id, _message}, 100
+    end
+
+    test "on overflow every stream ends with revoke, rather than a fact dropped", %{
+      session_ctx: session_ctx
+    } do
+      state = proven(pair!(session_ctx))
+      {first, _grant, state} = open_stream!(state, "s1")
+      {second, _grant, state} = open_stream!(state, "s2")
+
+      {:error, {:confirmation_required, _}} = Sanctum.Pairing.begin(session_ctx, %{})
+      assert_receive {DeviceChannel, :fact, ^first, message}, 2_000
+
+      # A channel that has fallen this far behind.
+      for n <- 1..1_001, do: send(self(), {:backlog, n})
+
+      assert {:push, frames, state} =
+               DeviceChannel.handle_info({DeviceChannel, :fact, first, message}, state)
+
+      flush_backlog()
+
+      revoked =
+        for {:text, json} <- frames do
+          {:ok, {:revoke, %{grant_id: grant_id}}} = Device.decode(Jason.decode!(json), :home)
+          grant_id
+        end
+
+      assert Enum.sort(revoked) == Enum.sort([first, second])
+      assert state.grants == %{}
+      refute state.closed
+    end
+
+    test "a fact the store cannot vouch for ends its stream with revoke, never dropped unannounced",
+         %{session_ctx: session_ctx} do
+      bound = Application.get_env(:sanctum, :caller_memo_ttl_ms)
+      Application.put_env(:sanctum, :caller_memo_ttl_ms, 0)
+      on_exit(fn -> restore_env(:sanctum, :caller_memo_ttl_ms, bound) end)
+
+      state = proven(pair!(session_ctx))
+      {grant_id, _grant, state} = open_stream!(state, "s1")
+
+      {:error, {:confirmation_required, _}} = Sanctum.Pairing.begin(session_ctx, %{})
+      assert_receive {DeviceChannel, :fact, ^grant_id, message}, 2_000
+
+      # The client's row cannot be read now.
+      Arca.Repo.query!("ALTER TABLE paired_clients RENAME TO paired_clients_unavailable")
+
+      assert {:push, [{:text, json}], state} =
+               DeviceChannel.handle_info({DeviceChannel, :fact, grant_id, message}, state)
+
+      assert {:revoke, %{grant_id: ^grant_id}} = decoded(json)
+      assert state.grants == %{}
+      refute state.closed
+    end
+
+    test "an admitted open whose forwarder cannot start is answered and its grant revoked; the channel stays",
+         %{session_ctx: session_ctx} do
+      state = proven(pair!(session_ctx))
+
+      # The supervisor forwarders start under is gone for the moment.
+      [{id, _pid, _type, _modules}] =
+        Enum.filter(
+          Supervisor.which_children(Cyfr.WebSupervisor),
+          fn {_id, pid, _type, _modules} ->
+            pid == Process.whereis(Emissary.Web.TaskSupervisor)
+          end
+        )
+
+      :ok = Supervisor.terminate_child(Cyfr.WebSupervisor, id)
+      on_exit(fn -> Supervisor.restart_child(Cyfr.WebSupervisor, id) end)
+
+      assert {:push, [{:text, answer}, {:text, revoke}], state} =
+               send_frame(
+                 state,
+                 intent_message("s1", "streams.open", %{"stream" => "confirmation.changes"})
+               )
+
+      {:ok, _} = Supervisor.restart_child(Cyfr.WebSupervisor, id)
+
+      assert {:answer, %{id: "s1", error: %{"class" => "unavailable"}}} = decoded(answer)
+      assert {:revoke, %{grant_id: grant_id}} = decoded(revoke)
+      assert "sgr_" <> _ = grant_id
+      assert state.grants == %{}
+      refute state.closed
+
+      # The channel goes on: the next open is granted.
+      {_grant_id, _grant, _state} = open_stream!(state, "s2")
+    end
+
+    test "a revoked client's streams are revoked, then its pairing, then the channel closes 4403",
+         %{session_ctx: session_ctx} do
+      device = pair!(session_ctx)
+      state = proven(device)
+      {grant_id, _grant, state} = open_stream!(state, "s1")
+      {token, _timer} = state.keepalive
+
+      {:ok, _row} =
+        Sanctum.TestContext.confirming(session_ctx, &Sanctum.Pairing.revoke(&1, device.client_id))
+
+      assert {:stop, :normal, {4403, "forbidden"}, frames, state} =
+               DeviceChannel.handle_info({DeviceChannel, :keepalive, token}, state)
+
+      assert [
+               {:revoke, %{client_id: client_id, grant_id: ^grant_id}},
+               {:revoke, pairing}
+             ] = Enum.map(frames, fn {:text, json} -> decoded(json) end)
+
+      assert client_id == device.client_id
+      assert pairing == %{client_id: device.client_id}
+      assert state.closed
+      assert state.grants == %{}
+
+      assert [_one] =
+               Enum.filter(decisions_of(state.ctx.request_id), &(&1.admission == "refused"))
+    end
+
+    test "a standing change heard on the bus ends the streams at once, not at the next ping", %{
+      session_ctx: session_ctx,
+      user: user,
+      athanor: athanor
+    } do
+      state = proven(pair!(session_ctx))
+      {grant_id, _grant, state} = open_stream!(state, "s1")
+
+      # A second member keeps the group open while the person leaves.
+      other = seated(%{})
+      {:ok, _} = Members.ensure(other.user.id, scope: "athanor", athanor_id: athanor.id)
+      :ok = Members.remove_member(athanor, user_id: user.id)
+
+      assert_receive %Cyfr.Bus.Membership{} = announcement, 2_000
+
+      assert {:stop, :normal, {4403, "forbidden"}, frames, _state} =
+               DeviceChannel.handle_info(announcement, state)
+
+      assert [{:revoke, %{grant_id: ^grant_id}}, {:revoke, _pairing}] =
+               Enum.map(frames, fn {:text, json} -> decoded(json) end)
+    end
+
+    test "a certificate expiring ends its streams with revoke, then closes 4408", %{
+      session_ctx: session_ctx
+    } do
+      Sanctum.Test.Settings.put("device_cert_seconds", 1)
+      device = pair!(session_ctx)
+      state = proven(device)
+      {grant_id, grant, state} = open_stream!(state, "s1")
+      {token, _timer} = state.expiry
+
+      # The grant ends no later than the certificate.
+      assert grant.expires_at <= device.cert.expires_at
+      past_expiry(device.cert)
+
+      assert {:stop, :normal, {4408, "unauthenticated"}, frames, state} =
+               DeviceChannel.handle_info({DeviceChannel, :expiry, token}, state)
+
+      assert [{:revoke, %{grant_id: ^grant_id}}] =
+               Enum.map(frames, fn {:text, json} -> decoded(json) end)
+
+      assert state.closed
+    end
+
+    test "after sleeping past its certificate the glass renews before any intent, and opens its streams again",
+         %{session_ctx: session_ctx} do
+      Sanctum.Test.Settings.put("device_cert_seconds", 1)
+      device = pair!(session_ctx)
+      past_expiry(device.cert)
+      Sanctum.Test.Settings.put("device_cert_seconds", 3600)
+
+      # Woken on a new connection: an intent before the renewal is refused,
+      # and nothing is dispatched.
+      {state, _challenge} = connected(device)
+
+      assert_refused_answering(
+        send_frame(
+          state,
+          intent_message("i0", "streams.open", %{"stream" => "confirmation.changes"})
+        )
+      )
+
+      # Its expired certificate proves nothing either.
+      {state, challenge} = connected(device)
+      assert_refused(send_frame(state, proof_message(challenge, device)), 4408)
+
+      # The renewal exchange: the stored key proves, the replacement
+      # verifies, and only then is a stream opened.
+      {state, challenge} = renewing(device)
+
+      assert {:push, [{:text, certificate}, {:text, standing}], state} =
+               send_frame(state, proof_message(challenge, device))
+
+      assert {:certificate, %{certificate: renewed}} = decoded(certificate)
+      assert {:standing, _} = decoded(standing)
+      assert renewed.expires_at > device.cert.expires_at
+
+      {_grant_id, grant, _state} = open_stream!(state, "s1")
+      assert grant.expires_at <= renewed.expires_at
+    end
+  end
+
+  defp restore_env(app, key, nil), do: Application.delete_env(app, key)
+  defp restore_env(app, key, value), do: Application.put_env(app, key, value)
+
+  defp decoded(json) do
+    {:ok, message} = Device.decode(Jason.decode!(json), :home)
+    message
+  end
+
+  # Open `confirmation.changes` with intent `id`: the grant's id, the grant
+  # message, and the channel's state.
+  defp open_stream!(state, id) do
+    assert {:push, [{:text, answer}, {:text, grant}], state} =
+             send_frame(
+               state,
+               intent_message(id, "streams.open", %{"stream" => "confirmation.changes"})
+             )
+
+    assert {:answer, %{id: ^id, result: %{"grant_id" => grant_id}}} = decoded(answer)
+    assert {:grant, %{grant_id: ^grant_id} = body} = decoded(grant)
+    assert Map.has_key?(state.grants, grant_id)
+    {grant_id, body, state}
+  end
+
+  # The next fact the grant's forwarder handed the channel, delivered.
+  defp event!(state, grant_id) do
+    assert_receive {DeviceChannel, :fact, ^grant_id, message}, 2_000
+
+    assert {:push, {:text, json}, state} =
+             DeviceChannel.handle_info({DeviceChannel, :fact, grant_id, message}, state)
+
+    assert {:event, %{grant_id: ^grant_id, payload: payload}} = decoded(json)
+    {payload, state}
+  end
+
+  defp answer!(state, message) do
+    assert {:reply, :ok, {:text, json}, state} = send_frame(state, message)
+    assert {:answer, %{result: result}} = decoded(json)
+    {result, state}
+  end
+
+  defp answer_error!(state, message) do
+    assert {:reply, :ok, {:text, json}, state} = send_frame(state, message)
+    assert {:answer, %{error: error}} = decoded(json)
+    {error, state}
+  end
+
+  defp flush_backlog do
+    receive do
+      {:backlog, _n} -> flush_backlog()
+    after
+      0 -> :ok
+    end
+  end
+
   describe "4401" do
     test "a connect without a proof is closed when its challenge's deadline passes",
          %{glass: glass} do
@@ -1165,8 +1576,15 @@ defmodule Emissary.Web.DeviceChannelTest do
 
   # A refusal: the close code with the class as its reason, exactly one
   # decision for the connection's refusal, and a channel closed for good.
+  # A client whose standing ended is told its pairing ended first.
   defp assert_refused(result, code, class \\ "unauthenticated", caller \\ :none) do
-    assert {:stop, :normal, {^code, ^class}, state} = result
+    {frames, state} =
+      case result do
+        {:stop, :normal, {^code, ^class}, state} -> {[], state}
+        {:stop, :normal, {^code, ^class}, frames, state} -> {frames, state}
+      end
+
+    assert frames == pairing_ended(state, code)
     assert_one_decision(state, class, caller)
     assert_closed(state)
     state
@@ -1174,12 +1592,19 @@ defmodule Emissary.Web.DeviceChannelTest do
 
   # A refusal that answers an intent first: its frame, then as above.
   defp assert_refused_answering(result, code \\ 4401, class \\ "unauthenticated") do
-    assert {:stop, :normal, {^code, ^class}, [{:text, json}], state} = result
+    assert {:stop, :normal, {^code, ^class}, [{:text, json} | rest], state} = result
+    assert rest == pairing_ended(state, code)
     caller = if state.client, do: :established, else: :none
     decision = assert_one_decision(state, class, caller)
     assert_closed(state)
     {Jason.decode!(json), decision}
   end
+
+  # The `revoke` naming no grant that a `4403` sends an established client.
+  defp pairing_ended(%{client: %Context{client_id: client_id}}, 4403),
+    do: [{:text, Jason.encode!(Device.encode({:revoke, %{client_id: client_id}}))}]
+
+  defp pairing_ended(_state, _code), do: []
 
   # Closed for good: every timer cancelled, and a frame of any kind, a
   # control frame or a timer the transport still delivers is acted on and

@@ -27,8 +27,9 @@ defmodule CyfrWeb.ContextGuardRosterTest do
     SchedulesLive SettingsLive McpServersLive ShellLive LegalLive
   )
 
-  # The sign-in page is what an anonymous caller comes for; it holds no context.
-  @public ~w(LoginLive)
+  # The sign-in page and the pairing page are what an anonymous caller
+  # comes for; neither holds a session's context.
+  @public ~w(LoginLive PairLive)
 
   # Rendered by the layout or a page with `live_render/3`; each mounts the guard itself.
   @nested ~w(TopbarLive AquaPanelLive ThreadPaneLive)
@@ -49,7 +50,10 @@ defmodule CyfrWeb.ContextGuardRosterTest do
     "live/components_live.ex" => {4, ["live/components_live.ex"]},
     "live/builds_live.ex" => {1, ["live/builds_live.ex"]},
     "live/shell_live.ex" => {1, ["live/shell_live.ex"]},
-    "live/aqua_live/agents_component.ex" => {1, ["live/aqua_live.ex"]}
+    "live/aqua_live/agents_component.ex" => {1, ["live/aqua_live.ex"]},
+    # The system layer's listener on `confirmation.changes`, whose facts
+    # the layer takes in the focus it was opened for.
+    "live/system_layer.ex" => {1, ["live/system_layer.ex"]}
   }
 
   @capture ~r/\bCyfrWeb\.ContextGuard\.capture\(/

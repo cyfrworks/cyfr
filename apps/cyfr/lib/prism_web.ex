@@ -42,6 +42,7 @@ defmodule PrismWeb do
       McpServersLive,
       MembersLive,
       MyReportsLive,
+      PairLive,
       PasskeyController,
       ReauthController,
       RegistryLive,

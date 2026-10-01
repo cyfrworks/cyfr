@@ -11,11 +11,18 @@ defmodule PrismWeb.WebhooksLive do
 
   The webhook URL is rendered against `CYFR_PUBLIC_URL` so users can copy
   the full URL into their external service (GitHub, Stripe, etc).
+
+  Creating a webhook and rotating its secret are sensitive changes: the
+  page asks for a fresh confirmation through its system layer
+  (`PrismWeb.SystemLayer.call/5`), which shows the request as this page's
+  own, and the page repeats the change once its record is confirmed,
+  wherever the person proved it.
   """
 
   use PrismWeb, :live_view
 
   alias Phoenix.LiveView.JS
+  alias PrismWeb.SystemLayer
   require Logger
 
   @default_signature_header Sanctum.Webhook.default_signature_header()
@@ -70,6 +77,15 @@ defmodule PrismWeb.WebhooksLive do
 
   def handle_info(%Cyfr.Bus.Webhooks{}, socket) do
     {:noreply, fetch_webhooks(socket)}
+  end
+
+  # A change this page asked for was confirmed: made again, once.
+  def handle_info({:system_layer, _id, _outcome} = report, socket) do
+    case SystemLayer.reported(socket, report) do
+      {:repeat, :webhook_create, _tool, args, socket} -> create(socket, args)
+      {:repeat, {:webhook_rotate, name}, _tool, _args, socket} -> rotate(socket, name)
+      {:ok, socket} -> {:noreply, socket}
+    end
   end
 
   def handle_info(msg, socket) do
@@ -184,9 +200,13 @@ defmodule PrismWeb.WebhooksLive do
     end
   end
 
-  def handle_event("rotate", %{"id" => name}, socket) do
-    case call_tool(socket, "webhook/rotate", %{"name" => name}) do
-      {:ok, result} ->
+  def handle_event("rotate", %{"id" => name}, socket), do: rotate(socket, name)
+
+  # Rotating a secret needs a fresh confirmation: asked for through the
+  # system layer, and repeated from `handle_info/2` once confirmed.
+  defp rotate(socket, name) do
+    case SystemLayer.call(socket, {:webhook_rotate, name}, "webhook/rotate", %{"name" => name}) do
+      {:ok, result, socket} ->
         {:noreply,
          socket
          |> assign(:new_secret, %{
@@ -196,7 +216,10 @@ defmodule PrismWeb.WebhooksLive do
          })
          |> put_flash(:info, "Secret rotated. Copy the new secret now.")}
 
-      {:error, reason} ->
+      {:asked, socket} ->
+        {:noreply, socket}
+
+      {:error, reason, socket} ->
         {:noreply, put_flash(socket, :error, "Failed to rotate: #{error_message(reason)}")}
     end
   end
@@ -205,11 +228,15 @@ defmodule PrismWeb.WebhooksLive do
   # Submission helpers
   # ============================================================================
 
-  defp submit_create(socket, params, template_map) do
-    args = build_args(params, template_map)
+  defp submit_create(socket, params, template_map),
+    do: create(socket, build_args(params, template_map))
 
-    case call_tool(socket, "webhook/create", args) do
-      {:ok, result} ->
+  # Minting a webhook's secret needs a fresh confirmation: asked for
+  # through the system layer, and repeated from `handle_info/2` once
+  # confirmed.
+  defp create(socket, args) do
+    case SystemLayer.call(socket, :webhook_create, "webhook/create", args) do
+      {:ok, result, socket} ->
         {:noreply,
          socket
          |> reset_form(false, nil)
@@ -221,7 +248,10 @@ defmodule PrismWeb.WebhooksLive do
          |> fetch_webhooks()
          |> put_flash(:info, "Webhook created. Copy the secret now — it won't be shown again.")}
 
-      {:error, reason} ->
+      {:asked, socket} ->
+        {:noreply, assign(socket, :form_error, nil)}
+
+      {:error, reason, socket} ->
         {:noreply, assign(socket, :form_error, format_tool_error(reason))}
     end
   end
@@ -577,6 +607,8 @@ defmodule PrismWeb.WebhooksLive do
           </:col>
         </.table>
       </.card>
+
+      <.live_component module={SystemLayer} id={SystemLayer.layer_id()} context={@context} />
     </div>
     """
   end

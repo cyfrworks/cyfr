@@ -39,6 +39,41 @@ defmodule Emissary.Web.DeviceChannel do
   `result` or `error`. Nothing is dispatched on a validation the channel
   remembers.
 
+  ## Streams
+
+  The channel is the delivery owner of a stream its client opens. The
+  intent `streams.open`, with `args` `{stream, subject?}` (the tincture
+  data routes' stream-open shape), is checked like every intent and then
+  admitted by the gate's stream entry (`Grimoire.open_stream/3`), which
+  records it. An admitted open is answered `answer` with
+  `result: {grant_id}`, then `grant`, naming the stream, its subject, the
+  fields it forwards and when it ends; a refused one is answered with its
+  `error`, and the channel stays open. Each fact of the granted topic
+  (`Cyfr.Bus.granted_topic/2`) is forwarded as `event`, projected to the
+  grant's fields, by a forwarder process per grant that ends with the
+  channel. A connection holds at most 16 grants.
+
+  A stream ends, with `revoke` naming its grant:
+
+    * at its deadline, which is never later than the certificate it was
+      opened under; the channel stays open, and the glass opens it again;
+    * on overflow: a channel whose mailbox holds more than 1,000 messages
+      has fallen too far behind to deliver faithfully, and every grant is
+      revoked rather than a fact dropped;
+    * when its fact cannot be delivered because the store cannot vouch
+      for the client now: that grant is revoked, never the fact dropped
+      unannounced;
+    * when the client's standing ends: each fact is delivered under a
+      standing read within the freshness bound, a standing announcement
+      about the person reads it again at once, and so does every intent
+      and ping. A refusal revokes each grant, then, when the client's
+      standing ended, the client's own pairing (`revoke` naming no grant),
+      then closes `4403`; an expired certificate revokes each grant and
+      closes `4408`.
+
+  An admitted open whose forwarder cannot start is answered with an
+  `unavailable` error and its grant revoked; the channel stays open.
+
   ## Renewal
 
   A glass renews with `renew`, naming its client and the certificate that
@@ -130,7 +165,9 @@ defmodule Emissary.Web.DeviceChannel do
 
   @behaviour Phoenix.Socket.Transport
 
-  alias Prima.{Device, DeviceCert}
+  alias Cyfr.Bus.{AthanorArchived, Membership, Session}
+  alias Emissary.Web.DeviceChannel.Forwarder
+  alias Prima.{Device, DeviceCert, StreamGrant}
   alias Prima.DeviceCert.{Challenge, Proof}
   alias Prima.Identity.Encoding
   alias Sanctum.Context
@@ -160,6 +197,15 @@ defmodule Emissary.Web.DeviceChannel do
   # 90-second read timeout.
   @keepalive_ms 30_000
 
+  # The intent that opens a declared stream, and the grants one connection
+  # holds at most.
+  @open_stream "streams.open"
+  @max_grants 16
+
+  # The mailbox depth past which the channel has fallen too far behind its
+  # streams to deliver them faithfully.
+  @max_backlog 1_000
+
   @typedoc """
   The channel's state:
 
@@ -178,6 +224,10 @@ defmodule Emissary.Web.DeviceChannel do
     * `keepalive` — the token and timer of the next ping.
     * `call_id` — the call id the channel assigned the message it decided
       last.
+    * `grants` — each stream open on this connection, by grant id: the
+      grant, the stream's name, its forwarder and its deadline's timer.
+    * `standing` — whether the channel hears the person's standing
+      announcements.
     * `closed` — true once a refusal closed the channel: nothing after it
       is recorded or acted on.
   """
@@ -191,6 +241,15 @@ defmodule Emissary.Web.DeviceChannel do
           expiry: {reference(), reference()} | nil,
           keepalive: {reference(), reference()} | nil,
           call_id: String.t() | nil,
+          grants: %{
+            optional(String.t()) => %{
+              grant: StreamGrant.t(),
+              stream: String.t(),
+              forwarder: pid(),
+              timer: {reference(), reference()}
+            }
+          },
+          standing: boolean(),
           closed: boolean()
         }
 
@@ -217,6 +276,8 @@ defmodule Emissary.Web.DeviceChannel do
        expiry: nil,
        keepalive: nil,
        call_id: nil,
+       grants: %{},
+       standing: false,
        closed: false
      }}
   end
@@ -282,6 +343,34 @@ defmodule Emissary.Web.DeviceChannel do
       {:error, reason} ->
         refuse(assign_call(state), reason)
     end
+  end
+
+  # A grant's deadline: that stream ends; the channel stays.
+  def handle_info({__MODULE__, {:grant, grant_id}, token}, state) do
+    case Map.get(state.grants, grant_id) do
+      %{timer: {^token, _timer}} ->
+        {:push, revoke_frames(state, [grant_id]), drop_grants(state, [grant_id])}
+
+      _stale ->
+        {:ok, state}
+    end
+  end
+
+  # A fact of a granted stream, delivered only to a client that keeps up
+  # and still stands.
+  def handle_info({__MODULE__, :fact, grant_id, message}, state) do
+    case Map.get(state.grants, grant_id) do
+      nil -> {:ok, state}
+      granted -> deliver(granted, message, state)
+    end
+  end
+
+  # A standing announcement about the person: the standing is read again
+  # now, not at the next ping.
+  def handle_info(message, %{client: %Context{} = client} = state)
+      when is_struct(message, Session) or is_struct(message, Membership) or
+             is_struct(message, AthanorArchived) do
+    if about?(message, client), do: recheck(state), else: {:ok, state}
   end
 
   def handle_info(_message, state), do: {:ok, state}
@@ -481,6 +570,8 @@ defmodule Emissary.Web.DeviceChannel do
     end
   end
 
+  defp dispatch(%{operation: @open_stream} = intent, state), do: open_stream(intent, state)
+
   defp dispatch(%{id: id, operation: operation, args: args} = intent, state) do
     {tool, action} = names(operation)
 
@@ -502,6 +593,208 @@ defmodule Emissary.Web.DeviceChannel do
       end
 
     {:reply, :ok, {:text, wire({:answer, answer})}, state}
+  end
+
+  # ---------------------------------------------------------------------------
+  # Streams
+  # ---------------------------------------------------------------------------
+
+  # `streams.open`: the stream and subject read as a frame's open reads
+  # them, the connection's bound, then the gate's stream admission. A
+  # refusal here, before the gate, is recorded as one; the gate records
+  # its own.
+  defp open_stream(%{id: id, args: args}, state) do
+    ctx = %{
+      state.client
+      | request_id: state.ctx.request_id,
+        call_id: state.call_id,
+        confirmation_id: nil,
+        origin: :interactive
+    }
+
+    with {:ok, name, subject} <- stream_args(args),
+         :ok <- grant_room(state) do
+      case Grimoire.open_stream(ctx, name, subject) do
+        {:ok, grant} ->
+          granted(id, name, grant, state)
+
+        {:error, refusal} ->
+          {:reply, :ok, {:text, wire({:answer, %{id: id, error: error(refusal)}})}, state}
+      end
+    else
+      {:error, reason} ->
+        refusal = %{Grimoire.classify(reason) | stage: :admission}
+        record(state, refusal, "streams", "open")
+        {:reply, :ok, answer_refused(id, refusal), state}
+    end
+  end
+
+  defp stream_args(args) do
+    stream = Map.get(args, "stream")
+    subject = Map.get(args, "subject")
+
+    cond do
+      Map.keys(args) -- ["stream", "subject"] != [] ->
+        {:error, {:invalid_argument, "streams.open takes a stream and, for some, a subject"}}
+
+      not Prima.Manifest.Tincture.stream_name?(stream) ->
+        {:error, {:invalid_argument, "streams.open needs the name of a declared stream"}}
+
+      not (is_nil(subject) or Prima.Manifest.Tincture.literal_subject?(subject)) ->
+        {:error, {:invalid_argument, "The subject must be a literal subject or absent"}}
+
+      true ->
+        {:ok, stream, subject}
+    end
+  end
+
+  defp grant_room(%{grants: grants}) when map_size(grants) < @max_grants, do: :ok
+  defp grant_room(_state), do: {:error, :stream_limit}
+
+  # An admitted open: its forwarder subscribed to the one topic the grant
+  # admits before the grant is answered, its deadline armed, and the
+  # person's standing announcements heard.
+  defp granted(id, name, grant, state) do
+    actor = Context.actor(state.client)
+    topic = Cyfr.Bus.granted_topic(actor, grant)
+
+    case Forwarder.start(self(), grant.grant_id, actor, topic, payload_struct(grant)) do
+      {:ok, forwarder} -> deliver_grant(id, name, grant, forwarder, state)
+      {:error, _unstarted} -> undeliverable(id, grant, state)
+    end
+  end
+
+  # An admitted open no forwarder could hear: the client is told, and the
+  # grant it was admitted for is revoked at once, so nothing waits on it.
+  defp undeliverable(id, grant, state) do
+    error = %{
+      "class" => "unavailable",
+      "message" => "This home could not deliver the stream now; open it again shortly"
+    }
+
+    frames = [
+      {:answer, %{id: id, error: error}},
+      {:revoke, %{client_id: state.client.client_id, grant_id: grant.grant_id}}
+    ]
+
+    {:push, Enum.map(frames, &{:text, wire(&1)}), state}
+  end
+
+  defp deliver_grant(id, name, grant, forwarder, state) do
+    timer =
+      timer(
+        nil,
+        {:grant, grant.grant_id},
+        DateTime.diff(grant.deadline, DateTime.utc_now(), :millisecond)
+      )
+
+    state =
+      state
+      |> put_in([:grants, grant.grant_id], %{
+        grant: grant,
+        stream: name,
+        forwarder: forwarder,
+        timer: timer
+      })
+      |> hear_standing()
+
+    body =
+      %{
+        grant_id: grant.grant_id,
+        stream: name,
+        projection: grant.projection,
+        expires_at: DateTime.to_unix(grant.deadline, :millisecond)
+      }
+      |> then(fn body ->
+        if grant.subject, do: Map.put(body, :subject, grant.subject), else: body
+      end)
+
+    frames = [
+      {:answer, %{id: id, result: %{"grant_id" => grant.grant_id}}},
+      {:grant, body}
+    ]
+
+    {:push, Enum.map(frames, &{:text, wire(&1)}), state}
+  end
+
+  # The one struct the grant's topic carries (the bus roster's).
+  defp payload_struct(%StreamGrant{topic: key}),
+    do: Enum.find_value(Cyfr.Bus.topics(), fn row -> row.key == key && row.struct end)
+
+  defp hear_standing(%{standing: true} = state), do: state
+
+  defp hear_standing(state) do
+    :ok = Cyfr.Bus.subscribe_standing(state.client.user_id)
+    %{state | standing: true}
+  end
+
+  defp deliver(%{grant: grant}, message, state) do
+    cond do
+      overflowing?() ->
+        grant_ids = Map.keys(state.grants)
+        {:push, revoke_frames(state, grant_ids), drop_grants(state, grant_ids)}
+
+      Sanctum.Caller.fresh?(state.client) ->
+        {:push, event(grant, message), state}
+
+      true ->
+        case Sanctum.DeviceCerts.verify_request(state.cert, state.client, []) do
+          {:ok, client} ->
+            {:push, event(grant, message), %{state | client: carried(client, state)}}
+
+          # A store that cannot answer now cannot vouch for the client: the
+          # fact is not delivered, and its stream ends, as on overflow, so
+          # the client opens it again rather than miss a fact unawares.
+          {:error, :unavailable} ->
+            {:push, revoke_frames(state, [grant.grant_id]), drop_grants(state, [grant.grant_id])}
+
+          {:error, reason} ->
+            refuse(assign_call(state), reason)
+        end
+    end
+  end
+
+  defp event(grant, %{} = message) do
+    payload = StreamGrant.project(grant, Map.from_struct(message))
+    {:text, wire({:event, %{grant_id: grant.grant_id, payload: payload}})}
+  end
+
+  defp overflowing? do
+    case Process.info(self(), :message_queue_len) do
+      {:message_queue_len, depth} -> depth > @max_backlog
+      nil -> false
+    end
+  end
+
+  defp recheck(state) do
+    case Sanctum.DeviceCerts.verify_request(state.cert, state.client, []) do
+      {:ok, client} -> {:ok, %{state | client: carried(client, state)}}
+      {:error, :unavailable} -> {:ok, state}
+      {:error, reason} -> refuse(assign_call(state), reason)
+    end
+  end
+
+  # Which standing announcements are about this client's person.
+  defp about?(%Session{kind: kind, user_id: user_id}, ctx),
+    do: kind != :created and user_id == ctx.user_id
+
+  defp about?(%AthanorArchived{athanor_id: athanor_id}, ctx), do: athanor_id == ctx.athanor_id
+  defp about?(%Membership{}, _ctx), do: true
+
+  # `revoke` for each of `grant_ids`, naming the client.
+  defp revoke_frames(state, grant_ids) do
+    for grant_id <- grant_ids,
+        do: {:text, wire({:revoke, %{client_id: state.client.client_id, grant_id: grant_id}})}
+  end
+
+  defp drop_grants(state, grant_ids) do
+    for grant_id <- grant_ids,
+        %{forwarder: forwarder, timer: timer} <- [state.grants[grant_id]] do
+      cancel(timer)
+      Forwarder.stop(forwarder)
+    end
+
+    %{state | grants: Map.drop(state.grants, grant_ids)}
   end
 
   # A consent signal is answered in its own `{tag, payload}` shape; every
@@ -526,25 +819,45 @@ defmodule Emissary.Web.DeviceChannel do
   # nothing. `record: false` closes a refusal the gate already recorded.
   defp refuse(state, reason, opts \\ []) do
     for timer <- [state.deadline, state.expiry, state.keepalive], do: cancel(timer)
-    state = %{state | deadline: nil, expiry: nil, keepalive: nil, closed: true}
     refusal = Keyword.get_lazy(opts, :refusal, fn -> refusal(reason) end)
+    code = close_code(refusal)
+    # Each stream ends with the connection, and a client whose standing
+    # ended is told its pairing ended too.
+    revokes = revoke_frames_on_close(state, code)
+    state = drop_grants(state, Map.keys(state.grants))
+    state = %{state | deadline: nil, expiry: nil, keepalive: nil, closed: true}
 
     if Keyword.get(opts, :record, true) do
       {tool, action} = names(Keyword.get(opts, :operation))
-
-      decision =
-        Grimoire.refused_decision(state.client, refusal,
-          call_id: state.call_id,
-          request_id: state.ctx.request_id,
-          plane: :external,
-          tool: tool,
-          action: action
-        )
-
-      Grimoire.open_decision(state.client, decision, %{method: "device", input: %{}})
+      record(state, refusal, tool, action)
     end
 
-    close(state, close_code(refusal), close_reason(refusal), Keyword.get(opts, :frames, []))
+    close(state, code, close_reason(refusal), Keyword.get(opts, :frames, []) ++ revokes)
+  end
+
+  defp revoke_frames_on_close(%{client: %Context{client_id: client_id}} = state, code) do
+    pairing =
+      if code == @standing_ended,
+        do: [{:text, wire({:revoke, %{client_id: client_id}})}],
+        else: []
+
+    revoke_frames(state, Map.keys(state.grants)) ++ pairing
+  end
+
+  defp revoke_frames_on_close(_state, _code), do: []
+
+  # One refused decision under the call id assigned the refused message.
+  defp record(state, refusal, tool, action) do
+    decision =
+      Grimoire.refused_decision(state.client, refusal,
+        call_id: state.call_id,
+        request_id: state.ctx.request_id,
+        plane: :external,
+        tool: tool,
+        action: action
+      )
+
+    Grimoire.open_decision(state.client, decision, %{method: "device", input: %{}})
   end
 
   defp close(state, code, reason, []), do: {:stop, :normal, {code, reason}, state}
@@ -685,4 +998,90 @@ defmodule Emissary.Web.DeviceChannel do
   defp wire(message), do: message |> Device.encode() |> Jason.encode!()
 
   defp now, do: System.system_time(:millisecond)
+end
+
+defmodule Emissary.Web.DeviceChannel.Forwarder do
+  @moduledoc false
+  # One granted stream of a device channel: subscribed to the one topic
+  # its grant admits, it hands each fact of the grant's payload struct to
+  # the channel under the grant's id, so a channel holding several grants
+  # knows which a fact belongs to. It ends with the channel, or when the
+  # channel ends the grant. It reaches no store.
+
+  @ready_ms 5_000
+
+  @doc false
+  # Started subscribed: the grant is answered only once its topic is heard.
+  # A forwarder that could not start, could not subscribe or did not say so
+  # in time is `{:error, reason}`, and none is left running.
+  @spec start(pid(), String.t(), Prima.Actor.t(), String.t(), module()) ::
+          {:ok, pid()} | {:error, term()}
+  def start(channel, grant_id, actor, topic, payload) do
+    ready = make_ref()
+
+    case start_child(fn -> run(channel, ready, grant_id, actor, topic, payload) end) do
+      {:ok, pid} ->
+        receive do
+          {^ready, :subscribed} ->
+            {:ok, pid}
+
+          {^ready, {:error, reason}} ->
+            {:error, reason}
+        after
+          @ready_ms ->
+            Task.Supervisor.terminate_child(Emissary.Web.TaskSupervisor, pid)
+            {:error, :not_subscribed}
+        end
+
+      {:error, reason} ->
+        {:error, reason}
+
+      _not_started ->
+        {:error, :not_started}
+    end
+  end
+
+  # The supervisor itself may be gone, or restarting.
+  defp start_child(fun) do
+    Task.Supervisor.start_child(Emissary.Web.TaskSupervisor, fun)
+  catch
+    :exit, _reason -> {:error, :unavailable}
+  end
+
+  @doc false
+  @spec stop(pid()) :: :ok
+  def stop(pid) do
+    send(pid, {__MODULE__, :stop})
+    :ok
+  end
+
+  defp run(channel, ready, grant_id, actor, topic, payload) do
+    monitor = Process.monitor(channel)
+
+    case Cyfr.Bus.subscribe(actor, topic) do
+      :ok ->
+        send(channel, {ready, :subscribed})
+        loop(channel, monitor, grant_id, payload)
+
+      {:error, reason} ->
+        send(channel, {ready, {:error, reason}})
+    end
+  end
+
+  defp loop(channel, monitor, grant_id, payload) do
+    receive do
+      {:DOWN, ^monitor, :process, _pid, _reason} ->
+        :ok
+
+      {__MODULE__, :stop} ->
+        :ok
+
+      %{__struct__: ^payload} = message ->
+        send(channel, {Emissary.Web.DeviceChannel, :fact, grant_id, message})
+        loop(channel, monitor, grant_id, payload)
+
+      _other ->
+        loop(channel, monitor, grant_id, payload)
+    end
+  end
 end

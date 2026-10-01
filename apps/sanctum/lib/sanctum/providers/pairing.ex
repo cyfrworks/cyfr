@@ -24,7 +24,11 @@ defmodule Sanctum.Providers.Pairing do
   wire and answered on it:
 
     * `begin` answers the invitation's secret (unpadded base64url, for the
-      pairing code), the client id it reserves and its expiry.
+      pairing code), the client id it reserves, its expiry, and the
+      `invitation_url` a new glass opens: this home's `/pair` page with the
+      secret in its fragment's `code`, so the page reads it in the browser
+      and no request line carries it. The pairing QR encodes that URL; it
+      is built here and nowhere else.
     * `complete` answers the `pair` challenge to sign when it carries no
       proof, and the paired client's id and its first certificate
       (`Prima.DeviceCert`'s JSON) when it carries the proof over it.
@@ -143,6 +147,7 @@ defmodule Sanctum.Providers.Pairing do
         {:ok,
          %{
            invitation_secret: Encoding.b64(invitation.invitation_secret),
+           invitation_url: invitation_url(invitation.invitation_secret),
            client_id: invitation.client_id,
            expires_at: Prima.Time.iso8601(invitation.expires_at)
          }}
@@ -219,6 +224,11 @@ defmodule Sanctum.Providers.Pairing do
             "16 and 32 bytes"}}
     end
   end
+
+  # The one spelling of the link a pairing code opens: this home's `/pair`
+  # page, the secret in the fragment, which a browser never sends.
+  defp invitation_url(secret),
+    do: Sanctum.Person.home() <> "/pair#code=" <> Encoding.b64(secret)
 
   defp optional_proof(%{"proof" => proof}) when is_map(proof), do: {:ok, proof}
   defp optional_proof(_args), do: {:ok, nil}

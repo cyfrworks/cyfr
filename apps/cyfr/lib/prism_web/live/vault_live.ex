@@ -12,10 +12,20 @@ defmodule PrismWeb.VaultLive do
   OAuth entries start a browser grant via `vault.authorize`; the
   callback completes it server-side and the vault PubSub topic refreshes
   this view when the entry lands.
+
+  Entering material — an entry, its rotation, an OAuth grant, an OAuth
+  app's client credentials — is a sensitive change: the page asks for a
+  fresh confirmation through its system layer
+  (`PrismWeb.SystemLayer.call/5`), which shows the request as this page's
+  own. A typed value is never held here while it waits: the forms keep
+  what was typed in the browser, which submits the same form again once
+  the record is confirmed, and the page makes the change then. A grant,
+  which carries no typed secret, the page starts again itself.
   """
 
   use PrismWeb, :live_view
 
+  alias PrismWeb.SystemLayer
   require Logger
 
   @impl true
@@ -73,15 +83,18 @@ defmodule PrismWeb.VaultLive do
       "client_secret" => blank_to_nil(params["client_secret"])
     }
 
-    case call_tool(socket, "oauth/set_client", args) do
-      {:ok, _} ->
+    case SystemLayer.call(socket, :set_client, "oauth/set_client", args, form: client_form()) do
+      {:ok, _, socket} ->
         {:noreply,
          socket
          |> fetch_clients()
          |> assign(:show_add, nil)
          |> put_flash(:info, "Client credentials stored for #{args["provider"]}.")}
 
-      {:error, reason} ->
+      {:asked, socket} ->
+        {:noreply, socket}
+
+      {:error, reason, socket} ->
         {:noreply, put_flash(socket, :error, "Could not store: #{fmt(reason)}")}
     end
   end
@@ -101,15 +114,18 @@ defmodule PrismWeb.VaultLive do
       {:ok, fields} ->
         args = %{"name" => name, "kind" => kind, "fields" => fields}
 
-        case call_tool(socket, "vault/create", args) do
-          {:ok, _} ->
+        case SystemLayer.call(socket, :create, "vault/create", args, form: create_form()) do
+          {:ok, _, socket} ->
             {:noreply,
              socket
              |> fetch_entries()
              |> assign(:show_add, nil)
              |> put_flash(:info, "Entry created.")}
 
-          {:error, reason} ->
+          {:asked, socket} ->
+            {:noreply, socket}
+
+          {:error, reason, socket} ->
             {:noreply, put_flash(socket, :error, "Create failed: #{fmt(reason)}")}
         end
 
@@ -161,15 +177,18 @@ defmodule PrismWeb.VaultLive do
         "expected_payload_rev" => rev_int
       }
 
-      case call_tool(socket, "vault/rotate", args) do
-        {:ok, _} ->
+      case SystemLayer.call(socket, {:rotate, id}, "vault/rotate", args, form: rotate_form(id)) do
+        {:ok, _, socket} ->
           {:noreply,
            socket
            |> fetch_entries()
            |> assign(:rotating, nil)
            |> put_flash(:info, "Material rotated — no re-consent needed.")}
 
-        {:error, reason} ->
+        {:asked, socket} ->
+          {:noreply, socket}
+
+        {:error, reason, socket} ->
           {:noreply, put_flash(socket, :error, "Rotate failed: #{fmt(reason)}")}
       end
     else
@@ -223,6 +242,15 @@ defmodule PrismWeb.VaultLive do
     {:noreply, socket |> fetch_entries() |> assign(:pending_grant, nil)}
   end
 
+  # A change this page asked for was confirmed: a grant is started again
+  # here, once; a typed form is submitted again by the browser.
+  def handle_info({:system_layer, _id, _outcome} = report, socket) do
+    case SystemLayer.reported(socket, report) do
+      {:repeat, :authorize, _tool, args, socket} -> start_grant(socket, args)
+      {:ok, socket} -> {:noreply, socket}
+    end
+  end
+
   def handle_info(msg, socket) do
     Prima.LoggerContext.unexpected(__MODULE__, msg, :debug)
     {:noreply, socket}
@@ -233,8 +261,8 @@ defmodule PrismWeb.VaultLive do
   # ---------------------------------------------------------------------------
 
   defp start_grant(socket, args) do
-    case call_tool(socket, "vault/authorize", args) do
-      {:ok, result} ->
+    case SystemLayer.call(socket, :authorize, "vault/authorize", args) do
+      {:ok, result, socket} ->
         url = result[:url]
 
         {:noreply,
@@ -242,10 +270,20 @@ defmodule PrismWeb.VaultLive do
          |> assign(:pending_grant, url)
          |> assign(:show_add, nil)}
 
-      {:error, reason} ->
+      {:asked, socket} ->
+        {:noreply, socket}
+
+      {:error, reason, socket} ->
         {:noreply, put_flash(socket, :error, "Authorization failed: #{fmt(reason)}")}
     end
   end
+
+  # The forms that carry typed material, each kept as typed by the browser
+  # (`phx-update="ignore"`) so it can be submitted again once its
+  # confirmation is given.
+  defp rotate_form(entry_id), do: "vault-rotate-form-" <> entry_id
+  defp create_form, do: "vault-create-form"
+  defp client_form, do: "vault-client-form"
 
   defp fetch_entries(socket) do
     case fetch_list(socket, "vault/list", :entries) do
@@ -370,7 +408,7 @@ defmodule PrismWeb.VaultLive do
       
     <!-- Add: sealed fields -->
       <.card :if={@show_add == "fields"}>
-        <form phx-submit="create" class="space-y-4">
+        <form id={create_form()} phx-update="ignore" phx-submit="create" class="space-y-4">
           <div class="grid grid-cols-2 gap-4">
             <div>
               <label class="block text-xs text-gray-500 uppercase mb-1">Name</label>
@@ -522,7 +560,13 @@ defmodule PrismWeb.VaultLive do
     <!-- Rotate form -->
       <.card :if={@rotating}>
         <% entry = Enum.find(@entries, &(&1.id == @rotating)) %>
-        <form :if={entry} phx-submit="rotate" class="space-y-4">
+        <form
+          :if={entry}
+          id={rotate_form(entry.id)}
+          phx-update="ignore"
+          phx-submit="rotate"
+          class="space-y-4"
+        >
           <input type="hidden" name="entry_id" value={entry.id} />
           <input type="hidden" name="payload_rev" value={entry.payload_rev} />
           <div>
@@ -557,7 +601,13 @@ defmodule PrismWeb.VaultLive do
           per provider. Stored sealed in this athanor; only the provider name is ever shown.
         </p>
 
-        <form :if={@show_add == "client"} phx-submit="set_client" class="space-y-3 mb-4">
+        <form
+          :if={@show_add == "client"}
+          id={client_form()}
+          phx-update="ignore"
+          phx-submit="set_client"
+          class="space-y-3 mb-4"
+        >
           <div class="grid grid-cols-3 gap-3">
             <div>
               <label class="block text-xs text-gray-500 uppercase mb-1">Provider</label>
@@ -598,6 +648,8 @@ defmodule PrismWeb.VaultLive do
           </li>
         </ul>
       </.card>
+
+      <.live_component module={SystemLayer} id={SystemLayer.layer_id()} context={@context} />
     </div>
     """
   end

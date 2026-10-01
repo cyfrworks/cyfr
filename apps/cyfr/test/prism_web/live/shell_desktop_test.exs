@@ -13,12 +13,16 @@ defmodule PrismWeb.ShellDesktopTest do
   own ask enter safe mode, which discards every frame with its credential;
   choosing leaves it and opens only the desktop. A frame's `credential`
   verb is honoured only for a live, visible frame whose version declares
-  `vault.create`, and the frame learns only whether an entry was saved.
+  `vault.create`, and the frame learns only whether an entry was saved;
+  the entry waits on its fresh confirmation, and the browser types the
+  value again once its record is confirmed. The shell's `Devices` control
+  opens the system layer's pairing prompt.
   """
 
   use PrismWeb.ConnCase, async: false
 
   import Ecto.Query, only: [from: 2]
+  import Prima.Test.Wait
 
   setup %{conn: conn} do
     user = test_user()
@@ -109,6 +113,29 @@ defmodule PrismWeb.ShellDesktopTest do
 
   defp desktop!(ctx, name \\ "desktop"),
     do: tincture!(ctx, name, %{"frame" => %{"placement" => "desktop"}})
+
+  # Type `secret` into the credential prompt, have the person confirm the
+  # record it waits on (by its ref, as another of their clients would),
+  # and type it again when the layer asks: the browser's resubmission.
+  # `waiting` runs while the record waits for its proof.
+  defp enter_confirmed!(view, prompt_id, secret, ctx, waiting \\ fn -> :ok end) do
+    view
+    |> form("#system-layer-credential", %{"prompt_id" => prompt_id, "secret" => secret})
+    |> render_submit()
+
+    assert {:ok, [%{ref: ref, operation: "vault.create"}]} =
+             Arca.PendingConfirmations.list_open(Sanctum.Context.actor(ctx), ctx.user_id)
+
+    wait_until(fn -> render(view) =~ ~s(data-ref="#{ref}") end, 2_000, "the waiting record")
+    waiting.()
+
+    Sanctum.TestContext.prove!(ctx, ref)
+    assert_push_event(view, "system_layer:resubmit", %{form: "system-layer-credential"}, 2_000)
+
+    view
+    |> form("#system-layer-credential", %{"prompt_id" => prompt_id, "secret" => secret})
+    |> render_submit()
+  end
 
   # The person's own context, as another of their sessions holds it.
   defp person(user, athanor) do
@@ -480,9 +507,8 @@ defmodule PrismWeb.ShellDesktopTest do
       verb!(view, keeper, :credential, %{"name" => "taken"})
       [{prompt_id, ^keeper}] = Map.to_list(assigns(view).credential_prompts)
 
-      view
-      |> form("#system-layer-credential", %{"prompt_id" => prompt_id, "secret" => "s3c0nd-v4lue"})
-      |> render_submit()
+      # Confirmed, then typed again: the vault refuses the taken name.
+      enter_confirmed!(view, prompt_id, "s3c0nd-v4lue", person(user, athanor))
 
       html = render(view)
       assert html =~ "Not done:"
@@ -494,10 +520,10 @@ defmodule PrismWeb.ShellDesktopTest do
       assert Map.keys(payload) |> Enum.sort() == [:frame, :saved]
     end
 
-    # Entering a credential is a sensitive change: from a session with no
-    # proof the entry meets the `confirmation_required` signal, the prompt
-    # stays open showing it, and the frame hears nothing of a save.
-    test "confirmed, the entry meets the confirmation signal: nothing saved, the frame told nothing, never the value",
+    # Entering a credential is a sensitive change: the entry waits on its
+    # record, unsaved and unheard of by the frame, until the person
+    # confirms it; the browser then types the value again and it is saved.
+    test "confirmed, the entry is saved and the frame is told saved: true, never the value",
          %{conn: conn, user: user, athanor: athanor} do
       view = shell!(conn)
       open!(view, "keeper-dash")
@@ -505,23 +531,49 @@ defmodule PrismWeb.ShellDesktopTest do
       verb!(view, keeper, :credential, %{"name" => "fresh-entry"})
       [{prompt_id, ^keeper}] = Map.to_list(assigns(view).credential_prompts)
 
-      view
-      |> form("#system-layer-credential", %{"prompt_id" => prompt_id, "secret" => "v4lue-typed"})
-      |> render_submit()
+      enter_confirmed!(view, prompt_id, "v4lue-typed", person(user, athanor), fn ->
+        # Waiting on the record: nothing saved, the frame told nothing.
+        html = render(view)
+        assert html =~ ~s(data-status="waiting")
+        refute html =~ "cnf_"
+        refute html =~ "v4lue-typed"
+        refute_push_event(view, "frame_credential", _payload, 50)
+        assert {:ok, entries} = Sanctum.Vault.list(person(user, athanor))
+        refute Enum.any?(entries, &(&1.name == "fresh-entry"))
+      end)
 
-      ctx = person(user, athanor)
+      assert_push_event(view, "frame_credential", %{frame: ^keeper, saved: true} = payload)
+      refute inspect(payload) =~ "v4lue-typed"
+      refute render(view) =~ "v4lue-typed"
 
-      assert {:ok, [%{ref: "cnr_" <> _, operation: "vault.create"}]} =
-               Arca.PendingConfirmations.list_open(Sanctum.Context.actor(ctx), ctx.user_id)
+      assert {:ok, entries} = Sanctum.Vault.list(person(user, athanor))
+      assert Enum.any?(entries, &(&1.name == "fresh-entry"))
+      Cyfr.Test.Sandbox.end_views()
+    end
+  end
 
+  describe "the devices control" do
+    test "opens the pairing prompt, once, listing the person's paired devices", %{conn: conn} do
+      view = shell!(conn)
+
+      view |> element("#shell-devices") |> render_click()
       html = render(view)
-      assert html =~ "Confirmation required"
-      refute html =~ "cnf_"
-      refute html =~ "v4lue-typed"
-      refute_push_event(view, "frame_credential", _payload, 50)
 
-      assert {:ok, entries} = Sanctum.Vault.list(ctx)
-      refute Enum.any?(entries, &(&1.name == "fresh-entry"))
+      assert html =~ ~s(data-kind="pairing")
+      assert has_element?(view, ~s([data-test="pairing-none"]))
+      assert has_element?(view, ~s([data-test="pairing-begin"]), "Pair a device")
+      [prompt_id] = Regex.run(~r/data-prompt-id="(pairing-[^"]+)"/, html, capture: :all_but_first)
+
+      # Asked again while it is open: the same prompt, and keys typed into
+      # it move nothing behind it.
+      view |> element("#shell-devices") |> render_click()
+      refute render(view) =~ "waiting."
+      assert assigns(view).pairing_prompt == prompt_id
+
+      view |> element(~s(#system-layer-dialog button[phx-click="dismiss"])) |> render_click()
+      _ = render(view)
+      assert assigns(view).pairing_prompt == nil
+      refute render(view) =~ ~s(data-kind="pairing")
     end
   end
 
