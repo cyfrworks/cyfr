@@ -199,6 +199,104 @@ defmodule Arca.CarryActionsTest do
                  assertion_digest: digest("another")
                })
     end
+
+    test "an assertion is recorded with what its also: closure writes, or not at all", %{
+      person: person
+    } do
+      {:ok, action} = CarryActions.open(as(person), source(person))
+      challenge = %{challenge: "b-challenge", challenge_digest: digest("challenge")}
+      {:ok, _} = CarryActions.attach_challenge(as(person), action.id, challenge)
+      assertion = %{assertion: "signed-assertion", assertion_digest: digest("assertion")}
+
+      # A closure that refuses leaves nothing written.
+      assert {:error, :proof_spent} =
+               CarryActions.record_assertion(as(person), action.id, assertion,
+                 also: fn _action -> {:error, :proof_spent} end
+               )
+
+      assert {:ok, %{assertion: nil}} = CarryActions.get(as(person), action.id)
+
+      # One that answers runs in the write's transaction, handed the action
+      # as written.
+      test = self()
+
+      assert {:ok, recorded} =
+               CarryActions.record_assertion(as(person), action.id, assertion,
+                 also: fn written ->
+                   send(test, {:also, written.assertion, Arca.Repo.in_transaction?()})
+                   :ok
+                 end
+               )
+
+      assert_received {:also, "signed-assertion", true}
+      assert recorded.assertion == "signed-assertion"
+
+      # The same assertion again runs nothing: nothing new is issued.
+      assert {:ok, ^recorded} =
+               CarryActions.record_assertion(as(person), action.id, assertion,
+                 also: fn _action -> flunk("no second issue") end
+               )
+    end
+
+    test "an assertion locks the action's person before the action, the standing order its also: closure keeps",
+         %{person: person} do
+      {:ok, action} = CarryActions.open(as(person), source(person))
+      challenge = %{challenge: "b-challenge", challenge_digest: digest("challenge")}
+      {:ok, _} = CarryActions.attach_challenge(as(person), action.id, challenge)
+      assertion = %{assertion: "signed-assertion", assertion_digest: digest("assertion")}
+
+      # Another person's actor locks no one and is refused.
+      other = person!()
+
+      assert {:error, :cross_tenant} =
+               CarryActions.record_assertion(as(other), action.id, assertion)
+
+      test = self()
+      handler = "carry-lock-order-#{System.unique_integer([:positive])}"
+
+      :ok =
+        :telemetry.attach(
+          handler,
+          [:arca, :repo, :query],
+          fn _event, _measurements, meta, _config ->
+            if self() == test and meta[:source] in ["users", "carry_actions"],
+              do: send(test, {:statement, meta[:source], meta[:query]})
+          end,
+          nil
+        )
+
+      on_exit(fn -> :telemetry.detach(handler) end)
+
+      # The closure takes the person's lock again, as consuming their
+      # confirmation does when it reads their standing again.
+      assert {:ok, %{assertion: "signed-assertion"}} =
+               CarryActions.record_assertion(as(person), action.id, assertion,
+                 also: fn _written ->
+                   _person = Arca.DirectoryHeads.lock_person!(person.id)
+                   :ok
+                 end
+               )
+
+      :telemetry.detach(handler)
+
+      assert [{"users", first} | rest] = statements()
+      assert first =~ "carry_actions"
+      assert Enum.any?(rest, &match?({"carry_actions", _}, &1))
+
+      if Arca.Repo.adapter() == Ecto.Adapters.Postgres do
+        assert first =~ "FOR UPDATE"
+        assert {"carry_actions", locked} = Enum.find(rest, &match?({"carry_actions", _}, &1))
+        assert locked =~ "FOR UPDATE"
+      end
+    end
+  end
+
+  defp statements(acc \\ []) do
+    receive do
+      {:statement, source, query} -> statements([{source, query} | acc])
+    after
+      0 -> Enum.reverse(acc)
+    end
   end
 
   describe "the member fence" do
@@ -336,6 +434,30 @@ defmodule Arca.CarryActionsTest do
         )
 
       assert {:error, :expired} = CarryActions.record_receipt(server(), attrs)
+
+      assert {:error, :expired} =
+               CarryActions.receipt(server(), attrs.destination_home, attrs.challenge_id)
+    end
+
+    test "a login retried after a lost response reads its receipt back, the platform's alone", %{
+      person: person
+    } do
+      attrs = receipt(person)
+
+      assert {:error, :not_found} =
+               CarryActions.receipt(server(), attrs.destination_home, attrs.challenge_id)
+
+      {:ok, recorded} = CarryActions.record_receipt(server(), attrs)
+
+      assert {:ok, ^recorded} =
+               CarryActions.receipt(server(), attrs.destination_home, attrs.challenge_id)
+
+      # Another home's receipt for that challenge is not this one's.
+      assert {:error, :not_found} =
+               CarryActions.receipt(server(), "https://c.example", attrs.challenge_id)
+
+      assert {:error, :cross_tenant} =
+               CarryActions.receipt(as(person), attrs.destination_home, attrs.challenge_id)
     end
   end
 end

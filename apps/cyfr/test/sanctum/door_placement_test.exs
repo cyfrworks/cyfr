@@ -3,7 +3,7 @@
 
 defmodule Sanctum.DoorPlacementTest do
   @moduledoc """
-  A session is minted at exactly four places: three sit behind the door,
+  A session is minted at exactly five places: four sit behind the door,
   and the restore ingress behind the installation capability, since no
   door admits a person who does not exist yet. Reads the sources rather
   than the behaviour: a new `Session.create/1` caller that forgot the door
@@ -21,9 +21,11 @@ defmodule Sanctum.DoorPlacementTest do
   @device_flow "apps/sanctum/lib/sanctum/auth/device_flow.ex"
   @passkeys "apps/sanctum/lib/sanctum/passkeys.ex"
   @recovery "apps/sanctum/lib/sanctum/recovery.ex"
+  @cyfr_door "apps/sanctum/lib/sanctum/auth/cyfr_door.ex"
   @browser_callback "apps/cyfr/lib/prism_web/controllers/auth_controller.ex"
   @minters [
     "apps/cyfr/lib/cyfr_web/sign_in_response.ex",
+    @cyfr_door,
     @device_flow,
     @passkeys,
     @recovery
@@ -50,6 +52,12 @@ defmodule Sanctum.DoorPlacementTest do
     assert Prima.Test.SourceTree.read(Path.join(@root, @device_flow)) =~
              "Door.admit_identity",
            "#{@device_flow} mints sessions without asking the door"
+
+    # The `cyfr` door asks it about the identity it verified, by its
+    # identifier, before it records the person or mints anything.
+    assert Prima.Test.SourceTree.read(Path.join(@root, @cyfr_door)) =~
+             "Sanctum.Door.admit_identity(key,",
+           "#{@cyfr_door} mints sessions without asking the door"
 
     # The passkey door asks it for the person's own door identities and
     # verified email: a person the allowlist no longer admits signs in with

@@ -31,7 +31,10 @@ defmodule Sanctum.Providers.Pairing do
       is built here and nowhere else.
     * `complete` answers the `pair` challenge to sign when it carries no
       proof, and the paired client's id and its first certificate
-      (`Prima.DeviceCert`'s JSON) when it carries the proof over it.
+      (`Prima.DeviceCert`'s JSON) when it carries the proof over it. For a
+      person whose identity is at another home it carries, with both
+      calls, the `certificate` their home issued for the reserved client,
+      and that certificate is the answer; for anyone else it carries none.
     * `renew` answers the client's id and its replacement certificate. It
       is reached from the device channel's renewal exchange alone, under
       the renewal context the channel obtains for the client that proved
@@ -73,6 +76,10 @@ defmodule Sanctum.Providers.Pairing do
             proof(
               "complete: the device key's signature over the pair challenge; absent, the answer is the challenge to sign",
               false
+            ),
+            Arg.new("certificate", :json,
+              description:
+                "complete: for a person whose identity is at another home, the device certificate their home issued for this client, device key, home and athanor; absent for a person whose keys are here"
             )
           ],
           auth: :anonymous,
@@ -163,7 +170,13 @@ defmodule Sanctum.Providers.Pairing do
   def handle(%Context{} = ctx, %{"action" => "complete"} = args) do
     with {:ok, secret, device_key} <- pair_request(args),
          {:ok, proof} <- optional_proof(args),
-         {:ok, answer} <- Pairing.complete(ctx, secret, %{device_key: device_key, proof: proof}) do
+         {:ok, certificate} <- optional_certificate(args),
+         {:ok, answer} <-
+           Pairing.complete(ctx, secret, %{
+             device_key: device_key,
+             proof: proof,
+             certificate: certificate
+           }) do
       {:ok, completed(answer)}
     else
       {:error, reason} -> {:error, refusal(reason)}
@@ -233,6 +246,25 @@ defmodule Sanctum.Providers.Pairing do
   defp optional_proof(%{"proof" => proof}) when is_map(proof), do: {:ok, proof}
   defp optional_proof(_args), do: {:ok, nil}
 
+  # A remote person's home's certificate, read as the device protocol reads
+  # one (`Prima.DeviceCert`), or none.
+  defp optional_certificate(%{"certificate" => certificate}) when is_map(certificate) do
+    case DeviceCert.decode(certificate) do
+      {:ok, decoded} ->
+        {:ok, decoded}
+
+      {:error, _malformed} ->
+        {:error, {:invalid_argument, "The certificate is not a device certificate a home signs"}}
+    end
+  end
+
+  defp optional_certificate(%{"certificate" => nil}), do: {:ok, nil}
+
+  defp optional_certificate(%{"certificate" => _malformed}),
+    do: {:error, {:invalid_argument, "The certificate is a device certificate, as JSON"}}
+
+  defp optional_certificate(_args), do: {:ok, nil}
+
   defp device_key(value) do
     case Encoding.unb64(value, Encoding.key_bytes()) do
       {:ok, device_key} ->
@@ -281,9 +313,36 @@ defmodule Sanctum.Providers.Pairing do
   defp refusal(:remote_identity_unavailable),
     do:
       refused(
-        :unavailable,
+        :forbidden,
         :remote_identity_unavailable,
-        "Pairing a device for a person whose identity is at another home is not built yet."
+        "A device of a person whose identity is at another home is certified again there, " <>
+          "not renewed here"
+      )
+
+  defp refusal(:certificate_required),
+    do:
+      refused(
+        :invalid_argument,
+        :certificate_required,
+        "This pairing is for a person whose identity is at another home: bring the certificate " <>
+          "their home issued for this device"
+      )
+
+  defp refusal(:certificate_unexpected),
+    do:
+      refused(
+        :invalid_argument,
+        :certificate_unexpected,
+        "This home certifies this person's devices itself; complete the pairing without a certificate"
+      )
+
+  defp refusal(:certificate_refused),
+    do:
+      refused(
+        :unauthenticated,
+        :certificate_refused,
+        "The certificate is not their home's for this device, this home and this athanor " <>
+          "under their current key; certify the device there again"
       )
 
   defp refusal(:revoked),

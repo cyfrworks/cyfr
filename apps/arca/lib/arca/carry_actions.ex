@@ -35,7 +35,8 @@ defmodule Arca.CarryActions do
   browser-binding digest and the accepted assertion's digest, in the
   caller's transaction beside the session it mints. The exact receipt
   again answers the recorded one; another binding or assertion is refused.
-  A receipt expires with the carry retention and admits nothing after.
+  `receipt/3` reads it back for a login retried after a lost response. A
+  receipt expires with the carry retention and admits nothing after.
 
   Every function takes the actor first: a person reaches their own source
   actions, and the platform's own actor any action and every receipt.
@@ -121,22 +122,59 @@ defmodule Arca.CarryActions do
   Record the assertion issued for the pending action `id`, once, after its
   challenge is attached: the same assertion again answers the action;
   another is `:assertion_recorded`.
+
+  `opts[:also]` runs in the same transaction after a new assertion is
+  written, handed the action as a plain map, and answers `:ok` or
+  `{:error, reason}`, which leaves nothing written and refuses with that
+  reason: the proof that authorizes an assertion is consumed with the
+  write that records it. The same assertion again runs nothing, since
+  nothing new is issued.
   """
-  @spec record_assertion(Prima.Actor.t(), String.t(), map()) :: {:ok, row()} | {:error, term()}
-  def record_assertion(%Prima.Actor{} = actor, id, %{assertion: bytes, assertion_digest: digest})
-      when is_binary(id) and is_binary(bytes) and bytes != "" do
+  @spec record_assertion(Prima.Actor.t(), String.t(), map(), keyword()) ::
+          {:ok, row()} | {:error, term()}
+  def record_assertion(actor, id, attrs, opts \\ [])
+
+  def record_assertion(
+        %Prima.Actor{} = actor,
+        id,
+        %{assertion: bytes, assertion_digest: digest},
+        opts
+      )
+      when is_binary(id) and is_binary(bytes) and bytes != "" and is_list(opts) do
+    also = Keyword.get(opts, :also, fn _action -> :ok end)
+
     if Prima.Identity.Encoding.digest?(digest) do
       once(actor, id, "Arca.CarryActions.record_assertion", fn action, now ->
         cond do
-          action.assertion == bytes and action.assertion_digest == digest -> {:ok, action}
-          not is_nil(action.assertion) -> {:error, :assertion_recorded}
-          is_nil(action.challenge) -> {:error, :no_challenge}
-          true -> write_once(action, [assertion: bytes, assertion_digest: digest], now)
+          action.assertion == bytes and action.assertion_digest == digest ->
+            {:ok, action}
+
+          not is_nil(action.assertion) ->
+            {:error, :assertion_recorded}
+
+          is_nil(action.challenge) ->
+            {:error, :no_challenge}
+
+          true ->
+            with {:ok, written} <-
+                   write_once(action, [assertion: bytes, assertion_digest: digest], now),
+                 :ok <- also_ran(also.(Arca.Data.project(written))) do
+              {:ok, written}
+            end
         end
       end)
     else
       {:error, {:invalid, %{assertion_digest: ["is not a sha256 digest"]}}}
     end
+  end
+
+  defp also_ran(:ok), do: :ok
+  defp also_ran({:error, _reason} = refusal), do: refusal
+
+  defp also_ran(other) do
+    raise ArgumentError,
+          "an also: closure answers :ok or {:error, reason}, got " <>
+            Prima.LoggerContext.shape(other)
   end
 
   @doc """
@@ -251,6 +289,40 @@ defmodule Arca.CarryActions do
   end
 
   def record_receipt(%Prima.Actor{}, _attrs), do: {:error, :cross_tenant}
+
+  @doc """
+  The login receipt this home recorded as `destination_home` for the
+  challenge `challenge_id`, the platform's own actor only: what a login
+  retried after a lost response resumes. A receipt past its retention is
+  `:expired`; none is `:not_found`.
+  """
+  @spec receipt(Prima.Actor.t(), String.t(), String.t()) ::
+          {:ok, row()} | {:error, :not_found | :expired | :cross_tenant | :database_error}
+  def receipt(%Prima.Actor{scope: :platform, system: true}, destination_home, challenge_id)
+      when is_binary(destination_home) and is_binary(challenge_id) do
+    Arca.Repo.Errors.with_db_rescue("Arca.CarryActions.receipt", fn ->
+      now = Arca.ServerMetaStorage.now!()
+
+      from(a in CarryAction,
+        where:
+          a.kind == "login_receipt" and a.destination_home == ^destination_home and
+            a.challenge_id == ^challenge_id
+      )
+      |> Arca.Repo.one()
+      |> case do
+        nil ->
+          {:error, :not_found}
+
+        receipt ->
+          if DateTime.compare(receipt.expires_at, now) == :gt,
+            do: {:ok, receipt},
+            else: {:error, :expired}
+      end
+    end)
+    |> Arca.Data.project()
+  end
+
+  def receipt(%Prima.Actor{}, _destination_home, _challenge_id), do: {:error, :cross_tenant}
 
   @doc """
   Housekeeping, the platform's own actor only: open actions past their
@@ -445,11 +517,13 @@ defmodule Arca.CarryActions do
   end
 
   # A challenge or an assertion, once: what the action will sign or carry,
-  # so the write is fenced (`fenced/1`) as well as locked.
+  # so the write is fenced (`fenced/1`) as well as locked, the action's
+  # person first (`lock_owner!/2`).
   defp once(actor, id, tag, decide) do
     Arca.Repo.Errors.with_db_rescue(tag, fn ->
       fenced(fn ->
         now = Arca.ServerMetaStorage.now!()
+        _owner = lock_owner!(actor, id)
 
         with {:ok, action} <- locked(actor, id) do
           cond do
@@ -486,6 +560,33 @@ defmodule Arca.CarryActions do
       do: {:ok, Arca.Repo.get!(CarryAction, action.id)},
       else: {:error, :stale}
   end
+
+  # The person who owns the source action `id`, their row locked before the
+  # action's: the head of the standing order. An assertion's `also:`
+  # closure consumes the person's confirmation in the same transaction,
+  # where reading the caller's standing again locks the person again
+  # (`Sanctum.Consent.Authz`'s consume, through `Sanctum.Caller`),
+  # so the action is never held while the person's lock is awaited, and
+  # this write and a path that locks the person and then the action never
+  # wait on each other. A person's actor locks only their own row; a
+  # cross-person or missing action locks nothing and `locked/2` refuses it.
+  defp lock_owner!(actor, id) do
+    owner = from(a in CarryAction, where: a.id == ^id and a.kind == "source", select: a.user_id)
+    query = from(u in User, where: u.id in subquery(owner), select: u.id)
+
+    case actor do
+      %Prima.Actor{scope: :platform} ->
+        lock_one(query)
+
+      %Prima.Actor{user_id: user_id} when is_binary(user_id) ->
+        lock_one(where(query, id: ^user_id))
+
+      %Prima.Actor{} ->
+        nil
+    end
+  end
+
+  defp lock_one(query), do: query |> Arca.QueryHelpers.for_update() |> Arca.Repo.one()
 
   defp locked(actor, id) do
     from(a in CarryAction, where: a.id == ^id and a.kind == "source")

@@ -17,6 +17,19 @@ defmodule PrismWeb.LoginLive do
   and mints the session. A one-time ticket bound to this browser hands it
   to `GET /auth/passkey/complete/:ticket`, as the device flow's does.
 
+  A person whose keys another home holds signs in through the `cyfr` door
+  (`Sanctum.Auth.CyfrDoor`). The page's "Sign in with your CYFR" entry
+  takes the address of their signing home and sends them to its `/carry`
+  page with this home as the destination, where they begin the sign-in
+  themselves. Their home sends the browser back here with the carry in
+  the URL's fragment, which the page's script hands to `cyfr_carry`: the
+  carry is verified against the person's directory, this home's challenge
+  is minted and handed by a one-time ticket bound to this browser to
+  `GET /auth/cyfr`, which keeps it in the browser's session and returns
+  the browser to their home. Their home's assertion comes back the same
+  way, to `cyfr_assertion`, and the page posts it, with its CSRF token, to
+  `POST /auth/cyfr/callback`. Neither event reads the browser's session.
+
   A refused sign-in never reaches a session — the door answers on the
   poll; a signed-in person who has no athanor yet is told so.
 
@@ -38,6 +51,10 @@ defmodule PrismWeb.LoginLive do
   # bound, per node, before any signature is checked.
   @passkey_starts 30
   @passkey_window_ms 60_000
+  # A `cyfr` sign-in's carry reads the person's directory before anything
+  # else answers, so each address has its own bound here, per node.
+  @cyfr_starts 30
+  @cyfr_window_ms 60_000
   @not_owner "This server is not accepting sign-ins right now. Try again in a moment."
 
   @impl true
@@ -64,10 +81,71 @@ defmodule PrismWeb.LoginLive do
      |> assign(:poll_interval, @default_poll_interval_s)
      # The passkey sign-in challenge this page holds, answered at most once.
      |> assign(:passkey_challenge, nil)
+     # A `cyfr` sign-in's callback fragment, posted once by the form below.
+     |> assign(:cyfr_fragment, nil)
+     |> assign(:cyfr_trigger, false)
      |> assign(:error, error_from_params(params)), layout: false}
   end
 
+  # The person names their signing home; they begin the sign-in there.
   @impl true
+  def handle_event("cyfr_home", %{"home" => address}, socket) when is_binary(address) do
+    case Sanctum.Auth.CyfrDoor.signing_home(address) do
+      {:ok, url} ->
+        {:noreply, redirect(socket, external: url)}
+
+      {:error, :this_home} ->
+        {:noreply,
+         assign(
+           socket,
+           :error,
+           "That is this home's address; name the home that holds your keys."
+         )}
+
+      {:error, :invalid_home} ->
+        {:noreply,
+         assign(socket, :error, "That is not a home's address, like https://home.example.")}
+    end
+  end
+
+  # The carry the person's home sent back with them: this home's challenge
+  # for it, by a ticket bound to this browser, to the hop that keeps it in
+  # the browser's session.
+  def handle_event("cyfr_carry", %{"fragment" => fragment}, socket) when is_binary(fragment) do
+    cond do
+      not Arca.ControlPlane.held?() ->
+        {:noreply, assign(socket, :error, @not_owner)}
+
+      Prima.RateLimiter.check(
+        {:cyfr_sign_in, socket.assigns.client_ip},
+        @cyfr_starts,
+        @cyfr_window_ms
+      ) != :ok ->
+        {:noreply, assign(socket, :error, "Too many sign-ins from here. Try again in a minute.")}
+
+      true ->
+        case Sanctum.Auth.CyfrDoor.challenge(fragment) do
+          {:ok, held} ->
+            ticket = mint_ticket({:login_cyfr_ticket, held}, socket.assigns.browser_binding)
+            {:noreply, redirect(socket, to: "/auth/cyfr?" <> URI.encode_query(%{ticket: ticket}))}
+
+          {:error, reason} ->
+            {:noreply, assign(socket, :error, cyfr_refused(reason))}
+        end
+    end
+  end
+
+  # The assertion the person's home sent back: posted, with this page's
+  # CSRF token, to the callback, by the form the trigger submits.
+  def handle_event("cyfr_assertion", %{"fragment" => fragment}, socket)
+      when is_binary(fragment) do
+    if byte_size(fragment) <= Prima.Carry.max_fragment_bytes() do
+      {:noreply, assign(socket, cyfr_fragment: fragment, cyfr_trigger: true, error: nil)}
+    else
+      {:noreply, assign(socket, :error, "That sign-in is larger than this home accepts.")}
+    end
+  end
+
   def handle_event("passkey_start", _params, socket) do
     cond do
       not Arca.ControlPlane.held?() ->
@@ -271,6 +349,29 @@ defmodule PrismWeb.LoginLive do
 
   defp passkey_refused, do: "That passkey did not sign you in here."
 
+  defp cyfr_refused(reason) when reason in [:identity_stale, :unavailable],
+    do: "Your identity could not be confirmed with its directory just now. Try again shortly."
+
+  defp cyfr_refused(:wrong_destination),
+    do: "That sign-in was begun for another home. Begin it again for this one."
+
+  defp cyfr_refused(_refused),
+    do: "That sign-in could not be checked here. Begin it again from your home."
+
+  # A `cyfr` sign-in's challenge, for the hop that keeps it in this
+  # browser's session: bound to the browser as the other tickets are.
+  defp mint_ticket({:login_cyfr_ticket, held}, browser_binding) do
+    ticket = Base.url_encode64(:crypto.strong_rand_bytes(32), padding: false)
+
+    Arca.Cache.put(
+      {:login_cyfr_ticket, ticket},
+      %{held: held, browser_binding: browser_binding},
+      @ticket_ttl_ms
+    )
+
+    ticket
+  end
+
   defp mint_ticket({:login_passkey_ticket, result}, browser_binding) do
     ticket = Base.url_encode64(:crypto.strong_rand_bytes(32), padding: false)
 
@@ -443,6 +544,48 @@ defmodule PrismWeb.LoginLive do
               <span>Sign in with a passkey</span>
             </button>
           </div>
+
+          <form
+            :if={@login_state == :idle}
+            id="cyfr-sign-in"
+            phx-submit="cyfr_home"
+            class="flex flex-col gap-2 pt-2 border-t border-gray-800"
+          >
+            <label for="cyfr-home" class="text-sm text-gray-300">
+              Sign in with your CYFR: the address of the home that holds your keys
+            </label>
+            <div class="flex gap-2">
+              <input
+                id="cyfr-home"
+                name="home"
+                type="text"
+                inputmode="url"
+                autocomplete="url"
+                placeholder="https://your-home.example"
+                class="flex-1 min-w-0 rounded-lg bg-gray-800 border border-gray-700 px-3 py-2 text-white"
+              />
+              <button
+                type="submit"
+                class="px-4 py-2 bg-gray-800 hover:bg-gray-700 text-white rounded-lg border border-gray-700"
+              >
+                Continue
+              </button>
+            </div>
+            <p class="text-xs text-gray-500">
+              Your home learns this home's address, and this home learns yours.
+            </p>
+          </form>
+
+          <.form
+            :if={@cyfr_trigger}
+            for={%{}}
+            id="cyfr-callback"
+            action={~p"/auth/cyfr/callback"}
+            method="post"
+            phx-trigger-action={@cyfr_trigger}
+          >
+            <input type="hidden" name="cyfr" value={@cyfr_fragment} />
+          </.form>
         </div>
       </div>
     </div>

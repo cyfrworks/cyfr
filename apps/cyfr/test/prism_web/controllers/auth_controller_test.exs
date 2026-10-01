@@ -956,6 +956,7 @@ defmodule PrismWeb.AuthControllerTest do
           directory_url: directory,
           head_hash: head,
           key_epoch: head,
+          recovery_epoch: head,
           state: ~s({"head":"#{head}"})
         })
 
@@ -965,6 +966,149 @@ defmodule PrismWeb.AuthControllerTest do
       )
 
       :ok
+    end
+  end
+
+  describe "the cyfr door — the challenge hop and the callback" do
+    alias Sanctum.Auth.CyfrDoor
+    alias Sanctum.Test.DirectoryServer
+
+    @cyfr_browser "cyfr-door-test-browser"
+
+    setup do
+      tls = DirectoryServer.tls()
+      DirectoryServer.listen!()
+      DirectoryServer.seam!(tls)
+      Arca.Cache.init()
+
+      on_exit(fn ->
+        Arca.Cache.delete_match(Arca.Cache.Keys.match_identity_unreachable())
+      end)
+
+      directory = DirectoryServer.start!(tls)
+      identity = DirectoryServer.identity!(directory.dir, directory.url)
+      %{fragment: fragment} = DirectoryServer.carry_fragment(identity, Sanctum.Person.home())
+      {:ok, held} = CyfrDoor.challenge(fragment)
+      %{directory: directory, identity: identity, held: held}
+    end
+
+    defp cyfr_ticket(held, binding \\ @cyfr_browser) do
+      ticket = Base.url_encode64(:crypto.strong_rand_bytes(32), padding: false)
+
+      Arca.Cache.put(
+        {:login_cyfr_ticket, ticket},
+        %{held: held, browser_binding: binding},
+        60_000
+      )
+
+      ticket
+    end
+
+    defp holding(conn, held),
+      do: Plug.Test.init_test_session(conn, %{"cyfr_challenge" => held})
+
+    defp callback(conn, held, fragment),
+      do: conn |> holding(held) |> post(~p"/auth/cyfr/callback", %{"cyfr" => fragment})
+
+    test "the hop keeps the challenge in this browser's session and answers 303 to the carry's signed return URL",
+         %{conn: conn, held: held} do
+      ticket = cyfr_ticket(held)
+
+      conn =
+        conn
+        |> Plug.Test.init_test_session(%{"_csrf_token" => @cyfr_browser})
+        |> get("/auth/cyfr?" <> URI.encode_query(%{ticket: ticket}))
+
+      assert conn.status == 303
+      assert [location] = get_resp_header(conn, "location")
+      assert location == CyfrDoor.redirect_url(held)
+      assert String.starts_with?(location, "https://a.example/carry#")
+      assert get_session(conn, "cyfr_challenge") == held
+      assert Arca.Cache.get({:login_cyfr_ticket, ticket}) == :miss
+    end
+
+    test "a ticket another browser presents is spent and sends it back to sign in; a missing one too",
+         %{conn: conn, held: held} do
+      ticket = cyfr_ticket(held)
+
+      wrong =
+        conn
+        |> Plug.Test.init_test_session(%{"_csrf_token" => "another-browser"})
+        |> get("/auth/cyfr?" <> URI.encode_query(%{ticket: ticket}))
+
+      assert redirected_to(wrong) == "/login"
+      refute get_session(wrong, "cyfr_challenge")
+      assert Arca.Cache.get({:login_cyfr_ticket, ticket}) == :miss
+
+      assert redirected_to(get(build_conn(), "/auth/cyfr?ticket=nothing")) == "/login"
+      assert redirected_to(get(build_conn(), "/auth/cyfr")) == "/login"
+    end
+
+    test "the callback admits under the challenge the session holds and sets the session; a retry resumes it",
+         %{conn: conn, held: held, identity: identity} do
+      {:ok, _} = Sanctum.Door.Store.allow("identifier", identity.identifier, "test")
+      fragment = DirectoryServer.assertion_fragment(identity, held, Sanctum.Person.home())
+
+      signed_in = callback(conn, held, fragment)
+      assert redirected_to(signed_in) == "/"
+      token = get_session(signed_in, :sanctum_session_token)
+      assert token == CyfrDoor.session_token(held)
+      refute get_session(signed_in, "cyfr_challenge")
+
+      # Admitted to nothing here: no athanor of their own is minted, and the
+      # page they land on tells them so.
+      landed = get(recycle(signed_in), "/")
+      assert redirected_to(landed) == "/login?error=no_athanor"
+
+      # The response was lost: the browser still holds the challenge, and
+      # its retry resumes the one session.
+      again = callback(build_conn(), held, fragment)
+      assert redirected_to(again) == "/"
+      assert get_session(again, :sanctum_session_token) == token
+    end
+
+    test "an identity the door refuses gets 403 and no session",
+         %{conn: conn, held: held} = ctx do
+      fragment = DirectoryServer.assertion_fragment(ctx.identity, held, Sanctum.Person.home())
+      refused = callback(conn, held, fragment)
+
+      assert html_response(refused, 403) =~ "Not allowed on this server"
+      refute get_session(refused, :sanctum_session_token)
+    end
+
+    test "an assertion for another audience, or no challenge held, signs nobody in",
+         %{conn: conn, held: held, identity: identity} do
+      {:ok, _} = Sanctum.Door.Store.allow("identifier", identity.identifier, "test")
+
+      fragment =
+        DirectoryServer.assertion_fragment(identity, held, Sanctum.Person.home(),
+          audience: "https://elsewhere.example"
+        )
+
+      refused = callback(conn, held, fragment)
+      assert html_response(refused, 401) =~ "Begin it again from your home"
+      refute get_session(refused, :sanctum_session_token)
+
+      unheld =
+        build_conn()
+        |> Plug.Test.init_test_session(%{})
+        |> post(~p"/auth/cyfr/callback", %{
+          "cyfr" => DirectoryServer.assertion_fragment(identity, held, Sanctum.Person.home())
+        })
+
+      assert html_response(unheld, 401)
+      refute get_session(unheld, :sanctum_session_token)
+    end
+
+    test "a directory that cannot be read answers try again, and signs nobody in",
+         %{conn: conn, held: held, identity: identity, directory: directory} do
+      {:ok, _} = Sanctum.Door.Store.allow("identifier", identity.identifier, "test")
+      fragment = DirectoryServer.assertion_fragment(identity, held, Sanctum.Person.home())
+      DirectoryServer.Server.stop(directory.server)
+
+      paused = callback(conn, held, fragment)
+      assert html_response(paused, 503) =~ "Try again shortly"
+      refute get_session(paused, :sanctum_session_token)
     end
   end
 end

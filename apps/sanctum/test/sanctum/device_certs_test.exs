@@ -695,9 +695,8 @@ defmodule Sanctum.DeviceCertsTest do
                {:error, :client_mismatch}
     end
 
-    test "an identity subject is refused until another home's head can be verified", %{
-      session_ctx: session_ctx
-    } do
+    test "an identity subject naming no person this home admitted from another home is refused",
+         %{session_ctx: session_ctx} do
       device = pair!(session_ctx)
       {_key, private} = :crypto.generate_key(:eddsa, :ed25519)
 
@@ -719,7 +718,7 @@ defmodule Sanctum.DeviceCertsTest do
                %{client_id: device.client_id, certificate: remote, source: @source},
                Proof.sign(challenge, device.private),
                challenge
-             ) == {:error, :remote_identity_unavailable}
+             ) == {:error, :unknown_subject}
     end
 
     test "standing is read anew on every request: revoked, denied, left and archived", %{
@@ -842,7 +841,13 @@ defmodule Sanctum.DeviceCertsTest do
               credential
               | seat: %{credential.seat | athanor_id: stranger.athanor.id}
             },
-            ended_seat: put_in(credential.seat.status, "removed")
+            ended_seat: put_in(credential.seat.status, "removed"),
+            an_identity_row_on_a_local_certificate:
+              Map.put(credential, :identity, %{
+                user_id: credential.client.user_id,
+                provenance: "remote",
+                identifier: "per_" <> Prima.Digest.sha256_hex("local-#{System.unique_integer()}")
+              })
           ] do
         assert Sanctum.Caller.establish_device(changed, []) == {:error, :unauthenticated},
                inspect(what)
@@ -1075,6 +1080,188 @@ defmodule Sanctum.DeviceCertsTest do
       for _ <- 1..20, do: :ok = DeviceCerts.claim_verification(nil)
       assert {:error, {:rate_limited, _}} = DeviceCerts.claim_verification(nil)
       assert window(:device_verification_source, "unknown")
+    end
+  end
+
+  # ---------------------------------------------------------------------------
+  # A remote person's device
+  # ---------------------------------------------------------------------------
+
+  describe "a device of a person whose keys are at another home" do
+    setup %{session_ctx: session_ctx, user: user, athanor: athanor} do
+      alias Sanctum.Test.DirectoryServer
+
+      tls = DirectoryServer.tls()
+      DirectoryServer.listen!()
+      DirectoryServer.seam!(tls)
+
+      on_exit(fn ->
+        Arca.Cache.delete_match(Arca.Cache.Keys.match_identity_unreachable())
+      end)
+
+      directory = DirectoryServer.start!(tls)
+      identity = DirectoryServer.identity!(directory.dir, directory.url)
+
+      # Paired at this home under their home's certificate: the invitation
+      # opened under the person's proof here, then they are remote.
+      {:ok, invitation} = begin!(session_ctx)
+      :ok = DirectoryServer.remote_person!(user.id, identity)
+      {device_key, private} = :crypto.generate_key(:eddsa, :ed25519)
+      certificate = remote_certificate(identity, invitation.client_id, device_key, athanor)
+      glass = Context.build(%{authenticated: false, client_ip: @source})
+      submission = %{device_key: device_key, certificate: certificate}
+
+      {:ok, %{challenge: challenge}} =
+        Pairing.complete(glass, invitation.invitation_secret, submission)
+
+      {:ok, %{client_id: client_id}} =
+        Pairing.complete(
+          glass,
+          invitation.invitation_secret,
+          Map.put(submission, :proof, Proof.sign(challenge, private))
+        )
+
+      device = %{
+        client_id: client_id,
+        certificate: certificate,
+        device_key: device_key,
+        private: private
+      }
+
+      %{directory: directory, identity: identity, device: device}
+    end
+
+    defp remote_certificate(identity, client_id, device_key, athanor) do
+      now = System.os_time(:millisecond)
+
+      {:ok, certificate} =
+        DeviceCert.new(
+          device_key: device_key,
+          client_id: client_id,
+          subject: %{
+            kind: :identity,
+            identifier: identity.identifier,
+            key_epoch: Sanctum.Test.DirectoryServer.key_epoch(identity)
+          },
+          issuer: "https://a.example",
+          audience: Person.home(),
+          athanor: athanor.id,
+          not_before: now,
+          expires_at: now + 3_600_000
+        )
+
+      DeviceCert.sign(certificate, elem(identity.live, 1))
+    end
+
+    defp remote_connect(device) do
+      challenge = challenge(device, :connect)
+
+      DeviceCerts.verify_connect(
+        %{client_id: device.client_id, certificate: device.certificate, source: @source},
+        Proof.sign(challenge, device.private),
+        challenge
+      )
+    end
+
+    test "connects under their home's certificate, checked against their head; this home never calls their home",
+         %{device: device, user: user} do
+      assert {:ok, %Context{auth_method: :device, user_id: user_id} = ctx} =
+               remote_connect(device)
+
+      assert user_id == user.id
+
+      assert {:ok, %Context{client_id: client_id}} =
+               DeviceCerts.verify_request(device.certificate, ctx, [])
+
+      assert client_id == device.client_id
+
+      # Only the directory was asked, never `https://a.example`.
+      refute Enum.any?(Sanctum.Test.DirectoryServer.requests(), &(&1.target =~ "a.example"))
+    end
+
+    test "the context is established only where the certificate, the identity row read for it and the client name one person",
+         %{device: device, user: user, identity: identity} do
+      athanor_id = device.certificate.athanor
+      {:ok, client} = DeviceCerts.paired_client(athanor_id, user.id, device.client_id)
+      {:ok, standing} = DeviceCerts.standing(user.id, athanor_id)
+
+      {:ok, row} =
+        Arca.PersonIdentities.lookup_identifier(Prima.Actor.system(), identity.identifier)
+
+      credential = %{
+        certificate: device.certificate,
+        client: client,
+        identity: Map.take(row, [:user_id, :provenance, :identifier]),
+        user: standing.user,
+        athanor: standing.athanor,
+        seat: standing.seat,
+        platform_admin: standing.platform_admin
+      }
+
+      assert {:ok, %Context{user_id: user_id, client_id: client_id}} =
+               Sanctum.Caller.establish_device(credential, [])
+
+      assert {user_id, client_id} == {user.id, device.client_id}
+
+      another = "per_" <> Prima.Digest.sha256_hex("another-#{System.unique_integer()}")
+      stranger = seated!()
+
+      for {what, changed} <- [
+            another_identifier: put_in(credential.identity.identifier, another),
+            another_persons_row: put_in(credential.identity.user_id, stranger.user.id),
+            a_local_row: put_in(credential.identity.provenance, "local"),
+            no_row: %{credential | identity: nil},
+            no_row_at_all: Map.delete(credential, :identity)
+          ] do
+        assert Sanctum.Caller.establish_device(changed, []) == {:error, :unauthenticated},
+               inspect(what)
+      end
+    end
+
+    test "a head that moved retires the certificate: its next request is refused, the glass certified again at their home",
+         %{device: device, directory: directory, identity: identity} do
+      {:ok, ctx} = remote_connect(device)
+      Sanctum.Test.DirectoryServer.rotate!(directory.dir, identity)
+      {:ok, _} = Sanctum.IdentityFreshness.fresh!(identity.identifier)
+
+      assert {:error, :bad_signature} = DeviceCerts.verify_request(device.certificate, ctx, [])
+      assert {:error, _refused} = remote_connect(device)
+
+      # A remote certificate is not renewed here.
+      challenge = challenge(device, :renew)
+
+      assert DeviceCerts.verify_connect(
+               %{client_id: device.client_id, certificate: device.certificate, source: @source},
+               Proof.sign(challenge, device.private),
+               challenge
+             ) == {:error, :remote_identity_unavailable}
+    end
+
+    test "past the freshness bound with the directory unreachable, the device pauses as a session does; the pairing stands",
+         %{device: device, directory: directory, identity: identity} do
+      {:ok, ctx} = remote_connect(device)
+      Sanctum.Test.DirectoryServer.Server.stop(directory.server)
+
+      {1, _} =
+        Arca.Repo.update_all(
+          from(h in Arca.Schemas.DirectoryHead, where: h.identifier == ^identity.identifier),
+          set: [verified_at: DateTime.add(DateTime.utc_now(), -400, :second)]
+        )
+
+      # Revalidation (`Sanctum.Caller.revalidate_device/1`) pauses it.
+      assert {:error, :identity_stale} =
+               Sanctum.Caller.revalidate_session(%{ctx | validated_at: nil})
+
+      assert {:error, :identity_stale} = DeviceCerts.verify_request(device.certificate, ctx, [])
+
+      # Its pause is no failed proof: nothing is counted against the bounds.
+      assert {:error, :identity_stale} = remote_connect(device)
+
+      assert {:ok, [%{standing: "active"}]} =
+               Arca.PairedClients.list(Prima.Actor.in_athanor(ctx.athanor_id),
+                 user_id: ctx.user_id,
+                 standing: :all
+               )
     end
   end
 end

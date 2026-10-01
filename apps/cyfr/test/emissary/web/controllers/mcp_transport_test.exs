@@ -305,6 +305,7 @@ defmodule Emissary.Web.MCPTransportTest do
           directory_url: directory,
           head_hash: head,
           key_epoch: head,
+          recovery_epoch: head,
           state: ~s({"head":"#{head}"})
         })
 

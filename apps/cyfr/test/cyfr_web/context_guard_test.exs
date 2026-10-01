@@ -332,6 +332,7 @@ defmodule CyfrWeb.ContextGuardTest do
         directory_url: @unreachable,
         head_hash: head,
         key_epoch: head,
+        recovery_epoch: head,
         state: ~s({"head":"#{head}"})
       })
 

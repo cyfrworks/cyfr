@@ -23,10 +23,12 @@ defmodule Sanctum.Pairing do
       the transaction that opens the invitation, and its preview states
       that whoever presents the invitation pairs a device.
     * `complete/3` — the new glass, holding neither a session nor a
-      certificate, presents the secret and its device public key and is
-      answered a `pair` challenge; it signs the challenge with its device
-      key and presents the proof, and the home records the paired client
-      and issues its first certificate. The invitation names the person
+      certificate of this home's, presents the secret and its device
+      public key and is answered a `pair` challenge; it signs the
+      challenge with its device key and presents the proof, and the home
+      records the paired client and issues its first certificate, or, for
+      a remote person, records the one their own home issued (below).
+      The invitation names the person
       and athanor, and nothing about the caller does: a session cookie
       the browser still holds never chooses the person. The person's
       standing and seat are locked and checked, the invitation rechecked
@@ -46,13 +48,29 @@ defmodule Sanctum.Pairing do
       (`pairing_revocation`).
     * `list/1` — the person's paired clients in the athanor in focus.
 
-  A certificate is signed by the person's live key at this home
+  A local person's certificate is signed by their live key at this home
   (`Sanctum.Person.issue_device_cert/4`) with a `local` subject, whose
-  issuer and audience are both this home. A person whose keys are at
-  another home is refused `:remote_identity_unavailable`: this home
-  cannot sign for them, and pairing them needs the certificate their own
-  home issues, which nothing verifies yet. Local pairing reads no
+  issuer and audience are both this home. Local pairing reads no
   directory and needs no identifier.
+
+  ## Pairing a remote person's device
+
+  This home cannot sign for a person whose keys are at another home. Their
+  invitation reserves the client id as any does; their own home certifies
+  that id, the device key, this home and the athanor
+  (`person.certify`, after a fresh confirmation there), and the glass
+  presents that certificate with its completion (`complete/3`'s
+  `:certificate`). Here the person's head is read fresh from their
+  directory, and the certificate must be signed by its current live key,
+  under its current `key_epoch`, for exactly the person's identifier, the
+  reserved client id, the submitted device key, this home as its audience
+  and the invitation's athanor, unexpired; the glass's proof over the
+  `pair` challenge shows it holds that device key. Then the client is
+  recorded with that certificate, bound to the epoch under the person's
+  lock, in the invitation's one transaction. A certificate offered for a
+  local person's invitation, or none for a remote person's, is refused.
+  A remote certificate is not renewed here: the glass is certified again
+  at the person's home when it expires.
 
   Every completion and every renewal is counted against the verification
   bounds before it is verified (`Sanctum.DeviceCerts.claim_verification/1`):
@@ -196,11 +214,14 @@ defmodule Sanctum.Pairing do
 
   @typedoc """
   What the new glass submits to `complete/3`: its device public key
-  (32 raw bytes) and, once it holds the `pair` challenge, its `proof`.
+  (32 raw bytes), once it holds the `pair` challenge its `proof`, and,
+  for a remote person's invitation, the `certificate` their own home
+  issued for the reserved client (with both calls).
   """
   @type submission :: %{
           required(:device_key) => binary(),
-          optional(:proof) => Proof.t() | map() | nil
+          optional(:proof) => Proof.t() | map() | nil,
+          optional(:certificate) => DeviceCert.t() | nil
         }
 
   @typedoc "A paired client and the certificate it connects under."
@@ -224,8 +245,16 @@ defmodule Sanctum.Pairing do
       device key submitted, or the challenge is not one this home issued
       for that invitation or client.
     * `:wrong_audience` — the invitation is for another home.
-    * `:remote_identity_unavailable` — the person's keys are at another
-      home.
+    * `:certificate_required` — a remote person's invitation completed
+      without their home's certificate; `:certificate_unexpected`, a
+      local person's offered one.
+    * `:certificate_refused` — the certificate offered is not their home's
+      for exactly this person, client, device key, home and athanor under
+      their current live key, or has expired.
+    * `:identity_stale` — a remote person's directory could not be read
+      fresh.
+    * `:remote_identity_unavailable` — a renewal of a remote person's
+      certificate, which their own home certifies again instead.
     * `:not_standing` — the person is denied, the athanor archived or the
       person no longer seated in it.
     * `:revoked` — the paired client was revoked.
@@ -240,6 +269,10 @@ defmodule Sanctum.Pairing do
           :invalid_invitation
           | :proof_refused
           | :wrong_audience
+          | :certificate_required
+          | :certificate_unexpected
+          | :certificate_refused
+          | :identity_stale
           | :remote_identity_unavailable
           | :not_standing
           | :revoked
@@ -356,10 +389,11 @@ defmodule Sanctum.Pairing do
     with :ok <- DeviceCerts.claim_verification(ctx.client_ip),
          {:ok, invitation} <- pending_invitation(secret, now),
          :ok <- this_home(invitation),
-         :ok <- DeviceCerts.local_identity(invitation.user_id) do
+         {:ok, issuer} <-
+           issuer(invitation, device_key, Map.get(submission, :certificate), now) do
       case Map.get(submission, :proof) do
         nil -> challenged(secret, invitation, device_key, now)
-        proof -> redeem(secret, invitation, device_key, proof, now)
+        proof -> redeem(secret, invitation, device_key, proof, issuer, now)
       end
     end
   end
@@ -388,6 +422,72 @@ defmodule Sanctum.Pairing do
 
   defp this_home(%{audience_home: audience}) do
     if audience == Person.home(), do: :ok, else: {:error, :wrong_audience}
+  end
+
+  # Who certifies the device: this home, for a person whose keys are here,
+  # with no certificate offered; or the person's own home, whose
+  # certificate for exactly this invitation's client, the device key, this
+  # home and the athanor is verified under the head their directory names
+  # now (`Sanctum.DeviceCerts.remote_subject/3`, read live).
+  defp issuer(invitation, device_key, certificate, now) do
+    case Arca.PersonIdentities.get(Prima.Actor.system(), invitation.user_id) do
+      {:ok, %{provenance: "remote", identifier: identifier}} when is_binary(identifier) ->
+        remote_issuer(invitation, identifier, device_key, certificate, now)
+
+      {:ok, %{provenance: "remote"}} ->
+        {:error, :unavailable}
+
+      {:ok, _local} ->
+        local_issuer(invitation.user_id, certificate)
+
+      {:error, :not_found} ->
+        local_issuer(invitation.user_id, certificate)
+
+      {:error, _unanswered} ->
+        {:error, :unavailable}
+    end
+  end
+
+  defp local_issuer(user_id, nil) do
+    with :ok <- DeviceCerts.local_identity(user_id), do: {:ok, :local}
+  end
+
+  defp local_issuer(_user_id, _certificate), do: {:error, :certificate_unexpected}
+
+  defp remote_issuer(_invitation, _identifier, _device_key, nil, _now),
+    do: {:error, :certificate_required}
+
+  defp remote_issuer(invitation, identifier, device_key, %DeviceCert{} = certificate, now) do
+    with :ok <- binds?(certificate, invitation, identifier, device_key),
+         {:ok, %{user_id: user_id, certificate: certificate}} <-
+           remote_certificate(certificate, now) do
+      if user_id == invitation.user_id,
+        do: {:ok, {:remote, identifier, certificate}},
+        else: {:error, :certificate_refused}
+    end
+  end
+
+  defp remote_issuer(_invitation, _identifier, _device_key, _certificate, _now),
+    do: {:error, :certificate_refused}
+
+  # The exact binding the invitation reserved, before anything is read:
+  # the person's identifier, the reserved client id, the submitted device
+  # key, this home and the invitation's athanor.
+  defp binds?(certificate, invitation, identifier, device_key) do
+    if match?(%{kind: :identity, identifier: ^identifier}, certificate.subject) and
+         certificate.client_id == invitation.prospective_client_id and
+         certificate.device_key == device_key and certificate.audience == Person.home() and
+         certificate.athanor == invitation.athanor_id,
+       do: :ok,
+       else: {:error, :certificate_refused}
+  end
+
+  defp remote_certificate(certificate, now) do
+    case DeviceCerts.remote_subject(certificate, now, :live) do
+      {:ok, subject} -> {:ok, subject}
+      {:error, reason} when reason in [:identity_stale, :unavailable] -> {:error, reason}
+      {:error, _refused} -> {:error, :certificate_refused}
+    end
   end
 
   defp challenged(secret, invitation, device_key, now) do
@@ -430,7 +530,7 @@ defmodule Sanctum.Pairing do
     end
   end
 
-  defp redeem(secret, invitation, device_key, proof, now) do
+  defp redeem(secret, invitation, device_key, proof, issuer, now) do
     with {:ok, proof} <- read_proof(proof),
          :ok <- issued_window(proof, now),
          {:ok, expected} <-
@@ -442,7 +542,7 @@ defmodule Sanctum.Pairing do
       |> Arca.PairingInvitations.consume(
         secret_hash(secret),
         &redeemable(&1, invitation),
-        &paired(actor, &1, device_key)
+        &paired(actor, &1, device_key, issuer)
       )
       |> redeemed()
     end
@@ -473,8 +573,10 @@ defmodule Sanctum.Pairing do
   defp seated?(_membership, _invitation), do: false
 
   # Inside the redemption's transaction: the client under the reserved id,
-  # standing on the invitation that paired it, and its first certificate.
-  defp paired(actor, invitation, device_key) do
+  # standing on the invitation that paired it, and its first certificate:
+  # issued here for a local person, or their own home's, recorded bound to
+  # the `key_epoch` the cached head still names under the person's lock.
+  defp paired(actor, invitation, device_key, issuer) do
     with {:ok, client} <-
            Arca.PairedClients.record(actor, %{
              id: invitation.prospective_client_id,
@@ -483,11 +585,14 @@ defmodule Sanctum.Pairing do
              source_id: invitation.id,
              device_public_key: device_key
            }),
-         {:ok, certificate} <- certify(client),
+         {:ok, certificate} <- first_certificate(client, issuer),
          {:ok, _row} <- record_certificate(actor, client, certificate) do
       {:ok, %{client_id: client.id, certificate: certificate}}
     end
   end
+
+  defp first_certificate(client, :local), do: certify(client)
+  defp first_certificate(_client, {:remote, _identifier, certificate}), do: {:ok, certificate}
 
   defp redeemed({:ok, paired}), do: {:ok, paired}
 
@@ -684,13 +789,17 @@ defmodule Sanctum.Pairing do
 
   # The certificate on the client's row, as signed: its JCS bytes and
   # their digest, under the member's live ownership and the client's lock.
+  # An identity subject's names its identifier and `key_epoch`, which the
+  # store binds to the cached head's under the person's lock.
   defp record_certificate(actor, client, %DeviceCert{} = certificate) do
     bytes = Encoding.jcs!(DeviceCert.encode(certificate))
 
     case Arca.DeviceCertificates.record(actor, %{
            paired_client_id: client.id,
            user_id: client.user_id,
-           subject_kind: "local",
+           subject_kind: Atom.to_string(certificate.subject.kind),
+           identifier: Map.get(certificate.subject, :identifier),
+           key_epoch: Map.get(certificate.subject, :key_epoch),
            device_public_key: certificate.device_key,
            issuing_home: certificate.issuer,
            audience_home: certificate.audience,
@@ -702,6 +811,9 @@ defmodule Sanctum.Pairing do
       {:ok, row} -> {:ok, row}
       {:error, :client_not_active} -> {:error, :not_standing}
       {:error, :database_error} -> {:error, :unavailable}
+      # A remote person's head moved between the certificate's check and
+      # its record: it is chained to a key no longer current.
+      {:error, :stale_key_epoch} -> {:error, :certificate_refused}
       {:error, reason} -> {:error, reason}
     end
   end

@@ -125,15 +125,80 @@ defmodule Sanctum.Session do
   an ordinary session request selects the provider whose recent session
   may initialize a person's first fresh method.
 
+  ## A remote person's session
+
+  A session of a person whose identity is `remote` records the
+  `identity_key_epoch` of their head, read fresh from their directory
+  (`Sanctum.IdentityFreshness.fresh!/2`) before the session's transaction
+  opens, whichever door admitted them: the `cyfr` door, a passkey
+  registered here or a door linked here. The store binds it under the
+  person's lock to the cached head's current epoch, so a rotation or a
+  recovery either retires the session or refuses it. A directory that
+  cannot be read mints nothing (`{:error, :identity_stale}`). A local
+  person's session records none.
+
+  ## A login receipt
+
+  `login_receipt: %{token: token, receipt: attrs}` is the `cyfr` door's
+  (`Sanctum.Auth.CyfrDoor`): the session's token is the one the door
+  derived for its challenge rather than a random one, and the receipt
+  (`Arca.CarryActions.record_receipt/2`'s `attrs`) commits in the
+  session's own transaction, so a session and its receipt exist together
+  or not at all. The receipt's `key_epoch`, the one the assertion was
+  verified under, must be the fresh head's (`{:error, :stale_key_epoch}`):
+  a rotation between the proof and the session admits nothing.
+
   Returns a session map containing the token and identity fields.
   """
   @spec create(Context.t(), keyword()) :: {:ok, session()} | {:error, term()}
   def create(%Context{} = ctx, opts \\ []) when is_list(opts) do
+    receipt = Keyword.get(opts, :login_receipt)
+
     with :ok <- provider_permitted(ctx, Keyword.get(opts, :restore)),
+         {:ok, epoch} <- identity_epoch(ctx.user_id),
+         :ok <- receipt_epoch(receipt, epoch),
          {:ok, expectation} <- Sanctum.Issuance.expectation(ctx, opts) do
-      insert(ctx, expectation)
+      insert(ctx, expectation, epoch, receipt)
     end
   end
+
+  # A remote person's head, read fresh from their directory outside any
+  # transaction: its `key_epoch` is what the session records. A local
+  # person's session records none.
+  defp identity_epoch(user_id) when is_binary(user_id) do
+    case Arca.PersonIdentities.get(Prima.Actor.system(), user_id) do
+      {:ok, %{provenance: "remote", identifier: identifier}} when is_binary(identifier) ->
+        case Sanctum.IdentityFreshness.fresh!(identifier) do
+          {:ok, %{key_epoch: epoch}} -> {:ok, epoch}
+          {:refused, :identity_stale} -> {:error, :identity_stale}
+          {:error, :unavailable} -> {:error, :unavailable}
+        end
+
+      {:ok, %{provenance: "remote"}} ->
+        {:error, :identity_key_epoch_required}
+
+      {:ok, _local} ->
+        {:ok, nil}
+
+      {:error, :not_found} ->
+        {:ok, nil}
+
+      {:error, _unanswered} ->
+        {:error, :unavailable}
+    end
+  end
+
+  defp identity_epoch(_user_id), do: {:ok, nil}
+
+  defp receipt_epoch(nil, _epoch), do: :ok
+
+  defp receipt_epoch(%{token: token, receipt: %{key_epoch: epoch}}, epoch) when is_binary(token),
+    do: :ok
+
+  defp receipt_epoch(%{token: token, receipt: %{}}, _epoch) when is_binary(token),
+    do: {:error, :stale_key_epoch}
+
+  defp receipt_epoch(_malformed, _epoch), do: {:error, :invalid_request}
 
   # The reserved `restore` provider stands only on the restore attempt that
   # minted the person, read again here: a context that merely names the
@@ -163,15 +228,31 @@ defmodule Sanctum.Session do
 
   defp restored?(_attempt_id, _user_id), do: false
 
-  defp insert(%Context{} = ctx, expectation) do
-    with {:ok, hours} <- session_ttl_hours() do
-      now = DateTime.utc_now() |> DateTime.truncate(:microsecond)
-      insert(ctx, expectation, now, expires_at(hours, now))
+  # The `cyfr` door's receipt, recorded in the session's own transaction
+  # for the person the session is minted for.
+  defp record_receipt(nil), do: fn _session -> :ok end
+
+  defp record_receipt(%{receipt: attrs}) do
+    fn %{user_id: user_id} ->
+      case Arca.CarryActions.record_receipt(
+             Prima.Actor.system(),
+             Map.put(attrs, :user_id, user_id)
+           ) do
+        {:ok, _receipt} -> :ok
+        {:error, reason} -> {:error, reason}
+      end
     end
   end
 
-  defp insert(%Context{} = ctx, expectation, now, expires_at) do
-    token = generate_token()
+  defp insert(%Context{} = ctx, expectation, epoch, receipt) do
+    with {:ok, hours} <- session_ttl_hours() do
+      now = DateTime.utc_now() |> DateTime.truncate(:microsecond)
+      insert(ctx, expectation, now, expires_at(hours, now), epoch, receipt)
+    end
+  end
+
+  defp insert(%Context{} = ctx, expectation, now, expires_at, epoch, receipt) do
+    token = if receipt, do: receipt.token, else: generate_token()
 
     # A session carries no permission list: it is a person's, and what
     # they may do is decided by their memberships, the athanor's consents
@@ -186,13 +267,15 @@ defmodule Sanctum.Session do
       # scope is persisted: every session works inside its athanor, and the
       # platform-admin capability is re-read from the membership row on load.
       athanor_id: ctx.athanor_id,
+      identity_key_epoch: epoch,
       expires_at: expires_at,
       inserted_at: now
     }
 
     case Arca.SessionStorage.create_session(hash_token(token), attrs,
            lock: Sanctum.Issuance.lock(expectation),
-           verify: Sanctum.Issuance.verify(expectation)
+           verify: Sanctum.Issuance.verify(expectation),
+           also: record_receipt(receipt)
          ) do
       :ok ->
         session = %{

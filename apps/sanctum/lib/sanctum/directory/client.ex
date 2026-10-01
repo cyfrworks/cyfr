@@ -32,7 +32,11 @@ defmodule Sanctum.Directory.Client do
 
   The trailing `opts` take only `:resolver` (a module answering
   `getaddr/2` as `:inet` does) and `:cacerts` (DER certificates to trust):
-  the address policy and peer verification are not options.
+  the address policy and peer verification are not options. The suite
+  sets the same two through the test seam `:sanctum, :directory_client`,
+  which no configuration file or variable sets, so the paths that read a
+  directory without options reach its scripted one; a caller's options
+  win over it.
 
   ## Resolution and the cache
 
@@ -46,9 +50,10 @@ defmodule Sanctum.Directory.Client do
   from is advanced (retiring what was bound to an old `key_epoch`, in the
   same transaction). A chain that does not contain the cached head is
   `:not_descendant` and leaves the cache untouched: an honest directory's
-  log only grows. The answer carries what an advance retired, for the
-  caller to announce. `cached/1` reads the cache back as a
-  `Prima.Identity.State`.
+  log only grows. The cache carries the head's `key_epoch` and
+  `recovery_epoch` beside it. The answer carries what an advance retired,
+  for the caller to announce. `cached/1` reads the cache back as a
+  `Prima.Identity.State`, and `state/1` reads a cached row as one.
 
   Registration, appends, recoveries and outcomes write no cache: they
   concern a person's own identity, whose head their identity row holds.
@@ -247,16 +252,27 @@ defmodule Sanctum.Directory.Client do
   def cached(identifier) when is_binary(identifier) do
     case Arca.DirectoryHeads.get(system(), identifier) do
       {:ok, row} ->
-        case decode_state(row) do
-          {:ok, state} -> {:ok, %{state: state, head: row}}
-          :error -> {:error, :corrupt}
-        end
+        with {:ok, state} <- state(row), do: {:ok, %{state: state, head: row}}
 
       {:error, :not_found} ->
         {:error, :not_found}
 
       {:error, _reason} ->
         {:error, :unavailable}
+    end
+  end
+
+  @doc """
+  The verified state a cached head row holds (`Arca.DirectoryHeads`'s row,
+  as `cached/1` and `Sanctum.IdentityFreshness` answer it), held to the
+  row's identifier, head and epochs: `{:ok, state}`, or `{:error, :corrupt}`
+  for a row whose stored state does not decode to them.
+  """
+  @spec state(map()) :: {:ok, State.t()} | {:error, :corrupt}
+  def state(row) when is_map(row) do
+    case decode_state(row) do
+      {:ok, state} -> {:ok, state}
+      :error -> {:error, :corrupt}
     end
   end
 
@@ -279,7 +295,17 @@ defmodule Sanctum.Directory.Client do
     end
   end
 
+  # A caller's options over the suite's (`:sanctum, :directory_client`, a
+  # test seam no configuration file or variable sets), each validated the
+  # same way: so a suite reaches its scripted directory through paths that
+  # pass no options, and a release, which never sets the key, uses the
+  # system's resolver and certificate store.
   defp options!(opts) when is_list(opts) do
+    seam = Application.get_env(:sanctum, :directory_client, [])
+    Keyword.merge(validated!(seam), validated!(opts))
+  end
+
+  defp validated!(opts) when is_list(opts) do
     case Keyword.validate(opts, [:resolver, :cacerts]) do
       {:ok, opts} ->
         unless is_nil(opts[:resolver]) or is_atom(opts[:resolver]),
@@ -724,6 +750,7 @@ defmodule Sanctum.Directory.Client do
       directory_url: ctx.genesis.directory,
       head_hash: state.head,
       key_epoch: state.key_epoch,
+      recovery_epoch: state.recovery_epoch,
       state: Jason.encode!(State.encode(state))
     }
   end
@@ -748,19 +775,23 @@ defmodule Sanctum.Directory.Client do
          {:ok, directory} <- Encoding.check(map, "directory", &Encoding.directory_url?/1),
          {:ok, head} <- Encoding.check(map, "head", &Encoding.digest?/1),
          {:ok, epoch} <- Encoding.check(map, "key_epoch", &Encoding.digest?/1),
+         {:ok, recovery_epoch} <- Encoding.check(map, "recovery_epoch", &Encoding.digest?/1),
          {:ok, live} <- Encoding.binary(map, "live_key", Encoding.key_bytes()),
          {:ok, operational} <- Encoding.binary(map, "operational_key", Encoding.key_bytes()),
          {:ok, recovery} <- Encoding.keys(map, "recovery_keys"),
          {:ok, revision} <- Encoding.check(map, "revision", &(is_integer(&1) and &1 >= 0)),
          {:ok, length} <- Encoding.check(map, "length", &(is_integer(&1) and &1 > 0)),
          {:ok, request_ids} <- Encoding.check(map, "request_ids", &request_ids?/1),
-         true <- {identifier, head, epoch} == {row.identifier, row.head_hash, row.key_epoch} do
+         true <-
+           {identifier, head, epoch, recovery_epoch} ==
+             {row.identifier, row.head_hash, row.key_epoch, row.recovery_epoch} do
       {:ok,
        %State{
          identifier: identifier,
          directory: directory,
          head: head,
          key_epoch: epoch,
+         recovery_epoch: recovery_epoch,
          live_key: live,
          operational_key: operational,
          recovery_keys: recovery,

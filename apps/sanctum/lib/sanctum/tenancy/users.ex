@@ -59,9 +59,20 @@ defmodule Sanctum.Tenancy.Users do
   is not recorded as "it said no".
 
   An absent provider claim preserves the stored value, including name and email verification.
+
+  A new person is minted with their live and operational key set on a
+  `local` identity row (`Sanctum.Person.mint_keys/1`), unless `opts[:remote]`
+  names the identity another home holds the keys of, as the `cyfr` door
+  admits it: `%{identifier, directory_url, genesis_hash, head_hash}`. Then
+  their identity row is `remote` and holds no key. A person who already
+  exists keeps the provenance they were minted with, whichever door they
+  come through: `opts[:remote]` writes nothing for them.
   """
-  @spec upsert_from_provider(provider_info()) :: {:ok, user()} | {:error, term()}
-  def upsert_from_provider(%{id: key, provider: provider} = info) when is_binary(key) do
+  @spec upsert_from_provider(provider_info(), keyword()) :: {:ok, user()} | {:error, term()}
+  def upsert_from_provider(info, opts \\ [])
+
+  def upsert_from_provider(%{id: key, provider: provider} = info, opts)
+      when is_binary(key) and is_list(opts) do
     now = DateTime.utc_now()
 
     seen =
@@ -80,21 +91,23 @@ defmodule Sanctum.Tenancy.Users do
         update(user, seen)
 
       {:error, :not_found} ->
-        first_sign_in(key, seen, now)
+        first_sign_in(key, seen, now, Keyword.get(opts, :remote))
 
       {:error, _} = err ->
         err
     end
   end
 
-  # The person, the identity that names them and their live and
-  # operational key set, minted together: the keys are written by
-  # `Sanctum.Person.mint_keys/1` inside the transaction that writes the
-  # person row, after the installation guard admitted it, so no person
-  # exists without their keys and a key set that cannot be minted refuses
-  # the sign-in. A concurrent first sign-in of the same identity wins the
-  # unique index; the loser reads the person it minted.
-  defp first_sign_in(key, seen, now) do
+  # The person, the identity that names them and their identity row,
+  # minted together: a local person's live and operational key set is
+  # written by `Sanctum.Person.mint_keys/1` inside the transaction that
+  # writes the person row, after the installation guard admitted it, so no
+  # local person exists without their keys and a key set that cannot be
+  # minted refuses the sign-in; a remote person's row names their
+  # identifier and directory and holds no key. A concurrent first sign-in
+  # of the same identity wins the unique index; the loser reads the person
+  # it minted.
+  defp first_sign_in(key, seen, now, remote) do
     with {:ok, %{provider: provider, issuer: issuer, subject: subject}} <- Identity.parse(key) do
       user_attrs =
         Map.merge(seen, %{
@@ -115,8 +128,40 @@ defmodule Sanctum.Tenancy.Users do
           first_seen_at: now,
           last_seen_at: now
         },
-        also: &Sanctum.Person.mint_keys/1
+        also: identity_row(remote)
       )
+    end
+  end
+
+  defp identity_row(nil), do: &Sanctum.Person.mint_keys/1
+
+  defp identity_row(%{identifier: identifier, directory_url: directory_url} = remote) do
+    fn %{id: user_id} ->
+      case Arca.PersonIdentities.create(server(), %{
+             user_id: user_id,
+             provenance: "remote",
+             identifier: identifier,
+             directory_url: directory_url,
+             genesis_hash: remote[:genesis_hash],
+             head_hash: remote[:head_hash]
+           }) do
+        {:ok, _row} -> :ok
+        {:error, reason} -> {:error, reason}
+      end
+    end
+  end
+
+  @doc """
+  The person a person identifier names here, by their identity row
+  (`Arca.PersonIdentities.lookup_identifier/2`): a person admitted through
+  the `cyfr` door, or a local person once enrolled.
+  """
+  @spec get_by_identifier(String.t()) :: {:ok, user()} | {:error, :not_found | :database_error}
+  def get_by_identifier(identifier) when is_binary(identifier) do
+    case Arca.PersonIdentities.lookup_identifier(server(), identifier) do
+      {:ok, %{user_id: user_id}} -> get(user_id)
+      {:error, :not_found} -> {:error, :not_found}
+      {:error, _unanswered} -> {:error, :database_error}
     end
   end
 

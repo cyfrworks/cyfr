@@ -22,15 +22,10 @@ defmodule Cyfr.DeclaredOperationsTest do
   @seed String.duplicate("A", 43)
   @digest "sha256:" <> String.duplicate("ab", 32)
 
-  # Each declared action with arguments its declaration accepts.
+  # Each declared action, or new argument, not yet built, with arguments
+  # its declaration accepts.
   @stubs [
-    {"person", "assert",
-     %{
-       "audience" => "https://hub.example.com",
-       "challenge" => "chl_1",
-       "action_id" => "act_1",
-       "key_epoch" => @digest
-     }}
+    {"member", "add", %{"identifier" => "per_" <> String.duplicate("ab", 32)}}
   ]
 
   defp operation(tool, action) do
@@ -135,16 +130,6 @@ defmodule Cyfr.DeclaredOperationsTest do
                  "identifier" => identifier,
                  "email" => "someone@example.com"
                })
-    end
-
-    test "the door takes no identifier entry yet", %{ctx: ctx} do
-      admin = %{ctx | platform_admin: true}
-      identifier = "per_" <> String.duplicate("ab", 32)
-
-      for action <- ~w(allow deny) do
-        assert call(admin, "door", action, %{"value" => identifier, "kind" => "identifier"}) ==
-                 {:error, :not_built}
-      end
     end
 
     test "a grant's origins and narrowing are decided, never refused as not built",

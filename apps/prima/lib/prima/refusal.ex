@@ -595,7 +595,7 @@ defmodule Prima.Refusal do
   defp row(:remote_identity_unavailable),
     do:
       {:unavailable,
-       "Confirming a change for a person whose identity is at another home is not built yet."}
+       "This needs the person's own home, where their identity is held: do it there."}
 
   defp row(:email_unavailable),
     do: {:unavailable, "No one-time code can be emailed to you here; confirm another way."}

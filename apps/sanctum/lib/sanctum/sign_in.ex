@@ -21,6 +21,15 @@ defmodule Sanctum.SignIn do
   sign-in, and so does an installation reserved for a restore, whatever
   the door's verdict: nothing is written, and no session follows.
 
+  A person the `cyfr` door admits (`Sanctum.Auth.CyfrDoor`) holds their
+  keys at another home: their first sign-in, carrying `remote:` (their
+  identifier, directory and heads), mints the person row with a `remote`
+  identity row and no key, and no personal athanor is minted for them,
+  then or later: they hold here only what an invitation or a membership
+  gives them. Provenance is written once. A person keeps it whichever door
+  they later sign in through, a passkey registered here or a door linked
+  here included, and only a newly created local person is minted keys.
+
   The platform grant or revoke answers to the identity facts this
   assertion carried, checked under the person's lock, and a grant or
   revoke that fails — or finds those facts overtaken by a later
@@ -114,12 +123,15 @@ defmodule Sanctum.SignIn do
 
   @doc """
   Record the admitted sign-in. `user_info` carries `id`, `provider`,
-  `email`, `verified` (`true | false | :unknown`) and `name`.
+  `email`, `verified` (`true | false | :unknown`) and `name`, and, for a
+  person the `cyfr` door admits, `remote`: their `identifier`,
+  `directory_url`, `genesis_hash` and `head_hash` (the module doc).
   """
   @spec admitted(map(), :admin | :allowed) ::
           {:ok, Sanctum.Tenancy.Users.user()} | {:error, term()}
   def admitted(%{id: _identity} = user_info, verdict) when verdict in [:admin, :allowed] do
-    with {:ok, user} <- identify(user_info, verdict) do
+    with {:ok, user} <- identify(user_info, verdict),
+         {:ok, provenance} <- provenance(user.id) do
       user_id = user.id
 
       # Log invitation activation failures without refusing sign-in.
@@ -134,15 +146,34 @@ defmodule Sanctum.SignIn do
           )
       end
 
-      # Filling the athanor is a background job whose failure lands on the
-      # row and is retried; it never refuses the sign-in. Failing to MINT
-      # one does refuse it: the caps bound how fast strangers arrive and
-      # how many athanors the server holds, and a person admitted without an
-      # athanor would hold a session with nowhere to work.
-      case Sanctum.Provisioning.after_sign_in(user_id) do
-        {:error, reason} -> {:error, reason}
-        _ -> Users.get(user_id)
-      end
+      provisioned(user_id, provenance)
+    end
+  end
+
+  # Filling the athanor is a background job whose failure lands on the
+  # row and is retried; it never refuses the sign-in. Failing to MINT one
+  # does refuse it: the caps bound how fast strangers arrive and how many
+  # athanors the server holds, and a person admitted without an athanor
+  # would hold a session with nowhere to work. A remote person is minted
+  # none: their own athanor is at their own home, and here they hold what
+  # a membership gives them, or nothing.
+  defp provisioned(user_id, "remote"), do: Users.get(user_id)
+
+  defp provisioned(user_id, _local) do
+    case Sanctum.Provisioning.after_sign_in(user_id) do
+      {:error, reason} -> {:error, reason}
+      _ -> Users.get(user_id)
+    end
+  end
+
+  # The person's provenance, as their identity row records it: `remote`,
+  # `local`, or `nil` for a person with no identity row (a local person,
+  # who holds no key here yet). A store that cannot answer refuses.
+  defp provenance(user_id) do
+    case Arca.PersonIdentities.get(Prima.Actor.system(), user_id) do
+      {:ok, %{provenance: provenance}} -> {:ok, provenance}
+      {:error, :not_found} -> {:ok, nil}
+      {:error, _unanswered} -> {:error, :unavailable}
     end
   end
 
@@ -162,7 +193,9 @@ defmodule Sanctum.SignIn do
   @spec identify(map(), :admin | :allowed) ::
           {:ok, Sanctum.Tenancy.Users.user()} | {:error, term()}
   def identify(user_info, verdict) when verdict in [:admin, :allowed] do
-    with {:ok, user} <- Users.upsert_from_provider(user_info) do
+    {remote, user_info} = Map.pop(user_info, :remote)
+
+    with {:ok, user} <- Users.upsert_from_provider(user_info, remote: remote) do
       expected = expected_identity(user_info, user)
 
       cond do

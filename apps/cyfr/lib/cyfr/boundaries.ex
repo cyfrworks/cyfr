@@ -482,7 +482,12 @@ defmodule Cyfr.Boundaries do
           "control and never decides: the operation a confirmation dispatches decides. " <>
           "`Sanctum.Passkeys` is the sign-in page's passkey door: the challenge it holds " <>
           "and the answer it verifies into a session, as the device flow's poll is " <>
-          "(`sign_in_challenge/0`, `sign_in/2`); `Sanctum.Auth.OIDC.reauth_callback/1` and " <>
+          "(`sign_in_challenge/0`, `sign_in/2`); `Sanctum.Auth.CyfrDoor` is the `cyfr` door's: " <>
+          "the signing home the sign-in page sends a person to (`signing_home/1`), the " <>
+          "challenge it mints for the carry they bring back (`challenge/1`), where the " <>
+          "callback's hop returns them (`redirect_url/1`), and the assertion the callback " <>
+          "admits into a session, behind the door (`callback/2`); " <>
+          "`Sanctum.Auth.OIDC.reauth_callback/1` and " <>
           "`reauth_decide/3` are the re-authentication's callback and its person's answer " <>
           "(`PrismWeb.ReauthController`), which confirm one pending confirmation on that " <>
           "answer and mint nothing. " <>
@@ -1268,6 +1273,7 @@ defmodule Cyfr.Boundaries do
     "Sanctum.ApiKey" => [default_scopes: 1, looks_like_key?: 1, valid_scopes: 1],
     "Sanctum.Atoms" => [known_permissions: 0],
     "Sanctum.Auth" => [provider: 0],
+    "Sanctum.Auth.CyfrDoor" => [callback: 2, challenge: 1, redirect_url: 1, signing_home: 1],
     "Sanctum.Auth.DeviceFlow" => [configured_providers: 0, impl: 0, provider?: 1, providers: 0],
     "Sanctum.Auth.EmailVerification" => [verify_with_claim: 3],
     "Sanctum.Auth.Identity" => [reserved_issuer?: 1],
@@ -1543,6 +1549,15 @@ defmodule Cyfr.Boundaries do
       admits: :flow_state,
       why: "a device-flow ticket or a post-acceptance hop, each single-use and consumed on lookup"
     },
+    browser_cyfr_callback: %{
+      admits: :flow_state,
+      why:
+        "the `cyfr` door's callback: a person assertion over the challenge this home keeps " <>
+          "in the browser's own session cookie, posted with the browser pipeline's CSRF " <>
+          "token, verified under the person's head read fresh from the directory their " <>
+          "genesis names, and redeemed once through its login receipt " <>
+          "(`Sanctum.Auth.CyfrDoor`)"
+    },
     browser_claim_gate: %{
       admits: :flow_state,
       why:
@@ -1740,6 +1755,11 @@ defmodule Cyfr.Boundaries do
     # (`Sanctum.Auth.OIDC`): a test stands in its own for the token
     # exchange, as `device_flow` does for the device flow's.
     oidc_reauth_client: :seam,
+    # The directory client's resolver and trusted certificates
+    # (`Sanctum.Directory.Client`), which a suite sets to reach its
+    # scripted directory through paths that pass no options; a caller's
+    # options win, and a release never sets it, so it uses the system's.
+    directory_client: :seam,
     # Compiled in by `config/test.exs` alone; with the runtime switch off it
     # lets the sandboxed suite boot omit `Cyfr.Bootstrap`
     # (`Cyfr.Application.bootstrap_skipped?/2`).

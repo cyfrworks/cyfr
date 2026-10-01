@@ -321,6 +321,72 @@ defmodule Sanctum.Providers.AthanorMemberDoorToolsTest do
     assert {:ok, :allowed} = Sanctum.Door.admit("github|https://github.com|c", email, true)
   end
 
+  test "door.* allows, denies, lists and resolves a person identifier, which the cyfr door is judged by",
+       %{ops: ops, ctx: ctx, n: n} do
+    admin = ctx.(ops, Sanctum.TestContext.athanor_id(), platform_admin: true)
+    identifier = "per_" <> Prima.Digest.sha256_hex("door-tools-#{n}")
+    key = Sanctum.Auth.Identity.cyfr_key("https://dir.example", identifier)
+
+    # An unadmitted cyfr sign-in waits for the operator as an identifier.
+    assert {:error, {:door, :not_allowed}} =
+             Sanctum.Door.admit_identity(key, %{email: nil, verified: :unknown})
+
+    assert {:ok, %{requests: requests}} = call(admin, "door", %{"action" => "requests"})
+
+    assert [%{id: request_id, kind: "identifier"}] =
+             Enum.filter(requests, &(&1.value == identifier))
+
+    assert {:ok, %{kind: "identifier", status: "allowed"}} =
+             call(admin, "door", %{
+               "action" => "resolve",
+               "id" => request_id,
+               "decision" => "allow"
+             })
+
+    assert {:ok, :allowed} = Sanctum.Door.admit(key, nil, :unknown)
+
+    # Its shape names its kind; a malformed one is refused as that kind.
+    other = "per_" <> Prima.Digest.sha256_hex("door-tools-other-#{n}")
+
+    assert {:ok, %{kind: "identifier", effect: "allow"}} =
+             call(admin, "door", %{"action" => "allow", "value" => other})
+
+    assert {:error, {:invalid_argument, message}} =
+             call(admin, "door", %{
+               "action" => "allow",
+               "value" => "per_x",
+               "kind" => "identifier"
+             })
+
+    assert message =~ "person identifier"
+
+    # A deny by identifier ejects the person the door admitted under it,
+    # and is sticky against `*`.
+    {:ok, user} =
+      Sanctum.SignIn.admitted(
+        %{
+          id: key,
+          provider: "cyfr",
+          email: nil,
+          verified: :unknown,
+          name: nil,
+          remote: %{identifier: identifier, directory_url: "https://dir.example"}
+        },
+        :allowed
+      )
+
+    assert {:ok, _} = call(admin, "door", %{"action" => "allow", "value" => "*"})
+
+    assert {:ok, %{effect: "deny", kind: "identifier", ejected: 1}} =
+             call(admin, "door", %{"action" => "deny", "value" => identifier})
+
+    assert {:error, :denied} = Sanctum.Door.admit(key, nil, :unknown)
+    assert {:ok, %{status: "denied"}} = Users.get(user.id)
+
+    assert {:ok, %{entries: entries}} = call(admin, "door", %{"action" => "list"})
+    assert Enum.any?(entries, &(&1.kind == "identifier" and &1.value == identifier))
+  end
+
   test "session.use repoints the session and refuses what focus refuses",
        %{alice: alice, bob: bob, ctx: ctx, n: n} do
     a = ctx.(alice, Sanctum.TestContext.athanor_id(), [])

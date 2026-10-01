@@ -440,4 +440,230 @@ defmodule Sanctum.Test.DirectoryServer do
 
   defp json(status, body),
     do: {status, [{"content-type", "application/json"}], Jason.encode!(body)}
+
+  # ---- people whose keys another home holds ----------------------------------
+
+  @doc """
+  The test authority and resolver as the directory client's seam
+  (`:sanctum, :directory_client`), restored on exit: the paths that read a
+  directory without options (a session's mint, a confirmation, the `cyfr`
+  door) reach the scripted directory.
+  """
+  @spec seam!(keyword()) :: :ok
+  def seam!(tls) do
+    prior = Application.fetch_env(:sanctum, :directory_client)
+    Application.put_env(:sanctum, :directory_client, opts(tls))
+
+    on_exit(fn ->
+      case prior do
+        {:ok, value} -> Application.put_env(:sanctum, :directory_client, value)
+        :error -> Application.delete_env(:sanctum, :directory_client)
+      end
+    end)
+  end
+
+  @doc """
+  A person's identity at the directory `url`, as their own home would
+  hold it: fresh live, operational and recovery key pairs, the genesis
+  signed by the operational key, published in the directory agent `dir`.
+  Answers `%{identifier, genesis, url, live, operational, recovery, log}`,
+  each key pair `{public, private}`; `key_epoch/1` and `recovery_epoch/1`
+  read its head.
+  """
+  @spec identity!(pid(), String.t()) :: map()
+  def identity!(dir, url) do
+    live = keypair()
+    operational = keypair()
+    recovery = keypair()
+
+    {:ok, genesis} =
+      Entry.genesis(
+        live_key: elem(live, 0),
+        operational_key: elem(operational, 0),
+        recovery_keys: [elem(recovery, 0)],
+        directory: url
+      )
+
+    genesis = Identity.sign(genesis, elem(operational, 1))
+    identifier = Identity.identifier(genesis)
+    publish(dir, identifier, [genesis])
+
+    %{
+      identifier: identifier,
+      genesis: genesis,
+      url: url,
+      live: live,
+      operational: operational,
+      recovery: recovery,
+      log: [genesis]
+    }
+  end
+
+  @doc "An identity's genesis as the JSON map a carry and an assertion transport it."
+  @spec genesis_map(map()) :: map()
+  def genesis_map(%{genesis: genesis}), do: Entry.encode(genesis)
+
+  @doc "An identity's `key_epoch`: the hash of its last entry, which introduced its live key."
+  @spec key_epoch(map()) :: String.t()
+  def key_epoch(%{log: log}), do: head_of(log)
+
+  @doc "An identity's `recovery_epoch` (`Prima.Identity.State`), from its verified log."
+  @spec recovery_epoch(map()) :: String.t()
+  def recovery_epoch(%{log: log}) do
+    {:ok, state} = Identity.verify_chain(log)
+    state.recovery_epoch
+  end
+
+  @doc "An ordinary rotation of the identity's live key, published in `dir`."
+  @spec rotate!(pid(), map()) :: map()
+  def rotate!(dir, identity) do
+    live = keypair()
+    {:ok, entry} = Entry.rotate(head_of(identity.log), elem(live, 0))
+    entry = Identity.sign(entry, elem(identity.operational, 1))
+    log = identity.log ++ [entry]
+    publish(dir, identity.identifier, log)
+    %{identity | live: live, log: log}
+  end
+
+  @doc """
+  A recovery of the identity, signed by its recovery key and published in
+  `dir`: by default it replaces the live and operational keys (a new
+  recovery epoch); `keep_live: true` keeps them and adds a recovery holder,
+  as a second printed kit does (the recovery epoch stays).
+  """
+  @spec recover!(pid(), map(), keyword()) :: map()
+  def recover!(dir, identity, opts \\ []) do
+    {:ok, state} = Identity.verify_chain(identity.log)
+
+    {live, operational, recovery_keys} =
+      if Keyword.get(opts, :keep_live, false),
+        do: {identity.live, identity.operational, state.recovery_keys ++ [elem(keypair(), 0)]},
+        else: {keypair(), keypair(), nil}
+
+    {:ok, request} =
+      RecoverRequest.new(
+        identifier: identity.identifier,
+        directory: identity.url,
+        live_key: elem(live, 0),
+        operational_key: elem(operational, 0),
+        recovery_keys: recovery_keys,
+        expected_revision: state.revision,
+        request_id: "req_" <> Integer.to_string(System.unique_integer([:positive]))
+      )
+
+    {:ok, entry} =
+      Entry.recover(head_of(identity.log), Identity.sign(request, elem(identity.recovery, 1)))
+
+    log = identity.log ++ [entry]
+    publish(dir, identity.identifier, log)
+    %{identity | live: live, operational: operational, log: log}
+  end
+
+  @doc """
+  Cache `identity`'s head at this home, read from its directory as the
+  `cyfr` door reads it when it admits the person: the binding from which
+  every later fresh read of them locates their directory. Needs the seam
+  (`seam!/1`).
+  """
+  @spec cached!(map()) :: map()
+  def cached!(identity) do
+    {:ok, head} =
+      Sanctum.IdentityFreshness.fresh!(identity.identifier, genesis: genesis_map(identity))
+
+    head
+  end
+
+  @doc """
+  Make the person `user_id` this home's remote person of `identity`: their
+  identity row `remote`, naming the identifier and its directory, with no
+  key, and its head cached, as the `cyfr` door admits them. Any identity
+  row they held is replaced. Needs the seam (`seam!/1`).
+  """
+  @spec remote_person!(String.t(), map()) :: :ok
+  def remote_person!(user_id, identity) do
+    import Ecto.Query, only: [from: 2]
+
+    Arca.Repo.delete_all(from(p in Arca.Schemas.PersonIdentity, where: p.user_id == ^user_id))
+
+    {:ok, _row} =
+      Arca.PersonIdentities.create(Prima.Actor.system(), %{
+        user_id: user_id,
+        provenance: "remote",
+        identifier: identity.identifier,
+        directory_url: identity.url
+      })
+
+    _head = cached!(identity)
+    :ok
+  end
+
+  @doc """
+  The carry fragment the person's own home answers `person.carry_begin`
+  with, for `destination`: the envelope (`Prima.Carry.Envelope`) signed by
+  the identity's live key, its payload the genesis. `opts`: `:action_id`,
+  `:source` (default `https://a.example`), `:issued_at`, `:key_epoch`,
+  `:payload` and `:live` (a private key to sign with) override theirs.
+  Answers `%{fragment, action_id, envelope}`.
+  """
+  @spec carry_fragment(map(), String.t(), keyword()) :: map()
+  def carry_fragment(identity, destination, opts \\ []) do
+    payload = Keyword.get(opts, :payload, %{"genesis" => genesis_map(identity)})
+    signed_payload = %{"genesis" => genesis_map(identity)}
+    {:ok, digest} = Prima.Carry.payload_digest(signed_payload)
+    action_id = Keyword.get(opts, :action_id, "car_#{System.unique_integer([:positive])}")
+
+    {:ok, envelope} =
+      Prima.Carry.Envelope.new(
+        action_id: action_id,
+        identifier: identity.identifier,
+        source: Keyword.get(opts, :source, "https://a.example"),
+        destination: destination,
+        payload_digest: digest,
+        key_epoch: Keyword.get(opts, :key_epoch, key_epoch(identity)),
+        issued_at: Keyword.get(opts, :issued_at, System.os_time(:millisecond))
+      )
+
+    signed = Prima.Carry.Envelope.sign(envelope, Keyword.get(opts, :live, elem(identity.live, 1)))
+
+    fragment =
+      %{"envelope" => Prima.Carry.Envelope.encode(signed), "payload" => payload}
+      |> Prima.Identity.Encoding.jcs!()
+      |> Prima.Identity.Encoding.b64()
+
+    %{fragment: fragment, action_id: action_id, envelope: signed}
+  end
+
+  @doc """
+  The callback fragment the person's own home answers `person.assert` with
+  for the challenge a relying home holds (`held`, the string keyed map
+  `Sanctum.Auth.CyfrDoor.challenge/1` answers): an assertion
+  (`Prima.PersonAssertion`) signed by the identity's live key, over the
+  relying home `audience`, the held challenge and its carry. `opts`:
+  `:audience`, `:challenge` (raw bytes), `:action_id`, `:key_epoch`,
+  `:expires_at`, `:identifier` and `:live` override theirs. Answers the
+  fragment, without its `cyfr=` key.
+  """
+  @spec assertion_fragment(map(), map(), String.t(), keyword()) :: String.t()
+  def assertion_fragment(identity, held, audience, opts \\ []) do
+    {:ok, challenge} = Prima.Identity.Encoding.unb64(held["challenge"], 32)
+
+    {:ok, assertion} =
+      Prima.PersonAssertion.new(
+        identifier: Keyword.get(opts, :identifier, identity.identifier),
+        audience: Keyword.get(opts, :audience, audience),
+        challenge: Keyword.get(opts, :challenge, challenge),
+        action_id: Keyword.get(opts, :action_id, held["action_id"]),
+        key_epoch: Keyword.get(opts, :key_epoch, key_epoch(identity)),
+        expires_at: Keyword.get(opts, :expires_at, System.os_time(:millisecond) + 300_000)
+      )
+
+    signed =
+      Prima.PersonAssertion.sign(assertion, Keyword.get(opts, :live, elem(identity.live, 1)))
+
+    %{"assertion" => Prima.PersonAssertion.encode(signed), "genesis" => genesis_map(identity)}
+    |> Prima.Identity.Encoding.jcs!()
+    |> Prima.Identity.Encoding.b64()
+  end
+
+  defp keypair, do: :crypto.generate_key(:eddsa, :ed25519)
 end

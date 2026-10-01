@@ -389,6 +389,21 @@ defmodule Sanctum.Directory.ClientTest do
   # ---- resolution --------------------------------------------------------------
 
   describe "resolve/3" do
+    test "a caller passing no options reaches a directory only through the suite's seam", ctx do
+      dir = directory(ctx, "dir-a.test", serving(ctx))
+      alice = publish(ctx, person(dir.url))
+
+      # With no seam, the system's resolver knows no test directory.
+      assert {:error, :unreachable} = Client.resolve(alice.identifier, genesis(alice))
+
+      DirectoryServer.seam!(ctx.tls)
+
+      assert {:ok, %{state: %{identifier: identifier}}} =
+               Client.resolve(alice.identifier, genesis(alice))
+
+      assert identifier == alice.identifier
+    end
+
     test "reads every linked page, verifies the whole chain and caches its head", ctx do
       dir = directory(ctx, "dir-a.test", serving(ctx))
       alice = ctx |> publish(person(dir.url) |> rotated(149))
@@ -428,6 +443,9 @@ defmodule Sanctum.Directory.ClientTest do
 
       assert moved.head_hash == alice.head and state.head == alice.head
       assert moved.key_epoch != first.key_epoch
+      # An ordinary rotation leaves the recovery epoch: the genesis's.
+      assert moved.recovery_epoch == first.recovery_epoch
+      assert moved.recovery_epoch == Identity.hash(alice.genesis)
       assert moved.revision == first.revision + 1
 
       assert %{session_hashes: [], passkey_ids: [], certificate_ids: [], confirmation_ids: []} =
@@ -570,8 +588,21 @@ defmodule Sanctum.Directory.ClientTest do
       dir = directory(ctx, "dir-a.test", serving(ctx))
       alice = publish(ctx, person(dir.url) |> rotated(1))
       assert {:ok, %{state: state}} = Client.resolve(alice.identifier, genesis(alice), opts(ctx))
-      assert {:ok, %{state: ^state, head: %{head_hash: head}}} = Client.cached(alice.identifier)
+
+      assert {:ok, %{state: ^state, head: %{head_hash: head} = row}} =
+               Client.cached(alice.identifier)
+
       assert head == state.head
+
+      # The cache carries the recovery epoch beside the key epoch, and a
+      # row read back as a state names both.
+      assert row.recovery_epoch == state.recovery_epoch
+      assert row.key_epoch == state.key_epoch
+      assert {:ok, ^state} = Client.state(row)
+
+      # A row whose recovery epoch is not its state's does not decode.
+      assert {:error, :corrupt} =
+               Client.state(%{row | recovery_epoch: "sha256:" <> String.duplicate("1", 64)})
 
       tampered =
         Jason.encode!(%{

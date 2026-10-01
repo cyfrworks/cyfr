@@ -394,7 +394,8 @@ defmodule Prima.RefusalTest do
       assert %Refusal{class: :unavailable, message: remote} =
                Refusal.classify(:remote_identity_unavailable)
 
-      assert remote =~ "another home"
+      assert remote =~ "own home"
+      refute remote =~ "not built"
 
       assert %Refusal{class: :unavailable, message: email} = Refusal.classify(:email_unavailable)
       assert email =~ "confirm another way"

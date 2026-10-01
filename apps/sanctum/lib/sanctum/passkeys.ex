@@ -22,25 +22,31 @@ defmodule Sanctum.Passkeys do
   stored, so one ceremony registers at most one passkey. With the
   credential, the ceremony is verified and the first of these applies:
 
-    1. a person whose keys are at another home is refused
-       `:remote_identity_unavailable`, until J.J0 installs remote
-       freshness;
-    2. a local person for whom no fresh method has ever existed (the
+    1. a local person for whom no fresh method has ever existed (the
        persistent first-method mark on their identity row), signed in
        through a local door, `restore` included and a CYFR sign-in never,
        by a session created within `reauth_seconds`, registers it at once:
        the local first-method exception, announced to their other clients
        (`:passkey_registered`);
-    3. a person who holds a fresh method here (an active passkey, an
+    2. a person who holds a fresh method here (an active passkey, an
        OpenID Connect door this home re-authenticates, or a verified email
        a code can reach) confirms `passkey_registration`
        (`Sanctum.Consent.Authz`), consumed with the row it opens;
-    4. a person for whom no method has ever existed, on an older or
+    3. a local person for whom no method has ever existed, on an older or
        non-local sign-in, is refused `:reauth_required`: signing in again
        reopens the exception;
-    5. otherwise the credential is kept `pending`, verified and inert,
+    4. otherwise the credential is kept `pending`, verified and inert,
        awaiting the platform administrator (`recover_admin/2`). Revoking
-       every method never reopens the exception.
+       every method never reopens the exception, and a person whose keys
+       are at another home always takes this path for their first method
+       here, however recent their sign-in: no sign-in through the `cyfr`
+       door, and no door linked here, initializes one.
+
+  A remote person's passkey is bound to their identity's `recovery_epoch`,
+  read fresh from their directory before it is stored
+  (`Sanctum.IdentityFreshness.fresh!/2`): a recovery that replaces their
+  live key retires it (`Arca.DirectoryHeads.advance/4`), and an ordinary
+  rotation, or a recover that only adds a printed kit, keeps it.
 
   Every branch writes the credential only while the person is active and
   the credential the context holds still stands, read again under the
@@ -57,16 +63,21 @@ defmodule Sanctum.Passkeys do
   here. The signature counter is checked as WebAuthn Level 3 §7.2 has it:
   two zero counts pass, and otherwise the count must rise. The record is
   confirmed once, naming the passkey and any paired client that gave the
-  proof, so revoking either voids it.
+  proof, so revoking either voids it. A remote person's head is read
+  fresh from their directory before their proof is taken, and their
+  passkey must be of its current `recovery_epoch`.
 
   ## Sign-in
 
   `sign_in_challenge/0` and `sign_in/2` are the passkey door: an active
-  passkey of an active local person, whose linked door identities or
+  passkey of an active person, whose linked door identities (a remote
+  person's `cyfr` identity among them, judged by its identifier) or
   verified email still pass `Sanctum.Door.admit/3` (or, for a person with
   no linked door, their own id, as a restore's door entry names it),
-  mints a session with provider `passkey`. The sign-in page holds the
-  challenge and answers it once.
+  mints a session with provider `passkey`. A remote person's head is read
+  fresh first, which retires a passkey a recovery replaced, and their
+  session records the head's `key_epoch` (`Sanctum.Session.create/2`). The
+  sign-in page holds the challenge and answers it once.
   """
 
   alias Prima.Identity.Encoding
@@ -127,10 +138,10 @@ defmodule Sanctum.Passkeys do
   "awaiting_administrator", passkey_id:, registration_digest:,
   expires_at:}` for a pending credential; the consent signal
   `{:error, {:confirmation_required, _}}` when a confirmation is needed;
-  or a refusal: `:remote_identity_unavailable`, `:reauth_required`,
-  `:registration_refused` (a ceremony that does not verify, or a token
-  expired or used), `{:conflict, _}` (the credential is already here),
-  `:unavailable`.
+  or a refusal: `:reauth_required`, `:registration_refused` (a ceremony
+  that does not verify, or a token expired or used), `{:conflict, _}` (the
+  credential is already here), `:identity_stale` (a remote person's
+  directory could not be read fresh), `:unavailable`.
   """
   @spec register(Context.t(), map()) :: {:ok, map()} | {:error, term()}
   def register(%Context{} = ctx, args) when is_map(args) do
@@ -161,16 +172,35 @@ defmodule Sanctum.Passkeys do
 
   defp registrant(%Context{}), do: {:error, :unauthenticated}
 
-  # The person's identity row: a remote person's keys, and so their fresh
-  # proofs, are another home's until J.J0.
+  # The person's identity row: local, or remote, whose head is read fresh
+  # wherever a passkey of theirs is bound or proves anything.
   defp identity(user_id) do
     case Arca.PersonIdentities.get(Prima.Actor.system(), user_id) do
-      {:ok, %{provenance: "remote"}} -> {:error, :remote_identity_unavailable}
       {:ok, identity} -> {:ok, identity}
       {:error, :not_found} -> {:error, :unavailable}
       {:error, _unanswered} -> {:error, :unavailable}
     end
   end
+
+  # A remote person's head, read fresh from their directory outside any
+  # transaction (`Sanctum.IdentityFreshness.fresh!/2`); a local person has
+  # none, and their passkeys bind no epoch.
+  defp remote_head(%{provenance: "remote", identifier: identifier}) when is_binary(identifier) do
+    case Sanctum.IdentityFreshness.fresh!(identifier) do
+      {:ok, head} -> {:ok, head}
+      {:refused, :identity_stale} -> {:error, :identity_stale}
+      {:error, :unavailable} -> {:error, :unavailable}
+    end
+  end
+
+  defp remote_head(%{provenance: "remote"}), do: {:error, :unavailable}
+  defp remote_head(_local), do: {:ok, nil}
+
+  defp recovery_epoch(nil), do: nil
+  defp recovery_epoch(%{recovery_epoch: epoch}), do: epoch
+
+  defp local?(%{provenance: "local"}), do: true
+  defp local?(_identity), do: false
 
   defp options(ctx, user_id) do
     with {:ok, seconds} <- Authz.confirmation_seconds(),
@@ -212,15 +242,19 @@ defmodule Sanctum.Passkeys do
   defp registered(ctx, identity, credential) do
     user_id = identity.user_id
 
-    with {:ok, verified} <- verify_registration(user_id, credential) do
+    with {:ok, verified} <- verify_registration(user_id, credential),
+         {:ok, head} <- remote_head(identity) do
+      verified = Map.put(verified, :recovery_epoch, recovery_epoch(head))
+      first_never_made? = is_nil(identity.first_method_at)
+
       cond do
-        is_nil(identity.first_method_at) and first_method_session?(ctx, user_id) ->
+        local?(identity) and first_never_made? and first_method_session?(ctx, user_id) ->
           first_method(ctx, verified, credential)
 
         fresh_method?(ctx) ->
           confirmed(ctx, verified, credential, [])
 
-        is_nil(identity.first_method_at) ->
+        local?(identity) and first_never_made? ->
           {:error, :reauth_required}
 
         true ->
@@ -326,7 +360,8 @@ defmodule Sanctum.Passkeys do
         registration_digest: verified.registration_digest,
         possession_verified: true,
         state: state,
-        expires_at: Keyword.get(opts, :expires_at)
+        expires_at: Keyword.get(opts, :expires_at),
+        identity_recovery_epoch: Map.get(verified, :recovery_epoch)
       }
 
       arca_opts = Keyword.take(opts, [:first_method, :also])
@@ -335,6 +370,9 @@ defmodule Sanctum.Passkeys do
         {:ok, row} -> {:ok, row}
         {:error, :conflict} -> {:error, {:conflict, "This passkey is already registered here"}}
         {:error, :first_method_used} -> {:error, :first_method_used}
+        # A recovery moved the person's head between its fresh read and the
+        # write: nothing is bound to an epoch already retired.
+        {:error, :stale_key_epoch} -> {:error, :identity_stale}
         {:error, :database_error} -> {:error, :unavailable}
         {:error, :not_owner} -> {:error, :unavailable}
         {:error, reason} -> {:error, reason}
@@ -569,21 +607,29 @@ defmodule Sanctum.Passkeys do
   Answers `%{ref:, state: "confirmed", expires_at:}`, or a refusal:
   `:assertion_refused` (another challenge, origin or RP ID, no user
   verification, a bad signature, a credential not registered here or not
-  this person's, or a counter that did not rise), `{:not_found,
-  "confirmation", ref}`, `:remote_identity_unavailable`, and the record's
-  own (`:not_pending`, `:expired`, `:revoked`).
+  this person's, or of a remote person's `recovery_epoch` a recovery has
+  replaced, or a counter that did not rise), `{:not_found, "confirmation",
+  ref}`, `:identity_stale` (a remote person's directory could not be read
+  fresh), and the record's own (`:not_pending`, `:expired`, `:revoked`).
   """
   @spec assert(Context.t(), String.t(), map()) :: {:ok, map()} | {:error, term()}
   def assert(%Context{} = ctx, ref, assertion) when is_binary(ref) and is_map(assertion) do
     actor = Context.actor(ctx)
 
+    # A remote person's head is read fresh before their proof is taken: a
+    # recovery since has retired the passkeys it replaced, and the one that
+    # proves must be of the current recovery epoch.
     with {:ok, user_id} <- confirming_person(ctx),
-         {:ok, _identity} <- identity(user_id),
+         {:ok, identity} <- identity(user_id),
+         {:ok, head} <- remote_head(identity),
          {:ok, row} <- record(actor, ref, user_id),
          {:ok, challenge} <- record_challenge(row),
          {:ok, parsed} <- parse_assertion(assertion),
          {:ok, passkey} <- credential(parsed.credential_id),
-         true <- passkey.user_id == user_id or {:error, :assertion_refused},
+         true <-
+           (passkey.user_id == user_id and
+              passkey.identity_recovery_epoch == recovery_epoch(head)) or
+             {:error, :assertion_refused},
          {:ok, sign_count} <- verify_assertion(parsed, passkey, challenge),
          :ok <- counted(passkey, sign_count),
          {:ok, confirmed} <- confirm_record(actor, ref, passkey, ctx.client_id) do
@@ -756,15 +802,18 @@ defmodule Sanctum.Passkeys do
 
   @doc """
   Sign in by passkey: the WebAuthn `assertion` over the challenge the
-  sign-in page held. The passkey must be active here, its person active
-  and local, and one of their linked door identities, or their verified
+  sign-in page held. The passkey must be active here and its person
+  active, and one of their linked door identities, or their verified
   email, must still pass `Sanctum.Door.admit/3`, so removing someone from
-  the allowlist closes this door too. Mints a session with provider
-  `passkey` and answers its token and the sign-in outcome, as the device
-  flow does.
+  the allowlist closes this door too. A remote person's head is read
+  fresh first, and their passkey must be of its current `recovery_epoch`:
+  one a recovery replaced is retired by that read and signs no one in.
+  Mints a session with provider `passkey` and answers its token and the
+  sign-in outcome, as the device flow does; a remote person's session
+  records the head's `key_epoch`.
 
   Refusals: `:assertion_refused`, `:expired`, `{:door, reason}`,
-  `:remote_identity_unavailable`, `:unavailable`.
+  `:identity_stale`, `:unavailable`.
   """
   @spec sign_in(sign_in_challenge() | map(), map()) ::
           {:ok, %{session_token: String.t(), outcome: term()}} | {:error, term()}
@@ -774,7 +823,9 @@ defmodule Sanctum.Passkeys do
          {:ok, parsed} <- parse_assertion(assertion),
          {:ok, passkey} <- credential(parsed.credential_id),
          {:ok, user} <- standing_person(passkey.user_id),
-         {:ok, _identity} <- identity(user.id),
+         {:ok, identity} <- identity(user.id),
+         {:ok, head} <- remote_head(identity),
+         {:ok, passkey} <- still_current(passkey, parsed.credential_id, head),
          {:ok, sign_count} <- verify_assertion(parsed, passkey, challenge),
          :ok <- counted(passkey, sign_count),
          :ok <- door(user) do
@@ -783,6 +834,26 @@ defmodule Sanctum.Passkeys do
   end
 
   def sign_in(_challenge, _assertion), do: {:error, :assertion_refused}
+
+  # A local person's passkey as it was read. A remote person's, read again
+  # after their head's fresh read (which revokes the passkeys a recovery
+  # replaced): still active, of the same person, and of the head's current
+  # recovery epoch.
+  defp still_current(passkey, _credential_id, nil), do: {:ok, passkey}
+
+  defp still_current(passkey, credential_id, head) do
+    case credential(credential_id) do
+      {:ok, %{id: id, user_id: user_id, identity_recovery_epoch: epoch} = current}
+      when id == passkey.id and user_id == passkey.user_id ->
+        if epoch == recovery_epoch(head), do: {:ok, current}, else: {:error, :assertion_refused}
+
+      {:ok, _another} ->
+        {:error, :assertion_refused}
+
+      {:error, reason} ->
+        {:error, reason}
+    end
+  end
 
   defp standing_person(user_id) do
     case Sanctum.Tenancy.Users.get(user_id) do
@@ -853,6 +924,7 @@ defmodule Sanctum.Passkeys do
       {:ok,
        %{session_token: session.token, outcome: {:proceed, %{unsynced: [], probe: :skipped}}}}
     else
+      {:error, :identity_stale} -> {:error, :identity_stale}
       {:error, :unavailable} -> {:error, :unavailable}
       {:error, _refused} -> {:error, :unavailable}
     end
@@ -966,9 +1038,15 @@ defmodule Sanctum.Passkeys do
   passkey (`{:conflict, _}`). Recorded by the gate's decision, and
   announced to the person's own clients (`:passkey_registered`) and to
   them and the members of every athanor they belong to
-  (`:passkey_recovered`), never to the administrator's. A person whose
-  keys are at another home is refused `:remote_identity_unavailable`
-  until J.J0.
+  (`:passkey_recovered`), never to the administrator's.
+
+  For a person whose keys are at another home, their head is read fresh
+  from their directory first, and the authorization names its current
+  `key_epoch` and `recovery_epoch` beside the registration: activation
+  compares both with the cached head under the person's lock, so an
+  authorization made before a rotation or a recovery activates nothing
+  after it, and a registration made before a recovery is gone with the
+  recovery epoch it was bound to.
   """
   @spec recover_admin(Context.t(), map()) :: {:ok, map()} | {:error, term()}
   def recover_admin(
@@ -976,19 +1054,10 @@ defmodule Sanctum.Passkeys do
         %{user_id: user_id, passkey_id: passkey_id, registration_digest: digest}
       )
       when is_binary(user_id) and is_binary(passkey_id) and is_binary(digest) do
-    change = %{
-      operation: "passkey.recover_admin",
-      arguments: %{
-        "user_id" => user_id,
-        "passkey_id" => passkey_id,
-        "registration_digest" => digest
-      },
-      resource: Sanctum.Tenancy.Users.display_name(user_id),
-      details: %{"registration_digest" => digest}
-    }
-
-    with {:ok, _identity} <- identity(user_id),
-         {:ok, _pending} <- pending_registration(user_id, passkey_id),
+    with {:ok, identity} <- identity(user_id),
+         {:ok, head} <- remote_head(identity),
+         {:ok, _pending} <- pending_registration(user_id, passkey_id, head),
+         change = recovery_change(user_id, passkey_id, digest, head),
          :ok <- Authz.check(ctx, :passkey_registration, change) do
       # The person first, locked and read active, then the administrator's
       # own standing and confirmation (`Authz.consume/2`).
@@ -999,7 +1068,8 @@ defmodule Sanctum.Passkeys do
 
       case Arca.Passkeys.activate(Prima.Actor.system(), passkey_id,
              registration_digest: digest,
-             identity_key_epoch: nil,
+             identity_key_epoch: head && head.key_epoch,
+             identity_recovery_epoch: recovery_epoch(head),
              admin_confirmation_id: confirmation_ref(ctx),
              also: also
            ) do
@@ -1016,6 +1086,13 @@ defmodule Sanctum.Passkeys do
           {:error,
            {:conflict,
             "That pending passkey is gone, expired or changed; the person registers it again"}}
+
+        # The person's identity moved on since the authorization read it.
+        {:error, reason}
+        when reason in [:stale_key_epoch, :identity_key_epoch_required, :unexpected_key_epoch] ->
+          {:error,
+           {:conflict,
+            "That person's identity changed since you authorized this; authorize it again"}}
 
         {:error, reason} when reason in [:database_error, :not_owner] ->
           {:error, :unavailable}
@@ -1048,12 +1125,41 @@ defmodule Sanctum.Passkeys do
     end
   end
 
-  defp pending_registration(user_id, passkey_id) do
+  # The person's pending registration, still of the recovery epoch their
+  # fresh head names: one registered before a recovery that replaced their
+  # live key was retired with that epoch, and is not offered again.
+  defp pending_registration(user_id, passkey_id, head) do
+    epoch = recovery_epoch(head)
+
     case Arca.Passkeys.get(Prima.Actor.system(), passkey_id) do
-      {:ok, %{user_id: ^user_id, state: "pending"} = passkey} -> {:ok, passkey}
-      {:error, :database_error} -> {:error, :unavailable}
-      _other -> {:error, {:not_found, "pending passkey", passkey_id}}
+      {:ok, %{user_id: ^user_id, state: "pending", identity_recovery_epoch: ^epoch} = passkey} ->
+        {:ok, passkey}
+
+      {:error, :database_error} ->
+        {:error, :unavailable}
+
+      _other ->
+        {:error, {:not_found, "pending passkey", passkey_id}}
     end
+  end
+
+  # What the administrator's authorization approves: this exact pending
+  # registration of this person, and, for a person whose keys are at
+  # another home, the `key_epoch` and `recovery_epoch` their head names
+  # now. A nil epoch, a local person's, is no argument at all.
+  defp recovery_change(user_id, passkey_id, digest, head) do
+    %{
+      operation: "passkey.recover_admin",
+      arguments: %{
+        "user_id" => user_id,
+        "passkey_id" => passkey_id,
+        "registration_digest" => digest,
+        "key_epoch" => head && head.key_epoch,
+        "recovery_epoch" => recovery_epoch(head)
+      },
+      resource: Sanctum.Tenancy.Users.display_name(user_id),
+      details: %{"registration_digest" => digest}
+    }
   end
 
   # ---------------------------------------------------------------------------

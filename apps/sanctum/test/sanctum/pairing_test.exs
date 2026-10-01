@@ -1155,4 +1155,186 @@ defmodule Sanctum.PairingTest do
                [{first.client_id, false}, {second.client_id, true}]
     end
   end
+
+  # ---------------------------------------------------------------------------
+  # A remote person's device
+  # ---------------------------------------------------------------------------
+
+  describe "complete/3 for a person whose keys are at another home" do
+    setup %{session_ctx: session_ctx, user: user} do
+      tls = Sanctum.Test.DirectoryServer.tls()
+      Sanctum.Test.DirectoryServer.listen!()
+      Sanctum.Test.DirectoryServer.seam!(tls)
+      directory = Sanctum.Test.DirectoryServer.start!(tls)
+      identity = Sanctum.Test.DirectoryServer.identity!(directory.dir, directory.url)
+
+      # The invitation is opened under the person's proof here, then they
+      # are this home's remote person of `identity`.
+      {:ok, invitation} = begin!(session_ctx)
+      :ok = Sanctum.Test.DirectoryServer.remote_person!(user.id, identity)
+
+      %{directory: directory, identity: identity, invitation: invitation}
+    end
+
+    # The certificate the person's own home issues (`person.certify`) for
+    # the reserved client, signed by their live key: `overrides` change its
+    # fields, `:live` the key it is signed with.
+    defp certified(identity, invitation, device_key, athanor, overrides \\ []) do
+      now = System.os_time(:millisecond)
+
+      {:ok, certificate} =
+        DeviceCert.new(
+          device_key: Keyword.get(overrides, :device_key, device_key),
+          client_id: Keyword.get(overrides, :client_id, invitation.client_id),
+          subject:
+            Keyword.get(overrides, :subject, %{
+              kind: :identity,
+              identifier: identity.identifier,
+              key_epoch: Sanctum.Test.DirectoryServer.key_epoch(identity)
+            }),
+          issuer: "https://a.example",
+          audience: Keyword.get(overrides, :audience, Person.home()),
+          athanor: Keyword.get(overrides, :athanor, athanor.id),
+          not_before: Keyword.get(overrides, :not_before, now),
+          expires_at: Keyword.get(overrides, :expires_at, now + 3_600_000)
+        )
+
+      DeviceCert.sign(certificate, Keyword.get(overrides, :live, elem(identity.live, 1)))
+    end
+
+    defp complete_remote(secret, {device_key, private}, certificate) do
+      submission = %{device_key: device_key, certificate: certificate}
+
+      with {:ok, %{challenge: challenge}} <- Pairing.complete(glass(), secret, submission) do
+        Pairing.complete(
+          glass(),
+          secret,
+          Map.put(submission, :proof, Proof.sign(challenge, private))
+        )
+      end
+    end
+
+    test "records the client under the reserved id with their home's certificate, bound to the current key epoch",
+         %{identity: identity, invitation: invitation, user: user, athanor: athanor} do
+      {device_key, _} = key = device_key()
+      certificate = certified(identity, invitation, device_key, athanor)
+
+      assert {:ok, %{client_id: client_id, certificate: ^certificate}} =
+               complete_remote(invitation.invitation_secret, key, certificate)
+
+      assert client_id == invitation.client_id
+      assert [%{id: ^client_id}] = clients(user.id)
+
+      assert [row] = Arca.Repo.all(from(c in DeviceCertificate, where: c.user_id == ^user.id))
+      assert row.subject_kind == "identity"
+      assert row.identifier == identity.identifier
+      assert row.key_epoch == Sanctum.Test.DirectoryServer.key_epoch(identity)
+      assert row.issuing_home == "https://a.example"
+      assert invitation_row(invitation.invitation_secret).state == "consumed"
+    end
+
+    test "no certificate for a remote person, or one for a local person, is refused",
+         %{identity: identity, invitation: invitation, user: user} do
+      {device_key, _} = key = device_key()
+
+      assert {:error, :certificate_required} =
+               Pairing.complete(glass(), invitation.invitation_secret, %{device_key: device_key})
+
+      assert {:error, :certificate_required} =
+               Pairing.complete(glass(), invitation.invitation_secret, %{
+                 device_key: device_key,
+                 proof: %{}
+               })
+
+      local = seated!()
+      {:ok, local_invitation} = begin!(local.session_ctx)
+      certificate = certified(identity, local_invitation, device_key, local.athanor)
+
+      assert {:error, :certificate_unexpected} =
+               complete_remote(local_invitation.invitation_secret, key, certificate)
+
+      assert clients(user.id) == []
+      assert clients(local.user.id) == []
+    end
+
+    test "a certificate not bound exactly to this invitation, device, home and athanor is refused before issuance",
+         %{
+           directory: directory,
+           identity: identity,
+           invitation: invitation,
+           user: user,
+           athanor: athanor
+         } do
+      {device_key, _} = key = device_key()
+      {other_device, _} = device_key()
+      {_public, forger} = :crypto.generate_key(:eddsa, :ed25519)
+      other = Sanctum.Test.DirectoryServer.identity!(directory.dir, directory.url)
+
+      for overrides <- [
+            [client_id: "pcl_another"],
+            [device_key: other_device],
+            [audience: "https://elsewhere.example"],
+            [athanor: "ath_another"],
+            [
+              subject: %{
+                kind: :identity,
+                identifier: other.identifier,
+                key_epoch: Sanctum.Test.DirectoryServer.key_epoch(other)
+              }
+            ],
+            [live: forger],
+            [
+              not_before: System.os_time(:millisecond) - 7_200_000,
+              expires_at: System.os_time(:millisecond) - 1
+            ]
+          ] do
+        certificate = certified(identity, invitation, device_key, athanor, overrides)
+
+        assert {:error, :certificate_refused} =
+                 complete_remote(invitation.invitation_secret, key, certificate),
+               inspect(overrides)
+      end
+
+      assert clients(user.id) == []
+      assert invitation_row(invitation.invitation_secret).state == "pending"
+    end
+
+    test "a key rotation between the certificate and the pairing refuses it; the head is read live",
+         %{directory: directory, identity: identity, invitation: invitation, user: user} = ctx do
+      {device_key, _} = key = device_key()
+      certificate = certified(identity, invitation, device_key, ctx.athanor)
+      Sanctum.Test.DirectoryServer.rotate!(directory.dir, identity)
+
+      assert {:error, :certificate_refused} =
+               complete_remote(invitation.invitation_secret, key, certificate)
+
+      assert clients(user.id) == []
+    end
+
+    test "a proof of possession under another key pairs nothing",
+         %{identity: identity, invitation: invitation, user: user, athanor: athanor} do
+      {device_key, _} = device_key()
+      {_other, other_private} = device_key()
+      certificate = certified(identity, invitation, device_key, athanor)
+
+      assert {:error, :proof_refused} =
+               complete_remote(
+                 invitation.invitation_secret,
+                 {device_key, other_private},
+                 certificate
+               )
+
+      assert clients(user.id) == []
+    end
+
+    test "a directory that cannot be read pairs nothing",
+         %{directory: directory, identity: identity, invitation: invitation, athanor: athanor} do
+      {device_key, _} = key = device_key()
+      certificate = certified(identity, invitation, device_key, athanor)
+      Sanctum.Test.DirectoryServer.Server.stop(directory.server)
+
+      assert {:error, :identity_stale} =
+               complete_remote(invitation.invitation_secret, key, certificate)
+    end
+  end
 end

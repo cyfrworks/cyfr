@@ -44,13 +44,16 @@ defmodule Sanctum.Person do
       a remote person, whose keys live at another home.
     * `:not_enrolled` — the request needs an identifier and the person has
       none yet; `:already_enrolled`, a genesis for a person who has one.
-    * `:stale_key_epoch` — an envelope naming a head the person's row no
-      longer holds.
+    * `:stale_key_epoch` — an envelope or an assertion naming a head the
+      person's row no longer holds.
     * `:wrong_audience` — a local-subject certificate for another home.
     * `:unavailable` — the keys cannot be opened: the store or the keyring
       cannot answer, or a sealed key does not open as its role.
-    * `:not_built` — a person assertion, which the CYFR door signs once its
-      confirmation check exists.
+
+  A person assertion (`sign_assertion/3`) answers, besides these, the
+  `confirmation_required` signal and the confirmation's other refusals,
+  `{:invalid_argument, _}` for a sign-in no pending carry of theirs names,
+  and `{:conflict, _}` for one that can no longer be signed.
 
   A malformed argument is refused as the Prima shape it would have built
   refuses it (`{:invalid_field, name}`).
@@ -82,11 +85,16 @@ defmodule Sanctum.Person do
           staged_live_key_sealed: binary()
         }
 
-  @typedoc "What a person assertion is asked for: the relying home, its challenge and the carry it serves."
+  @typedoc """
+  What a person assertion is asked for: the relying home, its challenge
+  (raw bytes) and the carry it serves, and optionally the `key_epoch` the
+  asker expects it signed under.
+  """
   @type assertion_request :: %{
           required(:audience) => String.t(),
           required(:challenge) => binary(),
-          required(:action_id) => String.t()
+          required(:action_id) => String.t(),
+          optional(:key_epoch) => String.t() | nil
         }
 
   @doc """
@@ -324,31 +332,284 @@ defmodule Sanctum.Person do
   defp unenrolled(_row), do: {:error, :already_enrolled}
 
   @doc """
-  A person assertion for the CYFR door: the live key vouching to
-  `request.audience` for one sign-in, over its `challenge` and the carry
-  `action_id`.
+  A person assertion for the CYFR door (`Prima.PersonAssertion`): the live
+  key vouching to `request.audience` for one sign-in, over its
+  `challenge` (the 32 raw bytes that home issued) and the carry
+  `action_id`, under the `key_epoch` the person's row holds. A
+  `request.key_epoch`, when given, must be that one.
 
-  Not signed yet: the assertion needs a fresh `remote_sign_in`
-  confirmation, which the CYFR door supplies. Until then a person with no
-  identifier is refused `:not_enrolled`, every other request `:not_built`,
-  and a store that cannot answer `:unavailable`.
+  It is decided in this order:
+
+    1. the context's person, enrolled here with their keys (`:not_enrolled`;
+       a person whose keys are at another home, `:not_found`);
+    2. the `key_epoch` named, the row's (`:stale_key_epoch`);
+    3. the audience, another home's origin;
+    4. the carry: the person's own pending action naming exactly that
+       audience as its destination, signed under the row's head (a
+       sign-in no pending carry names, or one begun before the keys
+       changed, is refused);
+    5. an exact retry, the action already holding this challenge and its
+       assertion, answers that assertion after the requester's standing
+       is read again, with no new proof;
+    6. the challenge, attached to the action once
+       (`Arca.CarryActions.attach_challenge/3`) before any proof is asked,
+       so the proof is over a challenge that can no longer change; another
+       challenge needs another sign-in;
+    7. `remote_sign_in` (`Sanctum.Consent.Authz.check/3`), whose preview
+       names the audience: a session alone is answered
+       `confirmation_required` and nothing is signed;
+    8. the assertion, signed by the live key and expiring with the action,
+       recorded on the action with the proof consumed in the same
+       transaction (`Arca.CarryActions.record_assertion/4`).
+
+  Answers `{:ok, %{assertion: %Prima.PersonAssertion{}, genesis: map}}`:
+  what the browser carries back to the audience, the genesis beside the
+  assertion so that home can find the person's directory. `opts` takes
+  nothing yet.
   """
   @spec sign_assertion(Sanctum.Context.t(), assertion_request(), keyword()) ::
-          {:error, :not_enrolled | :not_built | :unavailable}
+          {:ok, %{assertion: Prima.PersonAssertion.t(), genesis: map()}} | {:error, term()}
   def sign_assertion(
         %Sanctum.Context{user_id: user_id} = ctx,
-        %{audience: _audience, challenge: _challenge, action_id: _action_id},
+        %{audience: audience, challenge: challenge, action_id: action_id} = request,
         opts
       )
-      when is_list(opts) do
-    # The context's own person reads their own row.
-    case identity(Sanctum.Context.actor(ctx), user_id) do
-      {:ok, %{identifier: identifier}} when is_binary(identifier) -> {:error, :not_built}
-      {:ok, _unenrolled} -> {:error, :not_enrolled}
-      {:error, :not_found} -> {:error, :not_enrolled}
-      {:error, _unanswered} -> {:error, :unavailable}
+      when is_binary(audience) and is_binary(challenge) and is_binary(action_id) and
+             is_list(opts) do
+    actor = Sanctum.Context.actor(ctx)
+
+    with {:ok, row} <- assertion_signer(actor, user_id),
+         :ok <- named_epoch(request, row),
+         :ok <- other_home(audience),
+         :ok <- challenge_bytes(challenge),
+         {:ok, action} <- pending_carry(actor, action_id, audience, row),
+         {:ok, genesis} <- own_genesis(actor, user_id) do
+      case recorded(action, challenge) do
+        {:ok, assertion} ->
+          with :ok <- still_standing(ctx), do: {:ok, %{assertion: assertion, genesis: genesis}}
+
+        :none ->
+          signed_assertion(ctx, actor, row, action, challenge, genesis)
+      end
     end
   end
+
+  # The person who signs: their own local, enrolled key set, read as
+  # themselves.
+  defp assertion_signer(actor, user_id) do
+    case identity(actor, user_id) do
+      {:ok, %{provenance: "local", identifier: identifier} = row} when is_binary(identifier) ->
+        enrolled(row)
+
+      {:ok, %{provenance: "local"}} ->
+        {:error, :not_enrolled}
+
+      {:ok, _remote} ->
+        {:error, :not_found}
+
+      {:error, :not_found} ->
+        {:error, :not_enrolled}
+
+      {:error, _unanswered} ->
+        {:error, :unavailable}
+    end
+  end
+
+  defp named_epoch(%{key_epoch: epoch}, %{head_hash: head}) when is_binary(epoch) do
+    if epoch == head, do: :ok, else: {:error, :stale_key_epoch}
+  end
+
+  defp named_epoch(_request, _row), do: :ok
+
+  defp other_home(audience) do
+    cond do
+      not Prima.Identity.Encoding.home?(audience) ->
+        {:error, {:invalid_argument, "The audience is a home's origin, like https://hub.example"}}
+
+      audience == home() ->
+        {:error, {:invalid_argument, "An assertion is for another home than this one"}}
+
+      true ->
+        :ok
+    end
+  end
+
+  defp challenge_bytes(challenge) do
+    if byte_size(challenge) == Prima.PersonAssertion.challenge_bytes(),
+      do: :ok,
+      else: {:error, {:invalid_argument, "The challenge is the 32 bytes that home issued"}}
+  end
+
+  # The person's own source action, naming the audience as its destination,
+  # still open and signed under the head their row holds now.
+  defp pending_carry(actor, action_id, audience, row) do
+    case Arca.CarryActions.get(actor, action_id) do
+      {:ok, %{kind: "source", destination_home: ^audience, key_epoch: epoch} = action} ->
+        cond do
+          action.phase not in ["pending", "delivered"] ->
+            {:error,
+             {:conflict, "This sign-in is no longer pending; begin a new one from your home"}}
+
+          epoch != row.head_hash ->
+            {:error,
+             {:conflict,
+              "This sign-in was begun under keys your identity has since replaced; begin it again"}}
+
+          true ->
+            {:ok, action}
+        end
+
+      {:ok, _another} ->
+        {:error,
+         {:invalid_argument, "No pending sign-in of yours names that home; begin one first"}}
+
+      {:error, reason} when reason in [:not_found, :cross_tenant] ->
+        {:error,
+         {:invalid_argument, "No pending sign-in of yours names that home; begin one first"}}
+
+      {:error, _unanswered} ->
+        {:error, :unavailable}
+    end
+  end
+
+  defp own_genesis(actor, user_id) do
+    with {:ok, %{genesis: genesis}} <- Arca.IdentityAttempts.genesis(actor, user_id),
+         {:ok, %{} = map} <- Prima.Json.decode(genesis) do
+      {:ok, map}
+    else
+      {:error, :not_found} -> {:error, :not_enrolled}
+      _unanswered -> {:error, :unavailable}
+    end
+  end
+
+  # The assertion an exact retry answers: the one already recorded for this
+  # very challenge.
+  defp recorded(%{assertion: bytes, challenge: attached}, challenge)
+       when is_binary(bytes) and is_binary(attached) do
+    with true <- attached == Prima.Identity.Encoding.b64(challenge),
+         {:ok, %{} = map} <- Prima.Json.decode(bytes),
+         {:ok, assertion} <- Prima.PersonAssertion.decode(map) do
+      {:ok, assertion}
+    else
+      _other -> :none
+    end
+  end
+
+  defp recorded(_action, _challenge), do: :none
+
+  defp still_standing(ctx) do
+    case Sanctum.Caller.revalidate_session(ctx) do
+      {:ok, _standing} -> :ok
+      {:error, reason} -> {:error, reason}
+    end
+  end
+
+  defp signed_assertion(ctx, actor, row, action, challenge, genesis) do
+    change = assertion_change(action, challenge, row)
+
+    with {:ok, action} <- attach(actor, action, challenge),
+         :ok <- Sanctum.Consent.Authz.check(ctx, :remote_sign_in, change),
+         {:ok, unsigned} <-
+           Prima.PersonAssertion.new(
+             identifier: row.identifier,
+             audience: action.destination_home,
+             challenge: challenge,
+             action_id: action.action_id,
+             key_epoch: row.head_hash,
+             expires_at: DateTime.to_unix(action.expires_at, :millisecond)
+           )
+           |> shaped(),
+         {:ok, signed} <-
+           with_key(row, :live, fn live -> {:ok, Prima.PersonAssertion.sign(unsigned, live)} end),
+         {:ok, recorded} <- record(ctx, actor, action, signed, change) do
+      Sanctum.Consent.Authz.consumed(ctx)
+      # The assertion is on its way to the audience: the carry is delivered,
+      # which a lost reply's retry reads as such. A failed move changes
+      # nothing the browser holds.
+      _ = Arca.CarryActions.deliver(actor, recorded.id, recorded.revision)
+      {:ok, %{assertion: signed, genesis: genesis}}
+    end
+  end
+
+  # What confirming an assertion approves: signing in at that home, for
+  # this carry and challenge, under this head.
+  defp assertion_change(action, challenge, row) do
+    %{
+      operation: "person.assert",
+      arguments: %{
+        "audience" => action.destination_home,
+        "challenge" => Prima.Identity.Encoding.b64(challenge),
+        "action_id" => action.action_id,
+        "key_epoch" => row.head_hash
+      },
+      resource: action.destination_home,
+      details: %{
+        "effect" =>
+          "Signs you in at #{action.destination_home}, which learns this home's address."
+      }
+    }
+  end
+
+  defp attach(actor, action, challenge) do
+    case Arca.CarryActions.attach_challenge(actor, action.id, %{
+           challenge: Prima.Identity.Encoding.b64(challenge),
+           challenge_digest: Prima.Digest.sha256(challenge)
+         }) do
+      {:ok, attached} ->
+        {:ok, attached}
+
+      {:error, :challenge_attached} ->
+        {:error,
+         {:conflict,
+          "This sign-in already carries another challenge from that home; begin a new one"}}
+
+      {:error, reason} when reason in [:expired, :not_open] ->
+        {:error, {:conflict, "This sign-in is no longer pending; begin a new one from your home"}}
+
+      {:error, reason} when reason in [:not_found, :cross_tenant] ->
+        {:error,
+         {:invalid_argument, "No pending sign-in of yours names that home; begin one first"}}
+
+      {:error, _unanswered} ->
+        {:error, :unavailable}
+    end
+  end
+
+  # The assertion recorded once on its action, the proof consumed in the
+  # same transaction: either both happen or neither.
+  defp record(ctx, actor, action, signed, change) do
+    bytes = Prima.Identity.Encoding.jcs!(Prima.PersonAssertion.encode(signed))
+
+    case Arca.CarryActions.record_assertion(
+           actor,
+           action.id,
+           %{assertion: bytes, assertion_digest: Prima.Digest.sha256(bytes)},
+           also: fn _action ->
+             Sanctum.Consent.Authz.consume(ctx, {:remote_sign_in, change})
+           end
+         ) do
+      {:ok, recorded} ->
+        {:ok, recorded}
+
+      {:error, :assertion_recorded} ->
+        {:error, {:conflict, "This sign-in already holds another assertion; begin a new one"}}
+
+      {:error, reason} when reason in [:expired, :not_open] ->
+        {:error, {:conflict, "This sign-in is no longer pending; begin a new one from your home"}}
+
+      {:error, {:conflict, _sentence} = conflict} ->
+        {:error, conflict}
+
+      {:error, reason} when reason in [:not_owner, :database_error] ->
+        {:error, :unavailable}
+
+      {:error, reason} ->
+        {:error, reason}
+    end
+  end
+
+  defp shaped({:ok, assertion}), do: {:ok, assertion}
+  defp shaped({:error, _malformed}), do: {:error, :unavailable}
 
   # ---- the identity row ------------------------------------------------------
 

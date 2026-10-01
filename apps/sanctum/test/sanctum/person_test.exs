@@ -7,7 +7,8 @@ defmodule Sanctum.PersonTest do
   person and sealed to them by role; device certificates signed by the
   live key, local without an identifier and for another home only with
   one; rotations signed by the operational key and written nowhere; and
-  person assertions refused until the CYFR door exists.
+  person assertions signed only for the person's own pending carry, under
+  a fresh `remote_sign_in` proof, recorded with it once.
 
   The keys are proved by what they sign and what verifies it, never by
   opening one here.
@@ -123,6 +124,7 @@ defmodule Sanctum.PersonTest do
       directory: @directory,
       head: row.head_hash,
       key_epoch: row.head_hash,
+      recovery_epoch: row.head_hash,
       live_key: row.live_public_key,
       operational_key: row.operational_public_key,
       recovery_keys: genesis.recovery_keys,
@@ -625,6 +627,35 @@ defmodule Sanctum.PersonTest do
       {:ok, ctx: ctx, request: request}
     end
 
+    # The person's own pending carry to `destination`, signed under the head
+    # their row holds (or `epoch`).
+    defp carry!(user_id, destination, epoch \\ nil) do
+      payload = ~s({"genesis":{}})
+
+      {:ok, action} =
+        Arca.CarryActions.open(as(user_id), %{
+          user_id: user_id,
+          action_id: "car_#{System.unique_integer([:positive])}",
+          source_home: Person.home(),
+          destination_home: destination,
+          return_url: Person.home() <> "/carry",
+          payload: payload,
+          payload_digest: Prima.Digest.sha256(payload),
+          key_epoch: epoch || row(user_id).head_hash
+        })
+
+      action
+    end
+
+    defp asked(ctx, action, challenge) do
+      %{
+        audience: action.destination_home,
+        challenge: challenge,
+        action_id: action.action_id,
+        key_epoch: row(ctx.user_id).head_hash
+      }
+    end
+
     test "refuses a person with no identifier", %{ctx: ctx, request: request} do
       assert {:error, :not_enrolled} = Person.sign_assertion(ctx, request, [])
 
@@ -632,9 +663,126 @@ defmodule Sanctum.PersonTest do
                Person.sign_assertion(%{ctx | user_id: "usr_ghost"}, request, [])
     end
 
-    test "signs nothing yet for an enrolled person", %{ctx: ctx, request: request, user: user} do
+    test "a session alone signs nothing: the carry's challenge is fixed, and the proof asked",
+         %{ctx: ctx, user: user} do
       enroll!(user.id)
-      assert {:error, :not_built} = Person.sign_assertion(ctx, request, [])
+      action = carry!(user.id, "https://hub.example")
+      challenge = :crypto.strong_rand_bytes(32)
+
+      assert {:error, {:confirmation_required, %{operation: "person.assert"}}} =
+               Person.sign_assertion(ctx, asked(ctx, action, challenge), [])
+
+      assert {:ok, held} = Arca.CarryActions.get(as(user.id), action.id)
+      assert held.challenge == Prima.Identity.Encoding.b64(challenge)
+      assert is_nil(held.assertion)
+
+      # Another challenge for the same carry is refused, proof or none.
+      assert {:error, {:conflict, _}} =
+               Person.sign_assertion(ctx, asked(ctx, action, :crypto.strong_rand_bytes(32)), [])
+    end
+
+    test "under a fresh remote_sign_in proof, signs the assertion for exactly that carry, once",
+         %{ctx: ctx, user: user} do
+      {row, genesis} = enroll!(user.id)
+      action = carry!(user.id, "https://hub.example")
+      challenge = :crypto.strong_rand_bytes(32)
+      request = asked(ctx, action, challenge)
+      Sanctum.TestContext.passkey!(user.id)
+
+      {:error, {:confirmation_required, %{id: id}}} = Person.sign_assertion(ctx, request, [])
+      Sanctum.TestContext.prove!(ctx, id)
+
+      assert {:ok, %{assertion: assertion, genesis: carried}} =
+               Person.sign_assertion(%{ctx | confirmation_id: id}, request, [])
+
+      assert carried == Entry.encode(genesis)
+      assert assertion.identifier == row.identifier
+      assert assertion.key_epoch == row.head_hash
+      assert assertion.expires_at == DateTime.to_unix(action.expires_at, :millisecond)
+
+      # Signed by the live key, over this audience, challenge and carry.
+      assert {:ok, _} =
+               Prima.PersonAssertion.verify(assertion, state(row, genesis),
+                 audience: "https://hub.example",
+                 challenge: challenge,
+                 action_id: action.action_id,
+                 now: System.os_time(:millisecond)
+               )
+
+      # Recorded on the carry with its proof, and the carry delivered.
+      assert {:ok, %{phase: "delivered", assertion: bytes}} =
+               Arca.CarryActions.get(as(user.id), action.id)
+
+      assert {:ok, ^assertion} = bytes |> Jason.decode!() |> Prima.PersonAssertion.decode()
+
+      # An exact retry answers the same assertion, with no new proof.
+      assert {:ok, %{assertion: ^assertion}} =
+               Person.sign_assertion(%{ctx | confirmation_id: nil}, request, [])
+
+      # The spent proof signs nothing for another home's carry.
+      other = carry!(user.id, "https://other-hub.example")
+
+      assert {:error, {:confirmation_required, _}} =
+               Person.sign_assertion(
+                 %{ctx | confirmation_id: id},
+                 asked(ctx, other, challenge),
+                 []
+               )
+    end
+
+    test "an audience no pending carry of the person's names is refused", %{ctx: ctx, user: user} do
+      enroll!(user.id)
+      action = carry!(user.id, "https://hub.example")
+      challenge = :crypto.strong_rand_bytes(32)
+
+      assert {:error, {:invalid_argument, _}} =
+               Person.sign_assertion(
+                 ctx,
+                 %{asked(ctx, action, challenge) | audience: "https://other.example"},
+                 []
+               )
+
+      assert {:error, {:invalid_argument, _}} =
+               Person.sign_assertion(
+                 ctx,
+                 %{asked(ctx, action, challenge) | action_id: "car_nobody"},
+                 []
+               )
+
+      # Another person's carry is not theirs to sign for.
+      stranger = person!()
+      enroll!(stranger.id)
+      theirs = carry!(stranger.id, "https://hub.example")
+
+      assert {:error, {:invalid_argument, _}} =
+               Person.sign_assertion(ctx, %{asked(ctx, theirs, challenge) | key_epoch: nil}, [])
+
+      # This home is no audience.
+      assert {:error, {:invalid_argument, _}} =
+               Person.sign_assertion(
+                 ctx,
+                 %{asked(ctx, action, challenge) | audience: Person.home()},
+                 []
+               )
+    end
+
+    test "a carry or a request under a head the person's row no longer holds is refused",
+         %{ctx: ctx, user: user} do
+      enroll!(user.id)
+      challenge = :crypto.strong_rand_bytes(32)
+      old = carry!(user.id, "https://hub.example", Prima.Digest.sha256("a replaced head"))
+
+      assert {:error, {:conflict, _}} =
+               Person.sign_assertion(ctx, asked(ctx, old, challenge), [])
+
+      action = carry!(user.id, "https://hub.example")
+
+      assert {:error, :stale_key_epoch} =
+               Person.sign_assertion(
+                 ctx,
+                 %{asked(ctx, action, challenge) | key_epoch: Prima.Digest.sha256("another")},
+                 []
+               )
     end
   end
 end

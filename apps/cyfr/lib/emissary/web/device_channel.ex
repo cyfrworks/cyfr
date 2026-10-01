@@ -135,8 +135,10 @@ defmodule Emissary.Web.DeviceChannel do
       is no longer chained to the person's current live key: the glass
       renews.
     * `1013` — this home could not check the connection now: its store
-      did not answer (reason `unavailable`), or a verification bound is
-      spent (reason `rate_limited; retry_after_s=N`, the seconds until
+      did not answer, or a remote person's identity could not be
+      confirmed fresh with their directory (reason `unavailable` for
+      both: the work pauses, the pairing stands), or a verification bound
+      is spent (reason `rate_limited; retry_after_s=N`, the seconds until
       the bound opens again). The glass retries later, as it does after
       any close it does not read.
 
@@ -910,7 +912,9 @@ defmodule Emissary.Web.DeviceChannel do
   end
 
   defp class(reason) when reason in [:revoked, :not_standing], do: :forbidden
-  defp class(:unavailable), do: :unavailable
+  # A remote person's identity that could not be confirmed fresh is a
+  # pause, as a store that could not answer is: never a sign-out.
+  defp class(reason) when reason in [:unavailable, :identity_stale], do: :unavailable
   defp class({:rate_limited, _retry_after_ms}), do: :rate_limited
   defp class(_reason), do: :unauthenticated
 
@@ -938,7 +942,12 @@ defmodule Emissary.Web.DeviceChannel do
     do: "The device's certificate names another client than this connection's"
 
   defp sentence(:remote_identity_unavailable),
-    do: "A device of a person whose identity is at another home cannot connect here yet"
+    do:
+      "This device's certificate is issued by its person's own home; certify it there again " <>
+        "rather than renew it here"
+
+  defp sentence(:identity_stale),
+    do: "This device's person's identity could not be confirmed fresh just now; retry shortly"
 
   defp sentence(:revoked), do: "This device's pairing was revoked"
 
