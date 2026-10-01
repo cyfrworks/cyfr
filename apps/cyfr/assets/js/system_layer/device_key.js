@@ -332,7 +332,9 @@ export function askerName(asker) {
  * `waiting` (closed, about to try again) or `revoked`.
  */
 export class Glass {
-  constructor({url, socket, store, subtle = globalThis.crypto?.subtle, now = () => Date.now(), setTimer = setTimeout, clearTimer = clearTimeout, onChange = () => {}}) {
+  // The browser's timers are called unbound: a browser refuses its own
+  // `setTimeout` called as a method of anything else (Illegal invocation).
+  constructor({url, socket, store, subtle = globalThis.crypto?.subtle, now = () => Date.now(), setTimer = (act, ms) => setTimeout(act, ms), clearTimer = (timer) => clearTimeout(timer), onChange = () => {}}) {
     Object.assign(this, {url, makeSocket: socket, store, subtle, now, setTimer, clearTimer, onChange})
     this.status = "starting"
     this.device = null

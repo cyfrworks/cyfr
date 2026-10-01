@@ -410,6 +410,68 @@ defmodule PrismWeb.AquaPanelLiveTest do
     Cyfr.Test.Sandbox.end_views()
   end
 
+  # Minimal valid WASM with a `run` export: enough to publish a row.
+  @wasm <<0x00, 0x61, 0x73, 0x6D, 0x01, 0x00, 0x00, 0x00>> <>
+          <<0x01, 0x04, 0x01, 0x60, 0x00, 0x00>> <>
+          <<0x03, 0x02, 0x01, 0x00>> <>
+          <<0x07, 0x07, 0x01, 0x03, "run", 0x00, 0x00>> <>
+          <<0x0A, 0x04, 0x01, 0x02, 0x00, 0x0B>>
+
+  test "a grant the panel's turn needs is asked in the panel's own layer, in the person's own athanor, never the page's",
+       %{conn: conn, user: user, mine: mine, room: room, me: me, in_room: in_room, thread: thread} do
+    name = "panel-grant-#{System.unique_integer([:positive])}"
+
+    for ctx <- [me, in_room] do
+      {:ok, _} =
+        Compendium.Registry.publish_bytes(ctx, @wasm, %{
+          name: name,
+          version: "0.1.0",
+          type: "catalyst",
+          description: "A component a turn asks a grant for",
+          manifest: Jason.encode!(%{})
+        })
+    end
+
+    {:ok, you_thread} = Threads.create(Sanctum.Context.actor(me))
+
+    # The page is the room's, with its own layer; the panel is You.
+    {:ok, view, _} = live(conn, PrismWeb.ChatLive.chat_path(route(room), thread.id))
+    settled_render(view)
+    {panel, _html} = open_panel(view)
+    panel |> element("#aqua-panel-threads") |> render_change(%{"id" => you_thread.id})
+    pane = on_thread!(child!(panel, "aqua-panel-pane"), you_thread.id)
+
+    send(pane.pid, %Cyfr.Bus.ThreadEvent{
+      athanor_id: mine.id,
+      thread_id: you_thread.id,
+      kind: :consent_required,
+      data: %{ref: "catalyst:local.#{name}:0.1.0", user_id: user.user_id}
+    })
+
+    render(pane)
+    render(panel)
+    assert has_element?(panel, ~s(#system-layer-panel-dialog [data-kind="grant"]))
+    assert has_element?(panel, "#system-layer-panel-dialog .consent-sheet", "in Me")
+    refute has_element?(view, ~s(#system-layer-dialog [data-kind="grant"]))
+
+    panel |> element(~s(#system-layer-panel-dialog button[phx-click="confirm"])) |> render_click()
+
+    # The layer asks its sheet for the walk and commits; the panel takes its
+    # layer's report, then the pane the one it hands on.
+    wait_until(
+      fn -> :sys.get_state(pane.pid).socket.assigns.grant_prompt == nil end,
+      5_000,
+      "the pane to hear its grant"
+    )
+
+    # Granted in You, not in the room the page shows.
+    assert {:ok, [_profile | _]} = Sanctum.Consent.profiles(me, "catalyst:local.#{name}")
+    assert {:ok, []} = Sanctum.Consent.profiles(in_room, "catalyst:local.#{name}")
+    assert :sys.get_state(pane.pid).socket.assigns.grant_prompt == nil
+
+    Cyfr.Test.Sandbox.end_views()
+  end
+
   test "the sheet is a dialog over a page that stays live, Escape closes it, and its button names it only while open",
        %{conn: conn, room: room} do
     {:ok, view, _} = live(conn, athanor_path("/members", room))
@@ -422,7 +484,11 @@ defmodule PrismWeb.AquaPanelLiveTest do
     # Not modal: the room under it is what the panel reads and pastes into,
     # so nothing claims a focus trap the page does not have — and a click
     # on the room (to scroll it, to select a line) does not close the panel.
-    refute html =~ "aria-modal"
+    # The panel's own system layer is a dialog of its own, not the sheet,
+    # and with no prompt it is closed.
+    refute has_element?(panel, "#aqua-panel-sheet[aria-modal]")
+    assert html =~ ~s(id="system-layer-panel")
+    assert has_element?(panel, ~s(#system-layer-panel[data-open="false"]))
     refute has_element?(panel, "#aqua-panel-sheet[phx-click-away]")
     # Escape is the sheet's own, not the window's: a dialog on the page
     # underneath keeps its Escape.

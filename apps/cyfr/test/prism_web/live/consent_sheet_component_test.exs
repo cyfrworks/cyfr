@@ -3,12 +3,13 @@
 
 defmodule PrismWeb.ConsentSheetComponentTest do
   @moduledoc """
-  The consent sheet drives the plan → preview → commit walk through
-  `PrismWeb.Ops.call_tool/3`, whose dialect is `tool/action` — a
+  The consent sheet, the system layer's grant body, walks plan → preview
+  through `PrismWeb.Ops.call_tool/3`, whose dialect is `tool/action` — a
   dot-spelled name silently misses the registry and every call fails with
-  "Unknown tool". These tests render the component against the real
-  registry so a dialect drift (or a retired verb) fails here instead of
-  in the operator's browser.
+  "Unknown tool" — and the layer commits the walk through the same
+  adapter. These tests render the component against the real registry so
+  a dialect drift (or a retired verb) fails here instead of in the
+  operator's browser, and hold that no page draws it but the layer.
   """
 
   # The plan walk hits the DB, including from tasks the dispatcher spawns —
@@ -29,7 +30,7 @@ defmodule PrismWeb.ConsentSheetComponentTest do
     )
   end
 
-  test "the sheet's plan call reaches the profile tool through the registry" do
+  test "given no walk, the sheet's plan call reaches the profile tool through the registry" do
     html =
       render_component(PrismWeb.ConsentSheetComponent,
         id: "consent-sheet",
@@ -43,14 +44,62 @@ defmodule PrismWeb.ConsentSheetComponentTest do
     refute html =~ "Unknown tool"
   end
 
-  test "every verb the sheet speaks is a registered profile action" do
+  test "given the prompt's walk, the sheet draws it and reads nothing" do
+    walk = %{
+      ref: "tincture:local.sheet-probe",
+      plan: %{
+        plan_token: "not-read",
+        expected_consent_revision: 0,
+        needs: [%{need: "api_key", reason: "to reach the service"}],
+        candidates: [%{id: "vlt_1", name: "Service key", field_names: ["SERVICE_KEY"]}],
+        caps: nil
+      },
+      preview: %{summary: ["Uses Service key"], proof: "p", commit_digest: "d"},
+      decisions: %{
+        "ref" => "tincture:local.sheet-probe",
+        "bindings" => [%{"need" => "api_key", "entry_id" => "vlt_1"}]
+      }
+    }
+
+    html =
+      render_component(PrismWeb.ConsentSheetComponent,
+        id: "consent-sheet",
+        ref: walk.ref,
+        walk: walk,
+        context: oidc_ctx(),
+        athanor_name: "Home"
+      )
+
+    assert html =~ "to reach the service"
+    assert html =~ "Uses Service key"
+    assert html =~ "tincture:local.sheet-probe · in Home"
+    assert html =~ ~r/aria-pressed="true"[^>]*>\s*Service key/
+  end
+
+  test "every verb of the walk is a registered profile action" do
     {:ok, tool} = Grimoire.get_tool("profile")
 
     enum = get_in(tool, ["inputSchema", "properties", "action", "enum"]) || []
 
+    # The sheet plans and previews; the layer commits what it holds.
     for action <- ~w(plan preview commit) do
       assert action in enum,
-             "consent sheet drives profile.#{action}, which the profile tool no longer registers"
+             "a grant drives profile.#{action}, which the profile tool no longer registers"
     end
+
+    layer = File.read!(Path.expand("../../../lib/prism_web/live/system_layer.ex", __DIR__))
+    assert layer =~ ~s("profile/commit")
+  end
+
+  test "no page draws the sheet but the system layer" do
+    live = Path.expand("../../../lib/prism_web/live", __DIR__)
+
+    drawn =
+      for path <- Path.wildcard(Path.join(live, "**/*.ex")),
+          File.read!(path) =~
+            ~r/module=\{(PrismWeb\.)?ConsentSheetComponent\}|ConsentSheetComponent\./,
+          do: Path.relative_to(path, live)
+
+    assert drawn == ["system_layer.ex"]
   end
 end

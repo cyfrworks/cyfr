@@ -90,6 +90,33 @@ defmodule PrismWeb.ComponentsLiveTest do
     assert html =~ ~r/>\s*bundled\s*</
   end
 
+  test "a grant is asked in the page's system layer, not drawn on the page, and the plan is read again once granted",
+       %{conn: conn, ctx: ctx} do
+    {view, _html} = expanded_html(conn)
+
+    view |> element("button[phx-click=open_consent]", "Grant access") |> render_click()
+    html = render(view)
+
+    assert html =~ ~s(data-kind="grant")
+    assert html =~ "Grant reagent:local.shelf-tool:1.0.0"
+    assert has_element?(view, ~s(#system-layer-dialog [data-test="grant-sheet"]))
+    refute has_element?(view, "#consent-sheet-dialog")
+
+    view |> element(~s(#system-layer-dialog button[phx-click="confirm"])) |> render_click()
+
+    # The layer asks its sheet for the walk, commits, and reports.
+    Prima.Test.Wait.wait_until(
+      fn -> :sys.get_state(view.pid).socket.assigns.grant_prompt == nil end,
+      5_000,
+      "the grant"
+    )
+
+    html = render(view)
+    refute html =~ ~s(data-kind="grant")
+    assert :sys.get_state(view.pid).socket.assigns.grant_prompt == nil
+    assert {:ok, [_profile | _]} = Sanctum.Consent.profiles(ctx, "reagent:local.shelf-tool")
+  end
+
   test "a newer shipped version is offered as Update and pulled in beside the copy", %{
     conn: conn,
     ctx: ctx,

@@ -636,39 +636,21 @@ defmodule PrismWeb.ShellLive do
   end
 
   # A frame refused because the person has not granted what its tincture
-  # declares now: the grant prompt, when the consent walk's plan and
-  # preview can be read for it. Otherwise the frame shows its refusal.
+  # declares now: the grant prompt, whose sheet binds the vault entries the
+  # tincture needs, when the consent walk's plan and preview can be read
+  # for it (`PrismWeb.SystemLayer.grant_prompt/3`). Otherwise the frame
+  # shows its refusal.
   defp offer_grant(socket, %{key: key, tincture_id: tincture_id, reference: reference}) do
     ref = Prima.ComponentRef.build("tincture", reference.publisher, reference.name)
-    decisions = %{"ref" => ref, "bindings" => []}
+    {prompt_id, next} = next_prompt_id(socket, "grant")
 
-    with {:ok, plan} <- PrismWeb.Ops.call_tool(socket, "profile/plan", %{"ref" => ref}),
-         {:ok, preview} <-
-           PrismWeb.Ops.call_tool(socket, "profile/preview", %{"decisions" => decisions}) do
-      {prompt_id, socket} = next_prompt_id(socket, "grant")
+    case PrismWeb.SystemLayer.grant_prompt(socket, prompt_id, ref) do
+      {:ok, prompt} ->
+        show_prompt(prompt)
+        update(next, :grant_prompts, &Map.put(&1, prompt_id, {key, tincture_id}))
 
-      show_prompt(%{
-        id: prompt_id,
-        kind: :grant,
-        action: :grant,
-        subject: %{
-          ref: ref,
-          plan: %{
-            plan_token: plan.plan_token,
-            expected_consent_revision: plan.expected_consent_revision
-          },
-          preview: %{
-            summary: preview.summary,
-            proof: preview.proof,
-            commit_digest: preview.commit_digest
-          },
-          decisions: decisions
-        }
-      })
-
-      update(socket, :grant_prompts, &Map.put(&1, prompt_id, {key, tincture_id}))
-    else
-      _unavailable -> socket
+      {:error, _unavailable} ->
+        socket
     end
   end
 
@@ -1091,7 +1073,13 @@ defmodule PrismWeb.ShellLive do
         Devices
       </button>
 
-      <.live_component module={PrismWeb.SystemLayer} id="system-layer" context={@context} />
+      <.live_component
+        module={PrismWeb.SystemLayer}
+        id={PrismWeb.SystemLayer.layer_id()}
+        context={@context}
+        athanor_route={@athanor_route}
+        athanor_name={@athanor && @athanor.name}
+      />
 
       <.live_component
         module={PrismWeb.ReportComponent}

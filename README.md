@@ -102,7 +102,7 @@ Around the chat:
 - **`lite` / `dev`** — a per-person preference in Settings, not an edition. `dev` adds the developer views — **Executions**, **Activities**, **Enforcements**, **Components**, **Builds**, **Registry**, **API Keys**, **Reports** — in a sidebar with live indicators; the ops surface stays reachable in `lite`, it just isn't the face. `lite` is the default when the server has a door (an auth provider); operators and private boxes start in `dev`.
 - **⌘⇧K** — the command palette, also from the drawer's Search… row.
 
-Tinctures can stay private inside Prism, or be made public and shared at `http(s)://<your CYFR_HOST>/t/<athanor>/<publisher>/<name>` — served through Caddy (locally, plain HTTP on `:80`; with a real domain, HTTPS). See [Deploy to a Server](#deploy-to-a-server).
+Tinctures can stay private inside Prism, or be made public and shared at `http(s)://<your CYFR_HOST>/t/<athanor>/<publisher>/<name>` — served through Caddy (with `CYFR_HOST=localhost`, HTTPS from Caddy's own local certificate authority, with HTTP on `:80` redirected to it; with a real domain, HTTPS under a certificate Caddy obtains over ACME). See [Deploy to a Server](#deploy-to-a-server).
 
 ## Project Layout
 
@@ -850,6 +850,7 @@ Commands marked with `[i]` support interactive selection when run without argume
 | `cyfr call vault '{"action":"list",…}'` | Manage vault entries (encrypted credentials): create/rename/rotate/rebind/revoke/delete, `authorize` for OAuth — also in the console's Vault page |
 | `cyfr key create/list/get/revoke/rotate` | Manage API keys `[i]` |
 | `cyfr call oauth '{"action":"set_client",…}'` | Store an OAuth app's client credentials per provider; user grants run through `cyfr profile grant` and the console's Vault page |
+| `cyfr pair` / `cyfr pair list` / `cyfr pair revoke <client-id>` | Show a pairing link for a new device (its glass opens it in a browser before it expires), list paired devices, revoke one; pairing and revoking each need a fresh confirmation given in Prism ([devices-guide.md](devices-guide.md)) |
 
 ### Administration
 

@@ -22,21 +22,23 @@ defmodule PrismWeb.AquaLive do
   (`AgentsComponent`), the pinned page and the notes (`NotesComponent`),
   the scrolls (`ScrollsComponent`) and the shipped files
   (`RestoreComponent`). The page holds what they share — the provenance
-  of every file in the tree, the model catalogue, the consent sheet — and
-  loads one section per message, so a child LiveView's mount (the topbar,
-  the panel) is answered between them rather than after them all.
+  of every file in the tree, the model catalogue, the grant it asked its
+  system layer for — and loads one section per message, so a child
+  LiveView's mount (the topbar, the panel) is answered between them
+  rather than after them all.
 
   This is also where a person connects a model: the soul's catalyst
   needs an API key bound to it before AQUA can answer, and "Connect a
-  model" opens the consent sheet for that catalyst — reachable in `lite`,
-  so a box that never opens `dev` still gets its key in.
+  model" asks for that catalyst's grant in the page's system layer
+  (`PrismWeb.SystemLayer`), whose sheet binds the key — reachable in
+  `lite`, so a box that never opens `dev` still gets its key in. A
+  formula whose closure moved is consented again the same way.
   """
 
   use PrismWeb, :live_view
 
-  alias Phoenix.LiveView.JS
   alias PrismWeb.AquaLive.{AgentsComponent, NotesComponent, RestoreComponent, ScrollsComponent}
-  alias PrismWeb.ConsentSheetComponent
+  alias PrismWeb.SystemLayer
 
   # Each section reloads on its own message, so a write refreshes what it
   # changed and nothing else: a note kept here does not re-read the
@@ -55,7 +57,10 @@ defmodule PrismWeb.AquaLive do
       |> assign(:models_by_provider, %{})
       |> assign(:catalyst_refs, %{})
       |> assign(:models_loaded, false)
-      |> assign(:consent_sheet_ref, nil)
+      # The grant prompt this page asked its system layer for: its id and
+      # the component it grants, and the count prompt ids are numbered by.
+      |> assign(:grant_prompt, nil)
+      |> assign(:prompt_seq, 0)
 
     # Subscribe before the load asks whether the athanor is ready: a fill
     # that finishes in between must still reach this page.
@@ -74,12 +79,24 @@ defmodule PrismWeb.AquaLive do
 
   @impl true
   def handle_event("open_consent", %{"ref" => ref}, socket) when is_binary(ref) and ref != "" do
-    {:noreply, assign(socket, :consent_sheet_ref, ref)}
+    {:noreply, ask_grant(socket, ref)}
   end
 
-  # The dialog's backdrop and Escape; the sheet's own Cancel arrives as a message.
-  def handle_event("close_consent", _params, socket) do
-    {:noreply, assign(socket, :consent_sheet_ref, nil)}
+  # The grant for `ref`, asked in the page's system layer, whose sheet
+  # binds the key; a walk that cannot be read is said instead.
+  defp ask_grant(socket, ref) do
+    seq = socket.assigns.prompt_seq + 1
+    id = "grant-#{seq}"
+    socket = assign(socket, :prompt_seq, seq)
+
+    case SystemLayer.grant_prompt(socket, id, ref) do
+      {:ok, prompt} ->
+        SystemLayer.show(prompt)
+        assign(socket, :grant_prompt, {id, ref})
+
+      {:error, reason} ->
+        put_flash(socket, :error, "Cannot ask for this grant: #{error_message(reason)}")
+    end
   end
 
   # ============================================================================
@@ -122,30 +139,28 @@ defmodule PrismWeb.AquaLive do
     {:noreply, load_section(socket, section)}
   end
 
-  # The consent sheet for the soul's catalyst: the model got its key. The
+  # The grant this page asked for. Granted, the model got its key: the
   # kept catalogue predates the key, so it is dropped before the re-read —
   # a key bound here shows in the picker now, not when the entry lapses.
-  # The same sheet binds a model's key and re-consents a formula whose
-  # closure moved, so what it says names what was consented.
-  def handle_info({:consent_granted, ref, _result}, socket) do
-    PrismWeb.ModelCatalog.forget(socket.assigns.context.athanor_id)
+  # The same prompt binds a model's key and re-consents a formula whose
+  # closure moved, so what it says names what was consented. A refused
+  # commit leaves the prompt open; anything else ended it.
+  def handle_info({:system_layer, id, outcome}, %{assigns: %{grant_prompt: {id, ref}}} = socket) do
+    case outcome do
+      :confirmed ->
+        {:noreply, socket |> assign(:grant_prompt, nil) |> granted(ref)}
 
-    said =
-      case ref do
-        "formula:local." <> name -> "#{name} consented again."
-        _ -> "Model connected."
-      end
+      {:refused, reason} when reason != :invalid_prompt ->
+        {:noreply, socket}
 
-    {:noreply,
-     socket
-     |> assign(:consent_sheet_ref, nil)
-     |> put_flash(:info, said)
-     |> load_section(:agents)
-     |> load_models()}
+      _ended ->
+        {:noreply, assign(socket, :grant_prompt, nil)}
+    end
   end
 
-  def handle_info({:consent_sheet_closed, _ref}, socket) do
-    {:noreply, assign(socket, :consent_sheet_ref, nil)}
+  def handle_info({:system_layer, _id, _outcome} = report, socket) do
+    {:ok, socket} = SystemLayer.reported(socket, report)
+    {:noreply, socket}
   end
 
   # The catalogue, async, for the focus it was read under.
@@ -159,6 +174,21 @@ defmodule PrismWeb.AquaLive do
   def handle_info(msg, socket) do
     Prima.LoggerContext.unexpected(__MODULE__, msg, :debug)
     {:noreply, socket}
+  end
+
+  defp granted(socket, ref) do
+    PrismWeb.ModelCatalog.forget(socket.assigns.context.athanor_id)
+
+    said =
+      case ref do
+        "formula:local." <> name -> "#{name} consented again."
+        _ -> "Model connected."
+      end
+
+    socket
+    |> put_flash(:info, said)
+    |> load_section(:agents)
+    |> load_models()
   end
 
   # Shape: %{"models" => %{provider => [ids]}, "refs" => %{...}}.
@@ -366,13 +396,14 @@ defmodule PrismWeb.AquaLive do
         loaded={not @loading}
       />
 
-      <%!-- The consent sheet for a model's key: the house dialog. --%>
-      <ConsentSheetComponent.consent_sheet_modal
-        ref={@consent_sheet_ref}
+      <%!-- A grant is asked here, the one place a consent is shown: a
+            model's key, a formula consented again. --%>
+      <.live_component
+        module={SystemLayer}
+        id={SystemLayer.layer_id()}
         context={@context}
         athanor_route={@athanor_route}
         athanor_name={@athanor && @athanor.name}
-        on_cancel={JS.push("close_consent")}
       />
     </div>
     """

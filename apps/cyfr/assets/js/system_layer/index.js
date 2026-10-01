@@ -23,6 +23,26 @@ import {assert as assertPasskey, register as registerPasskey, supported as passk
  * prompt Tab and Shift+Tab wrap inside it. Escape dismisses every prompt
  * but safe mode; only the server closes a prompt.
  *
+ * While a modal prompt is open, from the step that leaves fullscreen until
+ * it closes, every frame on the page is hidden (`visibility: hidden`, by a
+ * stylesheet the layer owns) and `inert`, a frame added meanwhile too: it
+ * cannot draw over the prompt, take its input or act on it. On a page that
+ * is not fullscreen the frames are hidden at once; on one that is, once the
+ * exit has settled and the frames have had a moment to see it
+ * (`framesSee`), and only then is the prompt shown: a frame hidden before
+ * it saw the exit keeps its fullscreen and takes it back, with no gesture,
+ * as soon as it is shown again. A page may hold two layers (the page's and
+ * the person's own panel's); the frames stay hidden while either has a
+ * modal prompt open. When the last one closes the stylesheet goes, and
+ * each frame keeps the `inert` its server and its bridge last gave it: the
+ * layer removes only the `inert` it added and nobody wrote since. Safe
+ * mode's popover hides nothing: no app runs then.
+ *
+ * A frame's pointer lock is its own: no document can release a lock
+ * another frame holds. Hiding a frame ends the lock in Chromium, but a
+ * frame still holding its person's activation can take it again while
+ * hidden. Escape always ends it, and focus stays in the prompt.
+ *
  * The show and hide decisions are `state.js`'s and the tab order is
  * `focus.js`'s; this hook only performs their effects.
  *
@@ -30,11 +50,15 @@ import {assert as assertPasskey, register as registerPasskey, supported as passk
  * of the browser a proof comes from:
  *
  *   * On the system layer, the server asks for a ceremony with the pushed
- *     events `webauthn:get` (`{purpose, id, public_key}`, request options)
- *     and `webauthn:create` (`{purpose, public_key, registration}`,
- *     creation options and the home's registration token); the hook
- *     answers `webauthn_result` (`{purpose, id, credential}`) or
- *     `webauthn_error` (`{purpose, id}`) to the layer.
+ *     events `webauthn:get` (`{layer, purpose, id, public_key}`, request
+ *     options) and `webauthn:create` (`{layer, purpose, public_key,
+ *     registration}`, creation options and the home's registration
+ *     token); the hook answers `webauthn_result` (`{purpose, id,
+ *     credential}`) or `webauthn_error` (`{purpose, id}`) to the layer.
+ *     Every event the layer pushes names it (`layer`, its element's id),
+ *     and a layer's hook acts only on its own: a page may hold two layers
+ *     (the page's and the person's own panel's), each its own element in
+ *     the top layer, and every hook on a page hears every push.
  *   * On the sign-in page, an element with `data-webauthn="sign-in"` is
  *     a passkey sign-in: a click on its `[data-webauthn-start]` asks the
  *     page for a challenge (`passkey_start`, whose reply carries
@@ -45,12 +69,13 @@ import {assert as assertPasskey, register as registerPasskey, supported as passk
  * A change that waits on a fresh confirmation repeats once its record is
  * confirmed. A typed value is never held by the server meanwhile: the
  * form keeps it, and the server asks the browser to submit that form
- * again (`system_layer:resubmit`, `{form}`, the form's id). Every form in
- * a prompt is cleared when the prompt closes. A page's own form that
- * typed a credential, outside the prompt, is marked with the prompt it
- * asks under (`system_layer:mark`, `{form, prompt}`), the mark held here
- * by form id, and every form so marked is cleared when that prompt ends
- * (`system_layer:clear`, `{prompt, form}`) or when the page reconnects,
+ * again (`system_layer:resubmit`, `{layer, form}`, the form's id). Every
+ * form in a prompt is cleared when the prompt closes. A page's own form
+ * that typed a credential, outside the prompt, is marked with the prompt
+ * it asks under (`system_layer:mark`, `{layer, form, prompt}`), the mark
+ * held here by form id, and every form so marked is cleared when that
+ * prompt ends (`system_layer:clear`, `{layer, prompt, form}`) or when the
+ * page reconnects,
  * since its waiting requests ended with the old page process. Keys typed
  * into a prompt stay in it: none drives the page behind it.
  *
@@ -84,12 +109,117 @@ import {assert as assertPasskey, register as registerPasskey, supported as passk
 
 const FOCUSABLE = "a[href], button, input, select, textarea, [tabindex]"
 
+// ---------------------------------------------------------------------------
+// The frames, hidden while any layer on the page has a modal prompt open
+// ---------------------------------------------------------------------------
+
+// Every layer of the page with a modal prompt open; shared by every layer's
+// hook. While one does, a stylesheet the layer owns hides every frame, and
+// each frame is `inert`. A frame's own `inert` belongs to the server's
+// render and to the frame's bridge (`hooks/iframe_bridge.js`, which makes a
+// frozen frame inert), so the layer adds the attribute only where it is
+// absent, and gives back only what it added: a write of `inert` by anyone
+// else while the page is covered is the frame's latest state, kept as its
+// state when the last layer closes.
+const covering = new Set()
+const added = new Set()
+let coverStyle = null
+let frameWatch = null
+
+// Whether a layer in `state` covers the page: a modal prompt opening or shown.
+export const covers = (state) => state.phase !== "hidden" && state.mode === "modal"
+
+// How long after the page left fullscreen its frames are given to see it,
+// beyond two of the page's animation frames: each sees it at its own next
+// rendering.
+export const FRAMES_SEE_MS = 100
+
+/** Resolves once the page's frames have had their moment to see a fullscreen exit. */
+export function framesSee(wait = FRAMES_SEE_MS) {
+  const raf = globalThis.requestAnimationFrame
+  const twice = typeof raf === "function" ? new Promise((resolve) => raf(() => raf(resolve))) : Promise.resolve()
+  return twice.then(() => new Promise((resolve) => setTimeout(resolve, wait)))
+}
+
+/**
+ * `layer` (a hook) covers the page, or no longer does. The first to cover
+ * hides every frame and makes it inert, and watches the page for frames
+ * added and for anyone else's writes of a frame's `inert`; the last to stop
+ * removes the stylesheet and the `inert` it added and nobody has written
+ * since.
+ */
+export function cover(layer, on, doc = globalThis.document) {
+  if (on) {
+    const first = covering.size === 0
+    covering.add(layer)
+    if (first && doc && typeof doc.querySelectorAll === "function") {
+      hideFrames(doc)
+      for (const frame of doc.querySelectorAll("iframe")) inertFrame(frame)
+      watchFrames(doc)
+    }
+  } else if (covering.delete(layer) && covering.size === 0) {
+    if (frameWatch) frameWatch.disconnect()
+    frameWatch = null
+    if (coverStyle && typeof coverStyle.remove === "function") coverStyle.remove()
+    coverStyle = null
+    for (const frame of added) frame.removeAttribute("inert")
+    added.clear()
+  }
+}
+
+// The layer's own stylesheet, outside every frame and every dialog: no
+// render of the server's touches it, and removing it gives each frame back
+// whatever visibility its own attributes say.
+function hideFrames(doc) {
+  if (typeof doc.createElement !== "function") return
+  const parent = doc.head || doc.documentElement
+  if (!parent) return
+  coverStyle = doc.createElement("style")
+  coverStyle.setAttribute("data-system-layer-cover", "")
+  coverStyle.textContent = "iframe { visibility: hidden !important; }"
+  parent.appendChild(coverStyle)
+}
+
+function inertFrame(frame) {
+  if (frame.hasAttribute("inert")) return
+  frame.setAttribute("inert", "")
+  added.add(frame)
+}
+
+// A frame added while the page is covered is made inert as it arrives; a
+// write of a frame's `inert` by anyone else is its latest state: inert, it
+// is the writer's to keep; not, the layer makes it inert again and gives
+// that back when the page is uncovered. The layer's own writes are taken
+// off the queue as it makes them.
+function watchFrames(doc) {
+  const Observer = globalThis.MutationObserver
+  if (!Observer || !doc.body) return
+  frameWatch = new Observer((records) => {
+    for (const record of records) {
+      if (record.type === "attributes") {
+        const frame = record.target
+        if (!frame || frame.nodeName !== "IFRAME") continue
+        if (frame.hasAttribute("inert")) added.delete(frame)
+        else inertFrame(frame)
+      } else {
+        for (const node of record.addedNodes || []) {
+          if (node.nodeName === "IFRAME") inertFrame(node)
+          else if (node.querySelectorAll) for (const frame of node.querySelectorAll("iframe")) inertFrame(frame)
+        }
+      }
+    }
+    if (frameWatch) frameWatch.takeRecords()
+  })
+  frameWatch.observe(doc.body, {childList: true, subtree: true, attributes: true, attributeFilter: ["inert"]})
+}
+
 export default {
   mounted() {
     if (this.el.dataset.webauthn === "sign-in") return this.mountSignIn()
     if (this.el.dataset.glass === "pair") return this.mountGlass()
 
     this.handleCeremonies()
+    this.gone = false
     this.layer = initial
     this.returnFocus = null
     this.dialog = this.el.querySelector("dialog")
@@ -132,6 +262,11 @@ export default {
 
     if (this.glass) return this.destroyGlass()
 
+    // A layer that goes covers nothing and does nothing more: its state
+    // machine ends, and a fullscreen exit still settling finds it gone.
+    this.gone = true
+    this.layer = {...initial, attempt: this.layer ? this.layer.attempt + 1 : 0}
+    this.cover(false)
     this.dialog.removeEventListener("cancel", this.onCancel)
     this.dialog.removeEventListener("close", this.onClose)
     this.dialog.removeEventListener("keydown", this.onKeydown)
@@ -156,17 +291,26 @@ export default {
   },
 
   // The ceremonies the system layer asks for; the layer decides nothing
-  // from their answers, the home does.
+  // from their answers, the home does. Every hook on a page hears every
+  // push, and a page may hold two layers (the page's and the panel's), so
+  // each event names the layer it is for (`layer`, the layer's id) and
+  // only that layer's hook acts on it: a ceremony runs once, and a form is
+  // submitted again once.
   handleCeremonies() {
     if (typeof this.handleEvent !== "function") return
+    this.marks = new Map()
 
-    this.handleEvent("webauthn:get", ({purpose, id, public_key: publicKey}) => {
+    const on = (event, act) => this.handleEvent(event, (payload) => {
+      if (payload && payload.layer === this.el.id) act(payload)
+    })
+
+    on("webauthn:get", ({purpose, id, public_key: publicKey}) => {
       assertPasskey(publicKey, globalThis.navigator.credentials)
         .then((credential) => this.pushEventTo(this.el, "webauthn_result", {purpose, id, credential}))
         .catch(() => this.pushEventTo(this.el, "webauthn_error", {purpose, id}))
     })
 
-    this.handleEvent("webauthn:create", ({purpose, public_key: publicKey, registration}) => {
+    on("webauthn:create", ({purpose, public_key: publicKey, registration}) => {
       registerPasskey(publicKey, registration, globalThis.navigator.credentials)
         .then((credential) => this.pushEventTo(this.el, "webauthn_result", {purpose, credential}))
         .catch(() => this.pushEventTo(this.el, "webauthn_error", {purpose}))
@@ -174,13 +318,12 @@ export default {
 
     // A change confirmed: the form that typed it, which still holds what
     // was typed, is submitted again.
-    this.handleEvent("system_layer:resubmit", ({form}) => resubmit(globalThis.document, form))
+    on("system_layer:resubmit", ({form}) => resubmit(globalThis.document, form))
 
     // A page's form marked with the prompt it asks under, and emptied when
     // that prompt ends.
-    this.marks = new Map()
-    this.handleEvent("system_layer:mark", ({form, prompt}) => markForm(this.marks, form, prompt))
-    this.handleEvent("system_layer:clear", ({prompt, form}) => clearMarked(globalThis.document, this.marks, prompt, form))
+    on("system_layer:mark", ({form, prompt}) => markForm(this.marks, form, prompt))
+    on("system_layer:clear", ({prompt, form}) => clearMarked(globalThis.document, this.marks, prompt, form))
   },
 
   // A reconnect is a new page process: every request this page was waiting
@@ -199,10 +342,21 @@ export default {
     })
   },
 
+  // A modal prompt hides the page's frames before it shows, and gives them
+  // back only once its dialog has closed. On a page that is not fullscreen
+  // they are hidden before anything else it does; on one that is, once the
+  // exit has settled and the frames saw it (`exit-fullscreen`).
   dispatch(event) {
     const {state, effects} = transition(this.layer, event)
     this.layer = state
+    const on = covers(state)
+    if (on && !globalThis.document.fullscreenElement) this.cover(true)
     for (const effect of effects) this.perform(effect)
+    if (!on) this.cover(false)
+  },
+
+  cover(on) {
+    cover(this, on, globalThis.document)
   },
 
   perform(effect) {
@@ -219,7 +373,17 @@ export default {
 
       case "exit-fullscreen": {
         const attempt = this.layer.attempt
-        leaveFullscreen(doc).then(() => this.dispatch({type: "ready", attempt}))
+        const wasFullscreen = Boolean(doc.fullscreenElement)
+        const see = this.framesSee || framesSee
+        // Settled after the layer went, it does nothing: a destroyed hook
+        // never covers the page again.
+        leaveFullscreen(doc)
+          .then(() => (wasFullscreen && covers(this.layer) ? see() : undefined))
+          .then(() => {
+            if (this.gone) return
+            if (covers(this.layer) && this.layer.attempt === attempt) this.cover(true)
+            this.dispatch({type: "ready", attempt})
+          })
         break
       }
 

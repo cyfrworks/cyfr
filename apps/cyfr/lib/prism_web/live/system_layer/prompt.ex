@@ -16,11 +16,15 @@ defmodule PrismWeb.SystemLayer.Prompt do
   `subject` is what the prompt shows and what its confirmation
   dispatches:
 
-    * `:grant` — the consent walk as `PrismWeb.ConsentSheetComponent` holds
-      it: `ref`, the `plan` (`plan_token`, `expected_consent_revision`), the
-      `preview` (`summary`, `proof`, `commit_digest`) and the `decisions`
-      payload (`%{"ref" => ref, "bindings" => [...]}`), committed through
-      `profile.commit`;
+    * `:grant` — the consent walk the prompt's body, the consent sheet
+      (`PrismWeb.ConsentSheetComponent`), starts from and keeps in step:
+      `ref`, the `athanor_id` it was planned in, the `plan` as
+      `profile.plan` answers it (`plan_token`, `expected_consent_revision`,
+      the needs and the vault entries that can meet them), the `preview`
+      of the decisions (`summary`, `proof`, `commit_digest`) and the
+      `decisions` payload (`%{"ref" => ref, "bindings" => [...]}`),
+      committed through `profile.commit` (`PrismWeb.SystemLayer.grant_prompt/3`
+      builds it);
     * `:credential_entry` — `name`, the vault entry to create, and
       optionally `field`, the name its one field is stored under
       (`API_KEY` when absent), created through `vault.create` as an `api_key`
@@ -144,10 +148,21 @@ defmodule PrismWeb.SystemLayer.Prompt do
 
   defp action(_kind, _action), do: {:error, :invalid_prompt}
 
-  defp subject(:grant, %{ref: ref, plan: %{} = plan, preview: %{} = preview, decisions: decisions})
-       when is_binary(ref) and ref != "" do
+  defp subject(
+         :grant,
+         %{
+           ref: ref,
+           athanor_id: athanor_id,
+           plan: %{} = plan,
+           preview: %{} = preview,
+           decisions: decisions
+         }
+       )
+       when is_binary(ref) and ref != "" and is_binary(athanor_id) and athanor_id != "" do
     if plan?(plan) and preview?(preview) and decisions?(decisions, ref),
-      do: {:ok, %{ref: ref, plan: plan, preview: preview, decisions: decisions}},
+      do:
+        {:ok,
+         %{ref: ref, athanor_id: athanor_id, plan: plan, preview: preview, decisions: decisions}},
       else: {:error, :invalid_prompt}
   end
 
