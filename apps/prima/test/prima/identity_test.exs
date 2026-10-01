@@ -268,6 +268,97 @@ defmodule Prima.IdentityTest do
              )
   end
 
+  describe "recovery_epoch" do
+    defp pair, do: :crypto.generate_key(:eddsa, :ed25519)
+
+    # A log built here, so a recover that keeps the live key (one that only
+    # adds a recovery holder) stands beside one that replaces it.
+    defp built_log do
+      directory = "https://directory.example"
+      {live_1, _} = pair()
+      {op_pub, op} = pair()
+      {kit_pub, kit} = pair()
+      {kit_2_pub, _} = pair()
+      {live_2, _} = pair()
+      {live_3, _} = pair()
+      {op_3, _} = pair()
+
+      {:ok, genesis} =
+        Entry.genesis(
+          live_key: live_1,
+          operational_key: op_pub,
+          recovery_keys: [kit_pub],
+          directory: directory
+        )
+
+      genesis = Identity.sign(genesis, op)
+      identifier = Identity.identifier(genesis)
+
+      {:ok, rotate} = Entry.rotate(Identity.hash(genesis), live_2)
+      rotate = Identity.sign(rotate, op)
+
+      recover = fn prev, live, operational, recovery, revision, id ->
+        {:ok, request} =
+          RecoverRequest.new(
+            identifier: identifier,
+            directory: directory,
+            live_key: live,
+            operational_key: operational,
+            recovery_keys: recovery,
+            expected_revision: revision,
+            request_id: id
+          )
+
+        {:ok, entry} = Entry.recover(prev, Identity.sign(request, kit))
+        entry
+      end
+
+      add_holder =
+        recover.(Identity.hash(rotate), live_2, op_pub, [kit_pub, kit_2_pub], 0, "req_holder")
+
+      replace = recover.(Identity.hash(add_holder), live_3, op_3, nil, 1, "req_replace")
+
+      %{genesis: genesis, rotate: rotate, add_holder: add_holder, replace: replace}
+    end
+
+    test "starts at the genesis, survives a rotation and a holder-adding recover, and moves at a recovery that replaces the live key" do
+      log = built_log()
+      genesis_hash = Identity.hash(log.genesis)
+
+      {:ok, at_genesis} = Identity.verify_chain([log.genesis])
+      assert at_genesis.recovery_epoch == genesis_hash
+      assert at_genesis.key_epoch == genesis_hash
+
+      {:ok, rotated} = Identity.verify_chain([log.genesis, log.rotate])
+      assert rotated.key_epoch == Identity.hash(log.rotate)
+      assert rotated.recovery_epoch == genesis_hash
+
+      {:ok, holder} = Identity.verify_chain([log.genesis, log.rotate, log.add_holder])
+      assert holder.key_epoch == Identity.hash(log.add_holder)
+      assert holder.recovery_epoch == genesis_hash
+
+      {:ok, replaced} =
+        Identity.verify_chain([log.genesis, log.rotate, log.add_holder, log.replace])
+
+      assert replaced.key_epoch == Identity.hash(log.replace)
+      assert replaced.recovery_epoch == Identity.hash(log.replace)
+      assert State.encode(replaced)["recovery_epoch"] == Identity.hash(log.replace)
+    end
+
+    test "extend/2 moves it as verify_chain/1 does" do
+      log = built_log()
+      {:ok, state} = Identity.verify_chain([log.genesis])
+
+      stepped =
+        Enum.reduce([log.rotate, log.add_holder, log.replace], state, fn entry, state ->
+          {:ok, state} = Identity.extend(state, entry)
+          state
+        end)
+
+      assert stepped.recovery_epoch == Identity.hash(log.replace)
+    end
+  end
+
   describe "the shared encodings" do
     test "base64url is unpadded and has one spelling" do
       key = public("alice_live_1")

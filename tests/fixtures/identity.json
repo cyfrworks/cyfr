@@ -13,6 +13,7 @@
         "length": 1,
         "live_key": "z4SbNwACH3EJP0catDkfCNQWpQNdsYAUCTHlKOcyrGU",
         "operational_key": "eeutcBO3svGffX_iz5AhBmlHb_sKTBBh1ftMjsgQU5o",
+        "recovery_epoch": "sha256:252020f8258a5ac273ad001a2e428bab70e784bef6676bbdb314956e986a1446",
         "recovery_keys": [
           "0OxTidkGKIVD1DjlN78M2Lu5h8USUYAbnaqqniXRcNc"
         ],
@@ -34,6 +35,7 @@
         "length": 2,
         "live_key": "Wc8SfHJKHZOrNh0Qtc7YtRAUCUS82P-Gt8-1horAyAo",
         "operational_key": "eeutcBO3svGffX_iz5AhBmlHb_sKTBBh1ftMjsgQU5o",
+        "recovery_epoch": "sha256:252020f8258a5ac273ad001a2e428bab70e784bef6676bbdb314956e986a1446",
         "recovery_keys": [
           "0OxTidkGKIVD1DjlN78M2Lu5h8USUYAbnaqqniXRcNc"
         ],
@@ -56,6 +58,7 @@
         "length": 3,
         "live_key": "_GWuSiJv2Lma_tc6LEN-KJWvA02IH6onW8hxh4qXtTw",
         "operational_key": "5eAt0KUYrcCNFtmeYPxn9ZEHl_EfSHyKshvGq8FCOGU",
+        "recovery_epoch": "sha256:ea5c7b10ed2912adb80a611fd5139ee3aca59dc4962ae07b7569ddc6bb7144a8",
         "recovery_keys": [
           "0OxTidkGKIVD1DjlN78M2Lu5h8USUYAbnaqqniXRcNc"
         ],
@@ -81,6 +84,7 @@
         "length": 4,
         "live_key": "t8OJWAwFXl4GO3XApvVprnsOrS0c10pwGpyLDEGD-74",
         "operational_key": "5eAt0KUYrcCNFtmeYPxn9ZEHl_EfSHyKshvGq8FCOGU",
+        "recovery_epoch": "sha256:ea5c7b10ed2912adb80a611fd5139ee3aca59dc4962ae07b7569ddc6bb7144a8",
         "recovery_keys": [
           "0OxTidkGKIVD1DjlN78M2Lu5h8USUYAbnaqqniXRcNc"
         ],
@@ -107,6 +111,7 @@
         "length": 5,
         "live_key": "6-nDhxynI_HV-upqVviWPSPT2g1yX9ItgSYtepPfXtA",
         "operational_key": "gMoxLnnOi3DrTWAe6OaoIgkPyc6hc-wOis3yKk1se-Y",
+        "recovery_epoch": "sha256:e8ecdf22c1586c7060b06c89440bb99b77876464fa2dfbc743b1a7c29295f091",
         "recovery_keys": [
           "0OxTidkGKIVD1DjlN78M2Lu5h8USUYAbnaqqniXRcNc",
           "FBcgExj0vbv72p1suwCmETYk-cffTng7ir_cQf0Bz2g"
@@ -136,6 +141,7 @@
         "length": 6,
         "live_key": "PnDWMCC74EvzJGErWiryLH_P9DYCgRmT1puJexMaWCM",
         "operational_key": "PS-7PiwaKDwmGoeDBnFsj4D69FYyi3jEaUJMro0vDgc",
+        "recovery_epoch": "sha256:e542930095479a36dd7c710c861eed6e4cd5e47e0a7a565d5acf6af17c22d4f1",
         "recovery_keys": [
           "0OxTidkGKIVD1DjlN78M2Lu5h8USUYAbnaqqniXRcNc",
           "FBcgExj0vbv72p1suwCmETYk-cffTng7ir_cQf0Bz2g"
@@ -162,6 +168,7 @@
         "length": 2,
         "live_key": "22LF5_ryFk_jkCvds1l2k1ZKpl_2quOEEA9-E5LG1UE",
         "operational_key": "ypwQtvb89PvNcj8hNeJTAGZkUYgLUoWwuPNeq-ZXOWI",
+        "recovery_epoch": "sha256:1ca1d968963431cc755a153d76e533dbdee374664ea19c3dafc1d5cabcbc4cd1",
         "recovery_keys": [
           "0OxTidkGKIVD1DjlN78M2Lu5h8USUYAbnaqqniXRcNc"
         ],

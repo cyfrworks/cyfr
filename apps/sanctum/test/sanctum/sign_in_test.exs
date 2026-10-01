@@ -50,6 +50,61 @@ defmodule Sanctum.SignInTest do
     assert DateTime.compare(again.last_seen_at, first) in [:gt, :eq]
   end
 
+  test "a person the cyfr door admits is remote here: no key, and no athanor of their own" do
+    identifier = "per_" <> Prima.Digest.sha256_hex("remote-#{System.unique_integer()}")
+    key = Sanctum.Auth.Identity.cyfr_key("https://dir.example", identifier)
+
+    info = %{
+      id: key,
+      provider: "cyfr",
+      email: nil,
+      verified: :unknown,
+      name: nil,
+      remote: %{
+        identifier: identifier,
+        directory_url: "https://dir.example",
+        head_hash: Prima.Digest.sha256("head")
+      }
+    }
+
+    before = counts()
+    assert {:ok, user} = SignIn.admitted(info, :allowed)
+
+    row = identity_row!(user.id)
+    assert row.provenance == "remote"
+    assert row.identifier == identifier
+    assert row.directory_url == "https://dir.example"
+    assert is_nil(row.live_key_sealed) and is_nil(row.operational_key_sealed)
+    assert Users.personal_athanor_id(user.id) == :none
+    assert counts().people == before.people + 1
+
+    # Admitted again by the same identifier: the same person, one row.
+    assert {:ok, %{id: same}} = SignIn.admitted(info, :allowed)
+    assert same == user.id
+    assert identity_rows(user.id) == 1
+    assert counts().people == before.people + 1
+  end
+
+  test "a local person keeps their provenance whichever door admits them" do
+    i = info(System.unique_integer([:positive]))
+    {:ok, user} = SignIn.admitted(i, :allowed)
+    assert identity_row!(user.id).provenance == "local"
+
+    # A later sign-in carrying another provenance changes nothing: the
+    # person, and their key set, are as they were minted.
+    identifier = "per_" <> Prima.Digest.sha256_hex("not-theirs-#{System.unique_integer()}")
+
+    assert {:ok, %{id: same}} =
+             SignIn.admitted(
+               Map.put(i, :remote, %{identifier: identifier, directory_url: "https://dir.example"}),
+               :allowed
+             )
+
+    assert same == user.id
+    assert identity_row!(user.id).provenance == "local"
+    assert is_binary(identity_row!(user.id).live_key_sealed)
+  end
+
   test "an operator gets the platform row, minted once and audited once" do
     handler = "signin-test-#{System.unique_integer([:positive])}"
     parent = self()
@@ -457,9 +512,9 @@ defmodule Sanctum.SignInTest do
 
     # A person seated in a group of their own, and a context their own
     # session establishes there.
-    defp seated! do
+    defp seated!(overrides \\ %{}) do
       n = System.unique_integer([:positive])
-      {:ok, user} = Users.upsert_from_provider(info(n))
+      {:ok, user} = Users.upsert_from_provider(info(n, overrides))
       {:ok, athanor} = Athanors.create_group(user.id, "Link #{n}")
       {:ok, _} = Members.ensure(user.id, scope: "athanor", athanor_id: athanor.id)
       %{user: user, athanor: athanor, ctx: session_ctx(user, athanor)}
@@ -628,27 +683,80 @@ defmodule Sanctum.SignInTest do
       assert {:error, :not_found} = Users.get_by_identity(oidc(n).key)
     end
 
-    test "a remote person's session alone attaches no door" do
-      person = seated!()
+    test "a remote person links a door only under a fresh proof here, and its sessions carry the fresh head's key_epoch" do
+      tls = Sanctum.Test.DirectoryServer.tls()
+      Sanctum.Test.DirectoryServer.listen!()
+      Sanctum.Test.DirectoryServer.seam!(tls)
+      directory = Sanctum.Test.DirectoryServer.start!(tls)
+      identity = Sanctum.Test.DirectoryServer.identity!(directory.dir, directory.url)
+
+      # No email, as the `cyfr` door admits a person: no one-time code can
+      # reach them, so before a passkey here they hold no fresh method at
+      # this home (`Sanctum.Passkeys.fresh_method?/1`) and their first one
+      # waits for the administrator.
+      person = seated!(%{email: nil, verified: :unknown})
+      :ok = Sanctum.Test.DirectoryServer.remote_person!(person.user.id, identity)
+      refute Sanctum.Passkeys.fresh_method?(person.ctx)
+      # A session minted now records the head read fresh from the directory.
+      person = %{person | ctx: session_ctx(person.user, person.athanor)}
       n = System.unique_integer([:positive])
       ticket = ticket!(person, oidc(n))
 
-      {1, _} =
-        Arca.Repo.update_all(from(p in PersonIdentity, where: p.user_id == ^person.user.id),
-          set: [
-            provenance: "remote",
-            identifier: "per_" <> String.duplicate("b", 64),
-            enrollment: "enrolled",
-            directory_url: "https://dir.example",
-            live_key_sealed: nil,
-            operational_key_sealed: nil
-          ]
-        )
-
-      assert {:error, :remote_identity_unavailable} =
+      # A session alone attaches no door: the proof is asked here.
+      assert {:error, {:confirmation_required, _}} =
                SignIn.link_door(person.ctx, "oidcc", ticket)
 
       assert {:error, :not_found} = Users.get_by_identity(oidc(n).key)
+
+      # A passkey registered here, which the administrator authorized for
+      # them, proves it.
+      authorized_passkey!(person, identity)
+
+      assert {:ok, %{linked: true}} =
+               Sanctum.TestContext.confirming(person.ctx, &SignIn.link_door(&1, "oidcc", ticket))
+
+      assert {:ok, %{id: user_id}} = Users.get_by_identity(oidc(n).key)
+      assert user_id == person.user.id
+
+      # The person stays remote, whichever door they come through, and a
+      # session minted through the linked door binds the head's key_epoch.
+      assert {:ok, %{provenance: "remote"}} =
+               Arca.PersonIdentities.get(Prima.Actor.system(), user_id)
+
+      linked = session_ctx(person.user, person.athanor)
+
+      assert {:ok, %{identity_key_epoch: epoch}} =
+               Arca.SessionStorage.get_session(linked.session_token_hash)
+
+      assert epoch == Sanctum.Test.DirectoryServer.key_epoch(identity)
+
+      # Retired at the next fresh head once a rotation moves the key epoch.
+      Sanctum.Test.DirectoryServer.rotate!(directory.dir, identity)
+      {:ok, _} = Sanctum.IdentityFreshness.fresh!(identity.identifier)
+      assert {:error, :not_found} = Arca.SessionStorage.get_session(linked.session_token_hash)
+    end
+
+    # The person's software passkey registered here and activated as the
+    # administrator's authorization activates it, bound to their recovery
+    # epoch: the remote person's one way to a fresh proof here.
+    defp authorized_passkey!(person, identity) do
+      auth = Sanctum.TestContext.Authenticator.for_person(person.user.id)
+      {:ok, options} = Sanctum.Passkeys.register(person.ctx, %{})
+      credential = Sanctum.TestContext.Authenticator.registration(auth, options)
+
+      assert {:ok, %{status: "awaiting_administrator", passkey_id: id} = pending} =
+               Sanctum.Passkeys.register(person.ctx, %{credential: credential})
+
+      epoch = Sanctum.Test.DirectoryServer.key_epoch(identity)
+
+      {:ok, _} =
+        Arca.Passkeys.activate(Prima.Actor.system(), id,
+          registration_digest: pending.registration_digest,
+          identity_key_epoch: epoch,
+          identity_recovery_epoch: Sanctum.Test.DirectoryServer.recovery_epoch(identity)
+        )
+
+      auth
     end
 
     test "unlinking takes the person's own door under proof, never their last while no passkey" do

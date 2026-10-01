@@ -5,7 +5,10 @@ defmodule PrismWeb.LoginLiveTest do
   @moduledoc """
   Prism sign-in for GitHub and Google is device flow on this page; they
   have no browser callback. A deployment on its own issuer links to
-  `/auth/oidcc`.
+  `/auth/oidcc`. A person whose keys another home holds signs in with
+  their CYFR: the page sends them to their own home, checks the carry they
+  bring back, carries this home's challenge through the browser's session
+  and posts their home's assertion to the callback.
   """
   use PrismWeb.ConnCase, async: false
 
@@ -235,6 +238,102 @@ defmodule PrismWeb.LoginLiveTest do
     test "a missing device-complete ticket returns to login", %{conn: conn} do
       conn = get(conn, "/auth/device/complete/not-a-real-ticket")
       assert redirected_to(conn) == "/login"
+    end
+  end
+
+  describe "sign in with your CYFR" do
+    alias Sanctum.Test.DirectoryServer
+
+    setup do
+      tls = DirectoryServer.tls()
+      DirectoryServer.listen!()
+      DirectoryServer.seam!(tls)
+      Prima.RateLimiter.reset()
+
+      on_exit(fn ->
+        Prima.RateLimiter.reset()
+        Arca.Cache.delete_match(Arca.Cache.Keys.match_identity_unreachable())
+      end)
+
+      directory = DirectoryServer.start!(tls)
+      %{identity: DirectoryServer.identity!(directory.dir, directory.url)}
+    end
+
+    test "the entry sends the person to their own home's /carry, naming this home", %{conn: conn} do
+      {:ok, view, html} = live(conn, ~p"/login")
+      assert html =~ "Sign in with your CYFR"
+
+      assert {:error, {:redirect, %{to: to}}} =
+               view |> element("#cyfr-sign-in") |> render_submit(%{"home" => "a.example"})
+
+      assert to ==
+               "https://a.example/carry?" <>
+                 URI.encode_query(%{"destination" => Sanctum.Person.home()})
+    end
+
+    test "an address that is no home's, or this home's, is told so", %{conn: conn} do
+      {:ok, view, _} = live(conn, ~p"/login")
+
+      html = view |> element("#cyfr-sign-in") |> render_submit(%{"home" => "not a home"})
+      assert html =~ "not a home&#39;s address"
+
+      html =
+        view |> element("#cyfr-sign-in") |> render_submit(%{"home" => Sanctum.Person.home()})
+
+      assert html =~ "this home&#39;s address"
+    end
+
+    test "a carry brought back is checked, its challenge carried through this browser's session, and the assertion posted signs the person in",
+         %{conn: conn, identity: identity} do
+      {:ok, _} = Sanctum.Door.Store.allow("identifier", identity.identifier, "test")
+      %{fragment: carry} = DirectoryServer.carry_fragment(identity, Sanctum.Person.home())
+
+      # One browser start to finish: the ticket is bound to it.
+      browser = get(conn, ~p"/login")
+      {:ok, view, _} = live(browser, ~p"/login")
+      render_hook(view, "cyfr_carry", %{"fragment" => carry})
+      {path, _flash} = assert_redirect(view)
+      assert String.starts_with?(path, "/auth/cyfr?ticket=")
+
+      hop = get(browser, path)
+      assert hop.status == 303
+      held = get_session(hop, "cyfr_challenge")
+      assert [location] = get_resp_header(hop, "location")
+      assert String.starts_with?(location, "https://a.example/carry#")
+
+      # The person's home answers with the assertion, back to this page.
+      assertion = DirectoryServer.assertion_fragment(identity, held, Sanctum.Person.home())
+      back = recycle(hop)
+      {:ok, view, _} = live(back, ~p"/login")
+      render_hook(view, "cyfr_assertion", %{"fragment" => assertion})
+
+      signed_in = follow_trigger_action(element(view, "#cyfr-callback"), back)
+      assert redirected_to(signed_in) == "/"
+
+      assert get_session(signed_in, :sanctum_session_token) ==
+               Sanctum.Auth.CyfrDoor.session_token(held)
+    end
+
+    test "a carry that does not verify leaves the person here, told to begin again; nothing is posted",
+         %{conn: conn, identity: identity} do
+      {:ok, view, _} = live(conn, ~p"/login")
+
+      html = render_hook(view, "cyfr_carry", %{"fragment" => "not a carry"})
+      assert html =~ "Begin it again from your home"
+
+      %{fragment: elsewhere} =
+        DirectoryServer.carry_fragment(identity, "https://elsewhere.example")
+
+      html = render_hook(view, "cyfr_carry", %{"fragment" => elsewhere})
+      assert html =~ "begun for another home"
+
+      html =
+        render_hook(view, "cyfr_assertion", %{
+          "fragment" => String.duplicate("A", Prima.Carry.max_fragment_bytes() + 1)
+        })
+
+      assert html =~ "larger than this home accepts"
+      refute has_element?(view, "#cyfr-callback")
     end
   end
 end

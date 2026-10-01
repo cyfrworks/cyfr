@@ -614,6 +614,108 @@ defmodule Emissary.Web.DeviceChannelTest do
   # Keepalive
   # ==========================================================================
 
+  describe "a device of a person whose keys are at another home" do
+    setup [:seated]
+
+    # A remote person's device, paired here under the certificate their
+    # own home issued: the invitation opened under the person's proof here,
+    # then the person this home's remote person of an identity at a
+    # scripted directory.
+    defp remote_device!(%{session_ctx: session_ctx, user: user, athanor: athanor}) do
+      alias Sanctum.Test.DirectoryServer
+
+      tls = DirectoryServer.tls()
+      DirectoryServer.listen!()
+      DirectoryServer.seam!(tls)
+
+      on_exit(fn ->
+        Arca.Cache.delete_match(Arca.Cache.Keys.match_identity_unreachable())
+      end)
+
+      directory = DirectoryServer.start!(tls)
+      identity = DirectoryServer.identity!(directory.dir, directory.url)
+
+      {:ok, invitation} =
+        Sanctum.TestContext.confirming(session_ctx, &Sanctum.Pairing.begin(&1, %{}))
+
+      :ok = DirectoryServer.remote_person!(user.id, identity)
+      {device_key, private} = :crypto.generate_key(:eddsa, :ed25519)
+      now = System.system_time(:millisecond)
+
+      {:ok, cert} =
+        DeviceCert.new(
+          device_key: device_key,
+          client_id: invitation.client_id,
+          subject: %{
+            kind: :identity,
+            identifier: identity.identifier,
+            key_epoch: DirectoryServer.key_epoch(identity)
+          },
+          issuer: "https://a.example",
+          audience: Sanctum.Person.home(),
+          athanor: athanor.id,
+          not_before: now,
+          expires_at: now + 3_600_000
+        )
+
+      cert = DeviceCert.sign(cert, elem(identity.live, 1))
+      glass = Context.build(%{authenticated: false, client_ip: "198.51.100.77"})
+      submission = %{device_key: device_key, certificate: cert}
+
+      {:ok, %{challenge: challenge}} =
+        Sanctum.Pairing.complete(glass, invitation.invitation_secret, submission)
+
+      {:ok, %{client_id: client_id}} =
+        Sanctum.Pairing.complete(
+          glass,
+          invitation.invitation_secret,
+          Map.put(submission, :proof, Proof.sign(challenge, private))
+        )
+
+      %{
+        device: %{cert: cert, client_id: client_id, private: private},
+        identity: identity,
+        directory: directory
+      }
+    end
+
+    test "connects under their home's certificate and stands", context do
+      %{device: device} = remote_device!(context)
+      state = proven(device)
+      assert %Context{auth_method: :device, client_id: client_id} = state.client
+      assert client_id == device.client_id
+      refute state.closed
+    end
+
+    test "past the freshness bound with the directory unreachable, it pauses: closed 1013 unavailable, the pairing standing",
+         context do
+      %{device: device, identity: identity, directory: directory} = remote_device!(context)
+      state = proven(device)
+      {token, _timer} = state.keepalive
+
+      Sanctum.Test.DirectoryServer.Server.stop(directory.server)
+
+      {1, _} =
+        Arca.Repo.update_all(
+          from(h in Arca.Schemas.DirectoryHead, where: h.identifier == ^identity.identifier),
+          set: [verified_at: DateTime.add(DateTime.utc_now(), -400, :second)]
+        )
+
+      assert_refused(
+        DeviceChannel.handle_info({DeviceChannel, :keepalive, token}, state),
+        1013,
+        "unavailable",
+        :established
+      )
+
+      assert {:ok, [%{standing: "active"}]} =
+               Arca.PairedClients.list(Prima.Actor.in_athanor(context.athanor.id),
+                 user_id: context.user.id,
+                 standing: :all
+               )
+    end
+  end
+
   describe "keepalive" do
     setup [:seated]
 

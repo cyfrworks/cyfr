@@ -594,6 +594,15 @@
           pipe_through: ["auth_browser", "oauth_callback_throttle"]
         },
         %{
+          verb: "POST",
+          path: "/auth/cyfr/callback",
+          plug: "PrismWeb.AuthController",
+          plug_opts: ":cyfr_callback",
+          auth: "browser_cyfr_callback",
+          live_view: nil,
+          pipe_through: ["auth_browser", "oauth_callback_throttle"]
+        },
+        %{
           verb: "GET",
           path: "/auth/device/complete/:ticket",
           plug: "PrismWeb.AuthController",

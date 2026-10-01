@@ -27,7 +27,7 @@ defmodule Arca.Schemas.Passkey do
     field :relying_home, :string
     field :public_key, :binary
     field :sign_count, :integer, default: 0
-    field :identity_key_epoch, :string
+    field :identity_recovery_epoch, :string
     field :state, :string
     field :registration_digest, :string
     field :possession_verified, :boolean, default: false

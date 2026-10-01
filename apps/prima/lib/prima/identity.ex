@@ -657,9 +657,16 @@ defmodule Prima.Identity.State do
   What a verified identity log answers (`Prima.Identity.verify_chain/1`):
   the identifier; the directory that orders it; `head`, the hash of the
   last entry; `key_epoch`, the hash of the genesis, rotate or recover
-  entry that introduced the current live key; the current live,
-  operational and recovery public keys; the recovery policy revision; the
-  number of entries; and the request ids the log's recoveries carried.
+  entry that introduced the current live key; `recovery_epoch`, the hash
+  of the genesis, or of the latest recover entry that replaced the live
+  key; the current live, operational and recovery public keys; the
+  recovery policy revision; the number of entries; and the request ids
+  the log's recoveries carried.
+
+  `key_epoch` moves at every rotation and every recovery.
+  `recovery_epoch` moves only at a recovery that replaces the live key:
+  an ordinary rotation, or a recover that keeps the live key (one that
+  only adds a recovery holder), leaves it where it was.
   """
 
   alias Prima.Identity.Encoding
@@ -669,6 +676,7 @@ defmodule Prima.Identity.State do
           directory: String.t(),
           head: String.t(),
           key_epoch: String.t(),
+          recovery_epoch: String.t(),
           live_key: binary(),
           operational_key: binary(),
           recovery_keys: [binary()],
@@ -682,6 +690,7 @@ defmodule Prima.Identity.State do
     :directory,
     :head,
     :key_epoch,
+    :recovery_epoch,
     :live_key,
     :operational_key,
     :recovery_keys,
@@ -693,6 +702,7 @@ defmodule Prima.Identity.State do
     :directory,
     :head,
     :key_epoch,
+    :recovery_epoch,
     :live_key,
     :operational_key,
     :recovery_keys,
@@ -709,6 +719,7 @@ defmodule Prima.Identity.State do
       "directory" => state.directory,
       "head" => state.head,
       "key_epoch" => state.key_epoch,
+      "recovery_epoch" => state.recovery_epoch,
       "live_key" => Encoding.b64(state.live_key),
       "operational_key" => Encoding.b64(state.operational_key),
       "recovery_keys" => Encoding.b64_keys(state.recovery_keys),
@@ -974,6 +985,7 @@ defmodule Prima.Identity do
          directory: entry.directory,
          head: hash,
          key_epoch: hash,
+         recovery_epoch: hash,
          live_key: entry.live_key,
          operational_key: entry.operational_key,
          recovery_keys: entry.recovery_keys,
@@ -1018,6 +1030,12 @@ defmodule Prima.Identity do
          :ok <- distinct(request.live_key, request.operational_key, recovery) do
       hash = hash(entry)
 
+      # A recovery that replaces the live key is the path a compromise
+      # takes, so it opens a new recovery epoch; one that keeps the live
+      # key, adding a recovery holder, does not.
+      recovery_epoch =
+        if request.live_key == state.live_key, do: state.recovery_epoch, else: hash
+
       {:ok,
        %{
          state
@@ -1025,6 +1043,7 @@ defmodule Prima.Identity do
            operational_key: request.operational_key,
            recovery_keys: recovery,
            revision: state.revision + 1,
+           recovery_epoch: recovery_epoch,
            head: hash,
            key_epoch: hash,
            length: state.length + 1,

@@ -19,6 +19,7 @@ defmodule Arca.Schemas.DirectoryHead do
     field :directory_url, :string
     field :head_hash, :string
     field :key_epoch, :string
+    field :recovery_epoch, :string
     field :state, :string
     field :verified_at, :utc_datetime_usec
     field :revision, :integer, default: 1

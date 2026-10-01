@@ -420,8 +420,8 @@ defmodule Sanctum.IdentityFreshnessTest do
     entry
   end
 
-  # A passkey of the remote `person` registered at this home, bound to
-  # `epoch`.
+  # A passkey of the remote `person` registered at this home, bound to the
+  # recovery epoch `epoch`.
   defp passkey!(person, epoch) do
     Arca.Passkeys.register(%Prima.Actor{user_id: person.user.id}, %{
       user_id: person.user.id,
@@ -432,7 +432,7 @@ defmodule Sanctum.IdentityFreshnessTest do
       registration_digest: Prima.Digest.sha256("registration-#{System.unique_integer()}"),
       possession_verified: true,
       state: "active",
-      identity_key_epoch: epoch
+      identity_recovery_epoch: epoch
     })
   end
 
@@ -766,6 +766,7 @@ defmodule Sanctum.IdentityFreshnessTest do
           directory_url: url,
           head_hash: head,
           key_epoch: head,
+          recovery_epoch: head,
           state: ~s({"head":"#{head}"})
         })
 
@@ -960,8 +961,8 @@ defmodule Sanctum.IdentityFreshnessTest do
       assert {:error, :unauthenticated} = establish(person.token, person.athanor)
       assert {:error, :unauthenticated} = Caller.revalidate_session(held)
 
-      # The B-local passkey bound to the old key is retired, and no
-      # credential can bind that epoch again.
+      # The recovery replaced the live key, so the B-local passkey bound to
+      # the old recovery epoch is retired, and none can bind it again.
       assert %{state: "revoked"} = Arca.Repo.get!(Passkey, passkey.id)
       assert {:error, :stale_key_epoch} = passkey!(person, person.epoch)
       assert {:ok, %{state: "active"}} = passkey!(person, new_epoch)

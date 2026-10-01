@@ -122,6 +122,18 @@ defmodule CyfrWeb.SignInResponse do
           {:ok, session} ->
             fun.(conn |> renew_session() |> put_session(@session_key, session.token))
 
+          # A remote person whose identity could not be confirmed fresh, or
+          # a store that could not answer: the sign-in pauses, retryable,
+          # never a failure of this server.
+          {:error, reason} when reason in [:identity_stale, :unavailable] ->
+            CyfrWeb.MinimalPage.send_page(
+              conn,
+              503,
+              "Temporarily unavailable",
+              "<p>#{CyfrWeb.MinimalPage.h(Prima.Refusal.message(reason))}</p>" <>
+                "<p><a href=\"/login\">Back to sign-in</a></p>"
+            )
+
           {:error, reason} ->
             Logger.error("[CyfrWeb.SignInResponse] session create failed: #{inspect(reason)}")
 

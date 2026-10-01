@@ -375,7 +375,7 @@ defmodule Sanctum.Providers.Vault do
   # are: the confirmation signal, whose id the surface confirms, and the
   # refusals the decision gives.
   defp fmt({tag, payload} = signal) when Prima.ConsentSignal.is_signal(tag, payload), do: signal
-  defp fmt(reason) when reason in [:remote_identity_unavailable, :missing_tenant], do: reason
+  defp fmt(reason) when reason in [:identity_stale, :missing_tenant], do: reason
   defp fmt({:conflict, message} = conflict) when is_binary(message), do: conflict
 
   defp fmt(:name_taken), do: "name_taken: a living entry already holds that name"

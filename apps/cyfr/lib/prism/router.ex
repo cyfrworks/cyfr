@@ -7,7 +7,7 @@ defmodule Prism.Router do
   layout, the browser sign-in pipelines and their throttles, the claim,
   legal-acceptance and attachment pipelines, browser sign-in and
   sign-out with their callbacks, linking an OpenID Connect door, passkey
-  sign-in's completion, the
+  sign-in's completion, the `cyfr` door's challenge hop and callback, the
   OpenID Connect re-authentication's callback, the claim and legal pages, the
   attachment and file downloads and the `:athanor` LiveView session.
 
@@ -156,6 +156,16 @@ defmodule Prism.Router do
             metadata: %{auth: :browser_oauth_callback}
 
           post "/oidcc/reauth", ReauthController, :decide, metadata: %{auth: :browser_oauth_flow}
+        end
+
+        # The `cyfr` door's callback: the sign-in page posts the assertion
+        # the person's own home signed over the challenge this browser's
+        # session holds, with the browser pipeline's CSRF token.
+        scope "/" do
+          pipe_through :oauth_callback_throttle
+
+          post "/cyfr/callback", AuthController, :cyfr_callback,
+            metadata: %{auth: :browser_cyfr_callback}
         end
 
         # Linking an OpenID Connect door to the person signed in: a POST the

@@ -14,7 +14,10 @@ defmodule PrismWeb.PairLive do
   view: `pair_start` with the secret and the device key, answered with
   the `pair` challenge to sign, then `pair_proof` with the signature,
   answered with the paired client's id and its first certificate. The
-  script then connects the device channel under that certificate.
+  script then connects the device channel under that certificate. A
+  person whose identity is at another home brings, with both steps, the
+  `certificate` their own home issued for this device and the client id
+  the invitation reserved, and pairs under it.
 
   Each step is `pairing.complete` through `PrismWeb.Ops.call_tool/3`
   under a context this view builds itself (`Sanctum.Context.build/1`):
@@ -65,25 +68,39 @@ defmodule PrismWeb.PairLive do
   @impl true
   def handle_event(
         "pair_start",
-        %{"invitation_secret" => secret, "device_key" => device_key},
+        %{"invitation_secret" => secret, "device_key" => device_key} = params,
         socket
       )
       when is_binary(secret) and is_binary(device_key) do
-    complete(socket, %{"invitation_secret" => secret, "device_key" => device_key})
+    complete(
+      socket,
+      certified(params, %{"invitation_secret" => secret, "device_key" => device_key})
+    )
   end
 
   def handle_event(
         "pair_proof",
-        %{"invitation_secret" => secret, "device_key" => device_key, "proof" => proof},
+        %{"invitation_secret" => secret, "device_key" => device_key, "proof" => proof} = params,
         socket
       )
       when is_binary(secret) and is_binary(device_key) and is_map(proof) do
-    complete(socket, %{
-      "invitation_secret" => secret,
-      "device_key" => device_key,
-      "proof" => proof
-    })
+    complete(
+      socket,
+      certified(params, %{
+        "invitation_secret" => secret,
+        "device_key" => device_key,
+        "proof" => proof
+      })
+    )
   end
+
+  # A person whose identity is at another home pairs under the certificate
+  # their own home issued for this device, which the glass brings with both
+  # steps; anyone else's pairing carries none.
+  defp certified(%{"certificate" => certificate}, args) when is_map(certificate),
+    do: Map.put(args, "certificate", certificate)
+
+  defp certified(_params, args), do: args
 
   defp complete(socket, args) do
     case PrismWeb.Ops.call_tool(socket.assigns.context, "pairing/complete", args) do

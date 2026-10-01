@@ -212,6 +212,61 @@ defmodule CyfrWeb.SignInResponseTest do
     end
   end
 
+  describe "respond/3 — a remote person whose identity cannot be read fresh" do
+    import Ecto.Query, only: [from: 2]
+
+    alias Sanctum.Test.DirectoryServer
+
+    setup do
+      tls = DirectoryServer.tls()
+      DirectoryServer.listen!()
+      DirectoryServer.seam!(tls)
+
+      on_exit(fn ->
+        Arca.Cache.delete_match(Arca.Cache.Keys.match_identity_unreachable())
+      end)
+
+      %{directory: DirectoryServer.start!(tls)}
+    end
+
+    test "a minted sign-in pauses on a 503 page naming the reason, and establishes no session",
+         %{directory: directory} do
+      ctx = Sanctum.TestContext.issuer!(Sanctum.TestContext.local())
+      identity = DirectoryServer.identity!(directory.dir, directory.url)
+      :ok = DirectoryServer.remote_person!(ctx.user_id, identity)
+
+      # The cached head aged past the bound, and the directory unreachable:
+      # neither the cache nor a live read can name the key epoch a session
+      # records.
+      {1, _} =
+        Arca.Repo.update_all(
+          from(h in Arca.Schemas.DirectoryHead, where: h.identifier == ^identity.identifier),
+          set: [verified_at: DateTime.add(DateTime.utc_now(), -86_400, :second)]
+        )
+
+      DirectoryServer.Server.stop(directory.server)
+
+      {conn, log} =
+        with_log(fn ->
+          SignInResponse.respond(browser_conn(), {:proceed, %{}}, session: {:mint, ctx})
+        end)
+
+      assert log =~ "freshness bound"
+      refute log =~ "session create failed"
+
+      assert conn.status == 503
+      assert ["text/html" <> _] = get_resp_header(conn, "content-type")
+      assert conn.resp_body =~ "Temporarily unavailable"
+      assert conn.resp_body =~ Prima.Refusal.message(:identity_stale)
+      assert conn.resp_body =~ ~s(<a href="/login">Back to sign-in</a>)
+
+      # No session: none in the cookie, none in the store.
+      assert get_session(conn, SignInResponse.session_key()) == nil
+
+      refute Arca.Repo.exists?(from(s in Arca.Schemas.Session, where: s.user_id == ^ctx.user_id))
+    end
+  end
+
   describe "the session and flash helpers" do
     test "put_flash_if_available/3 flashes when flash is fetched and is a no-op otherwise" do
       conn = SignInResponse.put_flash_if_available(browser_conn(), :info, "hello")

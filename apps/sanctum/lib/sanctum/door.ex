@@ -9,8 +9,9 @@ defmodule Sanctum.Door do
   anything is said to cyfr.run about the identity. Two lists, two jobs:
   `CYFR_PLATFORM_ADMIN_EMAILS` names the operators — always admitted, and
   admitted as platform admins; the server allowlist (`Sanctum.Door.Store`)
-  names everyone else, by email, by IdP subject, or as `*` (any identity the
-  configured provider authenticates). A specific deny wins over everything a
+  names everyone else, by email, by IdP subject, by person identifier
+  (`per_…`), or as `*` (any identity the configured provider, or the
+  `cyfr` door, authenticates). A specific deny wins over everything a
   stored row can grant — `*` included — so a public door still has an eject;
   allowing that identity again is an explicit operator act. The one thing it
   does not outrank is the env list: an operator is admitted whatever rows
@@ -31,6 +32,16 @@ defmodule Sanctum.Door do
   the IdP subject as a pending request, so an issuer that never asserts
   `email_verified` — which no email entry can match — can be admitted by
   `user_id` without the operator having to find that subject some other way.
+
+  ## The `cyfr` door
+
+  A person another home holds the keys of presents a `cyfr` identity
+  (`Sanctum.Auth.Identity.cyfr_key/2`), which carries no email. The door
+  judges it by its identifier as it judges a provider identity by its
+  subject: a deny naming the identifier refuses it, an allow naming the
+  identifier admits it, and an unadmitted one is recorded as a pending
+  request naming the identifier, never a `user_id` an operator would have
+  to decode.
   """
 
   require Logger
@@ -77,16 +88,30 @@ defmodule Sanctum.Door do
   # answer stops the walk there rather than falling through to the next
   # arm, which would read an outage as "nothing admits you".
   defp stored_verdict(user_id, email, verified) do
-    with :no <- deny_arm(user_id, email),
+    identifier = identifier(user_id)
+
+    with :no <- deny_arm(user_id, email, identifier),
          :no <- wildcard_arm(verified),
          :no <- allow_arm("user_id", user_id),
+         :no <- identifier_arm(identifier),
          :no <- email_arm(email, verified) do
       {:error, :not_allowed}
     end
   end
 
-  defp deny_arm(user_id, email) do
-    case Store.denied(user_id, email) do
+  # The person identifier a `cyfr` identity names; nil for any other door.
+  defp identifier(user_id) do
+    case Sanctum.Auth.Identity.cyfr_identifier(user_id) do
+      {:ok, identifier} -> identifier
+      :error -> nil
+    end
+  end
+
+  defp identifier_arm(nil), do: :no
+  defp identifier_arm(identifier), do: allow_arm("identifier", identifier)
+
+  defp deny_arm(user_id, email, identifier \\ nil) do
+    case Store.denied(user_id, email, identifier) do
       {:ok, true} -> {:error, :denied}
       {:ok, false} -> :no
       {:error, :unavailable} -> {:error, :unavailable}
@@ -233,11 +258,20 @@ defmodule Sanctum.Door do
   #
   # Only `:not_allowed`. A `:denied` refusal already has its answer, and
   # writing a request for it would offer to undo a deny by approving it.
+  #
+  # A `cyfr` identity is recorded by its identifier, the kind the operator
+  # allows or denies it under.
   defp record_request(:not_allowed, user_id, email) do
     note = if email, do: "refused at sign-in (#{email})", else: "refused at sign-in"
 
-    case Store.request("user_id", user_id, user_id, note) do
-      {:ok, :created, _} -> Sanctum.Notify.allowlist_request(email || user_id)
+    {kind, value} =
+      case identifier(user_id) do
+        nil -> {"user_id", user_id}
+        identifier -> {"identifier", identifier}
+      end
+
+    case Store.request(kind, value, value, note) do
+      {:ok, :created, _} -> Sanctum.Notify.allowlist_request(email || value)
       _ -> :ok
     end
   end

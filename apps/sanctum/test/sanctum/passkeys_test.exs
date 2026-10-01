@@ -16,6 +16,16 @@ defmodule Sanctum.PasskeysTest do
   administrator. An assertion proves exactly one record's digest, at this
   home's origin and RP ID, with user verification, by the record's own
   person, once.
+
+  A person whose keys are at another home initializes no method from any
+  sign-in: their first passkey waits for the administrator, whose
+  authorization names their current `key_epoch` and `recovery_epoch`. It
+  is bound to their recovery epoch, read fresh from their directory: it
+  survives an ordinary rotation and a holder-adding recover, signing in
+  under the new key epoch, and a recovery that replaces the live key
+  retires it. Once they hold a fresh method here, a passkey here or a
+  verified email a code can reach, they confirm their next passkey
+  themselves, as anyone does.
   """
 
   use ExUnit.Case, async: false
@@ -27,6 +37,7 @@ defmodule Sanctum.PasskeysTest do
   alias Sanctum.{Context, Passkeys, TestContext}
   alias Sanctum.TestContext.Authenticator
   alias Sanctum.Tenancy.Athanors
+  alias Sanctum.Test.DirectoryServer
 
   setup do
     Arca.Cache.init()
@@ -388,26 +399,6 @@ defmodule Sanctum.PasskeysTest do
       assert Passkeys.register(ctx, %{credential: answer}) == {:error, :registration_refused}
     end
 
-    test "a remote person is refused before any ceremony, and nothing reads a directory" do
-      %{ctx: ctx, user: user} = person!()
-      Arca.Repo.delete_all(from(p in PersonIdentity, where: p.user_id == ^user.id))
-
-      {:ok, _remote} =
-        Arca.PersonIdentities.create(Prima.Actor.system(), %{
-          user_id: user.id,
-          provenance: "remote",
-          identifier: "per_" <> String.duplicate("a", 64),
-          directory_url: "https://dir.example"
-        })
-
-      assert Passkeys.register(ctx, %{}) == {:error, :remote_identity_unavailable}
-
-      assert Authz.check(ctx, :credential_entry, change()) ==
-               {:error, :remote_identity_unavailable}
-
-      assert Arca.Repo.all(Arca.Schemas.DirectoryHead) == []
-    end
-
     test "a key, a guest and an anonymous caller register nothing" do
       %{ctx: ctx} = person!()
 
@@ -418,6 +409,376 @@ defmodule Sanctum.PasskeysTest do
 
       assert Passkeys.register(Context.build(%{authenticated: false}), %{}) ==
                {:error, :unauthenticated}
+    end
+  end
+
+  # ---------------------------------------------------------------------------
+  # A person whose keys are at another home
+  # ---------------------------------------------------------------------------
+
+  describe "a person whose keys are at another home" do
+    setup do
+      tls = DirectoryServer.tls()
+      DirectoryServer.listen!()
+      DirectoryServer.seam!(tls)
+
+      on_exit(fn ->
+        Arca.Cache.delete_match(Arca.Cache.Keys.match_identity_unreachable())
+      end)
+
+      directory = DirectoryServer.start!(tls)
+      identity = DirectoryServer.identity!(directory.dir, directory.url)
+      key = Sanctum.Auth.Identity.cyfr_key(identity.url, identity.identifier)
+
+      # Admitted through the `cyfr` door: a remote person, judged by the
+      # identifier, with a group to work in here and no athanor of their own.
+      {:ok, _} = Sanctum.Door.Store.allow("identifier", identity.identifier, "ops")
+
+      {:ok, user} =
+        Sanctum.SignIn.admitted(
+          %{
+            id: key,
+            provider: "cyfr",
+            email: nil,
+            verified: :unknown,
+            name: nil,
+            remote: %{identifier: identity.identifier, directory_url: identity.url}
+          },
+          :allowed
+        )
+
+      # Their head cached, as the door caches it when it admits them.
+      DirectoryServer.cached!(identity)
+
+      {:ok, athanor} =
+        Athanors.create_group(user.id, "Remote #{System.unique_integer([:positive])}")
+
+      %{ctx: admin_ctx} = person!()
+      {admin_auth, _} = registered!(admin_ctx)
+
+      %{
+        dir: directory.dir,
+        server: directory.server,
+        identity: identity,
+        user: user,
+        athanor: athanor,
+        ctx: session_ctx(user, athanor, provider: "cyfr"),
+        admin: %{admin_ctx | platform_admin: true},
+        admin_auth: admin_auth
+      }
+    end
+
+    defp pending!(ctx, auth) do
+      assert {:ok, %{status: "awaiting_administrator"} = pending} =
+               Passkeys.register(ctx, %{credential: credential(ctx, auth)})
+
+      pending
+    end
+
+    defp recovery_args(user, pending) do
+      %{
+        user_id: user.id,
+        passkey_id: pending.passkey_id,
+        registration_digest: pending.registration_digest
+      }
+    end
+
+    # The person's pending passkey, authorized by the administrator.
+    defp authorized!(context, auth) do
+      pending = pending!(context.ctx, auth)
+
+      assert {:ok, %{status: "active"}} =
+               confirming(
+                 context.admin,
+                 context.admin_auth,
+                 &Passkeys.recover_admin(&1, recovery_args(context.user, pending))
+               )
+
+      pending
+    end
+
+    defp signed_in(auth) do
+      held = Passkeys.sign_in_challenge()
+
+      Passkeys.sign_in(
+        Map.take(held, [:challenge, :expires_at]),
+        Authenticator.assertion(auth, held.challenge)
+      )
+    end
+
+    defp session_epoch(token) do
+      {:ok, %{identity_key_epoch: epoch}} =
+        Arca.SessionStorage.get_session(Sanctum.Session.token_hash(token))
+
+      epoch
+    end
+
+    test "a sign-in, however recent, initializes no method: the credential waits for the administrator, bound to the recovery epoch",
+         %{ctx: ctx, user: user, identity: identity, athanor: athanor} do
+      pending = pending!(ctx, authenticator())
+
+      assert {:ok, %{state: "pending", identity_recovery_epoch: epoch}} =
+               Arca.Passkeys.get(Prima.Actor.system(), pending.passkey_id)
+
+      assert epoch == DirectoryServer.recovery_epoch(identity)
+      assert is_nil(first_method_at(user.id))
+
+      # A door linked here is no local first method for them either.
+      linked = session_ctx(user, athanor, provider: "github")
+
+      assert {:ok, %{status: "awaiting_administrator"}} =
+               Passkeys.register(linked, %{credential: credential(linked, authenticator())})
+
+      # Nor does a session alone confirm a sensitive change for them.
+      assert {:error, {:confirmation_required, _}} =
+               Authz.check(ctx, :credential_entry, change())
+    end
+
+    test "the administrator activates exactly the pending registration, under their own proof",
+         context do
+      pending = authorized!(context, authenticator())
+
+      assert {:ok, %{state: "active", identity_recovery_epoch: epoch}} =
+               Arca.Passkeys.get(Prima.Actor.system(), pending.passkey_id)
+
+      assert epoch == DirectoryServer.recovery_epoch(context.identity)
+    end
+
+    test "an authorization made before an ordinary rotation is asked again; the registration stays",
+         %{admin: admin, admin_auth: admin_auth, user: user} = context do
+      pending = pending!(context.ctx, authenticator())
+      args = recovery_args(user, pending)
+
+      assert {:error, {:confirmation_required, %{id: id}}} = Passkeys.recover_admin(admin, args)
+      TestContext.prove!(admin, id, admin_auth)
+
+      DirectoryServer.rotate!(context.dir, context.identity)
+
+      # The authorization named the key epoch the rotation replaced.
+      assert {:error, {:confirmation_required, %{id: again}}} =
+               Passkeys.recover_admin(%{admin | confirmation_id: id}, args)
+
+      assert again != id
+
+      assert {:ok, %{state: "pending"}} =
+               Arca.Passkeys.get(Prima.Actor.system(), pending.passkey_id)
+
+      assert {:ok, %{status: "active"}} =
+               confirming(admin, admin_auth, &Passkeys.recover_admin(&1, args))
+    end
+
+    test "an authorization made before a recovery activates nothing after it: the registration is gone with its epoch",
+         %{admin: admin, admin_auth: admin_auth, user: user} = context do
+      pending = pending!(context.ctx, authenticator())
+      args = recovery_args(user, pending)
+
+      assert {:error, {:confirmation_required, %{id: id}}} = Passkeys.recover_admin(admin, args)
+      TestContext.prove!(admin, id, admin_auth)
+
+      DirectoryServer.recover!(context.dir, context.identity)
+
+      assert {:error, {:not_found, "pending passkey", _}} =
+               Passkeys.recover_admin(%{admin | confirmation_id: id}, args)
+
+      assert {:ok, %{state: "revoked"}} =
+               Arca.Passkeys.get(Prima.Actor.system(), pending.passkey_id)
+
+      # The administrator's proof was never spent on it.
+      assert {:ok, %{state: "confirmed"}} =
+               Arca.PendingConfirmations.get(Context.actor(admin), Prima.Confirmation.ref(id))
+    end
+
+    test "a pending credential revoked or substituted after the administrator's preview is not the one activated",
+         %{admin: admin, admin_auth: admin_auth, user: user} = context do
+      first = pending!(context.ctx, authenticator())
+      args = recovery_args(user, first)
+
+      assert {:error, {:confirmation_required, %{id: id}}} = Passkeys.recover_admin(admin, args)
+      TestContext.prove!(admin, id, admin_auth)
+
+      # The person's pending credential is replaced by another.
+      {:ok, _} = Arca.Passkeys.revoke(Prima.Actor.system(), first.passkey_id)
+      second = pending!(context.ctx, authenticator())
+
+      assert {:error, {:not_found, "pending passkey", _}} =
+               Passkeys.recover_admin(%{admin | confirmation_id: id}, args)
+
+      # Named by the substitute's id with the previewed digest, it is not
+      # the registration the administrator saw.
+      assert {:error, _refused} =
+               Passkeys.recover_admin(%{admin | confirmation_id: id}, %{
+                 args
+                 | passkey_id: second.passkey_id
+               })
+
+      assert {:ok, %{state: "pending"}} =
+               Arca.Passkeys.get(Prima.Actor.system(), second.passkey_id)
+    end
+
+    test "an active passkey survives an ordinary rotation and a holder-adding recover, signing in under the new key epoch, and a recovery retires it",
+         context do
+      auth = authenticator()
+      pending = authorized!(context, auth)
+      assert {:ok, %{session_token: before}} = signed_in(auth)
+      assert session_epoch(before) == DirectoryServer.key_epoch(context.identity)
+
+      # The rotation retires the session at this home's next fresh head;
+      # the passkey stays, and its next sign-in binds the new key epoch.
+      rotated = DirectoryServer.rotate!(context.dir, context.identity)
+      {:ok, _} = Sanctum.IdentityFreshness.fresh!(context.identity.identifier)
+
+      assert {:error, :not_found} =
+               Arca.SessionStorage.get_session(Sanctum.Session.token_hash(before))
+
+      assert {:ok, %{session_token: token}} = signed_in(auth)
+      assert session_epoch(token) == DirectoryServer.key_epoch(rotated)
+
+      holder = DirectoryServer.recover!(context.dir, rotated, keep_live: true)
+      assert {:ok, %{session_token: token}} = signed_in(auth)
+      assert session_epoch(token) == DirectoryServer.key_epoch(holder)
+
+      # The earlier session was bound to the key epoch the recover replaced.
+      assert {:ok, %{state: "active"}} =
+               Arca.Passkeys.get(Prima.Actor.system(), pending.passkey_id)
+
+      DirectoryServer.recover!(context.dir, holder)
+      assert {:error, :assertion_refused} = signed_in(auth)
+
+      assert {:ok, %{state: "revoked"}} =
+               Arca.Passkeys.get(Prima.Actor.system(), pending.passkey_id)
+    end
+
+    test "proves a confirmation here with that passkey, the head read fresh first", context do
+      auth = authenticator()
+      authorized!(context, auth)
+      ctx = session_ctx(context.user, context.athanor, provider: "cyfr")
+
+      assert {:error, {:confirmation_required, %{id: id}}} =
+               Authz.check(ctx, :credential_entry, change())
+
+      TestContext.prove!(ctx, id, auth)
+      assert :ok = Authz.confirm(%{ctx | confirmation_id: id}, :credential_entry, change())
+
+      # An open confirmation is bound to the key epoch it was asked under:
+      # a rotation voids it.
+      assert {:error, {:confirmation_required, %{id: open}}} =
+               Authz.check(ctx, :credential_entry, change("other-key"))
+
+      DirectoryServer.rotate!(context.dir, context.identity)
+      {:ok, _} = Sanctum.IdentityFreshness.fresh!(context.identity.identifier)
+
+      assert {:ok, %{state: "voided"}} =
+               Arca.PendingConfirmations.get(Context.actor(ctx), Prima.Confirmation.ref(open))
+    end
+
+    test "with a passkey here, their next passkey is theirs to confirm by an assertion of it, and lands active",
+         %{ctx: ctx, user: user, admin: admin, admin_auth: admin_auth} = context do
+      auth = authenticator()
+
+      # With no fresh method here, the registration waits for the
+      # administrator, who authorizes it.
+      refute Passkeys.fresh_method?(ctx)
+
+      assert {:ok, %{status: "awaiting_administrator"} = first} =
+               Passkeys.register(ctx, %{credential: credential(ctx, auth)})
+
+      assert {:ok, %{status: "active"}} =
+               confirming(
+                 admin,
+                 admin_auth,
+                 &Passkeys.recover_admin(&1, recovery_args(user, first))
+               )
+
+      # That passkey is a fresh method here: the next registration asks the
+      # person, who proves it with an assertion of the first.
+      assert Passkeys.fresh_method?(ctx)
+      second = credential(ctx, authenticator())
+
+      assert {:ok, %{status: "active", passkey: %{id: id, state: "active"}}} =
+               confirming(ctx, auth, &Passkeys.register(&1, %{credential: second}))
+
+      assert {:ok, %{state: "active", identity_recovery_epoch: epoch}} =
+               Arca.Passkeys.get(Prima.Actor.system(), id)
+
+      assert epoch == DirectoryServer.recovery_epoch(context.identity)
+    end
+
+    test "with a verified email a code can reach, their next passkey is theirs to confirm by that code, and lands active",
+         %{ctx: ctx, user: user} = context do
+      # The email method needs a code transport. Set here, not taken from
+      # whichever configuration runs the suite, and restored after.
+      prior = Application.fetch_env(:sanctum, :confirmation_code_transport)
+
+      on_exit(fn ->
+        case prior do
+          {:ok, value} -> Application.put_env(:sanctum, :confirmation_code_transport, value)
+          :error -> Application.delete_env(:sanctum, :confirmation_code_transport)
+        end
+      end)
+
+      Application.put_env(:sanctum, :confirmation_code_transport, TestContext.MailSink)
+
+      # The `cyfr` door admitted them with no email: no fresh method, and
+      # the registration waits for the administrator.
+      refute Passkeys.fresh_method?(ctx)
+
+      assert {:ok, %{status: "awaiting_administrator"}} =
+               Passkeys.register(ctx, %{credential: credential(ctx, authenticator())})
+
+      email = "remote#{System.unique_integer([:positive])}@example.com"
+
+      {:ok, _} =
+        Arca.Users.update(Prima.Actor.system(), user.id, %{email: email, email_verified: true})
+
+      # A verified email is no fresh method where no code can be sent…
+      Application.delete_env(:sanctum, :confirmation_code_transport)
+      refute Passkeys.fresh_method?(ctx)
+
+      assert {:ok, %{status: "awaiting_administrator"}} =
+               Passkeys.register(ctx, %{credential: credential(ctx, authenticator())})
+
+      # …and is one where a code can: the registration asks the person, and
+      # the code mailed to them proves it.
+      Application.put_env(:sanctum, :confirmation_code_transport, TestContext.MailSink)
+      assert Passkeys.fresh_method?(ctx)
+      registration = credential(ctx, authenticator())
+
+      assert {:error,
+              {:confirmation_required, %{id: confirmation, operation: "passkey.register"}}} =
+               Passkeys.register(ctx, %{credential: registration})
+
+      ref = Prima.Confirmation.ref(confirmation)
+      assert {:ok, %{method: "email"}} = Sanctum.Auth.EmailVerification.send_code(ctx, ref)
+      assert_receive {:confirmation_code_mail, %{to: ^email} = mail}
+
+      assert {:ok, %{state: "confirmed"}} =
+               Sanctum.Auth.EmailVerification.verify_code(
+                 ctx,
+                 ref,
+                 TestContext.MailSink.code(mail)
+               )
+
+      assert {:ok, %{status: "active", passkey: %{id: id, state: "active"}}} =
+               Passkeys.register(%{ctx | confirmation_id: confirmation}, %{
+                 credential: registration
+               })
+
+      assert {:ok, %{state: "active", identity_recovery_epoch: epoch}} =
+               Arca.Passkeys.get(Prima.Actor.system(), id)
+
+      assert epoch == DirectoryServer.recovery_epoch(context.identity)
+
+      assert {:ok, %{state: "consumed"}} =
+               Arca.PendingConfirmations.get(Context.actor(ctx), ref)
+    end
+
+    test "a directory that cannot be read pauses the person's registration and sensitive changes",
+         %{ctx: ctx} = context do
+      credential = credential(ctx, authenticator())
+      DirectoryServer.Server.stop(context.server)
+
+      assert {:error, :identity_stale} = Passkeys.register(ctx, %{credential: credential})
+      assert {:error, :identity_stale} = Authz.check(ctx, :credential_entry, change())
     end
   end
 

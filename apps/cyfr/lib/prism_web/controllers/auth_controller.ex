@@ -22,9 +22,28 @@ defmodule PrismWeb.AuthController do
   - `POST /auth/logout` - Browser sign-out (cookie session, forgery-guarded)
   - `POST /auth/link/oidcc` - Begins linking an OpenID Connect door to the
     person signed in
+  - `GET /auth/cyfr?ticket=…` - The `cyfr` door's challenge hop
+  - `POST /auth/cyfr/callback` - The `cyfr` door's callback
 
   An API caller's sign-out and session read, by bearer token, are the
   HTTP API's, not the browser's.
+
+  ## The `cyfr` door
+
+  A person whose keys another home holds signs in with an assertion their
+  home signs (`Sanctum.Auth.CyfrDoor`). The sign-in page verifies the
+  carry their browser brought, mints this home's challenge and hands it
+  here by a one-time ticket bound to the browser's CSRF token
+  (`GET /auth/cyfr?ticket=…`). This action keeps the challenge in the
+  browser's own session cookie (`cyfr_challenge_key/0`) and answers
+  `303` to the carry's signed return URL, the person's home's `/carry`,
+  with the challenge in its fragment; it redirects nowhere the carry does
+  not sign. The person's home sends the browser back to `/login` with the
+  assertion in a fragment, and the sign-in page posts it here, with its
+  CSRF token, since a fragment never reaches a server
+  (`POST /auth/cyfr/callback`). The callback admits under the challenge
+  the cookie holds, or resumes the session an earlier admission under it
+  minted, and sets the session as every sign-in does.
 
   ## Linking a door
 
@@ -53,6 +72,14 @@ defmodule PrismWeb.AuthController do
   @link_intent "cyfr_link_intent"
   @link_ticket "cyfr_link_ticket"
   @link_intent_ms 600_000
+  @cyfr_challenge "cyfr_challenge"
+
+  @doc """
+  The cookie session key the `cyfr` door's challenge is held under between
+  its hop and its callback (the module doc).
+  """
+  @spec cyfr_challenge_key() :: String.t()
+  def cyfr_challenge_key, do: @cyfr_challenge
 
   @doc """
   The cookie session key the link ticket an OpenID Connect sign-in minted
@@ -90,11 +117,44 @@ defmodule PrismWeb.AuthController do
   end
 
   @doc """
-  Answers a sign-in start for a provider this server does not configure.
+  Answers a sign-in start for a provider this server does not configure,
+  and the `cyfr` door's challenge hop (the module doc).
 
   `CyfrWeb.Plugs.ConfiguredUeberauth` redirects a configured OIDC start
   before this action runs.
   """
+  def request(conn, %{"provider" => "cyfr", "ticket" => ticket})
+      when is_binary(ticket) and byte_size(ticket) > 0 and byte_size(ticket) <= 64 do
+    # Taken in one operation and consumed whichever way the check goes, as
+    # a device-flow ticket is: a ticket another browser presents is spent.
+    case Arca.Cache.take({:login_cyfr_ticket, ticket}) do
+      {:ok, %{held: held} = payload} ->
+        if same_browser?(conn, payload) do
+          conn
+          |> put_session(@cyfr_challenge, held)
+          |> put_status(303)
+          |> redirect(external: Sanctum.Auth.CyfrDoor.redirect_url(held))
+        else
+          Logger.warning(
+            "[AuthController] cyfr sign-in ticket presented by a different browser than the " <>
+              "one that started it — refusing"
+          )
+
+          conn
+          |> SignInResponse.put_flash_if_available(
+            :error,
+            "That sign-in was started in a different browser. Please sign in again."
+          )
+          |> redirect(to: "/login")
+        end
+
+      _miss ->
+        cyfr_expired(conn)
+    end
+  end
+
+  def request(conn, %{"provider" => "cyfr"}), do: cyfr_expired(conn)
+
   def request(conn, _params) do
     # Render the no-strategy branch as HTML; Ueberauth handles configured redirects.
     CyfrWeb.MinimalPage.send_page(
@@ -146,6 +206,62 @@ defmodule PrismWeb.AuthController do
   end
 
   def device_complete(conn, _params) do
+    conn
+    |> SignInResponse.put_flash_if_available(:error, "That sign-in expired. Please try again.")
+    |> redirect(to: "/login")
+  end
+
+  @doc """
+  The `cyfr` door's callback (the module doc): the assertion the sign-in
+  page posts, admitted, or resumed, under the challenge this browser's
+  session cookie holds. An admitted sign-in sets the session as every
+  sign-in does; a person admitted to no athanor here lands where a
+  signed-in person with none is told so.
+  """
+  def cyfr_callback(conn, %{"cyfr" => fragment}) when is_binary(fragment) do
+    held = get_session(conn, @cyfr_challenge)
+
+    case Sanctum.Auth.CyfrDoor.callback(fragment, held) do
+      {:ok, %{session_token: token, outcome: outcome}} ->
+        conn
+        |> delete_session(@cyfr_challenge)
+        |> SignInResponse.respond(outcome, session: {:token, token})
+
+      {:error, {:door, _reason}} ->
+        CyfrWeb.MinimalPage.send_page(
+          conn,
+          403,
+          "Not allowed on this server",
+          "<p>#{CyfrWeb.MinimalPage.h(Sanctum.Door.refusal_message())}</p>"
+        )
+
+      {:error, reason} when reason in [:identity_stale, :unavailable] ->
+        CyfrWeb.MinimalPage.send_page(
+          conn,
+          503,
+          "Try again shortly",
+          "<p>Your identity could not be confirmed with its directory just now. " <>
+            "Try again in a moment.</p><p><a href=\"/login\">Back to sign-in</a></p>"
+        )
+
+      {:error, reason} ->
+        Logger.info(
+          "[AuthController] a cyfr sign-in was refused: " <> Prima.LoggerContext.shape(reason)
+        )
+
+        CyfrWeb.MinimalPage.send_page(
+          conn,
+          401,
+          "Sign-in failed",
+          "<p>That sign-in could not be completed here. Begin it again from your home.</p>" <>
+            "<p><a href=\"/login\">Back to sign-in</a></p>"
+        )
+    end
+  end
+
+  def cyfr_callback(conn, _params), do: cyfr_expired(conn)
+
+  defp cyfr_expired(conn) do
     conn
     |> SignInResponse.put_flash_if_available(:error, "That sign-in expired. Please try again.")
     |> redirect(to: "/login")

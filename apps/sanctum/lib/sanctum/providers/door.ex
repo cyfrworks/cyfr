@@ -6,10 +6,9 @@ defmodule Sanctum.Providers.Door do
   The `door` tool: the server allowlist — who may sign in here. Platform
   admins only (`scope: :platform` on every action).
 
-  `allow` writes an entry (email, user_id, or `*`); an `identifier` entry
-  (a person identifier, `per_…`) is declared and answers
-  `{:error, :not_built}`, since nothing admits by identifier yet. `deny`
-  writes a sticky
+  `allow` writes an entry (email, user_id, identifier, or `*`); an
+  `identifier` entry names a person identifier (`per_…`), by which the
+  door judges a person the `cyfr` door presents. `deny` writes a sticky
   exclusion, ejects the person when they are already known
   (`Sanctum.Tenancy.Users.deny/1`) and withdraws the group invitations the
   address was holding either way; `remove` deletes an entry — and, when it was
@@ -17,8 +16,8 @@ defmodule Sanctum.Providers.Door do
   (`Sanctum.Door.reconcile/0`), which is the only way `*` is covered, since
   it names nobody;
   `list` shows the door; `requests` what is waiting on the operator — an
-  address a member invited, or the subject of a sign-in the door refused;
-  `resolve` approves or drops one.
+  address a member invited, or the subject or identifier of a sign-in the
+  door refused; `resolve` approves or drops one.
   """
 
   require Logger
@@ -291,21 +290,34 @@ defmodule Sanctum.Providers.Door do
     end
   end
 
+  defp known_users("identifier", value) do
+    case Users.get_by_identifier(value) do
+      {:ok, user} -> [user]
+      _ -> []
+    end
+  end
+
   defp known_users(_kind, _value), do: []
 
   defp denied_users(kind, value),
     do: kind |> known_users(value) |> Enum.filter(&(&1.status == "denied"))
 
-  # `*` is the wildcard; an `@` makes an email; anything else is an IdP
-  # identity key unless the caller said otherwise. The door speaks the
-  # provider's terms — it judges a person before any row of theirs exists
-  # — so a person's own id here is not an entry it can act on.
+  # `*` is the wildcard; an `@` makes an email; a person identifier's
+  # shape (`per_` and 64 hexadecimal digits) makes an identifier; anything
+  # else is an IdP identity key unless the caller said otherwise. The door
+  # speaks the provider's terms — it judges a person before any row of
+  # theirs exists — so a person's own id here is not an entry it can act
+  # on.
   defp kind_for("*", _), do: {:ok, "wildcard"}
-  defp kind_for(_value, "identifier"), do: {:error, :not_built}
   defp kind_for(value, kind) when kind in ["email", "user_id"], do: identity_kind(value, kind)
+  defp kind_for(value, "identifier"), do: identity_kind(value, "identifier")
 
   defp kind_for(value, nil) do
-    identity_kind(value, if(String.contains?(value, "@"), do: "email", else: "user_id"))
+    cond do
+      String.contains?(value, "@") -> identity_kind(value, "email")
+      Prima.Identity.Encoding.identifier?(value) -> identity_kind(value, "identifier")
+      true -> identity_kind(value, "user_id")
+    end
   end
 
   defp kind_for(_value, kind),
@@ -319,6 +331,15 @@ defmodule Sanctum.Providers.Door do
          {:invalid_argument,
           "A user_id entry names an IdP identity (provider|issuer|subject); " <>
             "to act on a person, name their email"}}
+  end
+
+  defp identity_kind(value, "identifier") do
+    if Prima.Identity.Encoding.identifier?(value),
+      do: {:ok, "identifier"},
+      else:
+        {:error,
+         {:invalid_argument,
+          "An identifier entry names a person identifier: per_ and 64 hexadecimal digits"}}
   end
 
   defp identity_kind(_value, kind), do: {:ok, kind}

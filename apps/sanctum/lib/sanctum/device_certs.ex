@@ -58,9 +58,23 @@ defmodule Sanctum.DeviceCerts do
   verified certificate, the paired client and its person, athanor and
   seat as read here.
 
-  A certificate of an `identity` subject, for a person whose identity is
-  at another home, is refused `:remote_identity_unavailable`: this home
-  has no verifier for another home's head yet.
+  ## A remote person's certificate
+
+  A certificate of an `identity` subject names a person whose keys another
+  home holds, and that home issued it (`remote_subject/3`). It is checked
+  against the person this home admitted under that identifier (their
+  identity row, `remote`) and the head their directory names: signed by
+  its current live key, under its current `key_epoch`, for this home as
+  audience, within its window. On every request the head is answered
+  within `identity_freshness_seconds` (`Sanctum.IdentityFreshness.fresh?/2`)
+  and read again past it; a directory that cannot be read pauses the
+  request (`:identity_stale`), and a head that moved retires the
+  certificate (`:bad_signature`, as a local certificate chained to a
+  rotated key is). This home never calls the person's home. Pairing reads
+  the head live instead (`Sanctum.Pairing.complete/3`). A remote
+  certificate is not renewed here: a `renew` for a remote person's client
+  is refused `:remote_identity_unavailable`, and the glass is certified
+  again at the person's home.
 
   ## Verification bounds
 
@@ -104,7 +118,10 @@ defmodule Sanctum.DeviceCerts do
     * `:revoked` — the paired client was revoked.
     * `:not_standing` — no such paired client here, or the person is
       denied, the athanor archived or the person no longer seated in it.
-    * `:remote_identity_unavailable` — see above.
+    * `:identity_stale` — a remote person's directory could not confirm
+      their head fresh: the request pauses.
+    * `:remote_identity_unavailable` — a renewal for a remote person's
+      client, which their own home certifies again.
     * `{:rate_limited, retry_after_ms}` — a verification bound is spent.
     * `:unavailable` — the store or a setting could not answer; never a
       verdict either way.
@@ -142,6 +159,7 @@ defmodule Sanctum.DeviceCerts do
           | :client_mismatch
           | :revoked
           | :not_standing
+          | :identity_stale
           | :remote_identity_unavailable
           | {:rate_limited, non_neg_integer()}
           | :unavailable
@@ -199,7 +217,8 @@ defmodule Sanctum.DeviceCerts do
       {:ok, _ctx} ->
         result
 
-      {:error, :unavailable} ->
+      # A store or a directory that could not answer is no failed proof.
+      {:error, reason} when reason in [:unavailable, :identity_stale] ->
         result
 
       {:error, {:rate_limited, _retry_after_ms}} ->
@@ -283,8 +302,15 @@ defmodule Sanctum.DeviceCerts do
       when is_binary(client_id) and is_list(opts) do
     now = Keyword.get(opts, :now) || now_ms()
 
-    with :ok <- names_context(certificate, ctx) do
-      checked_request(certificate, ctx, now, request_id: ctx.request_id, client_ip: ctx.client_ip)
+    with :ok <- names_context(certificate, ctx),
+         {:ok, %Context{user_id: user_id} = checked} <-
+           checked_request(certificate, ctx, now,
+             request_id: ctx.request_id,
+             client_ip: ctx.client_ip
+           ) do
+      # The certificate's subject, resolved to a person here, is the
+      # context's own person.
+      if user_id == ctx.user_id, do: {:ok, checked}, else: {:error, :client_mismatch}
     end
   end
 
@@ -296,40 +322,135 @@ defmodule Sanctum.DeviceCerts do
   # connection names. Private: a certificate alone proves nothing.
   defp checked_request(certificate, client, now, carried) do
     with :ok <- names_client(certificate, client),
-         {:ok, user_id} <- local_subject(certificate),
-         {:ok, live_key} <- live_key(user_id),
-         {:ok, skew_ms} <- skew_ms(),
-         {:ok, certificate} <- checked(certificate, live_key, now, skew_ms),
-         {:ok, row} <- paired_client(certificate.athanor, user_id, certificate.client_id),
+         {:ok, subject} <- subject(certificate, now),
+         certificate = subject.certificate,
+         {:ok, row} <- paired_client(certificate.athanor, subject.user_id, certificate.client_id),
          :ok <- stored_key(row, certificate.device_key, :client_mismatch),
-         {:ok, standing} <- standing(user_id, certificate.athanor) do
-      established(row, standing, certificate, carried)
+         {:ok, standing} <- standing(subject.user_id, certificate.athanor) do
+      established(row, standing, certificate, carried, subject.identity)
     end
   end
 
-  # The context names the certificate's client, athanor and person, and was
-  # established under this certificate (its deadline is the certificate's
-  # expiry) or is the renewal exchange's, established under none.
+  # The context names the certificate's client, athanor and, for a local
+  # subject, person (an identity subject's person is resolved from the
+  # identifier and held to the context's after), and was established under
+  # this certificate (its deadline is the certificate's expiry) or is the
+  # renewal exchange's, established under none.
   defp names_context(%DeviceCert{} = certificate, %Context{} = ctx) do
     deadline = ctx.credential_deadline
 
     if ctx.client_id == certificate.client_id and ctx.athanor_id == certificate.athanor and
-         ctx.user_id == subject_user(certificate) and
+         names_person?(certificate, ctx.user_id) and
          (is_nil(deadline) or DateTime.to_unix(deadline, :millisecond) == certificate.expires_at),
        do: :ok,
        else: {:error, :client_mismatch}
   end
 
+  defp names_person?(%DeviceCert{subject: %{kind: :local, user_id: user_id}}, user_id), do: true
+  defp names_person?(%DeviceCert{subject: %{kind: :identity}}, user_id), do: is_binary(user_id)
+  defp names_person?(%DeviceCert{}, _user_id), do: false
+
   defp names_client(%DeviceCert{client_id: id}, %{client_id: id}), do: :ok
   defp names_client(%DeviceCert{}, _client), do: {:error, :client_mismatch}
 
-  defp subject_user(%DeviceCert{subject: %{kind: :local, user_id: user_id}}), do: user_id
-  defp subject_user(%DeviceCert{}), do: nil
+  # The person a certificate names and the certificate as verified: a local
+  # subject under the live key this home stores for them; an identity
+  # subject under the head their directory names (`remote_subject/3`).
+  defp subject(%DeviceCert{subject: %{kind: :local, user_id: user_id}} = certificate, now) do
+    with {:ok, live_key} <- live_key(user_id),
+         {:ok, skew_ms} <- skew_ms(),
+         {:ok, certificate} <- checked(certificate, live_key, now, skew_ms, nil) do
+      {:ok, %{user_id: user_id, identity: nil, certificate: certificate}}
+    end
+  end
 
-  # A local subject names a person of this home; an identity subject names
-  # a person whose live key another home's directory holds.
-  defp local_subject(%DeviceCert{subject: %{kind: :local, user_id: user_id}}), do: {:ok, user_id}
-  defp local_subject(%DeviceCert{}), do: {:error, :remote_identity_unavailable}
+  defp subject(%DeviceCert{subject: %{kind: :identity}} = certificate, now),
+    do: remote_subject(certificate, now, :bounded)
+
+  defp subject(%DeviceCert{}, _now), do: {:error, :unknown_subject}
+
+  @doc """
+  Check `certificate`, an `identity` subject's, as another home issued it
+  for one of its people (the module doc), at `now` (Unix milliseconds):
+  the person this home admitted under that identifier, whose identity row
+  is `remote`, and the head their directory names, read within its
+  freshness bound (`:bounded`, every request) or live (`:live`, a
+  pairing). The certificate must be signed by that head's live key, under
+  its `key_epoch`, for this home as audience, within its window.
+
+  Answers `{:ok, %{user_id, identity, certificate}}`, `identity` the
+  person's identity row as read here (its `user_id`, `provenance` and
+  `identifier`), or a refusal: `:unknown_subject` (no remote person here
+  holds that identifier), `:bad_signature` (another key, or a `key_epoch`
+  the head has moved past), `:expired`, `:not_yet_valid`,
+  `:wrong_audience`, `:identity_stale`, `:unavailable`.
+  """
+  @spec remote_subject(DeviceCert.t(), non_neg_integer(), :bounded | :live) ::
+          {:ok,
+           %{
+             user_id: String.t(),
+             identity: %{user_id: String.t(), provenance: String.t(), identifier: String.t()},
+             certificate: DeviceCert.t()
+           }}
+          | {:error, refusal()}
+  def remote_subject(
+        %DeviceCert{subject: %{kind: :identity, identifier: identifier}} = certificate,
+        now,
+        freshness
+      )
+      when freshness in [:bounded, :live] do
+    with {:ok, identity} <- remote_person(identifier),
+         {:ok, state} <- head_state(identifier, freshness),
+         {:ok, skew_ms} <- skew_ms(),
+         {:ok, certificate} <- checked(certificate, state.live_key, now, skew_ms, state.key_epoch) do
+      {:ok, %{user_id: identity.user_id, identity: identity, certificate: certificate}}
+    end
+  end
+
+  def remote_subject(%DeviceCert{}, _now, _freshness), do: {:error, :unknown_subject}
+
+  # The person this home admitted under `identifier`: a remote person's
+  # identity row, of which the context's establishment is handed the
+  # columns that bind it (`Sanctum.Caller.establish_device/2`). A local
+  # person's own identifier names no certificate another home issued to
+  # them here.
+  defp remote_person(identifier) do
+    case Arca.PersonIdentities.lookup_identifier(Prima.Actor.system(), identifier) do
+      {:ok, %{provenance: "remote"} = row} ->
+        {:ok, Map.take(row, [:user_id, :provenance, :identifier])}
+
+      {:ok, _local} ->
+        {:error, :unknown_subject}
+
+      {:error, :not_found} ->
+        {:error, :unknown_subject}
+
+      {:error, _unanswered} ->
+        {:error, :unavailable}
+    end
+  end
+
+  defp head_state(identifier, freshness) do
+    answer =
+      case freshness do
+        :bounded -> Sanctum.IdentityFreshness.fresh?(identifier)
+        :live -> Sanctum.IdentityFreshness.fresh!(identifier)
+      end
+
+    case answer do
+      {:ok, head} ->
+        case Sanctum.Directory.Client.state(head) do
+          {:ok, state} -> {:ok, state}
+          {:error, :corrupt} -> {:error, :unavailable}
+        end
+
+      {:refused, :identity_stale} ->
+        {:error, :identity_stale}
+
+      {:error, :unavailable} ->
+        {:error, :unavailable}
+    end
+  end
 
   # The live key this home stores for the certificate's own subject, read
   # as the server, as every read of a person's key row is
@@ -338,7 +459,6 @@ defmodule Sanctum.DeviceCerts do
   defp live_key(user_id) do
     case Arca.PersonIdentities.get(Prima.Actor.system(), user_id) do
       {:ok, %{provenance: "local", live_public_key: key}} when is_binary(key) -> {:ok, key}
-      {:ok, %{provenance: "remote"}} -> {:error, :remote_identity_unavailable}
       {:ok, _no_local_keys} -> {:error, :unknown_subject}
       {:error, :not_found} -> {:error, :unknown_subject}
       {:error, _unanswered} -> {:error, :unavailable}
@@ -361,8 +481,16 @@ defmodule Sanctum.DeviceCerts do
     end
   end
 
-  defp checked(certificate, live_key, now, skew_ms) do
-    case DeviceCert.verify(certificate, live_key, home: Person.home(), now: now, skew: skew_ms) do
+  # A certificate under `live_key`; an identity subject's under the
+  # `key_epoch` its head names too, a moved epoch reading as a key the
+  # person's head no longer names.
+  defp checked(certificate, live_key, now, skew_ms, key_epoch) do
+    case DeviceCert.verify(certificate, live_key,
+           home: Person.home(),
+           now: now,
+           skew: skew_ms,
+           key_epoch: key_epoch
+         ) do
       {:ok, certificate} ->
         {:ok, certificate}
 
@@ -370,7 +498,7 @@ defmodule Sanctum.DeviceCerts do
       when reason in [:expired, :not_yet_valid, :bad_signature, :wrong_audience] ->
         {:error, reason}
 
-      {:error, _malformed} ->
+      {:error, _malformed_or_moved} ->
         {:error, :bad_signature}
     end
   end
@@ -507,13 +635,16 @@ defmodule Sanctum.DeviceCerts do
 
   # The client's context, established by `Sanctum.Caller.establish_device/2`
   # from what was verified here: the certificate (nil for a renewal, whose
-  # certificate only located the client), the paired-client row, and its
-  # person, athanor and seat as just read, with the connection's request
-  # correlation and address. Nothing here builds a context.
-  defp established(row, standing, certificate, carried) do
+  # certificate only located the client), the paired-client row, the
+  # identity row an identity subject's person was resolved by (nil for a
+  # local subject), and its person, athanor and seat as just read, with the
+  # connection's request correlation and address. Nothing here builds a
+  # context.
+  defp established(row, standing, certificate, carried, identity \\ nil) do
     device = %{
       certificate: certificate,
       client: row,
+      identity: identity,
       user: standing.user,
       athanor: standing.athanor,
       seat: standing.seat,

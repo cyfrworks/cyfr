@@ -122,13 +122,16 @@ defmodule Sanctum.Caller do
 
   @typedoc """
   A paired device as `Sanctum.DeviceCerts` verified it: the certificate
-  it stands under (nil for a renewal), its paired-client row, and its
-  person's `users` row, the athanor's row and the membership that seats
-  them there, read for this verification, and whether they hold the
-  platform's.
+  it stands under (nil for a renewal), its paired-client row, the
+  identity row an identity subject's person was resolved by (`identity`,
+  absent or nil for a local subject), and its person's `users` row, the
+  athanor's row and the membership that seats them there, read for this
+  verification, and whether they hold the platform's.
   """
   @type device :: %{
           required(:certificate) => Prima.DeviceCert.t() | nil,
+          optional(:identity) =>
+            %{user_id: String.t(), provenance: String.t(), identifier: String.t()} | nil,
           required(:client) => map(),
           required(:user) => map(),
           required(:athanor) => map(),
@@ -295,8 +298,10 @@ defmodule Sanctum.Caller do
   only that the rows it is handed agree with each other: one active
   device client of that person in that athanor, the person and the
   athanor active, the seat theirs, and the certificate, when there is
-  one, naming that client, athanor, person and device key. Rows that do
-  not agree are `{:error, :unauthenticated}`.
+  one, naming that client, athanor, person and device key: a local
+  subject by the person's id, an identity subject by the identifier of
+  the remote identity row the person was resolved by, which must be that
+  person's. Rows that do not agree are `{:error, :unauthenticated}`.
 
   The context is the person's own interactive client there
   (`auth_method: :device`, its `client_id`, `origin: :interactive`),
@@ -341,26 +346,31 @@ defmodule Sanctum.Caller do
   # were read (nothing is read here): one active device client of the
   # person in the athanor, the person and the athanor active, the seat
   # theirs (their seat there or their platform row), and the certificate,
-  # when there is one, naming that client, athanor, person and device key.
-  defp device_stands?(%{
-         certificate: certificate,
-         client:
-           %{
-             id: client_id,
-             user_id: user_id,
-             athanor_id: athanor_id,
-             standing: "active",
-             source_kind: "device_cert"
-           } = client,
-         user: %{id: user_id, status: "active", security_generation: user_generation},
-         athanor: %{id: athanor_id, status: "active", security_generation: athanor_generation},
-         seat: %{id: seat_id, status: "active", user_id: user_id} = seat,
-         platform_admin: platform_admin
-       })
+  # when there is one, naming that client, athanor, person and device key:
+  # a local subject by the person's id, an identity subject by the
+  # identifier of the identity row the verifier resolved them by
+  # (`device.identity`).
+  defp device_stands?(
+         %{
+           certificate: certificate,
+           client:
+             %{
+               id: client_id,
+               user_id: user_id,
+               athanor_id: athanor_id,
+               standing: "active",
+               source_kind: "device_cert"
+             } = client,
+           user: %{id: user_id, status: "active", security_generation: user_generation},
+           athanor: %{id: athanor_id, status: "active", security_generation: athanor_generation},
+           seat: %{id: seat_id, status: "active", user_id: user_id} = seat,
+           platform_admin: platform_admin
+         } = device
+       )
        when is_binary(client_id) and is_binary(user_id) and is_binary(athanor_id) and
               is_binary(seat_id) and is_integer(user_generation) and
               is_integer(athanor_generation) and is_boolean(platform_admin) do
-    seated?(seat, athanor_id) and certifies?(certificate, client)
+    seated?(seat, athanor_id) and certifies?(certificate, client, Map.get(device, :identity))
   end
 
   defp device_stands?(_device), do: false
@@ -369,15 +379,31 @@ defmodule Sanctum.Caller do
   defp seated?(%{scope: "platform"}, _athanor_id), do: true
   defp seated?(_seat, _athanor_id), do: false
 
-  defp certifies?(nil, _client), do: true
+  defp certifies?(nil, _client, _identity), do: true
 
-  defp certifies?(%Prima.DeviceCert{} = certificate, client) do
+  defp certifies?(%Prima.DeviceCert{} = certificate, client, identity) do
     certificate.client_id == client.id and certificate.athanor == client.athanor_id and
-      certificate.subject == %{kind: :local, user_id: client.user_id} and
+      subject_names?(certificate.subject, client.user_id, identity) and
       certificate.device_key == client.device_public_key
   end
 
-  defp certifies?(_certificate, _client), do: false
+  defp certifies?(_certificate, _client, _identity), do: false
+
+  # A local subject names the client's person by their id, with no identity
+  # row handed. An identity subject names them by an identifier, which must
+  # be the one the identity row handed holds, and that row must be the
+  # client's person's and remote: the subject, the row and the client agree.
+  defp subject_names?(%{kind: :local, user_id: user_id}, user_id, nil), do: true
+
+  defp subject_names?(
+         %{kind: :identity, identifier: identifier},
+         user_id,
+         %{provenance: "remote", user_id: user_id, identifier: identifier}
+       )
+       when is_binary(identifier),
+       do: true
+
+  defp subject_names?(_subject, _user_id, _identity), do: false
 
   # What the device's context was read against
   # (`t:Sanctum.Context.credential_binding/0`): the person's and the
@@ -688,7 +714,12 @@ defmodule Sanctum.Caller do
   archived one, is `:not_standing`; and it comes back with a new
   `validated_at` while it stands. So work a device started and something
   else holds (a pending OAuth grant, say) is refused at its recheck once
-  the device is revoked or its certificate expired.
+  the device is revoked or its certificate expired. A remote person's
+  device is held to their identity's head as their session is: past its
+  bound with the directory unable to refresh it, the work pauses as
+  `:identity_stale` and the pairing stands. A head that moved retires the
+  device's certificate, which its next request's check refuses
+  (`Sanctum.DeviceCerts.verify_request/3`).
 
   Any other context — one an auth provider synthesized, a frame's, a
   webhook, the system's own — keeps its establishment contract and is
@@ -918,13 +949,49 @@ defmodule Sanctum.Caller do
     if expired?(deadline) do
       {:error, :unauthenticated}
     else
-      case Sanctum.DeviceCerts.client_standing(ctx) do
-        :ok -> {:ok, validated(ctx)}
-        {:error, :unavailable} -> {:error, :unavailable}
-        {:error, _ended} -> {:error, :not_standing}
+      with :ok <- client_stands(ctx),
+           :ok <- device_identity(ctx.user_id) do
+        {:ok, validated(ctx)}
       end
     end
   end
+
+  defp client_stands(ctx) do
+    case Sanctum.DeviceCerts.client_standing(ctx) do
+      :ok -> :ok
+      {:error, :unavailable} -> {:error, :unavailable}
+      {:error, _ended} -> {:error, :not_standing}
+    end
+  end
+
+  # A remote person's device stands on their identity's fresh head as their
+  # session does: past the bound with the directory unable to refresh it,
+  # the work pauses and the pairing stands. A local person's device reads
+  # no directory.
+  defp device_identity(user_id) when is_binary(user_id) do
+    case Arca.PersonIdentities.get(Prima.Actor.system(), user_id) do
+      {:ok, %{provenance: "remote", identifier: identifier}} when is_binary(identifier) ->
+        case Sanctum.IdentityFreshness.fresh?(identifier, []) do
+          {:ok, _head} -> :ok
+          {:refused, :identity_stale} -> {:error, :identity_stale}
+          {:error, :unavailable} -> {:error, :unavailable}
+        end
+
+      {:ok, %{provenance: "remote"}} ->
+        {:error, :not_standing}
+
+      {:ok, _local} ->
+        :ok
+
+      {:error, :not_found} ->
+        :ok
+
+      {:error, _unanswered} ->
+        {:error, :unavailable}
+    end
+  end
+
+  defp device_identity(_user_id), do: {:error, :not_standing}
 
   defp expired?(%DateTime{} = deadline), do: DateTime.compare(now(), deadline) != :lt
   defp expired?(nil), do: false

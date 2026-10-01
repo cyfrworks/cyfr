@@ -632,14 +632,15 @@ defmodule Arca.Repo.Migrations.Baseline do
 
     # A home's verified cache of another person's head: the genesis it was
     # verified from and the directory it names, both immutable, and the
-    # head, its `key_epoch` and the verified state, with when it was
-    # verified on the database's clock.
+    # head, its `key_epoch`, its `recovery_epoch` and the verified state,
+    # with when it was verified on the database's clock.
     create table(:directory_heads, primary_key: false) do
       add :identifier, :string, primary_key: true
       add :genesis, :binary, null: false
       add :directory_url, :text, null: false
       add :head_hash, :string, null: false
       add :key_epoch, :string, null: false
+      add :recovery_epoch, :string, null: false
       add :state, :text, null: false
       add :verified_at, :utc_datetime_usec, null: false
       add :revision, :bigint, null: false, default: 1
@@ -707,8 +708,10 @@ defmodule Arca.Repo.Migrations.Baseline do
 
     # A person's WebAuthn credentials at this relying home, pinned to its RP
     # ID. A pending registration waits, with its exact registration digest,
-    # for activation; a remote person's credential names the `key_epoch` it
-    # was registered under, and a change of it revokes the credential.
+    # for activation; a remote person's credential names the
+    # `recovery_epoch` it was registered under, and a recovery that replaces
+    # the live key revokes the credential, while an ordinary rotation keeps
+    # it.
     create table(:passkeys, primary_key: false) do
       add :id, :string, primary_key: true
       add :user_id, references(:users, type: :string, on_delete: :delete_all), null: false
@@ -717,7 +720,7 @@ defmodule Arca.Repo.Migrations.Baseline do
       add :relying_home, :text, null: false
       add :public_key, :binary
       add :sign_count, :bigint, null: false, default: 0
-      add :identity_key_epoch, :string
+      add :identity_recovery_epoch, :string
       add :state, :string, null: false, check: if(sqlite?, do: passkey_state)
       add :registration_digest, :string, null: false
       add :possession_verified, :boolean, null: false, default: false
@@ -733,7 +736,9 @@ defmodule Arca.Repo.Migrations.Baseline do
     checked(sqlite?, :passkeys, [passkey_state])
     create index(:passkeys, [:user_id, :state])
 
-    create index(:passkeys, [:identity_key_epoch], where: "identity_key_epoch IS NOT NULL")
+    create index(:passkeys, [:identity_recovery_epoch],
+             where: "identity_recovery_epoch IS NOT NULL"
+           )
 
     create unique_index(:passkeys, [:rp_id, :credential_id],
              where: "state != 'revoked'",

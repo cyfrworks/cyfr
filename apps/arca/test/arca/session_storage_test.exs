@@ -204,6 +204,7 @@ defmodule Arca.SessionStorageTest do
           directory_url: "https://dir.example",
           head_hash: epoch,
           key_epoch: epoch,
+          recovery_epoch: epoch,
           state: "{}"
         })
 

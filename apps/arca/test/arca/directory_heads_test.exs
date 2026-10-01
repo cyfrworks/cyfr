@@ -5,10 +5,11 @@ defmodule Arca.DirectoryHeadsTest do
   @moduledoc """
   A home's verified cache of other people's heads: the genesis and
   directory binding immutable, the head moved by compare-and-set,
-  freshness read on the database's clock, and a changed `key_epoch`
-  retiring, in the same transaction, the sessions, passkeys, pending
-  confirmations and device certificates bound to the old one, after which
-  the old epoch binds nothing new.
+  freshness read on the database's clock, a changed `key_epoch` retiring,
+  in the same transaction, the sessions, pending confirmations and device
+  certificates bound to the old one, and a changed `recovery_epoch` the
+  passkeys registered under the old one, after which the old epoch binds
+  nothing new.
   """
 
   # Takes the cell's slot, which is process-wide; each case restores it.
@@ -69,7 +70,7 @@ defmodule Arca.DirectoryHeadsTest do
   defp server, do: Prima.Actor.system()
   defp digest(seed), do: Prima.Digest.sha256("#{seed}-#{System.unique_integer()}")
 
-  defp cached!(identifier, key_epoch) do
+  defp cached!(identifier, key_epoch, recovery_epoch \\ nil) do
     {:ok, head} =
       DirectoryHeads.put(server(), %{
         identifier: identifier,
@@ -77,6 +78,7 @@ defmodule Arca.DirectoryHeadsTest do
         directory_url: "https://dir.example",
         head_hash: key_epoch,
         key_epoch: key_epoch,
+        recovery_epoch: recovery_epoch || key_epoch,
         state: ~s({"head":"#{key_epoch}"})
       })
 
@@ -157,7 +159,7 @@ defmodule Arca.DirectoryHeadsTest do
       registration_digest: digest("registration"),
       possession_verified: true,
       state: "active",
-      identity_key_epoch: epoch
+      identity_recovery_epoch: epoch
     }
   end
 
@@ -252,6 +254,17 @@ defmodule Arca.DirectoryHeadsTest do
                directory_url: "https://dir.example",
                head_hash: epoch,
                key_epoch: epoch,
+               recovery_epoch: epoch,
+               state: "{}"
+             })
+
+    assert {:error, {:invalid, %{recovery_epoch: _}}} =
+             DirectoryHeads.put(server(), %{
+               identifier: identifier(),
+               genesis: "genesis-bytes",
+               directory_url: "https://dir.example",
+               head_hash: epoch,
+               key_epoch: epoch,
                state: "{}"
              })
 
@@ -279,6 +292,7 @@ defmodule Arca.DirectoryHeadsTest do
       directory_url: "https://dir.example",
       head_hash: next,
       key_epoch: epoch,
+      recovery_epoch: epoch,
       state: "{}"
     }
 
@@ -306,17 +320,18 @@ defmodule Arca.DirectoryHeadsTest do
     assert {:error, :not_found} = DirectoryHeads.advance(server(), identifier(), epoch, attrs)
   end
 
-  test "a changed key_epoch retires what was bound to the old one, which then binds nothing" do
+  test "a rotation retires what was bound to the old key_epoch, which then binds nothing, and keeps the passkeys" do
     id = identifier()
     old = digest("old")
     new = digest("new")
-    cached!(id, old)
+    recovery = digest("recovery")
+    cached!(id, old, recovery)
     person = remote_person!(id)
     athanor = Prima.Actor.in_athanor("ath_dh_#{System.unique_integer([:positive])}")
     other = remote_person!(identifier())
 
     session = session!(person.id, old)
-    passkey = passkey!(person.id, old)
+    passkey = passkey!(person.id, recovery)
     confirmation = confirmation!(athanor, person.id, old)
     client = device_client!(athanor, person.id)
     certificate = certificate!(athanor, client, id, old)
@@ -325,31 +340,32 @@ defmodule Arca.DirectoryHeadsTest do
     cached!(other_identifier(other), old)
     kept = session!(other.id, old)
 
+    # An ordinary rotation: a new key_epoch, the same recovery_epoch.
     assert {:ok, %{retired: retired}} =
              DirectoryHeads.advance(server(), id, old, %{
                genesis: "genesis-bytes",
                directory_url: "https://dir.example",
                head_hash: new,
                key_epoch: new,
+               recovery_epoch: recovery,
                state: "{}"
              })
 
     assert retired == %{
              session_hashes: [session],
-             passkey_ids: [passkey.id],
+             passkey_ids: [],
              confirmation_ids: [confirmation.ref],
              certificate_ids: [certificate.id]
            }
 
     assert [] = Arca.Repo.all(from(s in Session, where: s.user_id == ^person.id))
     assert [_] = Arca.Repo.all(from(s in Session, where: s.token_hash == ^kept))
-    assert {:ok, %{state: "revoked"}} = Passkeys.get(server(), passkey.id)
+    assert {:ok, %{state: "active"}} = Passkeys.get(server(), passkey.id)
     assert {:ok, %{state: "voided"}} = PendingConfirmations.get(athanor, confirmation.ref)
     assert {:ok, %{status: "revoked"}} = DeviceCertificates.get(athanor, certificate.id)
 
     # The retired epoch binds nothing new, on every write that binds one.
     assert {:error, :stale_key_epoch} = try_session(person.id, old)
-    assert {:error, :stale_key_epoch} = Passkeys.register(server(), passkey_attrs(person.id, old))
 
     assert {:error, :stale_key_epoch} =
              PendingConfirmations.open(athanor, %{
@@ -362,10 +378,84 @@ defmodule Arca.DirectoryHeadsTest do
     assert {:error, :stale_key_epoch} =
              DeviceCertificates.record(athanor, certificate_attrs(client, id, old))
 
-    # The current one does.
+    # A passkey binds the recovery epoch, which the rotation left: a key
+    # epoch is not one it binds.
+    assert {:error, :stale_key_epoch} = Passkeys.register(server(), passkey_attrs(person.id, new))
+    assert {:ok, _} = Passkeys.register(server(), passkey_attrs(person.id, recovery))
+
+    # The current key epoch binds the rest.
     assert is_binary(session!(person.id, new))
-    assert {:ok, _} = Passkeys.register(server(), passkey_attrs(person.id, new))
     assert {:ok, _} = DeviceCertificates.record(athanor, certificate_attrs(client, id, new))
+  end
+
+  test "a recovery that replaces the live key retires the passkeys registered under the old recovery_epoch" do
+    id = identifier()
+    old = digest("old")
+    recovered = digest("recovered")
+    cached!(id, old)
+    person = remote_person!(id)
+    athanor = Prima.Actor.in_athanor("ath_dh_#{System.unique_integer([:positive])}")
+
+    session = session!(person.id, old)
+    passkey = passkey!(person.id, old)
+    confirmation = confirmation!(athanor, person.id, old)
+
+    assert {:ok, %{retired: retired}} =
+             DirectoryHeads.advance(server(), id, old, %{
+               genesis: "genesis-bytes",
+               directory_url: "https://dir.example",
+               head_hash: recovered,
+               key_epoch: recovered,
+               recovery_epoch: recovered,
+               state: "{}"
+             })
+
+    assert retired == %{
+             session_hashes: [session],
+             passkey_ids: [passkey.id],
+             confirmation_ids: [confirmation.ref],
+             certificate_ids: []
+           }
+
+    assert {:ok, %{state: "revoked"}} = Passkeys.get(server(), passkey.id)
+    assert {:error, :stale_key_epoch} = Passkeys.register(server(), passkey_attrs(person.id, old))
+    assert {:ok, _} = Passkeys.register(server(), passkey_attrs(person.id, recovered))
+  end
+
+  test "a recover that keeps the live key (one adding a holder) moves the key epoch alone, and keeps the passkeys" do
+    id = identifier()
+    old = digest("old")
+    holder = digest("holder")
+    cached!(id, old)
+    person = remote_person!(id)
+    passkey = passkey!(person.id, old)
+
+    assert {:ok, %{retired: %{passkey_ids: []}}} =
+             DirectoryHeads.advance(server(), id, old, %{
+               genesis: "genesis-bytes",
+               directory_url: "https://dir.example",
+               head_hash: holder,
+               key_epoch: holder,
+               recovery_epoch: old,
+               state: "{}"
+             })
+
+    assert {:ok, %{state: "active"}} = Passkeys.get(server(), passkey.id)
+  end
+
+  test "a passkey binds a remote person's current recovery epoch under their lock, and a local person's none" do
+    id = identifier()
+    epoch = digest("epoch")
+    cached!(id, epoch, digest("recovery"))
+    person = remote_person!(id)
+
+    assert {:error, :identity_key_epoch_required} =
+             Passkeys.register(server(), passkey_attrs(person.id, nil))
+
+    assert {:error, :stale_key_epoch} =
+             Passkeys.register(server(), passkey_attrs(person.id, epoch))
+
+    assert DirectoryHeads.current_recovery_epoch!(id) != epoch
   end
 
   test "only the platform's own actor reads or writes the cache" do
@@ -467,6 +557,7 @@ defmodule Arca.DirectoryHeadsRaceTest do
           directory_url: "https://dir.example",
           head_hash: old,
           key_epoch: old,
+          recovery_epoch: old,
           state: "{}"
         })
     end)
@@ -624,6 +715,7 @@ defmodule Arca.DirectoryHeadsRaceTest do
       directory_url: "https://dir.example",
       head_hash: new,
       key_epoch: new,
+      recovery_epoch: new,
       state: "{}"
     })
   end

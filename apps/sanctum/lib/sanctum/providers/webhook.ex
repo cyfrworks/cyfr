@@ -14,7 +14,7 @@ defmodule Sanctum.Providers.Webhook do
 
   # A sensitive change's own answers (`Sanctum.Consent.Authz`), which pass
   # as they are: the confirmation signal is matched apart, by its shape.
-  @confirmation_refusals [:remote_identity_unavailable, :missing_tenant]
+  @confirmation_refusals [:identity_stale, :missing_tenant]
 
   alias Sanctum.Context
 

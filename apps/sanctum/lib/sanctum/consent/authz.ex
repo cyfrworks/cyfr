@@ -57,8 +57,16 @@ defmodule Sanctum.Consent.Authz do
       an athanor, and must not be on the guest plane; an API key's
       context opens one for the key's creator, so an MCP caller receives
       the signal and confirms in Prism;
-    * a person whose keys are at another home is refused
-      `:remote_identity_unavailable`, reading no directory;
+    * a person whose keys are at another home has their head read fresh
+      from their directory (`Sanctum.IdentityFreshness.fresh!/2`) when the
+      change is asked or repeated, outside any transaction, and the record
+      opened binds its `key_epoch`, so a rotation or a recovery voids it
+      (`Arca.DirectoryHeads.advance/4`); a directory that cannot be read
+      pauses the change (`:identity_stale`). Inside a caller's
+      transaction, where `consume/2` runs, the head is read from the cache
+      alone, as the request's revalidation left it. The proof is still
+      this home's own: a passkey registered here or a fresh method this
+      home verifies;
     * when the context names a confirmation (`confirmation_id`, the
       secret its signal answered), the caller's standing is read again
       and the record is consumed: it must be confirmed, unexpired and
@@ -177,7 +185,6 @@ defmodule Sanctum.Consent.Authz do
           | :identity_stale
           | :unavailable
           | :missing_tenant
-          | :remote_identity_unavailable
           | {:conflict, String.t()}
 
   @doc """
@@ -413,9 +420,6 @@ defmodule Sanctum.Consent.Authz do
   def message(:missing_tenant),
     do: "A change that needs a fresh confirmation is made in an athanor; open one first"
 
-  def message(:remote_identity_unavailable),
-    do: "Confirming a change for a person whose identity is at another home is not built yet"
-
   def message({:conflict, message}) when is_binary(message), do: message
 
   # This IS the vocabulary module — an unknown term here is a producer bug,
@@ -463,7 +467,7 @@ defmodule Sanctum.Consent.Authz do
   # person whose keys are here; and the preview the record binds.
   defp sensitive(ctx, action, change, mode) do
     with :ok <- confirmer(ctx),
-         :ok <- local_identity(ctx.user_id),
+         {:ok, epoch} <- identity_epoch(ctx.user_id, mode),
          {:ok, preview} <- preview(ctx, change) do
       expected = %{
         user_id: ctx.user_id,
@@ -475,10 +479,10 @@ defmodule Sanctum.Consent.Authz do
 
       case ctx.confirmation_id do
         id when is_binary(id) and id != "" ->
-          named(ctx, {action, change, preview}, expected, id, mode)
+          named(ctx, {action, change, preview, epoch}, expected, id, mode)
 
         _none ->
-          ask(ctx, {action, change, preview}, mode)
+          ask(ctx, {action, change, preview, epoch}, mode)
       end
     end
   end
@@ -495,18 +499,42 @@ defmodule Sanctum.Consent.Authz do
     end
   end
 
-  # A person whose keys are held at another home proves freshness through
-  # that identity's current head, which J.J0 installs; until then the
-  # change is refused here, reading no directory. A person with no identity
-  # row holds no remote provenance.
-  defp local_identity(user_id) do
+  # A person whose keys are held at another home: their head's `key_epoch`,
+  # read fresh from their directory before their fresh confirmation, never
+  # from their own home, which may be the stolen one. Inside a caller's
+  # transaction (a `consume/2`, or a caller that holds one open) the
+  # directory is never read: the cache answers, within its bound, as the
+  # request's own revalidation outside the transaction left it. A local
+  # person, and a person with no identity row, binds none.
+  defp identity_epoch(user_id, mode) do
     case Arca.PersonIdentities.get(Prima.Actor.system(), user_id) do
-      {:ok, %{provenance: "remote"}} -> {:error, :remote_identity_unavailable}
-      {:ok, _local} -> :ok
-      {:error, :not_found} -> :ok
-      {:error, _unanswered} -> {:error, :unavailable}
+      {:ok, %{provenance: "remote", identifier: identifier}} when is_binary(identifier) ->
+        identifier
+        |> remote_head(mode == :consume or Arca.in_transaction?())
+        |> case do
+          {:ok, %{key_epoch: epoch}} -> {:ok, epoch}
+          {:refused, :identity_stale} -> {:error, :identity_stale}
+          {:error, :unavailable} -> {:error, :unavailable}
+        end
+
+      {:ok, %{provenance: "remote"}} ->
+        {:error, :unavailable}
+
+      {:ok, _local} ->
+        {:ok, nil}
+
+      {:error, :not_found} ->
+        {:ok, nil}
+
+      {:error, _unanswered} ->
+        {:error, :unavailable}
     end
   end
+
+  defp remote_head(identifier, true = _in_transaction),
+    do: Sanctum.IdentityFreshness.fresh?(identifier)
+
+  defp remote_head(identifier, false), do: Sanctum.IdentityFreshness.fresh!(identifier)
 
   # The secret-free preview the deciding site's request yields: this home,
   # the athanor by name, the operation, the resource by name and the
@@ -619,7 +647,7 @@ defmodule Sanctum.Consent.Authz do
   # transaction opens nothing.
   defp ask(_ctx, _asked, :consume), do: {:error, :invalid_request}
 
-  defp ask(ctx, {action, change, preview}, _mode) do
+  defp ask(ctx, {action, change, preview, epoch}, _mode) do
     secret = "cnf_" <> Prima.Identity.Encoding.b64(:crypto.strong_rand_bytes(@secret_bytes))
 
     with {:ok, seconds} <- confirmation_seconds(),
@@ -640,12 +668,18 @@ defmodule Sanctum.Consent.Authz do
       case PendingConfirmations.open(Context.actor(ctx), %{
              record: record,
              opener: opener(ctx),
-             asker: asker(ctx)
+             asker: asker(ctx),
+             identity_key_epoch: epoch
            }) do
         {:ok, row} ->
           announce_voided(ctx, Map.get(row, :voided, []))
           announce(:opened, row)
           {:error, {:confirmation_required, signal(secret, row)}}
+
+        # A remote person's head moved between its fresh read and the open:
+        # the change pauses, as one whose head could not be confirmed does.
+        {:error, :stale_key_epoch} ->
+          {:error, :identity_stale}
 
         {:error, reason} ->
           Logger.warning(

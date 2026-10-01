@@ -17,7 +17,9 @@ defmodule Arca.Passkeys do
       `active` (the person's own fresh proof sufficed).
     * **Activation** (`activate/3`) moves a pending credential to active
       only while it is unexpired on the database's clock and still carries
-      the registration digest and `key_epoch` the activation names, with an
+      the registration digest and `recovery_epoch` the activation names,
+      and while the `key_epoch` and `recovery_epoch` it names are the
+      cached head's current ones, read under the person's lock, with an
       `also:` closure in which the administrator's confirmation is
       consumed, so activation and authorization commit together.
     * Every credential that becomes active marks the person's
@@ -25,11 +27,13 @@ defmodule Arca.Passkeys do
       activation that claims the local first-method exception
       (`first_method: true`) is refused `:first_method_used` once any
       method ever existed.
-    * A remote person's credential names the `identity_key_epoch` it was
-      registered under, which must be the cached head's current one when
-      it is recorded (`Arca.DirectoryHeads.bindable!/2`, under the
-      person's lock), and a change of that epoch revokes it
-      (`revoke_key_epoch!/2`); a local person's names none.
+    * A remote person's credential names the `identity_recovery_epoch` it
+      was registered under, which must be the cached head's current
+      `recovery_epoch` when it is recorded
+      (`Arca.DirectoryHeads.recovery_bindable!/2`, under the person's
+      lock), and a recovery that moves that epoch revokes it
+      (`revoke_recovery_epoch!/2`); an ordinary rotation does not. A local
+      person's names none.
     * **Revocation** is terminal, and voids the pending confirmations the
       credential confirmed (`Arca.PendingConfirmations`). It locks the
       person's row first, as unlinking a door does, and runs the caller's
@@ -53,7 +57,7 @@ defmodule Arca.Passkeys do
   Record a credential. `attrs`: `:user_id`, `:credential_id`, `:rp_id`,
   `:relying_home`, `:public_key`, `:registration_digest`,
   `:possession_verified`, `:state` (`"pending"` or `"active"`), `:label`,
-  `:expires_at` (required while pending) and `:identity_key_epoch`
+  `:expires_at` (required while pending) and `:identity_recovery_epoch`
   (required for a remote person, refused for a local one). `opts`:
   `first_method: true` claims the local first-method exception, and
   `also:` runs in the transaction with the row as a plain map.
@@ -78,20 +82,27 @@ defmodule Arca.Passkeys do
 
   @doc """
   Activate the pending credential `id`. `opts`: the
-  `:registration_digest` it must still carry, the `:identity_key_epoch` it
-  must still name (nil for a local person), the `:admin_confirmation_id`
-  whose consumption authorizes it, `first_method: true` for the local
-  first-method exception, and `also:`, run after the move in the same
-  transaction. Refusals: `:not_pending`, `:expired`, `:mismatch`,
-  `:first_method_used`, `:not_found`, `:not_owner`, `:cross_tenant`,
-  `:database_error`, or the closure's reason.
+  `:registration_digest` it must still carry, the
+  `:identity_recovery_epoch` it must still name and the
+  `:identity_key_epoch` the authorization was made under (both the cached
+  head's current ones, read under the person's lock, and both nil for a
+  local person), the `:admin_confirmation_id` whose consumption
+  authorizes it, `first_method: true` for the local first-method
+  exception, and `also:`, run after the move in the same transaction.
+  Refusals: `:not_pending`, `:expired`, `:mismatch`, `:stale_key_epoch`
+  (an epoch the cached head no longer names), `:first_method_used`,
+  `:not_found`, `:not_owner`, `:cross_tenant`, `:database_error`, or the
+  closure's reason.
   """
   @spec activate(Prima.Actor.t(), String.t(), keyword()) :: {:ok, row()} | {:error, term()}
   def activate(%Prima.Actor{} = actor, id, opts) when is_binary(id) and is_list(opts) do
     Arca.Repo.Errors.with_db_rescue("Arca.Passkeys.activate", fn ->
       fenced(fn ->
         with {:ok, passkey} <- held(actor, id) do
-          activate_in(passkey, opts)
+          # The person first, the head of the standing order, then the
+          # credential read again under that lock.
+          _locked = Arca.DirectoryHeads.lock_person!(passkey.user_id)
+          activate_in(Arca.Repo.get!(Passkey, passkey.id), opts)
         end
       end)
     end)
@@ -228,15 +239,19 @@ defmodule Arca.Passkeys do
   end
 
   @doc false
-  @spec revoke_key_epoch!([String.t()], String.t()) :: [String.t()]
-  # The credentials of `user_ids` registered under `key_epoch`, revoked
-  # when a fresh head retires it (`Arca.DirectoryHeads.advance/4`), with
-  # the confirmations they confirmed voided.
+  @spec revoke_recovery_epoch!([String.t()], String.t()) :: [String.t()]
+  # The credentials of `user_ids` registered under `recovery_epoch`,
+  # revoked when a fresh head's recovery replaced it
+  # (`Arca.DirectoryHeads.advance/4`), with the confirmations they
+  # confirmed voided.
   # arca:db-raise-ok a transaction step: its callers rescue around the transaction.
-  def revoke_key_epoch!(user_ids, key_epoch) when is_list(user_ids) and is_binary(key_epoch) do
+  def revoke_recovery_epoch!(user_ids, recovery_epoch)
+      when is_list(user_ids) and is_binary(recovery_epoch) do
     ids =
       revoke_all(
-        from(p in Passkey, where: p.user_id in ^user_ids and p.identity_key_epoch == ^key_epoch)
+        from(p in Passkey,
+          where: p.user_id in ^user_ids and p.identity_recovery_epoch == ^recovery_epoch
+        )
       )
 
     PendingConfirmations.void_confirmed_by!(:passkey, ids)
@@ -248,7 +263,7 @@ defmodule Arca.Passkeys do
   defp register_in(row, opts) do
     also = Keyword.get(opts, :also, fn _passkey -> :ok end)
 
-    with :ok <- Arca.DirectoryHeads.bindable!(row.user_id, row.identity_key_epoch),
+    with :ok <- Arca.DirectoryHeads.recovery_bindable!(row.user_id, row.identity_recovery_epoch),
          :ok <- first_method(row, opts),
          :ok <- inserted(row) do
       passkey = Arca.Repo.get!(Passkey, row.id)
@@ -290,11 +305,25 @@ defmodule Arca.Passkeys do
         {:error, :expired}
 
       passkey.registration_digest != Keyword.get(opts, :registration_digest) or
-          passkey.identity_key_epoch != Keyword.get(opts, :identity_key_epoch) ->
+          passkey.identity_recovery_epoch != Keyword.get(opts, :identity_recovery_epoch) ->
         {:error, :mismatch}
 
       true ->
-        with :ok <- mark_first(passkey.user_id, Keyword.get(opts, :first_method, false)),
+        # The epochs the authorization names are the cached head's current
+        # ones, read under the person's lock an advance also takes: an
+        # authorization made before a rotation or a recovery activates
+        # nothing after it.
+        with :ok <-
+               Arca.DirectoryHeads.recovery_bindable!(
+                 passkey.user_id,
+                 passkey.identity_recovery_epoch
+               ),
+             :ok <-
+               Arca.DirectoryHeads.bindable!(
+                 passkey.user_id,
+                 Keyword.get(opts, :identity_key_epoch)
+               ),
+             :ok <- mark_first(passkey.user_id, Keyword.get(opts, :first_method, false)),
              :ok <- moved_active(passkey, now, Keyword.get(opts, :admin_confirmation_id)) do
           activated = Arca.Repo.get!(Passkey, passkey.id)
 
@@ -401,7 +430,7 @@ defmodule Arca.Passkeys do
          relying_home: attrs.relying_home,
          public_key: attrs.public_key,
          sign_count: Map.get(attrs, :sign_count, 0),
-         identity_key_epoch: attrs[:identity_key_epoch],
+         identity_recovery_epoch: attrs[:identity_recovery_epoch],
          state: state,
          registration_digest: attrs.registration_digest,
          possession_verified: true,

@@ -18,6 +18,17 @@ defmodule Sanctum.Auth.Identity do
   host an issuer string really names (`issuer_host/1`), and whether a
   configured OIDC issuer is one a direct strategy already owns
   (`reserved_issuer?/1`).
+
+  ## The `cyfr` door
+
+  A person another home holds the keys of signs in through the `cyfr`
+  door (`Sanctum.Auth.CyfrDoor`), whose identity is
+  `cyfr|<directory>|<identifier>` (`cyfr_key/2`). It stands beside the
+  built-in table, never in it: its issuer is not one URL per provider but,
+  per person, the directory URL their verified genesis names, which never
+  changes for that identifier, and never this deployment's own
+  enrollment directory. Its subject is the person identifier
+  (`cyfr_identifier/1`), by which the door judges it.
   """
 
   @builtin %{
@@ -109,6 +120,42 @@ defmodule Sanctum.Auth.Identity do
   @doc "Whether `value` has the shape of an identity key."
   @spec key?(term()) :: boolean()
   def key?(value), do: match?({:ok, _}, parse(value))
+
+  @doc """
+  The identity key of a person the `cyfr` door admits: `cyfr`, the
+  directory URL their verified genesis names as the issuer, and their
+  identifier as the subject (the module doc): for the directory
+  `https://dir.example`, `"cyfr|https://dir.example|per_…"`. A malformed
+  directory URL or identifier raises, as `key/3` does for an empty part.
+  """
+  @spec cyfr_key(String.t(), String.t()) :: String.t()
+  def cyfr_key(directory_url, identifier)
+      when is_binary(directory_url) and is_binary(identifier) do
+    unless Prima.Identity.Encoding.directory_url?(directory_url) and
+             Prima.Identity.Encoding.identifier?(identifier) do
+      raise ArgumentError, "a cyfr identity names a directory URL and a person identifier"
+    end
+
+    key("cyfr", directory_url, identifier)
+  end
+
+  @doc """
+  The person identifier a `cyfr` identity key names, or `:error` for a key
+  of any other door.
+  """
+  @spec cyfr_identifier(term()) :: {:ok, String.t()} | :error
+  def cyfr_identifier(key) do
+    case parse(key) do
+      {:ok, %{provider: "cyfr", issuer: directory, subject: identifier}} ->
+        if Prima.Identity.Encoding.identifier?(identifier) and
+             Prima.Identity.Encoding.directory_url?(directory),
+           do: {:ok, identifier},
+           else: :error
+
+      _other ->
+        :error
+    end
+  end
 
   @doc """
   Canonical `iss` (RFC 7519 issuer) for a built-in provider.
