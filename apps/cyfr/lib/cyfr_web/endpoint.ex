@@ -122,19 +122,28 @@ defmodule CyfrWeb.Endpoint do
   plug(CyfrWeb.Plugs.ControlPlaneOwnership)
   plug(Plug.Telemetry, event_prefix: [:phoenix, :endpoint])
 
-  # Plug.Parsers behind the wrapper that answers /mcp parser failures in
-  # JSON-RPC (-32700) and gates its content type; everything else keeps
-  # Phoenix's rendering.
+  # Plug.Parsers behind the wrapper that refuses a multipart body before
+  # reading any of it, answers /mcp parser failures in JSON-RPC (-32700)
+  # and gates its content type; every other parser failure keeps Phoenix's
+  # rendering.
+  #
+  # No route takes a multipart body (LiveView uploads travel over the
+  # socket), and the multipart parser reads one without RawBodyReader, so
+  # up to this length whatever the route's own cap. Multipart is therefore
+  # not parsed, and a multipart request is refused 415 before any byte of
+  # its body is read, in JSON-RPC under /mcp and through CyfrWeb.ApiError
+  # elsewhere: every body the parsers read passes RawBodyReader.
   plug(CyfrWeb.Plugs.ParserErrors,
     jsonrpc: {"/mcp", Emissary.Web.MCPError},
-    parsers: [:urlencoded, :multipart, :json],
+    refuse: {["multipart/*"], :multipart_refused},
+    parsers: [:urlencoded, :json],
     pass: ["*/*"],
     json_decoder: Phoenix.json_library(),
     # Sized for the 20 MB attachment cap the chat enforces (ThreadPaneLive's
     # max_file_size):
     # attachments arrive base64-encoded through POST /mcp, so 20 MB × 4/3
-    # plus JSON envelope headroom. Webhooks keep their own smaller cap in
-    # RawBodyReader.
+    # plus JSON envelope headroom. Webhooks, the directory and the restore
+    # ingress keep their own smaller caps in RawBodyReader.
     length: 28_000_000,
     body_reader: {CyfrWeb.Plugs.RawBodyReader, :read_body, []}
   )

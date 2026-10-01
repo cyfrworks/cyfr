@@ -119,6 +119,7 @@ defmodule Prima.RefusalTest do
     {:not_found, :not_found},
     {:missing_idempotency_key, :invalid_argument},
     {:unsupported_content_type, :invalid_argument},
+    {:multipart_refused, :invalid_argument},
     {:signature_invalid, :unauthenticated},
     {:internal_error, :internal},
     {:invalid_params, :invalid_argument},

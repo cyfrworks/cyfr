@@ -633,6 +633,9 @@ defmodule Prima.Refusal do
   defp row(:unsupported_content_type),
     do: {:invalid_argument, "Unsupported content type — send the delivery as application/json"}
 
+  # The endpoint's parsers: a multipart body is refused before it is read.
+  defp row(:multipart_refused), do: {:invalid_argument, "This endpoint takes no multipart bodies"}
+
   defp row(:internal_error), do: {:internal, "Internal error"}
 
   defp row({:bootstrap_refused, sub}) when is_map_key(@bootstrap, sub),
