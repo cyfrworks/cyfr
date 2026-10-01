@@ -207,6 +207,14 @@ defmodule Arca do
   @spec repo_adapter() :: module()
   defdelegate repo_adapter(), to: Arca.Repo, as: :adapter
 
+  @doc """
+  Whether the calling process is inside a transaction of the repository:
+  for a layer above that must make no network call and no write of its
+  own while a caller's transaction holds its locks.
+  """
+  @spec in_transaction?() :: boolean()
+  defdelegate in_transaction?(), to: Arca.Repo
+
   @doc "The configured tenant storage adapter (`config :arca, :storage_adapter`)."
   @spec storage_adapter() :: module()
   defdelegate storage_adapter(), to: Arca.Storage, as: :configured_adapter

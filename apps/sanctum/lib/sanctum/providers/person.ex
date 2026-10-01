@@ -21,11 +21,17 @@ defmodule Sanctum.Providers.Person do
   appears, nested kit structures included, so the redaction vocabulary
   (`Prima.Sanitizer`) keeps it out of every log.
 
-  Every action answers `{:error, :not_built}`: none is built yet.
+  `person.rotate` rotates an enrolled local person's live key
+  (`Sanctum.IdentityFreshness.rotate_live/3`) under the `key_rotation`
+  confirmation, through one durable attempt per `request_id`: a retry
+  under the same id resumes it and generates no second key. It answers
+  the attempt's `request_id`, its `phase` and the new `key_epoch`. Every
+  other action answers `{:error, :not_built}`: none is built yet.
   """
 
   alias Prima.{Arg, Operation}
   alias Sanctum.Context
+  alias Sanctum.IdentityFreshness
   alias Sanctum.Providers.Assertion
 
   @doc false
@@ -223,11 +229,72 @@ defmodule Sanctum.Providers.Person do
         description: "The enrollment or added-kit attempt whose kit this is (kit, kit_ack)"
       )
 
-  @actions ~w(enroll rotate kit kit_ack link_door unlink_door enroll_holder carry_begin
+  @actions ~w(enroll kit kit_ack link_door unlink_door enroll_holder carry_begin
               carry_complete certify)
 
   def handle(%Context{} = ctx, %{"action" => "assert"} = args), do: Assertion.handle(ctx, args)
+
+  # The live key's rotation (`Sanctum.IdentityFreshness.rotate_live/3`):
+  # the `key_rotation` confirmation, one durable attempt per request id,
+  # and a retry under the same id resuming it.
+  def handle(%Context{} = ctx, %{"action" => "rotate", "request_id" => request_id})
+      when is_binary(request_id) do
+    case IdentityFreshness.rotate_live(ctx, request_id) do
+      {:ok, rotation} ->
+        {:ok,
+         %{request_id: rotation.request_id, phase: rotation.phase, key_epoch: rotation.key_epoch}}
+
+      {:error, reason} ->
+        {:error, rotation_refusal(reason)}
+    end
+  end
+
+  def handle(%Context{}, %{"action" => "rotate"}),
+    do: {:error, {:invalid_argument, "rotate needs the attempt's request_id"}}
+
   def handle(%Context{}, %{"action" => action}) when action in @actions, do: {:error, :not_built}
   def handle(_ctx, %{"action" => action}), do: {:error, {:unknown_action, "person.#{action}"}}
   def handle(_ctx, _args), do: {:error, :action_missing}
+
+  # A rotation's own refusals, in the refusal table's words. Nothing
+  # rotated in any of them; the retryable ones resume under the same
+  # request id.
+  defp rotation_refusal(:invalid_request),
+    do: {:invalid_argument, "The request_id is not a valid request id"}
+
+  defp rotation_refusal(:not_found),
+    do: {:conflict, "Your keys are held at another home; rotate them there."}
+
+  defp rotation_refusal(:not_enrolled),
+    do: {:conflict, "Rotating the live key needs an enrolled identity; enroll first."}
+
+  defp rotation_refusal(:stale_head),
+    do:
+      {:conflict,
+       "Your identity's log has moved past this home's head, so nothing was rotated. A " <>
+         "recovery or another rotation may have replaced your keys."}
+
+  defp rotation_refusal(:superseded),
+    do:
+      {:conflict,
+       "A recovery or another rotation replaced this rotation before it took effect, so " <>
+         "nothing was rotated here."}
+
+  defp rotation_refusal(:rotation_refused),
+    do: {:conflict, "Your identity's directory refused this rotation; nothing was rotated."}
+
+  defp rotation_refusal({:attempt_in_progress, request_id}) when is_binary(request_id),
+    do:
+      {:conflict,
+       "Another rotation of your live key is in progress; finish it under its request id " <>
+         request_id <> "."}
+
+  defp rotation_refusal({:attempt_in_progress, _unknown}),
+    do: {:conflict, "Another rotation of your live key is in progress; finish it first."}
+
+  defp rotation_refusal(:request_id_reused),
+    do: {:conflict, "This request id names another request; use a new one."}
+
+  defp rotation_refusal(:directory_unavailable), do: {:unavailable, "Your identity's directory"}
+  defp rotation_refusal(reason), do: reason
 end

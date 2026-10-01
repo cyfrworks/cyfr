@@ -25,7 +25,6 @@ defmodule Cyfr.DeclaredOperationsTest do
   # Each declared action with arguments its declaration accepts.
   @stubs [
     {"person", "enroll", %{"recovery_secret" => @seed, "request_id" => "req_1"}},
-    {"person", "rotate", %{"request_id" => "req_1"}},
     {"person", "kit", %{"attempt_id" => "att_1"}},
     {"person", "kit_ack", %{"attempt_id" => "att_1"}},
     {"person", "link_door", %{"provider" => "github", "ticket" => "tkt_1"}},

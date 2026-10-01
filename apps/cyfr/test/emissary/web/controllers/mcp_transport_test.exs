@@ -254,6 +254,80 @@ defmodule Emissary.Web.MCPTransportTest do
       )
     end
 
+    # A person whose keys are at another home, admitted here: their identity
+    # row `remote`, their head cached as verified now from a genesis naming a
+    # directory nothing answers at (a loopback port nothing listens on), and
+    # a session bound to that head's `key_epoch`.
+    defp remote_session! do
+      n = System.unique_integer([:positive])
+      directory = "https://localhost:1"
+
+      {:ok, user} =
+        Sanctum.Tenancy.Users.upsert_from_provider(%{
+          id: "github|https://github.com|mcp-remote-#{n}",
+          provider: "github",
+          email: "mcp-remote#{n}@example.com",
+          verified: true
+        })
+
+      {:ok, athanor} = Sanctum.Tenancy.Athanors.create_group(user.id, "MCP remote #{n}")
+      {:ok, _} = Sanctum.Tenancy.Members.ensure(user.id, scope: "athanor", athanor_id: athanor.id)
+      Arca.Repo.delete_all(from(p in Arca.Schemas.PersonIdentity, where: p.user_id == ^user.id))
+
+      {live, _} = :crypto.generate_key(:eddsa, :ed25519)
+      {operational_pub, operational} = :crypto.generate_key(:eddsa, :ed25519)
+      {recovery, _} = :crypto.generate_key(:eddsa, :ed25519)
+
+      {:ok, genesis} =
+        Prima.Identity.Entry.genesis(
+          live_key: live,
+          operational_key: operational_pub,
+          recovery_keys: [recovery],
+          directory: directory
+        )
+
+      genesis = Prima.Identity.sign(genesis, operational)
+      identifier = Prima.Identity.identifier(genesis)
+      head = Prima.Identity.hash(genesis)
+
+      {:ok, _} =
+        Arca.PersonIdentities.create(Prima.Actor.system(), %{
+          user_id: user.id,
+          provenance: "remote",
+          identifier: identifier,
+          directory_url: directory
+        })
+
+      {:ok, _} =
+        Arca.DirectoryHeads.put(Prima.Actor.system(), %{
+          identifier: identifier,
+          genesis: Prima.Identity.canonical(genesis),
+          directory_url: directory,
+          head_hash: head,
+          key_epoch: head,
+          state: ~s({"head":"#{head}"})
+        })
+
+      token = Base.url_encode64(:crypto.strong_rand_bytes(32), padding: false)
+      now = DateTime.utc_now()
+
+      Arca.Repo.insert_all(Arca.Schemas.Session, [
+        %{
+          id: Prima.UUID7.generate_id("ses"),
+          token_hash: Sanctum.Session.token_hash(token),
+          token_prefix: String.slice(token, 0, 8),
+          user_id: user.id,
+          provider: "cyfr",
+          athanor_id: athanor.id,
+          identity_key_epoch: head,
+          expires_at: DateTime.add(now, 30 * 86_400, :second),
+          inserted_at: now
+        }
+      ])
+
+      %{identifier: identifier, token: token}
+    end
+
     defp last_frame(conn) do
       conn.resp_body
       |> String.split("\n\n", trim: true)
@@ -313,6 +387,44 @@ defmodule Emissary.Web.MCPTransportTest do
       {conn, elapsed} = Task.await(task, 10_000)
       assert elapsed < 4_000
       assert %{"id" => 14, "error" => %{"code" => -33001}} = last_frame(conn)
+    end
+
+    test "a remote person's stream whose identity cannot be confirmed fresh ends paused, " <>
+           "never as a dead credential",
+         %{conn: conn} do
+      remote = remote_session!()
+      task = open_listen(conn, remote.token, 15)
+      await_open(task)
+
+      # The cached head ages past its bound, and the directory (a loopback
+      # port nothing listens on) cannot refresh it.
+      Arca.Repo.update_all(
+        from(h in Arca.Schemas.DirectoryHead, where: h.identifier == ^remote.identifier),
+        set: [verified_at: DateTime.add(DateTime.utc_now(), -400, :second)]
+      )
+
+      {{conn, elapsed}, _log} =
+        ExUnit.CaptureLog.with_log(fn ->
+          send(task.pid, CyfrWeb.ContextGuard.recheck_message())
+          Task.await(task, 10_000)
+        end)
+
+      assert elapsed < 4_000
+
+      # The refusal's own class and sentence: unavailable, retryable.
+      refusal = Prima.Refusal.classify(:identity_stale)
+      code = Prima.MCP.Message.refusal_code(refusal, :transport, nil)
+
+      assert %{"id" => 15, "error" => %{"code" => wire, "message" => message}} =
+               last_frame(conn)
+
+      assert message == refusal.message
+      assert wire == Prima.MCP.Message.error_code(code)
+      refute wire == -33001
+
+      # The session stands: a pause is no sign-out.
+      hash = Sanctum.Session.token_hash(remote.token)
+      assert Arca.Repo.exists?(from(s in Arca.Schemas.Session, where: s.token_hash == ^hash))
     end
 
     test "a standing caller's recheck keeps the stream open to its end", %{

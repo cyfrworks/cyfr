@@ -265,7 +265,9 @@ defmodule PrismWeb.AuthController do
         access_token: if(is_nil(user.namespace), do: access_token)
       )
     else
-      {:error, :unavailable} ->
+      # A store that cannot answer, or a remote person whose identity could
+      # not be confirmed fresh: the session stands, and nothing was probed.
+      {:error, reason} when reason in [:unavailable, :identity_stale] ->
         CyfrWeb.MinimalPage.send_page(
           conn,
           503,

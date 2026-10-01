@@ -285,6 +285,45 @@ defmodule Arca.IdentityAttemptsTest do
 
       assert {:error, :cross_tenant} = IdentityAttempts.open(stranger, enrollment(person.id))
     end
+
+    test "the genesis reader answers an accepted or completed enrollment's genesis, and nothing before" do
+      person = person!()
+      attrs = enrollment(person.id, "the genesis bytes")
+      {:ok, attempt} = IdentityAttempts.open(as(person), attrs)
+
+      # Staged, then submitted: not yet the person's identity.
+      assert {:error, :not_found} = IdentityAttempts.genesis(as(person), person.id)
+      {:ok, _} = IdentityAttempts.advance(as(person), attempt.id, "staged", "submitted")
+      assert {:error, :not_found} = IdentityAttempts.genesis(as(person), person.id)
+
+      {:ok, _} = IdentityAttempts.advance(as(person), attempt.id, "submitted", "accepted")
+
+      binding = %{
+        genesis: "the genesis bytes",
+        identifier: attrs.identifier,
+        directory_url: "https://dir.example"
+      }
+
+      assert {:ok, ^binding} = IdentityAttempts.genesis(as(person), person.id)
+      assert {:ok, ^binding} = IdentityAttempts.genesis(server(), person.id)
+
+      # The kit's acknowledgment completes the attempt and keeps the genesis.
+      {:ok, _} = IdentityAttempts.acknowledge_kit(as(person), attempt.id)
+      assert {:ok, ^binding} = IdentityAttempts.genesis(as(person), person.id)
+
+      # Only the person, or the platform, reads it.
+      stranger = %Prima.Actor{user_id: "usr_stranger"}
+      assert {:error, :cross_tenant} = IdentityAttempts.genesis(stranger, person.id)
+    end
+
+    test "a refused enrollment leaves no genesis to read" do
+      person = person!()
+      {:ok, attempt} = IdentityAttempts.open(as(person), enrollment(person.id))
+      {:ok, _} = IdentityAttempts.advance(as(person), attempt.id, "staged", "submitted")
+      {:ok, _} = IdentityAttempts.advance(as(person), attempt.id, "submitted", "refused")
+
+      assert {:error, :not_found} = IdentityAttempts.genesis(as(person), person.id)
+    end
   end
 
   describe "rotation" do

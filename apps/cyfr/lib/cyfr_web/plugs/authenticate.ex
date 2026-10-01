@@ -17,7 +17,10 @@ defmodule CyfrWeb.Plugs.Authenticate do
      behind this plug gates per action and some are deliberately public.
 
   An auth-provider *error* is distinguished from absent credentials and fails
-  closed with 503; it never degrades to unauthenticated.
+  closed with 503; it never degrades to unauthenticated. So does a session
+  of a remote person whose identity could not be confirmed fresh
+  (`:identity_stale`): it answers 503 with that refusal's class and
+  sentence, and the session stands.
 
   Every context this plug assigns carries the origin `programmatic`
   (`Prima.Origin`): the HTTP API and MCP are programmatic surfaces,
@@ -277,6 +280,12 @@ defmodule CyfrWeb.Plugs.Authenticate do
         # from an unknown session. Retryable, so it must not read as "expired".
         {:error, :auth_provider_error}
 
+      {:error, :identity_stale} ->
+        # A remote person's identity could not be confirmed fresh: their
+        # work pauses and the session stands, so it reads as neither
+        # "expired" nor a denial.
+        {:error, :identity_stale}
+
       {:error, :unauthenticated} ->
         # Not a session token this server issued — but not necessarily invalid.
         # A configured auth provider may accept bearer tokens of its own (an
@@ -293,8 +302,8 @@ defmodule CyfrWeb.Plugs.Authenticate do
         {:ok, fresh} ->
           {:ok, fresh}
 
-        {:error, :unavailable} ->
-          {:error, :unavailable}
+        {:error, reason} when reason in [:unavailable, :identity_stale] ->
+          {:error, reason}
 
         # The memo named an athanor the session no longer reaches: this
         # member's copy is stale, and one establish without it resolves
@@ -345,4 +354,9 @@ defmodule CyfrWeb.Plugs.Authenticate do
 
   defp error_response(conn, :ip_not_allowed, errors),
     do: errors.halt(conn, 403, :ip_not_allowed, nil)
+
+  # A paused identity: the refusal's class (`unavailable`) and sentence,
+  # retryable, never a 401 that reads as a dead credential.
+  defp error_response(conn, :identity_stale, errors),
+    do: errors.halt(conn, 503, :identity_stale, nil)
 end

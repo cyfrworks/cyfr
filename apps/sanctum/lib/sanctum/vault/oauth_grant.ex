@@ -143,7 +143,8 @@ defmodule Sanctum.Vault.OAuthGrant do
   grant's actor must still stand where it started the grant, read before
   the exchange and again before anything is written: `{:error,
   :unauthenticated}` when it does not — the presented `state` opens
-  nothing — and `{:error, :unavailable}` when the store cannot say.
+  nothing — and `{:error, :unavailable}` when the store cannot say, or
+  when a remote person's identity cannot be confirmed fresh.
   """
   @spec complete(String.t(), String.t(), String.t()) :: {:ok, map()} | {:error, term()}
   def complete(state, code, redirect_uri) do
@@ -171,10 +172,13 @@ defmodule Sanctum.Vault.OAuthGrant do
   # The grant's actor, re-established: a session that started the grant must
   # still be a live session of a standing person focused on the same athanor;
   # any other holder is held to the rule an athanor-owned channel stands by.
+  # A remote person whose identity could not be confirmed fresh is paused,
+  # not signed out: the callback says to try again, as when the store
+  # cannot answer.
   defp still_standing(%{context: %Context{} = ctx, actor: actor}) do
     case Sanctum.Caller.revalidate_session(ctx) do
       {:ok, %Context{} = fresh} -> same_athanor(fresh, actor)
-      {:error, :unavailable} -> {:error, :unavailable}
+      {:error, reason} when reason in [:unavailable, :identity_stale] -> {:error, :unavailable}
       {:error, _refused} -> {:error, :unauthenticated}
     end
   end
