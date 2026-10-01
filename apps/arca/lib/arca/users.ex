@@ -272,6 +272,154 @@ defmodule Arca.Users do
     |> Arca.Data.project()
   end
 
+  @doc """
+  Link another IdP identity (`attrs`: its `:key`, `:provider`, `:issuer`
+  and `:subject`) to the person `user_id`, in one locking transaction that
+  locks the person's row first and reads them `active`
+  (`:not_active` otherwise, `:not_found` for no such person).
+
+  An identity already the person's is answered `{:ok, %{identity: row,
+  linked: false}}` and writes nothing. One another person holds is
+  `:conflict`. Otherwise the row is written and `opts[:also]` runs after
+  it, inside the transaction, handed `%{identity: row}`; it answers `:ok`
+  or `{:error, reason}`, which rolls the link back with that reason. A
+  link answers `{:ok, %{identity: row, linked: true}}`.
+  """
+  @spec link_identity(Prima.Actor.t(), String.t(), map(), keyword()) ::
+          {:ok, %{identity: map(), linked: boolean()}}
+          | {:error, :conflict | :not_active | :not_found | term()}
+          | refusal()
+  def link_identity(actor, user_id, attrs, opts \\ [])
+
+  def link_identity(%Prima.Actor{scope: :platform}, user_id, attrs, opts)
+      when is_binary(user_id) and user_id != "" and is_map(attrs) and is_list(opts) do
+    also = Keyword.get(opts, :also, fn _linked -> :ok end)
+
+    Arca.Repo.Errors.with_db_rescue("Arca.Users.link_identity", fn ->
+      Arca.Repo.locking_transaction(fn ->
+        with :ok <- active_locked(user_id),
+             {:ok, outcome} <- linked(user_id, attrs) do
+          case outcome do
+            %{linked: false} ->
+              outcome
+
+            %{linked: true, identity: identity} ->
+              case also_ran(also.(%{identity: Arca.Data.project(identity)})) do
+                :ok -> outcome
+                {:error, reason} -> Arca.Repo.rollback(reason)
+              end
+          end
+        else
+          {:error, reason} -> Arca.Repo.rollback(reason)
+        end
+      end)
+    end)
+    |> Arca.Data.project()
+  end
+
+  def link_identity(%Prima.Actor{}, _user_id, _attrs, _opts), do: {:error, :cross_tenant}
+
+  @doc """
+  Unlink the IdP identity `key` from the person `user_id`, in one locking
+  transaction that locks the person's row first and reads them `active`.
+  Only the person's own identity is removed (`:not_found` for one that is
+  not theirs). `opts[:also]` runs after the delete, inside the
+  transaction, handed `%{identity: row, remaining: count}`, the person's
+  identities left; it answers `:ok` or `{:error, reason}`, which restores
+  the identity and refuses with that reason.
+  """
+  @spec unlink_identity(Prima.Actor.t(), String.t(), String.t(), keyword()) ::
+          {:ok, map()} | {:error, :not_active | :not_found | term()} | refusal()
+  def unlink_identity(actor, user_id, key, opts \\ [])
+
+  def unlink_identity(%Prima.Actor{scope: :platform}, user_id, key, opts)
+      when is_binary(user_id) and user_id != "" and is_binary(key) and is_list(opts) do
+    also = Keyword.get(opts, :also, fn _unlinked -> :ok end)
+
+    Arca.Repo.Errors.with_db_rescue("Arca.Users.unlink_identity", fn ->
+      Arca.Repo.locking_transaction(fn ->
+        with :ok <- active_locked(user_id),
+             %ExternalIdentity{} = identity <-
+               Arca.Repo.get_by(ExternalIdentity, key: key, user_id: user_id) ||
+                 {:error, :not_found} do
+          {1, _} = Arca.Repo.delete_all(from(i in ExternalIdentity, where: i.id == ^identity.id))
+
+          remaining =
+            Arca.Repo.one(
+              from(i in ExternalIdentity, where: i.user_id == ^user_id, select: count(i.id))
+            )
+
+          unlinked = %{identity: Arca.Data.project(identity), remaining: remaining}
+
+          case also_ran(also.(unlinked)) do
+            :ok -> unlinked
+            {:error, reason} -> Arca.Repo.rollback(reason)
+          end
+        else
+          {:error, reason} -> Arca.Repo.rollback(reason)
+        end
+      end)
+    end)
+    |> Arca.Data.project()
+  end
+
+  def unlink_identity(%Prima.Actor{}, _user_id, _key, _opts), do: {:error, :cross_tenant}
+
+  # The person's row, locked first as every standing order locks it, and
+  # read active under the lock.
+  defp active_locked(user_id) do
+    from(u in User, where: u.id == ^user_id, select: u.status)
+    |> Arca.QueryHelpers.for_update()
+    |> Arca.Repo.one()
+    |> case do
+      nil -> {:error, :not_found}
+      "active" -> :ok
+      _not_active -> {:error, :not_active}
+    end
+  end
+
+  # The unique key decides: an insert that finds the key taken writes
+  # nothing (`on_conflict: :nothing`, which on PostgreSQL leaves the
+  # transaction usable) and reads whose it is.
+  defp linked(user_id, attrs) do
+    key = attrs[:key]
+
+    case Arca.Repo.get_by(ExternalIdentity, key: key) do
+      %ExternalIdentity{user_id: ^user_id} = identity ->
+        {:ok, %{identity: identity, linked: false}}
+
+      %ExternalIdentity{} ->
+        {:error, :conflict}
+
+      nil ->
+        now = DateTime.utc_now()
+
+        row = %{
+          id: Prima.UUID7.generate_id("ext"),
+          user_id: user_id,
+          key: key,
+          provider: attrs[:provider],
+          issuer: attrs[:issuer],
+          subject: attrs[:subject],
+          first_seen_at: now,
+          last_seen_at: now
+        }
+
+        changeset = ExternalIdentity.changeset(%ExternalIdentity{}, row)
+
+        cond do
+          not changeset.valid? ->
+            {:error, Arca.Data.invalid(changeset)}
+
+          match?({1, _}, Arca.Repo.insert_all(ExternalIdentity, [row], on_conflict: :nothing)) ->
+            {:ok, %{identity: Arca.Repo.get!(ExternalIdentity, row.id), linked: true}}
+
+          true ->
+            {:error, :conflict}
+        end
+    end
+  end
+
   defp also_ran(:ok), do: :ok
   defp also_ran({:error, _reason} = refusal), do: refusal
 

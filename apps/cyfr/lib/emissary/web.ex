@@ -5,8 +5,8 @@ defmodule Emissary.Web do
   @moduledoc """
   Emissary's HTTP adapters' `use` definitions: MCP, the HTTP API and its
   event streams, health, inbound webhooks, the vault's OAuth callback,
-  tinctures' served files and data routes, and the identity directory's
-  endpoints. The device channel
+  tinctures' served files and data routes, the identity directory's
+  endpoints and the restore ingress. The device channel
   (`Emissary.Web.DeviceChannel`) is the socket the endpoint mounts beside
   them.
 
@@ -32,6 +32,7 @@ defmodule Emissary.Web do
       MCPError,
       OAuthCallbackController,
       Plugs.MCPRequestMetadata,
+      RestoreController,
       SessionController,
       TinctureController,
       TinctureDataController,

@@ -21,17 +21,38 @@ defmodule Sanctum.Providers.Person do
   appears, nested kit structures included, so the redaction vocabulary
   (`Prima.Sanitizer`) keeps it out of every log.
 
-  `person.rotate` rotates an enrolled local person's live key
-  (`Sanctum.IdentityFreshness.rotate_live/3`) under the `key_rotation`
-  confirmation, through one durable attempt per `request_id`: a retry
-  under the same id resumes it and generates no second key. It answers
-  the attempt's `request_id`, its `phase` and the new `key_epoch`. Every
-  other action answers `{:error, :not_built}`: none is built yet.
+  What each action answers:
+
+    * `person.enroll` (`Sanctum.Recovery.enroll/3`) — the attempt's
+      `attempt_id`, `request_id`, `phase` and `identifier`, and once the
+      directory accepted it the `kit`, `%{identifier, directory_url,
+      recovery_secret}`, the three lines a restore takes, until the kit is
+      acknowledged. A retry under the same `request_id` resumes the
+      attempt and registers the same genesis.
+    * `person.kit` (`Sanctum.Recovery.kit/2`) — the same `kit` again, under
+      a fresh confirmation, until `person.kit_ack` erases its seed.
+    * `person.kit_ack` (`Sanctum.Recovery.kit_ack/2`) — `attempt_id` and
+      `phase: "completed"`.
+    * `person.enroll_holder` (`Sanctum.Recovery.enroll_holder/3`) — as
+      enroll, the `kit` being the added one's, and the new `key_epoch`.
+    * `person.rotate` (`Sanctum.IdentityFreshness.rotate_live/3`) — the
+      attempt's `request_id`, its `phase` and the new `key_epoch`.
+    * `person.link_door` and `person.unlink_door`
+      (`Sanctum.SignIn.link_door/3`, `unlink_door/2`) — the door linked or
+      unlinked, by its key, provider, issuer and subject.
+    * `person.carry_begin` and `person.carry_complete`
+      (`Sanctum.Carry.begin/3`, `complete/3`) — the pending carry, its
+      envelope, payload and fragment; then its recorded outcome.
+    * `person.certify` — `%{certificate: _}`, a device certificate with an
+      identity subject (`Sanctum.Person.issue_device_cert/4`) for another
+      home, after the `device_pairing` confirmation; this home pairs its
+      own devices through `pairing`.
   """
 
   alias Prima.{Arg, Operation}
-  alias Sanctum.Context
-  alias Sanctum.IdentityFreshness
+  alias Prima.Identity.Encoding
+  alias Sanctum.{Carry, Context, IdentityFreshness, Recovery, SignIn}
+  alias Sanctum.Consent.Authz
   alias Sanctum.Providers.Assertion
 
   @doc false
@@ -229,10 +250,54 @@ defmodule Sanctum.Providers.Person do
         description: "The enrollment or added-kit attempt whose kit this is (kit, kit_ack)"
       )
 
-  @actions ~w(enroll kit kit_ack link_door unlink_door enroll_holder carry_begin
-              carry_complete certify)
-
   def handle(%Context{} = ctx, %{"action" => "assert"} = args), do: Assertion.handle(ctx, args)
+
+  def handle(%Context{} = ctx, %{"action" => "enroll"} = args),
+    do: answer(Recovery.enroll(ctx, args))
+
+  def handle(%Context{} = ctx, %{"action" => "kit", "attempt_id" => id}) when is_binary(id),
+    do: answer(Recovery.kit(ctx, id))
+
+  def handle(%Context{} = ctx, %{"action" => "kit_ack", "attempt_id" => id}) when is_binary(id),
+    do: answer(Recovery.kit_ack(ctx, id))
+
+  def handle(%Context{}, %{"action" => action}) when action in ["kit", "kit_ack"],
+    do: {:error, {:invalid_argument, "#{action} needs the kit's attempt_id"}}
+
+  def handle(%Context{} = ctx, %{"action" => "enroll_holder"} = args),
+    do: answer(Recovery.enroll_holder(ctx, args))
+
+  def handle(%Context{} = ctx, %{"action" => "link_door", "provider" => provider, "ticket" => t})
+      when is_binary(provider) and is_binary(t),
+      do: answer(SignIn.link_door(ctx, provider, t))
+
+  def handle(%Context{}, %{"action" => "link_door"}),
+    do: {:error, {:invalid_argument, "link_door needs the door's provider and its ticket"}}
+
+  def handle(%Context{} = ctx, %{"action" => "unlink_door", "door" => door}) when is_binary(door),
+    do: answer(SignIn.unlink_door(ctx, door))
+
+  def handle(%Context{}, %{"action" => "unlink_door"}),
+    do: {:error, {:invalid_argument, "unlink_door needs the door's identity key"}}
+
+  def handle(%Context{} = ctx, %{"action" => "carry_begin", "destination" => destination} = args)
+      when is_binary(destination),
+      do: answer(Carry.begin(ctx, destination, Map.get(args, "operation")))
+
+  def handle(%Context{}, %{"action" => "carry_begin"}),
+    do: {:error, {:invalid_argument, "carry_begin needs the destination home"}}
+
+  def handle(
+        %Context{} = ctx,
+        %{"action" => "carry_complete", "action_id" => action_id, "outcome" => outcome}
+      )
+      when is_binary(action_id) and is_binary(outcome),
+      do: answer(Carry.complete(ctx, action_id, outcome))
+
+  def handle(%Context{}, %{"action" => "carry_complete"}),
+    do: {:error, {:invalid_argument, "carry_complete needs the action_id and its outcome"}}
+
+  def handle(%Context{} = ctx, %{"action" => "certify"} = args), do: answer(certify(ctx, args))
 
   # The live key's rotation (`Sanctum.IdentityFreshness.rotate_live/3`):
   # the `key_rotation` confirmation, one durable attempt per request id,
@@ -252,9 +317,187 @@ defmodule Sanctum.Providers.Person do
   def handle(%Context{}, %{"action" => "rotate"}),
     do: {:error, {:invalid_argument, "rotate needs the attempt's request_id"}}
 
-  def handle(%Context{}, %{"action" => action}) when action in @actions, do: {:error, :not_built}
   def handle(_ctx, %{"action" => action}), do: {:error, {:unknown_action, "person.#{action}"}}
   def handle(_ctx, _args), do: {:error, :action_missing}
+
+  # ---- certify -----------------------------------------------------------------
+
+  # A certificate for another home names the person's identifier and the
+  # `key_epoch` their row holds: the person must be enrolled. A device for
+  # this home pairs through `pairing`, whose certificate is local.
+  defp certify(%Context{user_id: user_id} = ctx, args) when is_binary(user_id) do
+    with {:ok, device_key} <- device_key(args["device_key"]),
+         {:ok, request} <- certify_request(args),
+         :ok <- identity_subject(user_id),
+         change = certify_change(args, request),
+         :ok <- Authz.confirm(ctx, :device_pairing, change),
+         {:ok, cert} <-
+           Sanctum.Person.issue_device_cert(user_id, device_key, request.client_id, %{
+             subject: :identity,
+             audience: request.audience,
+             athanor: request.athanor
+           }) do
+      {:ok, %{certificate: Prima.DeviceCert.encode(cert)}}
+    end
+  end
+
+  defp certify(%Context{}, _args), do: {:error, :not_found}
+
+  # Asked before the proof: a person with no identifier is told to enroll,
+  # and no confirmation is spent on a certificate that cannot be issued.
+  defp identity_subject(user_id) do
+    case Sanctum.Tenancy.Users.identifier(user_id) do
+      {:ok, identifier} when is_binary(identifier) -> :ok
+      {:ok, nil} -> {:error, :not_enrolled}
+      {:error, :not_found} -> {:error, :not_found}
+      {:error, _unanswered} -> {:error, :unavailable}
+    end
+  end
+
+  defp device_key(value) when is_binary(value) do
+    case Encoding.unb64(value, Encoding.key_bytes()) do
+      {:ok, key} -> {:ok, key}
+      :error -> {:error, {:invalid_argument, "The device_key is a 32-byte public key, base64url"}}
+    end
+  end
+
+  defp device_key(_value),
+    do: {:error, {:invalid_argument, "The device_key is a 32-byte public key, base64url"}}
+
+  defp certify_request(%{"audience" => audience, "athanor" => athanor, "client_id" => client_id})
+       when is_binary(audience) and is_binary(athanor) and is_binary(client_id) do
+    cond do
+      not Encoding.home?(audience) ->
+        {:error, {:invalid_argument, "The audience is a home's origin, like https://hub.example"}}
+
+      audience == Sanctum.Person.home() ->
+        {:error,
+         {:invalid_argument,
+          "certify is for another home; a device for this home pairs here through pairing"}}
+
+      true ->
+        {:ok, %{audience: audience, athanor: athanor, client_id: client_id}}
+    end
+  end
+
+  defp certify_request(_args),
+    do: {:error, {:invalid_argument, "certify needs the audience, the athanor and the client_id"}}
+
+  # What confirming a certificate approves: this device key, for this
+  # client at that home and athanor.
+  defp certify_change(args, request) do
+    %{
+      operation: "person.certify",
+      arguments: %{
+        "device_key" => args["device_key"],
+        "audience" => request.audience,
+        "athanor" => request.athanor,
+        "client_id" => request.client_id
+      },
+      resource: "a device at " <> request.audience,
+      details: %{
+        "audience" => request.audience,
+        "athanor" => request.athanor,
+        "client_id" => request.client_id,
+        "effect" =>
+          "Lets a device act for you at that home until its certificate expires or is revoked."
+      }
+    }
+  end
+
+  # ---- answers -----------------------------------------------------------------
+
+  # Each action's own refusals in the one refusal shape every surface
+  # renders (`Prima.Refusal`), each with the sentence its person reads; the
+  # vocabulary's own reasons (a confirmation signal, a standing refusal, a
+  # rate limit) pass as they are.
+  defp answer({:ok, value}), do: {:ok, value}
+  defp answer({:error, reason}), do: {:error, refusal(reason)}
+
+  defp refusal(:no_directory),
+    do:
+      refused(
+        :setup_required,
+        :no_directory,
+        "This home names no identity directory; its operator sets CYFR_DIRECTORY_URL before " <>
+          "anyone enrolls."
+      )
+
+  defp refusal(:already_enrolled),
+    do: {:conflict, "Your identity is enrolled already; add another kit instead."}
+
+  defp refusal(:not_enrolled),
+    do: {:conflict, "This needs an enrolled identity; enroll first."}
+
+  defp refusal(:not_found),
+    do: {:conflict, "Your keys are held at another home; do this there."}
+
+  defp refusal(:enrollment_refused),
+    do: {:conflict, "The directory refused this identity, so you have none yet; enroll again."}
+
+  defp refusal(:holder_refused),
+    do: {:conflict, "The directory refused this kit, so none was added."}
+
+  defp refusal(:kit_acknowledged),
+    do: {:conflict, "You acknowledged saving this kit, so its seed is gone and cannot be shown."}
+
+  defp refusal(:not_accepted),
+    do: {:conflict, "The directory has not accepted this yet; finish it under its request id."}
+
+  defp refusal(:not_a_holder),
+    do:
+      refused(
+        :forbidden,
+        :not_a_holder,
+        "The kit that signs this is not one of your identity's recovery kits now."
+      )
+
+  defp refusal(:already_a_holder),
+    do: {:conflict, "That kit is already one of your identity's recovery kits."}
+
+  defp refusal(:stale_head),
+    do:
+      {:conflict,
+       "Your identity's log has moved past this home's head, so nothing changed. A recovery " <>
+         "may have replaced your keys."}
+
+  defp refusal({:attempt_in_progress, request_id}) when is_binary(request_id),
+    do:
+      {:conflict,
+       "Another change of your identity is in progress; finish it under its request id " <>
+         request_id <> "."}
+
+  defp refusal({:attempt_in_progress, _unknown}),
+    do: {:conflict, "Another change of your identity is in progress; finish it first."}
+
+  defp refusal(:request_id_reused),
+    do: {:conflict, "This request id names another request; use a new one."}
+
+  defp refusal(:directory_unavailable), do: {:unavailable, "Your identity's directory"}
+
+  defp refusal(:wrong_audience),
+    do: {:invalid_argument, "A certificate for this home is a pairing's"}
+
+  defp refusal(:unauthenticated),
+    do: refused(:unauthenticated, :unauthenticated, "Sign in to change your identity.")
+
+  defp refusal(:guest_plane),
+    do:
+      refused(:forbidden, :guest_plane, "A running component cannot change a person's identity.")
+
+  defp refusal({:door, _reason}),
+    do: refused(:forbidden, :door, Sanctum.Door.refusal_message())
+
+  defp refusal({:invalid, _errors}),
+    do: {:invalid_argument, "The change could not be recorded as given"}
+
+  defp refusal({:invalid_field, field}) when is_binary(field),
+    do: {:invalid_argument, "The #{field} is not valid"}
+
+  defp refusal(reason), do: reason
+
+  defp refused(class, reason, message),
+    do: %Prima.Refusal{class: class, reason: reason, message: message}
 
   # A rotation's own refusals, in the refusal table's words. Nothing
   # rotated in any of them; the retryable ones resume under the same

@@ -418,11 +418,10 @@ defmodule Cyfr.Boundaries do
         Sanctum Sanctum.BearerToken Sanctum.Caller Sanctum.ClientIp Sanctum.Consent
         Sanctum.Context Sanctum.DeviceCerts Sanctum.Directory Sanctum.Egress
         Sanctum.ExecutionStanding
-        Sanctum.Network Sanctum.Session Sanctum.TinctureAccess Sanctum.TinctureAuth
-        Sanctum.ToolServerDigest Sanctum.Unauthorized Sanctum.UnauthorizedError
-        Sanctum.Vault.OAuthGrant Sanctum.VaultReader Sanctum.Webhook
+        Sanctum.Network Sanctum.Recovery Sanctum.Session Sanctum.TinctureAccess
+        Sanctum.TinctureAuth Sanctum.ToolServerDigest Sanctum.Unauthorized
+        Sanctum.UnauthorizedError Sanctum.Vault.OAuthGrant Sanctum.VaultReader Sanctum.Webhook
       ),
-      pending_allow: ~w(Sanctum.Recovery),
       reason:
         "the auth fabric's own front door, where a wide roster is the front door doing " <>
           "its job. The MCP transport carries tenancy, reads a server's vault edge, and " <>
@@ -1349,9 +1348,10 @@ defmodule Cyfr.Boundaries do
       take_claim: 2,
       under_claim: 3
     ],
+    "Sanctum.Recovery" => [reproof: 2, restore: 2, restore_challenge: 1],
     "Sanctum.RegistryCredentials" => [delete: 3, get: 3, list: 2, put_push_token: 6],
     "Sanctum.Session" => [cleanup: 0, create: 1, destroy: 1, get: 1],
-    "Sanctum.SignIn" => [admitted: 2, record_namespace: 2, suggested_slug: 2],
+    "Sanctum.SignIn" => [admitted: 2, link_ticket: 2, record_namespace: 2, suggested_slug: 2],
     "Sanctum.Tenancy" => [
       channel_active?: 2,
       continuation: 3,
@@ -1428,19 +1428,17 @@ defmodule Cyfr.Boundaries do
   def sanctum_exports, do: @sanctum_exports
 
   # The Sanctum functions the host will call once the work that calls them
-  # lands, each on a module that exists and holds no function yet: the
-  # restore ingress. A call to one is admitted; one nothing calls yet is
-  # not stale.
-  @pending_sanctum_exports %{
-    "Sanctum.Recovery" => [restore: 2]
-  }
+  # lands, each on a module that exists. A call to one is admitted; one
+  # nothing calls yet is not stale. None is pending now; the roster is kept
+  # as pairs, so its reader stays a map of any module.
+  @pending_sanctum_exports []
 
   @doc """
   The Sanctum functions the host is to call, pending: admitted as
   `sanctum_exports/0`'s are, and never reported stale.
   """
   @spec pending_sanctum_exports() :: %{String.t() => [{atom(), non_neg_integer()}]}
-  def pending_sanctum_exports, do: @pending_sanctum_exports
+  def pending_sanctum_exports, do: Map.new(@pending_sanctum_exports)
 
   @typedoc "A remote function as the compiled scan reads it: module name, function, arity."
   @type reach :: {String.t(), atom(), non_neg_integer()}
@@ -1588,6 +1586,21 @@ defmodule Cyfr.Boundaries do
       why:
         "a directory entry or recovery, signed by a key the identifier's verified chain " <>
           "authorizes and verified against that chain before anything is written; no session"
+    },
+    installation_capability: %{
+      admits: :credential,
+      why:
+        "the restore ingress: the installation capability (`CYFR_RESTORE_TOKEN`) as the " <>
+          "authorization header, checked in constant time before any kit is read, any key " <>
+          "staged or any outbound call made (`Sanctum.Recovery`); no session and no CSRF " <>
+          "token, since no cross-site form sets the header and no CORS answer admits one"
+    },
+    browser_session: %{
+      admits: :session,
+      why:
+        "the browser's own cookie session, established and revalidated in the controller, " <>
+          "with the browser pipeline's CSRF token on the POST; no athanor, since what it " <>
+          "starts (linking a door) is the person's own"
     }
   }
 

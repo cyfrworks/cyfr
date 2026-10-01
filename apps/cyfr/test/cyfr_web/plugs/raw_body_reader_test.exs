@@ -131,6 +131,27 @@ defmodule CyfrWeb.Plugs.RawBodyReaderTest do
       end
     end
 
+    test "caps the restore ingress's bodies the same way, and caches nothing" do
+      body = :binary.copy(<<?x>>, Prima.Identity.max_entry_bytes() + 1)
+
+      for url <- [
+            "/restore",
+            "/restore/challenge",
+            "/restore/reproof",
+            "http://www.example.com//restore"
+          ] do
+        conn = build_conn(:post, url, body)
+
+        assert {:more, chunk, conn} = RawBodyReader.read_body(conn, length: 28_000_000)
+        assert byte_size(chunk) == Prima.Identity.max_entry_bytes()
+        refute Map.has_key?(conn.assigns, :raw_body)
+      end
+
+      # A path that merely begins with the word is not the ingress.
+      conn = build_conn(:post, "/restored", body)
+      assert {:ok, ^body, _conn} = RawBodyReader.read_body(conn, length: 28_000_000)
+    end
+
     test "never raises a smaller cap set upstream" do
       conn = build_conn(:post, "/directory/v1/per_x/recover", :binary.copy(<<?x>>, 200))
 

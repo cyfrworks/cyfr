@@ -3,10 +3,11 @@
 
 defmodule Sanctum.DoorPlacementTest do
   @moduledoc """
-  A session is minted at exactly three places, and each sits behind the
-  door. Reads the sources rather than the behaviour: a new
-  `Session.create/1` caller that forgot the door would pass every
-  behavioural test on the paths that remembered it.
+  A session is minted at exactly four places: three sit behind the door,
+  and the restore ingress behind the installation capability, since no
+  door admits a person who does not exist yet. Reads the sources rather
+  than the behaviour: a new `Session.create/1` caller that forgot the door
+  would pass every behavioural test on the paths that remembered it.
   """
   use ExUnit.Case, async: true
 
@@ -19,8 +20,14 @@ defmodule Sanctum.DoorPlacementTest do
   # browser flows mint through the shared sign-in responder.
   @device_flow "apps/sanctum/lib/sanctum/auth/device_flow.ex"
   @passkeys "apps/sanctum/lib/sanctum/passkeys.ex"
+  @recovery "apps/sanctum/lib/sanctum/recovery.ex"
   @browser_callback "apps/cyfr/lib/prism_web/controllers/auth_controller.ex"
-  @minters ["apps/cyfr/lib/cyfr_web/sign_in_response.ex", @device_flow, @passkeys]
+  @minters [
+    "apps/cyfr/lib/cyfr_web/sign_in_response.ex",
+    @device_flow,
+    @passkeys,
+    @recovery
+  ]
 
   defp lib_files do
     for dir <- Prima.Test.SourceTree.app_libs(@root),
@@ -49,6 +56,15 @@ defmodule Sanctum.DoorPlacementTest do
     # no passkey either.
     assert Prima.Test.SourceTree.read(Path.join(@root, @passkeys)) =~ "Door.admit(",
            "#{@passkeys} mints sessions without asking the door"
+
+    # The restore mints the first person of an empty node, whom no door can
+    # have admitted: it checks the installation capability instead, and
+    # mints only the reserved `restore` provider's session, which the
+    # session store holds to the restore attempt that minted the person.
+    recovery = Prima.Test.SourceTree.read(Path.join(@root, @recovery))
+    assert recovery =~ "Application.get_env(:sanctum, :restore_token)"
+    assert recovery =~ "Plug.Crypto.secure_compare("
+    assert recovery =~ "Sanctum.Session.create(ctx, restore: attempt.id)"
 
     # The responder mints only when a flow hands it `session: {:mint, ctx}`;
     # the one producer of that option must be the browser callback, and the

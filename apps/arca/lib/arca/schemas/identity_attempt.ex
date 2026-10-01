@@ -4,9 +4,10 @@
 defmodule Arca.Schemas.IdentityAttempt do
   @moduledoc """
   Ecto schema for the `identity_attempts` table (backs
-  `Arca.IdentityAttempts`): one enrollment, restore or rotation attempt,
-  keyed by its request id, with the immutable submission it makes, the
-  sealed material it stages and the phase it has reached.
+  `Arca.IdentityAttempts`): one enrollment, added-kit (`holder`), restore
+  or rotation attempt, keyed by its request id, with the immutable
+  submission it makes, the sealed material it stages and the phase it has
+  reached.
   """
 
   use Ecto.Schema
@@ -15,7 +16,7 @@ defmodule Arca.Schemas.IdentityAttempt do
 
   @type t :: %__MODULE__{}
 
-  @kinds ~w(enrollment restore rotation)
+  @kinds ~w(enrollment holder restore rotation)
   @phases ~w(staged submitted accepted refused superseded keys_active minted completed)
 
   @doc "The kinds of attempt."

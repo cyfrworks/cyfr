@@ -20,9 +20,25 @@ defmodule PrismWeb.AuthController do
   - `GET /auth/device/complete/:ticket` - Sets the cookie after device flow
   - `GET /auth/post-legal-accept` - Re-probes after policy acceptance
   - `POST /auth/logout` - Browser sign-out (cookie session, forgery-guarded)
+  - `POST /auth/link/oidcc` - Begins linking an OpenID Connect door to the
+    person signed in
 
   An API caller's sign-out and session read, by bearer token, are the
   HTTP API's, not the browser's.
+
+  ## Linking a door
+
+  `POST /auth/link/oidcc`, under the browser's session and its forgery
+  token, holds a link intent in the cookie session (the person, their
+  session's token hash and a return path `CyfrWeb.SafeRedirect.link_return/1`
+  admits) for ten minutes and starts the issuer's sign-in. The callback
+  that finds the intent signs no one in: it takes the intent, holds the
+  issuer's identity to the session that asked, still standing, and hands
+  it to `Sanctum.SignIn.link_ticket/2`, which asks the door. The ticket
+  goes into the cookie session under `link_ticket_key/0`, as
+  `%{"provider" => "oidcc", "ticket" => ticket}`, never into a URL, and
+  the browser returns to the page that asked, which presents it to
+  `person.link_door`.
   """
 
   use PrismWeb, :controller
@@ -33,6 +49,45 @@ defmodule PrismWeb.AuthController do
 
   alias CyfrWeb.SignInResponse
   alias Sanctum.Session
+
+  @link_intent "cyfr_link_intent"
+  @link_ticket "cyfr_link_ticket"
+  @link_intent_ms 600_000
+
+  @doc """
+  The cookie session key the link ticket an OpenID Connect sign-in minted
+  is held under, as `%{"provider" => "oidcc", "ticket" => ticket}`: what
+  the page that started the link reads and presents to `person.link_door`.
+  """
+  @spec link_ticket_key() :: String.t()
+  def link_ticket_key, do: @link_ticket
+
+  @doc """
+  Begin linking an OpenID Connect door to the person this browser's
+  session names (the module doc): `POST /auth/link/oidcc`, `return_to`
+  being the settings page to come back to.
+  """
+  def link_start(conn, params) do
+    case standing_session(conn) do
+      {:ok, ctx} ->
+        intent = %{
+          "user_id" => ctx.user_id,
+          "session" => Base.url_encode64(ctx.session_token_hash, padding: false),
+          "return_to" => CyfrWeb.SafeRedirect.link_return(params["return_to"]),
+          "expires_at" => System.system_time(:millisecond) + @link_intent_ms
+        }
+
+        conn
+        |> delete_session(@link_ticket)
+        |> put_session(@link_intent, intent)
+        |> redirect(to: "/auth/oidcc")
+
+      {:error, _no_session} ->
+        conn
+        |> SignInResponse.put_flash_if_available(:error, "Sign in, then link the door again.")
+        |> redirect(to: "/login")
+    end
+  end
 
   @doc """
   Answers a sign-in start for a provider this server does not configure.
@@ -140,8 +195,149 @@ defmodule PrismWeb.AuthController do
     claim)
   - a membership read failed while minting → no session, a page saying so
   - refused at the door → 403 page, no session, no cyfr.run call
+
+  A callback that finds a link intent in the cookie session links a door
+  instead and signs no one in (the module doc).
   """
   def callback(%{assigns: %{ueberauth_auth: auth}} = conn, _params) do
+    case take_link_intent(conn) do
+      {conn, nil} -> sign_in(conn, auth)
+      {conn, intent} -> link(conn, auth, intent)
+    end
+  end
+
+  def callback(%{assigns: %{ueberauth_failure: failure}} = conn, _params) do
+    {conn, _intent} = take_link_intent(conn)
+
+    CyfrWeb.MinimalPage.send_page(
+      conn,
+      401,
+      "Sign-in failed",
+      "<p>#{CyfrWeb.MinimalPage.h(failure_message(failure))}</p>" <>
+        "<p><a href=\"/login\">Try again</a></p>"
+    )
+  end
+
+  def callback(conn, _params) do
+    CyfrWeb.MinimalPage.send_page(
+      conn,
+      400,
+      "Invalid sign-in callback",
+      "<p>The sign-in callback carried no auth or failure information.</p>" <>
+        "<p><a href=\"/login\">Try again</a></p>"
+    )
+  end
+
+  # Link mode: the issuer's identity, held to the session that asked and
+  # still standing, becomes a link ticket the door admitted. No person is
+  # minted and no session issued.
+  defp link(conn, auth, intent) do
+    with {:ok, identity_ctx} <- authenticate_with_provider(auth),
+         {:ok, standing} <- standing_session(conn, intent),
+         {:ok, ticket} <-
+           Sanctum.SignIn.link_ticket(standing, %{
+             key: identity_ctx.user_id,
+             provider: to_string(Map.get(auth, :provider)),
+             email: identity_ctx.email,
+             verified: verified_claim(auth, identity_ctx.email)
+           }) do
+      conn
+      |> put_session(@link_ticket, %{"provider" => "oidcc", "ticket" => ticket})
+      |> redirect(to: intent["return_to"])
+    else
+      {:error, {:door, _reason}} ->
+        CyfrWeb.MinimalPage.send_page(
+          conn,
+          403,
+          "Not allowed on this server",
+          "<p>#{CyfrWeb.MinimalPage.h(Sanctum.Door.refusal_message())}</p>"
+        )
+
+      {:error, :unavailable} ->
+        CyfrWeb.MinimalPage.send_page(
+          conn,
+          503,
+          "Temporarily unavailable",
+          "<p>The door could not be linked just now. Try again shortly.</p>"
+        )
+
+      {:error, _refused} ->
+        CyfrWeb.MinimalPage.send_page(
+          conn,
+          401,
+          "The door was not linked",
+          "<p>That sign-in could not be linked to you here. Sign in again and link it " <>
+            "from your settings.</p>"
+        )
+    end
+  end
+
+  # The intent, taken once whatever follows, and only while it is alive.
+  defp take_link_intent(conn) do
+    case get_session(conn, @link_intent) do
+      %{"expires_at" => expires_at} = intent when is_integer(expires_at) ->
+        conn = delete_session(conn, @link_intent)
+
+        if expires_at > System.system_time(:millisecond),
+          do: {conn, intent},
+          else: {conn, %{"expired" => true}}
+
+      nil ->
+        {conn, nil}
+
+      _malformed ->
+        {delete_session(conn, @link_intent), %{"expired" => true}}
+    end
+  rescue
+    # No session fetched (a test drives the action bare): no intent.
+    ArgumentError -> {conn, nil}
+  end
+
+  # The browser's own session, established and read again: a link belongs
+  # to a person who stands, signed in through a stored session.
+  defp standing_session(conn) do
+    token = get_session(conn, SignInResponse.session_key())
+
+    with {:ok, ctx} <- Sanctum.Caller.establish(token, refresh: false),
+         {:ok, %Sanctum.Context{session_token_hash: hash} = ctx} when is_binary(hash) <-
+           Sanctum.Caller.revalidate_session(ctx) do
+      {:ok, ctx}
+    else
+      {:error, reason} -> {:error, reason}
+      _no_session -> {:error, :unauthenticated}
+    end
+  end
+
+  defp standing_session(conn, %{"user_id" => user_id, "session" => session}) do
+    with {:ok, ctx} <- standing_session(conn),
+         true <- ctx.user_id == user_id,
+         true <-
+           Plug.Crypto.secure_compare(
+             Base.url_encode64(ctx.session_token_hash, padding: false),
+             session
+           ) do
+      {:ok, ctx}
+    else
+      {:error, reason} -> {:error, reason}
+      false -> {:error, :another_session}
+    end
+  end
+
+  defp standing_session(_conn, _expired), do: {:error, :expired}
+
+  # What the issuer proved about the email: `true`, `false` or `:unknown`.
+  defp verified_claim(auth, email) do
+    case Sanctum.Auth.EmailVerification.verify_with_claim(
+           Map.get(auth, :provider),
+           email,
+           Map.get(auth, :extra) || %{}
+         ) do
+      {:ok, claim} -> claim
+      {:error, _} -> :unknown
+    end
+  end
+
+  defp sign_in(conn, auth) do
     access_token = extract_access_token(auth)
     provider = auth.provider
 
@@ -198,26 +394,6 @@ defmodule PrismWeb.AuthController do
             "<p><a href=\"/login\">Try again</a></p>"
         )
     end
-  end
-
-  def callback(%{assigns: %{ueberauth_failure: failure}} = conn, _params) do
-    CyfrWeb.MinimalPage.send_page(
-      conn,
-      401,
-      "Sign-in failed",
-      "<p>#{CyfrWeb.MinimalPage.h(failure_message(failure))}</p>" <>
-        "<p><a href=\"/login\">Try again</a></p>"
-    )
-  end
-
-  def callback(conn, _params) do
-    CyfrWeb.MinimalPage.send_page(
-      conn,
-      400,
-      "Invalid sign-in callback",
-      "<p>The sign-in callback carried no auth or failure information.</p>" <>
-        "<p><a href=\"/login\">Try again</a></p>"
-    )
   end
 
   @doc """

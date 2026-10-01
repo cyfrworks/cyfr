@@ -709,6 +709,142 @@ defmodule PrismWeb.AuthControllerTest do
         auth_method: :oidc
       )
 
+  describe "linking an OpenID Connect door" do
+    setup do
+      original = Application.get_env(:sanctum, :auth_provider)
+      Application.put_env(:sanctum, :auth_provider, Sanctum.Test.AltAuthProvider)
+      {:ok, _} = Sanctum.Door.Store.allow("wildcard", "*", "test")
+
+      on_exit(fn ->
+        if original,
+          do: Application.put_env(:sanctum, :auth_provider, original),
+          else: Application.delete_env(:sanctum, :auth_provider)
+      end)
+
+      person = Sanctum.TestContext.issuer!(Sanctum.TestContext.local())
+      {:ok, session} = Sanctum.Session.create(person)
+      {:ok, person: person, session: session}
+    end
+
+    defp link_auth(uid) do
+      %Ueberauth.Auth{
+        uid: uid,
+        provider: :oidcc,
+        info: %Ueberauth.Auth.Info{email: "#{uid}@idp.test", name: "Linked"},
+        credentials: %Ueberauth.Auth.Credentials{token: "t", refresh_token: nil, expires: false},
+        extra: %{}
+      }
+    end
+
+    defp intent(person, session, overrides \\ %{}) do
+      Map.merge(
+        %{
+          "user_id" => person.user_id,
+          "session" =>
+            Base.url_encode64(Sanctum.Session.token_hash(session.token), padding: false),
+          "return_to" => "/a/test/settings",
+          "expires_at" => System.system_time(:millisecond) + 60_000
+        },
+        overrides
+      )
+    end
+
+    defp linked_callback(token, intent, auth) do
+      build_conn()
+      |> Plug.Test.init_test_session(%{
+        sanctum_session_token: token,
+        cyfr_link_intent: intent
+      })
+      |> assign(:ueberauth_auth, auth)
+      |> PrismWeb.AuthController.callback(%{})
+    end
+
+    test "the start holds the intent for the session that asked, and returns only to settings",
+         %{session: session, person: person} do
+      conn =
+        build_conn()
+        |> Plug.Test.init_test_session(%{sanctum_session_token: session.token})
+        |> post("/auth/link/oidcc", %{"return_to" => "/a/test/settings"})
+
+      assert redirected_to(conn) == "/auth/oidcc"
+      held = get_session(conn, "cyfr_link_intent")
+      assert held["user_id"] == person.user_id
+      assert held["return_to"] == "/a/test/settings"
+
+      elsewhere =
+        build_conn()
+        |> Plug.Test.init_test_session(%{sanctum_session_token: session.token})
+        |> post("/auth/link/oidcc", %{"return_to" => "https://evil.example/a/x/settings"})
+
+      assert get_session(elsewhere, "cyfr_link_intent")["return_to"] == "/"
+    end
+
+    test "with no session the start sends the browser to sign in" do
+      conn = post(build_conn(), "/auth/link/oidcc", %{})
+      assert redirected_to(conn) == "/login"
+    end
+
+    test "the callback mints a ticket for the session that asked, and signs no one in",
+         %{session: session, person: person} do
+      uid = "link-#{System.unique_integer([:positive])}"
+      sessions = Arca.Repo.aggregate(Arca.Schemas.Session, :count)
+
+      conn = linked_callback(session.token, intent(person, session), link_auth(uid))
+
+      assert redirected_to(conn) == "/a/test/settings"
+      assert %{"provider" => "oidcc", "ticket" => ticket} = get_session(conn, "cyfr_link_ticket")
+      refute get_session(conn, "cyfr_link_intent")
+      assert get_session(conn, :sanctum_session_token) == session.token
+      refute conn.resp_body =~ ticket
+      assert Arca.Repo.aggregate(Arca.Schemas.Session, :count) == sessions
+
+      key = "oidcc|https://idp.test|#{uid}"
+      assert {:error, :not_found} = Sanctum.Tenancy.Users.get_by_identity(key)
+
+      {:ok, ctx} = Sanctum.Caller.establish(session.token, task_supervisor: nil)
+
+      assert {:ok, %{linked: true}} =
+               Sanctum.TestContext.confirming(
+                 ctx,
+                 &Sanctum.SignIn.link_door(&1, "oidcc", ticket)
+               )
+
+      assert {:ok, %{id: user_id}} = Sanctum.Tenancy.Users.get_by_identity(key)
+      assert user_id == person.user_id
+    end
+
+    test "another session's, an expired or a refused intent links nothing, and signs no one in",
+         %{session: session, person: person} do
+      other =
+        Sanctum.TestContext.issuer!(%{
+          Sanctum.TestContext.local()
+          | user_id: "local|local|other-#{System.unique_integer([:positive])}"
+        })
+
+      {:ok, others} = Sanctum.Session.create(other)
+      uid = "link-#{System.unique_integer([:positive])}"
+
+      for {token, intent} <- [
+            {others.token, intent(person, session)},
+            {session.token, intent(person, session, %{"expires_at" => 0})}
+          ] do
+        conn = linked_callback(token, intent, link_auth(uid))
+        assert conn.status == 401
+        refute get_session(conn, "cyfr_link_ticket")
+        assert get_session(conn, :sanctum_session_token) == token
+      end
+
+      [entry] = Enum.filter(Sanctum.Door.Store.list(), &(&1.kind == "wildcard"))
+      :ok = Sanctum.Door.Store.remove(entry.id)
+      conn = linked_callback(session.token, intent(person, session), link_auth(uid))
+      assert conn.status == 403
+      refute get_session(conn, "cyfr_link_ticket")
+
+      assert {:error, :not_found} =
+               Sanctum.Tenancy.Users.get_by_identity("oidcc|https://idp.test|#{uid}")
+    end
+  end
+
   describe "post_legal_accept/2 — the probe runs only for a session that stands" do
     setup do
       # cyfr.run unreachable, so a probe that does run answers at once.

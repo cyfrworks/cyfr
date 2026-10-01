@@ -147,6 +147,29 @@ defmodule Arca.CarryActionsTest do
       assert {:error, :cross_tenant} =
                CarryActions.open(%Prima.Actor{user_id: "usr_other"}, source(person))
     end
+
+    test "opening ends the person's own expired actions first, releasing their payloads", %{
+      person: person
+    } do
+      other = person!()
+      {:ok, mine} = CarryActions.open(as(person), source(person))
+      {:ok, theirs} = CarryActions.open(as(other), source(other))
+      past = DateTime.add(DateTime.utc_now(), -1, :second)
+
+      {2, _} =
+        Arca.Repo.update_all(from(a in CarryAction, where: a.id in ^[mine.id, theirs.id]),
+          set: [expires_at: past]
+        )
+
+      assert {:ok, _opened} = CarryActions.open(as(person), source(person))
+
+      assert {:ok, %{phase: "expired", payload: nil, retain_until: %DateTime{}}} =
+               CarryActions.get(as(person), mine.id)
+
+      # Another person's expired action waits for the sweep.
+      assert {:ok, %{phase: "pending", payload: payload}} = CarryActions.get(as(other), theirs.id)
+      assert is_binary(payload)
+    end
   end
 
   describe "the challenge and the assertion" do

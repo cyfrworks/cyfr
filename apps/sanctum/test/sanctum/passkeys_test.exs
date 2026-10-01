@@ -294,6 +294,28 @@ defmodule Sanctum.PasskeysTest do
       assert length(Arca.Repo.all(from(p in Passkey, where: p.user_id == ^user.id))) == 2
     end
 
+    test "the last active passkey of a person with no linked door is their way in, and stays" do
+      %{ctx: ctx, user: user} = person!()
+      {auth, first} = registered!(ctx)
+      second = credential(ctx, authenticator())
+
+      Arca.Repo.delete_all(from(i in Arca.Schemas.ExternalIdentity, where: i.user_id == ^user.id))
+
+      # Refused before any proof is asked; the passkey stands.
+      assert {:error, {:conflict, message}} = Passkeys.revoke(ctx, first.id)
+      assert message =~ "only way to sign in"
+      assert message =~ "link a door"
+      assert {:ok, %{state: "active"}} = Arca.Passkeys.get(Prima.Actor.system(), first.id)
+
+      # With another active passkey, the first goes; the other is then the last.
+      assert {:ok, %{passkey: %{id: second_id, state: "active"}}} =
+               confirming(ctx, auth, &Passkeys.register(&1, %{credential: second}))
+
+      assert {:ok, %{state: "revoked"}} = confirming(ctx, auth, &Passkeys.revoke(&1, first.id))
+      assert {:error, {:conflict, _}} = Passkeys.revoke(ctx, second_id)
+      assert {:ok, %{state: "active"}} = Arca.Passkeys.get(Prima.Actor.system(), second_id)
+    end
+
     test "revoking the last passkey never reopens the exception: a recent session waits for the administrator" do
       %{ctx: ctx, user: user, athanor: athanor} = person!()
       {auth, passkey} = registered!(ctx)
@@ -755,6 +777,36 @@ defmodule Sanctum.PasskeysTest do
 
       {:ok, _} = Sanctum.Door.Store.allow("user_id", key, "ops")
       {:ok, _} = Sanctum.Door.Store.deny("email", user.email, "ops")
+      held = Passkeys.sign_in_challenge()
+
+      assert Passkeys.sign_in(held, Authenticator.assertion(auth, held.challenge)) ==
+               {:error, {:door, :denied}}
+    end
+
+    test "a person with no linked door is asked about by their own id, as a restore names them" do
+      # No verified email, so before this rule nothing asked about them at
+      # all once their last door was gone.
+      %{ctx: ctx, user: user} = person!()
+      {auth, _passkey} = registered!(ctx)
+      assert {:ok, %{email_verified: false}} = Sanctum.Tenancy.Users.get(user.id)
+
+      Arca.Repo.delete_all(
+        Ecto.Query.from(i in Arca.Schemas.ExternalIdentity, where: i.user_id == ^user.id)
+      )
+
+      assert {:ok, []} = Arca.Users.identities(Prima.Actor.system(), user.id)
+
+      held = Passkeys.sign_in_challenge()
+
+      assert Passkeys.sign_in(held, Authenticator.assertion(auth, held.challenge)) ==
+               {:error, {:door, :not_allowed}}
+
+      {:ok, _} = Sanctum.Door.Store.allow("user_id", user.id, "restored")
+      held = Passkeys.sign_in_challenge()
+      assert {:ok, _} = Passkeys.sign_in(held, Authenticator.assertion(auth, held.challenge))
+
+      # The operator's deny still wins.
+      {:ok, _} = Sanctum.Door.Store.deny("user_id", user.id, "ops")
       held = Passkeys.sign_in_challenge()
 
       assert Passkeys.sign_in(held, Authenticator.assertion(auth, held.challenge)) ==

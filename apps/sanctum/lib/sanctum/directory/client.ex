@@ -126,6 +126,51 @@ defmodule Sanctum.Directory.Client do
   end
 
   @doc """
+  The genesis of `identifier` at `directory_url`, for a caller that holds
+  only the identifier and the directory it was given (a printed kit's two
+  lines), never a genesis to locate it by: the log's first entry, read
+  from that directory, held to the identifier with
+  `Prima.Identity.locate/2` and required to name `directory_url` as its own
+  directory (`:directory_mismatch` otherwise). Answers the genesis's JCS
+  bytes, the locator every other function here takes. A malformed
+  identifier or directory makes no request (`:invalid_locator`).
+  """
+  @spec genesis(String.t(), String.t(), opts()) :: {:ok, binary()} | {:error, reason()}
+  def genesis(identifier, directory_url, opts \\ [])
+
+  def genesis(identifier, directory_url, opts)
+      when is_binary(identifier) and is_binary(directory_url) do
+    opts = options!(opts)
+
+    with true <- Encoding.identifier?(identifier) and Encoding.directory_url?(directory_url),
+         {:ok, base, origin} <- target(directory_url) do
+      ctx = %{
+        identifier: identifier,
+        base: base,
+        origin: origin,
+        transport: transport(opts),
+        deadline: now() + @operation_ms
+      }
+
+      with {:ok, body} <- call(ctx, :get, "/#{identifier}?after=-1", nil),
+           {:ok, %{entries: [first | _]}} <- page(body, identifier, -1),
+           {:ok, located} <- Identity.locate(first, identifier) do
+        if located.directory == directory_url,
+          do: {:ok, Identity.canonical(located)},
+          else: {:error, :directory_mismatch}
+      else
+        {:ok, %{entries: []}} -> {:error, :invalid_page}
+        {:error, _reason} = refusal -> refusal
+      end
+    else
+      false -> {:error, :invalid_locator}
+      {:error, _reason} = refusal -> refusal
+    end
+  end
+
+  def genesis(_identifier, _directory_url, _opts), do: {:error, :invalid_locator}
+
+  @doc """
   Resolve `identifier` at the directory its genesis names, verify the whole
   log, and cache its head. Answers the verified state, the cached head's
   row and what an advance retired.

@@ -63,9 +63,10 @@ defmodule Sanctum.Passkeys do
 
   `sign_in_challenge/0` and `sign_in/2` are the passkey door: an active
   passkey of an active local person, whose linked door identities or
-  verified email still pass `Sanctum.Door.admit/3`, mints a session with
-  provider `passkey`. The sign-in page holds the challenge and answers it
-  once.
+  verified email still pass `Sanctum.Door.admit/3` (or, for a person with
+  no linked door, their own id, as a restore's door entry names it),
+  mints a session with provider `passkey`. The sign-in page holds the
+  challenge and answers it once.
   """
 
   alias Prima.Identity.Encoding
@@ -794,7 +795,11 @@ defmodule Sanctum.Passkeys do
 
   # The door, asked for every door identity the person holds and for
   # their verified email: one admission suffices, a store that cannot
-  # answer admits nothing.
+  # answer admits nothing. A person who holds no door identity (a restored
+  # person before they link one, or one who unlinked their last door while
+  # holding a passkey) is asked about by their own id
+  # (`Sanctum.Door.admit_person/1`), as the door's reconciliation asks
+  # about them and as unlinking a last door checks first.
   defp door(user) do
     verified =
       case user[:email_verified] do
@@ -803,12 +808,18 @@ defmodule Sanctum.Passkeys do
       end
 
     with {:ok, identities} <- door_identities(user.id) do
-      asks =
-        Enum.map(identities, &{&1.key, user[:email], verified}) ++
-          if(verified == true, do: [{user.id, user[:email], true}], else: [])
-
       verdicts =
-        Enum.map(asks, fn {key, email, claim} -> Sanctum.Door.admit(key, email, claim) end)
+        case identities do
+          [] ->
+            [Sanctum.Door.admit_person(user)]
+
+          identities ->
+            asks =
+              Enum.map(identities, &{&1.key, user[:email], verified}) ++
+                if(verified == true, do: [{user.id, user[:email], true}], else: [])
+
+            Enum.map(asks, fn {key, email, claim} -> Sanctum.Door.admit(key, email, claim) end)
+        end
 
       cond do
         Enum.any?(verdicts, &match?({:ok, _admitted}, &1)) -> :ok
@@ -869,24 +880,64 @@ defmodule Sanctum.Passkeys do
   Revoke the context person's passkey `passkey_id`: a sensitive change
   (`passkey_registration`), its confirmation consumed at once, then the
   credential revoked with the open confirmations it proved voided in one
-  transaction (`Arca.Passkeys.revoke/2`). The first-method mark stays:
-  revoking the last passkey never reopens the exception.
+  transaction (`Arca.Passkeys.revoke/3`), under the person's lock. The
+  first-method mark stays: revoking the last passkey never reopens the
+  exception.
+
+  The last active passkey here of a person with no linked door is their
+  only way in, so revoking it is refused (`{:conflict, _}`), before the
+  confirmation is asked and again under the lock, where an unlinking of
+  their last door serializes with it (`Sanctum.SignIn.unlink_door/2`).
   """
   @spec revoke(Context.t(), String.t()) :: {:ok, listed()} | {:error, term()}
   def revoke(%Context{} = ctx, passkey_id) when is_binary(passkey_id) do
     with {:ok, user_id} <- registrant(ctx),
          {:ok, passkey} <- own(ctx, user_id, passkey_id),
+         :ok <- leaves_a_way_in(ctx, user_id, passkey, passkey.state),
          :ok <-
            Authz.confirm(ctx, :passkey_registration, %{
              operation: "passkey.revoke",
              arguments: %{"passkey_id" => passkey_id},
              resource: passkey.label || "passkey " <> String.slice(passkey.credential_id, 0, 16)
            }) do
-      case Arca.Passkeys.revoke(Context.actor(ctx), passkey_id) do
+      also = fn %{passkey: revoked, was: was} -> leaves_a_way_in(ctx, user_id, revoked, was) end
+
+      case Arca.Passkeys.revoke(Context.actor(ctx), passkey_id, also: also) do
         {:ok, %{passkey: row}} -> {:ok, listed(row)}
-        {:error, :database_error} -> {:error, :unavailable}
+        {:error, {:conflict, _sentence} = refusal} -> {:error, refusal}
+        {:error, reason} when reason in [:database_error, :unavailable] -> {:error, :unavailable}
         {:error, _gone} -> {:error, {:not_found, "passkey", passkey_id}}
       end
+    end
+  end
+
+  # Revoking `passkey`, which stood `was`, leaves the person a way to sign
+  # in here: a linked door, or another active passkey at this RP ID. Only
+  # an active passkey here was a way in, so revoking a pending one, or one
+  # pinned elsewhere, takes none away.
+  defp leaves_a_way_in(ctx, user_id, passkey, "active") do
+    if passkey.rp_id == rp_id() do
+      with {:ok, []} <- door_identities(user_id),
+           {:ok, []} <- other_active(ctx, user_id, passkey.id) do
+        {:error,
+         {:conflict,
+          "This passkey is your only way to sign in here; link a door or register another " <>
+            "passkey before you revoke it"}}
+      else
+        {:ok, [_ | _]} -> :ok
+        {:error, :unavailable} -> {:error, :unavailable}
+      end
+    else
+      :ok
+    end
+  end
+
+  defp leaves_a_way_in(_ctx, _user_id, _passkey, _was), do: :ok
+
+  defp other_active(ctx, user_id, passkey_id) do
+    case Arca.Passkeys.list(Context.actor(ctx), user_id, state: :active) do
+      {:ok, rows} -> {:ok, Enum.filter(rows, &(&1.id != passkey_id and &1.rp_id == rp_id()))}
+      {:error, _unanswered} -> {:error, :unavailable}
     end
   end
 

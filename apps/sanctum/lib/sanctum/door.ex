@@ -106,6 +106,19 @@ defmodule Sanctum.Door do
   defp admits({:error, :unavailable}), do: {:error, :unavailable}
 
   @doc """
+  `admit/3` for a person asked about without a door identity: by their
+  own id, with the email and verified claim their row holds. Whatever
+  admits them is an entry naming that id, an email entry for an address
+  their row holds verified, `*`, or the operator list; an entry naming
+  only an identity they no longer hold does not. The passkey door asks
+  this of a person with no linked door, so a person's last door is
+  unlinked only while it admits them (`Sanctum.SignIn.unlink_door/2`).
+  """
+  @spec admit_person(%{required(:id) => String.t(), optional(atom()) => term()}) :: verdict()
+  def admit_person(%{id: user_id} = user) when is_binary(user_id),
+    do: admit(user_id, user[:email], verified_claim(user))
+
+  @doc """
   `admit/3` for an auth provider: takes the extracted user info (`email`,
   `verified`), audits a refusal and returns it as `{:error, {:door, reason}}`
   so it can travel through the provider's `authenticate/1` contract.
@@ -173,13 +186,11 @@ defmodule Sanctum.Door do
   # The door judges an IdP identity, so a person is asked about by each of
   # theirs and stays admitted while any one of them is.
   defp eject_if_refused(user) do
-    keys =
+    verdicts =
       case Sanctum.Tenancy.Users.identities(user.id) do
-        [] -> [user.id]
-        identities -> Enum.map(identities, & &1.key)
+        [] -> [admit_person(user)]
+        identities -> Enum.map(identities, &admit(&1.key, user.email, verified_claim(user)))
       end
-
-    verdicts = Enum.map(keys, &admit(&1, user.email, verified_claim(user)))
 
     cond do
       Enum.any?(verdicts, &match?({:ok, _}, &1)) ->

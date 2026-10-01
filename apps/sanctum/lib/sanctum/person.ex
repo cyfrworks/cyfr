@@ -4,8 +4,9 @@
 defmodule Sanctum.Person do
   @moduledoc """
   A person's online keys at their home: the live key, which signs device
-  certificates and person assertions for doors, and the operational key,
-  which signs the rotations that replace the live key and nothing else.
+  certificates, person assertions for doors and the envelopes of their
+  sign-in carries, and the operational key, which signs their log's
+  genesis and the rotations that replace the live key and nothing else.
 
   ## Where the keys are
 
@@ -42,7 +43,9 @@ defmodule Sanctum.Person do
     * `:not_found` — the person has no local key set: no identity row, or
       a remote person, whose keys live at another home.
     * `:not_enrolled` — the request needs an identifier and the person has
-      none yet.
+      none yet; `:already_enrolled`, a genesis for a person who has one.
+    * `:stale_key_epoch` — an envelope naming a head the person's row no
+      longer holds.
     * `:wrong_audience` — a local-subject certificate for another home.
     * `:unavailable` — the keys cannot be opened: the store or the keyring
       cannot answer, or a sealed key does not open as its role.
@@ -243,6 +246,82 @@ defmodule Sanctum.Person do
        }}
     end
   end
+
+  @doc """
+  The genesis entry of the person's identity log, and write nothing: their
+  live and operational public keys, the recovery set `recovery_keys`
+  (raw public keys) and the directory `directory` that will order it
+  (`Prima.Identity.Entry.genesis/1`), signed by their operational key.
+
+  Answers the genesis's JCS bytes (what enrollment stores and registers),
+  the identifier they hash to and the entry's hash, its `key_epoch`. The
+  same keys, set and directory sign to the same bytes, since Ed25519
+  signing is deterministic.
+
+  Refusals: `:not_found` (no local key set), `:already_enrolled` (the
+  person has an identifier), `:unavailable` (the operational key cannot
+  be opened), and a malformed set or directory as
+  `Prima.Identity.Entry.genesis/1` refuses it.
+  """
+  @spec sign_genesis(String.t(), [binary()], String.t()) ::
+          {:ok, %{genesis: binary(), identifier: String.t(), genesis_hash: String.t()}}
+          | {:error,
+             :not_found | :already_enrolled | :unavailable | Prima.Identity.Encoding.reason()}
+  def sign_genesis(user_id, recovery_keys, directory)
+      when is_binary(user_id) and is_list(recovery_keys) and is_binary(directory) do
+    with {:ok, row} <- key_set(user_id),
+         :ok <- unenrolled(row),
+         {:ok, unsigned} <-
+           Entry.genesis(
+             live_key: row.live_public_key,
+             operational_key: row.operational_public_key,
+             recovery_keys: recovery_keys,
+             directory: directory
+           ),
+         {:ok, genesis} <-
+           with_key(row, :operational, fn operational ->
+             {:ok, Identity.sign(unsigned, operational)}
+           end) do
+      {:ok,
+       %{
+         genesis: Identity.canonical(genesis),
+         identifier: Identity.identifier(genesis),
+         genesis_hash: Identity.hash(genesis)
+       }}
+    end
+  end
+
+  @doc """
+  Sign a sign-in carry's envelope (`Prima.Carry.Envelope`) with the
+  person's live key. The envelope must name the person's identifier and
+  the `key_epoch` their identity row holds now, the head every remote home
+  verifies it against.
+
+  Refusals: `:not_found`, `:not_enrolled`, `:stale_key_epoch` (an
+  envelope naming another identifier or an older head), `:unavailable`
+  (the live key cannot be opened).
+  """
+  @spec sign_envelope(String.t(), Prima.Carry.Envelope.t()) ::
+          {:ok, Prima.Carry.Envelope.t()}
+          | {:error, :not_found | :not_enrolled | :stale_key_epoch | :unavailable}
+  def sign_envelope(user_id, %Prima.Carry.Envelope{} = envelope) when is_binary(user_id) do
+    with {:ok, row} <- key_set(user_id),
+         {:ok, row} <- enrolled(row),
+         :ok <- current(envelope, row) do
+      with_key(row, :live, fn live -> {:ok, Prima.Carry.Envelope.sign(envelope, live)} end)
+    end
+  end
+
+  defp current(%Prima.Carry.Envelope{identifier: identifier, key_epoch: epoch}, %{
+         identifier: identifier,
+         head_hash: epoch
+       }),
+       do: :ok
+
+  defp current(_envelope, _row), do: {:error, :stale_key_epoch}
+
+  defp unenrolled(%{identifier: nil}), do: :ok
+  defp unenrolled(_row), do: {:error, :already_enrolled}
 
   @doc """
   A person assertion for the CYFR door: the live key vouching to

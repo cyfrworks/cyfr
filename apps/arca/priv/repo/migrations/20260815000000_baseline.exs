@@ -522,7 +522,7 @@ defmodule Arca.Repo.Migrations.Baseline do
     create unique_index(:person_identities, [:identifier], where: "identifier IS NOT NULL")
 
     attempt_checks = [
-      known("identity_attempts_kind_known", "kind", ~w(enrollment restore rotation)),
+      known("identity_attempts_kind_known", "kind", ~w(enrollment holder restore rotation)),
       known(
         "identity_attempts_phase_known",
         "phase",
@@ -530,12 +530,12 @@ defmodule Arca.Repo.Migrations.Baseline do
       )
     ]
 
-    # Enrollment, restore and rotation attempts, keyed by their request id,
-    # each advanced through its phases by conditional writes so a killed
-    # attempt resumes from the phase it reached. The submission is
-    # immutable: the genesis bytes, or the entry or recover request bytes,
-    # and their digest. Staged keys and a pending kit seed are sealed; a
-    # restore names the installation token digest it claimed.
+    # Enrollment, added-kit (`holder`), restore and rotation attempts, keyed
+    # by their request id, each advanced through its phases by conditional
+    # writes so a killed attempt resumes from the phase it reached. The
+    # submission is immutable: the genesis bytes, or the entry or recover
+    # request bytes, and their digest. Staged keys and a pending kit seed
+    # are sealed; a restore names the installation token digest it claimed.
     create table(:identity_attempts, primary_key: false) do
       add :id, :string, primary_key: true
       add :kind, :string, null: false, check: if(sqlite?, do: Enum.at(attempt_checks, 0))

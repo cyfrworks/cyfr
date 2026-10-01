@@ -294,6 +294,59 @@ defmodule Sanctum.Auth.DeviceFlow do
     end
   end
 
+  @doc """
+  Poll a device flow begun to link a door for the person signed in on
+  `ctx`, instead of signing anyone in: once the provider authorizes, the
+  identity it names is handed to `Sanctum.SignIn.link_ticket/2`, which asks
+  the door and binds a single-use link ticket to that person and session.
+  No person is minted and no session is created; the ticket is answered
+  to the page that polled, which presents it to `person.link_door`.
+
+  Returns `{:ok, %{status: "pending"}}`, `{:ok, %{status: "complete",
+  provider:, ticket:}}`, `{:ok, %{status: "expired" | "denied"}}`, or a
+  refusal: the poll's own, and `link_ticket/2`'s (`:unauthenticated`,
+  `:not_linkable`, `{:door, reason}`, `:unavailable`). The budget is the
+  sign-in poll's.
+  """
+  @spec poll_for_link(provider(), String.t(), String.t() | nil, Context.t()) ::
+          {:ok, map()} | {:error, term()}
+  def poll_for_link(provider, device_code, client_ip, %Context{} = ctx) do
+    with :ok <- check_poll_budget(device_code, client_ip),
+         {:ok, provider, client_id} <- usable(provider) do
+      case request_token(provider, client_id, device_code) do
+        {:ok, tokens} ->
+          with {:ok, user_info} <- fetch_user_info(provider, tokens),
+               {:ok, ticket} <-
+                 Sanctum.SignIn.link_ticket(ctx, %{
+                   key: Identity.builtin_key(provider, user_info.id),
+                   provider: Atom.to_string(provider),
+                   email: user_info.email,
+                   verified: user_info.verified
+                 }) do
+            {:ok, %{status: "complete", provider: Atom.to_string(provider), ticket: ticket}}
+          end
+
+        {:error, :authorization_pending} ->
+          {:ok, %{status: "pending"}}
+
+        {:error, :slow_down} ->
+          {:ok, %{status: "pending", slow_down: true}}
+
+        {:error, :expired_token} ->
+          {:ok, %{status: "expired"}}
+
+        {:error, :access_denied} ->
+          {:ok, %{status: "denied"}}
+
+        {:error, reason} ->
+          {:error, reason}
+      end
+    else
+      {:budget, :slow_down} -> {:ok, %{status: "pending", slow_down: true}}
+      {:error, reason} -> {:error, reason}
+    end
+  end
+
   # Both poll surfaces are anonymous, and every poll POSTs to the IdP
   # with THIS server's client id — unbudgeted, an abuser could spend the
   # client id's reputation at the provider. Three buckets, narrowest

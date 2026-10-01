@@ -10,7 +10,12 @@ defmodule Grimoire.RequestLogTest do
   """
   use ExUnit.Case, async: false
 
+  import Phoenix.ConnTest, only: [get: 2]
+  import Phoenix.LiveViewTest, only: [live: 2, render_hook: 3]
+
   alias Grimoire.{Decisions, RequestLog}
+
+  @endpoint CyfrWeb.Endpoint
   alias Prima.{Decision, UUID7}
 
   setup do
@@ -326,6 +331,123 @@ defmodule Grimoire.RequestLogTest do
 
       [%{"text" => text}] = decode_json(output)["content"]
       assert text == "all services healthy"
+    end
+  end
+
+  describe "an identity's recovery material" do
+    # A printed kit's seed, as the enrollment form draws it and the kit
+    # answers it: the field is `recovery_secret` wherever it appears.
+    defp seed, do: Prima.Identity.Encoding.b64(:crypto.strong_rand_bytes(32))
+
+    test "the enrollment's input is stored with every seed redacted", %{ctx: ctx} do
+      decision = decision(ctx, tool: "person", action: "enroll_holder")
+      signing = seed()
+      added = seed()
+
+      :ok =
+        Decisions.open(ctx, decision, %{
+          input: %{
+            "action" => "enroll_holder",
+            "recovery_secret" => signing,
+            "holder" => %{"kind" => "kit", "recovery_secret" => added},
+            "request_id" => "req_kit"
+          }
+        })
+
+      stored = row(decision.call_id).input
+      refute stored =~ signing
+      refute stored =~ added
+
+      input = decode_json(stored)
+      assert input["recovery_secret"] == "[REDACTED]"
+      assert input["holder"] == %{"kind" => "kit", "recovery_secret" => "[REDACTED]"}
+      assert input["request_id"] == "req_kit"
+    end
+
+    test "the kit answered is stored redacted, in the MCP text block and the structured content",
+         %{ctx: ctx} do
+      secret = seed()
+      identifier = "per_" <> String.duplicate("d", 64)
+
+      # What `person.enroll` answers, as the MCP router encodes a result:
+      # the JSON text of the structured value, and the value itself.
+      answer = %{
+        attempt_id: "iat_x",
+        phase: "accepted",
+        identifier: identifier,
+        kit: %{
+          identifier: identifier,
+          directory_url: "https://dir.example",
+          recovery_secret: secret
+        }
+      }
+
+      output =
+        closed_output(ctx, %{
+          "content" => [%{"type" => "text", "text" => Jason.encode!(answer)}],
+          "structuredContent" => Jason.decode!(Jason.encode!(answer)),
+          "isError" => false
+        })
+
+      refute output =~ secret
+      [%{"text" => text}] = decode_json(output)["content"]
+      inner = Jason.decode!(text)
+      assert inner["kit"]["recovery_secret"] == "[REDACTED]"
+      assert inner["kit"]["identifier"] == identifier
+      assert inner["kit"]["directory_url"] == "https://dir.example"
+
+      structured = decode_json(output)["structuredContent"]
+      assert structured["kit"]["recovery_secret"] == "[REDACTED]"
+      assert structured["identifier"] == identifier
+    end
+
+    test "the ingress and the console log neither a seed nor the installation token" do
+      previous = Logger.level()
+      token = String.duplicate("8d", 32)
+      restore_token = Application.fetch_env(:sanctum, :restore_token)
+      Logger.configure(level: :debug)
+      Application.put_env(:sanctum, :restore_token, token)
+
+      on_exit(fn ->
+        Logger.configure(level: previous)
+
+        case restore_token do
+          {:ok, value} -> Application.put_env(:sanctum, :restore_token, value)
+          :error -> Application.delete_env(:sanctum, :restore_token)
+        end
+      end)
+
+      secret = seed()
+
+      kit = %{
+        "identifier" => "per_" <> String.duplicate("e", 64),
+        "directory_url" => "http://not-https.example",
+        "recovery_secret" => secret
+      }
+
+      log =
+        ExUnit.CaptureLog.capture_log([level: :debug], fn ->
+          conn =
+            Phoenix.ConnTest.build_conn()
+            |> Plug.Conn.put_req_header("content-type", "application/json")
+            |> Plug.Conn.put_req_header("authorization", "Bearer " <> token)
+            |> Phoenix.ConnTest.dispatch(CyfrWeb.Endpoint, :post, "/restore", Jason.encode!(kit))
+
+          assert conn.status == 422
+        end)
+
+      assert log =~ "/restore"
+      refute log =~ secret
+      refute log =~ token
+
+      # A console event carrying the field is logged filtered too.
+      console =
+        ExUnit.CaptureLog.capture_log([level: :debug], fn ->
+          {:ok, view, _html} = live(Phoenix.ConnTest.build_conn(), "/login")
+          render_hook(view, "cancel", %{"recovery_secret" => secret})
+        end)
+
+      refute console =~ secret
     end
   end
 

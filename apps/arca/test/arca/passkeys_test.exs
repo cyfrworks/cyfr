@@ -363,6 +363,33 @@ defmodule Arca.PasskeysTest do
     assert {:ok, %{state: "voided"}} = PendingConfirmations.get(actor, record.id)
   end
 
+  test "a revocation's check runs in its transaction, and its refusal revokes nothing" do
+    person = local!()
+    {:ok, passkey} = Passkeys.register(as(person), attrs(person, %{}))
+    passkey_id = passkey.id
+    test = self()
+
+    keep = fn handed ->
+      send(test, {:handed, handed})
+      {:error, :last_way_in}
+    end
+
+    assert {:error, :last_way_in} = Passkeys.revoke(as(person), passkey.id, also: keep)
+    assert_received {:handed, %{passkey: %{id: ^passkey_id, state: "revoked"}, was: "active"}}
+    assert {:ok, %{state: "active", revoked_at: nil}} = Passkeys.get(as(person), passkey.id)
+
+    assert {:ok, %{passkey: %{state: "revoked"}}} =
+             Passkeys.revoke(as(person), passkey.id, also: fn %{was: "active"} -> :ok end)
+
+    # A revoked credential answers as it is, the state it stood in handed on.
+    assert {:ok, %{passkey: %{state: "revoked"}, voided_confirmation_ids: []}} =
+             Passkeys.revoke(as(person), passkey.id, also: fn %{was: "revoked"} -> :ok end)
+
+    other = local!()
+    assert {:error, :cross_tenant} = Passkeys.revoke(as(other), passkey.id, also: keep)
+    refute_received {:handed, _}
+  end
+
   test "a counter moves by compare-and-set only" do
     person = local!()
     {:ok, passkey} = Passkeys.register(as(person), attrs(person, %{}))
@@ -389,5 +416,219 @@ defmodule Arca.PasskeysTest do
              Passkeys.get_by_credential(server(), passkey.rp_id, passkey.credential_id)
 
     assert {:ok, [%{id: ^id}]} = Passkeys.list(as(person), person.id, state: :revoked)
+  end
+end
+
+defmodule Arca.PasskeysRaceTest do
+  @moduledoc """
+  A person's last passkey revoked while their last door is unlinked, on
+  two real connections outside the sandbox. Each checks, under the
+  person's lock, that the person keeps a way in without what it removes,
+  and both take that lock first, so the second waits for the first to
+  commit and then sees its removal: the two never both commit. On
+  PostgreSQL the waiter blocks on the person's row; on SQLite at the lock
+  its transaction takes at entry.
+  """
+
+  use ExUnit.Case, async: false
+
+  import Ecto.Query
+
+  alias Arca.{ControlPlane, Passkeys, PersonIdentities, Users}
+  alias Arca.Schemas.{CellLease, ExternalIdentity, Passkey, PersonIdentity, User}
+  alias Ecto.Adapters.SQL.Sandbox
+
+  @slot_keys [
+    {Arca.ControlPlane, :standing},
+    {Arca.ControlPlane, :generation},
+    {Arca.ControlPlane, :slot}
+  ]
+
+  defp unboxed(fun), do: Sandbox.unboxed_run(Arca.Repo, fun)
+  defp server, do: Prima.Actor.system()
+  defp postgres?, do: Arca.Repo.adapter() == Ecto.Adapters.Postgres
+
+  setup do
+    hold_slot!()
+    n = System.unique_integer([:positive])
+    now = DateTime.utc_now()
+    user_id = Prima.UUID7.generate_id(Prima.PersonId.prefix())
+    key = "github|https://github.com|psk-race#{n}"
+
+    on_exit(fn ->
+      unboxed(fn ->
+        Arca.Repo.delete_all(where(Passkey, user_id: ^user_id))
+        Arca.Repo.delete_all(where(PersonIdentity, user_id: ^user_id))
+        Arca.Repo.delete_all(where(ExternalIdentity, user_id: ^user_id))
+        Arca.Repo.delete_all(where(User, id: ^user_id))
+      end)
+    end)
+
+    passkey =
+      unboxed(fn ->
+        {:ok, _} =
+          Users.mint(
+            server(),
+            %{
+              id: user_id,
+              provider: "github",
+              first_seen_at: now,
+              last_seen_at: now,
+              created_at: now,
+              updated_at: now
+            },
+            %{
+              key: key,
+              provider: "github",
+              issuer: "https://github.com",
+              subject: "psk-race#{n}",
+              first_seen_at: now,
+              last_seen_at: now
+            },
+            also: fn person ->
+              {:ok, _} =
+                PersonIdentities.create(server(), %{
+                  user_id: person.id,
+                  provenance: "local",
+                  live_public_key: :crypto.strong_rand_bytes(32),
+                  operational_public_key: :crypto.strong_rand_bytes(32),
+                  live_key_sealed: "l",
+                  operational_key_sealed: "o"
+                })
+
+              :ok
+            end
+          )
+
+        {:ok, passkey} =
+          Passkeys.register(server(), %{
+            user_id: user_id,
+            credential_id: "cred-race#{n}",
+            rp_id: "home.example",
+            relying_home: "https://home.example",
+            public_key: "cose-key",
+            registration_digest: Prima.Digest.sha256("registration-#{n}"),
+            possession_verified: true,
+            state: "active"
+          })
+
+        passkey
+      end)
+
+    {:ok, user_id: user_id, key: key, passkey: passkey}
+  end
+
+  # This member's slot, taken on a real connection so every connection
+  # reads the lease; the lease row, the process-wide standing and the
+  # claim switch are given back after the case.
+  defp hold_slot! do
+    saved = Map.new(@slot_keys, &{&1, :persistent_term.get(&1, :absent)})
+    claim = Application.get_env(:arca, :control_plane_claim_enabled)
+    node = "node-#{System.unique_integer([:positive])}"
+
+    on_exit(fn ->
+      unboxed(fn -> Arca.Repo.delete_all(from(l in CellLease, where: l.node == ^node)) end)
+
+      for {key, value} <- saved do
+        if value == :absent,
+          do: :persistent_term.erase(key),
+          else: :persistent_term.put(key, value)
+      end
+
+      if is_nil(claim),
+        do: Application.delete_env(:arca, :control_plane_claim_enabled),
+        else: Application.put_env(:arca, :control_plane_claim_enabled, claim)
+    end)
+
+    Application.put_env(:arca, :control_plane_claim_enabled, true)
+    {:ok, slot} = unboxed(fn -> ControlPlane.take(node, node <> "#boot", 60_000) end)
+    slot
+  end
+
+  # The connection's backend, on PostgreSQL, for the test to watch it wait.
+  defp backend do
+    if postgres?(), do: hd(hd(Arca.Repo.query!("SELECT pg_backend_pid()").rows))
+  end
+
+  # On PostgreSQL, `backend` is blocked on a lock, in a statement naming
+  # every one of `fragments`.
+  defp await_wait!(backend, fragments, tries \\ 250) do
+    [[type, event, query]] =
+      unboxed(fn ->
+        Arca.Repo.query!(
+          "SELECT wait_event_type, wait_event, query FROM pg_stat_activity WHERE pid = $1",
+          [backend]
+        ).rows
+      end)
+
+    cond do
+      type == "Lock" and Enum.all?(fragments, &String.contains?(query, &1)) ->
+        :ok
+
+      tries == 0 ->
+        flunk(
+          "backend #{backend} is not waiting at #{inspect(fragments)}: #{type} #{event} #{query}"
+        )
+
+      true ->
+        retry_wait!(backend, fragments, tries)
+    end
+  end
+
+  defp retry_wait!(backend, fragments, tries) do
+    Process.sleep(20)
+    await_wait!(backend, fragments, tries - 1)
+  end
+
+  # The callers' check, as they make it under the lock: the person keeps
+  # a door or an active passkey.
+  defp keeps_a_way_in(user_id) do
+    doors = Arca.Repo.aggregate(where(ExternalIdentity, user_id: ^user_id), :count)
+    passkeys = Arca.Repo.aggregate(where(Passkey, user_id: ^user_id, state: "active"), :count)
+    if doors + passkeys > 0, do: :ok, else: {:error, :last_way_in}
+  end
+
+  test "a revocation waits behind the unlinking of the last door, then keeps the passkey",
+       %{user_id: user_id, key: key, passkey: passkey} do
+    test = self()
+
+    unlinker =
+      Task.async(fn ->
+        unboxed(fn ->
+          Users.unlink_identity(server(), user_id, key,
+            also: fn %{remaining: 0} ->
+              send(test, :unlinking)
+
+              receive do
+                :go -> keeps_a_way_in(user_id)
+              end
+            end
+          )
+        end)
+      end)
+
+    assert_receive :unlinking, 5_000
+
+    revoker =
+      Task.async(fn ->
+        unboxed(fn ->
+          send(test, {:revoker, backend()})
+
+          Passkeys.revoke(server(), passkey.id,
+            also: fn %{was: "active"} -> keeps_a_way_in(user_id) end
+          )
+        end)
+      end)
+
+    assert_receive {:revoker, pid}, 5_000
+    if postgres?(), do: await_wait!(pid, [~s(FROM "users"), "FOR UPDATE"])
+    refute Task.yield(revoker, 300), "the revocation decided while the unlinking held the person"
+
+    send(unlinker.pid, :go)
+    assert {:ok, %{remaining: 0}} = Task.await(unlinker, 25_000)
+    assert {:error, :last_way_in} = Task.await(revoker, 25_000)
+
+    assert %{state: "active"} = unboxed(fn -> Arca.Repo.get!(Passkey, passkey.id) end)
+    assert [] = unboxed(fn -> Arca.Repo.all(where(ExternalIdentity, user_id: ^user_id)) end)
   end
 end

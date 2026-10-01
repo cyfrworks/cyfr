@@ -35,126 +35,12 @@ defmodule Sanctum.IdentityFreshnessTest do
   alias Sanctum.{Caller, Cipher, CipherAAD, Context, IdentityFreshness}
   alias Sanctum.Consent.Authz
   alias Sanctum.Tenancy.{Athanors, Members, Users}
+  alias Sanctum.Test.DirectoryServer.{Resolver, Server}
 
   @host "dir-a.test"
 
-  defmodule Resolver do
-    @moduledoc false
-    # The test directory's name answers at loopback; nothing else resolves.
-    # Each lookup is told to the running test, so a read the directory
-    # never answered is still seen to have been tried.
-    def getaddr(~c"dir-a.test", :inet) do
-      case :persistent_term.get({__MODULE__, :observer}, nil) do
-        pid when is_pid(pid) -> send(pid, {:resolved, "dir-a.test"})
-        nil -> :ok
-      end
-
-      {:ok, {127, 0, 0, 1}}
-    end
-
-    def getaddr(_name, _family), do: {:error, :nxdomain}
-  end
-
-  defmodule Server do
-    @moduledoc false
-    # A TLS listener on loopback that reads one HTTP/1.1 request per
-    # connection, reports it to the test and answers `handler.(request)`:
-    # `{status, headers, body}`, or `:close` to close without answering.
-
-    def start(ssl_options, handler, observer) do
-      {:ok, listen} =
-        :ssl.listen(
-          0,
-          ssl_options ++ [ip: {127, 0, 0, 1}, active: false, mode: :binary, reuseaddr: true]
-        )
-
-      {:ok, {_address, port}} = :ssl.sockname(listen)
-      pid = spawn(fn -> accept(listen, handler, observer) end)
-      %{port: port, pid: pid, listen: listen}
-    end
-
-    def stop(%{pid: pid, listen: listen}) do
-      Process.exit(pid, :kill)
-      :ssl.close(listen)
-    end
-
-    defp accept(listen, handler, observer) do
-      case :ssl.transport_accept(listen) do
-        {:ok, socket} ->
-          # Told before the handshake: a client that opened a connection
-          # is seen to have, whether or not it then trusts the server.
-          send(observer, :connected)
-          serve(socket, handler, observer)
-          accept(listen, handler, observer)
-
-        {:error, _closed} ->
-          :ok
-      end
-    end
-
-    defp serve(socket, handler, observer) do
-      with {:ok, socket} <- :ssl.handshake(socket, 5_000),
-           {:ok, request} <- read(socket, "") do
-        send(observer, {:request, request})
-
-        case handler.(request) do
-          :close ->
-            :ok
-
-          {status, headers, body} ->
-            headers = [{"content-length", byte_size(body)}, {"connection", "close"} | headers]
-            head = Enum.map_join(headers, "", fn {name, value} -> "#{name}: #{value}\r\n" end)
-            :ssl.send(socket, "HTTP/1.1 #{status} Answer\r\n" <> head <> "\r\n" <> body)
-        end
-
-        :ssl.close(socket)
-      end
-    end
-
-    defp read(socket, acc) do
-      case :binary.split(acc, "\r\n\r\n") do
-        [head, rest] ->
-          [line | lines] = String.split(head, "\r\n")
-          [method, target, _version] = String.split(line, " ", parts: 3)
-
-          headers =
-            for line <- lines, [name, value] = String.split(line, ":", parts: 2) do
-              {String.downcase(name), String.trim(value)}
-            end
-
-          length =
-            case List.keyfind(headers, "content-length", 0) do
-              {_name, value} -> String.to_integer(value)
-              nil -> 0
-            end
-
-          with {:ok, body} <- body(socket, rest, length) do
-            {:ok, %{method: method, target: target, body: body}}
-          end
-
-        [_partial] ->
-          with {:ok, data} <- :ssl.recv(socket, 0, 5_000), do: read(socket, acc <> data)
-      end
-    end
-
-    defp body(_socket, acc, length) when byte_size(acc) >= length, do: {:ok, acc}
-
-    defp body(socket, acc, length) do
-      with {:ok, data} <- :ssl.recv(socket, 0, 5_000), do: body(socket, acc <> data, length)
-    end
-  end
-
   setup_all do
-    san = {:Extension, {2, 5, 29, 17}, false, [{:dNSName, String.to_charlist(@host)}]}
-    key = [key: {:namedCurve, :secp256r1}, digest: :sha256]
-
-    tls =
-      :public_key.pkix_test_data(%{
-        server_chain: %{root: key, intermediates: [], peer: key ++ [extensions: [san]]},
-        client_chain: %{root: key, intermediates: [], peer: key}
-      })
-
-    %{tls: tls}
+    %{tls: Sanctum.Test.DirectoryServer.tls([@host])}
   end
 
   setup tags do

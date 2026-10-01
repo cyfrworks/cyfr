@@ -172,6 +172,24 @@ defmodule Arca.PersonIdentities do
   end
 
   @doc false
+  @spec recovered_head!(String.t(), String.t(), String.t()) :: non_neg_integer()
+  # A committed `recover` that kept the person's online keys (another
+  # printed kit) moves their head to it, only while the row still reads the
+  # head the recover was staged at: the head is the `key_epoch` every
+  # certificate and session of theirs names.
+  # arca:db-raise-ok a transaction step: its caller rescues around the transaction.
+  def recovered_head!(user_id, expected_head, entry_hash) do
+    step(
+      from(p in PersonIdentity,
+        where:
+          p.user_id == ^user_id and p.provenance == "local" and p.enrollment == "enrolled" and
+            p.head_hash == ^expected_head
+      ),
+      head_hash: entry_hash
+    )
+  end
+
+  @doc false
   @spec first_method!(String.t()) :: :marked | :already | :no_identity
   # Record, once and for good, that a fresh confirmation method exists for
   # the person: nothing clears the mark, so revoking every method never
