@@ -15,7 +15,10 @@ defmodule Cyfr.Cluster.CredentialRetirementTest do
   there is the rows. A context the other member established before the
   denial, used again after an allow, issues nothing — its binding names
   the generation it read, and the issuance rereads the row — whether or
-  not the announcement arrived.
+  not the announcement arrived. Issuing a key is a sensitive change, so
+  its fresh confirmation rereads the session first and refuses it as
+  `Sanctum.Consent.Authz` names a revalidation that finds no session,
+  `:not_authenticated`.
   """
 
   use Cyfr.Cluster.Case, async: false
@@ -45,7 +48,7 @@ defmodule Cyfr.Cluster.CredentialRetirementTest do
       # before the denial cannot issue after the allow.
       refute match?({:ok, _}, Cell.call(:b, Fixtures, :establish, [person.token]))
       assert {:error, reason} = Cell.call(:b, Fixtures, :issue_key, [before])
-      assert reason in [:stale_generation, :unauthenticated]
+      assert reason in [:stale_generation, :not_authenticated]
     end
 
     test "a derived credential minted on the peer is refused there after the denial and the allow" do
@@ -83,7 +86,7 @@ defmodule Cyfr.Cluster.CredentialRetirementTest do
       # the denial issues nothing there, because the issuance rereads the
       # rows the denial changed.
       assert {:error, reason} = Cell.call(:b, Fixtures, :issue_key, [before])
-      assert reason in [:stale_generation, :unauthenticated]
+      assert reason in [:stale_generation, :not_authenticated]
 
       # A derived credential needs no announcement either: its every mint
       # and use rereads the rows.
