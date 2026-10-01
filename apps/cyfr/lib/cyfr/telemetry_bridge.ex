@@ -282,14 +282,14 @@ defmodule Cyfr.TelemetryBridge do
        do: [{:global, Bus.athanor_archived_global(), AthanorArchived.new(id)}]
 
   # A pending confirmation moved: on its person's own topic, carrying its
-  # id, operation and expiry and nothing else the emitter attached.
+  # ref, operation and expiry and nothing else the emitter attached.
   defp messages(
          [:cyfr, :sanctum, :confirmation, stage] = event,
          _measurements,
          %{user_id: user_id} = meta
        )
        when event in @confirmation_events and is_binary(user_id) and user_id != "" do
-    fields = Map.take(meta, [:id, :operation, :expires_at])
+    fields = Map.take(meta, [:ref, :operation, :expires_at])
 
     [
       tenant(meta, &Bus.confirmations(&1, user_id), &Confirmation.new(&1, stage, fields))

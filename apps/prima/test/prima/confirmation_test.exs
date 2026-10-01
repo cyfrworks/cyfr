@@ -7,7 +7,8 @@ defmodule Prima.ConfirmationTest do
   the record reads, writes back and digests over its whole JCS form, the
   protocol, home, RP and preview included, so a record changed in any one
   field digests differently; a preview carrying a secret, a preview of
-  another home or operation and an RP that is not the home's are refused.
+  another home or operation and an RP that is not the home's are refused;
+  and a record's public ref is derived one way from its secret.
   """
 
   use ExUnit.Case, async: true
@@ -60,6 +61,27 @@ defmodule Prima.ConfirmationTest do
              changed,
              v["record"] |> Map.keys() |> MapSet.new() |> MapSet.delete("protocol")
            )
+  end
+
+  test "a record's ref is derived one way from its secret, as the vector pins it" do
+    %{"id" => id, "protocol" => protocol, "ref" => ref} = vectors()["ref"]
+
+    assert protocol == "cyfr-confirmation-ref/v1"
+    assert Confirmation.ref(id) == ref
+
+    assert ref ==
+             "cnr_" <> Base.url_encode64(:crypto.hash(:sha256, protocol <> id), padding: false)
+
+    # The secret is 256 bits spelled cnf_ and 43 base64url characters, a
+    # valid id; the ref is spelled apart from it, and a ref's own ref is
+    # another name, so presenting a ref as a secret names no record.
+    assert "cnf_" <> body = id
+    assert {:ok, <<_::256>>} = Base.url_decode64(body, padding: false)
+    assert Prima.Identity.Encoding.id?(id) and Prima.Identity.Encoding.id?(ref)
+    assert Confirmation.ref?(ref)
+    refute Confirmation.ref?(id)
+    refute Confirmation.ref(ref) == ref
+    refute Confirmation.ref(id <> "x") == ref
   end
 
   test "every refusal is refused with its reason" do

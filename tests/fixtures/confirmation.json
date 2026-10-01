@@ -1,6 +1,6 @@
 {
-  "comment": "The vectors pinning Prima.Confirmation: every side reads each record, writes it back to the same map and reproduces its digest, sha256:<hex> over the JCS bytes of the whole record with the protocol string, home, rp_id and preview included, and a record changed in any one field digests differently; and refuses each refusal with the named reason. A preview is secret-free: a detail named as a secret is refused. The rp_id is the home's host or a parent domain of it.",
-  "digest": "sha256:0cfcb0d67e25c15ef8c44955b33b353e1c0964d5f2c700c0d6d74ac4a1537ea1",
+  "comment": "The vectors pinning Prima.Confirmation: every side reads each record, writes it back to the same map and reproduces its digest, sha256:<hex> over the JCS bytes of the whole record with the protocol string, home, rp_id and preview included, and a record changed in any one field digests differently; and refuses each refusal with the named reason. A preview is secret-free: a detail named as a secret is refused. The rp_id is the home's host or a parent domain of it. A record is named by its ref, never by the secret id its signal answered: the ref is cnr_ followed by the unpadded base64url SHA-256 of the ref protocol string followed by the id, and every side derives the vector's ref from its id.",
+  "digest": "sha256:88beaba6955b1a33a8f18c208beb4d7bd3e76a6fc6eaa4bb99499b14401bfe50",
   "protocol": "cyfr-confirmation/v1",
   "record": {
     "action": "credential_entry",
@@ -9,7 +9,7 @@
     "challenge": "9O5RvaQwkTvttp04xqxi9aTx4R2YmVyX72Wle8vis9Q",
     "expires_at": 1790000300000,
     "home": "https://alice.example",
-    "id": "cnf_01a09fee-1111-7000-8000-000000000001",
+    "id": "cnr_RwUmgDNh5ufeCSEze6Mgzs_TKyc4u-HLi4RFA8i9XZ4",
     "operation": "vault.create",
     "person": "usr_01a09fee-0000-7000-8000-000000000001",
     "preview": {
@@ -20,6 +20,11 @@
     },
     "protocol": "cyfr-confirmation/v1",
     "rp_id": "alice.example"
+  },
+  "ref": {
+    "id": "cnf_AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8",
+    "protocol": "cyfr-confirmation-ref/v1",
+    "ref": "cnr_RwUmgDNh5ufeCSEze6Mgzs_TKyc4u-HLi4RFA8i9XZ4"
   },
   "refusals": [
     {
@@ -32,7 +37,7 @@
         "challenge": "9O5RvaQwkTvttp04xqxi9aTx4R2YmVyX72Wle8vis9Q",
         "expires_at": 1790000300000,
         "home": "https://alice.example",
-        "id": "cnf_01a09fee-1111-7000-8000-000000000001",
+        "id": "cnr_RwUmgDNh5ufeCSEze6Mgzs_TKyc4u-HLi4RFA8i9XZ4",
         "operation": "vault.create",
         "person": "usr_01a09fee-0000-7000-8000-000000000001",
         "preview": {
@@ -58,7 +63,7 @@
         "challenge": "9O5RvaQwkTvttp04xqxi9aTx4R2YmVyX72Wle8vis9Q",
         "expires_at": 1790000300000,
         "home": "https://alice.example",
-        "id": "cnf_01a09fee-1111-7000-8000-000000000001",
+        "id": "cnr_RwUmgDNh5ufeCSEze6Mgzs_TKyc4u-HLi4RFA8i9XZ4",
         "operation": "vault.create",
         "person": "usr_01a09fee-0000-7000-8000-000000000001",
         "preview": {
@@ -84,7 +89,7 @@
         "challenge": "9O5RvaQwkTvttp04xqxi9aTx4R2YmVyX72Wle8vis9Q",
         "expires_at": 1790000300000,
         "home": "https://alice.example",
-        "id": "cnf_01a09fee-1111-7000-8000-000000000001",
+        "id": "cnr_RwUmgDNh5ufeCSEze6Mgzs_TKyc4u-HLi4RFA8i9XZ4",
         "operation": "vault.create",
         "person": "usr_01a09fee-0000-7000-8000-000000000001",
         "preview": {
@@ -107,7 +112,7 @@
         "challenge": "9O5RvaQwkTvttp04xqxi9aTx4R2YmVyX72Wle8vis9Q",
         "expires_at": 1790000300000,
         "home": "https://alice.example",
-        "id": "cnf_01a09fee-1111-7000-8000-000000000001",
+        "id": "cnr_RwUmgDNh5ufeCSEze6Mgzs_TKyc4u-HLi4RFA8i9XZ4",
         "operation": "vault.create",
         "person": "usr_01a09fee-0000-7000-8000-000000000001",
         "preview": {
@@ -130,7 +135,7 @@
         "challenge": "9O5RvaQwkTvttp04xqxi9aTx4R2YmVyX72Wle8vis9Q",
         "expires_at": 1790000300000,
         "home": "https://alice.example",
-        "id": "cnf_01a09fee-1111-7000-8000-000000000001",
+        "id": "cnr_RwUmgDNh5ufeCSEze6Mgzs_TKyc4u-HLi4RFA8i9XZ4",
         "operation": "vault.create",
         "person": "usr_01a09fee-0000-7000-8000-000000000001",
         "preview": {
@@ -153,7 +158,7 @@
         "challenge": "9O5RvaQwkTvttp04xqxi9aTx4R2YmVyX72Wle8vis9Q",
         "expires_at": 1790000300000,
         "home": "https://alice.example",
-        "id": "cnf_01a09fee-1111-7000-8000-000000000001",
+        "id": "cnr_RwUmgDNh5ufeCSEze6Mgzs_TKyc4u-HLi4RFA8i9XZ4",
         "operation": "vault.create",
         "person": "usr_01a09fee-0000-7000-8000-000000000001",
         "preview": {
@@ -176,7 +181,7 @@
         "challenge": "9O5RvaQwkTvttp04xqxi9aTx4R2YmVyX72Wle8vis9Q",
         "expires_at": 1790000300000,
         "home": "https://alice.example",
-        "id": "cnf_01a09fee-1111-7000-8000-000000000001",
+        "id": "cnr_RwUmgDNh5ufeCSEze6Mgzs_TKyc4u-HLi4RFA8i9XZ4",
         "operation": "vault.create",
         "person": "usr_01a09fee-0000-7000-8000-000000000001",
         "preview": {
@@ -199,7 +204,7 @@
         "challenge": "9O5RvaQwkTvttp04xqxi9aTx4R2YmVyX72Wle8vis9Q",
         "expires_at": 1790000300000,
         "home": "https://alice.example",
-        "id": "cnf_01a09fee-1111-7000-8000-000000000001",
+        "id": "cnr_RwUmgDNh5ufeCSEze6Mgzs_TKyc4u-HLi4RFA8i9XZ4",
         "operation": "vault.create",
         "person": "system",
         "preview": {
@@ -222,7 +227,7 @@
         "challenge": "279UNC8AaEna5-6f87Ah4A",
         "expires_at": 1790000300000,
         "home": "https://alice.example",
-        "id": "cnf_01a09fee-1111-7000-8000-000000000001",
+        "id": "cnr_RwUmgDNh5ufeCSEze6Mgzs_TKyc4u-HLi4RFA8i9XZ4",
         "operation": "vault.create",
         "person": "usr_01a09fee-0000-7000-8000-000000000001",
         "preview": {
@@ -245,7 +250,7 @@
         "challenge": "9O5RvaQwkTvttp04xqxi9aTx4R2YmVyX72Wle8vis9Q",
         "expires_at": 1790000300000,
         "home": "https://alice.example",
-        "id": "cnf_01a09fee-1111-7000-8000-000000000001",
+        "id": "cnr_RwUmgDNh5ufeCSEze6Mgzs_TKyc4u-HLi4RFA8i9XZ4",
         "operation": "vault",
         "person": "usr_01a09fee-0000-7000-8000-000000000001",
         "preview": {
@@ -268,7 +273,7 @@
         "challenge": "9O5RvaQwkTvttp04xqxi9aTx4R2YmVyX72Wle8vis9Q",
         "expires_at": 1790000300000,
         "home": "https://alice.example",
-        "id": "cnf_01a09fee-1111-7000-8000-000000000001",
+        "id": "cnr_RwUmgDNh5ufeCSEze6Mgzs_TKyc4u-HLi4RFA8i9XZ4",
         "operation": "vault.create",
         "person": "usr_01a09fee-0000-7000-8000-000000000001",
         "preview": {
@@ -292,7 +297,7 @@
         "challenge": "9O5RvaQwkTvttp04xqxi9aTx4R2YmVyX72Wle8vis9Q",
         "expires_at": 1790000300000,
         "home": "https://alice.example",
-        "id": "cnf_01a09fee-1111-7000-8000-000000000001",
+        "id": "cnr_RwUmgDNh5ufeCSEze6Mgzs_TKyc4u-HLi4RFA8i9XZ4",
         "operation": "vault.create",
         "person": "usr_01a09fee-0000-7000-8000-000000000001",
         "preview": {
@@ -315,7 +320,7 @@
         "challenge": "9O5RvaQwkTvttp04xqxi9aTx4R2YmVyX72Wle8vis9Q",
         "expires_at": 1790000300000,
         "home": "https://alice.example",
-        "id": "cnf_01a09fee-1111-7000-8000-000000000001",
+        "id": "cnr_RwUmgDNh5ufeCSEze6Mgzs_TKyc4u-HLi4RFA8i9XZ4",
         "operation": "vault.create",
         "person": "usr_01a09fee-0000-7000-8000-000000000001",
         "protocol": "cyfr-confirmation/v1",
@@ -325,7 +330,7 @@
   ],
   "variations": [
     {
-      "digest": "sha256:4bbcf8daee70c7592f9f9f4cb0eda42a8cfbb361fed8a34a18f7cb911cddb921",
+      "digest": "sha256:4c84aaec81595792353003f6cce4bdfbdec2dc6f4f2a54c3b26a9c5570d4a39d",
       "name": "another id",
       "record": {
         "action": "credential_entry",
@@ -334,7 +339,7 @@
         "challenge": "9O5RvaQwkTvttp04xqxi9aTx4R2YmVyX72Wle8vis9Q",
         "expires_at": 1790000300000,
         "home": "https://alice.example",
-        "id": "cnf_01a09fee-1111-7000-8000-000000000002",
+        "id": "cnr_yP6pCHyKeI1FCPw5DFR7r7bqpGI-6a5iM6x8ED8bbAc",
         "operation": "vault.create",
         "person": "usr_01a09fee-0000-7000-8000-000000000001",
         "preview": {
@@ -348,7 +353,7 @@
       }
     },
     {
-      "digest": "sha256:a47452ef0d4e21114e8ff0d651d55b97882d0d4b2ab2d6f719f4338619e5cbe4",
+      "digest": "sha256:3e051504e907206b2fbd05f0885d9e7b0b3d0b2d07f65a53f34d48e25475c999",
       "name": "another home",
       "record": {
         "action": "credential_entry",
@@ -357,7 +362,7 @@
         "challenge": "9O5RvaQwkTvttp04xqxi9aTx4R2YmVyX72Wle8vis9Q",
         "expires_at": 1790000300000,
         "home": "https://hub.example",
-        "id": "cnf_01a09fee-1111-7000-8000-000000000001",
+        "id": "cnr_RwUmgDNh5ufeCSEze6Mgzs_TKyc4u-HLi4RFA8i9XZ4",
         "operation": "vault.create",
         "person": "usr_01a09fee-0000-7000-8000-000000000001",
         "preview": {
@@ -371,7 +376,7 @@
       }
     },
     {
-      "digest": "sha256:7e504b8f2b90def50936b51c841dab32c8256f78678f9d8f852940ff095847fd",
+      "digest": "sha256:355a03f4c806dafef49d261f3d8b89fc841143bc0caeb621d748c71d89324477",
       "name": "another rp_id, a parent domain of the home",
       "record": {
         "action": "credential_entry",
@@ -380,7 +385,7 @@
         "challenge": "9O5RvaQwkTvttp04xqxi9aTx4R2YmVyX72Wle8vis9Q",
         "expires_at": 1790000300000,
         "home": "https://alice.example",
-        "id": "cnf_01a09fee-1111-7000-8000-000000000001",
+        "id": "cnr_RwUmgDNh5ufeCSEze6Mgzs_TKyc4u-HLi4RFA8i9XZ4",
         "operation": "vault.create",
         "person": "usr_01a09fee-0000-7000-8000-000000000001",
         "preview": {
@@ -394,7 +399,7 @@
       }
     },
     {
-      "digest": "sha256:2c539666cc7b4467ffd3b064aaa2096791fa9b515965a0ce6f1f8e70a03cfefc",
+      "digest": "sha256:0a0ca02925492609f9bbbda5a65867368bb29cfe538998e197c3ad2bd8d896ef",
       "name": "another athanor",
       "record": {
         "action": "credential_entry",
@@ -403,7 +408,7 @@
         "challenge": "9O5RvaQwkTvttp04xqxi9aTx4R2YmVyX72Wle8vis9Q",
         "expires_at": 1790000300000,
         "home": "https://alice.example",
-        "id": "cnf_01a09fee-1111-7000-8000-000000000001",
+        "id": "cnr_RwUmgDNh5ufeCSEze6Mgzs_TKyc4u-HLi4RFA8i9XZ4",
         "operation": "vault.create",
         "person": "usr_01a09fee-0000-7000-8000-000000000001",
         "preview": {
@@ -417,7 +422,7 @@
       }
     },
     {
-      "digest": "sha256:69d6f5b60accc8f0204b246fb2875d861d14701870958847c4c019e9a98d9eaa",
+      "digest": "sha256:3b0e5ba81dc212df042ac17cebeb149fbb8fc431badcd3344ea5b7f18fe3c1fa",
       "name": "another person",
       "record": {
         "action": "credential_entry",
@@ -426,7 +431,7 @@
         "challenge": "9O5RvaQwkTvttp04xqxi9aTx4R2YmVyX72Wle8vis9Q",
         "expires_at": 1790000300000,
         "home": "https://alice.example",
-        "id": "cnf_01a09fee-1111-7000-8000-000000000001",
+        "id": "cnr_RwUmgDNh5ufeCSEze6Mgzs_TKyc4u-HLi4RFA8i9XZ4",
         "operation": "vault.create",
         "person": "usr_01a09fee-0000-7000-8000-000000000002",
         "preview": {
@@ -440,7 +445,7 @@
       }
     },
     {
-      "digest": "sha256:ec888cdc0f75031ae550c44ffb2ff534492a69e297b7ed47a9c2d3172090621d",
+      "digest": "sha256:72ca9435567213cf652b6c8e3d6b945b262977ee0c0e2225cfcd352c202e7751",
       "name": "other arguments",
       "record": {
         "action": "credential_entry",
@@ -449,7 +454,7 @@
         "challenge": "9O5RvaQwkTvttp04xqxi9aTx4R2YmVyX72Wle8vis9Q",
         "expires_at": 1790000300000,
         "home": "https://alice.example",
-        "id": "cnf_01a09fee-1111-7000-8000-000000000001",
+        "id": "cnr_RwUmgDNh5ufeCSEze6Mgzs_TKyc4u-HLi4RFA8i9XZ4",
         "operation": "vault.create",
         "person": "usr_01a09fee-0000-7000-8000-000000000001",
         "preview": {
@@ -463,7 +468,7 @@
       }
     },
     {
-      "digest": "sha256:b79469b4df15ea10b528f2090f536fe029bdfd9544b50ed5f3e81c0b1ab9f028",
+      "digest": "sha256:0e645dbc9b81179f118653f700ef1d8631546a044535c750d28bbf608834f5ce",
       "name": "another action",
       "record": {
         "action": "credential_issuance",
@@ -472,7 +477,7 @@
         "challenge": "9O5RvaQwkTvttp04xqxi9aTx4R2YmVyX72Wle8vis9Q",
         "expires_at": 1790000300000,
         "home": "https://alice.example",
-        "id": "cnf_01a09fee-1111-7000-8000-000000000001",
+        "id": "cnr_RwUmgDNh5ufeCSEze6Mgzs_TKyc4u-HLi4RFA8i9XZ4",
         "operation": "vault.create",
         "person": "usr_01a09fee-0000-7000-8000-000000000001",
         "preview": {
@@ -486,7 +491,7 @@
       }
     },
     {
-      "digest": "sha256:486387d8030bb400e0f1007bdcf9febcfe2cef28c4824e399ca61d0294e51882",
+      "digest": "sha256:8cb5a82334d7e1e8f361a7a75969fb556133886fa06001cb6f79b7c67a13e99d",
       "name": "another operation",
       "record": {
         "action": "credential_entry",
@@ -495,7 +500,7 @@
         "challenge": "9O5RvaQwkTvttp04xqxi9aTx4R2YmVyX72Wle8vis9Q",
         "expires_at": 1790000300000,
         "home": "https://alice.example",
-        "id": "cnf_01a09fee-1111-7000-8000-000000000001",
+        "id": "cnr_RwUmgDNh5ufeCSEze6Mgzs_TKyc4u-HLi4RFA8i9XZ4",
         "operation": "vault.rotate",
         "person": "usr_01a09fee-0000-7000-8000-000000000001",
         "preview": {
@@ -509,7 +514,7 @@
       }
     },
     {
-      "digest": "sha256:f5bf1a3cc4764d9b3fed9fa96d6b60467760df2f346d3d0fecb03748a3694c0b",
+      "digest": "sha256:6a1efcf5b665788b76a866757224c53aca36938f9bb888a6c0c485767558245f",
       "name": "another resource in the preview",
       "record": {
         "action": "credential_entry",
@@ -518,7 +523,7 @@
         "challenge": "9O5RvaQwkTvttp04xqxi9aTx4R2YmVyX72Wle8vis9Q",
         "expires_at": 1790000300000,
         "home": "https://alice.example",
-        "id": "cnf_01a09fee-1111-7000-8000-000000000001",
+        "id": "cnr_RwUmgDNh5ufeCSEze6Mgzs_TKyc4u-HLi4RFA8i9XZ4",
         "operation": "vault.create",
         "person": "usr_01a09fee-0000-7000-8000-000000000001",
         "preview": {
@@ -532,7 +537,7 @@
       }
     },
     {
-      "digest": "sha256:aae50940962d29faf96cf298c7a1e5d2103121ea666047123c8ddfc445521a90",
+      "digest": "sha256:b7bdf8e567a08bae975c70e6499386f45083083ead724cd51e1eb169cf41c11c",
       "name": "another athanor name in the preview",
       "record": {
         "action": "credential_entry",
@@ -541,7 +546,7 @@
         "challenge": "9O5RvaQwkTvttp04xqxi9aTx4R2YmVyX72Wle8vis9Q",
         "expires_at": 1790000300000,
         "home": "https://alice.example",
-        "id": "cnf_01a09fee-1111-7000-8000-000000000001",
+        "id": "cnr_RwUmgDNh5ufeCSEze6Mgzs_TKyc4u-HLi4RFA8i9XZ4",
         "operation": "vault.create",
         "person": "usr_01a09fee-0000-7000-8000-000000000001",
         "preview": {
@@ -555,7 +560,7 @@
       }
     },
     {
-      "digest": "sha256:42641e6bedb7eacadba5e7cf844ec4b084c6305af7c3540a54e5bef7066261c8",
+      "digest": "sha256:fa908c8610733db278f4ecb40cf220b6e331e2c14b4f239122e600d935f2a747",
       "name": "a detail in the preview",
       "record": {
         "action": "credential_entry",
@@ -564,7 +569,7 @@
         "challenge": "9O5RvaQwkTvttp04xqxi9aTx4R2YmVyX72Wle8vis9Q",
         "expires_at": 1790000300000,
         "home": "https://alice.example",
-        "id": "cnf_01a09fee-1111-7000-8000-000000000001",
+        "id": "cnr_RwUmgDNh5ufeCSEze6Mgzs_TKyc4u-HLi4RFA8i9XZ4",
         "operation": "vault.create",
         "person": "usr_01a09fee-0000-7000-8000-000000000001",
         "preview": {
@@ -581,7 +586,7 @@
       }
     },
     {
-      "digest": "sha256:93484d7ee7090e21d802d2c4f8fbccc5ffcce81028a40bf1c02ac4b651a4e630",
+      "digest": "sha256:a3fab193e0722aaf02209403494093832ed2278a310a313c647f4b1c205eda1a",
       "name": "another challenge",
       "record": {
         "action": "credential_entry",
@@ -590,7 +595,7 @@
         "challenge": "Inde6BYBPFOnBRIE8DEnDMmoQ9NfTwMOX4jbJkNHSBU",
         "expires_at": 1790000300000,
         "home": "https://alice.example",
-        "id": "cnf_01a09fee-1111-7000-8000-000000000001",
+        "id": "cnr_RwUmgDNh5ufeCSEze6Mgzs_TKyc4u-HLi4RFA8i9XZ4",
         "operation": "vault.create",
         "person": "usr_01a09fee-0000-7000-8000-000000000001",
         "preview": {
@@ -604,7 +609,7 @@
       }
     },
     {
-      "digest": "sha256:20cd93a25cbef7a53c808394350aaa2a2ba99474f4b3a632fb58ebc587482e5d",
+      "digest": "sha256:6b580981e714d42a1bc0474e01d6f04d6abf7bf25805f1f4e8ed756fa9a8f612",
       "name": "another expiry",
       "record": {
         "action": "credential_entry",
@@ -613,7 +618,7 @@
         "challenge": "9O5RvaQwkTvttp04xqxi9aTx4R2YmVyX72Wle8vis9Q",
         "expires_at": 1790000300001,
         "home": "https://alice.example",
-        "id": "cnf_01a09fee-1111-7000-8000-000000000001",
+        "id": "cnr_RwUmgDNh5ufeCSEze6Mgzs_TKyc4u-HLi4RFA8i9XZ4",
         "operation": "vault.create",
         "person": "usr_01a09fee-0000-7000-8000-000000000001",
         "preview": {

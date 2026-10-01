@@ -290,12 +290,12 @@ defmodule Arca.SecurityTransitions.Fixtures do
 
   def confirmation!(athanor_id, user_id, confirmed_by \\ []) do
     now = DateTime.utc_now()
-    id = "cnf_#{uniq()}"
+    ref = Prima.Confirmation.ref("cnf_#{uniq()}")
 
     {1, _} =
       Arca.Repo.insert_all(Arca.Schemas.PendingConfirmation, [
         %{
-          id: id,
+          ref: ref,
           athanor_id: athanor_id,
           user_id: user_id,
           operation: "vault.create",
@@ -307,6 +307,7 @@ defmodule Arca.SecurityTransitions.Fixtures do
           challenge: :crypto.strong_rand_bytes(32),
           digest: Prima.Digest.sha256("record-#{uniq()}"),
           opener: "session:security-transitions-test",
+          asker: ~s({"kind":"session"}),
           state: if(confirmed_by == [], do: "pending", else: "confirmed"),
           proof: if(confirmed_by == [], do: nil, else: "passkey"),
           confirmed_client_id: confirmed_by[:client],
@@ -319,7 +320,7 @@ defmodule Arca.SecurityTransitions.Fixtures do
         }
       ])
 
-    id
+    ref
   end
 
   def confirmation_state(id), do: Arca.Repo.get(Arca.Schemas.PendingConfirmation, id).state

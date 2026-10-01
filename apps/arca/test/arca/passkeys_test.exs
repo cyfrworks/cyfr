@@ -330,7 +330,7 @@ defmodule Arca.PasskeysTest do
 
     {:ok, record} =
       Prima.Confirmation.new(
-        id: "cnf_#{System.unique_integer([:positive])}",
+        id: Prima.Confirmation.ref("cnf_#{System.unique_integer([:positive])}"),
         home: "https://home.example",
         rp_id: "home.example",
         athanor: "ath_test",
@@ -344,7 +344,11 @@ defmodule Arca.PasskeysTest do
       )
 
     {:ok, _} =
-      PendingConfirmations.open(actor, %{record: record, opener: "session:passkeys-test"})
+      PendingConfirmations.open(actor, %{
+        record: record,
+        opener: "session:passkeys-test",
+        asker: %{"kind" => "session"}
+      })
 
     {:ok, _} =
       PendingConfirmations.confirm(actor, record.id, %{proof: "passkey", passkey_id: passkey.id})

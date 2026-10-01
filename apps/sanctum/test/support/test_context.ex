@@ -404,14 +404,17 @@ defmodule Sanctum.TestContext do
   end
 
   @doc """
-  Prove the pending confirmation `id` of `ctx`'s person with the
-  software passkey `authenticator` (`passkey!/1`'s by default), from the
-  person's interactive surface in `ctx`'s athanor. Answers the confirmed
+  Prove the pending confirmation whose secret `id` the signal answered
+  (or, given a `cnr_` ref, the record it names) of `ctx`'s person with
+  the software passkey `authenticator` (`passkey!/1`'s by default), from
+  the person's interactive surface in `ctx`'s athanor, naming the record
+  by its ref as any client of the person does. Answers the confirmed
   record.
   """
   def prove!(%Context{} = ctx, id, authenticator \\ nil) do
     authenticator = authenticator || passkey!(ctx.user_id)
-    {:ok, row} = Arca.PendingConfirmations.get(Context.actor(ctx), id)
+    ref = if Prima.Confirmation.ref?(id), do: id, else: Prima.Confirmation.ref(id)
+    {:ok, row} = Arca.PendingConfirmations.get(Context.actor(ctx), ref)
     "sha256:" <> hex = row.digest
 
     assertion =
@@ -420,7 +423,7 @@ defmodule Sanctum.TestContext do
         Base.decode16!(hex, case: :lower)
       )
 
-    {:ok, confirmed} = Sanctum.Passkeys.assert(interactive(ctx), id, assertion)
+    {:ok, confirmed} = Sanctum.Passkeys.assert(interactive(ctx), ref, assertion)
     confirmed
   end
 

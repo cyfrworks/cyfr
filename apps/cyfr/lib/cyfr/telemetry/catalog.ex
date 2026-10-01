@@ -117,7 +117,8 @@ defmodule Cyfr.Telemetry.Catalog do
       consumers: [:bridge],
       note:
         "a pending confirmation of a sensitive change was opened; its person's clients " <>
-          "hear the id, the operation and the expiry, never the arguments or the preview"
+          "hear the ref, the operation and the expiry, never the secret the asking request " <>
+          "holds, the arguments or the preview"
     },
     [:cyfr, :sanctum, :confirmation, :confirmed] => %{
       consumers: [:bridge],

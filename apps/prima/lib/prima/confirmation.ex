@@ -123,7 +123,8 @@ end
 defmodule Prima.Confirmation do
   @moduledoc """
   A pending confirmation of one sensitive change, as the deciding home
-  records it: `cyfr-confirmation/v1`, its `id`, the deciding `home` and the
+  records it: `cyfr-confirmation/v1`, its `id` (the record's public
+  `ref/1`, below), the deciding `home` and the
   WebAuthn `rp_id` pinned to it, the `athanor`, the `person` (a local
   `usr_` id), the `operation` (`tool.action`), `args_digest`, the digest of
   the exact arguments, the `action` it confirms (a name from Sanctum's
@@ -139,6 +140,19 @@ defmodule Prima.Confirmation do
   of it; which RP a record names never follows the person's identity
   provenance.
 
+  ## The secret and the ref
+
+  The home answers the `confirmation_required` signal with a secret, 256
+  random bits spelled `cnf_` and 43 base64url characters, to the request
+  that asked alone: only that request's client repeats the change, by
+  presenting it. The record is named everywhere else by its `ref/1`, the
+  unpadded base64url SHA-256 of `cyfr-confirmation-ref/v1` followed by
+  the secret, prefixed `cnr_`. The record's `id` is that ref, so the
+  record, its digest and everything the home stores, announces or lists
+  carry no secret. Any holder of the secret computes its ref (a glass
+  recognizes its own record's events so), and no ref reveals its secret.
+  `tests/fixtures/confirmation.json` holds a vector of the derivation.
+
   A confirmation is never a permission for a similar change: it is
   proven, consumed and voided by Sanctum and Arca, one record at a time.
   """
@@ -148,7 +162,9 @@ defmodule Prima.Confirmation do
   alias Prima.Manifest.Tincture
 
   @protocol "cyfr-confirmation/v1"
+  @ref_protocol "cyfr-confirmation-ref/v1"
   @challenge_bytes 32
+  @ref ~r/\Acnr_[A-Za-z0-9_-]{43}\z/
   @action ~r/\A[a-z][a-z0-9_]{0,62}\z/
   @required ~w(protocol id home rp_id athanor person operation args_digest action preview challenge expires_at)
 
@@ -207,6 +223,20 @@ defmodule Prima.Confirmation do
   @doc "The length of a record's challenge, in bytes."
   @spec challenge_bytes() :: pos_integer()
   def challenge_bytes, do: @challenge_bytes
+
+  @doc """
+  The public ref of the secret `id` the `confirmation_required` signal
+  answered: `cnr_` and the unpadded base64url SHA-256 of
+  `cyfr-confirmation-ref/v1` followed by the secret. One-way: the ref
+  names the record, and no ref reveals the secret it was derived from.
+  """
+  @spec ref(String.t()) :: String.t()
+  def ref(id) when is_binary(id),
+    do: "cnr_" <> Encoding.b64(:crypto.hash(:sha256, @ref_protocol <> id))
+
+  @doc "Whether `value` is spelled as a ref (`ref/1`)."
+  @spec ref?(term()) :: boolean()
+  def ref?(value), do: is_binary(value) and Regex.match?(@ref, value)
 
   @doc """
   A record from its fields (atom keys; `:preview` a `Prima.Confirmation.Preview`

@@ -65,15 +65,16 @@ defmodule PrismWeb.WebhooksLiveTest do
       })
 
       # Past the replay decision, the page meets the signal for this
-      # create, naming its confirmation, and no secret is minted.
+      # create, naming the change and never the request's confirmation
+      # secret, and no secret is minted.
       error = :sys.get_state(view.pid).socket.assigns.form_error
       assert is_binary(error) and error =~ "Confirmation required"
       refute error =~ "replay"
 
-      assert {:ok, [%{id: id, operation: "webhook.create"}]} =
+      assert {:ok, [%{ref: "cnr_" <> _, operation: "webhook.create"}]} =
                Arca.PendingConfirmations.list_open(Sanctum.Context.actor(ctx), ctx.user_id)
 
-      assert error =~ id
+      refute error =~ "cnf_"
       assert {:error, :not_found} = Sanctum.Webhook.get(ctx, name)
     end
 

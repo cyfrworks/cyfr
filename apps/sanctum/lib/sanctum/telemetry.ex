@@ -188,31 +188,31 @@ defmodule Sanctum.Telemetry do
   @type confirmation_kind :: :opened | :confirmed | :consumed | :cancelled | :voided | :expired
 
   @doc """
-  The pending-confirmation lifecycle's announcement: the confirmation `id`
-  of `user_id` in `athanor_id`, for the operation it confirms
-  (`tool.action`), was opened, confirmed, consumed, cancelled, voided or
-  expired. Emits `[:cyfr, :sanctum, :confirmation, kind]` with the
-  athanor, the person, the id, the operation and the expiry, and nothing
-  else: never the change's arguments or its preview, which a client reads
-  under its own session. The host's bridge carries it to the person's own
-  clients.
+  The pending-confirmation lifecycle's announcement: the confirmation
+  `ref` (`Prima.Confirmation.ref/1`) of `user_id` in `athanor_id`, for the
+  operation it confirms (`tool.action`), was opened, confirmed, consumed,
+  cancelled, voided or expired. Emits `[:cyfr, :sanctum, :confirmation,
+  kind]` with the athanor, the person, the ref, the operation and the
+  expiry, and nothing else: never the secret the asking request holds,
+  the change's arguments or its preview, which a client reads under its
+  own session. The host's bridge carries it to the person's own clients.
   """
   @spec confirmation(confirmation_kind(), String.t(), String.t(), %{
-          id: String.t(),
+          ref: String.t(),
           operation: String.t(),
           expires_at: DateTime.t()
         }) :: :ok
   def confirmation(kind, athanor_id, user_id, %{
-        id: id,
+        ref: ref,
         operation: operation,
         expires_at: %DateTime{} = expires_at
       })
       when is_map_key(@confirmation_events, kind) and is_binary(athanor_id) and
-             is_binary(user_id) and is_binary(id) and is_binary(operation) do
+             is_binary(user_id) and is_binary(ref) and is_binary(operation) do
     :telemetry.execute(Map.fetch!(@confirmation_events, kind), %{count: 1}, %{
       athanor_id: athanor_id,
       user_id: user_id,
-      id: id,
+      ref: ref,
       operation: operation,
       expires_at: expires_at
     })

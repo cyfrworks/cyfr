@@ -169,7 +169,7 @@ defmodule Arca.DirectoryHeadsTest do
   defp record(athanor, user_id) do
     {:ok, record} =
       Prima.Confirmation.new(
-        id: "cnf_dh_#{System.unique_integer([:positive])}",
+        id: Prima.Confirmation.ref("cnf_dh_#{System.unique_integer([:positive])}"),
         home: "https://home.example",
         rp_id: "home.example",
         athanor: athanor.athanor_id,
@@ -190,6 +190,7 @@ defmodule Arca.DirectoryHeadsTest do
       PendingConfirmations.open(athanor, %{
         record: record(athanor, user_id),
         opener: "session:directory-heads-test",
+        asker: %{"kind" => "session"},
         identity_key_epoch: epoch
       })
 
@@ -336,14 +337,14 @@ defmodule Arca.DirectoryHeadsTest do
     assert retired == %{
              session_hashes: [session],
              passkey_ids: [passkey.id],
-             confirmation_ids: [confirmation.id],
+             confirmation_ids: [confirmation.ref],
              certificate_ids: [certificate.id]
            }
 
     assert [] = Arca.Repo.all(from(s in Session, where: s.user_id == ^person.id))
     assert [_] = Arca.Repo.all(from(s in Session, where: s.token_hash == ^kept))
     assert {:ok, %{state: "revoked"}} = Passkeys.get(server(), passkey.id)
-    assert {:ok, %{state: "voided"}} = PendingConfirmations.get(athanor, confirmation.id)
+    assert {:ok, %{state: "voided"}} = PendingConfirmations.get(athanor, confirmation.ref)
     assert {:ok, %{status: "revoked"}} = DeviceCertificates.get(athanor, certificate.id)
 
     # The retired epoch binds nothing new, on every write that binds one.
@@ -354,6 +355,7 @@ defmodule Arca.DirectoryHeadsTest do
              PendingConfirmations.open(athanor, %{
                record: record(athanor, person.id),
                opener: "session:directory-heads-test",
+               asker: %{"kind" => "session"},
                identity_key_epoch: old
              })
 

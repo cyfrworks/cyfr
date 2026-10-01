@@ -59,22 +59,40 @@ defmodule Sanctum.Consent.Authz do
       the signal and confirms in Prism;
     * a person whose keys are at another home is refused
       `:remote_identity_unavailable`, reading no directory;
-    * when the context names a confirmation (`confirmation_id`), the
-      caller's standing is read again and the record is consumed: it must
-      be confirmed, unexpired and unvoided, name exactly this person,
-      athanor, operation, argument digest and preview, and have been
-      opened by this context's own credential;
-    * otherwise, or when the record named does not answer, the open
-      record this credential holds for the same person, operation,
-      argument digest and preview is answered, or a new one opened, and
-      the answer is the consent signal `{:error, {:confirmation_required,
-      %{id, operation, expires_at}}}`.
+    * when the context names a confirmation (`confirmation_id`, the
+      secret its signal answered), the caller's standing is read again
+      and the record is consumed: it must be confirmed, unexpired and
+      unvoided, name exactly this person, athanor, operation, argument
+      digest and preview, and have been opened by this context's own
+      credential;
+    * when the record named is this change's, opened by this credential,
+      and still pending, the repeat came before the proof: it waits on
+      that record, answered the consent signal again with the same `id`
+      and the record's expiry, and nothing is opened;
+    * otherwise, or when the record named does not answer, a new record
+      is opened, whatever stands for the same change, and the answer is
+      the consent signal `{:error, {:confirmation_required, %{id,
+      operation, expires_at}}}`.
 
-  A record is bound to the credential that opened it, its opener: the
-  context's paired client, frame credential, API key or session. Any
-  client of the person may prove it, but only its opener repeats the
-  change, so another session of the same person, a stolen one listening
-  for the proof among them, never takes a change it did not ask for.
+  The signal's `id` is a secret, 256 random bits drawn for this request
+  and answered to it alone: it is never stored, announced, listed or
+  logged. The record is stored, announced and listed under its public
+  ref (`Prima.Confirmation.ref/1` of the secret), by which any client of
+  the person reads and proves it (`Sanctum.Providers.Confirmation`).
+  Repeating the change needs the secret, from the credential that opened
+  the record, its opener: the context's paired client, frame credential,
+  API key or session. So neither another session of the same person nor
+  a thief holding the asking session's own token takes a change it did
+  not ask for: an identical request of the thief's opens a record of its
+  own, and the one the person proves is repeated only by the request
+  that holds its secret.
+
+  A record also names its asker, from what the opener already holds: a
+  paired client's or an API key's name, a session's sign-in provider and
+  creation time, a frame's tincture, or this home for a context no
+  stored credential backs. So a person tells their own request from
+  another's; the same credential yields the same name, so the secret,
+  not the name, is the protection.
 
   `confirm/3` consumes at once, for a change whose effect is one call.
   `check/3` asks the same question and consumes nothing. `consume/2`
@@ -86,8 +104,8 @@ defmodule Sanctum.Consent.Authz do
   The arguments are bound by a keyed digest (`args_digest/1`), so a
   record names its change without holding anything guessable about a
   secret argument. The lifecycle is announced through
-  `Sanctum.Telemetry.confirmation/4`, carrying the id, the operation and
-  the expiry and never the arguments or the preview.
+  `Sanctum.Telemetry.confirmation/4`, carrying the ref, the operation and
+  the expiry and never the secret, the arguments or the preview.
 
   Overrides — granting a component more than its author declared — are
   always interactive. A key cannot mint one no matter how tightly caveated,
@@ -103,6 +121,11 @@ defmodule Sanctum.Consent.Authz do
   alias Sanctum.Context
 
   require Logger
+
+  # The bytes of a confirmation's secret: 256 random bits.
+  @secret_bytes 32
+  # The bytes of the asker's name, at most.
+  @asker_name_bytes 255
 
   defmodule Request do
     @moduledoc """
@@ -151,6 +174,7 @@ defmodule Sanctum.Consent.Authz do
           | :capability_expired
           | :invalid_request
           | :not_standing
+          | :identity_stale
           | :unavailable
           | :missing_tenant
           | :remote_identity_unavailable
@@ -191,11 +215,12 @@ defmodule Sanctum.Consent.Authz do
   one call (the module doc).
 
   `:ok` when the action needs no fresh confirmation, or when the
-  confirmation `ctx.confirmation_id` names is consumed for exactly this
-  change. Otherwise the open record for this change is answered, or one
-  opened, as the consent signal `{:error, {:confirmation_required, %{id,
-  operation, expires_at}}}`. `{:error, :invalid_request}` names an action
-  outside the table or a malformed change.
+  confirmation whose secret `ctx.confirmation_id` holds is consumed for
+  exactly this change. Otherwise a new record is opened for this change
+  and answered as the consent signal `{:error, {:confirmation_required,
+  %{id, operation, expires_at}}}`, its `id` the record's secret.
+  `{:error, :invalid_request}` names an action outside the table or a
+  malformed change.
   """
   @spec confirm(Context.t(), Sanctum.Pairing.action(), change()) ::
           :ok | {:error, refusal() | {:confirmation_required, map()}}
@@ -230,14 +255,14 @@ defmodule Sanctum.Consent.Authz do
   def consume(%Context{}, _change), do: {:error, :invalid_request}
 
   @doc """
-  Announce that the record `ctx.confirmation_id` names was consumed, once
-  the transaction `consume/2` ran in committed. A context that names none,
-  or a record that is not consumed, announces nothing.
+  Announce that the record whose secret `ctx.confirmation_id` holds was
+  consumed, once the transaction `consume/2` ran in committed. A context
+  that names none, or a record that is not consumed, announces nothing.
   """
   @spec consumed(Context.t()) :: :ok
   def consumed(%Context{confirmation_id: id, athanor_id: a} = ctx)
       when is_binary(id) and id != "" and is_binary(a) and a != "" do
-    case PendingConfirmations.get(Context.actor(ctx), id) do
+    case PendingConfirmations.get(Context.actor(ctx), Prima.Confirmation.ref(id)) do
       {:ok, %{state: "consumed"} = row} -> announce(:consumed, row)
       _other -> :ok
     end
@@ -381,6 +406,9 @@ defmodule Sanctum.Consent.Authz do
     do: "Your sign-in or key no longer stands here; sign in again to decide this"
 
   def message(:unavailable), do: "Your standing could not be checked; try again"
+
+  def message(:identity_stale),
+    do: "Your identity's current state could not be read from its directory; try again shortly"
 
   def message(:missing_tenant),
     do: "A change that needs a fresh confirmation is made in an athanor; open one first"
@@ -553,11 +581,29 @@ defmodule Sanctum.Consent.Authz do
 
   # A record found past its expiry is announced as expired; any record
   # that does not answer is asked for again. A store that could not answer
-  # is no verdict.
+  # is no verdict. A repeat before the proof (`:not_confirmed`, which the
+  # store answers only for this exact change's unexpired pending record,
+  # opened by this same credential) waits on that record: the asker is
+  # answered the secret it presented and the record's expiry again, and
+  # nothing is opened, so repeating early never mints a new secret or, at
+  # the opener's bound, voids the record the person is proving.
   defp reask(_ctx, _asked, _id, :database_error), do: {:error, :unavailable}
 
+  defp reask(ctx, asked, id, :not_confirmed) do
+    case PendingConfirmations.get(Context.actor(ctx), Prima.Confirmation.ref(id)) do
+      {:ok, %{state: state} = row} when state in ["pending", "confirmed"] ->
+        {:error, {:confirmation_required, signal(id, row)}}
+
+      {:error, :database_error} ->
+        {:error, :unavailable}
+
+      _ended ->
+        ask(ctx, asked, :check)
+    end
+  end
+
   defp reask(ctx, asked, id, :expired) do
-    case PendingConfirmations.get(Context.actor(ctx), id) do
+    case PendingConfirmations.get(Context.actor(ctx), Prima.Confirmation.ref(id)) do
       {:ok, row} -> announce(:expired, row)
       _other -> :ok
     end
@@ -567,15 +613,19 @@ defmodule Sanctum.Consent.Authz do
 
   defp reask(ctx, asked, _id, _reason), do: ask(ctx, asked, :check)
 
-  # Open the record for this change, or answer the one standing, as the
-  # consent signal. A caller's transaction opens nothing.
+  # Open a new record for this change under a secret drawn for this
+  # request, and answer the secret as the consent signal: the record is
+  # stored, announced and listed under the secret's ref alone. A caller's
+  # transaction opens nothing.
   defp ask(_ctx, _asked, :consume), do: {:error, :invalid_request}
 
   defp ask(ctx, {action, change, preview}, _mode) do
+    secret = "cnf_" <> Prima.Identity.Encoding.b64(:crypto.strong_rand_bytes(@secret_bytes))
+
     with {:ok, seconds} <- confirmation_seconds(),
          {:ok, record} <-
            Prima.Confirmation.new(
-             id: Prima.UUID7.generate_id("cnf"),
+             id: Prima.Confirmation.ref(secret),
              home: Sanctum.Person.home(),
              rp_id: Sanctum.Passkeys.rp_id(),
              athanor: ctx.athanor_id,
@@ -587,10 +637,15 @@ defmodule Sanctum.Consent.Authz do
              challenge: :crypto.strong_rand_bytes(Prima.Confirmation.challenge_bytes()),
              expires_at: System.os_time(:millisecond) + seconds * 1000
            ) do
-      case PendingConfirmations.open(Context.actor(ctx), %{record: record, opener: opener(ctx)}) do
+      case PendingConfirmations.open(Context.actor(ctx), %{
+             record: record,
+             opener: opener(ctx),
+             asker: asker(ctx)
+           }) do
         {:ok, row} ->
-          if row.id == record.id, do: announce(:opened, row)
-          {:error, {:confirmation_required, signal(row)}}
+          announce_voided(ctx, Map.get(row, :voided, []))
+          announce(:opened, row)
+          {:error, {:confirmation_required, signal(secret, row)}}
 
         {:error, reason} ->
           Logger.warning(
@@ -606,7 +661,25 @@ defmodule Sanctum.Consent.Authz do
     end
   end
 
-  defp signal(row), do: %{id: row.id, operation: row.operation, expires_at: row.expires_at}
+  # The records an open voided to keep its opener within the store's bound
+  # (`Arca.PendingConfirmations.open_per_opener/0`), announced as any void
+  # is: read back by ref for the operation and expiry the announcement
+  # carries. One that cannot be read is not announced.
+  defp announce_voided(ctx, refs) do
+    for ref <- refs do
+      case PendingConfirmations.get(Context.actor(ctx), ref) do
+        {:ok, %{state: "voided"} = row} -> announce(:voided, row)
+        _unread -> :ok
+      end
+    end
+
+    :ok
+  end
+
+  # The consent signal: the secret, answered to the asking request alone,
+  # with the record's operation and expiry.
+  defp signal(secret, row),
+    do: %{id: secret, operation: row.operation, expires_at: row.expires_at}
 
   # The credential a context acts under, which alone repeats a change it
   # asked for: its paired client, its frame credential, its API key or its
@@ -626,13 +699,92 @@ defmodule Sanctum.Consent.Authz do
 
   defp opener(%Context{}), do: "unbound"
 
+  # A name for the client that asked, from what the opener already holds,
+  # in the order `opener/1` reads it: a paired client's name, a frame's
+  # tincture, an API key's name, a session's sign-in provider and creation
+  # time from its own row, or this home for a context no stored credential
+  # backs. A hint for the person reading the record: a name that cannot be
+  # read is left out, never a refusal.
+  defp asker(%Context{auth_method: :device, client_id: id} = ctx)
+       when is_binary(id) and id != "",
+       do: named_asker("client", client_name(ctx, id))
+
+  defp asker(%Context{frame: %{id: id} = frame}) when is_binary(id) and id != "",
+    do: named_asker("frame", tincture(frame))
+
+  defp asker(%Context{auth_method: :api_key, api_key_id: id} = ctx)
+       when is_binary(id) and id != "",
+       do: named_asker("key", key_name(ctx, id))
+
+  defp asker(%Context{session_token_hash: hash}) when is_binary(hash) and hash != "" do
+    case Arca.SessionStorage.get_session(hash) do
+      {:ok, %{provider: provider, inserted_at: %DateTime{} = since}} ->
+        "session"
+        |> named_asker(provider)
+        |> Map.put("since", DateTime.to_iso8601(since))
+
+      _unread ->
+        named_asker("session", nil)
+    end
+  end
+
+  defp asker(%Context{}), do: named_asker("unbound", Sanctum.Person.home())
+
+  # The name is cut to at most 255 bytes at a UTF-8 boundary, never 255
+  # graphemes, so however many bytes its characters take the asker stays
+  # far inside the store's bound and a hint never becomes a refusal. A name
+  # with no valid UTF-8 prefix is left out.
+  defp named_asker(kind, name) when is_binary(name) do
+    case utf8_prefix(name, @asker_name_bytes) do
+      "" -> %{"kind" => kind}
+      bounded -> %{"kind" => kind, "name" => bounded}
+    end
+  end
+
+  defp named_asker(kind, _unnamed), do: %{"kind" => kind}
+
   @doc false
-  # The lifecycle announcement for a stored record: its id, operation and
+  # The longest prefix of `text` that is at most `max` bytes and valid
+  # UTF-8: a character the cut would split is dropped whole.
+  @spec utf8_prefix(binary(), non_neg_integer()) :: binary()
+  def utf8_prefix(text, max) when is_binary(text) and is_integer(max) and max >= 0,
+    do: valid_prefix(binary_part(text, 0, min(byte_size(text), max)))
+
+  defp valid_prefix(""), do: ""
+
+  defp valid_prefix(bytes) do
+    if String.valid?(bytes),
+      do: bytes,
+      else: valid_prefix(binary_part(bytes, 0, byte_size(bytes) - 1))
+  end
+
+  defp client_name(ctx, client_id) do
+    case Arca.PairedClients.list(Context.actor(ctx), user_id: ctx.user_id, standing: :all) do
+      {:ok, clients} -> Enum.find_value(clients, &(&1.id == client_id && &1.label))
+      {:error, _unanswered} -> nil
+    end
+  end
+
+  defp key_name(ctx, key_id) do
+    case Arca.ApiKeyStorage.get_key_by_id(Context.actor(ctx), key_id) do
+      {:ok, %{name: name}} -> name
+      {:error, _unanswered} -> nil
+    end
+  end
+
+  defp tincture(%{reference: %{publisher: publisher, name: name}})
+       when is_binary(publisher) and is_binary(name),
+       do: publisher <> "/" <> name
+
+  defp tincture(_frame), do: nil
+
+  @doc false
+  # The lifecycle announcement for a stored record: its ref, operation and
   # expiry, and nothing else (`Sanctum.Telemetry.confirmation/4`).
   @spec announce(Sanctum.Telemetry.confirmation_kind(), map()) :: :ok
-  def announce(kind, %{id: id, athanor_id: athanor_id, user_id: user_id} = row) do
+  def announce(kind, %{ref: ref, athanor_id: athanor_id, user_id: user_id} = row) do
     Sanctum.Telemetry.confirmation(kind, athanor_id, user_id, %{
-      id: id,
+      ref: ref,
       operation: row.operation,
       expires_at: row.expires_at
     })
@@ -733,14 +885,34 @@ defmodule Sanctum.Consent.Authz do
   # transaction the rows are locked in it, so a write that asks here
   # commits only while they stand (`Sanctum.Passkeys`).
   @spec standing(Context.t()) ::
-          :ok | {:error, :not_authenticated | :not_standing | :unavailable}
+          :ok
+          | {:error, :not_authenticated | :not_standing | :identity_stale | :unavailable}
   def standing(%Context{} = ctx) do
     case Sanctum.Caller.revalidate_session(ctx) do
       {:ok, _current} -> :ok
-      {:error, :unauthenticated} -> {:error, :not_authenticated}
-      {:error, reason} when reason in [:not_standing, :not_member] -> {:error, :not_standing}
-      {:error, :unavailable} -> {:error, :unavailable}
+      {:error, reason} -> {:error, standing_refusal(reason)}
     end
+  end
+
+  @doc false
+  # What a revalidation's refusal is here: a person whose remote identity
+  # could not be read fresh is `:identity_stale`, and a refusal this
+  # vocabulary does not know is `:unavailable`, never a crash, so a refusal
+  # revalidation learns later still refuses.
+  @spec standing_refusal(term()) ::
+          :not_authenticated | :not_standing | :identity_stale | :unavailable
+  def standing_refusal(:unauthenticated), do: :not_authenticated
+  def standing_refusal(reason) when reason in [:not_standing, :not_member], do: :not_standing
+  def standing_refusal(:identity_stale), do: :identity_stale
+  def standing_refusal(:unavailable), do: :unavailable
+
+  def standing_refusal(other) do
+    Logger.error(
+      "[Sanctum.Consent.Authz] revalidation answered an unknown refusal " <>
+        "#{Prima.LoggerContext.shape(other)}; refusing as unavailable"
+    )
+
+    :unavailable
   end
 
   # The surface a context authenticated through. A paired client is the

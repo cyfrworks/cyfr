@@ -101,7 +101,13 @@ defmodule Sanctum.PairingTest do
     {:ok, session_ctx} =
       Sanctum.Caller.establish(session.token, focus: athanor.id, task_supervisor: nil)
 
-    %{user: user, athanor: athanor, session_ctx: session_ctx}
+    %{user: user, athanor: athanor, session_ctx: session_ctx, session_token: session.token}
+  end
+
+  # The pending record a confirmation's secret names, read by its ref.
+  defp record!(ctx, id) do
+    {:ok, row} = Arca.PendingConfirmations.get(Context.actor(ctx), Prima.Confirmation.ref(id))
+    row
   end
 
   defp glass(source \\ @source), do: Context.build(%{authenticated: false, client_ip: source})
@@ -367,6 +373,48 @@ defmodule Sanctum.PairingTest do
   # ---------------------------------------------------------------------------
 
   describe "begin/2" do
+    test "a thief holding the asking session's own token, asking first, never takes the person's invitation",
+         %{session_token: token, user: user, athanor: athanor} do
+      # Two contexts built from one session token: the thief's, which asks
+      # first, and the person's. One credential, one opener.
+      {:ok, thief} = Sanctum.Caller.establish(token, focus: athanor.id, task_supervisor: nil)
+      {:ok, person} = Sanctum.Caller.establish(token, focus: athanor.id, task_supervisor: nil)
+      assert thief.session_token_hash == person.session_token_hash
+
+      assert {:error, {:confirmation_required, %{id: thief_id}}} = Pairing.begin(thief, %{})
+      assert {:error, {:confirmation_required, %{id: person_id}}} = Pairing.begin(person, %{})
+
+      # The person's identical request gets a record of its own, which the
+      # person proves by its ref, as any client of theirs reads it.
+      refute person_id == thief_id
+      person_ref = Prima.Confirmation.ref(person_id)
+      refute person_ref == Prima.Confirmation.ref(thief_id)
+      assert %{state: "confirmed"} = Sanctum.TestContext.prove!(person, person_ref)
+
+      # The thief repeats under its own secret, and waits on its own
+      # unproven record; or under the ref it learned from the stream or the
+      # pending list, which names nothing to consume, and is asked for a
+      # proof anew. No invitation opens.
+      assert {:error, {:confirmation_required, %{id: ^thief_id}}} =
+               Pairing.begin(%{thief | confirmation_id: thief_id}, %{})
+
+      assert {:error, {:confirmation_required, %{id: fresh}}} =
+               Pairing.begin(%{thief | confirmation_id: person_ref}, %{})
+
+      refute fresh in [thief_id, person_id]
+
+      assert Arca.Repo.all(from(i in PairingInvitation, where: i.user_id == ^user.id)) == []
+      assert record!(person, person_id).state == "confirmed"
+
+      # The person repeats under their own secret, once; the thief's record
+      # stays unproven.
+      assert {:ok, %{invitation_secret: _}} =
+               Pairing.begin(%{person | confirmation_id: person_id}, %{})
+
+      assert record!(person, person_id).state == "consumed"
+      assert record!(person, thief_id).state == "pending"
+    end
+
     test "opens a five-minute, 128-bit bearer invitation, stored only as its hash", %{
       session_ctx: session_ctx,
       user: user,
@@ -409,8 +457,7 @@ defmodule Sanctum.PairingTest do
       Sanctum.TestContext.prove!(session_ctx, id)
       assert {:ok, invitation} = Pairing.begin(%{session_ctx | confirmation_id: id}, %{})
 
-      {:ok, record} = Arca.PendingConfirmations.get(Context.actor(session_ctx), id)
-      assert record.state == "consumed"
+      assert record!(session_ctx, id).state == "consumed"
       assert {:ok, _paired} = complete(invitation.invitation_secret, device_key())
 
       # The confirmation paired once: naming it again asks anew.
@@ -454,8 +501,7 @@ defmodule Sanctum.PairingTest do
 
       # The asking session repeats under its record, once.
       assert {:ok, %{invitation_secret: _}} = Pairing.begin(%{asking | confirmation_id: id}, %{})
-      {:ok, record} = Arca.PendingConfirmations.get(Context.actor(asking), id)
-      assert record.state == "consumed"
+      assert record!(asking, id).state == "consumed"
     end
 
     test "a record a device confirmed is void once that device is revoked", %{
@@ -465,9 +511,17 @@ defmodule Sanctum.PairingTest do
       device_ctx = connected!(device)
       authenticator = Sanctum.TestContext.passkey!(session_ctx.user_id)
 
+      {1, _} =
+        Arca.Repo.update_all(from(p in PairedClient, where: p.id == ^device.client_id),
+          set: [label: "Kitchen tablet"]
+        )
+
       assert {:error, {:confirmation_required, %{id: id}}} = Pairing.begin(device_ctx, %{})
-      {:ok, row} = Arca.PendingConfirmations.get(Context.actor(device_ctx), id)
+      row = record!(device_ctx, id)
       "sha256:" <> hex = row.digest
+
+      # The record names the device that asked, by its name.
+      assert Jason.decode!(row.asker) == %{"kind" => "client", "name" => "Kitchen tablet"}
 
       assertion =
         Sanctum.TestContext.Authenticator.assertion(
@@ -475,20 +529,39 @@ defmodule Sanctum.PairingTest do
           Base.decode16!(hex, case: :lower)
         )
 
-      assert {:ok, %{state: "confirmed"}} = Sanctum.Passkeys.assert(device_ctx, id, assertion)
+      assert {:ok, %{state: "confirmed"}} =
+               Sanctum.Passkeys.assert(device_ctx, row.ref, assertion)
 
-      {:ok, confirmed} = Arca.PendingConfirmations.get(Context.actor(device_ctx), id)
-      assert confirmed.confirmed_client_id == device.client_id
+      assert record!(device_ctx, id).confirmed_client_id == device.client_id
 
-      {:ok, _} = revoke!(session_ctx, device.client_id)
+      # The revocation's preview names the device by its name now.
+      {:ok, _} =
+        Sanctum.TestContext.confirming(session_ctx, &Pairing.revoke(&1, device.client_id))
 
-      {:ok, voided} = Arca.PendingConfirmations.get(Context.actor(device_ctx), id)
-      assert voided.state == "voided"
+      assert record!(device_ctx, id).state == "voided"
 
       assert {:error, {:confirmation_required, %{id: fresh}}} =
                Pairing.begin(%{session_ctx | confirmation_id: id}, %{})
 
       refute fresh == id
+    end
+
+    test "a device's long name is kept within 255 bytes, cut between characters", %{
+      session_ctx: session_ctx
+    } do
+      device = pair!(session_ctx)
+      device_ctx = connected!(device)
+
+      # Four bytes a character: 100 of them are 400 bytes, and 63 fit.
+      {1, _} =
+        Arca.Repo.update_all(from(p in PairedClient, where: p.id == ^device.client_id),
+          set: [label: String.duplicate("🦫", 100)]
+        )
+
+      assert {:error, {:confirmation_required, %{id: id}}} = Pairing.begin(device_ctx, %{})
+      assert %{"kind" => "client", "name" => name} = Jason.decode!(record!(device_ctx, id).asker)
+      assert name == String.duplicate("🦫", 63)
+      assert byte_size(name) <= 255 and String.valid?(name)
     end
 
     test "needs a person working in an athanor", %{session_ctx: session_ctx} do

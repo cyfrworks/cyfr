@@ -511,12 +511,12 @@ defmodule PrismWeb.ShellDesktopTest do
 
       ctx = person(user, athanor)
 
-      assert {:ok, [%{id: id, operation: "vault.create"}]} =
+      assert {:ok, [%{ref: "cnr_" <> _, operation: "vault.create"}]} =
                Arca.PendingConfirmations.list_open(Sanctum.Context.actor(ctx), ctx.user_id)
 
       html = render(view)
       assert html =~ "Confirmation required"
-      assert html =~ id
+      refute html =~ "cnf_"
       refute html =~ "v4lue-typed"
       refute_push_event(view, "frame_credential", _payload, 50)
 

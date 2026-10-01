@@ -82,7 +82,7 @@ defmodule Cyfr.BusPayloadTest do
       }),
       LayoutPublished.new(@actor, "usr_1", 4),
       Confirmation.new(@actor, :opened,
-        id: "confirmation-7f3a",
+        ref: "cnr_RwUmgDNh5ufeCSEze6Mgzs_TKyc4u-HLi4RFA8i9XZ4",
         operation: "vault.create",
         expires_at: ~U[2026-09-30 12:05:00Z]
       ),

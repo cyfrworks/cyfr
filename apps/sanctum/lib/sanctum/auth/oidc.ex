@@ -31,14 +31,18 @@ defmodule Sanctum.Auth.OIDC do
   re-authentication bound to it instead:
 
     * `reauth_url/2` begins one for a pending confirmation of the
-      caller's own person, who must hold an `oidcc` door of this issuer.
-      It asks the issuer, through `Oidcc` directly against the
+      caller's own person, named by its public ref
+      (`Prima.Confirmation.ref/1`), who must hold an `oidcc` door of this
+      issuer. It asks the issuer, through `Oidcc` directly against the
       `:cyfr_oidc` configuration worker, for a login forced fresh with
       `prompt=login` and `max_age=0`, carrying a nonce derived from the
-      confirmation's id and digest and held on the record, a state naming
-      the record under a keyed digest, and a PKCE verifier derived from
-      the nonce. Its redirect URI is `<origin>/auth/oidcc/reauth`, which
-      the issuer must list beside the sign-in callback.
+      confirmation's ref and digest and held on the record, a state
+      naming the record's ref under a keyed digest, and a PKCE verifier
+      derived from the nonce. Its redirect URI is
+      `<origin>/auth/oidcc/reauth`, which the issuer must list beside the
+      sign-in callback. Nothing here carries the secret the asking
+      request holds: the URL travels through the issuer, the browser and
+      the request log.
     * `reauth_callback/1` accepts the issuer's answer only when the ID
       token's `nonce` is the one the record holds, its `auth_time` is not
       earlier than the record's opening (an answer with no `auth_time`
@@ -276,27 +280,27 @@ defmodule Sanctum.Auth.OIDC do
   end
 
   @doc """
-  Begin a re-authentication for the pending confirmation `confirmation_id`
-  of the context's own person, in the context's athanor (the module doc).
+  Begin a re-authentication for the pending confirmation `ref` of the
+  context's own person, in the context's athanor (the module doc).
   Answers `%{method: "oidc", url:}`, the issuer's URL to send the browser
   to. A new one replaces any earlier re-authentication for that record.
 
   Refusals: `{:invalid_argument, _}` for a person with no linked `oidcc`
   door of this issuer, or a home that signs no one in through one;
-  `{:not_found, "confirmation", id}`; `:not_pending`; `:unavailable`.
+  `{:not_found, "confirmation", ref}`; `:not_pending`; `:unavailable`.
   """
   @spec reauth_url(Context.t(), String.t()) :: {:ok, map()} | {:error, term()}
-  def reauth_url(%Context{} = ctx, confirmation_id) when is_binary(confirmation_id) do
+  def reauth_url(%Context{} = ctx, ref) when is_binary(ref) do
     actor = Context.actor(ctx)
 
     with {:ok, user_id} <- confirming_person(ctx),
          {:ok, _door} <- linked_door(user_id),
-         {:ok, row} <- pending_record(actor, confirmation_id, user_id) do
+         {:ok, row} <- pending_record(actor, ref, user_id) do
       nonce = reauth_nonce(row)
 
-      case Arca.PendingConfirmations.put_challenge(actor, row.id, %{reauth_nonce: nonce}) do
+      case Arca.PendingConfirmations.put_challenge(actor, row.ref, %{reauth_nonce: nonce}) do
         {:ok, _held} ->
-          case client().authorize_url(request(ctx.athanor_id, row.id, nonce)) do
+          case client().authorize_url(request(ctx.athanor_id, row.ref, nonce)) do
             {:ok, url} -> {:ok, %{method: "oidc", url: url}}
             {:error, _unreached} -> {:error, :unavailable}
           end
@@ -316,24 +320,24 @@ defmodule Sanctum.Auth.OIDC do
   and person (the module doc). It confirms nothing: the verified proof is
   held under a single-use ticket, alive while the record is and at most
   ten minutes, and the answer is what the person approves or declines,
-  `%{ticket:, id:, operation:, preview:, expires_at:}`, the preview as the
+  `%{ticket:, ref:, operation:, preview:, expires_at:}`, the preview as the
   home stored it. The ticket goes to `reauth_decide/3` and nowhere a
   page renders.
 
   Refusals: `:reauth_refused` (a state not this home's, an error answer,
   a code the issuer refuses, or an ID token whose nonce, `auth_time`,
-  issuer or subject does not hold), `{:not_found, "confirmation", id}`,
+  issuer or subject does not hold), `{:not_found, "confirmation", ref}`,
   `:not_pending`, `:expired`, `:unavailable`.
   """
   @spec reauth_callback(map()) :: {:ok, map()} | {:error, term()}
   def reauth_callback(%{"state" => state, "code" => code})
       when is_binary(state) and is_binary(code) and code != "" do
-    with {:ok, athanor_id, confirmation_id} <- read_state(state),
+    with {:ok, athanor_id, ref} <- read_state(state),
          actor = Prima.Actor.in_athanor(athanor_id),
-         {:ok, row} <- stored(actor, confirmation_id),
+         {:ok, row} <- stored(actor, ref),
          {:ok, nonce} <- held_nonce(row),
          {:ok, ttl} <- alive_ms(row),
-         {:ok, claims} <- client().redeem(code, request(athanor_id, row.id, nonce)),
+         {:ok, claims} <- client().redeem(code, request(athanor_id, row.ref, nonce)),
          :ok <- fresh(claims, nonce, row),
          :ok <- same_door(claims, row.user_id),
          {:ok, preview} <- Jason.decode(row.preview) do
@@ -341,14 +345,14 @@ defmodule Sanctum.Auth.OIDC do
 
       Arca.Cache.put(
         {:oidc_reauth_proof, ticket},
-        %{athanor_id: athanor_id, id: row.id, user_id: row.user_id, nonce: nonce},
+        %{athanor_id: athanor_id, ref: row.ref, user_id: row.user_id, nonce: nonce},
         ttl
       )
 
       {:ok,
        %{
          ticket: ticket,
-         id: row.id,
+         ref: row.ref,
          operation: row.operation,
          preview: preview,
          expires_at: row.expires_at
@@ -371,7 +375,7 @@ defmodule Sanctum.Auth.OIDC do
   An approval confirms the record with proof `oidc_reauth` only when that
   session is the record's person's, still standing (`Sanctum.Caller.establish/2`),
   and the record still pending under the nonce the login answered.
-  Answers `%{id:, state: "confirmed", expires_at:}`, or `:declined` for a
+  Answers `%{ref:, state: "confirmed", expires_at:}`, or `:declined` for a
   decline, which confirms nothing.
 
   Refusals: `:reauth_refused` (a ticket spent, expired or never issued, or
@@ -392,7 +396,7 @@ defmodule Sanctum.Auth.OIDC do
 
   defp take_held(ticket) when is_binary(ticket) and ticket != "" and byte_size(ticket) <= 64 do
     case Arca.Cache.take({:oidc_reauth_proof, ticket}) do
-      {:ok, %{athanor_id: _, id: _, user_id: _, nonce: _} = held} -> {:ok, held}
+      {:ok, %{athanor_id: _, ref: _, user_id: _, nonce: _} = held} -> {:ok, held}
       _spent -> {:error, :reauth_refused}
     end
   end
@@ -403,13 +407,13 @@ defmodule Sanctum.Auth.OIDC do
     actor = Prima.Actor.in_athanor(held.athanor_id)
 
     with :ok <- answering_person(session_token, held.user_id),
-         {:ok, row} <- stored(actor, held.id),
+         {:ok, row} <- stored(actor, held.ref),
          {:ok, nonce} <- held_nonce(row),
          true <- Plug.Crypto.secure_compare(nonce, held.nonce) or {:error, :reauth_refused} do
-      case Arca.PendingConfirmations.confirm(actor, row.id, %{proof: "oidc_reauth"}) do
+      case Arca.PendingConfirmations.confirm(actor, row.ref, %{proof: "oidc_reauth"}) do
         {:ok, confirmed} ->
           Authz.announce(:confirmed, confirmed)
-          {:ok, %{id: confirmed.id, state: confirmed.state, expires_at: confirmed.expires_at}}
+          {:ok, %{ref: confirmed.ref, state: confirmed.state, expires_at: confirmed.expires_at}}
 
         {:error, reason} when reason in [:not_pending, :expired] ->
           {:error, reason}
@@ -462,20 +466,20 @@ defmodule Sanctum.Auth.OIDC do
     end
   end
 
-  defp pending_record(actor, id, user_id) do
-    case Arca.PendingConfirmations.get(actor, id) do
+  defp pending_record(actor, ref, user_id) do
+    case Arca.PendingConfirmations.get(actor, ref) do
       {:ok, %{user_id: ^user_id, state: "pending"} = row} -> {:ok, row}
       {:ok, %{user_id: ^user_id}} -> {:error, :not_pending}
-      {:ok, _another} -> {:error, {:not_found, "confirmation", id}}
-      {:error, :not_found} -> {:error, {:not_found, "confirmation", id}}
+      {:ok, _another} -> {:error, {:not_found, "confirmation", ref}}
+      {:error, :not_found} -> {:error, {:not_found, "confirmation", ref}}
       {:error, _unanswered} -> {:error, :unavailable}
     end
   end
 
-  defp stored(actor, id) do
-    case Arca.PendingConfirmations.get(actor, id) do
+  defp stored(actor, ref) do
+    case Arca.PendingConfirmations.get(actor, ref) do
       {:ok, row} -> {:ok, row}
-      {:error, :not_found} -> {:error, {:not_found, "confirmation", id}}
+      {:error, :not_found} -> {:error, {:not_found, "confirmation", ref}}
       {:error, _unanswered} -> {:error, :unavailable}
     end
   end
@@ -486,7 +490,7 @@ defmodule Sanctum.Auth.OIDC do
   defp held_nonce(%{state: "pending"}), do: {:error, :reauth_refused}
   defp held_nonce(_row), do: {:error, :not_pending}
 
-  # A nonce bound to the record's id and digest, and drawn fresh for each
+  # A nonce bound to the record's ref and digest, and drawn fresh for each
   # re-authentication: only this home can make one, and each names one
   # attempt at one record.
   defp reauth_nonce(row) do
@@ -497,7 +501,7 @@ defmodule Sanctum.Auth.OIDC do
         Authz.derived_key("oidc-reauth-nonce"),
         Encoding.jcs!(%{
           "protocol" => @nonce_protocol,
-          "id" => row.id,
+          "ref" => row.ref,
           "digest" => row.digest,
           "salt" => Encoding.b64(:crypto.strong_rand_bytes(16))
         })
@@ -505,20 +509,22 @@ defmodule Sanctum.Auth.OIDC do
     )
   end
 
-  defp request(athanor_id, confirmation_id, nonce) do
+  defp request(athanor_id, ref, nonce) do
     %{
       redirect_uri: Sanctum.Person.home() <> @reauth_path,
       nonce: nonce,
-      state: state(athanor_id, confirmation_id),
+      state: state(athanor_id, ref),
       pkce_verifier:
         Encoding.b64(:crypto.mac(:hmac, :sha256, Authz.derived_key("oidc-reauth-pkce"), nonce))
     }
   end
 
-  # The state names the record, under a keyed digest only this home can
-  # make: the callback reads nothing it did not write.
-  defp state(athanor_id, confirmation_id) do
-    payload = Encoding.b64(Encoding.jcs!(%{"a" => athanor_id, "c" => confirmation_id}))
+  # The state names the record by its public ref, under a keyed digest
+  # only this home can make: the callback reads nothing it did not write,
+  # and the state, which the issuer, the browser and the request log all
+  # see, carries nothing the asking request alone holds.
+  defp state(athanor_id, ref) do
+    payload = Encoding.b64(Encoding.jcs!(%{"a" => athanor_id, "c" => ref}))
     payload <> "." <> Encoding.b64(state_mac(payload))
   end
 
@@ -530,9 +536,9 @@ defmodule Sanctum.Auth.OIDC do
          {:ok, mac} <- Encoding.unb64(mac, 32),
          true <- Plug.Crypto.secure_compare(mac, state_mac(payload)),
          {:ok, json} <- Base.url_decode64(payload, padding: false),
-         {:ok, %{"a" => athanor_id, "c" => id}} <- Jason.decode(json),
-         true <- Encoding.id?(athanor_id) and Encoding.id?(id) do
-      {:ok, athanor_id, id}
+         {:ok, %{"a" => athanor_id, "c" => ref}} <- Jason.decode(json),
+         true <- Encoding.id?(athanor_id) and Prima.Confirmation.ref?(ref) do
+      {:ok, athanor_id, ref}
     else
       _forged -> {:error, :reauth_refused}
     end

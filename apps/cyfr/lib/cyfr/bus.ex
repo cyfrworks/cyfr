@@ -296,7 +296,7 @@ defmodule Cyfr.Bus do
       pending: true,
       reason:
         "one person's pending confirmations moved, on that person's own topic, so no other " <>
-          "member learns of their sensitive changes; it carries the id, the operation and " <>
+          "member learns of their sensitive changes; it carries the ref, the operation and " <>
           "the expiry, and a client reads the preview under its own session"
     },
     # --- global: unscoped on purpose ---

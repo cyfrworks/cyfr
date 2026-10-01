@@ -5,7 +5,8 @@ defmodule Prima.ConsentSignalTest do
   @moduledoc """
   The consent signal's shape: five tags, a map payload, a sentence,
   `error.data` and a refusal class for each; `confirmation_required`
-  names its confirmation's id or is no signal.
+  names its confirmation's id or is no signal, and its sentence never
+  names that secret.
   """
 
   use ExUnit.Case, async: true
@@ -124,14 +125,18 @@ defmodule Prima.ConsentSignalTest do
              "Consent required: scope widened"
   end
 
-  test "the confirmation sentence names the change and its id, and sends the person to Prism" do
+  test "the confirmation sentence names the change, never its secret id, and sends the person to Prism" do
     assert ConsentSignal.message({:confirmation_required, @confirmation}) ==
-             "Confirmation required: vault/create needs a fresh confirmation — " <>
-               "confirm it in Prism (confirmation confirmation-7f3a)"
+             "Confirmation required: vault/create needs a fresh confirmation — confirm it in Prism"
 
     assert ConsentSignal.message({:confirmation_required, %{"id" => "confirmation-7f3a"}}) ==
-             "Confirmation required: this change needs a fresh confirmation — " <>
-               "confirm it in Prism (confirmation confirmation-7f3a)"
+             "Confirmation required: this change needs a fresh confirmation — confirm it in Prism"
+
+    # The id is the asking request's secret: a sentence is what logs,
+    # request-log rows and pages keep, so it is never in one.
+    for payload <- [@confirmation, %{"id" => "confirmation-7f3a"}] do
+      refute ConsentSignal.message({:confirmation_required, payload}) =~ "confirmation-7f3a"
+    end
   end
 
   test "the confirmation data carries its three fields alone, and encodes with its id" do
