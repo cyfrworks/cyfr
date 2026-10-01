@@ -6,8 +6,18 @@ defmodule Arca.PendingConfirmations do
   Pending confirmations of sensitive changes
   (`Arca.Schemas.PendingConfirmation`), athanor-scoped: each the stored
   form of one `Prima.Confirmation` record, with its digest, its
-  secret-free preview, how it was proven and by which paired client or
-  passkey, and its state.
+  secret-free preview, the credential that opened it, how it was proven
+  and by which paired client or passkey, and its state.
+
+  ## The opener
+
+  A record names the credential of the context that opened it (`opener`,
+  the identity domain's name for a session, a paired client or an API
+  key). Only that credential consumes it: any client of the person may
+  prove a record, but the change is repeated by the one that asked, so a
+  second credential of the same person never takes a change another
+  asked for, even once it is proven. Arca compares the opener and reads
+  nothing into it.
 
   ## States
 
@@ -16,10 +26,12 @@ defmodule Arca.PendingConfirmations do
   once: a record confirmed, consumed or cancelled twice is refused the
   second time. Expiry is read on the database's clock.
 
-    * `open/2` answers the open record of the same person, operation and
-      argument digest and preview rather than writing a second; an open
-      record past its expiry is marked `expired`, and one whose preview
-      differs is `voided`, and a new one written in its place.
+    * `open/2` answers the open record of the same person, operation,
+      argument digest, opener and preview rather than writing a second; an
+      open record past its expiry is marked `expired`, and one whose
+      preview differs is `voided`, and a new one written in its place. A
+      record another opener holds is never answered: that opener's record
+      and this one stand side by side.
     * `confirm/3` records the proof (`passkey`, `oidc_reauth` or
       `email_code`) and the paired client or passkey that gave it, only
       while that client or passkey still stands, so a revocation that
@@ -28,8 +40,8 @@ defmodule Arca.PendingConfirmations do
       (`Arca.SecurityTransitions`), so a confirm and a revocation of its
       confirmer never wait on each other.
     * `consume/3` consumes a confirmed, unexpired, unvoided record whose
-      person, operation, argument digest and preview are exactly the
-      caller's. It runs in its own transaction or nested in a caller's, so
+      person, operation, argument digest, preview and opener are exactly
+      the caller's. It runs in its own transaction or nested in a caller's, so
       an action whose effect opens a row consumes in the transaction that
       opens it. `check/3` asks the same question and writes nothing.
     * `void_for/2` voids the open records a revoked paired client or
@@ -60,36 +72,49 @@ defmodule Arca.PendingConfirmations do
   @typedoc "A pending confirmation row, as a plain map."
   @type row :: map()
 
-  @typedoc "What `consume/3` requires the record to still say."
+  @typedoc """
+  What `consume/3` requires the record to still say, `:opener` the
+  consuming context's credential.
+  """
   @type expected :: %{
           required(:user_id) => String.t(),
           required(:operation) => String.t(),
           required(:args_digest) => String.t(),
-          required(:preview) => Preview.t() | map()
+          required(:preview) => Preview.t() | map(),
+          required(:opener) => String.t()
         }
 
   @doc """
   Open a pending confirmation in the actor's athanor: `attrs[:record]` is
   the `Prima.Confirmation` the deciding site built (its athanor the
-  actor's), and `attrs[:identity_key_epoch]` the epoch a remote person's
-  record depends on (required for a remote person and the cached head's
-  current one, `:stale_key_epoch` otherwise; refused for a local one).
-  Answers the open record of the same person, operation, argument digest
-  and preview when one stands; one of the same person, operation and
-  argument digest whose preview differs is voided and a new one opened.
+  actor's), `attrs[:opener]` the credential of the context that opens it
+  (a non-empty name of at most 255 bytes, `{:invalid, _}` otherwise), and
+  `attrs[:identity_key_epoch]` the epoch a remote person's record depends
+  on (required for a remote person and the cached head's current one,
+  `:stale_key_epoch` otherwise; refused for a local one). Answers the open
+  record of the same person, operation, argument digest, opener and
+  preview when one stands; one of the same person, operation, argument
+  digest and opener whose preview differs is voided and a new one opened.
   """
   @spec open(Prima.Actor.t(), map()) :: {:ok, row()} | {:error, term()}
   def open(%Prima.Actor{athanor_id: athanor_id}, %{record: %Confirmation{} = record} = attrs)
       when is_binary(athanor_id) and athanor_id != "" do
-    if record.athanor == athanor_id do
-      Arca.Repo.Errors.with_db_rescue("Arca.PendingConfirmations.open", fn ->
-        Arca.Repo.locking_transaction(fn ->
-          committed(open_in(athanor_id, record, Map.get(attrs, :identity_key_epoch)))
+    cond do
+      record.athanor != athanor_id ->
+        {:error, :cross_tenant}
+
+      not opener?(Map.get(attrs, :opener)) ->
+        {:error, {:invalid, %{opener: ["names the credential that opens the record"]}}}
+
+      true ->
+        Arca.Repo.Errors.with_db_rescue("Arca.PendingConfirmations.open", fn ->
+          Arca.Repo.locking_transaction(fn ->
+            committed(
+              open_in(athanor_id, record, attrs.opener, Map.get(attrs, :identity_key_epoch))
+            )
+          end)
         end)
-      end)
-      |> Arca.Data.project()
-    else
-      {:error, :cross_tenant}
+        |> Arca.Data.project()
     end
   end
 
@@ -119,10 +144,11 @@ defmodule Arca.PendingConfirmations do
 
   @doc """
   Consume the confirmed record `id` for exactly the change `expected`
-  names (`t:expected/0`). Succeeds once. Refusals: `:not_confirmed` (still
-  pending), `:consumed`, `:cancelled`, `:voided`, `:expired`, `:mismatch`
-  (another person, operation, argument digest or preview), `:not_found`,
-  `:no_athanor`, `:database_error`.
+  names (`t:expected/0`), by the credential that opened it. Succeeds once.
+  Refusals: `:not_confirmed` (still pending), `:consumed`, `:cancelled`,
+  `:voided`, `:expired`, `:mismatch` (another person, operation, argument
+  digest, preview or opener), `:not_found`, `:no_athanor`,
+  `:database_error`.
 
   A refusal is a rollback of the transaction `consume/3` runs in. Nested
   in a caller's transaction, it therefore rolls the caller's whole
@@ -404,16 +430,18 @@ defmodule Arca.PendingConfirmations do
 
   # ---- internals -------------------------------------------------------------
 
-  defp open_in(athanor_id, record, epoch) do
+  defp open_in(athanor_id, record, opener, epoch) do
     with :ok <- Arca.DirectoryHeads.bindable!(record.person, epoch) do
       now = Arca.ServerMetaStorage.now!()
 
+      # The open record of this person, change and opener: the one the
+      # open index allows.
       open_query =
         from(c in PendingConfirmation,
           where:
             c.athanor_id == ^athanor_id and c.user_id == ^record.person and
               c.operation == ^record.operation and c.args_digest == ^record.args_digest and
-              c.state in ^@open
+              c.opener == ^opener and c.state in ^@open
         )
 
       case open_query |> QueryHelpers.for_update() |> Arca.Repo.one() do
@@ -421,23 +449,23 @@ defmodule Arca.PendingConfirmations do
           cond do
             DateTime.compare(standing.expires_at, now) != :gt ->
               end!(standing, "expired", now)
-              insert_record(athanor_id, record, epoch, now)
+              insert_record(athanor_id, record, opener, epoch, now)
 
             standing.preview != preview_text(record.preview) ->
               end!(standing, "voided", now)
-              insert_record(athanor_id, record, epoch, now)
+              insert_record(athanor_id, record, opener, epoch, now)
 
             true ->
               {:ok, standing}
           end
 
         nil ->
-          insert_record(athanor_id, record, epoch, now)
+          insert_record(athanor_id, record, opener, epoch, now)
       end
     end
   end
 
-  defp insert_record(athanor_id, record, epoch, now) do
+  defp insert_record(athanor_id, record, opener, epoch, now) do
     row = %{
       id: record.id,
       athanor_id: athanor_id,
@@ -450,6 +478,7 @@ defmodule Arca.PendingConfirmations do
       rp_id: record.rp_id,
       challenge: record.challenge,
       digest: Confirmation.digest(record),
+      opener: opener,
       identity_key_epoch: epoch,
       state: "pending",
       email_code_failures: 0,
@@ -461,21 +490,21 @@ defmodule Arca.PendingConfirmations do
 
     case Arca.Repo.insert_all(PendingConfirmation, [row], on_conflict: :nothing) do
       {1, _} -> {:ok, Arca.Repo.get!(PendingConfirmation, record.id)}
-      {0, _} -> standing_or_conflict(athanor_id, record)
+      {0, _} -> standing_or_conflict(athanor_id, record, opener)
     end
   end
 
-  # A concurrent open of the same request won the open index: answer its
-  # record when it is the same preview. An id already used for another
-  # record is a conflict.
-  defp standing_or_conflict(athanor_id, record) do
+  # A concurrent open of the same request by the same opener won the open
+  # index: answer its record when it is the same preview. An id already
+  # used for another record is a conflict.
+  defp standing_or_conflict(athanor_id, record, opener) do
     preview = preview_text(record.preview)
 
     from(c in PendingConfirmation,
       where:
         c.athanor_id == ^athanor_id and c.user_id == ^record.person and
           c.operation == ^record.operation and c.args_digest == ^record.args_digest and
-          c.state in ^@open
+          c.opener == ^opener and c.state in ^@open
     )
     |> Arca.Repo.one()
     |> case do
@@ -592,13 +621,16 @@ defmodule Arca.PendingConfirmations do
   defp consumable(%PendingConfirmation{state: "voided"}, _now), do: {:error, :voided}
   defp consumable(%PendingConfirmation{state: "expired"}, _now), do: {:error, :expired}
 
+  # The same change, asked by the credential that opened the record: a
+  # consumer naming no opener, or another, matches nothing.
   defp matches(record, expected) do
     with {:ok, preview} <- expected_preview(Map.get(expected, :preview)) do
       same? =
         record.user_id == Map.get(expected, :user_id) and
           record.operation == Map.get(expected, :operation) and
           record.args_digest == Map.get(expected, :args_digest) and
-          record.preview == preview_text(preview)
+          record.preview == preview_text(preview) and
+          opener?(Map.get(expected, :opener)) and record.opener == Map.get(expected, :opener)
 
       if same?, do: :ok, else: {:error, :mismatch}
     else
@@ -663,6 +695,9 @@ defmodule Arca.PendingConfirmations do
 
   defp proof(_proof),
     do: {:error, {:invalid, %{proof: ["is passkey, oidc_reauth or email_code"]}}}
+
+  defp opener?(opener),
+    do: is_binary(opener) and byte_size(opener) > 0 and byte_size(opener) <= 255
 
   defp preview_text(%Preview{} = preview),
     do: preview |> Preview.encode() |> Prima.Identity.Encoding.jcs!()

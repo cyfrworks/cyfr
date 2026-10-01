@@ -3,33 +3,44 @@
 
 defmodule PrismWeb.SecretRevealTest do
   @moduledoc """
-  The one-time reveal cards, and letting go of what they showed.
+  The one-time reveal cards, and what a page reveals when the change that
+  would mint a secret is not yet confirmed.
 
-  Checks that dismissing a revealed API key or webhook secret removes
-  its plaintext from socket assigns and the DOM.
+  Minting an API key and rotating a webhook's secret are sensitive
+  changes: from a session with no proof, the page meets the
+  `confirmation_required` signal, naming the confirmation it opened, and
+  reveals no card, since nothing was minted.
   """
   use PrismWeb.ConnCase, async: false
 
   defp assigns(view), do: :sys.get_state(view.pid).socket.assigns
 
-  test "a minted API key is dismissible and leaves the assigns with the card",
+  defp open_confirmations(user_id) do
+    ctx = %{Sanctum.TestContext.local() | athanor_id: seated_athanor().id, user_id: user_id}
+    {:ok, rows} = Arca.PendingConfirmations.list_open(Sanctum.Context.actor(ctx), user_id)
+    rows
+  end
+
+  test "a key minted from the page meets the confirmation signal, and no card is revealed",
        %{conn: conn} do
-    {view, _html} = conn |> log_in_user(test_user()) |> mount_athanor("/api-keys")
+    user = test_user()
+    {view, _html} = conn |> log_in_user(user) |> mount_athanor("/api-keys")
 
     render_click(view, "toggle_create")
     render_submit(view, "create", %{"name" => "reveal-probe", "type" => "application"})
 
-    key = assigns(view).new_key
-    assert is_map(key) and is_binary(key[:api_key])
-    assert render(view) =~ "not be shown again"
+    assert [%{id: id, operation: "key.create"}] = open_confirmations(user.user_id)
 
-    render_click(view, "dismiss_key")
+    flash = Phoenix.Flash.get(assigns(view).flash, :error)
+    assert flash =~ "Confirmation required"
+    assert flash =~ id
 
     refute assigns(view).new_key
-    refute settled_render(view) =~ "not be shown again"
+    refute render(view) =~ "not be shown again"
   end
 
-  test "a webhook secret is dismissible too", %{conn: conn} do
+  test "a webhook secret rotated from the page meets the signal, and the old one stands",
+       %{conn: conn} do
     user = test_user()
     conn = log_in_user(conn, user)
     ctx = %{Sanctum.TestContext.local() | athanor_id: seated_athanor().id, user_id: user.user_id}
@@ -48,8 +59,10 @@ defmodule PrismWeb.SecretRevealTest do
     # A webhook fires under a bound profile's consent, so it needs one.
     profile_id = Sanctum.Test.ConsentFixtures.bindable_profile(ctx, "reagent:local.reveal-echo")
 
-    {:ok, _} =
-      Sanctum.Webhook.create(ctx, %{
+    # Created under the confirmation its person proved
+    # (`Sanctum.TestContext.create_webhook/2`).
+    {:ok, %{secret: secret}} =
+      Sanctum.TestContext.create_webhook(ctx, %{
         name: name,
         replay_protection: "none",
         target_ref: "reagent:local.reveal-echo",
@@ -58,15 +71,28 @@ defmodule PrismWeb.SecretRevealTest do
 
     {view, _html} = mount_athanor(conn, "/webhooks")
 
-    # Rotating reveals the new secret the same way creating does.
+    # Rotating from the page asks first: no new secret is revealed, and
+    # the secret minted before still verifies.
     render_click(view, "rotate", %{"id" => name})
 
-    secret = assigns(view).new_secret
-    assert is_map(secret) and is_binary(secret[:secret])
+    assert [%{id: id, operation: "webhook.rotate"}] = open_confirmations(user.user_id)
 
-    render_click(view, "dismiss_secret")
+    flash = Phoenix.Flash.get(assigns(view).flash, :error)
+    assert flash =~ "Confirmation required"
+    assert flash =~ id
 
     refute assigns(view).new_secret
-    settled_render(view)
+    refute render(view) =~ secret
+
+    {:ok, %{slug: slug}} = Sanctum.Webhook.get(ctx, name)
+    {:ok, hook} = Arca.WebhookStorage.get_by_slug(slug)
+    # No rotation happened: there is no previous secret in its grace.
+    assert hook.previous_secret_encrypted == nil
+    body = "reveal"
+
+    signature =
+      "sha256=" <> Base.encode16(:crypto.mac(:hmac, :sha256, secret, body), case: :lower)
+
+    assert :ok = Sanctum.Webhook.verify_with_grace(hook, body, signature)
   end
 end

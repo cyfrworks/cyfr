@@ -468,7 +468,7 @@ defmodule PrismWeb.ShellDesktopTest do
     test "refused, the prompt stays open; closed, the frame is told saved: false and nothing else",
          %{conn: conn, user: user, athanor: athanor} do
       {:ok, _} =
-        Sanctum.Vault.create(person(user, athanor), %{
+        Sanctum.TestContext.create_vault(person(user, athanor), %{
           name: "taken",
           kind: "api_key",
           fields: %{"API_KEY" => "first"}
@@ -494,7 +494,10 @@ defmodule PrismWeb.ShellDesktopTest do
       assert Map.keys(payload) |> Enum.sort() == [:frame, :saved]
     end
 
-    test "confirmed, the entry is saved and the frame is told saved: true, never the value",
+    # Entering a credential is a sensitive change: from a session with no
+    # proof the entry meets the `confirmation_required` signal, the prompt
+    # stays open showing it, and the frame hears nothing of a save.
+    test "confirmed, the entry meets the confirmation signal: nothing saved, the frame told nothing, never the value",
          %{conn: conn, user: user, athanor: athanor} do
       view = shell!(conn)
       open!(view, "keeper-dash")
@@ -506,12 +509,19 @@ defmodule PrismWeb.ShellDesktopTest do
       |> form("#system-layer-credential", %{"prompt_id" => prompt_id, "secret" => "v4lue-typed"})
       |> render_submit()
 
-      assert_push_event(view, "frame_credential", %{frame: ^keeper, saved: true} = payload)
-      refute inspect(payload) =~ "v4lue-typed"
-      refute render(view) =~ "v4lue-typed"
+      ctx = person(user, athanor)
 
-      assert {:ok, entries} = Sanctum.Vault.list(person(user, athanor))
-      assert Enum.any?(entries, &(&1.name == "fresh-entry"))
+      assert {:ok, [%{id: id, operation: "vault.create"}]} =
+               Arca.PendingConfirmations.list_open(Sanctum.Context.actor(ctx), ctx.user_id)
+
+      html = render(view)
+      assert html =~ "Confirmation required"
+      assert html =~ id
+      refute html =~ "v4lue-typed"
+      refute_push_event(view, "frame_credential", _payload, 50)
+
+      assert {:ok, entries} = Sanctum.Vault.list(ctx)
+      refute Enum.any?(entries, &(&1.name == "fresh-entry"))
     end
   end
 

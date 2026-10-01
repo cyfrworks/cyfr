@@ -10,6 +10,11 @@ defmodule Sanctum.Providers.Webhook do
   """
 
   require Logger
+  require Prima.ConsentSignal
+
+  # A sensitive change's own answers (`Sanctum.Consent.Authz`), which pass
+  # as they are: the confirmation signal is matched apart, by its shape.
+  @confirmation_refusals [:remote_identity_unavailable, :missing_tenant]
 
   alias Sanctum.Context
 
@@ -236,6 +241,15 @@ defmodule Sanctum.Providers.Webhook do
       {:error, reason} when is_binary(reason) ->
         {:error, reason}
 
+      {:error, {tag, payload} = signal} when Prima.ConsentSignal.is_signal(tag, payload) ->
+        {:error, signal}
+
+      {:error, reason} when reason in @confirmation_refusals ->
+        {:error, reason}
+
+      {:error, {:conflict, message} = conflict} when is_binary(message) ->
+        {:error, conflict}
+
       {:error, reason} ->
         Logger.error("[Sanctum.Providers.Webhook] Failed to create webhook: #{inspect(reason)}")
         {:error, "Failed to create webhook"}
@@ -312,6 +326,15 @@ defmodule Sanctum.Providers.Webhook do
       # is what keeps the loser from erasing the winner's grace secret.
       {:error, :conflict} ->
         {:error, "Another rotation of this webhook is in flight — try again"}
+
+      {:error, {tag, payload} = signal} when Prima.ConsentSignal.is_signal(tag, payload) ->
+        {:error, signal}
+
+      {:error, reason} when reason in @confirmation_refusals ->
+        {:error, reason}
+
+      {:error, {:conflict, message} = conflict} when is_binary(message) ->
+        {:error, conflict}
 
       {:error, reason} ->
         Logger.error("[Sanctum.Providers.Webhook] Failed to rotate webhook: #{inspect(reason)}")

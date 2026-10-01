@@ -89,11 +89,29 @@ defmodule Sanctum.DeviceCertsTest do
     %{user: user, athanor: athanor, session_ctx: session_ctx}
   end
 
+  # Beginning a pairing and revoking a device are sensitive changes: each
+  # under a confirmation the person proved (`Sanctum.TestContext.confirmed/3`).
+  defp begin!(session_ctx) do
+    session_ctx
+    |> Sanctum.TestContext.confirmed(:device_pairing, Pairing.invitation_change())
+    |> Pairing.begin(%{})
+  end
+
+  defp revoke!(session_ctx, client_id) do
+    session_ctx
+    |> Sanctum.TestContext.confirmed(:pairing_revocation, %{
+      operation: "pairing.revoke",
+      arguments: %{"client_id" => client_id},
+      resource: client_id
+    })
+    |> Pairing.revoke(client_id)
+  end
+
   # A device paired through the ceremony: its key pair, its client and its
   # first certificate.
   defp pair!(session_ctx, source \\ @source) do
     {device_key, private} = :crypto.generate_key(:eddsa, :ed25519)
-    {:ok, invitation} = Pairing.begin(session_ctx, %{})
+    {:ok, invitation} = begin!(session_ctx)
     glass = Context.build(%{authenticated: false, client_ip: source})
     submission = %{device_key: device_key}
 
@@ -501,7 +519,7 @@ defmodule Sanctum.DeviceCertsTest do
 
     test "a revoked client renews nothing", %{session_ctx: session_ctx} do
       device = pair!(session_ctx)
-      {:ok, _row} = Pairing.revoke(session_ctx, device.client_id)
+      {:ok, _row} = revoke!(session_ctx, device.client_id)
       challenge = challenge(device, :renew)
 
       assert DeviceCerts.verify_connect(
@@ -713,7 +731,7 @@ defmodule Sanctum.DeviceCertsTest do
       revoked = pair!(session_ctx)
       {:ok, ctx} = connect(revoked)
       assert {:ok, _} = DeviceCerts.verify_request(revoked.certificate, ctx, [])
-      {:ok, _row} = Pairing.revoke(session_ctx, revoked.client_id)
+      {:ok, _row} = revoke!(session_ctx, revoked.client_id)
       assert DeviceCerts.verify_request(revoked.certificate, ctx, []) == {:error, :revoked}
 
       # Left: a second member keeps the group open while the person leaves.
@@ -871,7 +889,7 @@ defmodule Sanctum.DeviceCertsTest do
       expired = %{ctx | credential_deadline: DateTime.add(DateTime.utc_now(), -1, :second)}
       assert Sanctum.Caller.revalidate_session(expired) == {:error, :unauthenticated}
 
-      {:ok, _row} = Pairing.revoke(session_ctx, device.client_id)
+      {:ok, _row} = revoke!(session_ctx, device.client_id)
       assert Sanctum.Caller.revalidate_session(ctx) == {:error, :not_standing}
 
       # And a denied person's.
@@ -883,20 +901,38 @@ defmodule Sanctum.DeviceCertsTest do
 
     test "an OAuth grant a device started is refused at its recheck once the device is revoked",
          %{session_ctx: session_ctx} do
-      :ok = Sanctum.ProviderCredentials.put(session_ctx, "google", "cid", "csec")
+      entering =
+        Sanctum.TestContext.confirmed(session_ctx, :credential_entry, %{
+          operation: "oauth.set_client",
+          arguments: %{provider: "google", client_id: "cid", client_secret: "csec"},
+          resource: "google"
+        })
 
+      :ok = Sanctum.ProviderCredentials.put(entering, "google", "cid", "csec")
+
+      # Starting a grant enters a credential: each under the confirmation
+      # the device's person proved.
       grant = fn ctx ->
-        {:ok, started} =
-          Sanctum.Vault.OAuthGrant.authorize_url(ctx, %{
-            name: "Mail #{System.unique_integer([:positive])}",
-            provider: "google",
-            scopes: ["mail"],
-            endpoints: %{
-              "authorize_url" => "https://accounts.google.com/o/oauth2/v2/auth",
-              "token_url" => "https://127.0.0.1:9/token"
-            }
+        name = "Mail #{System.unique_integer([:positive])}"
+
+        params = %{
+          name: name,
+          provider: "google",
+          scopes: ["mail"],
+          endpoints: %{
+            "authorize_url" => "https://accounts.google.com/o/oauth2/v2/auth",
+            "token_url" => "https://127.0.0.1:9/token"
+          }
+        }
+
+        confirmed =
+          Sanctum.TestContext.confirmed(ctx, :credential_entry, %{
+            operation: "vault.authorize",
+            arguments: params,
+            resource: name
           })
 
+        {:ok, started} = Sanctum.Vault.OAuthGrant.authorize_url(confirmed, params)
         started
       end
 
@@ -917,7 +953,7 @@ defmodule Sanctum.DeviceCertsTest do
       revoked = pair!(session_ctx)
       {:ok, revoked_ctx} = connect(revoked)
       started = grant.(revoked_ctx)
-      {:ok, _row} = Pairing.revoke(session_ctx, revoked.client_id)
+      {:ok, _row} = revoke!(session_ctx, revoked.client_id)
 
       assert Sanctum.Vault.OAuthGrant.complete(started.state, "code", started.redirect_uri) ==
                {:error, :unauthenticated}
@@ -959,7 +995,7 @@ defmodule Sanctum.DeviceCertsTest do
       # A context of any other kind stands for no paired client.
       assert DeviceCerts.client_standing(session_ctx) == {:error, :not_standing}
 
-      {:ok, _} = Pairing.revoke(session_ctx, device.client_id)
+      {:ok, _} = revoke!(session_ctx, device.client_id)
       assert DeviceCerts.client_standing(ctx) == {:error, :revoked}
     end
   end

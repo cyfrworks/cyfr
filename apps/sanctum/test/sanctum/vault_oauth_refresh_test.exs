@@ -161,7 +161,14 @@ defmodule Sanctum.VaultOAuthRefreshTest do
       {_entry, resource} = mint_oauth_entry(ctx, @expired)
       counter = attach_attempt_counter()
 
-      :ok = Sanctum.ProviderCredentials.put(ctx, "google", "cid", "csec")
+      entering =
+        Sanctum.TestContext.confirmed(ctx, :credential_entry, %{
+          operation: "oauth.set_client",
+          arguments: %{provider: "google", client_id: "cid", client_secret: "csec"},
+          resource: "google"
+        })
+
+      :ok = Sanctum.ProviderCredentials.put(entering, "google", "cid", "csec")
 
       assert {:error, {:authorization_required, detail}} =
                VaultReader.oauth_token(ctx, resource, "google")

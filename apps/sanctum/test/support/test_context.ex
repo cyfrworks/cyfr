@@ -178,10 +178,470 @@ defmodule Sanctum.TestContext do
 
   @doc """
   `Sanctum.ApiKey.create/3` for a context a fixture built by hand, with
-  the `generation_snapshot:` its rows stand at now (`snapshot!/1`).
+  the `generation_snapshot:` its rows stand at now (`snapshot!/1`), and the
+  fresh confirmation minting a key needs (`confirmed/3`). The context
+  names a person from here on, as `confirmed/3` answers it.
   """
-  def create_key(%Context{} = ctx, attrs),
-    do: Sanctum.ApiKey.create(ctx, attrs, generation_snapshot: snapshot!(ctx))
+  def create_key(%Context{} = ctx, attrs) do
+    ctx =
+      confirmed(ctx, :credential_issuance, %{
+        operation: "key.create",
+        arguments: attrs,
+        resource: Map.fetch!(attrs, :name)
+      })
+
+    Sanctum.ApiKey.create(ctx, attrs, generation_snapshot: snapshot!(ctx))
+  end
+
+  # ---------------------------------------------------------------------------
+  # Fresh confirmation
+  # ---------------------------------------------------------------------------
+
+  @doc """
+  `ctx` holding a proven confirmation of the sensitive change `change`
+  (`t:Sanctum.Consent.Authz.change/0`), which confirms `action`: the
+  context the deciding site then consumes it under, `confirmation_id`
+  naming the record.
+
+  The change must be exactly the one the deciding site passes: its
+  operation, its arguments as the call passes them, and its resource
+  and details, since the record binds them all. The proof is real, and
+  goes through production code alone:
+
+    * the context is given a real person when it names none
+      (`person!/2`);
+    * the person's software passkey (`Sanctum.TestContext.Authenticator`)
+      is registered once, through `Sanctum.Passkeys.register/2`'s local
+      first-method rule, on a new session of a local door;
+    * the record is opened by `Sanctum.Consent.Authz.check/3` under
+      `ctx`, so `ctx`'s own credential is its opener and alone repeats
+      the change, and proven by the passkey's assertion over its digest
+      (`Sanctum.Passkeys.assert/3`), from the person's interactive
+      surface, whatever surface `ctx` itself is: a key's context repeats
+      the change it asked for once its person proved it in Prism.
+
+  A person whose first method was ever used, and who holds no passkey
+  this helper made, raises: a test that needs that path drives it itself.
+  """
+  @spec confirmed(Context.t(), atom(), map()) :: Context.t()
+  def confirmed(%Context{} = ctx, action, change) do
+    ctx = %{person_ctx!(ctx) | confirmation_id: nil}
+    authenticator = passkey!(ctx.user_id)
+
+    case Sanctum.Consent.Authz.check(ctx, action, change) do
+      {:error, {:confirmation_required, %{id: id}}} ->
+        prove!(ctx, id, authenticator)
+        %{ctx | confirmation_id: id}
+
+      other ->
+        raise "confirmed/3: #{change.operation} asked no confirmation: #{inspect(other)}"
+    end
+  end
+
+  @doc """
+  Run `fun` under `ctx`, made a person's as `confirmed/3` makes it, and
+  when it answers the confirmation signal, prove that record as
+  `confirmed/3` proves one (`prove!/3`) and run `fun` once more naming
+  it: the person confirming in Prism and the page repeating its change.
+  For a change reached through a provider or a surface, whose exact
+  arguments the provider builds; any other answer is `fun`'s own.
+  """
+  @spec confirming(Context.t(), (Context.t() -> term())) :: term()
+  def confirming(%Context{} = ctx, fun) when is_function(fun, 1) do
+    ctx = %{person_ctx!(ctx) | confirmation_id: nil}
+    authenticator = passkey!(ctx.user_id)
+
+    case fun.(ctx) do
+      {:error, {:confirmation_required, %{id: id}}} ->
+        prove!(ctx, id, authenticator)
+        fun.(%{ctx | confirmation_id: id})
+
+      other ->
+        other
+    end
+  end
+
+  @doc """
+  `confirmed/3` for the change the deciding site of `operation`
+  (`tool.action`) passes for `arguments`, naming `resource`: the action is
+  the table's (`Sanctum.Pairing.action_for/1`). Every credential site
+  names its resource by name (the entry, the key, the webhook, the OAuth
+  provider).
+  """
+  @spec confirmed_change(Context.t(), String.t(), map(), String.t() | nil) :: Context.t()
+  def confirmed_change(%Context{} = ctx, operation, arguments, resource) do
+    action =
+      Sanctum.Pairing.action_for(operation) ||
+        raise ArgumentError, "#{operation} confirms nothing"
+
+    confirmed(ctx, action, %{operation: operation, arguments: arguments, resource: resource})
+  end
+
+  # ---------------------------------------------------------------------------
+  # The credential sites, each under the confirmation its change needs
+  # ---------------------------------------------------------------------------
+
+  @doc "`Sanctum.ApiKey.rotate/3` under the confirmation it needs (`confirmed_change/4`)."
+  def rotate_key(%Context{} = ctx, name, issuance \\ []) do
+    ctx
+    |> confirmed_change("key.rotate", %{name: name}, name)
+    |> Sanctum.ApiKey.rotate(name, issuance)
+  end
+
+  @doc "`Sanctum.Webhook.create/2` under the confirmation it needs (`confirmed_change/4`)."
+  def create_webhook(%Context{} = ctx, opts) do
+    ctx
+    |> confirmed_change("webhook.create", opts, opts[:name])
+    |> Sanctum.Webhook.create(opts)
+  end
+
+  @doc "`Sanctum.Webhook.rotate/2` under the confirmation it needs (`confirmed_change/4`)."
+  def rotate_webhook(%Context{} = ctx, name) do
+    ctx
+    |> confirmed_change("webhook.rotate", %{name: name}, name)
+    |> Sanctum.Webhook.rotate(name)
+  end
+
+  @doc "`Sanctum.Vault.create/2` under the confirmation it needs (`confirmed_change/4`)."
+  def create_vault(%Context{} = ctx, params) do
+    ctx
+    |> confirmed_change("vault.create", params, params[:name])
+    |> Sanctum.Vault.create(params)
+  end
+
+  @doc """
+  `Sanctum.Vault.rotate/2` under the confirmation it needs
+  (`confirmed_change/4`), naming the entry as the vault names it.
+  """
+  def rotate_vault(%Context{} = ctx, %{id: id} = params) do
+    ctx
+    |> confirmed_change("vault.rotate", params, entry_name(ctx, id))
+    |> Sanctum.Vault.rotate(params)
+  end
+
+  @doc """
+  `Sanctum.Vault.OAuthGrant.authorize_url/2` under the confirmation it
+  needs (`confirmed_change/4`), naming the entry as the grant names it:
+  the new entry's name, or the entry re-authorized.
+  """
+  def authorize_vault(%Context{} = ctx, params) do
+    name =
+      case params do
+        %{entry_id: id} -> entry_name(ctx, id)
+        _new -> params[:name]
+      end
+
+    ctx
+    |> confirmed_change("vault.authorize", params, name)
+    |> Sanctum.Vault.OAuthGrant.authorize_url(params)
+  end
+
+  @doc """
+  `Sanctum.ProviderCredentials.put/4` under the confirmation it needs
+  (`confirmed_change/4`).
+  """
+  def put_provider_credentials(%Context{} = ctx, provider, client_id, client_secret \\ nil) do
+    ctx
+    |> confirmed_change(
+      "oauth.set_client",
+      %{provider: provider, client_id: client_id, client_secret: client_secret},
+      provider
+    )
+    |> Sanctum.ProviderCredentials.put(provider, client_id, client_secret)
+  end
+
+  defp entry_name(ctx, id) do
+    case Arca.VaultStorage.get(Context.actor(ctx), id) do
+      {:ok, %{name: name}} -> name
+      _missing -> nil
+    end
+  end
+
+  # The context as a person's: an IdP identity key signed in (`person!/2`),
+  # a person id a fixture made up minted as that person with their keys,
+  # a person already here as they are.
+  defp person_ctx!(%Context{user_id: user_id} = ctx) do
+    cond do
+      not Prima.PersonId.person?(user_id) ->
+        # A fixture's bare name reads as a local door's identity.
+        key =
+          if Sanctum.Auth.Identity.key?(user_id), do: user_id, else: "local|local|" <> user_id
+
+        {person, _user} = person!(%{ctx | user_id: key})
+        person
+
+      match?({:ok, _person}, Sanctum.Tenancy.Users.get(user_id)) ->
+        ctx
+
+      true ->
+        now = DateTime.utc_now()
+
+        {:ok, _person} =
+          Arca.Users.mint(
+            Prima.Actor.system(),
+            %{
+              id: user_id,
+              provider: "local",
+              prefs: "{}",
+              first_seen_at: now,
+              last_seen_at: now,
+              created_at: now,
+              updated_at: now
+            },
+            %{
+              key: "local|local|" <> user_id,
+              provider: "local",
+              issuer: "local",
+              subject: user_id,
+              first_seen_at: now,
+              last_seen_at: now
+            },
+            also: &Sanctum.Person.mint_keys/1
+          )
+
+        ctx
+    end
+  end
+
+  @doc """
+  Prove the pending confirmation `id` of `ctx`'s person with the
+  software passkey `authenticator` (`passkey!/1`'s by default), from the
+  person's interactive surface in `ctx`'s athanor. Answers the confirmed
+  record.
+  """
+  def prove!(%Context{} = ctx, id, authenticator \\ nil) do
+    authenticator = authenticator || passkey!(ctx.user_id)
+    {:ok, row} = Arca.PendingConfirmations.get(Context.actor(ctx), id)
+    "sha256:" <> hex = row.digest
+
+    assertion =
+      Sanctum.TestContext.Authenticator.assertion(
+        authenticator,
+        Base.decode16!(hex, case: :lower)
+      )
+
+    {:ok, confirmed} = Sanctum.Passkeys.assert(interactive(ctx), id, assertion)
+    confirmed
+  end
+
+  # The person's own interactive surface, in the same athanor: where a
+  # confirmation is proven, whatever surface asked for it.
+  defp interactive(%Context{} = ctx),
+    do: %{ctx | auth_method: :oidc, client_id: nil, plane: :external}
+
+  @doc """
+  The person `user_id`'s software passkey, registered at this home once:
+  on a new session of a local door, under the local first-method rule
+  (`Sanctum.Passkeys.register/2`). Answers the authenticator.
+  """
+  def passkey!(user_id) when is_binary(user_id) do
+    authenticator = Sanctum.TestContext.Authenticator.for_person(user_id)
+    credential_id = Base.url_encode64(authenticator.credential_id, padding: false)
+
+    case Arca.Passkeys.get_by_credential(
+           Prima.Actor.system(),
+           Sanctum.Passkeys.rp_id(),
+           credential_id
+         ) do
+      {:ok, %{state: "active", user_id: ^user_id}} ->
+        authenticator
+
+      _none ->
+        # Focused nowhere: a passkey is the person's, and the write rechecks
+        # the session and the person alone, whatever seat a fixture's person
+        # holds or lacks.
+        session = %{session!(user_id) | athanor_id: nil}
+        {:ok, options} = Sanctum.Passkeys.register(session, %{})
+        credential = Sanctum.TestContext.Authenticator.registration(authenticator, options)
+
+        case Sanctum.Passkeys.register(session, %{credential: credential}) do
+          {:ok, %{status: "active"}} ->
+            authenticator
+
+          other ->
+            raise "passkey!/1: #{user_id}'s first passkey was not registered: #{inspect(other)}"
+        end
+    end
+  end
+
+  @doc """
+  A context loaded from a new session of the person `user_id`, as the
+  console holds one: `provider` (default `"local"`) is the door the
+  session records, which the first-method rule reads.
+  """
+  def session!(user_id, provider \\ "local") when is_binary(user_id) do
+    base =
+      Context.build(
+        user_id: user_id,
+        provider: provider,
+        athanor_id: nil,
+        permissions: Context.person_permissions(),
+        auth_method: :oidc
+      )
+
+    {:ok, session} = Sanctum.Session.create(base, generation_snapshot: snapshot!(base))
+    {:ok, loaded} = Sanctum.Session.load(session.token, surface: :console)
+    loaded
+  end
+
+  defmodule MailSink do
+    @moduledoc """
+    The suite's transport for one-time confirmation codes
+    (`:sanctum, :confirmation_code_transport` in `config/test.exs`): each
+    message is sent to the process that asked for it, and to the
+    processes it was asked on behalf of, as
+    `{:confirmation_code_mail, %{to:, subject:, text:}}`.
+    """
+
+    @doc false
+    def deliver(%{to: _, subject: _, text: _} = message) do
+      for pid <- [self() | Process.get(:"$callers", [])],
+          do: send(pid, {:confirmation_code_mail, message})
+
+      :ok
+    end
+
+    @doc "The code a captured message carries."
+    def code(%{text: text}) do
+      [code] = Regex.run(~r/\b(\d{6})\b/, text, capture: :all_but_first)
+      code
+    end
+  end
+
+  defmodule Authenticator do
+    @moduledoc """
+    A software WebAuthn authenticator for the suite: an ES256 key pair and
+    a credential id, derived from a seed so every process of a test finds
+    the same one for the same person. It answers a registration with
+    attestation `none`, and an assertion over any challenge, with user
+    presence and verification set unless told otherwise. Its counter is
+    `0` unless a test gives one: an authenticator that keeps no counter.
+    """
+
+    defstruct [:credential_id, :private_key, :public_key]
+
+    @doc "The authenticator a seed derives."
+    def new(seed) when is_binary(seed) do
+      private = :crypto.hash(:sha256, ["cyfr-test-authenticator|", seed])
+      {public, private} = :crypto.generate_key(:ecdh, :secp256r1, private)
+      credential_id = binary_part(:crypto.hash(:sha256, ["cyfr-test-credential|", seed]), 0, 16)
+      %__MODULE__{credential_id: credential_id, private_key: private, public_key: public}
+    end
+
+    @doc "The person `user_id`'s authenticator."
+    def for_person(user_id), do: new("person|" <> user_id)
+
+    @doc """
+    The browser's answer to `options` (`Sanctum.Passkeys.register/2`'s
+    answer without a credential). `opts`: `:origin`, `:rp_id`, `:uv`
+    (default `true`), `:count` (default `0`), `:challenge` (in place of the
+    options').
+    """
+    def registration(
+          %__MODULE__{} = auth,
+          %{public_key: public_key, registration: token},
+          opts \\ []
+        ) do
+      challenge = Keyword.get(opts, :challenge, public_key["challenge"])
+      rp_id = Keyword.get(opts, :rp_id, public_key["rp"]["id"])
+
+      client_data =
+        Jason.encode!(%{
+          "type" => "webauthn.create",
+          "challenge" => challenge,
+          "origin" => Keyword.get(opts, :origin, Sanctum.Passkeys.origin()),
+          "crossOrigin" => false
+        })
+
+      <<4, x::binary-size(32), y::binary-size(32)>> = auth.public_key
+      cose = cbor(%{1 => 2, 3 => -7, -1 => 1, -2 => {:bytes, x}, -3 => {:bytes, y}})
+
+      auth_data =
+        :crypto.hash(:sha256, rp_id) <>
+          <<flags(opts, 0x40)::8, Keyword.get(opts, :count, 0)::32>> <>
+          <<0::128>> <> <<byte_size(auth.credential_id)::16>> <> auth.credential_id <> cose
+
+      attestation =
+        cbor(%{"fmt" => "none", "attStmt" => %{}, "authData" => {:bytes, auth_data}})
+
+      %{
+        "id" => b64(auth.credential_id),
+        "rawId" => b64(auth.credential_id),
+        "type" => "public-key",
+        "registration" => token,
+        "response" => %{
+          "clientDataJSON" => b64(client_data),
+          "attestationObject" => b64(attestation)
+        }
+      }
+    end
+
+    @doc """
+    The browser's answer to a request whose challenge is `challenge`
+    (raw bytes). `opts`: `:origin`, `:rp_id` (default this home's), `:uv`
+    (default `true`), `:count` (default `0`), `:type` (default
+    `"webauthn.get"`).
+    """
+    def assertion(%__MODULE__{} = auth, challenge, opts \\ []) when is_binary(challenge) do
+      client_data =
+        Jason.encode!(%{
+          "type" => Keyword.get(opts, :type, "webauthn.get"),
+          "challenge" => b64(challenge),
+          "origin" => Keyword.get(opts, :origin, Sanctum.Passkeys.origin()),
+          "crossOrigin" => false
+        })
+
+      auth_data =
+        :crypto.hash(:sha256, Keyword.get(opts, :rp_id, Sanctum.Passkeys.rp_id())) <>
+          <<flags(opts, 0)::8, Keyword.get(opts, :count, 0)::32>>
+
+      signature =
+        :crypto.sign(
+          :ecdsa,
+          :sha256,
+          auth_data <> :crypto.hash(:sha256, client_data),
+          [auth.private_key, :secp256r1]
+        )
+
+      %{
+        "id" => b64(auth.credential_id),
+        "rawId" => b64(auth.credential_id),
+        "type" => "public-key",
+        "response" => %{
+          "clientDataJSON" => b64(client_data),
+          "authenticatorData" => b64(auth_data),
+          "signature" => b64(signature)
+        }
+      }
+    end
+
+    # User presence always; user verification unless `uv: false`; and the
+    # attested-credential flag a registration adds.
+    defp flags(opts, extra) do
+      uv = if Keyword.get(opts, :uv, true), do: 0x04, else: 0
+      Bitwise.bor(Bitwise.bor(0x01, uv), extra)
+    end
+
+    defp b64(bytes), do: Base.url_encode64(bytes, padding: false)
+
+    # The CBOR the two answers need: integers, text, `{:bytes, _}` byte
+    # strings and maps.
+    defp cbor(value) when is_integer(value) and value >= 0, do: head(0, value)
+    defp cbor(value) when is_integer(value), do: head(1, -1 - value)
+    defp cbor({:bytes, bytes}), do: head(2, byte_size(bytes)) <> bytes
+    defp cbor(text) when is_binary(text), do: head(3, byte_size(text)) <> text
+
+    defp cbor(map) when is_map(map) do
+      Enum.reduce(map, head(5, map_size(map)), fn {key, value}, acc ->
+        acc <> cbor(key) <> cbor(value)
+      end)
+    end
+
+    defp head(major, n) when n < 24, do: <<major::3, n::5>>
+    defp head(major, n) when n < 0x100, do: <<major::3, 24::5, n::8>>
+    defp head(major, n) when n < 0x10000, do: <<major::3, 25::5, n::16>>
+    defp head(major, n), do: <<major::3, 26::5, n::32>>
+  end
 
   @doc """
   The context as an issuer: its identity signed in (`person!/2`) unless it

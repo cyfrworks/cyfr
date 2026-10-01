@@ -24,7 +24,9 @@ defmodule Cyfr.Bus.Notify do
     :execution_failed,
     :approval_pending,
     :approval_resolved,
-    :schedule_failed
+    :schedule_failed,
+    :passkey_registered,
+    :passkey_recovered
   ]
 
   @payload_keys [
@@ -53,6 +55,8 @@ defmodule Cyfr.Bus.Notify do
           | :approval_pending
           | :approval_resolved
           | :schedule_failed
+          | :passkey_registered
+          | :passkey_recovered
 
   @type t :: %__MODULE__{
           athanor_id: String.t() | :platform,

@@ -5,7 +5,6 @@ defmodule CyfrWeb.Plugs.WebhookIdempotencyTest do
   use ExUnit.Case, async: false
 
   alias CyfrWeb.Plugs.WebhookIdempotency
-  alias Sanctum.Webhook
 
   setup do
     :ok = Ecto.Adapters.SQL.Sandbox.checkout(Arca.Repo)
@@ -19,7 +18,7 @@ defmodule CyfrWeb.Plugs.WebhookIdempotencyTest do
     profile = Sanctum.Test.ConsentFixtures.bindable_profile(ctx, "f:local.handler")
 
     {:ok, %{slug: slug}} =
-      Webhook.create(
+      Sanctum.TestContext.create_webhook(
         ctx,
         Map.merge(%{name: name, target_ref: "f:local.handler", profile_id: profile}, opts)
         |> Map.put_new(:replay_protection, "none")

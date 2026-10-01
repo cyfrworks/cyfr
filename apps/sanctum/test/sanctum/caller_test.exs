@@ -355,7 +355,7 @@ defmodule Sanctum.CallerTest do
     test "a key's revalidation keeps them too" do
       ctx = Sanctum.TestContext.issuer!(Sanctum.TestContext.local())
       name = "revalidation-#{System.unique_integer([:positive])}"
-      {:ok, %{api_key: raw}} = Sanctum.ApiKey.create(ctx, %{name: name})
+      {:ok, %{api_key: raw}} = Sanctum.TestContext.create_key(ctx, %{name: name})
       {:ok, key} = Caller.establish({:api_key, raw})
 
       held = struct!(key, @admission)
@@ -372,7 +372,11 @@ defmodule Sanctum.CallerTest do
       name = "corrupt-allowlist-#{System.unique_integer([:positive])}"
 
       {:ok, %{api_key: raw}} =
-        Sanctum.ApiKey.create(ctx, %{name: name, type: :service, ip_allowlist: ["192.168.1.0/24"]})
+        Sanctum.TestContext.create_key(ctx, %{
+          name: name,
+          type: :service,
+          ip_allowlist: ["192.168.1.0/24"]
+        })
 
       {:ok, key} = Caller.establish({:api_key, raw}, client_ip: "192.168.1.10")
       key = %{key | client_ip: "192.168.1.10"}

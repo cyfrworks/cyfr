@@ -18,7 +18,6 @@ defmodule Sanctum.Consent.SelectionFlowTest do
   alias Sanctum.Consent.Plan
   alias Sanctum.Providers.Profile
   alias Prima.Test.AuthorityFixtures, as: Fixtures
-  alias Sanctum.Vault
 
   @wasm File.read!(Path.join(__DIR__, "../../support/test_wasm/math.wasm"))
   @dep "reagent:local.sel-dep"
@@ -81,7 +80,9 @@ defmodule Sanctum.Consent.SelectionFlowTest do
   end
 
   defp entry!(ctx, name, fields) do
-    {:ok, view} = Vault.create(ctx, %{name: name, kind: "api_key", fields: fields})
+    {:ok, view} =
+      Sanctum.TestContext.create_vault(ctx, %{name: name, kind: "api_key", fields: fields})
+
     view
   end
 

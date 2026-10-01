@@ -283,7 +283,9 @@ defmodule Emissary.Web.DeviceChannelTest do
     } do
       device = pair!(session_ctx)
       state = proven(device)
-      {:ok, _row} = Sanctum.Pairing.revoke(session_ctx, device.client_id)
+
+      {:ok, _row} =
+        Sanctum.TestContext.confirming(session_ctx, &Sanctum.Pairing.revoke(&1, device.client_id))
 
       {answer, decision} =
         assert_refused_answering(
@@ -304,7 +306,9 @@ defmodule Emissary.Web.DeviceChannelTest do
       device = pair!(session_ctx)
       state = proven(device)
       {token, _timer} = state.keepalive
-      {:ok, _row} = Sanctum.Pairing.revoke(session_ctx, device.client_id)
+
+      {:ok, _row} =
+        Sanctum.TestContext.confirming(session_ctx, &Sanctum.Pairing.revoke(&1, device.client_id))
 
       assert_refused(
         DeviceChannel.handle_info({DeviceChannel, :keepalive, token}, state),
@@ -336,7 +340,10 @@ defmodule Emissary.Web.DeviceChannelTest do
 
     test "a revoked client cannot renew", %{session_ctx: session_ctx} do
       device = pair!(session_ctx)
-      {:ok, _row} = Sanctum.Pairing.revoke(session_ctx, device.client_id)
+
+      {:ok, _row} =
+        Sanctum.TestContext.confirming(session_ctx, &Sanctum.Pairing.revoke(&1, device.client_id))
+
       {state, challenge} = renewing(device)
 
       assert_refused(send_frame(state, proof_message(challenge, device)), 4403, "forbidden")
@@ -667,7 +674,9 @@ defmodule Emissary.Web.DeviceChannelTest do
 
       # A pairing completion from the same address is not charged for it:
       # bad connects cannot starve completions and renewals.
-      {:ok, invitation} = Sanctum.Pairing.begin(session_ctx, %{})
+      {:ok, invitation} =
+        Sanctum.TestContext.confirming(session_ctx, &Sanctum.Pairing.begin(&1, %{}))
+
       {device_key, _} = :crypto.generate_key(:eddsa, :ed25519)
 
       assert {:ok, %{challenge: _}} =
@@ -1068,7 +1077,10 @@ defmodule Emissary.Web.DeviceChannelTest do
   # `glass/0` answers, with the certificate its home issued.
   defp pair!(session_ctx) do
     {device_key, private} = :crypto.generate_key(:eddsa, :ed25519)
-    {:ok, invitation} = Sanctum.Pairing.begin(session_ctx, %{})
+
+    {:ok, invitation} =
+      Sanctum.TestContext.confirming(session_ctx, &Sanctum.Pairing.begin(&1, %{}))
+
     source = "198.51.100.#{rem(System.unique_integer([:positive]), 250) + 1}"
     glass = Context.build(%{authenticated: false, client_ip: source})
 

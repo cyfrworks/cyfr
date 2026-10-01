@@ -286,7 +286,7 @@ defmodule Emissary.External.ServerTest do
       ctx = Sanctum.TestContext.local()
 
       {:ok, _} =
-        Sanctum.Vault.create(ctx, %{
+        Sanctum.TestContext.create_vault(ctx, %{
           name: "ext-bearer",
           kind: "api_key",
           fields: %{"token" => "sk-ext-0123456789"}
@@ -413,7 +413,7 @@ defmodule Emissary.External.ServerTest do
       entry_name = "stop-race-#{suffix}"
 
       {:ok, entry} =
-        Sanctum.Vault.create(ctx, %{
+        Sanctum.TestContext.create_vault(ctx, %{
           name: entry_name,
           kind: "api_key",
           fields: %{"token" => "ghp_stop_race_0123456789"}
@@ -526,7 +526,7 @@ defmodule Emissary.External.ServerTest do
 
     defp vault!(ctx, name) do
       {:ok, _} =
-        Sanctum.Vault.create(ctx, %{
+        Sanctum.TestContext.create_vault(ctx, %{
           name: name,
           kind: "api_key",
           fields: %{"token" => "t-" <> name}

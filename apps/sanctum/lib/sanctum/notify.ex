@@ -4,8 +4,10 @@
 defmodule Sanctum.Notify do
   @moduledoc """
   What a person's tray shows: members joining or leaving, invites,
-  allowlist requests, executions finishing, approvals waiting and
-  schedules failing — about one athanor, or, for its operators, about the
+  allowlist requests, executions finishing, approvals waiting, schedules
+  failing, a passkey registered under the first-method rule or the
+  administrator's authorization, and a passkey the platform administrator
+  recovered — about one athanor, or, for its operators, about the
   server.
 
   This module owns the vocabulary (`t:kind/0`, `kinds/0`) and the
@@ -24,7 +26,9 @@ defmodule Sanctum.Notify do
     :execution_failed,
     :approval_pending,
     :approval_resolved,
-    :schedule_failed
+    :schedule_failed,
+    :passkey_registered,
+    :passkey_recovered
   ]
 
   @type kind ::
@@ -37,6 +41,8 @@ defmodule Sanctum.Notify do
           | :approval_pending
           | :approval_resolved
           | :schedule_failed
+          | :passkey_registered
+          | :passkey_recovered
 
   @doc "The tray's closed vocabulary, in the order `t:kind/0` names it."
   @spec kinds() :: [kind()]

@@ -79,7 +79,7 @@ defmodule Cyfr.GmailOAuthSmokeTest do
 
   defp mint_entry!(ctx, oauth, endpoints) do
     {:ok, view} =
-      Vault.create(ctx, %{
+      Sanctum.TestContext.create_vault(ctx, %{
         name: "my-gmail",
         kind: "oauth",
         provider_hint: @provider,
@@ -160,7 +160,7 @@ defmodule Cyfr.GmailOAuthSmokeTest do
     # the vault path. The pending is fabricated exactly as vault.authorize
     # mints it (endpoint https validation happens there, on operator
     # input), with the token URL pointed at Bypass.
-    :ok = Sanctum.ProviderCredentials.put(ctx, @provider, "smoke-cid", "smoke-cs")
+    :ok = Sanctum.TestContext.put_provider_credentials(ctx, @provider, "smoke-cid", "smoke-cs")
 
     bypass = Bypass.open()
 
@@ -225,7 +225,8 @@ defmodule Cyfr.GmailOAuthSmokeTest do
       Plug.Conn.resp(conn, 200, "{}")
     end)
 
-    :ok = Sanctum.ProviderCredentials.put(ctx, @provider, "client-id", "client-secret")
+    :ok =
+      Sanctum.TestContext.put_provider_credentials(ctx, @provider, "client-id", "client-secret")
 
     entry =
       mint_entry!(

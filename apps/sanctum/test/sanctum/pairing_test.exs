@@ -119,9 +119,27 @@ defmodule Sanctum.PairingTest do
     end
   end
 
+  # Beginning a pairing and revoking a device are sensitive changes: each
+  # under a confirmation the person proved (`Sanctum.TestContext.confirmed/3`).
+  defp begin!(session_ctx) do
+    session_ctx
+    |> Sanctum.TestContext.confirmed(:device_pairing, Pairing.invitation_change())
+    |> Pairing.begin(%{})
+  end
+
+  defp revoke!(session_ctx, client_id) do
+    session_ctx
+    |> Sanctum.TestContext.confirmed(:pairing_revocation, %{
+      operation: "pairing.revoke",
+      arguments: %{"client_id" => client_id},
+      resource: client_id
+    })
+    |> Pairing.revoke(client_id)
+  end
+
   defp pair!(session_ctx) do
     {device_key, private} = key = device_key()
-    {:ok, invitation} = Pairing.begin(session_ctx, %{})
+    {:ok, invitation} = begin!(session_ctx)
     {:ok, paired} = complete(invitation.invitation_secret, key)
     Map.merge(paired, %{device_key: device_key, private: private})
   end
@@ -274,11 +292,22 @@ defmodule Sanctum.PairingTest do
   describe "fresh_required?/2" do
     @describetag database: false
 
-    test "asks for no proof before one can be given, for any action or caller" do
+    test "answers the table, the same for every person and every client" do
       for action <- Pairing.actions(),
-          context <- [ctx(auth_method: :oidc), ctx(auth_method: :api_key)] do
-        refute Pairing.fresh_required?(action, context)
+          context <- [
+            ctx(auth_method: :oidc),
+            ctx(auth_method: :api_key),
+            ctx(auth_method: :device)
+          ] do
+        assert Pairing.fresh_required?(action, context) == Pairing.sensitive?(action),
+               inspect(action)
       end
+
+      refute Pairing.fresh_required?(:grant, ctx(auth_method: :oidc))
+      refute Pairing.fresh_required?(:approval, ctx(auth_method: :oidc))
+      assert Pairing.fresh_required?(:credential_issuance, ctx(auth_method: :api_key))
+      assert Pairing.fresh_required?(:vault_unlock, ctx(auth_method: :oidc))
+      assert Pairing.fresh_required?(:home_transfer, ctx(auth_method: :oidc))
 
       assert_raise FunctionClauseError, fn ->
         Pairing.fresh_required?(:delete_everything, ctx(auth_method: :oidc))
@@ -321,7 +350,7 @@ defmodule Sanctum.PairingTest do
 
       assert Pairing.can_confirm?(ctx)
 
-      {:ok, _row} = Pairing.revoke(session_ctx, device.client_id)
+      {:ok, _row} = revoke!(session_ctx, device.client_id)
       refute Pairing.can_confirm?(ctx)
     end
 
@@ -344,7 +373,7 @@ defmodule Sanctum.PairingTest do
       athanor: athanor
     } do
       before = DateTime.utc_now()
-      assert {:ok, invitation} = Pairing.begin(session_ctx, %{})
+      assert {:ok, invitation} = begin!(session_ctx)
 
       assert byte_size(invitation.invitation_secret) == 16
       assert "pcl_" <> _ = invitation.client_id
@@ -363,9 +392,103 @@ defmodule Sanctum.PairingTest do
       refute inspect(Map.from_struct(row)) =~ invitation.invitation_secret
 
       # Each invitation is its own.
-      {:ok, second} = Pairing.begin(session_ctx, %{})
+      {:ok, second} = begin!(session_ctx)
       refute second.invitation_secret == invitation.invitation_secret
       refute second.client_id == invitation.client_id
+    end
+
+    test "begun without proof asks for one and opens nothing; proven, it pairs", %{
+      session_ctx: session_ctx,
+      user: user
+    } do
+      assert {:error, {:confirmation_required, %{id: id, operation: "pairing.begin"}}} =
+               Pairing.begin(session_ctx, %{})
+
+      assert Arca.Repo.all(from(i in PairingInvitation, where: i.user_id == ^user.id)) == []
+
+      Sanctum.TestContext.prove!(session_ctx, id)
+      assert {:ok, invitation} = Pairing.begin(%{session_ctx | confirmation_id: id}, %{})
+
+      {:ok, record} = Arca.PendingConfirmations.get(Context.actor(session_ctx), id)
+      assert record.state == "consumed"
+      assert {:ok, _paired} = complete(invitation.invitation_secret, device_key())
+
+      # The confirmation paired once: naming it again asks anew.
+      assert {:error, {:confirmation_required, %{id: again}}} =
+               Pairing.begin(%{session_ctx | confirmation_id: id}, %{})
+
+      refute again == id
+    end
+
+    test "another session of the person never takes the invitation the asking session proved", %{
+      session_ctx: asking,
+      user: user,
+      athanor: athanor
+    } do
+      built =
+        Context.build(
+          user_id: user.id,
+          email: user.email,
+          provider: "github",
+          athanor_id: athanor.id,
+          permissions: [:*],
+          auth_method: :oidc,
+          authenticated: true
+        )
+
+      {:ok, session} = Sanctum.TestContext.create_session(built)
+
+      {:ok, stolen} =
+        Sanctum.Caller.establish(session.token, focus: athanor.id, task_supervisor: nil)
+
+      assert {:error, {:confirmation_required, %{id: id}}} = Pairing.begin(asking, %{})
+      Sanctum.TestContext.prove!(asking, id)
+
+      # The stolen session names the proven record: it is asked for a proof
+      # of its own, and no invitation is opened for it.
+      assert {:error, {:confirmation_required, %{id: own}}} =
+               Pairing.begin(%{stolen | confirmation_id: id}, %{})
+
+      refute own == id
+      assert Arca.Repo.all(from(i in PairingInvitation, where: i.user_id == ^user.id)) == []
+
+      # The asking session repeats under its record, once.
+      assert {:ok, %{invitation_secret: _}} = Pairing.begin(%{asking | confirmation_id: id}, %{})
+      {:ok, record} = Arca.PendingConfirmations.get(Context.actor(asking), id)
+      assert record.state == "consumed"
+    end
+
+    test "a record a device confirmed is void once that device is revoked", %{
+      session_ctx: session_ctx
+    } do
+      device = pair!(session_ctx)
+      device_ctx = connected!(device)
+      authenticator = Sanctum.TestContext.passkey!(session_ctx.user_id)
+
+      assert {:error, {:confirmation_required, %{id: id}}} = Pairing.begin(device_ctx, %{})
+      {:ok, row} = Arca.PendingConfirmations.get(Context.actor(device_ctx), id)
+      "sha256:" <> hex = row.digest
+
+      assertion =
+        Sanctum.TestContext.Authenticator.assertion(
+          authenticator,
+          Base.decode16!(hex, case: :lower)
+        )
+
+      assert {:ok, %{state: "confirmed"}} = Sanctum.Passkeys.assert(device_ctx, id, assertion)
+
+      {:ok, confirmed} = Arca.PendingConfirmations.get(Context.actor(device_ctx), id)
+      assert confirmed.confirmed_client_id == device.client_id
+
+      {:ok, _} = revoke!(session_ctx, device.client_id)
+
+      {:ok, voided} = Arca.PendingConfirmations.get(Context.actor(device_ctx), id)
+      assert voided.state == "voided"
+
+      assert {:error, {:confirmation_required, %{id: fresh}}} =
+               Pairing.begin(%{session_ctx | confirmation_id: id}, %{})
+
+      refute fresh == id
     end
 
     test "needs a person working in an athanor", %{session_ctx: session_ctx} do
@@ -394,7 +517,7 @@ defmodule Sanctum.PairingTest do
   describe "complete/3" do
     test "a glass with neither cookie nor certificate is paired by the invitation and its key proof",
          %{session_ctx: session_ctx, user: user, athanor: athanor} do
-      {:ok, invitation} = Pairing.begin(session_ctx, %{})
+      {:ok, invitation} = begin!(session_ctx)
       {device_key, private} = device_key()
 
       assert {:ok, %{challenge: %Challenge{} = challenge}} =
@@ -452,7 +575,7 @@ defmodule Sanctum.PairingTest do
       session_ctx: session_ctx,
       user: user
     } do
-      {:ok, invitation} = Pairing.begin(session_ctx, %{})
+      {:ok, invitation} = begin!(session_ctx)
       stranger = seated!()
       {device_key, private} = device_key()
 
@@ -476,7 +599,7 @@ defmodule Sanctum.PairingTest do
       session_ctx: session_ctx,
       user: user
     } do
-      {:ok, invitation} = Pairing.begin(session_ctx, %{})
+      {:ok, invitation} = begin!(session_ctx)
       assert {:ok, _paired} = complete(invitation.invitation_secret, device_key())
 
       assert complete(invitation.invitation_secret, device_key()) ==
@@ -494,7 +617,7 @@ defmodule Sanctum.PairingTest do
       session_ctx: session_ctx,
       user: user
     } do
-      {:ok, invitation} = Pairing.begin(session_ctx, %{})
+      {:ok, invitation} = begin!(session_ctx)
       {device_key, private} = device_key()
       {_other_key, other_private} = device_key()
 
@@ -528,7 +651,7 @@ defmodule Sanctum.PairingTest do
       session_ctx: session_ctx,
       user: user
     } do
-      {:ok, invitation} = Pairing.begin(session_ctx, %{})
+      {:ok, invitation} = begin!(session_ctx)
       {device_key, private} = device_key()
       {other_key, _} = device_key()
 
@@ -557,7 +680,7 @@ defmodule Sanctum.PairingTest do
     end
 
     test "a proof after its challenge expired is refused", %{session_ctx: session_ctx} do
-      {:ok, invitation} = Pairing.begin(session_ctx, %{})
+      {:ok, invitation} = begin!(session_ctx)
       {device_key, private} = device_key()
 
       {:ok, %{challenge: challenge}} =
@@ -595,7 +718,7 @@ defmodule Sanctum.PairingTest do
     end
 
     test "an expired invitation is refused", %{session_ctx: session_ctx} do
-      {:ok, invitation} = Pairing.begin(session_ctx, %{})
+      {:ok, invitation} = begin!(session_ctx)
       past = DateTime.add(DateTime.utc_now(), -1, :second)
 
       Arca.Repo.update_all(
@@ -613,7 +736,7 @@ defmodule Sanctum.PairingTest do
       session_ctx: session_ctx,
       user: user
     } do
-      {:ok, invitation} = Pairing.begin(session_ctx, %{})
+      {:ok, invitation} = begin!(session_ctx)
       {:ok, _} = Users.deny(user)
 
       assert complete(invitation.invitation_secret, device_key()) ==
@@ -627,7 +750,7 @@ defmodule Sanctum.PairingTest do
       user: user,
       athanor: athanor
     } do
-      {:ok, invitation} = Pairing.begin(session_ctx, %{})
+      {:ok, invitation} = begin!(session_ctx)
       {device_key, private} = device_key()
 
       {:ok, %{challenge: challenge}} =
@@ -651,7 +774,7 @@ defmodule Sanctum.PairingTest do
       session_ctx: session_ctx,
       user: user
     } do
-      {:ok, invitation} = Pairing.begin(session_ctx, %{})
+      {:ok, invitation} = begin!(session_ctx)
       Arca.Repo.delete_all(from(p in PersonIdentity, where: p.user_id == ^user.id))
 
       assert complete(invitation.invitation_secret, device_key()) ==
@@ -676,7 +799,7 @@ defmodule Sanctum.PairingTest do
     test "a burst of wrong codes from one address is limited, a correct one after it too", %{
       session_ctx: session_ctx
     } do
-      {:ok, invitation} = Pairing.begin(session_ctx, %{})
+      {:ok, invitation} = begin!(session_ctx)
       {device_key, _} = device_key()
 
       for _ <- 1..20 do
@@ -704,7 +827,7 @@ defmodule Sanctum.PairingTest do
 
     test "a code brute-forced from many addresses across two members: the installation bound holds",
          %{session_ctx: session_ctx} do
-      {:ok, invitation} = Pairing.begin(session_ctx, %{})
+      {:ok, invitation} = begin!(session_ctx)
       {device_key, _} = device_key()
 
       for n <- 1..200 do
@@ -847,7 +970,7 @@ defmodule Sanctum.PairingTest do
       device = pair!(session_ctx)
       challenge = challenge(device, :renew)
       ctx = renewing!(device, challenge)
-      {:ok, _} = Pairing.revoke(session_ctx, device.client_id)
+      {:ok, _} = revoke!(session_ctx, device.client_id)
 
       assert Pairing.renew(ctx, renewal(device, challenge)) == {:error, :revoked}
     end
@@ -890,7 +1013,7 @@ defmodule Sanctum.PairingTest do
     test "ends the person's own client with its certificates", %{session_ctx: session_ctx} do
       device = pair!(session_ctx)
 
-      assert {:ok, %{id: id, standing: "revoked"}} = Pairing.revoke(session_ctx, device.client_id)
+      assert {:ok, %{id: id, standing: "revoked"}} = revoke!(session_ctx, device.client_id)
       assert id == device.client_id
 
       assert Enum.all?(

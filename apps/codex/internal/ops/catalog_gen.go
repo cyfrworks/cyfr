@@ -1216,8 +1216,6 @@ type ConfirmationConfirmArgs struct {
 	Assertion Field[any] `json:"assertion,omitzero"`
 	// confirm: the one-time code sent to your verified email for it
 	Code Field[string] `json:"code,omitzero"`
-	// confirm: the single-use ticket a completed OpenID Connect re-authentication for it answered
-	Ticket Field[string] `json:"ticket,omitzero"`
 }
 
 // MarshalJSON supplies the operation's fixed action discriminator.

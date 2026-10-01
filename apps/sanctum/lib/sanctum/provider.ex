@@ -98,6 +98,12 @@ defmodule Sanctum.Provider do
     ]
   end
 
+  @doc """
+  The streams Sanctum's tools offer, each declared beside its operations:
+  a person's pending confirmations (`confirmation.changes`).
+  """
+  def streams, do: Sanctum.Providers.Confirmation.streams()
+
   # ============================================================================
   # Tool Handlers — delegated to per-tool modules
   # ============================================================================

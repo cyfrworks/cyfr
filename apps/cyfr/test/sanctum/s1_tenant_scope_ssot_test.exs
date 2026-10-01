@@ -52,7 +52,7 @@ defmodule Sanctum.S1TenantScopeSSOTTest do
 
   describe "equivalence — normal context behaviour unchanged" do
     test "ApiKey create/get/list still work and are tenant-scoped", %{ctx: ctx} do
-      {:ok, %{name: "k1"}} = ApiKey.create(ctx, %{name: "k1"})
+      {:ok, %{name: "k1"}} = Sanctum.TestContext.create_key(ctx, %{name: "k1"})
       assert {:ok, _} = ApiKey.get(ctx, "k1")
       {:ok, list} = ApiKey.list(ctx)
       assert Enum.any?(list, &(&1.name == "k1"))
@@ -63,7 +63,7 @@ defmodule Sanctum.S1TenantScopeSSOTTest do
       profile = Sanctum.Test.ConsentFixtures.bindable_profile(ctx, "f:local.h")
 
       {:ok, %{name: "h1"}} =
-        Webhook.create(ctx, %{
+        Sanctum.TestContext.create_webhook(ctx, %{
           name: "h1",
           replay_protection: "none",
           target_ref: "f:local.h",
@@ -91,7 +91,7 @@ defmodule Sanctum.S1TenantScopeSSOTTest do
     end
 
     test "a resolved context still works", %{ctx: ctx} do
-      {:ok, _} = ApiKey.create(ctx, %{name: "ok"})
+      {:ok, _} = Sanctum.TestContext.create_key(ctx, %{name: "ok"})
       assert {:ok, _} = ApiKey.get(ctx, "ok")
       assert {:ok, _} = ApiKey.list(ctx)
     end

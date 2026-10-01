@@ -50,7 +50,7 @@ defmodule Opus.RetainedInputTest do
   # run needs one bound, even for a keyless `describe`.
   defp bind_claude!(ctx) do
     {:ok, entry} =
-      Sanctum.Vault.create(ctx, %{
+      Sanctum.TestContext.create_vault(ctx, %{
         name: "claude key",
         kind: "api_key",
         fields: %{"ANTHROPIC_API_KEY" => "sk-test-claude"}

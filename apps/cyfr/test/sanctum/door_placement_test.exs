@@ -3,7 +3,7 @@
 
 defmodule Sanctum.DoorPlacementTest do
   @moduledoc """
-  A session is minted at exactly two places, and both sit behind the
+  A session is minted at exactly three places, and each sits behind the
   door. Reads the sources rather than the behaviour: a new
   `Session.create/1` caller that forgot the door would pass every
   behavioural test on the paths that remembered it.
@@ -15,11 +15,12 @@ defmodule Sanctum.DoorPlacementTest do
   # so the scan spans two applications.
   @root Path.expand("../../../..", __DIR__)
 
-  # The CLI device flow mints for itself; the browser flows mint through
-  # the shared sign-in responder.
+  # The CLI device flow and the passkey door mint for themselves; the
+  # browser flows mint through the shared sign-in responder.
   @device_flow "apps/sanctum/lib/sanctum/auth/device_flow.ex"
+  @passkeys "apps/sanctum/lib/sanctum/passkeys.ex"
   @browser_callback "apps/cyfr/lib/prism_web/controllers/auth_controller.ex"
-  @minters ["apps/cyfr/lib/cyfr_web/sign_in_response.ex", @device_flow]
+  @minters ["apps/cyfr/lib/cyfr_web/sign_in_response.ex", @device_flow, @passkeys]
 
   defp lib_files do
     for dir <- Prima.Test.SourceTree.app_libs(@root),
@@ -42,6 +43,12 @@ defmodule Sanctum.DoorPlacementTest do
     assert Prima.Test.SourceTree.read(Path.join(@root, @device_flow)) =~
              "Door.admit_identity",
            "#{@device_flow} mints sessions without asking the door"
+
+    # The passkey door asks it for the person's own door identities and
+    # verified email: a person the allowlist no longer admits signs in with
+    # no passkey either.
+    assert Prima.Test.SourceTree.read(Path.join(@root, @passkeys)) =~ "Door.admit(",
+           "#{@passkeys} mints sessions without asking the door"
 
     # The responder mints only when a flow hands it `session: {:mint, ctx}`;
     # the one producer of that option must be the browser callback, and the

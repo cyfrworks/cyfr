@@ -10,8 +10,13 @@ defmodule Sanctum.Providers.Key do
   """
 
   require Logger
+  require Prima.ConsentSignal
 
   @standing_refusals [:missing_generation, :stale_generation, :unauthenticated]
+
+  # A sensitive change's own answers (`Sanctum.Consent.Authz`), which pass
+  # as they are: the confirmation signal is matched apart, by its shape.
+  @confirmation_refusals [:remote_identity_unavailable, :missing_tenant]
 
   alias Sanctum.Context
 
@@ -163,6 +168,15 @@ defmodule Sanctum.Providers.Key do
         {:error, reason} when reason in @standing_refusals ->
           {:error, standing_refusal(reason)}
 
+        {:error, {tag, payload} = signal} when Prima.ConsentSignal.is_signal(tag, payload) ->
+          {:error, signal}
+
+        {:error, reason} when reason in @confirmation_refusals ->
+          {:error, reason}
+
+        {:error, {:conflict, message} = conflict} when is_binary(message) ->
+          {:error, conflict}
+
         # No re-log: the storage layer already logged this failure with the
         # exception detail (Arca.ApiKeyStorage); a second error line here
         # carried nothing the first lacked.
@@ -213,6 +227,15 @@ defmodule Sanctum.Providers.Key do
 
       {:error, reason} when reason in @standing_refusals ->
         {:error, standing_refusal(reason)}
+
+      {:error, {tag, payload} = signal} when Prima.ConsentSignal.is_signal(tag, payload) ->
+        {:error, signal}
+
+      {:error, reason} when reason in @confirmation_refusals ->
+        {:error, reason}
+
+      {:error, {:conflict, message} = conflict} when is_binary(message) ->
+        {:error, conflict}
 
       {:error, reason} ->
         Logger.error("[Sanctum.Providers.Key] Failed to rotate key: #{inspect(reason)}")

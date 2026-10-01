@@ -75,9 +75,15 @@ defmodule Sanctum.Providers.PairingTest do
 
   defp refusal({:error, reason}), do: Grimoire.Error.classify(reason)
 
+  # Beginning a pairing and revoking a device are sensitive changes: the
+  # person proves each, and the call repeats naming it
+  # (`Sanctum.TestContext.confirming/2`).
+  defp confirmed_call(ctx, action, args),
+    do: Sanctum.TestContext.confirming(ctx, &call(&1, action, args))
+
   defp pair!(session_ctx, completing \\ glass()) do
     {device_key, private} = :crypto.generate_key(:eddsa, :ed25519)
-    {:ok, %{invitation_secret: secret}} = call(session_ctx, "begin", %{})
+    {:ok, %{invitation_secret: secret}} = confirmed_call(session_ctx, "begin", %{})
     submission = %{"invitation_secret" => secret, "device_key" => Encoding.b64(device_key)}
 
     {:ok, %{challenge: challenge}} = call(completing, "complete", submission)
@@ -94,7 +100,7 @@ defmodule Sanctum.Providers.PairingTest do
   test "a session begins, a glass holding nothing completes, and the certificate is the person's",
        %{session_ctx: session_ctx, user: user, athanor: athanor} do
     assert {:ok, %{invitation_secret: secret, client_id: reserved, expires_at: expires_at}} =
-             call(session_ctx, "begin", %{})
+             confirmed_call(session_ctx, "begin", %{})
 
     assert {:ok, <<_::binary-size(16)>>} = Encoding.unb64(secret, 16)
     assert "pcl_" <> _ = reserved
@@ -176,7 +182,7 @@ defmodule Sanctum.Providers.PairingTest do
            end)
 
     assert {:ok, %{client_id: revoked, standing: "revoked"}} =
-             call(session_ctx, "revoke", %{"client_id" => first.client_id})
+             confirmed_call(session_ctx, "revoke", %{"client_id" => first.client_id})
 
     assert revoked == first.client_id
 

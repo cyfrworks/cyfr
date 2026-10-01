@@ -34,14 +34,18 @@ defmodule Sanctum.ProviderVaultProfileTest do
         type: "reagent"
       })
 
-    # vault.create over wire args
+    # vault.create over wire args, under the confirmation entering a
+    # credential needs (`Sanctum.TestContext.confirming/2`)
     {:ok, %{entry: entry}} =
-      Sanctum.Provider.handle("vault", ctx, %{
-        "action" => "create",
-        "name" => "wire-conn",
-        "kind" => "api_key",
-        "fields" => %{"url" => "https://db.example", "anon_key" => "anon"}
-      })
+      Sanctum.TestContext.confirming(
+        ctx,
+        &Sanctum.Provider.handle("vault", &1, %{
+          "action" => "create",
+          "name" => "wire-conn",
+          "kind" => "api_key",
+          "fields" => %{"url" => "https://db.example", "anon_key" => "anon"}
+        })
+      )
 
     {:ok, %{entries: entries}} = Sanctum.Provider.handle("vault", ctx, %{"action" => "list"})
     assert Enum.any?(entries, &(&1.id == entry.id))

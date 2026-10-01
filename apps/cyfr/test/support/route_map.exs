@@ -321,7 +321,8 @@
         "device_complete_throttle" => ["CyfrWeb.Plugs.AuthRateLimit"],
         "legal_accept_throttle" => ["CyfrWeb.Plugs.AuthRateLimit"],
         "oauth_callback_throttle" => ["CyfrWeb.Plugs.AuthRateLimit"],
-        "oauth_start_throttle" => ["CyfrWeb.Plugs.AuthRateLimit"]
+        "oauth_start_throttle" => ["CyfrWeb.Plugs.AuthRateLimit"],
+        "passkey_complete_throttle" => ["CyfrWeb.Plugs.AuthRateLimit"]
       },
       routes: [
         %{
@@ -575,6 +576,33 @@
           auth: "browser_public_auth",
           live_view: nil,
           pipe_through: ["auth_browser"]
+        },
+        %{
+          verb: "GET",
+          path: "/auth/oidcc/reauth",
+          plug: "PrismWeb.ReauthController",
+          plug_opts: ":callback",
+          auth: "browser_oauth_callback",
+          live_view: nil,
+          pipe_through: ["auth_browser", "oauth_callback_throttle"]
+        },
+        %{
+          verb: "POST",
+          path: "/auth/oidcc/reauth",
+          plug: "PrismWeb.ReauthController",
+          plug_opts: ":decide",
+          auth: "browser_oauth_flow",
+          live_view: nil,
+          pipe_through: ["auth_browser", "oauth_callback_throttle"]
+        },
+        %{
+          verb: "GET",
+          path: "/auth/passkey/complete/:ticket",
+          plug: "PrismWeb.PasskeyController",
+          plug_opts: ":complete",
+          auth: "browser_oauth_flow",
+          live_view: nil,
+          pipe_through: ["auth_browser", "passkey_complete_throttle"]
         },
         %{
           verb: "GET",

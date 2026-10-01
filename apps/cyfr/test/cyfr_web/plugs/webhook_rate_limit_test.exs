@@ -23,7 +23,10 @@ defmodule CyfrWeb.Plugs.WebhookRateLimitTest do
     Sanctum.Test.ComponentHelpers.register_test_component("h", "1.0.0", "formula", %{})
     profile = Sanctum.Test.ConsentFixtures.bindable_profile(ctx, "f:local.h")
     attrs = Map.merge(%{name: name, target_ref: "f:local.h", profile_id: profile}, opts)
-    {:ok, result} = Sanctum.Webhook.create(ctx, Map.put_new(attrs, :replay_protection, "none"))
+
+    {:ok, result} =
+      Sanctum.TestContext.create_webhook(ctx, Map.put_new(attrs, :replay_protection, "none"))
+
     result.slug
   end
 

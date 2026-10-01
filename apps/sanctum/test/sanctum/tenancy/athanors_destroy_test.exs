@@ -58,12 +58,16 @@ defmodule Sanctum.Tenancy.AthanorsDestroyTest do
   # One row in each of the tables whose survival was the point: a sealed
   # credential, a thread with a message, and a request log.
   defp seed_rows!(ctx) do
-    {:ok, _entry} =
-      Sanctum.Vault.create(ctx, %{
-        name: "to-be-erased",
-        kind: "api_key",
-        fields: %{"token" => "super-secret-value"}
+    params = %{name: "to-be-erased", kind: "api_key", fields: %{"token" => "super-secret-value"}}
+
+    entering =
+      Sanctum.TestContext.confirmed(ctx, :credential_entry, %{
+        operation: "vault.create",
+        arguments: params,
+        resource: params.name
       })
+
+    {:ok, _entry} = Sanctum.Vault.create(entering, params)
 
     {:ok, thread} = Arca.ThreadStorage.create(Sanctum.Context.actor(ctx))
 

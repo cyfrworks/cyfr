@@ -75,7 +75,11 @@ defmodule Compendium.ConsentSetupPlanTest do
     publish!(ctx, "plan-damaged")
 
     {:ok, entry} =
-      Vault.create(ctx, %{name: "plan-damaged-conn", kind: "api_key", fields: %{"k" => "v"}})
+      Sanctum.TestContext.create_vault(ctx, %{
+        name: "plan-damaged-conn",
+        kind: "api_key",
+        fields: %{"k" => "v"}
+      })
 
     grant!(ctx, "reagent:local.plan-damaged", [%{need: "@ingress", entry_id: entry.id}])
 
@@ -109,7 +113,11 @@ defmodule Compendium.ConsentSetupPlanTest do
     publish!(ctx, "plan-granted")
 
     {:ok, entry} =
-      Vault.create(ctx, %{name: "plan-conn", kind: "api_key", fields: %{"k" => "v"}})
+      Sanctum.TestContext.create_vault(ctx, %{
+        name: "plan-conn",
+        kind: "api_key",
+        fields: %{"k" => "v"}
+      })
 
     grant!(ctx, "reagent:local.plan-granted", [%{need: "@ingress", entry_id: entry.id}])
 
@@ -127,7 +135,11 @@ defmodule Compendium.ConsentSetupPlanTest do
     publish!(ctx, "plan-rebound")
 
     {:ok, entry} =
-      Vault.create(ctx, %{name: "rebound-conn", kind: "api_key", fields: %{"k" => "v"}})
+      Sanctum.TestContext.create_vault(ctx, %{
+        name: "rebound-conn",
+        kind: "api_key",
+        fields: %{"k" => "v"}
+      })
 
     grant!(ctx, "reagent:local.plan-rebound", [%{need: "@ingress", entry_id: entry.id}])
     {:ok, _} = Vault.rebind(ctx, %{id: entry.id, oauth_scopes: ["new.scope"]})
@@ -143,7 +155,11 @@ defmodule Compendium.ConsentSetupPlanTest do
     publish!(ctx, "plan-revoked")
 
     {:ok, entry} =
-      Vault.create(ctx, %{name: "revoked-conn", kind: "api_key", fields: %{"k" => "v"}})
+      Sanctum.TestContext.create_vault(ctx, %{
+        name: "revoked-conn",
+        kind: "api_key",
+        fields: %{"k" => "v"}
+      })
 
     grant!(ctx, "reagent:local.plan-revoked", [%{need: "@ingress", entry_id: entry.id}])
     {:ok, _} = Vault.revoke(ctx, entry.id)

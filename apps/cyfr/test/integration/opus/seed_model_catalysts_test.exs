@@ -120,7 +120,7 @@ defmodule Opus.SeedModelCatalystsTest do
 
       # The operator binds a vault entry to the catalyst's one need.
       {:ok, entry} =
-        Sanctum.Vault.create(ctx, %{
+        Sanctum.TestContext.create_vault(ctx, %{
           name: "#{name} key",
           kind: "api_key",
           fields: %{field => "sk-test-#{name}"}
@@ -194,7 +194,7 @@ defmodule Opus.SeedModelCatalystsTest do
 
     # The person connects the key on the catalyst — one act, on the model.
     {:ok, entry} =
-      Sanctum.Vault.create(ctx, %{
+      Sanctum.TestContext.create_vault(ctx, %{
         name: "claude key",
         kind: "api_key",
         fields: %{"ANTHROPIC_API_KEY" => "sk-test-claude"}

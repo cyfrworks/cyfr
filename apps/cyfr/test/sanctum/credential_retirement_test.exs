@@ -111,7 +111,7 @@ defmodule Sanctum.CredentialRetirementTest do
       assert ctx.credential_binding.source_id == Base.url_encode64(hash, padding: false)
       assert ctx.credential_binding.focus_basis == seat.id
 
-      {:ok, %{api_key: key}} = ApiKey.create(ctx, %{name: "bound-#{uniq()}"})
+      {:ok, %{api_key: key}} = issue(ctx, %{name: "bound-#{uniq()}"})
       {:ok, key_ctx} = Caller.establish({:api_key, key})
       assert key_ctx.credential_binding.source_kind == :api_key
       assert key_ctx.credential_binding.source_id == key_ctx.api_key_id
@@ -132,7 +132,7 @@ defmodule Sanctum.CredentialRetirementTest do
         )
 
       assert {:error, :missing_generation} = Session.create(bare)
-      assert {:error, :missing_generation} = ApiKey.create(bare, %{name: "unbound"})
+      assert {:error, :missing_generation} = issue(bare, %{name: "unbound"})
 
       # A person focused on an athanor through no membership has no standing
       # to issue there, whatever generations the binding names; unfocused,
@@ -152,7 +152,7 @@ defmodule Sanctum.CredentialRetirementTest do
       }
 
       assert {:error, :missing_generation} = Session.create(unbacked)
-      assert {:error, :missing_generation} = ApiKey.create(unbacked, %{name: "unbacked"})
+      assert {:error, :missing_generation} = issue(unbacked, %{name: "unbacked"})
 
       assert {:ok, _} =
                Session.create(%{
@@ -184,7 +184,7 @@ defmodule Sanctum.CredentialRetirementTest do
       {:ok, snapshot} = Sanctum.Tenancy.generation_snapshot(user.id, "ath_test")
 
       {:ok, %{api_key: raw}} =
-        ApiKey.create(%{system_key | user_id: user.id}, %{name: "orphan-#{uniq()}"},
+        issue(%{system_key | user_id: user.id}, %{name: "orphan-#{uniq()}"},
           generation_snapshot: snapshot
         )
 
@@ -196,7 +196,10 @@ defmodule Sanctum.CredentialRetirementTest do
 
       {:ok, orphan_ctx} = Caller.establish({:api_key, raw})
       assert orphan_ctx.credential_binding == nil
-      assert {:error, :missing_generation} = ApiKey.create(orphan_ctx, %{name: "from-orphan"})
+
+      # No person stands behind it to confirm what it would issue.
+      assert {:error, {:surface_not_permitted, :api_key}} =
+               ApiKey.create(orphan_ctx, %{name: "from-orphan"})
     end
   end
 
@@ -221,8 +224,10 @@ defmodule Sanctum.CredentialRetirementTest do
       {:ok, denied} = Users.deny(user)
       {:ok, _} = Users.allow(denied)
 
-      assert {:error, reason} = ApiKey.create(ctx, %{name: "late-#{uniq()}"})
-      assert reason in [:stale_generation, :unauthenticated]
+      # Refused at the confirmation's standing check, the denial having
+      # retired the session, or at the issuance's generation check.
+      assert {:error, reason} = issue(ctx, %{name: "late-#{uniq()}"})
+      assert reason in [:stale_generation, :unauthenticated, :not_authenticated]
 
       # And the session itself stays retired: the allow restores no
       # credential, and signing in again mints a different one.
@@ -236,23 +241,23 @@ defmodule Sanctum.CredentialRetirementTest do
       {:ok, group} = Athanors.create_group(user.id, "Pre-archive #{uniq()}")
       {_session, ctx} = signed_in!(user)
       {:ok, ctx} = Context.focus(ctx, group.id)
-      {:ok, %{api_key: key}} = ApiKey.create(ctx, %{name: "in-group-#{uniq()}"})
+      {:ok, %{api_key: key}} = issue(ctx, %{name: "in-group-#{uniq()}"})
 
       {:ok, archived} = Athanors.archive(group)
       assert archived.security_generation == 2
       {:ok, reopened} = Athanors.unarchive(archived)
       assert reopened.security_generation == 3
 
-      assert {:error, :stale_generation} = ApiKey.create(ctx, %{name: "late-#{uniq()}"})
+      assert {:error, :stale_generation} = issue(ctx, %{name: "late-#{uniq()}"})
       assert {:error, :revoked} = ApiKey.validate(key, [])
 
       # Focusing again is a new standing read, and issues; the context read
       # before the archive still cannot rotate what the new one minted.
       {:ok, refocused} = Context.focus(ctx, group.id)
       fresh = "fresh-#{uniq()}"
-      assert {:ok, _} = ApiKey.create(refocused, %{name: fresh})
-      assert {:error, :stale_generation} = ApiKey.rotate(ctx, fresh)
-      assert {:ok, _} = ApiKey.rotate(refocused, fresh)
+      assert {:ok, _} = issue(refocused, %{name: fresh})
+      assert {:error, :stale_generation} = rotate(ctx, fresh)
+      assert {:ok, _} = rotate(refocused, fresh)
     end
 
     test "a context whose seat was removed cannot issue in that athanor" do
@@ -264,11 +269,13 @@ defmodule Sanctum.CredentialRetirementTest do
       {:ok, ctx} = Context.focus(ctx, group.id)
 
       :ok = Members.remove_member(group, user_id: user.id)
-      assert {:error, :unauthenticated} = ApiKey.create(ctx, %{name: "gone-#{uniq()}"})
+      # The confirmation's standing check refuses the lost seat first.
+      assert {:error, :not_standing} = issue(ctx, %{name: "gone-#{uniq()}"})
 
       # Rejoining is a new row: the old focus is not restored by it.
       {:ok, :added} = Members.add(group, [user_id: user.id], other.id)
-      assert {:error, :unauthenticated} = ApiKey.create(ctx, %{name: "rejoined-#{uniq()}"})
+      assert {:error, reason} = issue(ctx, %{name: "rejoined-#{uniq()}"})
+      assert reason in [:unauthenticated, :not_standing]
     end
   end
 
@@ -399,6 +406,21 @@ defmodule Sanctum.CredentialRetirementTest do
         Arca.Repo.query!("DROP TRIGGER retire_fail ON sessions")
         Arca.Repo.query!("DROP FUNCTION retire_fail()")
     end
+  end
+
+  # A key issued, or rotated, as a person issues one: under the
+  # confirmation they proved (`Sanctum.TestContext.confirmed_change/4`),
+  # then the call with the issuance options the test names.
+  defp issue(ctx, opts, issuance \\ []) do
+    ctx
+    |> Sanctum.TestContext.confirmed_change("key.create", opts, opts[:name])
+    |> ApiKey.create(opts, issuance)
+  end
+
+  defp rotate(ctx, name) do
+    ctx
+    |> Sanctum.TestContext.confirmed_change("key.rotate", %{name: name}, name)
+    |> ApiKey.rotate(name)
   end
 end
 

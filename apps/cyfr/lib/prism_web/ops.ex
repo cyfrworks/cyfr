@@ -44,21 +44,38 @@ defmodule PrismWeb.Ops do
   older than the freshness bound is revalidated for this call, and one
   that no longer stands is the call's refusal — nothing is dispatched.
 
+  A sensitive change the call makes may answer the consent signal
+  `{:error, {:confirmation_required, %{id: id, …}}}`. Once the person
+  proved that confirmation, the page repeats the same call with
+  `confirmation_id: id` in `opts`, and the repeat carries the id in its
+  context (`Sanctum.Context`'s `confirmation_id`), where the deciding site
+  consumes it. A confirmation is for its one change: the id rides this
+  call alone, never the socket's context.
+
   Returns `{:ok, result}` or `{:error, reason}`.
   """
-  def call_tool(socket_or_context, tool_name, args \\ %{})
+  def call_tool(socket_or_context, tool_name, args \\ %{}, opts \\ [])
 
-  def call_tool(%Sanctum.Context{} = ctx, tool_name, args) do
+  def call_tool(%Sanctum.Context{} = ctx, tool_name, args, opts) when is_list(opts) do
     with {:ok, ctx} <- CyfrWeb.ContextGuard.check(ctx) do
       {name, merged_args} = normalize_tool_call(tool_name, args)
-      Grimoire.call_external(name, ctx, merged_args)
+      Grimoire.call_external(name, confirming(ctx, opts), merged_args)
     end
   end
 
-  def call_tool(socket, tool_name, args) do
+  def call_tool(socket, tool_name, args, opts) when is_list(opts) do
     case socket.assigns do
-      %{context: %Sanctum.Context{} = ctx} -> call_tool(ctx, tool_name, args)
+      %{context: %Sanctum.Context{} = ctx} -> call_tool(ctx, tool_name, args, opts)
       _ -> {:error, :no_context}
+    end
+  end
+
+  # The confirmation a repeated change names, or none: a caller's own
+  # `confirmation_id` never survives into a call that names none.
+  defp confirming(ctx, opts) do
+    case Keyword.get(opts, :confirmation_id) do
+      id when is_binary(id) and id != "" -> %{ctx | confirmation_id: id}
+      _none -> %{ctx | confirmation_id: nil}
     end
   end
 
