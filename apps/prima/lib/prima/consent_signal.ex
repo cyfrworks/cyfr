@@ -12,13 +12,18 @@ defmodule Prima.ConsentSignal do
   remediation: the change stands and waits for the person's fresh
   confirmation. Its payload is the pending confirmation's `id`, `operation`
   and `expires_at`, and a payload without a non-empty string `id` is no
-  signal, since the id is what the person confirms and what the asking
-  surface repeats the change under. The payload's keys are atoms as a
-  producer builds it, or strings as it reads back from JSON, and one
+  signal. The `id` is the asking request's secret, answered to that
+  request alone: the asking client repeats the change under it, and the
+  person confirms the change, on any of their clients, by the record's
+  public ref (`Prima.Confirmation.ref/1`), never by the `id`. So the
+  signal's sentence names the change and never the `id`: a sentence is
+  what logs, request-log rows and pages keep. The payload's keys are atoms
+  as a producer builds it, or strings as it reads back from JSON, and one
   payload holds `id` under exactly one of the two: a payload naming it
-  both ways is no signal, so no reader can check one id and render
-  another. Its `error.data` carries those three fields alone, so nothing
-  else a producer put in the payload reaches a wire.
+  both ways is no signal, so no reader can check one id and act on
+  another. Its `error.data`, answered to the asking request alone,
+  carries those three fields alone, so nothing else a producer put in the
+  payload reaches a wire.
 
   Each signal has a sentence, a refusal class (`Prima.Refusal`) and
   `error.data` shaped as `{"tag": ..., "payload": ...}`; the MCP wire
@@ -66,7 +71,9 @@ defmodule Prima.ConsentSignal do
 
   @doc """
   The short human sentence for a signal — what a client that reads no
-  `data` shows. The payload's detail is for clients that branch.
+  `data` shows. The payload's detail is for clients that branch. A
+  `confirmation_required` sentence names the change and never the
+  confirmation's secret `id`, which only `data/1` carries.
   """
   @spec message({tag(), map()}) :: String.t()
   def message({:setup_required, payload}) do
@@ -108,8 +115,7 @@ defmodule Prima.ConsentSignal do
         _ -> "this change"
       end
 
-    "Confirmation required: #{change} needs a fresh confirmation — " <>
-      "confirm it in Prism (confirmation #{confirmation["id"]})"
+    "Confirmation required: #{change} needs a fresh confirmation — confirm it in Prism"
   end
 
   @doc ~S"""

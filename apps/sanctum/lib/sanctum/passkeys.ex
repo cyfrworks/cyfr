@@ -557,41 +557,41 @@ defmodule Sanctum.Passkeys do
   # ---------------------------------------------------------------------------
 
   @doc """
-  Prove the pending confirmation `confirmation_id`, in the context's
-  athanor and of the context's own person, with the WebAuthn `assertion`
-  (`id`, `rawId`, `type` and `response` with `clientDataJSON`,
-  `authenticatorData` and `signature`, unpadded base64url). The record is
-  confirmed once with proof `passkey`, naming the passkey and the paired
-  client `ctx.client_id` names, if any.
+  Prove the pending confirmation `ref` (its public ref,
+  `Prima.Confirmation.ref/1`), in the context's athanor and of the
+  context's own person, with the WebAuthn `assertion` (`id`, `rawId`,
+  `type` and `response` with `clientDataJSON`, `authenticatorData` and
+  `signature`, unpadded base64url). The record is confirmed once with
+  proof `passkey`, naming the passkey and the paired client
+  `ctx.client_id` names, if any.
 
-  Answers `%{id:, state: "confirmed", expires_at:}`, or a refusal:
+  Answers `%{ref:, state: "confirmed", expires_at:}`, or a refusal:
   `:assertion_refused` (another challenge, origin or RP ID, no user
   verification, a bad signature, a credential not registered here or not
   this person's, or a counter that did not rise), `{:not_found,
-  "confirmation", id}`, `:remote_identity_unavailable`, and the record's
+  "confirmation", ref}`, `:remote_identity_unavailable`, and the record's
   own (`:not_pending`, `:expired`, `:revoked`).
   """
   @spec assert(Context.t(), String.t(), map()) :: {:ok, map()} | {:error, term()}
-  def assert(%Context{} = ctx, confirmation_id, assertion)
-      when is_binary(confirmation_id) and is_map(assertion) do
+  def assert(%Context{} = ctx, ref, assertion) when is_binary(ref) and is_map(assertion) do
     actor = Context.actor(ctx)
 
     with {:ok, user_id} <- confirming_person(ctx),
          {:ok, _identity} <- identity(user_id),
-         {:ok, row} <- record(actor, confirmation_id, user_id),
+         {:ok, row} <- record(actor, ref, user_id),
          {:ok, challenge} <- record_challenge(row),
          {:ok, parsed} <- parse_assertion(assertion),
          {:ok, passkey} <- credential(parsed.credential_id),
          true <- passkey.user_id == user_id or {:error, :assertion_refused},
          {:ok, sign_count} <- verify_assertion(parsed, passkey, challenge),
          :ok <- counted(passkey, sign_count),
-         {:ok, confirmed} <- confirm_record(actor, confirmation_id, passkey, ctx.client_id) do
+         {:ok, confirmed} <- confirm_record(actor, ref, passkey, ctx.client_id) do
       Authz.announce(:confirmed, confirmed)
-      {:ok, %{id: confirmed.id, state: confirmed.state, expires_at: confirmed.expires_at}}
+      {:ok, %{ref: confirmed.ref, state: confirmed.state, expires_at: confirmed.expires_at}}
     end
   end
 
-  def assert(%Context{}, _confirmation_id, _assertion), do: {:error, :assertion_refused}
+  def assert(%Context{}, _ref, _assertion), do: {:error, :assertion_refused}
 
   defp confirming_person(%Context{plane: :guest}), do: {:error, :guest_plane}
 
@@ -601,19 +601,19 @@ defmodule Sanctum.Passkeys do
       else: {:error, :unauthenticated}
   end
 
-  # The record, of this person, deciding a change at this home.
-  defp record(actor, id, user_id) do
-    case Arca.PendingConfirmations.get(actor, id) do
+  # The record `ref` names, of this person, deciding a change at this home.
+  defp record(actor, ref, user_id) do
+    case Arca.PendingConfirmations.get(actor, ref) do
       {:ok, %{user_id: ^user_id} = row} ->
         if row.home == origin() and row.rp_id == rp_id(),
           do: {:ok, row},
           else: {:error, :assertion_refused}
 
       {:ok, _another} ->
-        {:error, {:not_found, "confirmation", id}}
+        {:error, {:not_found, "confirmation", ref}}
 
       {:error, :not_found} ->
-        {:error, {:not_found, "confirmation", id}}
+        {:error, {:not_found, "confirmation", ref}}
 
       {:error, _unanswered} ->
         {:error, :unavailable}
@@ -649,8 +649,8 @@ defmodule Sanctum.Passkeys do
     end
   end
 
-  defp confirm_record(actor, id, passkey, client_id) do
-    case Arca.PendingConfirmations.confirm(actor, id, %{
+  defp confirm_record(actor, ref, passkey, client_id) do
+    case Arca.PendingConfirmations.confirm(actor, ref, %{
            proof: "passkey",
            passkey_id: passkey.id,
            client_id: client_id
@@ -658,7 +658,7 @@ defmodule Sanctum.Passkeys do
       {:ok, row} -> {:ok, row}
       {:error, :database_error} -> {:error, :unavailable}
       {:error, :not_owner} -> {:error, :unavailable}
-      {:error, :not_found} -> {:error, {:not_found, "confirmation", id}}
+      {:error, :not_found} -> {:error, {:not_found, "confirmation", ref}}
       {:error, reason} -> {:error, reason}
     end
   end
@@ -949,7 +949,7 @@ defmodule Sanctum.Passkeys do
       case Arca.Passkeys.activate(Prima.Actor.system(), passkey_id,
              registration_digest: digest,
              identity_key_epoch: nil,
-             admin_confirmation_id: ctx.confirmation_id,
+             admin_confirmation_id: confirmation_ref(ctx),
              also: also
            ) do
         {:ok, row} ->
@@ -979,6 +979,13 @@ defmodule Sanctum.Passkeys do
     do: {:error, {:invalid_argument, "Name the person, the pending passkey and its digest"}}
 
   def recover_admin(%Context{}, _args), do: {:error, :platform_admin_required}
+
+  # The administrator's confirmation, as the activated passkey records it:
+  # its public ref, never the secret the administrator's request presented.
+  defp confirmation_ref(%Context{confirmation_id: id}) when is_binary(id) and id != "",
+    do: Prima.Confirmation.ref(id)
+
+  defp confirmation_ref(%Context{}), do: nil
 
   # The person a recovery activates for, locked in its transaction and
   # read active.

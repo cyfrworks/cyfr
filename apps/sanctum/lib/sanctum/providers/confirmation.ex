@@ -6,7 +6,16 @@ defmodule Sanctum.Providers.Confirmation do
   The `confirmation` tool: a person's pending confirmations of sensitive
   changes, in the athanor in focus. A confirmation is never a permission
   for a similar change: each proves one record, which the change's
-  repeat, naming the record's id, consumes (`Sanctum.Consent.Authz`).
+  repeat consumes (`Sanctum.Consent.Authz`).
+
+  Every action names a record by its public `ref`
+  (`Prima.Confirmation.ref/1`), as `pending` and the stream list it, so
+  any client of the person reads, proves and cancels it. None takes the
+  secret `id` the `confirmation_required` signal answered to the asking
+  request: that secret is presented only by that request's client, when
+  it repeats the change (`PrismWeb.Ops`'s `confirmation_id:`, the device
+  intent's `confirmation_id`), never as an argument, so no request-log row
+  keeps it, and a `ref` never repeats a change.
 
     * `confirm` proves one with a passkey assertion over its digest
       (`Sanctum.Passkeys.assert/3`) or the one-time code emailed for it
@@ -18,8 +27,10 @@ defmodule Sanctum.Providers.Confirmation do
       code.
     * `pending` answers the person's open confirmations with the previews
       the home stored, so another of their devices shows the home's record
-      rather than the asking client's word, and with the WebAuthn request
-      options a passkey proves each with.
+      rather than the asking client's word; with the asker, a name for the
+      client that asked, so the person tells their own request from
+      another's; and with the WebAuthn request options a passkey proves
+      each with.
     * `cancel` ends one.
 
   Every action is the person's own, on the external plane, through an
@@ -29,9 +40,11 @@ defmodule Sanctum.Providers.Confirmation do
   The stream `confirmation.changes` rides the bus's `confirmations` topic
   (`Cyfr.Bus.confirmations/2`), bound to its holder, the context's own
   person: a client of theirs hears each record of theirs opened,
-  confirmed, consumed, cancelled, voided or expired, as its `id`, its
-  `operation` and its `expires_at`, never the arguments or the preview,
-  which it reads through `pending` under its own session.
+  confirmed, consumed, cancelled, voided or expired, as its `ref`, its
+  `operation` and its `expires_at`, never the secret, the arguments or the
+  preview, which it reads through `pending` under its own session. The
+  asking client knows its own record's events by the `ref` of the secret
+  it holds.
   """
 
   alias Prima.{Arg, Operation}
@@ -49,7 +62,7 @@ defmodule Sanctum.Providers.Confirmation do
           "confirm",
           "Confirm a pending change",
           [
-            id(),
+            ref(),
             Arg.new("assertion", :json,
               description:
                 "confirm: a WebAuthn assertion over the confirmation's digest, from a passkey registered here"
@@ -67,7 +80,7 @@ defmodule Sanctum.Providers.Confirmation do
           "reauth",
           "Begin a re-authentication for a pending change",
           [
-            id(),
+            ref(),
             Arg.new("method", :string,
               required: true,
               enum: ["oidc", "email"],
@@ -84,23 +97,24 @@ defmodule Sanctum.Providers.Confirmation do
           planes: [:external],
           consent: :interactive
         ),
-        Operation.new("confirmation", "cancel", "Cancel a pending change", [id()],
+        Operation.new("confirmation", "cancel", "Cancel a pending change", [ref()],
           kind: :write,
           planes: [:external],
           consent: :interactive
         )
       ],
       description:
-        "Your pending confirmations of sensitive changes: confirm one with a passkey, a fresh sign-in or an emailed code, list them with what each would change, or cancel one.",
+        "Your pending confirmations of sensitive changes: confirm one with a passkey, a fresh sign-in or an emailed code, list them with what each would change and which client asked, or cancel one.",
       title: "Confirmations"
     )
   end
 
-  defp id,
+  defp ref,
     do:
-      Arg.new("id", :string,
+      Arg.new("ref", :string,
         required: true,
-        description: "The pending confirmation, as the confirmation_required signal named it"
+        description:
+          "The pending confirmation's ref, as confirmation.pending and the confirmation.changes stream name it"
       )
 
   @doc false
@@ -111,7 +125,7 @@ defmodule Sanctum.Providers.Confirmation do
       %Prima.Provider.Stream{
         name: "confirmation.changes",
         topic: :confirmations,
-        projection: ["id", "operation", "expires_at"],
+        projection: ["ref", "operation", "expires_at"],
         subject: ~S"\Ausr_[A-Za-z0-9_-]{1,128}\z",
         bind: :holder,
         deadline_bound: 86_400
@@ -119,13 +133,14 @@ defmodule Sanctum.Providers.Confirmation do
     ]
   end
 
-  def handle(%Context{} = ctx, %{"action" => "confirm", "id" => id} = args) when is_binary(id) do
+  def handle(%Context{} = ctx, %{"action" => "confirm", "ref" => ref} = args)
+      when is_binary(ref) do
     case {args["assertion"], args["code"]} do
       {assertion, nil} when is_map(assertion) ->
-        answered(Passkeys.assert(ctx, id, assertion))
+        answered(Passkeys.assert(ctx, ref, assertion))
 
       {nil, code} when is_binary(code) and code != "" ->
-        answered(EmailVerification.verify_code(ctx, id, code))
+        answered(EmailVerification.verify_code(ctx, ref, code))
 
       _neither_or_both ->
         {:error,
@@ -133,11 +148,11 @@ defmodule Sanctum.Providers.Confirmation do
     end
   end
 
-  def handle(%Context{} = ctx, %{"action" => "reauth", "id" => id, "method" => method})
-      when is_binary(id) do
+  def handle(%Context{} = ctx, %{"action" => "reauth", "ref" => ref, "method" => method})
+      when is_binary(ref) do
     case method do
-      "oidc" -> answered(OIDC.reauth_url(ctx, id))
-      "email" -> answered(EmailVerification.send_code(ctx, id))
+      "oidc" -> answered(OIDC.reauth_url(ctx, ref))
+      "email" -> answered(EmailVerification.send_code(ctx, ref))
       _other -> {:error, {:invalid_argument, "The method is oidc or email"}}
     end
   end
@@ -152,15 +167,15 @@ defmodule Sanctum.Providers.Confirmation do
     end
   end
 
-  def handle(%Context{} = ctx, %{"action" => "cancel", "id" => id}) when is_binary(id) do
+  def handle(%Context{} = ctx, %{"action" => "cancel", "ref" => ref}) when is_binary(ref) do
     actor = Context.actor(ctx)
 
     with {:ok, user_id} <- person(ctx),
-         {:ok, _row} <- own(actor, id, user_id) do
-      case Arca.PendingConfirmations.cancel(actor, id) do
+         {:ok, _row} <- own(actor, ref, user_id) do
+      case Arca.PendingConfirmations.cancel(actor, ref) do
         {:ok, row} ->
           Sanctum.Consent.Authz.announce(:cancelled, row)
-          {:ok, %{id: row.id, state: row.state}}
+          {:ok, %{ref: row.ref, state: row.state}}
 
         {:error, :not_open} ->
           {:error, refusal(:not_pending)}
@@ -174,7 +189,7 @@ defmodule Sanctum.Providers.Confirmation do
   end
 
   def handle(_ctx, %{"action" => action}) when action in ~w(confirm reauth cancel),
-    do: {:error, {:invalid_argument, "Missing required argument: id"}}
+    do: {:error, {:invalid_argument, "Missing required argument: ref"}}
 
   def handle(_ctx, %{"action" => action}),
     do: {:error, {:unknown_action, "confirmation.#{action}"}}
@@ -214,26 +229,30 @@ defmodule Sanctum.Providers.Confirmation do
     end
   end
 
-  defp own(actor, id, user_id) do
-    case Arca.PendingConfirmations.get(actor, id) do
+  # The record `ref` names, in the context's athanor, of the context's own
+  # person: a ref of another person, another athanor or none is not found.
+  defp own(actor, ref, user_id) do
+    case Arca.PendingConfirmations.get(actor, ref) do
       {:ok, %{user_id: ^user_id} = row} -> {:ok, row}
-      {:ok, _another} -> {:error, {:not_found, "confirmation", id}}
-      {:error, :not_found} -> {:error, {:not_found, "confirmation", id}}
+      {:ok, _another} -> {:error, {:not_found, "confirmation", ref}}
+      {:error, :not_found} -> {:error, {:not_found, "confirmation", ref}}
       {:error, _unanswered} -> {:error, :unavailable}
     end
   end
 
-  # An open record as a client of its person reads it: what it would
-  # change, as the home stored it, and how a passkey proves it — the
-  # challenge is the raw bytes of the record's digest.
+  # An open record as a client of its person reads it: its ref, what it
+  # would change, as the home stored it, which client asked, and how a
+  # passkey proves it — the challenge is the raw bytes of the record's
+  # digest.
   defp pending(row, credentials) do
     "sha256:" <> hex = row.digest
 
     %{
-      id: row.id,
+      ref: row.ref,
       operation: row.operation,
       action: row.action,
       preview: Jason.decode!(row.preview),
+      asker: Jason.decode!(row.asker),
       state: row.state,
       expires_at: row.expires_at,
       webauthn: %{

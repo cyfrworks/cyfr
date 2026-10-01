@@ -763,7 +763,7 @@ defmodule Emissary.Web.DeviceChannelTest do
         |> Map.put("confirmation_id", "cnf_" <> Ecto.UUID.generate())
 
       confirming =
-        intent_message("int_3", "confirmation.confirm", %{"id" => "cnf_1", "assertion" => %{}})
+        intent_message("int_3", "confirmation.confirm", %{"ref" => "cnr_1", "assertion" => %{}})
 
       for message <- [repeated, confirming] do
         {state, _challenge} = connected(glass)

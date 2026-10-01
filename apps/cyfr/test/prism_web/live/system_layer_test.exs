@@ -314,10 +314,11 @@ defmodule PrismWeb.SystemLayerTest do
   end
 
   describe "the confirmation signal" do
-    test "a confirmation the operation answers with it reads as its sentence, naming its id" do
+    test "a confirmation the operation answers with it reads as its sentence, never naming its secret" do
       # What a refused dispatch shows (`PrismWeb.Ops.error_message/1`): the
       # signal is neither a denial nor an unknown term, and names the
-      # confirmation the person gives in Prism.
+      # change the person confirms in Prism; its id is the asking
+      # request's secret, which no page shows.
       signal =
         {:confirmation_required,
          %{
@@ -327,7 +328,7 @@ defmodule PrismWeb.SystemLayerTest do
          }}
 
       sentence = PrismWeb.Ops.error_message(signal)
-      assert sentence =~ "confirmation-7f3a"
+      refute sentence =~ "confirmation-7f3a"
       assert sentence =~ "vault.create"
       assert sentence == Prima.ConsentSignal.message(signal)
     end
@@ -480,9 +481,11 @@ defmodule PrismWeb.SystemLayerTest do
 
       Logger.configure(level: previous)
 
+      # The page shows the change waiting, never the request's secret.
       html = render(view)
       assert html =~ "Confirmation required"
-      assert html =~ id
+      refute html =~ id
+      refute log =~ id
       refute html =~ secret
 
       refute inspect(:sys.get_state(view.pid), limit: :infinity, printable_limit: :infinity) =~
@@ -498,10 +501,12 @@ defmodule PrismWeb.SystemLayerTest do
       {:ok, entries} = Sanctum.Vault.list(ctx)
       refute Enum.any?(entries, &(&1.name == name))
 
-      assert {:ok, [%{id: ^id} = record]} =
+      assert {:ok, [%{ref: ref} = record]} =
                Arca.PendingConfirmations.list_open(Context.actor(ctx), ctx.user_id)
 
+      assert ref == Prima.Confirmation.ref(id)
       refute inspect(record, limit: :infinity, printable_limit: :infinity) =~ secret
+      refute inspect(record, limit: :infinity, printable_limit: :infinity) =~ id
     end
 
     test "an empty value is asked for again and dispatches nothing", %{view: view} do

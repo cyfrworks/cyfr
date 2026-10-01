@@ -39,6 +39,9 @@ defmodule Cyfr.TelemetryBridgeTest do
   @athanor "ath_bridge"
   @actor Prima.Actor.in_athanor(@athanor)
   @user "user_bridge"
+  # A confirmation as the stream names it, and the secret its asker alone holds.
+  @ref "cnr_RwUmgDNh5ufeCSEze6Mgzs_TKyc4u-HLi4RFA8i9XZ4"
+  @secret "cnf_AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8"
 
   # Every bridged event: the metadata it is emitted with, the topic its
   # message lands on and the message it must be.
@@ -101,14 +104,16 @@ defmodule Cyfr.TelemetryBridgeTest do
   end
 
   # A pending confirmation's life, each on its person's own topic, carrying
-  # the id, operation and expiry and nothing else the emitter attached.
+  # the ref, operation and expiry and nothing else the emitter attached:
+  # never a secret id.
   defp confirmation_cases(tenant) do
     expires_at = ~U[2026-09-30 12:05:00Z]
 
     metadata =
       Map.merge(tenant, %{
         user_id: @user,
-        id: "confirmation-7f3a",
+        ref: @ref,
+        id: @secret,
         operation: "vault.create",
         expires_at: expires_at,
         arguments: %{"fields" => %{"API_KEY" => "sk-never-bridged"}}
@@ -119,7 +124,7 @@ defmodule Cyfr.TelemetryBridgeTest do
        {Confirmation,
         %{
           kind: kind,
-          id: "confirmation-7f3a",
+          ref: @ref,
           operation: "vault.create",
           expires_at: expires_at
         }}}
@@ -328,16 +333,19 @@ defmodule Cyfr.TelemetryBridgeTest do
       :telemetry.execute([:cyfr, :sanctum, :confirmation, :opened], %{count: 1}, %{
         athanor_id: @athanor,
         user_id: @user,
-        id: "confirmation-7f3a",
+        ref: @ref,
+        id: @secret,
         operation: "vault.create",
         expires_at: ~U[2026-09-30 12:05:00Z],
         arguments: %{"fields" => %{"API_KEY" => "sk-confirmed"}},
         preview: %{"resource" => "production-key"}
       })
 
-      assert_receive %Confirmation{kind: :opened, id: "confirmation-7f3a"} = heard
+      assert_receive %Confirmation{kind: :opened, ref: @ref} = heard
       refute inspect(heard) =~ "sk-confirmed"
       refute inspect(heard) =~ "production-key"
+      refute inspect(heard) =~ @secret
+      refute Map.has_key?(heard, :id)
 
       # Published once, on the person's own topic: another member hears nothing.
       refute_receive %Confirmation{}, 100
@@ -346,7 +354,7 @@ defmodule Cyfr.TelemetryBridgeTest do
     test "Sanctum's announcement of a confirmation is what the bridge carries, kind by kind" do
       listen(Bus.confirmations(@actor, @user))
       expires_at = ~U[2026-09-30 12:05:00Z]
-      fields = %{id: "confirmation-7f3a", operation: "vault.create", expires_at: expires_at}
+      fields = %{ref: @ref, operation: "vault.create", expires_at: expires_at}
 
       for kind <- Cyfr.Bus.Confirmation.kinds() do
         :ok = Sanctum.Telemetry.confirmation(kind, @athanor, @user, fields)
@@ -354,7 +362,7 @@ defmodule Cyfr.TelemetryBridgeTest do
         assert_receive %Confirmation{
           kind: ^kind,
           athanor_id: @athanor,
-          id: "confirmation-7f3a",
+          ref: @ref,
           operation: "vault.create",
           expires_at: ^expires_at
         }
@@ -370,7 +378,7 @@ defmodule Cyfr.TelemetryBridgeTest do
 
       :telemetry.execute([:cyfr, :sanctum, :confirmation, :opened], %{count: 1}, %{
         athanor_id: @athanor,
-        id: "confirmation-7f3a"
+        ref: @ref
       })
 
       assert_receive {:dropped, %{count: 1}, %{event: [:cyfr, :sanctum, :confirmation, :opened]}}

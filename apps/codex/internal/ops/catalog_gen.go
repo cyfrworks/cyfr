@@ -1195,8 +1195,8 @@ func (args ComponentYankArgs) MarshalJSON() ([]byte, error) {
 
 // ConfirmationCancelArgs carries arguments for confirmation.cancel.
 type ConfirmationCancelArgs struct {
-	// The pending confirmation, as the confirmation_required signal named it
-	Id string `json:"id"`
+	// The pending confirmation's ref, as confirmation.pending and the confirmation.changes stream name it
+	Ref string `json:"ref"`
 }
 
 // MarshalJSON supplies the operation's fixed action discriminator.
@@ -1210,8 +1210,8 @@ func (args ConfirmationCancelArgs) MarshalJSON() ([]byte, error) {
 
 // ConfirmationConfirmArgs carries arguments for confirmation.confirm.
 type ConfirmationConfirmArgs struct {
-	// The pending confirmation, as the confirmation_required signal named it
-	Id string `json:"id"`
+	// The pending confirmation's ref, as confirmation.pending and the confirmation.changes stream name it
+	Ref string `json:"ref"`
 	// confirm: a WebAuthn assertion over the confirmation's digest, from a passkey registered here
 	Assertion Field[any] `json:"assertion,omitzero"`
 	// confirm: the one-time code sent to your verified email for it
@@ -1242,8 +1242,8 @@ func (args ConfirmationPendingArgs) MarshalJSON() ([]byte, error) {
 
 // ConfirmationReauthArgs carries arguments for confirmation.reauth.
 type ConfirmationReauthArgs struct {
-	// The pending confirmation, as the confirmation_required signal named it
-	Id string `json:"id"`
+	// The pending confirmation's ref, as confirmation.pending and the confirmation.changes stream name it
+	Ref string `json:"ref"`
 	// reauth: a fresh OpenID Connect sign-in, or a one-time code to your verified email
 	Method string `json:"method"`
 }

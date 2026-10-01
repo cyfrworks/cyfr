@@ -852,13 +852,15 @@ defmodule Arca.Repo.Migrations.Baseline do
       )
     ]
 
-    # A pending confirmation of one sensitive change (`Prima.Confirmation`):
-    # the record's fields, its digest and secret-free preview, the
-    # credential that opened it and alone may consume it, how it was proven
-    # and by which client or passkey, and a state each transition moves
-    # once. A remote person's record names the `key_epoch` it depends on.
+    # A pending confirmation of one sensitive change (`Prima.Confirmation`),
+    # keyed by its public ref and never by the secret the asking request
+    # holds (`Prima.Confirmation.ref/1`): the record's fields, its digest
+    # and secret-free preview, the credential that opened it and alone may
+    # consume it, a name for the client that asked, how it was proven and
+    # by which client or passkey, and a state each transition moves once.
+    # A remote person's record names the `key_epoch` it depends on.
     create table(:pending_confirmations, primary_key: false) do
-      add :id, :string, primary_key: true
+      add :ref, :string, primary_key: true
       add :athanor_id, :string, null: false
       add :user_id, :string, null: false
       add :operation, :string, null: false
@@ -870,6 +872,7 @@ defmodule Arca.Repo.Migrations.Baseline do
       add :challenge, :binary, null: false
       add :digest, :string, null: false
       add :opener, :string, null: false
+      add :asker, :text, null: false
       add :identity_key_epoch, :string
 
       add :state, :string,
@@ -904,15 +907,6 @@ defmodule Arca.Repo.Migrations.Baseline do
 
     create index(:pending_confirmations, [:identity_key_epoch],
              where: "identity_key_epoch IS NOT NULL"
-           )
-
-    # One open record per person, operation, argument digest and opener:
-    # a record another credential opened is never handed to this one.
-    create unique_index(
-             :pending_confirmations,
-             [:athanor_id, :user_id, :operation, :args_digest, :opener],
-             where: "state IN ('pending', 'confirmed')",
-             name: :pending_confirmations_open_index
            )
 
     invitation_state =

@@ -100,15 +100,16 @@ defmodule PrismWeb.VaultLiveTest do
         authenticated: true
       )
 
-    # The page meets the signal, naming the confirmation it opened, and
-    # stores nothing; the secret appears in neither the page nor the flash.
+    # The page meets the signal, naming the change and never the secret
+    # of the confirmation it opened, and stores nothing; the client secret
+    # appears in neither the page nor the flash.
     flash = Phoenix.Flash.get(:sys.get_state(view.pid).socket.assigns.flash, :error)
     assert flash =~ "Confirmation required"
 
-    assert {:ok, [%{id: id, operation: "oauth.set_client"}]} =
+    assert {:ok, [%{ref: "cnr_" <> _, operation: "oauth.set_client"}]} =
              Arca.PendingConfirmations.list_open(Sanctum.Context.actor(ctx), ctx.user_id)
 
-    assert flash =~ id
+    refute flash =~ "cnf_"
     refute flash =~ @client_secret
     rendered = render(view)
     assert rendered =~ "No client credentials stored"

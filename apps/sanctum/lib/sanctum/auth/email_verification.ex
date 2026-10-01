@@ -18,8 +18,9 @@ defmodule Sanctum.Auth.EmailVerification do
   confirmation (`Prima.Confirmation`): `send_code/2` draws a six-digit
   code, holds only its keyed digest on the record, and sends it to the
   address the person's `users` row holds as verified; `verify_code/3`
-  confirms the record with proof `email_code` when the code matches. The
-  code is bound to that record's id, used once, and expires with it.
+  confirms the record with proof `email_code` when the code matches. Both
+  name the record by its public ref (`Prima.Confirmation.ref/1`). The
+  code is bound to that record's ref, used once, and expires with it.
 
     * At most five guesses per confirmation: each is counted in a durable
       window as long as the record lives (`Arca.RequestRateWindows`), and
@@ -63,29 +64,30 @@ defmodule Sanctum.Auth.EmailVerification do
   end
 
   @doc """
-  Send a one-time code for the pending confirmation `confirmation_id` of
-  the context's own person, in the context's athanor, replacing any
-  earlier one. Answers `%{method: "email", expires_at:}`, never the code.
+  Send a one-time code for the pending confirmation `ref` of the
+  context's own person, in the context's athanor, replacing any earlier
+  one. Answers `%{method: "email", expires_at:}`, never the code.
 
   Refusals: `:email_unavailable` (no transport, or no verified email),
-  `{:not_found, "confirmation", id}`, `:not_pending`, `{:rate_limited,
+  `{:not_found, "confirmation", ref}`, `:not_pending`, `{:rate_limited,
   seconds}`, `:unavailable`.
   """
   @spec send_code(Context.t(), String.t()) :: {:ok, map()} | {:error, term()}
-  def send_code(%Context{} = ctx, confirmation_id) when is_binary(confirmation_id) do
+  def send_code(%Context{} = ctx, ref) when is_binary(ref) do
     actor = Context.actor(ctx)
 
     with {:ok, user_id} <- confirming_person(ctx),
          {:ok, transport} <- configured_transport(),
          {:ok, email} <- verified_email(user_id),
-         {:ok, row} <- pending_record(actor, confirmation_id, user_id),
-         :ok <- claim(:confirmation_code_send, row.id, @sends_per_confirmation, @record_window_ms),
+         {:ok, row} <- pending_record(actor, ref, user_id),
+         :ok <-
+           claim(:confirmation_code_send, row.ref, @sends_per_confirmation, @record_window_ms),
          :ok <-
            claim(:confirmation_code_send_person, user_id, @sends_per_person, @person_window_ms) do
       code = draw()
 
-      case Arca.PendingConfirmations.put_challenge(actor, row.id, %{
-             email_code_hash: code_hash(row.id, code)
+      case Arca.PendingConfirmations.put_challenge(actor, row.ref, %{
+             email_code_hash: code_hash(row.ref, code)
            }) do
         {:ok, held} ->
           deliver(transport, email, code, held)
@@ -100,26 +102,25 @@ defmodule Sanctum.Auth.EmailVerification do
   end
 
   @doc """
-  Confirm the pending confirmation `confirmation_id` of the context's own
-  person with `code`, the one `send_code/2` sent for it, with proof
-  `email_code`, naming the paired client `ctx.client_id` names, if any.
-  Answers the confirmed record's `%{id:, state:, expires_at:}`.
+  Confirm the pending confirmation `ref` of the context's own person with
+  `code`, the one `send_code/2` sent for it, with proof `email_code`,
+  naming the paired client `ctx.client_id` names, if any. Answers the
+  confirmed record's `%{ref:, state:, expires_at:}`.
 
   Refusals: `:code_refused` (no code sent, or another code; five of them
   cancel the record), `:confirmation_cancelled` (a guess past the five),
-  `{:not_found, "confirmation", id}`, `:not_pending` (already confirmed,
+  `{:not_found, "confirmation", ref}`, `:not_pending` (already confirmed,
   consumed or ended), `:unavailable`.
   """
   @spec verify_code(Context.t(), String.t(), String.t()) :: {:ok, map()} | {:error, term()}
-  def verify_code(%Context{} = ctx, confirmation_id, code)
-      when is_binary(confirmation_id) and is_binary(code) do
+  def verify_code(%Context{} = ctx, ref, code) when is_binary(ref) and is_binary(code) do
     actor = Context.actor(ctx)
 
     with {:ok, user_id} <- confirming_person(ctx),
-         {:ok, row} <- pending_record(actor, confirmation_id, user_id),
+         {:ok, row} <- pending_record(actor, ref, user_id),
          :ok <- guessed(actor, row) do
       if is_binary(row.email_code_hash) and
-           Plug.Crypto.secure_compare(code_hash(row.id, String.trim(code)), row.email_code_hash) do
+           Plug.Crypto.secure_compare(code_hash(row.ref, String.trim(code)), row.email_code_hash) do
         confirmed(actor, row, ctx.client_id)
       else
         wrong(actor, row)
@@ -155,12 +156,12 @@ defmodule Sanctum.Auth.EmailVerification do
     end
   end
 
-  defp pending_record(actor, id, user_id) do
-    case Arca.PendingConfirmations.get(actor, id) do
+  defp pending_record(actor, ref, user_id) do
+    case Arca.PendingConfirmations.get(actor, ref) do
       {:ok, %{user_id: ^user_id, state: "pending"} = row} -> {:ok, row}
       {:ok, %{user_id: ^user_id}} -> {:error, :not_pending}
-      {:ok, _another} -> {:error, {:not_found, "confirmation", id}}
-      {:error, :not_found} -> {:error, {:not_found, "confirmation", id}}
+      {:ok, _another} -> {:error, {:not_found, "confirmation", ref}}
+      {:error, :not_found} -> {:error, {:not_found, "confirmation", ref}}
       {:error, _unanswered} -> {:error, :unavailable}
     end
   end
@@ -168,7 +169,7 @@ defmodule Sanctum.Auth.EmailVerification do
   # Every guess is counted, durably, for as long as the record lives: a
   # guess past the five finds the record cancelled.
   defp guessed(actor, row) do
-    case claim(:confirmation_code_guess, row.id, @guesses, @record_window_ms) do
+    case claim(:confirmation_code_guess, row.ref, @guesses, @record_window_ms) do
       :ok ->
         :ok
 
@@ -182,7 +183,7 @@ defmodule Sanctum.Auth.EmailVerification do
   end
 
   defp wrong(actor, row) do
-    case Arca.PendingConfirmations.count_code_failure(actor, row.id, @guesses) do
+    case Arca.PendingConfirmations.count_code_failure(actor, row.ref, @guesses) do
       {:ok, %{state: "cancelled"} = cancelled} ->
         Authz.announce(:cancelled, cancelled)
         {:error, :code_refused}
@@ -196,13 +197,13 @@ defmodule Sanctum.Auth.EmailVerification do
   end
 
   defp confirmed(actor, row, client_id) do
-    case Arca.PendingConfirmations.confirm(actor, row.id, %{
+    case Arca.PendingConfirmations.confirm(actor, row.ref, %{
            proof: "email_code",
            client_id: client_id
          }) do
       {:ok, confirmed} ->
         Authz.announce(:confirmed, confirmed)
-        {:ok, %{id: confirmed.id, state: confirmed.state, expires_at: confirmed.expires_at}}
+        {:ok, %{ref: confirmed.ref, state: confirmed.state, expires_at: confirmed.expires_at}}
 
       {:error, reason} when reason in [:not_pending, :expired, :revoked] ->
         {:error, reason}
@@ -213,7 +214,7 @@ defmodule Sanctum.Auth.EmailVerification do
   end
 
   defp cancel(actor, row) do
-    case Arca.PendingConfirmations.cancel(actor, row.id) do
+    case Arca.PendingConfirmations.cancel(actor, row.ref) do
       {:ok, cancelled} -> Authz.announce(:cancelled, cancelled)
       {:error, _closed} -> :ok
     end
@@ -257,12 +258,12 @@ defmodule Sanctum.Auth.EmailVerification do
 
   # A keyed digest bound to the record: a leaked row gives nothing to try
   # codes against, and a code for one record matches no other.
-  defp code_hash(id, code) do
+  defp code_hash(ref, code) do
     :crypto.mac(
       :hmac,
       :sha256,
       Authz.derived_key("email-code"),
-      Encoding.jcs!(%{"id" => id, "code" => code})
+      Encoding.jcs!(%{"ref" => ref, "code" => code})
     )
     |> Base.encode16(case: :lower)
   end

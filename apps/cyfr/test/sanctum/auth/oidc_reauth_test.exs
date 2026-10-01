@@ -8,7 +8,8 @@ defmodule Sanctum.Auth.OIDCReauthTest do
 
   The request forces a fresh login (`prompt=login`, `max_age=0`) and
   carries a nonce derived from the record, held on it, and a state naming
-  the record under the home's keyed digest; its redirect URI is the
+  the record by its public ref under the home's keyed digest, never the
+  secret its asking request holds; its redirect URI is the
   second one the issuer lists, `<origin>/auth/oidcc/reauth`. The callback
   verifies the login only when the ID token carries the record's nonce,
   an `auth_time` at or after the record's opening, and the issuer and
@@ -154,12 +155,17 @@ defmodule Sanctum.Auth.OIDCReauthTest do
     }
   end
 
-  defp opened!(ctx, change \\ change()) do
-    {:error, {:confirmation_required, %{id: id}}} =
+  # A change asked for with no proof: the signal's secret, and the ref
+  # every other surface names its record by.
+  defp asked!(ctx, change \\ change()) do
+    {:error, {:confirmation_required, %{id: secret}}} =
       Sanctum.Consent.Authz.check(ctx, :credential_entry, change)
 
-    id
+    {secret, Prima.Confirmation.ref(secret)}
   end
+
+  # The record's ref, as a re-authentication names it.
+  defp opened!(ctx, change \\ change()), do: ctx |> asked!(change) |> elem(1)
 
   defp record(ctx, id) do
     {:ok, row} = Arca.PendingConfirmations.get(Context.actor(ctx), id)
@@ -191,7 +197,7 @@ defmodule Sanctum.Auth.OIDCReauthTest do
 
   describe "the request" do
     test "forces a fresh login for one record, at the second redirect URI", %{ctx: ctx} do
-      id = opened!(ctx)
+      {secret, id} = asked!(ctx)
       {url, request} = begun!(ctx, id)
       query = url |> URI.parse() |> Map.fetch!(:query) |> URI.decode_query()
 
@@ -201,6 +207,16 @@ defmodule Sanctum.Auth.OIDCReauthTest do
       assert record(ctx, id).reauth_nonce == request.nonce
       refute request.nonce == id
       assert request.state =~ "."
+
+      # The state names the record by its ref; nothing the issuer, the
+      # browser or the request log sees carries the asking request's
+      # secret.
+      [payload, _mac] = String.split(request.state, ".")
+      assert %{"c" => ^id} = payload |> Base.url_decode64!(padding: false) |> Jason.decode!()
+
+      for seen <- [url, request.state, request.nonce, request.pkce_verifier] do
+        refute seen =~ secret
+      end
     end
 
     test "a new request replaces the old nonce", %{ctx: ctx, subject: subject} do
@@ -215,7 +231,7 @@ defmodule Sanctum.Auth.OIDCReauthTest do
              }) ==
                {:error, :reauth_refused}
 
-      assert {:ok, %{id: ^id, ticket: _}} =
+      assert {:ok, %{ref: ^id, ticket: _}} =
                OIDC.reauth_callback(%{
                  "state" => second.state,
                  "code" => code(claims(second, subject))
@@ -260,7 +276,8 @@ defmodule Sanctum.Auth.OIDCReauthTest do
       assert redeemed.nonce == request.nonce
       assert redeemed.pkce_verifier == request.pkce_verifier
 
-      assert %{id: ^id, operation: "vault.create", preview: preview} = held
+      assert %{ref: ^id, operation: "vault.create", preview: preview} = held
+      refute Map.has_key?(held, :id)
       assert preview["resource"] == "prod-key"
       assert preview["operation"] == "vault.create"
       refute inspect(held) =~ "sk-secret"
@@ -352,16 +369,25 @@ defmodule Sanctum.Auth.OIDCReauthTest do
   describe "the person's answer" do
     test "an approval from the person's own session confirms the record, and the change goes ahead",
          %{ctx: ctx, subject: subject, token: token} do
-      id = opened!(ctx)
+      {secret, id} = asked!(ctx)
       {held, _request} = verified!(ctx, subject, id)
 
-      assert {:ok, %{id: ^id, state: "confirmed"}} =
+      assert {:ok, %{ref: ^id, state: "confirmed"}} =
                OIDC.reauth_decide(held.ticket, token, :approve)
 
       assert record(ctx, id).proof == "oidc_reauth"
 
+      # The ref the page and the stream name repeats nothing; the asking
+      # request's secret does.
+      assert {:error, {:confirmation_required, _}} =
+               Sanctum.Consent.Authz.confirm(
+                 %{ctx | confirmation_id: id},
+                 :credential_entry,
+                 change()
+               )
+
       assert Sanctum.Consent.Authz.confirm(
-               %{ctx | confirmation_id: id},
+               %{ctx | confirmation_id: secret},
                :credential_entry,
                change()
              ) ==

@@ -8,8 +8,9 @@ defmodule PrismWeb.SecretRevealTest do
 
   Minting an API key and rotating a webhook's secret are sensitive
   changes: from a session with no proof, the page meets the
-  `confirmation_required` signal, naming the confirmation it opened, and
-  reveals no card, since nothing was minted.
+  `confirmation_required` signal, naming the change and never the
+  secret of the confirmation it opened, and reveals no card, since
+  nothing was minted.
   """
   use PrismWeb.ConnCase, async: false
 
@@ -29,11 +30,11 @@ defmodule PrismWeb.SecretRevealTest do
     render_click(view, "toggle_create")
     render_submit(view, "create", %{"name" => "reveal-probe", "type" => "application"})
 
-    assert [%{id: id, operation: "key.create"}] = open_confirmations(user.user_id)
+    assert [%{ref: "cnr_" <> _, operation: "key.create"}] = open_confirmations(user.user_id)
 
     flash = Phoenix.Flash.get(assigns(view).flash, :error)
     assert flash =~ "Confirmation required"
-    assert flash =~ id
+    refute flash =~ "cnf_"
 
     refute assigns(view).new_key
     refute render(view) =~ "not be shown again"
@@ -75,11 +76,11 @@ defmodule PrismWeb.SecretRevealTest do
     # the secret minted before still verifies.
     render_click(view, "rotate", %{"id" => name})
 
-    assert [%{id: id, operation: "webhook.rotate"}] = open_confirmations(user.user_id)
+    assert [%{ref: "cnr_" <> _, operation: "webhook.rotate"}] = open_confirmations(user.user_id)
 
     flash = Phoenix.Flash.get(assigns(view).flash, :error)
     assert flash =~ "Confirmation required"
-    assert flash =~ id
+    refute flash =~ "cnf_"
 
     refute assigns(view).new_secret
     refute render(view) =~ secret

@@ -117,7 +117,7 @@ defmodule Sanctum.PasskeysTest do
     assert {:error, {:confirmation_required, %{id: id}}} =
              Authz.check(ctx, :credential_entry, change)
 
-    {:ok, row} = Arca.PendingConfirmations.get(Context.actor(ctx), id)
+    {:ok, row} = Arca.PendingConfirmations.get(Context.actor(ctx), Prima.Confirmation.ref(id))
     row
   end
 
@@ -289,7 +289,7 @@ defmodule Sanctum.PasskeysTest do
 
       assert_receive {:announced, [:cyfr, :sanctum, :confirmation, :consumed], _, meta}
       assert meta.operation == "passkey.register"
-      assert Enum.sort(Map.keys(meta)) == [:athanor_id, :expires_at, :id, :operation, :user_id]
+      assert Enum.sort(Map.keys(meta)) == [:athanor_id, :expires_at, :operation, :ref, :user_id]
 
       assert length(Arca.Repo.all(from(p in Passkey, where: p.user_id == ^user.id))) == 2
     end
@@ -443,7 +443,14 @@ defmodule Sanctum.PasskeysTest do
       assert {:ok, %{admin_confirmation_id: confirmation}} =
                Arca.Passkeys.get(Prima.Actor.system(), id)
 
-      assert is_binary(confirmation)
+      # The passkey records the administrator's confirmation by its ref,
+      # never the secret their request presented.
+      assert Prima.Confirmation.ref?(confirmation)
+
+      assert {:ok, %{state: "consumed", user_id: admin_user}} =
+               Arca.PendingConfirmations.get(Context.actor(admin), confirmation)
+
+      assert admin_user == admin.user_id
 
       # The person's own clients hear of the new passkey, and they and the
       # members of every athanor they belong to hear of the recovery; the
@@ -502,7 +509,7 @@ defmodule Sanctum.PasskeysTest do
       # Rolled back with the activation, the administrator's confirmation
       # still stands proven.
       assert {:ok, %{state: "confirmed"}} =
-               Arca.PendingConfirmations.get(Context.actor(admin), id)
+               Arca.PendingConfirmations.get(Context.actor(admin), Prima.Confirmation.ref(id))
     end
 
     test "another digest, an ordinary member, or a session alone activates nothing",
@@ -545,28 +552,31 @@ defmodule Sanctum.PasskeysTest do
       row = opened!(ctx)
       assertion = Authenticator.assertion(auth, challenge(row))
 
-      assert {:ok, %{id: id, state: "confirmed"}} = Passkeys.assert(ctx, row.id, assertion)
-      assert id == row.id
+      assert {:ok, %{ref: ref, state: "confirmed"} = answer} =
+               Passkeys.assert(ctx, row.ref, assertion)
+
+      assert ref == row.ref
+      refute Map.has_key?(answer, :id)
 
       assert {:ok, %{proof: "passkey", confirmed_passkey_id: confirmed_by}} =
-               Arca.PendingConfirmations.get(Context.actor(ctx), row.id)
+               Arca.PendingConfirmations.get(Context.actor(ctx), row.ref)
 
       assert confirmed_by == passkey.id
 
       assert_receive {:announced, [:cyfr, :sanctum, :confirmation, :confirmed], _, meta}
-      assert meta.id == row.id and meta.operation == "vault.create"
+      assert meta.ref == row.ref and meta.operation == "vault.create"
       refute inspect(meta) =~ "sk-secret"
 
       # The same assertion again, the zero counter unchanged: the record is
       # single-use.
-      assert Passkeys.assert(ctx, row.id, assertion) == {:error, :not_pending}
+      assert Passkeys.assert(ctx, row.ref, assertion) == {:error, :not_pending}
     end
 
     test "an assertion over a different digest is refused", %{ctx: ctx, auth: auth} do
       row = opened!(ctx)
       other = opened!(ctx, change("other-key"))
 
-      assert Passkeys.assert(ctx, row.id, Authenticator.assertion(auth, challenge(other))) ==
+      assert Passkeys.assert(ctx, row.ref, Authenticator.assertion(auth, challenge(other))) ==
                {:error, :assertion_refused}
     end
 
@@ -575,7 +585,7 @@ defmodule Sanctum.PasskeysTest do
 
       assert Passkeys.assert(
                ctx,
-               row.id,
+               row.ref,
                Authenticator.assertion(auth, challenge(row), uv: false)
              ) ==
                {:error, :assertion_refused}
@@ -591,7 +601,7 @@ defmodule Sanctum.PasskeysTest do
             [origin: "https://a.example", rp_id: "a.example"],
             [type: "webauthn.create"]
           ] do
-        assert Passkeys.assert(ctx, row.id, Authenticator.assertion(auth, challenge(row), opts)) ==
+        assert Passkeys.assert(ctx, row.ref, Authenticator.assertion(auth, challenge(row), opts)) ==
                  {:error, :assertion_refused},
                inspect(opts)
       end
@@ -599,7 +609,7 @@ defmodule Sanctum.PasskeysTest do
       # A credential this home never registered.
       stranger = authenticator()
 
-      assert Passkeys.assert(ctx, row.id, Authenticator.assertion(stranger, challenge(row))) ==
+      assert Passkeys.assert(ctx, row.ref, Authenticator.assertion(stranger, challenge(row))) ==
                {:error, :assertion_refused}
     end
 
@@ -617,12 +627,12 @@ defmodule Sanctum.PasskeysTest do
       # Their own passkey over this record, and this record through their session.
       assert Passkeys.assert(
                other_here,
-               row.id,
+               row.ref,
                Authenticator.assertion(other_auth, challenge(row))
              ) ==
-               {:error, {:not_found, "confirmation", row.id}}
+               {:error, {:not_found, "confirmation", row.ref}}
 
-      assert Passkeys.assert(ctx, row.id, Authenticator.assertion(other_auth, challenge(row))) ==
+      assert Passkeys.assert(ctx, row.ref, Authenticator.assertion(other_auth, challenge(row))) ==
                {:error, :assertion_refused}
     end
 
@@ -632,7 +642,7 @@ defmodule Sanctum.PasskeysTest do
       assert {:ok, _} =
                Passkeys.assert(
                  ctx,
-                 first.id,
+                 first.ref,
                  Authenticator.assertion(auth, challenge(first), count: 5)
                )
 
@@ -640,14 +650,14 @@ defmodule Sanctum.PasskeysTest do
 
       assert Passkeys.assert(
                ctx,
-               again.id,
+               again.ref,
                Authenticator.assertion(auth, challenge(again), count: 5)
              ) ==
                {:error, :assertion_refused}
 
       assert Passkeys.assert(
                ctx,
-               again.id,
+               again.ref,
                Authenticator.assertion(auth, challenge(again), count: 0)
              ) ==
                {:error, :assertion_refused}
@@ -655,7 +665,7 @@ defmodule Sanctum.PasskeysTest do
       assert {:ok, _} =
                Passkeys.assert(
                  ctx,
-                 again.id,
+                 again.ref,
                  Authenticator.assertion(auth, challenge(again), count: 6)
                )
     end
@@ -668,7 +678,7 @@ defmodule Sanctum.PasskeysTest do
         row = opened!(ctx, change(name))
 
         assert {:ok, _} =
-                 Passkeys.assert(ctx, row.id, Authenticator.assertion(auth, challenge(row)))
+                 Passkeys.assert(ctx, row.ref, Authenticator.assertion(auth, challenge(row)))
       end
     end
 
@@ -681,13 +691,13 @@ defmodule Sanctum.PasskeysTest do
       {:ok, record} = Arca.PendingConfirmations.confirmation(%{row | expires_at: past})
       digest = Prima.Confirmation.digest(record)
 
-      Arca.Repo.update_all(from(c in PendingConfirmation, where: c.id == ^row.id),
+      Arca.Repo.update_all(from(c in PendingConfirmation, where: c.ref == ^row.ref),
         set: [expires_at: past, digest: digest]
       )
 
       stale = %{row | digest: digest}
 
-      assert Passkeys.assert(ctx, row.id, Authenticator.assertion(auth, challenge(stale))) ==
+      assert Passkeys.assert(ctx, row.ref, Authenticator.assertion(auth, challenge(stale))) ==
                {:error, :expired}
     end
 
@@ -699,7 +709,7 @@ defmodule Sanctum.PasskeysTest do
 
       row = opened!(ctx)
 
-      assert Passkeys.assert(ctx, row.id, Authenticator.assertion(auth, challenge(row))) ==
+      assert Passkeys.assert(ctx, row.ref, Authenticator.assertion(auth, challenge(row))) ==
                {:error, :assertion_refused}
     end
   end

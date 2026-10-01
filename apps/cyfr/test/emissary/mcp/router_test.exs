@@ -249,13 +249,15 @@ defmodule Emissary.MCP.RouterTest do
       end)
     end
 
-    test "a pending confirmation is a protocol error, -33505, naming its confirmation",
+    test "a pending confirmation is a protocol error, -33505, its secret in the data alone",
          %{context: ctx} do
       Grimoire.Catalog.with_providers([Emissary.MCP.RouterTest.Confirming], fn ->
         assert {:error, :confirmation_required, message, data} =
                  call(ctx, "confirming_probe", %{"action" => "change"})
 
-        assert message =~ "confirmation-7f3a"
+        # The id is the asking request's secret: it rides the data alone,
+        # never the sentence a log or a page keeps.
+        refute message =~ "confirmation-7f3a"
         assert message =~ "Prism"
 
         # As the wire carries it.

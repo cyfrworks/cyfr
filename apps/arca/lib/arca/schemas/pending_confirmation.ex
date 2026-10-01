@@ -5,13 +5,15 @@ defmodule Arca.Schemas.PendingConfirmation do
   @moduledoc """
   Ecto schema for the `pending_confirmations` table (backs
   `Arca.PendingConfirmations`): one pending confirmation of a sensitive
-  change in an athanor, as `Prima.Confirmation` shapes it, with the
-  credential that opened it (`opener`), how it was proven and its state.
+  change in an athanor, as `Prima.Confirmation` shapes it, keyed by its
+  public `ref` and never by the secret its asking request holds, with the
+  credential that opened it (`opener`), a name for the client that asked
+  (`asker`), how it was proven and its state.
   """
 
   use Ecto.Schema
 
-  @primary_key {:id, :string, autogenerate: false}
+  @primary_key {:ref, :string, autogenerate: false}
 
   @type t :: %__MODULE__{}
 
@@ -38,6 +40,7 @@ defmodule Arca.Schemas.PendingConfirmation do
     field :challenge, :binary
     field :digest, :string
     field :opener, :string
+    field :asker, :string
     field :identity_key_epoch, :string
     field :state, :string, default: "pending"
     field :proof, :string
