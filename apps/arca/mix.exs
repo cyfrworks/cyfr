@@ -51,7 +51,7 @@ defmodule Arca.MixProject do
       # every `use Boundary` declaration in this application.
       {:boundary, "~> 0.11.0", runtime: false},
       {:ecto_sql, "~> 3.12"},
-      {:ecto_sqlite3, "~> 0.22.0"},
+      {:ecto_sqlite3, "~> 0.23.0"},
       {:exqlite, "~> 0.22"},
       {:postgrex, "~> 0.21"},
       {:jason, "~> 1.4"},
