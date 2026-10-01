@@ -9,6 +9,21 @@ defmodule Arca.Repo do
   parsed into `:arca, :repo_adapter` by a configuration file rather than
   read at runtime. `adapter/0` reports the value the compiler bound, for
   the callers that must branch on it.
+
+  On SQLite every write takes the one write lock through the lock step
+  (`prepare_transaction/2`): a transaction as it starts, and a write run
+  outside a transaction (`insert`, `update`, `delete` and their bang
+  forms, `insert_or_update`, `insert_all`, `update_all`, `delete_all`) as
+  a transaction of its one statement. Such a write that cannot take the
+  lock in time raises `Arca.Repo.BusyTimeoutError`, as the transaction
+  does, within its own `timeout:` where it names one. One whose connection
+  the pool closed under it raises `DBConnection.ConnectionError`, and so
+  does an `insert_all`, `update_all` or `delete_all` inside a transaction,
+  rather than answering a count of `nil`.
+
+  A write Ecto answers without a statement (an invalid changeset, an
+  update with no change and no `force: true`, an `insert_all` of no
+  entries) answers as Ecto answers it, taking no lock.
   """
 
   use Ecto.Repo,
@@ -16,6 +31,20 @@ defmodule Arca.Repo do
     # config:compile-runtime-ok — Ecto binds the adapter at compile time;
     # `adapter/0` reports the same value at runtime.
     adapter: Application.compile_env(:arca, :repo_adapter, Ecto.Adapters.SQLite3)
+
+  # The writes a caller can run outside a transaction, each redefined below
+  # to take SQLite's write lock through the lock step (`standalone/4`).
+  defoverridable insert: 2,
+                 insert!: 2,
+                 update: 2,
+                 update!: 2,
+                 delete: 2,
+                 delete!: 2,
+                 insert_or_update: 2,
+                 insert_or_update!: 2,
+                 insert_all: 3,
+                 update_all: 3,
+                 delete_all: 2
 
   @doc """
   The adapter this build was compiled against, read at runtime.
@@ -42,6 +71,7 @@ defmodule Arca.Repo do
   @pool_deadline :pool_deadline
   # What must still fit inside a pool deadline once the lock is taken: the
   # last quantum, the pause before it, the caller's writes and the commit.
+  # At most half the caller's own `timeout:` (`commit_slack_ms/1`).
   @commit_slack_ms 500
   @default_busy_timeout_ms 5_000
   # A busy answer to a statement, in the driver's two spellings.
@@ -103,6 +133,153 @@ defmodule Arca.Repo do
     end
   end
 
+  # ---- standalone writes -------------------------------------------------------
+  #
+  # A write run outside a transaction would wait for SQLite's write lock
+  # inside the driver for the whole busy timeout, holding a dirty I/O
+  # scheduler while it waits. Enough such waiters hold every one of them,
+  # and a transaction that already holds the lock then cannot step its next
+  # statement until their waits run out, however long the waiters keep
+  # coming: a renewal's among them. So on SQLite each runs as a transaction
+  # of its one statement, whose lock step waits inside the driver a quantum
+  # at a time (`prepare_transaction/2`). It takes no write turn. Inside a
+  # transaction, which already holds the lock, the write is Ecto's own, and
+  # so is a write Ecto answers without a statement (`no_statement?/3`); on
+  # PostgreSQL every write is.
+  #
+  # The driver reads a statement's row count off the connection once the
+  # statement is done, and reads `nil` from a connection the pool closed
+  # meanwhile at its timeout: the close waits for the running statement,
+  # then the count is read. So on SQLite a count of `nil` from
+  # `insert_all`, `update_all` or `delete_all`, inside a transaction or
+  # not, raises the closed connection it is (`counted/2`), which
+  # `Arca.Repo.Errors.db_errors/0` names, and is never answered as a count.
+  # A connection closed after the count was read leaves the write's own
+  # transaction uncommitted, and that raises the same.
+
+  @impl true
+  def insert(struct, opts),
+    do: standalone(:answer, {:insert, struct}, opts, fn -> super(struct, opts) end)
+
+  @impl true
+  def insert!(struct, opts),
+    do: standalone(:value, {:insert, struct}, opts, fn -> super(struct, opts) end)
+
+  @impl true
+  def update(changeset, opts),
+    do: standalone(:answer, {:update, changeset}, opts, fn -> super(changeset, opts) end)
+
+  @impl true
+  def update!(changeset, opts),
+    do: standalone(:value, {:update, changeset}, opts, fn -> super(changeset, opts) end)
+
+  @impl true
+  def delete(struct, opts),
+    do: standalone(:answer, {:delete, struct}, opts, fn -> super(struct, opts) end)
+
+  @impl true
+  def delete!(struct, opts),
+    do: standalone(:value, {:delete, struct}, opts, fn -> super(struct, opts) end)
+
+  @impl true
+  def insert_or_update(changeset, opts),
+    do:
+      standalone(:answer, {:insert_or_update, changeset}, opts, fn -> super(changeset, opts) end)
+
+  @impl true
+  def insert_or_update!(changeset, opts),
+    do: standalone(:value, {:insert_or_update, changeset}, opts, fn -> super(changeset, opts) end)
+
+  @impl true
+  def insert_all(source, entries, opts),
+    do: standalone(:count, {:insert_all, entries}, opts, fn -> super(source, entries, opts) end)
+
+  @impl true
+  def update_all(queryable, updates, opts),
+    do:
+      standalone(:count, {:update_all, queryable}, opts, fn -> super(queryable, updates, opts) end)
+
+  @impl true
+  def delete_all(queryable, opts),
+    do: standalone(:count, {:delete_all, queryable}, opts, fn -> super(queryable, opts) end)
+
+  # `:answer` for a write that answers `{:ok, _}` or `{:error, _}`, which the
+  # transaction answers in its place, rolled back on an error; `:value` for
+  # one that returns its value or raises; `:count` for one that returns its
+  # row count and rows, or raises.
+  defp standalone(kind, {operation, subject}, opts, write) do
+    cond do
+      adapter() != Ecto.Adapters.SQLite3 -> write.()
+      no_statement?(operation, subject, opts) -> write.()
+      in_transaction?() -> counted(kind, write.())
+      true -> one_statement(kind, fn -> counted(kind, write.()) end, one_statement_opts(opts))
+    end
+  end
+
+  # What Ecto answers without sending a statement, as it answers it: an
+  # invalid changeset, refused; an update with no change and no `force:`,
+  # answered with its data, whether it comes as an update or as an
+  # `insert_or_update` of loaded data; and an `insert_all` of no entries.
+  defp no_statement?(_operation, %Ecto.Changeset{valid?: false}, _opts), do: true
+
+  defp no_statement?(:update, %Ecto.Changeset{} = changeset, opts),
+    do: unchanged?(changeset, opts)
+
+  defp no_statement?(
+         :insert_or_update,
+         %Ecto.Changeset{data: %{__meta__: %{state: :loaded}}} = changeset,
+         opts
+       ),
+       do: unchanged?(changeset, opts)
+
+  defp no_statement?(:insert_all, [], _opts), do: true
+  defp no_statement?(_operation, _subject, _opts), do: false
+
+  # Ecto reads `force` from the changeset's own repo options under the
+  # call's.
+  defp unchanged?(%Ecto.Changeset{changes: changes, repo_opts: repo_opts}, opts),
+    do: changes == %{} and !Keyword.merge(repo_opts, opts)[:force]
+
+  # The write never asks for a rollback, so `{:error, :rollback}` is the
+  # transaction's own: the pool closed its connection after the statement
+  # answered, and nothing committed.
+  defp one_statement(:answer, write, opts) do
+    case transact(write, opts) do
+      {:error, :rollback} -> closed!()
+      answer -> answer
+    end
+  end
+
+  defp one_statement(_value_or_count, write, opts) do
+    case transaction(write, opts) do
+      {:ok, value} -> value
+      {:error, :rollback} -> closed!()
+    end
+  end
+
+  # Raised inside the write's transaction, so it rolls back with it.
+  defp counted(:count, {nil, _rows}), do: closed!()
+  defp counted(_kind, answer), do: answer
+
+  @spec closed!() :: no_return()
+  defp closed!, do: raise(DBConnection.ConnectionError, "connection closed")
+
+  # What the transaction keeps of the write's options: its log level, so
+  # the transaction logs nothing the caller silenced, and its pool timeout,
+  # which now bounds the whole transaction. The pool closes a connection
+  # held past it, so the lock step is told the instant (`:pool_deadline`).
+  defp one_statement_opts(opts) do
+    kept = Keyword.take(opts, [:log, :timeout])
+
+    case Keyword.get(kept, :timeout) do
+      ms when is_integer(ms) ->
+        [{@pool_deadline, System.monotonic_time(:millisecond) + ms} | kept]
+
+      _default_or_infinity ->
+        kept
+    end
+  end
+
   @doc """
   The one place a SQLite transaction takes the write lock; the identity
   on PostgreSQL.
@@ -117,7 +294,8 @@ defmodule Arca.Repo do
   attempts in Elixir, until `busy_timeout_ms/0` has passed. The
   connection's busy timeout is back to the pool's before the caller's
   work runs. An `Ecto.Multi` gets the step as its first operation,
-  `:arca_lock`.
+  `:arca_lock`. A write run outside a transaction is a transaction of its
+  one statement here, so it waits the same way.
 
   A writer `locking_transaction/2` names (`write_turn:`) first asks
   `Arca.WriteTurn` for its turn, holding its connection and within the
@@ -149,12 +327,22 @@ defmodule Arca.Repo do
     {pool_deadline, opts} = Keyword.pop(opts, @pool_deadline)
     {turn, opts} = Keyword.pop(opts, @write_turn)
 
+    step = {pool_deadline, commit_slack_ms(opts[:timeout]), turn}
+
     cond do
       in_transaction?() -> {fun_or_multi, opts}
       read_only? -> {fun_or_multi, Keyword.put(opts, :mode, :deferred)}
-      true -> {locking(fun_or_multi, {pool_deadline, turn}), Keyword.put(opts, :mode, :deferred)}
+      true -> {locking(fun_or_multi, step), Keyword.put(opts, :mode, :deferred)}
     end
   end
+
+  # A short pool timeout keeps half of itself for the commit and gives the
+  # lock wait the rest, so it still gets its attempt; past twice the fixed
+  # slack the slack is the fixed one.
+  defp commit_slack_ms(timeout) when is_integer(timeout),
+    do: min(@commit_slack_ms, div(timeout, 2))
+
+  defp commit_slack_ms(_default_or_infinity), do: @commit_slack_ms
 
   defp locking(fun, step) when is_function(fun, 0) do
     fn ->
@@ -187,17 +375,24 @@ defmodule Arca.Repo do
   # (`:pool_deadline`, in `System.monotonic_time(:millisecond)`) names it,
   # and the wait is cut so that it ends, with the caller's own writes and
   # the commit, before the pool acts: a lock quantum, the pause and the
-  # commit's fsync all fit inside `@commit_slack_ms`. Out of that slack
-  # before the first attempt — a wait for the connection itself took the
-  # time — the step raises at once and touches no lock. The pool's deadline
-  # counts from the checkout request, so no fixed margin above the busy
-  # timeout could promise this on its own.
+  # commit's fsync all fit inside `@commit_slack_ms`. A caller whose own
+  # `timeout:` is under twice that keeps half of it instead, so its attempt
+  # still comes. No attempt outlasts the wait: each one's wait inside the
+  # driver, and each pause between them, is cut to the time left, so the
+  # step has left the driver before the pool can act. A connection closed
+  # under a statement still waiting inside the driver can crash the VM, so
+  # this is the guarantee the step keeps for any timeout that fits its own
+  # statements. Out of the
+  # slack before the first attempt — a wait for the connection itself took
+  # the time — the step raises at once and touches no lock. The pool's
+  # deadline counts from the checkout request, so no fixed margin above the
+  # busy timeout could promise this on its own.
   #
   # The turn and the lock share one absolute deadline: time spent waiting
   # for the turn is time the lock wait no longer has.
-  defp take_write_lock!({pool_deadline, turn}) do
+  defp take_write_lock!({pool_deadline, slack_ms, turn}) do
     config = config()
-    deadline_ms = lock_wait_ms(busy_timeout_ms(config), pool_deadline)
+    deadline_ms = lock_wait_ms(busy_timeout_ms(config), pool_deadline, slack_ms)
 
     if deadline_ms <= 0,
       do: raise(Arca.Repo.BusyTimeoutError, deadline_ms: 0)
@@ -210,7 +405,7 @@ defmodule Arca.Repo do
     query!("PRAGMA busy_timeout = #{@quantum_ms}", [], log: false)
 
     try do
-      attempt_write_lock(statement, deadline, deadline_ms)
+      attempt_write_lock(statement, deadline, deadline_ms, @quantum_ms)
     after
       query!("PRAGMA busy_timeout = #{busy_timeout_ms(config)}", [], log: false)
     end
@@ -235,26 +430,48 @@ defmodule Arca.Repo do
     end
   end
 
-  defp lock_wait_ms(busy_ms, nil), do: busy_ms
+  defp lock_wait_ms(busy_ms, nil, _slack_ms), do: busy_ms
 
-  defp lock_wait_ms(busy_ms, pool_deadline) do
-    min(busy_ms, pool_deadline - System.monotonic_time(:millisecond) - @commit_slack_ms)
+  defp lock_wait_ms(busy_ms, pool_deadline, slack_ms) do
+    min(busy_ms, pool_deadline - System.monotonic_time(:millisecond) - slack_ms)
   end
 
-  defp attempt_write_lock(statement, deadline, deadline_ms) do
+  # `quantum` is the connection's busy timeout as this step last set it.
+  defp attempt_write_lock(statement, deadline, deadline_ms, quantum) do
+    quantum = within_deadline!(quantum, deadline, deadline_ms)
+
     case query(statement, [], log: false) do
       {:ok, _result} ->
         :acquired
 
       {:error, %Exqlite.Error{message: message}} when message in @busy ->
-        if System.monotonic_time(:millisecond) >= deadline,
-          do: raise(Arca.Repo.BusyTimeoutError, deadline_ms: deadline_ms)
-
-        Process.sleep(Enum.random(@pause_ms))
-        attempt_write_lock(statement, deadline, deadline_ms)
+        left = time_left!(deadline, deadline_ms)
+        Process.sleep(min(Enum.random(@pause_ms), left))
+        attempt_write_lock(statement, deadline, deadline_ms, quantum)
 
       {:error, error} ->
         raise error
+    end
+  end
+
+  # The attempt's wait inside the driver, cut to the time left when a whole
+  # quantum would outlast it, so the attempt has answered before the
+  # deadline.
+  defp within_deadline!(quantum, deadline, deadline_ms) do
+    case time_left!(deadline, deadline_ms) do
+      left when left >= quantum ->
+        quantum
+
+      left ->
+        query!("PRAGMA busy_timeout = #{left}", [], log: false)
+        left
+    end
+  end
+
+  defp time_left!(deadline, deadline_ms) do
+    case deadline - System.monotonic_time(:millisecond) do
+      left when left > 0 -> left
+      _gone -> raise Arca.Repo.BusyTimeoutError, deadline_ms: deadline_ms
     end
   end
 
