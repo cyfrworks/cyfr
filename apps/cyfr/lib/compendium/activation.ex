@@ -23,7 +23,11 @@ defmodule Compendium.Activation do
   whose release digest is missing (a row published before release digests
   existed) or whose required dependency is not installed makes the whole
   activation `:incomplete`, and nothing is recorded — a partial graph
-  would read as a complete attestation. A dependency the manifest marks
+  would read as a complete attestation. The refusal names what is
+  missing, so a person can be told: `{:missing_release_digest, key}` the
+  node with no digest, `{:unresolvable_dependency, ref}` the name-level ref
+  of the required dependency that is not installed, or of the node whose
+  dependencies cannot be read. A dependency the manifest marks
   `optional` and that is not installed is simply absent from the graph:
   the attestation covers what can run, and when the component arrives the
   graph — and so the digest — changes with it. Only a dependency the
@@ -49,7 +53,8 @@ defmodule Compendium.Activation do
   @type t :: %{digest: String.t(), graph: graph()}
 
   @type error ::
-          {:incomplete, :missing_release_digest | :unresolvable_dependency | :depth_exceeded}
+          {:incomplete,
+           {:missing_release_digest | :unresolvable_dependency, String.t()} | :depth_exceeded}
           | {:invalid_graph, JCS.error()}
           | :projection_unavailable
           | :unavailable
@@ -202,7 +207,7 @@ defmodule Compendium.Activation do
         {:ok, acc}
 
       is_nil(release_digest(component)) ->
-        {:error, {:incomplete, :missing_release_digest}}
+        {:error, {:incomplete, {:missing_release_digest, key}}}
 
       true ->
         acc = Map.put(acc, key, component)
@@ -210,7 +215,7 @@ defmodule Compendium.Activation do
 
         case Compendium.DependencyResolver.extract_from_manifest(manifest, key) do
           {:ok, deps} -> walk_deps(ctx, deps, acc, depth)
-          {:error, _} -> {:error, {:incomplete, :unresolvable_dependency}}
+          {:error, _} -> {:error, {:incomplete, {:unresolvable_dependency, key}}}
         end
     end
   end
@@ -227,7 +232,7 @@ defmodule Compendium.Activation do
         {:error, :not_found} ->
           if dep.optional == true,
             do: {:cont, {:ok, acc}},
-            else: {:halt, {:error, {:incomplete, :unresolvable_dependency}}}
+            else: {:halt, {:error, {:incomplete, {:unresolvable_dependency, dep_ref(dep)}}}}
 
         {:error, _} = error ->
           {:halt, error}
@@ -253,6 +258,9 @@ defmodule Compendium.Activation do
       Compendium.Registry.latest_row(ctx, dep.dep_name, dep.dep_namespace, dep.dep_type)
     end
   end
+
+  # The name-level ref a dependency names, as a graph keys its node.
+  defp dep_ref(dep), do: Prima.ComponentRef.build(dep.dep_type, dep.dep_namespace, dep.dep_name)
 
   defp release_digest(component), do: field(component, :release_digest)
 

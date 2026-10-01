@@ -48,6 +48,40 @@ defmodule Prima.ConsentPreviewTest do
     assert ConsentPreview.new(rows, origins, decoded.commit_digest) == {:ok, decoded}
   end
 
+  test "a credential is one row per edge it rides, and a stream one per subject" do
+    {:ok, %ConsentPreview{rows: rows}} = ConsentPreview.decode(vectors()["preview"])
+
+    weather =
+      for %Row{kind: :credential, values: %{"name" => "weather-api"} = values} = row <- rows,
+          do: {Row.identity(row), values["edge"]}
+
+    assert [{first, "@ingress"}, {second, "reagent:local.geo"}] = weather
+    refute first == second
+
+    deltas =
+      for %Row{kind: :streams, values: %{"name" => "executions.deltas"}} = row <- rows,
+          do: Row.identity(row)
+
+    assert [{:streams, _, _, "*"}, {:streams, _, _, "exe_1"}] = deltas
+
+    # A stream that names no subject is its own row too.
+    assert Enum.any?(rows, &(&1.kind == :streams and Row.identity(&1) |> elem(3) |> is_nil()))
+  end
+
+  test "a wildcard tools row names every tool alone and is never narrowed" do
+    {:ok, %ConsentPreview{rows: rows}} = ConsentPreview.decode(vectors()["preview"])
+
+    assert [%Row{node: "reagent:local.geo", narrowed: false}] =
+             Enum.filter(rows, &(&1.kind == :tools and &1.values["tools"] == Row.wildcard()))
+
+    tools = Enum.find(rows, &(&1.kind == :tools))
+
+    for spelled <- [["file.read", "*"], ["*", "*"]] do
+      assert Row.decode(Row.encode(%{tools | values: %{"tools" => spelled}})) ==
+               {:error, {:invalid_field, "tools"}}
+    end
+  end
+
   test "origins are answered in the enum's order" do
     preview = Map.put(vectors()["preview"], "origins", ["webhook", "interactive"])
 

@@ -1,5 +1,5 @@
 {
-  "comment": "The vectors pinning Prima.ConsentPreview: every side reads the preview, which holds a row of every kind, and writes it back to the same map; accepts each origin spelling and refuses each invalid one; and refuses each refusal with the named reason. A preview carries no sentence. Only egress, storage, tools and limits can be narrowed. Origins are answered in the enum's order: interactive, programmatic, schedule, webhook.",
+  "comment": "The vectors pinning Prima.ConsentPreview: every side reads the preview, which holds a row of every kind, and writes it back to the same map; accepts each origin spelling and refuses each invalid one; and refuses each refusal with the named reason. A preview carries no sentence. Only egress, storage, tools and limits can be narrowed. Origins are answered in the enum's order: interactive, programmatic, schedule, webhook. A row is one per kind and node; a credential one per entry and the edge it rides (@ingress for the node's own key, otherwise the dependency's name-level ref, ref|need for a named need); a stream one per name and subject; a tool server and a card one per name. So one entry lent on two edges is two rows, and so is one stream under two subjects. A tools row names tool.action names, or * alone and never narrowed when the ask names every tool and the grant is the whole ask.",
   "kinds": [
     "credential",
     "egress",
@@ -45,6 +45,7 @@
         "narrowed": false,
         "node": "reagent:local.weather",
         "values": {
+          "edge": "@ingress",
           "fields": [
             "api_key"
           ],
@@ -57,11 +58,27 @@
         "narrowed": false,
         "node": "reagent:local.weather",
         "values": {
+          "edge": "reagent:local.maps|tiles",
           "fields": [
             "token"
           ],
           "label": "shared-maps",
           "name": "maps",
+          "scopes": [
+            "read"
+          ]
+        }
+      },
+      {
+        "kind": "credential",
+        "narrowed": false,
+        "node": "reagent:local.weather",
+        "values": {
+          "edge": "reagent:local.geo",
+          "fields": [
+            "api_key"
+          ],
+          "name": "weather-api",
           "scopes": [
             "read"
           ]
@@ -139,6 +156,16 @@
         }
       },
       {
+        "kind": "tools",
+        "narrowed": false,
+        "node": "reagent:local.geo",
+        "values": {
+          "tools": [
+            "*"
+          ]
+        }
+      },
+      {
         "kind": "frame",
         "narrowed": false,
         "node": "tincture:local.dashboard",
@@ -157,6 +184,15 @@
         "values": {
           "name": "executions.deltas",
           "subject": "*"
+        }
+      },
+      {
+        "kind": "streams",
+        "narrowed": false,
+        "node": "tincture:local.dashboard",
+        "values": {
+          "name": "executions.deltas",
+          "subject": "exe_1"
         }
       },
       {
@@ -216,6 +252,7 @@
             "narrowed": false,
             "node": "reagent:local.weather",
             "values": {
+              "edge": "@ingress",
               "fields": [
                 "api_key"
               ],
@@ -242,6 +279,7 @@
             "node": "reagent:local.weather",
             "summary": "Uses your weather key",
             "values": {
+              "edge": "@ingress",
               "fields": [
                 "api_key"
               ],
@@ -300,11 +338,119 @@
             "narrowed": true,
             "node": "reagent:local.weather",
             "values": {
+              "edge": "@ingress",
               "fields": [
                 "api_key"
               ],
               "name": "weather-api",
               "scopes": []
+            }
+          }
+        ],
+        "v": 1
+      }
+    },
+    {
+      "error": "missing_field",
+      "name": "a credential naming no edge",
+      "preview": {
+        "commit_digest": "sha256:9505cacb7c710ed17125fcc6cb3669e8ddca6c8cd8af6a31f6b3cd64604c3098",
+        "origins": [
+          "interactive"
+        ],
+        "rows": [
+          {
+            "kind": "credential",
+            "narrowed": false,
+            "node": "reagent:local.weather",
+            "values": {
+              "fields": [
+                "api_key"
+              ],
+              "name": "weather-api",
+              "scopes": []
+            }
+          }
+        ],
+        "v": 1
+      }
+    },
+    {
+      "error": "invalid_field",
+      "name": "a credential edge in the reserved namespace",
+      "preview": {
+        "commit_digest": "sha256:9505cacb7c710ed17125fcc6cb3669e8ddca6c8cd8af6a31f6b3cd64604c3098",
+        "origins": [
+          "interactive"
+        ],
+        "rows": [
+          {
+            "kind": "credential",
+            "narrowed": false,
+            "node": "reagent:local.weather",
+            "values": {
+              "edge": "@egress",
+              "fields": [
+                "api_key"
+              ],
+              "name": "weather-api",
+              "scopes": []
+            }
+          }
+        ],
+        "v": 1
+      }
+    },
+    {
+      "error": "invalid_field",
+      "name": "a credential edge naming a version",
+      "preview": {
+        "commit_digest": "sha256:9505cacb7c710ed17125fcc6cb3669e8ddca6c8cd8af6a31f6b3cd64604c3098",
+        "origins": [
+          "interactive"
+        ],
+        "rows": [
+          {
+            "kind": "credential",
+            "narrowed": false,
+            "node": "reagent:local.weather",
+            "values": {
+              "edge": "reagent:local.geo:1.0.0",
+              "fields": [
+                "api_key"
+              ],
+              "name": "weather-api",
+              "scopes": [
+                "read"
+              ]
+            }
+          }
+        ],
+        "v": 1
+      }
+    },
+    {
+      "error": "invalid_field",
+      "name": "a credential edge naming an empty need",
+      "preview": {
+        "commit_digest": "sha256:9505cacb7c710ed17125fcc6cb3669e8ddca6c8cd8af6a31f6b3cd64604c3098",
+        "origins": [
+          "interactive"
+        ],
+        "rows": [
+          {
+            "kind": "credential",
+            "narrowed": false,
+            "node": "reagent:local.weather",
+            "values": {
+              "edge": "reagent:local.geo|",
+              "fields": [
+                "api_key"
+              ],
+              "name": "weather-api",
+              "scopes": [
+                "read"
+              ]
             }
           }
         ],
@@ -580,6 +726,53 @@
       }
     },
     {
+      "error": "invalid_field",
+      "name": "a wildcard beside another tool",
+      "preview": {
+        "commit_digest": "sha256:9505cacb7c710ed17125fcc6cb3669e8ddca6c8cd8af6a31f6b3cd64604c3098",
+        "origins": [
+          "interactive"
+        ],
+        "rows": [
+          {
+            "kind": "tools",
+            "narrowed": false,
+            "node": "reagent:local.geo",
+            "values": {
+              "tools": [
+                "*",
+                "file.read"
+              ]
+            }
+          }
+        ],
+        "v": 1
+      }
+    },
+    {
+      "error": "invalid_field",
+      "name": "a wildcard marked narrowed",
+      "preview": {
+        "commit_digest": "sha256:9505cacb7c710ed17125fcc6cb3669e8ddca6c8cd8af6a31f6b3cd64604c3098",
+        "origins": [
+          "interactive"
+        ],
+        "rows": [
+          {
+            "kind": "tools",
+            "narrowed": true,
+            "node": "reagent:local.geo",
+            "values": {
+              "tools": [
+                "*"
+              ]
+            }
+          }
+        ],
+        "v": 1
+      }
+    },
+    {
       "error": "missing_field",
       "name": "limits missing a limit",
       "preview": {
@@ -710,7 +903,7 @@
     },
     {
       "error": "duplicate_row",
-      "name": "two rows for one credential",
+      "name": "two rows for one credential on one edge",
       "preview": {
         "commit_digest": "sha256:9505cacb7c710ed17125fcc6cb3669e8ddca6c8cd8af6a31f6b3cd64604c3098",
         "origins": [
@@ -722,6 +915,7 @@
             "narrowed": false,
             "node": "reagent:local.weather",
             "values": {
+              "edge": "@ingress",
               "fields": [
                 "api_key"
               ],
@@ -734,11 +928,43 @@
             "narrowed": false,
             "node": "reagent:local.weather",
             "values": {
+              "edge": "@ingress",
               "fields": [
-                "api_key"
+                "token"
               ],
               "name": "weather-api",
               "scopes": []
+            }
+          }
+        ],
+        "v": 1
+      }
+    },
+    {
+      "error": "duplicate_row",
+      "name": "two rows for one stream under one subject",
+      "preview": {
+        "commit_digest": "sha256:9505cacb7c710ed17125fcc6cb3669e8ddca6c8cd8af6a31f6b3cd64604c3098",
+        "origins": [
+          "interactive"
+        ],
+        "rows": [
+          {
+            "kind": "streams",
+            "narrowed": false,
+            "node": "tincture:local.dashboard",
+            "values": {
+              "name": "executions.deltas",
+              "subject": "exe_1"
+            }
+          },
+          {
+            "kind": "streams",
+            "narrowed": false,
+            "node": "tincture:local.dashboard",
+            "values": {
+              "name": "executions.deltas",
+              "subject": "exe_1"
             }
           }
         ],

@@ -54,7 +54,25 @@ defmodule PrismWeb.ConsentSheetComponentTest do
         candidates: [%{id: "vlt_1", name: "Service key", field_names: ["SERVICE_KEY"]}],
         caps: nil
       },
-      preview: %{summary: ["Uses Service key"], proof: "p", commit_digest: "d"},
+      preview: %{
+        v: 1,
+        rows: [
+          %{
+            "kind" => "credential",
+            "node" => "tincture:local.sheet-probe",
+            "narrowed" => false,
+            "values" => %{
+              "name" => "Service key",
+              "edge" => "@ingress",
+              "fields" => ["SERVICE_KEY"],
+              "scopes" => []
+            }
+          }
+        ],
+        origins: ["interactive"],
+        proof: "p",
+        commit_digest: "d"
+      },
       decisions: %{
         "ref" => "tincture:local.sheet-probe",
         "bindings" => [%{"need" => "api_key", "entry_id" => "vlt_1"}]
@@ -71,9 +89,74 @@ defmodule PrismWeb.ConsentSheetComponentTest do
       )
 
     assert html =~ "to reach the service"
-    assert html =~ "Uses Service key"
+    assert html =~ ~r/data-row="credential"[^>]*>\s*<span[^>]*>Service key<\/span>/
+    assert html =~ "tincture:local.sheet-probe&#39;s own calls"
     assert html =~ "tincture:local.sheet-probe · in Home"
     assert html =~ ~r/aria-pressed="true"[^>]*>\s*Service key/
+  end
+
+  test "a plan whose closure is unresolved names what is missing, and draws no rows" do
+    walk = %{
+      ref: "tincture:local.sheet-orphan",
+      plan: %{
+        plan_token: "not-read",
+        expected_consent_revision: 0,
+        needs: [],
+        candidates: [],
+        rows: [%{"kind" => "limits", "node" => "tincture:local.sheet-orphan"}],
+        unresolved: %{reason: "unresolvable_dependency", missing: "reagent:local.absent"}
+      },
+      preview: nil,
+      decisions: %{"ref" => "tincture:local.sheet-orphan", "bindings" => []}
+    }
+
+    html =
+      render_component(PrismWeb.ConsentSheetComponent,
+        id: "consent-sheet",
+        ref: walk.ref,
+        walk: walk,
+        context: oidc_ctx()
+      )
+
+    assert html =~ ~s(data-test="grant-unresolved")
+    assert html =~ "reagent:local.absent is missing"
+    refute html =~ ~s(data-test="grant-rows")
+    refute html =~ ~s(data-test="grant-origins")
+  end
+
+  test "what changed is worded against the person's grant, never as the component widening" do
+    walk = %{
+      ref: "tincture:local.sheet-delta",
+      plan: %{
+        plan_token: "not-read",
+        expected_consent_revision: 1,
+        needs: [],
+        candidates: [],
+        rows: [],
+        shape_diff: [
+          %{
+            capability: "egress.domains",
+            change: :changed,
+            added: ["b.example"],
+            removed: ["old.example"]
+          }
+        ]
+      },
+      preview: %{v: 1, rows: [], origins: ["interactive"], proof: "p", commit_digest: "d"},
+      decisions: %{"ref" => "tincture:local.sheet-delta", "bindings" => []}
+    }
+
+    html =
+      render_component(PrismWeb.ConsentSheetComponent,
+        id: "consent-sheet",
+        ref: walk.ref,
+        walk: walk,
+        context: oidc_ctx()
+      )
+
+    assert html =~ "asks for b.example, which your grant does not give"
+    assert html =~ "no longer asks for old.example"
+    refute html =~ "now wants"
   end
 
   test "every verb of the walk is a registered profile action" do

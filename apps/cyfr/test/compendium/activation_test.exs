@@ -227,7 +227,12 @@ defmodule Compendium.ActivationTest do
           manifest: %{"dependencies" => %{"static" => [%{"ref" => "reagent:local.absent:1.0.0"}]}}
         )
 
-      assert {:error, {:incomplete, :unresolvable_dependency}} = Activation.resolve(ctx, root)
+      # The refusal names the dependency that is not installed, at name level.
+      assert {:error, {:incomplete, {:unresolvable_dependency, "reagent:local.absent"}}} =
+               Activation.resolve(ctx, root)
+
+      assert {:error, {:incomplete, {:unresolvable_dependency, "reagent:local.absent"}}} =
+               Activation.resolve_verified(ctx, root)
     end
 
     test "a missing OPTIONAL dependency is absent from the graph, not a refusal", %{ctx: ctx} do
@@ -255,7 +260,8 @@ defmodule Compendium.ActivationTest do
       component = publish!(ctx, "legacy")
       legacy = %{component | release_digest: nil}
 
-      assert {:error, {:incomplete, :missing_release_digest}} = Activation.resolve(ctx, legacy)
+      assert {:error, {:incomplete, {:missing_release_digest, "reagent:local.legacy"}}} =
+               Activation.resolve(ctx, legacy)
     end
   end
 

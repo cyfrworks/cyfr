@@ -198,6 +198,50 @@ defmodule Prima.ComponentPath do
 
   def path_granted?(_path, _grants), do: false
 
+  @doc """
+  A path as the storage door spells one: its segments with the empty ones
+  trimmed, joined by `/`, a folder keeping its trailing `/`. `nil` for a
+  path that names no segment, an absolute one, or one the door's path
+  check refuses (`Prima.PathSafety.validate_relative_path/1`).
+
+  The one spelling a person is offered a path in, and a grant pattern is
+  read through: the door reaches the physical path with its empty
+  segments trimmed, so a path picked or a call's argument offered in this
+  spelling is the one a later call is matched against.
+
+  ## Examples
+
+      iex> Prima.ComponentPath.door_path("data//notes/")
+      "data/notes/"
+
+      iex> Prima.ComponentPath.door_path("data/notes/today.md")
+      "data/notes/today.md"
+
+      iex> Prima.ComponentPath.door_path("/etc/passwd")
+      nil
+
+      iex> Prima.ComponentPath.door_path("data/../secrets")
+      nil
+
+  """
+  @spec door_path(term()) :: String.t() | nil
+  def door_path("/" <> _absolute), do: nil
+
+  def door_path(path) when is_binary(path) do
+    case String.split(path, "/", trim: true) do
+      [] ->
+        nil
+
+      segments ->
+        if Prima.PathSafety.validate_relative_path(path) == :ok do
+          joined = Enum.join(segments, "/")
+          if String.ends_with?(path, "/"), do: joined <> "/", else: joined
+        end
+    end
+  end
+
+  def door_path(_path), do: nil
+
   defp grant_admits?("*", _path, _with_slash), do: true
 
   defp grant_admits?(grant, path, with_slash) when is_binary(grant) do

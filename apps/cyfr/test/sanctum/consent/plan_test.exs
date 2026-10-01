@@ -189,6 +189,134 @@ defmodule Sanctum.Consent.PlanTest do
     end
   end
 
+  defp commit!(ctx, ref, over) do
+    {:ok, plan} = Plan.plan(ctx, %{ref: ref})
+    decisions = Map.merge(%{ref: ref}, over)
+    {:ok, preview} = Sanctum.Consent.Commit.preview(ctx, decisions)
+
+    {:ok, _} =
+      Sanctum.Consent.Commit.commit(ctx, %{
+        decisions: decisions,
+        plan_token: plan.plan_token,
+        proof: preview.proof,
+        commit_digest: preview.commit_digest,
+        expected_consent_revision: plan.expected_consent_revision
+      })
+  end
+
+  describe "what the head holds" do
+    test "a first grant has no head: no origins of its own and no delta", %{ctx: ctx} do
+      publish!(ctx, "plan-first", "1.0.0", %{})
+      {:ok, plan} = Plan.plan(ctx, %{ref: "reagent:local.plan-first"})
+      assert plan.head_origins == nil
+      assert plan.shape_diff == []
+    end
+
+    test "a re-grant names the origins the head admits, and what changed against the head " <>
+           "as the person narrowed it",
+         %{ctx: ctx} do
+      ref = "reagent:local.plan-head"
+      ask = fn domains -> %{"caps" => %{"egress" => %{"domains" => domains}}} end
+      publish!(ctx, "plan-head", "1.0.0", ask.(["a.example", "b.example"]))
+
+      commit!(ctx, ref, %{
+        origins: [:interactive, :webhook],
+        subset: %{ref => %{"egress" => %{"domains" => ["a.example"]}}}
+      })
+
+      {:ok, unchanged} = Plan.plan(ctx, %{ref: ref})
+      assert unchanged.head_origins == ["interactive", "webhook"]
+      assert unchanged.shape_diff == []
+
+      publish!(ctx, "plan-head", "1.1.0", ask.(["a.example", "b.example", "c.example"]))
+      {:ok, moved} = Plan.plan(ctx, %{ref: ref})
+
+      assert [%{capability: "egress.domains", added: added, removed: []}] =
+               Enum.filter(moved.shape_diff, &(&1.capability == "egress.domains"))
+
+      # b is what the person narrowed away, c what the component newly
+      # asks for: both are asked for and not granted.
+      assert added == ["b.example", "c.example"]
+    end
+
+    test "a sub-folder picked inside a folder still asked for is not reported as dropped",
+         %{ctx: ctx} do
+      ref = "reagent:local.plan-picked"
+
+      ask = fn domains ->
+        %{
+          "caps" => %{
+            "egress" => %{"domains" => domains},
+            "storage" => %{"paths" => ["data/notes/"], "actions" => ["read"]}
+          }
+        }
+      end
+
+      publish!(ctx, "plan-picked", "1.0.0", ask.(["a.example"]))
+
+      commit!(ctx, ref, %{
+        subset: %{ref => %{"storage" => %{"paths" => ["data/notes/2026/"]}}}
+      })
+
+      # The shape moves for another reason; the folder is still asked for.
+      publish!(ctx, "plan-picked", "1.1.0", ask.(["a.example", "b.example"]))
+      {:ok, moved} = Plan.plan(ctx, %{ref: ref})
+
+      refute moved.shape_diff == []
+
+      for entry <- moved.shape_diff do
+        refute "data/notes/2026/" in entry.removed,
+               "#{entry.capability} reports the picked sub-folder as no longer asked for"
+      end
+
+      # What the ask names and the grant does not give is still said.
+      assert [%{added: ["data/notes/"], removed: []}] =
+               Enum.filter(moved.shape_diff, &(&1.capability == "storage.paths"))
+    end
+  end
+
+  describe "a closure that cannot be resolved" do
+    test "is unresolved, naming what is missing, with no rows and no selection", %{ctx: ctx} do
+      publish!(ctx, "plan-orphan", "1.0.0", %{
+        "dependencies" => %{"static" => [%{"ref" => "reagent:local.plan-absent"}]},
+        "caps" => %{"egress" => %{"domains" => ["api.orphan.example"]}}
+      })
+
+      {:ok, plan} = Plan.plan(ctx, %{ref: "reagent:local.plan-orphan"})
+
+      assert plan.unresolved == %{
+               reason: "unresolvable_dependency",
+               missing: "reagent:local.plan-absent"
+             }
+
+      # The source's own rows are not the ask: none is drawn.
+      assert plan.rows == []
+      assert plan.dependency_needs == []
+
+      # The preview refuses it, naming the same missing ref.
+      assert {:error,
+              {:activation_unresolvable, {:incomplete, {:unresolvable_dependency, missing}}}} =
+               Sanctum.Consent.Commit.preview(ctx, %{ref: "reagent:local.plan-orphan"})
+
+      assert missing == "reagent:local.plan-absent"
+
+      assert {:error, message} =
+               Sanctum.Providers.Profile.handle(ctx, %{
+                 "action" => "preview",
+                 "decisions" => %{"ref" => "reagent:local.plan-orphan"}
+               })
+
+      assert message =~ "reagent:local.plan-absent"
+    end
+
+    test "a resolved closure is not unresolved", %{ctx: ctx} do
+      publish!(ctx, "plan-alone", "1.0.0", %{})
+      {:ok, plan} = Plan.plan(ctx, %{ref: "reagent:local.plan-alone"})
+      assert plan.unresolved == nil
+      assert [_limits] = plan.rows
+    end
+  end
+
   describe "a tincture's declarations" do
     @declaration %{
       "frame" => %{"capabilities" => ["pointer_lock"], "placement" => "float"},
@@ -272,6 +400,25 @@ defmodule Sanctum.Consent.PlanTest do
              ]
 
       assert length(before.rows -- later.rows) == 2
+    end
+
+    test "one stream declared under two subjects is two rows, one per subject", %{ctx: ctx} do
+      ref =
+        tincture!(ctx, "plan-subjects", "1.0.0", %{
+          "streams" => [
+            %{"name" => "executions.deltas", "subject" => "run_1"},
+            %{"name" => "executions.deltas", "subject" => "*"},
+            %{"name" => "executions.deltas"}
+          ]
+        })
+
+      {:ok, plan} = Plan.plan(ctx, %{ref: ref})
+
+      assert by_kind(decode!(plan.rows))[{:streams, ref}] == [
+               %{"name" => "executions.deltas"},
+               %{"name" => "executions.deltas", "subject" => "*"},
+               %{"name" => "executions.deltas", "subject" => "run_1"}
+             ]
     end
 
     test "a tincture that declares nothing has no declaration rows", %{ctx: ctx} do

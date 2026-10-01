@@ -34,6 +34,22 @@ defmodule Sanctum.Consent.Loader.DecisionTest do
                  )
       end
     end
+
+    test "an activation naming what is missing refuses with the reason's tag alone" do
+      for {reason, node} <- [
+            {:missing_release_digest, @node},
+            {:unresolvable_dependency, "reagent:local.absent"}
+          ] do
+        assert {:setup_required, ^reason} =
+                 Decision.evaluate(
+                   :versionless,
+                   @granted,
+                   {:error, {:incomplete, {reason, node}}},
+                   :match,
+                   false
+                 )
+      end
+    end
   end
 
   describe "tampering" do

@@ -1463,8 +1463,9 @@ defmodule Sanctum.Consent.Commit do
 
   # One row per credential an edge carries, on the node whose edge carries
   # it: the source for its ingress, the calling node for an edge into a
-  # dependency. A bound entry is named by the entry; a selection by the
-  # lender's entry and the label of the profile lending it.
+  # dependency, with the edge's key, so one entry lent on two edges is two
+  # rows. A bound entry is named by the entry; a selection by the lender's
+  # entry and the label of the profile lending it.
   defp credential_rows(prep, nodes) do
     carried =
       for {from, node} <- Enum.sort(nodes),
@@ -1475,20 +1476,20 @@ defmodule Sanctum.Consent.Commit do
             {:ok, dep} -> dep
           end
 
-        credential_row(prep, from, target, vault)
+        credential_row(prep, {from, key, target}, vault)
       end
 
     case Enum.find(carried, &match?({:error, _}, &1)) do
       nil ->
-        rows = for {:ok, row} <- carried, uniq: true, do: row
-        {:ok, Enum.sort_by(rows, &{&1["node"], &1["values"]["name"]})}
+        rows = for {:ok, row} <- carried, do: row
+        {:ok, Enum.sort_by(rows, &{&1["node"], &1["values"]["name"], &1["values"]["edge"]})}
 
       error ->
         error
     end
   end
 
-  defp credential_row(prep, from, _target, %{"entry_id" => entry_id} = vault) do
+  defp credential_row(prep, {from, key, _target}, %{"entry_id" => entry_id} = vault) do
     case Map.fetch(prep.entries, entry_id) do
       {:ok, entry} ->
         {:ok,
@@ -1497,6 +1498,7 @@ defmodule Sanctum.Consent.Commit do
            from,
            %{
              "name" => entry.name,
+             "edge" => key,
              "fields" => projection(vault, "fields"),
              "scopes" => projection(vault, "scopes")
            },
@@ -1508,7 +1510,7 @@ defmodule Sanctum.Consent.Commit do
     end
   end
 
-  defp credential_row(prep, from, target, %{"via" => %{"label" => label}} = vault) do
+  defp credential_row(prep, {from, key, target}, %{"via" => %{"label" => label}} = vault) do
     case Enum.find(prep.selections, &(&1.from == from and &1.dep == target)) do
       nil ->
         {:error, {:preview_unrepresentable, :credential}}
@@ -1526,6 +1528,7 @@ defmodule Sanctum.Consent.Commit do
            from,
            %{
              "name" => selection.entry_name,
+             "edge" => key,
              "label" => label,
              "fields" => fields,
              "scopes" => Enum.sort(Enum.uniq(selection.lent_scopes))

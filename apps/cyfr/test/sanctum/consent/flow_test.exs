@@ -171,7 +171,20 @@ defmodule Sanctum.Consent.FlowTest do
       }
 
       {:ok, preview} = Commit.preview(ctx, decisions)
-      assert Enum.any?(preview.summary, &(&1 =~ "Uses #{entry.name}"))
+
+      assert [
+               %{
+                 "kind" => "credential",
+                 "node" => "reagent:local.flow-happy",
+                 "values" => %{
+                   "name" => entry_name,
+                   "edge" => "@ingress",
+                   "fields" => ["anon_key", "url"]
+                 }
+               }
+             ] = Enum.filter(preview.rows, &(&1["kind"] == "credential"))
+
+      assert entry_name == entry.name
 
       {:ok, committed} =
         Commit.commit(ctx, %{
@@ -735,19 +748,23 @@ defmodule Sanctum.Consent.FlowTest do
     # Exercise projection defaults through the MCP tool. Omitted fields
     # must retain the manifest’s subset, and the consent sheet must show
     # every granted resource and node limit.
-    test "the summary discloses private egress, schemes and the node's limits",
+    test "the rows disclose private egress, schemes and the node's limits",
          %{ctx: ctx} do
       publish_private_egress!(ctx, "flow-private-egress")
       ref = "reagent:local.flow-private-egress"
 
       {:ok, preview} = Commit.preview(ctx, %{ref: ref})
-      sheet = Enum.join(preview.summary, "\n")
+      rows = Enum.group_by(preview.rows, &{&1["kind"], &1["node"]}, & &1["values"])
 
-      assert sheet =~ "internal.corp"
-      assert sheet =~ "INCLUDING PRIVATE"
-      assert sheet =~ "10.0.0.0/8"
-      assert sheet =~ "via http"
-      assert sheet =~ "limits "
+      assert [egress] = rows[{"egress", ref}]
+      assert "internal.corp" in egress["domains"]
+      assert "10.0.0.0/8" in egress["private_ips"]
+      assert "http" in egress["schemes"]
+
+      assert [limits] = rows[{"limits", ref}]
+
+      assert Map.keys(limits) |> Enum.sort() ==
+               Prima.Limits.fields() |> Enum.map(&Atom.to_string/1) |> Enum.sort()
     end
 
     test "an MCP binding that omits fields still gets the manifest's subset",
@@ -873,8 +890,21 @@ defmodule Sanctum.Consent.FlowTest do
           bindings: [%{need: "api_key", entry_id: entry.id}]
         })
 
-      assert "Uses #{entry.name} (ANTHROPIC_API_KEY)" in preview.summary
-      refute Enum.any?(preview.summary, &(&1 =~ "all fields"))
+      # The row names exactly the fields the edge projects, never the
+      # entry's other fields.
+      entry_name = entry.name
+
+      assert [
+               %{
+                 "node" => "reagent:local.flow-needs-sheet",
+                 "values" => %{
+                   "name" => ^entry_name,
+                   "edge" => "@ingress",
+                   "fields" => ["ANTHROPIC_API_KEY"],
+                   "scopes" => []
+                 }
+               }
+             ] = Enum.filter(preview.rows, &(&1["kind"] == "credential"))
     end
 
     test "the implicit slot retires when needs are declared", %{ctx: ctx} do

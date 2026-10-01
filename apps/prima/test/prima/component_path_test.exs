@@ -90,4 +90,43 @@ defmodule Prima.ComponentPathTest do
       refute ComponentPath.path_granted?("data/a", [nil, 7])
     end
   end
+
+  describe "door_path/1" do
+    test "a folder keeps its trailing slash" do
+      assert ComponentPath.door_path("data/notes/") == "data/notes/"
+      assert ComponentPath.door_path("data/") == "data/"
+    end
+
+    test "a file is spelled as it is" do
+      assert ComponentPath.door_path("data/notes/today.md") == "data/notes/today.md"
+    end
+
+    test "an empty path names nothing" do
+      for empty <- ["", "/", "//", "///"] do
+        assert ComponentPath.door_path(empty) == nil, inspect(empty)
+      end
+    end
+
+    test "an absolute path is not the door's" do
+      assert ComponentPath.door_path("/data/notes/") == nil
+      assert ComponentPath.door_path("/etc/passwd") == nil
+    end
+
+    test "a path the door's check refuses is none" do
+      for unsafe <- ["data/../secrets", "../data", "data/./notes", "data/\0/x"] do
+        assert ComponentPath.door_path(unsafe) == nil, inspect(unsafe)
+      end
+    end
+
+    test "doubled slashes are trimmed, so a picked path matches the call it covers" do
+      assert ComponentPath.door_path("data//notes/today.md") == "data/notes/today.md"
+      assert ComponentPath.door_path("data//notes//") == "data/notes/"
+      assert ComponentPath.door_path("data///reports") == "data/reports"
+    end
+
+    test "anything but a string is none" do
+      assert ComponentPath.door_path(nil) == nil
+      assert ComponentPath.door_path(["data"]) == nil
+    end
+  end
 end

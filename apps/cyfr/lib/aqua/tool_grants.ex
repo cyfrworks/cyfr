@@ -279,11 +279,11 @@ defmodule Aqua.ToolGrants do
   end
 
   @doc """
-  Every `{agent_name, tool, action}` a thread currently auto-approves
-  by a grant, for every agent that has rows in it — the runner's fast
-  path, keyed by the agent a card names, so an answer given for one
-  agent never runs another's card. Standing-checked and deny-subtracted
-  per agent exactly as `allowed_keys/1`. Fails closed like the reads.
+  Every `{agent_name, tool, action}` a thread has a standing allow for,
+  for every agent that has rows in it: what the thread pane lists as the
+  thread's standing answers, each revocable, keyed by the agent the
+  answer was given for. Standing-checked and deny-subtracted per agent
+  exactly as `allowed_keys/1`. Fails closed like the reads.
   """
   @spec allowed_by_agent(Context.t(), String.t()) ::
           {:ok, MapSet.t({String.t(), String.t(), String.t()})} | {:error, unavailable()}
@@ -304,13 +304,15 @@ defmodule Aqua.ToolGrants do
   end
 
   @doc """
-  The `{tool, action}` pairs a thread currently auto-approves BY A
-  GRANT — what the runner's fast path checks before re-asking, and what
-  the chat shows as its standing grants. An authored `auto` never mints a
-  card, so it is never here, and neither is a bounded allow, which covers
-  only the calls its bounds admit; a deny for the same pair subtracts, so
-  a pair a person refused cannot be auto on the fast path while denied in
-  the policy.
+  The `{tool, action}` pairs a person answered with a standing allow that
+  still stands — what the chat shows as its standing answers, each
+  revocable there. A bounded allow is listed too, though it covers only
+  the calls its bounds admit (each decided as it is made, `effective/2`),
+  so every standing answer a person gave can be seen and withdrawn. An
+  authored `auto` never mints a card, so it is never here; an allow the
+  action's current declaration would refuse no longer stands and is not
+  here; a deny for the same pair subtracts, since the pair asks no more.
+  Nothing decides a call from this list.
   """
   @spec allowed_keys([grant()]) :: MapSet.t(key())
   def allowed_keys(grants) when is_list(grants) do
@@ -319,7 +321,6 @@ defmodule Aqua.ToolGrants do
     grants
     |> Enum.filter(&(&1.effect == "allow"))
     |> standing_allows()
-    |> Enum.reject(&bounded?/1)
     |> MapSet.new(fn %{tool: tool, action: action} -> {tool, action} end)
     |> MapSet.difference(denied)
   end

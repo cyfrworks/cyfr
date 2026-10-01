@@ -310,6 +310,35 @@ defmodule Sanctum.Consent.BlobBuilderTest do
     end
   end
 
+  describe "an ask that names every tool" do
+    setup %{ctx: ctx} do
+      publish!(ctx, "narrow-every", %{"caps" => %{"tools" => ["*"]}})
+      {:ok, ref: "reagent:local.narrow-every"}
+    end
+
+    test "is one wildcard row as the grant states it, in the plan and the preview",
+         %{ctx: ctx, ref: ref} do
+      {:ok, plan} = Plan.plan(ctx, %{ref: ref})
+
+      assert [%{"values" => %{"tools" => ["*"]}, "narrowed" => false}] =
+               Enum.filter(plan.rows, &(&1["kind"] == "tools"))
+
+      # The ask still grants the whole catalog it expands to.
+      assert length(plan.caps["tools"]) > 1
+
+      {:ok, preview} = preview(ctx, %{}, ref)
+      assert %{narrowed: false, values: %{"tools" => ["*"]}} = rows(preview)[{:tools, ref}]
+    end
+
+    test "narrowed, it is the tools the grant holds, never the wildcard", %{ctx: ctx, ref: ref} do
+      {:ok, none} = preview(ctx, %{ref => %{"tools" => []}}, ref)
+      assert %{narrowed: true, values: %{"tools" => []}} = rows(none)[{:tools, ref}]
+
+      {:ok, one} = preview(ctx, %{ref => %{"tools" => ["execution.run"]}}, ref)
+      assert %{narrowed: true, values: %{"tools" => ["execution.run"]}} = rows(one)[{:tools, ref}]
+    end
+  end
+
   describe "a kind its enforcement point cannot narrow" do
     test "is refused, never granted as narrowed", %{ctx: ctx} do
       for kind <- ~w(credential tool_servers frame streams cards system_actions) do

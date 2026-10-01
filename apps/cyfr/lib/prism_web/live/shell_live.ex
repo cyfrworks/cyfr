@@ -636,10 +636,11 @@ defmodule PrismWeb.ShellLive do
   end
 
   # A frame refused because the person has not granted what its tincture
-  # declares now: the grant prompt, whose sheet binds the vault entries the
-  # tincture needs, when the consent walk's plan and preview can be read
-  # for it (`PrismWeb.SystemLayer.grant_prompt/3`). Otherwise the frame
-  # shows its refusal.
+  # declares now: the grant prompt, whose sheet draws the preview's rows,
+  # the tincture's frame, streams, cards and system actions among them,
+  # and binds the vault entries it needs, when the consent walk's plan and
+  # preview can be read for it (`PrismWeb.SystemLayer.grant_prompt/4`).
+  # Otherwise the frame shows its refusal.
   defp offer_grant(socket, %{key: key, tincture_id: tincture_id, reference: reference}) do
     ref = Prima.ComponentRef.build("tincture", reference.publisher, reference.name)
     {prompt_id, next} = next_prompt_id(socket, "grant")

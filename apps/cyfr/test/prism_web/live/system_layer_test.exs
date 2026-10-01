@@ -265,16 +265,44 @@ defmodule PrismWeb.SystemLayerTest do
           ref: ref,
           athanor_id: ctx.athanor_id,
           plan: %{plan_token: "not-a-plan-token", expected_consent_revision: 0},
-          preview: %{
-            summary: ["Talks to api.example.com", "Keeps its own private storage"],
-            proof: "not-a-proof",
-            commit_digest: "sha256:" <> String.duplicate("0", 64)
-          },
+          preview: typed_preview(ref),
           decisions: %{"ref" => ref, "bindings" => []}
         }
       },
       attrs
     )
+  end
+
+  # A preview as `profile.preview` answers one: the typed rows, the
+  # origins and the digest, beside the proof. It carries no sentence.
+  defp typed_preview(ref, rows \\ nil) do
+    %{
+      v: Prima.ConsentPreview.version(),
+      rows:
+        rows ||
+          [
+            %{
+              "kind" => "egress",
+              "node" => ref,
+              "narrowed" => false,
+              "values" => %{
+                "domains" => ["api.example.com"],
+                "methods" => ["GET"],
+                "schemes" => ["https"],
+                "private_ips" => []
+              }
+            },
+            %{
+              "kind" => "storage",
+              "node" => ref,
+              "narrowed" => false,
+              "values" => %{"paths" => ["data/probe/"], "actions" => ["read"]}
+            }
+          ],
+      origins: ["interactive"],
+      proof: "not-a-proof",
+      commit_digest: "sha256:" <> String.duplicate("0", 64)
+    }
   end
 
   defp sign_in(id), do: %{id: id, kind: :sign_in, action: nil, subject: %{}}
@@ -321,7 +349,8 @@ defmodule PrismWeb.SystemLayerTest do
       assert html =~ ~s(id="system-layer-description")
       assert html =~ ~s(data-open="true")
       assert html =~ ~s(data-dismissable="true")
-      assert html =~ "Talks to api.example.com"
+      assert html =~ "api.example.com"
+      assert html =~ "data/probe/"
 
       # A person's session can confirm: it is told nothing about standing,
       # and no client is shown a rank.
@@ -549,6 +578,48 @@ defmodule PrismWeb.SystemLayerTest do
     }
   end
 
+  # A component in the person's athanor asking for egress, storage, every
+  # tool and a timeout: what the person narrows.
+  defp asking_more(%{ctx: ctx}) do
+    local = %{Sanctum.TestContext.local() | user_id: ctx.user_id, athanor_id: ctx.athanor_id}
+    name = "layer-asks-#{System.unique_integer([:positive])}"
+    publish_asking!(local, name, "0.1.0", ["a.layer.example", "b.layer.example"])
+
+    %{local: local, name: name, name_ref: "catalyst:local.#{name}", ref: "catalyst:local.#{name}"}
+  end
+
+  defp publish_asking!(local, name, version, domains) do
+    {:ok, _} =
+      Compendium.Registry.publish_bytes(local, @wasm, %{
+        name: name,
+        version: version,
+        type: "catalyst",
+        description: "A component that asks for more",
+        manifest:
+          Jason.encode!(%{
+            "caps" => %{
+              "egress" => %{"domains" => domains, "methods" => ["GET"]},
+              "storage" => %{"paths" => ["data/layer/"], "actions" => ["read", "write"]},
+              "tools" => ["*"],
+              "limits" => %{"timeout" => "30s"}
+            }
+          })
+      })
+  end
+
+  defp head!(local, name_ref) do
+    {:ok, [%{id: profile_id} | _]} = Sanctum.Consent.profiles(local, name_ref)
+    {:ok, head} = Sanctum.Consent.head_consent(local, profile_id)
+    {:ok, blob} = Prima.Authority.Blob.parse(head.resolved_policy)
+    {:ok, ingress} = Prima.Authority.Blob.ingress(blob, name_ref)
+    {head, ingress, blob.nodes[name_ref].limits}
+  end
+
+  defp click(view, selector) do
+    view |> element(selector) |> render_click()
+    render(view)
+  end
+
   defp view_context(view), do: :sys.get_state(view.pid).socket.assigns.context
 
   # The assigns of the layer `id` holds in the view's process.
@@ -734,6 +805,256 @@ defmodule PrismWeb.SystemLayerTest do
     end
   end
 
+  describe "the person's exact choices" do
+    setup [:signed_in, :asking_more]
+
+    test "origins, narrowing and lowered limits are submitted exactly, and are what is granted",
+         %{view: view, ref: ref, name_ref: node, local: local} do
+      {:ok, grant} = PrismWeb.SystemLayer.grant_prompt(view_context(view), "g-choose", ref)
+      assert grant.subject.decisions["origins"] == ["interactive"]
+      prompt(view, grant)
+
+      # Interactive is always named; on a first grant the others are each
+      # a visible choice, unticked.
+      assert has_element?(view, ~s(input[data-origin="interactive"][checked][disabled]))
+
+      for origin <- ~w(programmatic schedule webhook) do
+        assert has_element?(view, ~s(input[data-origin="#{origin}"]))
+        refute has_element?(view, ~s(input[data-origin="#{origin}"][checked]))
+      end
+
+      # The wildcard ask is one row, every tool, whole or none.
+      assert has_element?(view, ~s([data-row="tools"]), "Every tool of the catalog (*)")
+
+      click(view, ~s(input[phx-click="toggle_origin"][phx-value-origin="programmatic"]))
+
+      click(
+        view,
+        ~s(input[phx-click="toggle_value"][phx-value-field="domains"][phx-value-value="b.layer.example"])
+      )
+
+      click(
+        view,
+        ~s(input[phx-click="toggle_value"][phx-value-field="actions"][phx-value-value="write"])
+      )
+
+      click(view, ~s(input[phx-click="toggle_every_tool"]))
+
+      view
+      |> form(~s(form[phx-submit="set_limits"]), %{"limits" => %{"timeout" => "10s"}})
+      |> render_submit()
+
+      render(view)
+
+      # The layer holds exactly the choices, never a category.
+      %{current: %{subject: %{decisions: decisions, preview: preview}}} = layer_assigns(view)
+      assert decisions["origins"] == ["interactive", "programmatic"]
+
+      assert decisions["subset"] == %{
+               node => %{
+                 "egress" => %{"domains" => ["a.layer.example"]},
+                 "storage" => %{"actions" => ["read"]},
+                 "tools" => [],
+                 "limits" => %{"timeout" => "10s"}
+               }
+             }
+
+      assert preview.origins == ["interactive", "programmatic"]
+      assert has_element?(view, ~s([data-row="egress"]), "narrowed by you")
+      assert has_element?(view, ~s([data-test="grant-admits"]), "programmatic")
+
+      view |> element(~s(button[phx-click="confirm"])) |> render_click()
+      assert outcome("g-choose") == :confirmed
+
+      {head, ingress, limits} = head!(local, node)
+      assert head.admitted_origins == [:interactive, :programmatic]
+      assert ingress.egress.domains == ["a.layer.example"]
+      assert ingress.storage.actions == ["read"]
+      assert ingress.tools == []
+      assert limits.timeout == "10s"
+    end
+
+    test "a narrowing the home refuses keeps every control, and the person can choose again",
+         %{view: view, ref: ref, name_ref: node, local: local} do
+      {:ok, grant} = PrismWeb.SystemLayer.grant_prompt(view_context(view), "g-zero", ref)
+      prompt(view, grant)
+      assert has_element?(view, ~s(form[phx-submit="set_limits"]))
+
+      # Zero bounds nothing a timeout reads: the home refuses it, and says
+      # so beside the limits that asked for it.
+      view
+      |> form(~s(form[phx-submit="set_limits"]), %{"limits" => %{"timeout" => "0s"}})
+      |> render_submit()
+
+      render(view)
+
+      assert has_element?(
+               view,
+               ~s([data-row="limits"] [data-test="grant-refusal"][role="alert"]),
+               "name a positive duration"
+             )
+
+      # The walk is put back as it last previewed: the controls stay, and
+      # the layer holds a preview of exactly its own choices.
+      assert has_element?(view, ~s(form[phx-submit="set_limits"]))
+      assert has_element?(view, ~s(input[phx-click="toggle_value"]))
+      %{current: %{subject: %{decisions: decisions, preview: preview}}} = layer_assigns(view)
+      refute Map.has_key?(decisions, "subset")
+      assert %{rows: [_ | _]} = preview
+      refute has_element?(view, ~s(button[phx-click="confirm"][disabled]))
+
+      # A value the home takes previews, and the refusal goes.
+      view
+      |> form(~s(form[phx-submit="set_limits"]), %{"limits" => %{"timeout" => "10s"}})
+      |> render_submit()
+
+      render(view)
+      refute has_element?(view, ~s([data-test="grant-refusal"]))
+      %{current: %{subject: %{decisions: decisions}}} = layer_assigns(view)
+      assert decisions["subset"] == %{node => %{"limits" => %{"timeout" => "10s"}}}
+
+      view |> element(~s(button[phx-click="confirm"])) |> render_click()
+      assert outcome("g-zero") == :confirmed
+      {_head, _ingress, limits} = head!(local, node)
+      assert limits.timeout == "10s"
+    end
+
+    test "a limit above the ask is not offered, and changes nothing",
+         %{view: view, ref: ref} do
+      {:ok, grant} = PrismWeb.SystemLayer.grant_prompt(view_context(view), "g-above", ref)
+      prompt(view, grant)
+      %{current: %{subject: %{preview: before}}} = layer_assigns(view)
+
+      view
+      |> form(~s(form[phx-submit="set_limits"]), %{"limits" => %{"timeout" => "2h"}})
+      |> render_submit()
+
+      render(view)
+
+      assert has_element?(
+               view,
+               ~s([data-row="limits"] [data-test="grant-refusal"]),
+               "can be at most 30s"
+             )
+
+      %{current: %{subject: %{decisions: decisions, preview: after_refusal}}} =
+        layer_assigns(view)
+
+      refute Map.has_key?(decisions, "subset")
+      assert after_refusal == before
+    end
+
+    test "a value the ask does not name is not a choice, and changes nothing",
+         %{view: view, ref: ref, name_ref: node} do
+      {:ok, grant} = PrismWeb.SystemLayer.grant_prompt(view_context(view), "g-forged", ref)
+      prompt(view, grant)
+
+      # A forged event naming a domain outside the ask, and an origin
+      # outside the three the sheet offers.
+      sheet = with_target(view, "#consent-sheet-system-layer-grant-g-forged")
+
+      render_click(sheet, "toggle_value", %{
+        "node" => node,
+        "kind" => "egress",
+        "field" => "domains",
+        "value" => "evil.example"
+      })
+
+      render_click(sheet, "toggle_origin", %{"origin" => "interactive"})
+      render(view)
+
+      %{current: %{subject: %{decisions: decisions}}} = layer_assigns(view)
+      refute Map.has_key?(decisions, "subset")
+      assert decisions["origins"] == ["interactive"]
+    end
+
+    test "a re-grant starts from the origins its head admits",
+         %{view: view, ref: ref, name_ref: node, local: local} do
+      {:ok, _} = commit_with!(local, node, %{origins: [:interactive, :schedule]})
+
+      {:ok, grant} = PrismWeb.SystemLayer.grant_prompt(view_context(view), "g-regrant", ref)
+      assert grant.subject.decisions["origins"] == ["interactive", "schedule"]
+      assert grant.subject.preview.origins == ["interactive", "schedule"]
+
+      prompt(view, grant)
+      assert has_element?(view, ~s(input[data-origin="schedule"][checked]))
+      refute has_element?(view, ~s(input[data-origin="programmatic"][checked]))
+    end
+
+    test "what changed is read against the head as the person narrowed it",
+         %{view: view, ref: ref, name: name, name_ref: node, local: local} do
+      # The person narrowed b away; the next version asks for c too.
+      {:ok, _} =
+        commit_with!(local, node, %{
+          subset: %{node => %{"egress" => %{"domains" => ["a.layer.example"]}}}
+        })
+
+      publish_asking!(local, name, "0.2.0", [
+        "a.layer.example",
+        "b.layer.example",
+        "c.layer.example"
+      ])
+
+      {:ok, grant} = PrismWeb.SystemLayer.grant_prompt(view_context(view), "g-delta", ref)
+
+      assert [%{capability: "egress.domains", added: added}] =
+               Enum.filter(grant.subject.plan.shape_diff, &(&1.capability == "egress.domains"))
+
+      assert added == ["b.layer.example", "c.layer.example"]
+
+      html = prompt(view, grant)
+      assert has_element?(view, ~s([data-test="grant-delta"]), "which your grant does not give")
+      assert has_element?(view, ~s([data-test="grant-delta"]), "c.layer.example")
+      refute html =~ "now wants"
+    end
+
+    test "a storage path is picked inside the asked folder, in the door's spelling",
+         %{view: view, ref: ref, name_ref: node, local: local} do
+      {:ok, _} = Arca.Files.write(Sanctum.Context.actor(local), "data/layer/2026/notes.md", "n")
+
+      {:ok, grant} = PrismWeb.SystemLayer.grant_prompt(view_context(view), "g-pick", ref)
+      prompt(view, grant)
+
+      click(view, ~s(button[phx-click="open_picker"][phx-value-path="data/layer/"]))
+      assert has_element?(view, ~s([data-test="grant-picker"]), "2026/")
+
+      click(view, ~s(button[phx-click="pick_path"][phx-value-path="data/layer/2026/"]))
+
+      %{current: %{subject: %{decisions: decisions}}} = layer_assigns(view)
+      assert decisions["subset"] == %{node => %{"storage" => %{"paths" => ["data/layer/2026/"]}}}
+
+      # A folder outside the ask is not offered, whatever an event names.
+      sheet = with_target(view, "#consent-sheet-system-layer-grant-g-pick")
+      render_click(sheet, "pick_path", %{"node" => node, "path" => "data/other/"})
+      render_click(sheet, "open_picker", %{"node" => node, "path" => "data/"})
+      render(view)
+
+      %{current: %{subject: %{decisions: again}}} = layer_assigns(view)
+      assert again["subset"] == decisions["subset"]
+      refute has_element?(view, ~s([data-test="grant-picker"]))
+
+      view |> element(~s(button[phx-click="confirm"])) |> render_click()
+      assert outcome("g-pick") == :confirmed
+      {_head, ingress, _limits} = head!(local, node)
+      assert ingress.storage.paths == ["data/layer/2026/"]
+    end
+  end
+
+  # A grant committed straight through the walk, as another client would.
+  defp commit_with!(local, node, over) do
+    {:ok, plan} = Sanctum.Consent.Plan.plan(local, %{ref: node})
+    decisions = Map.merge(%{ref: node}, over)
+    {:ok, preview} = Sanctum.Consent.Commit.preview(local, decisions)
+
+    Sanctum.Consent.Commit.commit(local, %{
+      decisions: decisions,
+      plan_token: plan.plan_token,
+      proof: preview.proof,
+      commit_digest: preview.commit_digest,
+      expected_consent_revision: plan.expected_consent_revision
+    })
+  end
+
   describe "a nested view's own layer" do
     test "has its own id, opens no stream, and draws what it is shown", %{conn: conn} do
       user = test_user()
@@ -797,6 +1118,91 @@ defmodule PrismWeb.SystemLayerTest do
         assert outcome(id) == {:refused, :invalid_prompt}
         assert html =~ ~s(data-open="false")
       end
+    end
+
+    test "a grant opens on a typed preview with no summary, and refuses malformed typed rows",
+         %{view: view, ctx: ctx} do
+      ref = "tincture:local.system-layer-probe"
+
+      # No sentence at all: the typed rows, the origins, the digest and the
+      # proof are the whole preview, and the prompt opens on them.
+      refute Map.has_key?(grant(ctx, "typed").subject.preview, :summary)
+      html = prompt(view, grant(ctx, "typed"))
+      assert html =~ ~s(data-prompt-id="typed")
+
+      assert has_element?(
+               view,
+               ~s([data-test="grant-rows"] [data-row="egress"]),
+               "api.example.com"
+             )
+
+      view |> element(~s(button[phx-click="dismiss"])) |> render_click()
+      assert outcome("typed") == :dismissed
+
+      egress = hd(typed_preview(ref).rows)
+
+      credential = %{
+        "kind" => "credential",
+        "node" => ref,
+        "narrowed" => false,
+        "values" => %{"name" => "key", "fields" => ["KEY"], "scopes" => []}
+      }
+
+      malformed = [
+        # The old shape: a sentence and no rows.
+        {"p1",
+         put_in(grant(ctx, "p1"), [:subject, :preview], %{
+           summary: ["Talks to api.example.com"],
+           proof: "not-a-proof",
+           commit_digest: "sha256:" <> String.duplicate("0", 64)
+         })},
+        # A row of a kind the preview does not know.
+        {"p2",
+         put_in(
+           grant(ctx, "p2"),
+           [:subject, :preview],
+           typed_preview(ref, [%{egress | "kind" => "vault_unlock"}])
+         )},
+        # A credential that names no edge.
+        {"p3", put_in(grant(ctx, "p3"), [:subject, :preview], typed_preview(ref, [credential]))},
+        # A row carrying a sentence.
+        {"p4",
+         put_in(
+           grant(ctx, "p4"),
+           [:subject, :preview],
+           typed_preview(ref, [Map.put(egress, "summary", "Talks to api.example.com")])
+         )},
+        # No proof to commit with, or no origins.
+        {"p5", update_in(grant(ctx, "p5"), [:subject, :preview], &Map.delete(&1, :proof))},
+        {"p6", put_in(grant(ctx, "p6"), [:subject, :preview, :origins], [])},
+        # No preview for a plan that is not unresolved.
+        {"p7", put_in(grant(ctx, "p7"), [:subject, :preview], nil)},
+        # Decisions naming an origin outside the enum.
+        {"p8", put_in(grant(ctx, "p8"), [:subject, :decisions, "origins"], ["cli"])}
+      ]
+
+      for {id, bad} <- malformed do
+        html = prompt(view, bad)
+        assert outcome(id) == {:refused, :invalid_prompt}, id
+        assert html =~ ~s(data-open="false")
+      end
+    end
+
+    test "a grant whose closure is unresolved opens naming what is missing, with nothing to confirm",
+         %{view: view, ctx: ctx} do
+      unresolved =
+        grant(ctx, "unresolved")
+        |> put_in([:subject, :preview], nil)
+        |> put_in([:subject, :plan, :unresolved], %{
+          reason: "unresolvable_dependency",
+          missing: "reagent:local.absent"
+        })
+
+      html = prompt(view, unresolved)
+      assert html =~ ~s(data-prompt-id="unresolved")
+      assert has_element?(view, ~s([data-test="grant-unresolved"]), "reagent:local.absent")
+      refute has_element?(view, ~s([data-test="grant-rows"]))
+      assert has_element?(view, ~s(button[phx-click="confirm"][disabled]))
     end
   end
 

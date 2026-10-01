@@ -177,6 +177,7 @@ defmodule PrismWeb.ThreadPaneLive do
       |> assign(:input, "")
       |> stream(:messages, [], reset: true)
       |> assign(:pending_approvals, [])
+      |> assign(:run_schedules, %{})
       |> assign(:any_messages, false)
       |> reset_live()
 
@@ -201,6 +202,7 @@ defmodule PrismWeb.ThreadPaneLive do
         socket
         |> stream(:messages, rows, reset: true)
         |> assign(:pending_approvals, pending_in(rows))
+        |> note_schedules(pending_in(rows))
         |> assign(:any_messages, rows != [])
         |> apply_live(live)
 
@@ -395,7 +397,7 @@ defmodule PrismWeb.ThreadPaneLive do
   def handle_event("approve_all_pending", _params, socket) do
     socket =
       Enum.reduce(socket.assigns.pending_approvals, socket, fn msg, acc ->
-        decide(acc, {:approval_approve, msg.id, :once})
+        decide(acc, {:approval_approve, msg.approval_id, %{scope: :once}})
       end)
 
     {:noreply, socket}
@@ -404,7 +406,7 @@ defmodule PrismWeb.ThreadPaneLive do
   def handle_event("decline_all_pending", _params, socket) do
     socket =
       Enum.reduce(socket.assigns.pending_approvals, socket, fn msg, acc ->
-        decide(acc, {:approval_decline, msg.id, "", :once})
+        decide(acc, {:approval_decline, msg.approval_id, "", :once})
       end)
 
     {:noreply, socket}
@@ -587,16 +589,30 @@ defmodule PrismWeb.ThreadPaneLive do
 
   defp models_loaded(socket, {:error, _}), do: {:noreply, assign(socket, :models_loaded, true)}
 
-  # A refusal reaches the person who clicked — log-only made the button
-  # appear to do nothing.
-  defp decide(socket, {:approval_approve, id, scope}) do
+  # A card is decided through `approval.resolve`, by its approval's id,
+  # with the bounds the person chose for a standing answer. A refusal
+  # reaches the person who clicked — log-only made the button appear to
+  # do nothing.
+  defp decide(socket, {:approval_approve, id, %{scope: scope} = choice}) when is_binary(id) do
     case socket.assigns.thread do
-      %{id: thread_id} ->
-        case PrismWeb.Ops.call_tool(socket, "thread/approve", %{
-               "thread" => thread_id,
-               "message_id" => id,
-               "scope" => Aqua.approval_scope_string(scope)
-             }) do
+      %{id: _thread_id} ->
+        args =
+          %{
+            "approval" => id,
+            "decision" => "approve",
+            "scope" => Aqua.approval_scope_string(scope)
+          }
+          |> Prima.MapUtil.put_present(
+            "lifecycle",
+            choice[:lifecycle] && to_string(choice[:lifecycle])
+          )
+          |> Prima.MapUtil.put_present(
+            "until",
+            choice[:until] && DateTime.to_iso8601(choice[:until])
+          )
+          |> Prima.MapUtil.put_present("constraint", constraint_wire(choice[:constraint]))
+
+        case PrismWeb.Ops.call_tool(socket, "approval/resolve", args) do
           {:ok, _} ->
             socket
 
@@ -613,12 +629,12 @@ defmodule PrismWeb.ThreadPaneLive do
     end
   end
 
-  defp decide(socket, {:approval_decline, id, reason, scope}) do
+  defp decide(socket, {:approval_decline, id, reason, scope}) when is_binary(id) do
     case socket.assigns.thread do
-      %{id: thread_id} ->
-        case PrismWeb.Ops.call_tool(socket, "thread/decline", %{
-               "thread" => thread_id,
-               "message_id" => id,
+      %{id: _thread_id} ->
+        case PrismWeb.Ops.call_tool(socket, "approval/resolve", %{
+               "approval" => id,
+               "decision" => "decline",
                "reason" => reason,
                "scope" => Aqua.approval_scope_string(scope)
              }) do
@@ -637,6 +653,15 @@ defmodule PrismWeb.ThreadPaneLive do
         socket
     end
   end
+
+  # A card with no approval behind it, or a choice the card never offers,
+  # decides nothing.
+  defp decide(socket, _decision), do: socket
+
+  defp constraint_wire(%{kind: kind, patterns: patterns}) when is_list(patterns),
+    do: %{"kind" => to_string(kind), "patterns" => patterns}
+
+  defp constraint_wire(_none), do: nil
 
   # ---------------------------------------------------------------------------
   # Runner events
@@ -775,7 +800,30 @@ defmodule PrismWeb.ThreadPaneLive do
     socket
     |> stream_insert(:messages, row)
     |> assign(:pending_approvals, pending)
+    |> note_schedules(pending_in([row]))
     |> assign(:any_messages, true)
+  end
+
+  # Whether each pending card's run was started by a schedule, read once
+  # per run from its execution row in the pane's athanor: a card offers
+  # "for this schedule" only where there is one to end with.
+  defp note_schedules(socket, cards) do
+    actor = Sanctum.Context.actor(socket.assigns.context)
+
+    Enum.reduce(cards, socket, fn card, acc ->
+      known = acc.assigns.run_schedules
+
+      case card.execution_id do
+        id when is_binary(id) and not is_map_key(known, id) ->
+          scheduled? =
+            match?(%{schedule_id: s} when is_binary(s), Arca.Execution.get_tenant(actor, id))
+
+          assign(acc, :run_schedules, Map.put(known, id, scheduled?))
+
+        _known_or_none ->
+          acc
+      end
+    end)
   end
 
   # ---------------------------------------------------------------------------
@@ -1292,7 +1340,7 @@ defmodule PrismWeb.ThreadPaneLive do
           <span
             :if={MapSet.size(@grants) > 0}
             class="shrink-0 inline-flex items-center rounded bg-gray-800 px-1.5 py-0.5 text-[10px] text-gray-300"
-            title="Actions auto-approved for this thread"
+            title="Standing answers in this chat"
           >
             +{MapSet.size(@grants)} this chat
           </span>
@@ -1390,8 +1438,9 @@ defmodule PrismWeb.ThreadPaneLive do
         <div
           :if={MapSet.size(@grants) > 0}
           class="flex flex-wrap items-center gap-1.5 text-[10px] text-gray-500"
+          data-test="standing-answers"
         >
-          <span>auto-approving this chat:</span>
+          <span>standing answers in this chat:</span>
           <span
             :for={{agent, tool, action} <- Enum.sort(@grants)}
             class="inline-flex items-center gap-1 rounded bg-gray-800 px-1.5 py-0.5 text-gray-300 font-mono"
@@ -1405,7 +1454,7 @@ defmodule PrismWeb.ThreadPaneLive do
               phx-value-tool={tool}
               phx-value-action={action}
               class="text-gray-500 hover:text-gray-200"
-              title="stop auto-approving in this chat"
+              title="withdraw this standing answer"
             >
               ×
             </button>
@@ -1452,6 +1501,9 @@ defmodule PrismWeb.ThreadPaneLive do
                   module={PrismWeb.AquaApprovalCard}
                   id={@dom <> "-card-" <> msg.id}
                   message_id={msg.id}
+                  approval_id={msg.approval_id}
+                  scheduled={Map.get(@run_schedules, msg.execution_id, false)}
+                  bounds={Map.take(resolution, ~w(lifecycle until constraint))}
                   payload={intent}
                   status={msg.status}
                   decided_at={msg.resolved_at}

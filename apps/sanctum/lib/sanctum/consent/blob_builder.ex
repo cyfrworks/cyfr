@@ -50,9 +50,11 @@ defmodule Sanctum.Consent.BlobBuilder do
   `ask_rows/2` and `grant_rows/4` answer the typed rows of
   `Prima.ConsentPreview` in their JSON form for the resources, the limits
   and a tincture's declarations: the ask a plan shows, and the grant a
-  built blob holds. The commit adds the rows only it can name, the
-  credentials and tool servers, and `order_rows/1` puts every row in one
-  order.
+  built blob holds. A node whose ask names every tool (`"*"`) and whose
+  grant is that whole ask has one wildcard tools row, as the grant states
+  it, rather than the catalog it expands to. The commit adds the rows only
+  it can name, the credentials, each with the edge it rides, and the tool
+  servers, and `order_rows/1` puts every row in one order.
   """
 
   alias Prima.Manifest.Caps
@@ -708,7 +710,7 @@ defmodule Sanctum.Consent.BlobBuilder do
            manifest = manifest(row, node_key),
            {:ok, resources, limits} <- node_grant(ctx, node_key, manifest),
            {:ok, declared} <- tincture_rows(node_key, manifest) do
-        {:ok, node_rows(node_key, resources, limits, []) ++ declared}
+        {:ok, node_rows(node_key, {resources, wildcard_ask(manifest)}, limits, []) ++ declared}
       end
     end)
   end
@@ -723,8 +725,9 @@ defmodule Sanctum.Consent.BlobBuilder do
   def grant_rows(ctx, source_ref, nodes, narrowed) when is_map(nodes) and is_map(narrowed) do
     collect_rows(nodes |> Map.keys() |> Enum.sort(), fn node_key ->
       with {:ok, row} <- node_row(ctx, node_key),
-           {:ok, declared} <- tincture_rows(node_key, manifest(row, node_key)) do
-        resources = node_resources(nodes, source_ref, node_key)
+           manifest = manifest(row, node_key),
+           {:ok, declared} <- tincture_rows(node_key, manifest) do
+        resources = {node_resources(nodes, source_ref, node_key), wildcard_ask(manifest)}
         limits = get_in(nodes, [node_key, "limits"])
         {:ok, node_rows(node_key, resources, limits, Map.get(narrowed, node_key, [])) ++ declared}
       end
@@ -779,7 +782,7 @@ defmodule Sanctum.Consent.BlobBuilder do
   # A resource kind is shown when it grants something or the narrowing
   # changed it, so a kind narrowed to nothing still shows, empty and
   # narrowed; the limits always show.
-  defp node_rows(node_key, resources, limits, narrowed) do
+  defp node_rows(node_key, {resources, wildcard}, limits, narrowed) do
     egress = kind(resources, "egress")
     storage = kind(resources, "storage")
     tools = kind(resources, "tools")
@@ -787,7 +790,7 @@ defmodule Sanctum.Consent.BlobBuilder do
     [
       set_row(node_key, "egress", egress, "domains", narrowed),
       set_row(node_key, "storage", storage, "paths", narrowed),
-      tools_row(node_key, tools, narrowed),
+      tools_row(node_key, tools, narrowed, wildcard),
       is_map(limits) && row("limits", node_key, limits, "limits" in narrowed)
     ]
     |> Enum.filter(&is_map/1)
@@ -800,9 +803,27 @@ defmodule Sanctum.Consent.BlobBuilder do
       do: row(kind, node_key, values, kind in narrowed)
   end
 
-  defp tools_row(node_key, tools, narrowed) do
-    if (tools || []) != [] or "tools" in narrowed,
-      do: row("tools", node_key, %{"tools" => tools || []}, "tools" in narrowed)
+  # An ask that names every tool, granted whole, is shown as the grant
+  # states it: one wildcard, not the catalog it expands to today.
+  defp tools_row(node_key, tools, narrowed, wildcard) do
+    cond do
+      is_list(wildcard) and "tools" not in narrowed and (tools || []) == wildcard ->
+        row("tools", node_key, %{"tools" => Prima.ConsentPreview.Row.wildcard()}, false)
+
+      (tools || []) != [] or "tools" in narrowed ->
+        row("tools", node_key, %{"tools" => tools || []}, "tools" in narrowed)
+
+      true ->
+        nil
+    end
+  end
+
+  # What a manifest's ask expands to when it names every tool, or nil.
+  defp wildcard_ask(manifest) do
+    caps = Caps.from_manifest(manifest, &Arca.Storage.valid_guest_path?/1) || Caps.empty()
+
+    if "*" in caps.tools,
+      do: Sanctum.Consent.ShapeDerivation.expand_tools(caps.tools)
   end
 
   # A tincture's frame, streams, cards and system actions, from the

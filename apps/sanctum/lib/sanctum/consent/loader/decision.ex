@@ -27,7 +27,7 @@ defmodule Sanctum.Consent.Loader.Decision do
              graph: %{String.t() => String.t()},
              nodes: %{String.t() => %{release_digest: String.t(), integrity: :ok | :mismatch}}
            }}
-          | {:error, {:incomplete, atom()}}
+          | {:error, {:incomplete, atom() | {atom(), String.t()}}}
 
   @type shape_comparison :: :match | :differ | :unknown
 
@@ -59,6 +59,11 @@ defmodule Sanctum.Consent.Loader.Decision do
       when scope in [:versionless, :pinned] and is_binary(granted_digest) and
              shape in [:match, :differ, :unknown] and is_boolean(local_source?) do
     case live do
+      # The setup_required payload carries the reason's tag; the node an
+      # incomplete activation names is the consent walk's to show.
+      {:error, {:incomplete, {reason, _node}}} when is_atom(reason) ->
+        {:setup_required, reason}
+
       {:error, {:incomplete, reason}} ->
         {:setup_required, reason}
 
