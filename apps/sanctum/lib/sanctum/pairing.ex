@@ -95,10 +95,9 @@ defmodule Sanctum.Pairing do
   action.
 
   `fresh_required?/2` is what the deciding sites ask
-  (`Sanctum.Consent.Authz.confirm/3`). It answers `false` for every
-  action until a proof can be given — a passkey assertion or a fresh
-  re-authentication over a pending confirmation — so no change asks for a
-  proof before one exists.
+  (`Sanctum.Consent.Authz.confirm/3`): the table's answer, so a sensitive
+  change needs a pending confirmation proven by a passkey assertion or a
+  fresh re-authentication, whoever makes it.
 
   ## Who can confirm
 
@@ -294,6 +293,10 @@ defmodule Sanctum.Pairing do
 
       case Arca.PairingInvitations.open(Context.actor(ctx), attrs, verify) do
         {:ok, invitation} ->
+          # Announced once the confirmation's consumption committed with
+          # the invitation it approved.
+          Authz.consumed(ctx)
+
           {:ok,
            %{
              invitation_secret: secret,
@@ -310,9 +313,13 @@ defmodule Sanctum.Pairing do
     end
   end
 
-  # What confirming a pairing approves, for its preview: the invitation is
-  # a bearer capability, and the preview says so.
-  defp invitation_change do
+  @doc """
+  What confirming a pairing approves (`t:Sanctum.Consent.Authz.change/0`),
+  the change `begin/2` decides: the invitation is a bearer capability, and
+  the preview says so.
+  """
+  @spec invitation_change() :: Sanctum.Consent.Authz.change()
+  def invitation_change do
     %{
       operation: "pairing.begin",
       arguments: %{},
@@ -773,11 +780,13 @@ defmodule Sanctum.Pairing do
 
   @doc """
   Whether `action`, asked for under `ctx`, needs a fresh confirmation
-  before it is decided. `false` for every action until a proof can be
-  given (see the module doc).
+  before it is decided: the table's answer, the same for every person and
+  every client. A local person's first passkey registration may instead
+  rest on a recent local sign-in, which `Sanctum.Passkeys.register/2`
+  decides before it asks.
   """
-  @spec fresh_required?(action(), Context.t()) :: false
-  def fresh_required?(action, %Context{}) when is_map_key(@table, action), do: false
+  @spec fresh_required?(action(), Context.t()) :: boolean()
+  def fresh_required?(action, %Context{}) when is_map_key(@table, action), do: sensitive?(action)
 
   @doc """
   Whether the client behind `ctx` has a person behind it who can give a

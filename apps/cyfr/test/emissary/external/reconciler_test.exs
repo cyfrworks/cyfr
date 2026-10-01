@@ -48,7 +48,7 @@ defmodule Emissary.External.ReconcilerTest do
 
   test "a rotate of a referenced entry restarts the referencing server", %{ctx: ctx} do
     {:ok, entry} =
-      Vault.create(ctx, %{
+      Sanctum.TestContext.create_vault(ctx, %{
         name: "gh-header-token",
         kind: "api_key",
         fields: %{"token" => "ghp_original"}
@@ -66,7 +66,7 @@ defmodule Emissary.External.ReconcilerTest do
       })
 
     {:ok, _} =
-      Vault.rotate(ctx, %{
+      Sanctum.TestContext.rotate_vault(ctx, %{
         id: entry.id,
         fields: %{"token" => "ghp_rotated"},
         expected_payload_rev: 0
@@ -79,7 +79,7 @@ defmodule Emissary.External.ReconcilerTest do
   test "a rename restarts the server still spelling the OLD name", %{ctx: ctx} do
     # A rename must reconcile servers using both the previous and current credential name.
     {:ok, entry} =
-      Vault.create(ctx, %{
+      Sanctum.TestContext.create_vault(ctx, %{
         name: "prod-token",
         kind: "api_key",
         fields: %{"token" => "ghp_prod"}
@@ -104,7 +104,11 @@ defmodule Emissary.External.ReconcilerTest do
 
   test "a scheme-prefixed template is matched by the entry it names", %{ctx: ctx} do
     {:ok, entry} =
-      Vault.create(ctx, %{name: "bearer-token", kind: "api_key", fields: %{"token" => "t1"}})
+      Sanctum.TestContext.create_vault(ctx, %{
+        name: "bearer-token",
+        kind: "api_key",
+        fields: %{"token" => "t1"}
+      })
 
     {:ok, _} =
       Arca.McpServerStorage.insert(Sanctum.Context.actor(ctx), %{
@@ -126,7 +130,11 @@ defmodule Emissary.External.ReconcilerTest do
   test "a stdio server whose env template references the entry is matched and its epoch raised",
        %{ctx: ctx} do
     {:ok, entry} =
-      Vault.create(ctx, %{name: "env-token", kind: "api_key", fields: %{"token" => "t1"}})
+      Sanctum.TestContext.create_vault(ctx, %{
+        name: "env-token",
+        kind: "api_key",
+        fields: %{"token" => "t1"}
+      })
 
     {:ok, %{epoch: 1}} =
       Arca.McpServerStorage.insert(Sanctum.Context.actor(ctx), %{
@@ -186,7 +194,11 @@ defmodule Emissary.External.ReconcilerTest do
       {:ok, slot} = Arca.ControlPlane.take(node, node <> "#boot_a", 60_000)
 
       {:ok, entry} =
-        Vault.create(ctx, %{name: "slot-token", kind: "api_key", fields: %{"token" => "t1"}})
+        Sanctum.TestContext.create_vault(ctx, %{
+          name: "slot-token",
+          kind: "api_key",
+          fields: %{"token" => "t1"}
+        })
 
       {:ok, server} =
         Arca.McpServerStorage.insert(Sanctum.Context.actor(ctx), %{
@@ -303,7 +315,11 @@ defmodule Emissary.External.ReconcilerTest do
 
   test "unrelated entries and non-referencing servers are untouched", %{ctx: ctx} do
     {:ok, entry} =
-      Vault.create(ctx, %{name: "unrelated", kind: "api_key", fields: %{"k" => "v"}})
+      Sanctum.TestContext.create_vault(ctx, %{
+        name: "unrelated",
+        kind: "api_key",
+        fields: %{"k" => "v"}
+      })
 
     {:ok, _} =
       Arca.McpServerStorage.insert(Sanctum.Context.actor(ctx), %{
@@ -348,7 +364,7 @@ defmodule Emissary.External.ReconcilerTest do
 
   test "a revoked referenced entry can no longer resolve its header", %{ctx: ctx} do
     {:ok, entry} =
-      Vault.create(ctx, %{
+      Sanctum.TestContext.create_vault(ctx, %{
         name: "revoke-me",
         kind: "api_key",
         fields: %{"token" => "ghp_live"}
@@ -407,7 +423,11 @@ defmodule Emissary.External.ReconcilerTest do
     test "a server whose credential was rotated without an announcement is restarted",
          %{ctx: ctx} do
       {:ok, entry} =
-        Vault.create(ctx, %{name: "swept-token", kind: "api_key", fields: %{"token" => "v1"}})
+        Sanctum.TestContext.create_vault(ctx, %{
+          name: "swept-token",
+          kind: "api_key",
+          fields: %{"token" => "v1"}
+        })
 
       sync_reconciler()
       {pid, {payload_rev, _digest}} = swept_server!(ctx, "sweptsrv", "swept-token")
@@ -434,7 +454,11 @@ defmodule Emissary.External.ReconcilerTest do
     test "a server whose credential was rebound without an announcement is restarted",
          %{ctx: ctx} do
       {:ok, entry} =
-        Vault.create(ctx, %{name: "rebound-token", kind: "api_key", fields: %{"token" => "v1"}})
+        Sanctum.TestContext.create_vault(ctx, %{
+          name: "rebound-token",
+          kind: "api_key",
+          fields: %{"token" => "v1"}
+        })
 
       sync_reconciler()
       {pid, {payload_rev, digest}} = swept_server!(ctx, "reboundsrv", "rebound-token")
@@ -466,7 +490,11 @@ defmodule Emissary.External.ReconcilerTest do
 
     test "a server whose entry is no longer active is stopped", %{ctx: ctx} do
       {:ok, entry} =
-        Vault.create(ctx, %{name: "gone-token", kind: "api_key", fields: %{"token" => "v1"}})
+        Sanctum.TestContext.create_vault(ctx, %{
+          name: "gone-token",
+          kind: "api_key",
+          fields: %{"token" => "v1"}
+        })
 
       sync_reconciler()
       {pid, _revision} = swept_server!(ctx, "gonesrv", "gone-token")
@@ -482,7 +510,11 @@ defmodule Emissary.External.ReconcilerTest do
 
     test "a server not yet connected resolved nothing and is left alone", %{ctx: ctx} do
       {:ok, _} =
-        Vault.create(ctx, %{name: "idle-token", kind: "api_key", fields: %{"token" => "v1"}})
+        Sanctum.TestContext.create_vault(ctx, %{
+          name: "idle-token",
+          kind: "api_key",
+          fields: %{"token" => "v1"}
+        })
 
       {:ok, pid} =
         Emissary.External.ServerSupervisor.ensure_started(

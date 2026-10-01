@@ -126,6 +126,9 @@ defmodule Prima.RefusalTest do
     {{:ambiguous, ["prof_a", "prof_b"]}, :conflict},
     {:service_unavailable, :unavailable},
     {:not_built, :unavailable},
+    {:remote_identity_unavailable, :unavailable},
+    {:email_unavailable, :unavailable},
+    {:reauth_required, :unauthenticated},
     {:execution_failed, :internal},
     {:invalid_session, :unauthenticated},
     {:missing_token, :unauthenticated},
@@ -382,6 +385,24 @@ defmodule Prima.RefusalTest do
       # only a line about this reason would be the table's.
       refute log =~ "not_built"
       assert Refusal.reason?(:not_built)
+    end
+
+    test "a proof that cannot be given here is no denial, and says which" do
+      assert %Refusal{class: :unavailable, message: remote} =
+               Refusal.classify(:remote_identity_unavailable)
+
+      assert remote =~ "another home"
+
+      assert %Refusal{class: :unavailable, message: email} = Refusal.classify(:email_unavailable)
+      assert email =~ "confirm another way"
+
+      assert %Refusal{class: :unauthenticated, message: again} =
+               Refusal.classify(:reauth_required)
+
+      assert again =~ "sign in again"
+
+      for reason <- [:remote_identity_unavailable, :email_unavailable, :reauth_required],
+          do: assert(Refusal.reason?(reason))
     end
 
     test "a binary is internal and keeps its words" do

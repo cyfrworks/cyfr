@@ -7,7 +7,9 @@ defmodule PrismWeb.WebhooksLiveTest do
   replay-protection decision `Sanctum.Webhook.create/2` requires.
 
   The form must submit an explicit replay-protection choice when
-  neither replay header is configured.
+  neither replay header is configured. Minting the webhook's secret is
+  a sensitive change: a decided form meets the `confirmation_required`
+  signal, and nothing is minted until its person proves it.
   """
 
   use PrismWeb.ConnCase, async: false
@@ -48,7 +50,7 @@ defmodule PrismWeb.WebhooksLiveTest do
       {:ok, view: view, profile_id: profile_id, ctx: ctx}
     end
 
-    test "ticking the box creates a webhook that names neither header",
+    test "ticking the box decides the replay posture, and the create meets the confirmation signal",
          %{view: view, profile_id: profile_id, ctx: ctx} do
       name = "console-hook-#{System.unique_integer([:positive])}"
 
@@ -62,8 +64,17 @@ defmodule PrismWeb.WebhooksLiveTest do
         "input_template" => "{}"
       })
 
-      refute :sys.get_state(view.pid).socket.assigns.form_error
-      assert {:ok, %{name: ^name}} = Sanctum.Webhook.get(ctx, name)
+      # Past the replay decision, the page meets the signal for this
+      # create, naming its confirmation, and no secret is minted.
+      error = :sys.get_state(view.pid).socket.assigns.form_error
+      assert is_binary(error) and error =~ "Confirmation required"
+      refute error =~ "replay"
+
+      assert {:ok, [%{id: id, operation: "webhook.create"}]} =
+               Arca.PendingConfirmations.list_open(Sanctum.Context.actor(ctx), ctx.user_id)
+
+      assert error =~ id
+      assert {:error, :not_found} = Sanctum.Webhook.get(ctx, name)
     end
 
     test "leaving it unticked refuses, and says which decision is missing",

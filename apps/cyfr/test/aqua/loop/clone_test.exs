@@ -101,7 +101,7 @@ defmodule Aqua.Loop.CloneTest do
 
   defp bind_claude!(ctx, opts) do
     {:ok, entry} =
-      Sanctum.Vault.create(ctx, %{
+      Sanctum.TestContext.create_vault(ctx, %{
         name: Keyword.fetch!(opts, :name),
         kind: "api_key",
         fields: %{"ANTHROPIC_API_KEY" => Keyword.fetch!(opts, :key)}

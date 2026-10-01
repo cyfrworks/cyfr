@@ -441,7 +441,12 @@ defmodule PrismWeb.SystemLayerTest do
   describe "credential entry" do
     setup :signed_in
 
-    test "the value goes to the vault and nowhere else", %{view: view, ctx: ctx} do
+    # Entering a credential is a sensitive change: from a session with no
+    # proof, the entry meets the `confirmation_required` signal, the
+    # prompt stays open showing it, and the value reaches neither the
+    # vault nor the page, its state, the log or the confirmation record.
+    test "the value meets the confirmation signal and goes nowhere else",
+         %{view: view, ctx: ctx} do
       name = "system-layer-#{System.unique_integer([:positive])}"
       secret = "sk-system-layer-#{System.unique_integer([:positive])}-sentinel"
 
@@ -460,19 +465,25 @@ defmodule PrismWeb.SystemLayerTest do
       Logger.configure(level: :debug)
       on_exit(fn -> Logger.configure(level: previous) end)
 
-      log =
-        capture_log([level: :debug], fn ->
+      {id, log} =
+        with_log([level: :debug], fn ->
           view
           |> form("#system-layer-credential", %{"secret" => secret})
           |> render_submit()
 
-          assert outcome("c1") == :confirmed
+          assert {:refused, {:confirmation_required, %{id: id, operation: "vault.create"}}} =
+                   outcome("c1")
+
           render(view)
+          id
         end)
 
       Logger.configure(level: previous)
 
-      refute render(view) =~ secret
+      html = render(view)
+      assert html =~ "Confirmation required"
+      assert html =~ id
+      refute html =~ secret
 
       refute inspect(:sys.get_state(view.pid), limit: :infinity, printable_limit: :infinity) =~
                secret
@@ -480,10 +491,17 @@ defmodule PrismWeb.SystemLayerTest do
       # The event was logged, with the value under its redacted name.
       assert log =~ ~s("secret" => "[FILTERED]")
       refute log =~ secret
-      assert open_prompt(view) == nil
+      assert open_prompt(view) == "c1"
 
+      # Nothing sealed; the open record binds the change by its keyed
+      # digest and names the entry, never the value.
       {:ok, entries} = Sanctum.Vault.list(ctx)
-      assert Enum.any?(entries, &(&1.name == name and &1.field_names == ["API_KEY"]))
+      refute Enum.any?(entries, &(&1.name == name))
+
+      assert {:ok, [%{id: ^id} = record]} =
+               Arca.PendingConfirmations.list_open(Context.actor(ctx), ctx.user_id)
+
+      refute inspect(record, limit: :infinity, printable_limit: :infinity) =~ secret
     end
 
     test "an empty value is asked for again and dispatches nothing", %{view: view} do

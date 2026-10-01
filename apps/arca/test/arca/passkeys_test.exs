@@ -343,7 +343,8 @@ defmodule Arca.PasskeysTest do
         expires_at: System.system_time(:millisecond) + 300_000
       )
 
-    {:ok, _} = PendingConfirmations.open(actor, %{record: record})
+    {:ok, _} =
+      PendingConfirmations.open(actor, %{record: record, opener: "session:passkeys-test"})
 
     {:ok, _} =
       PendingConfirmations.confirm(actor, record.id, %{proof: "passkey", passkey_id: passkey.id})

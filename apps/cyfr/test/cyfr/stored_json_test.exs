@@ -136,7 +136,9 @@ defmodule Cyfr.StoredJsonTest do
   test "Sanctum.ApiKey lists a corrupt scope as none and a corrupt allowlist as absent" do
     ctx = Sanctum.TestContext.issuer!(Sanctum.TestContext.local())
     name = "stored-json-#{System.unique_integer([:positive])}"
-    {:ok, _} = Sanctum.ApiKey.create(ctx, %{name: name, ip_allowlist: ["203.0.113.0/24"]})
+
+    {:ok, _} =
+      Sanctum.TestContext.create_key(ctx, %{name: name, ip_allowlist: ["203.0.113.0/24"]})
 
     Arca.Repo.update_all(from(k in Arca.Schemas.ApiKey, where: k.name == ^name),
       set: [scope: @corrupt, ip_allowlist: @corrupt]
@@ -159,7 +161,11 @@ defmodule Cyfr.StoredJsonTest do
     name = "stored-json-#{System.unique_integer([:positive])}"
 
     {:ok, %{api_key: raw}} =
-      Sanctum.ApiKey.create(ctx, %{name: name, type: :service, ip_allowlist: ["127.0.0.1"]})
+      Sanctum.TestContext.create_key(ctx, %{
+        name: name,
+        type: :service,
+        ip_allowlist: ["127.0.0.1"]
+      })
 
     {:ok, key_ctx} = Sanctum.Caller.establish({:api_key, raw}, client_ip: "127.0.0.1")
 
@@ -185,7 +191,7 @@ defmodule Cyfr.StoredJsonTest do
     ctx: ctx
   } do
     {:ok, view} =
-      Sanctum.Vault.create(ctx, %{
+      Sanctum.TestContext.create_vault(ctx, %{
         name: "stored-json",
         kind: "api_key",
         fields: %{"token" => "t0k3n-value"}

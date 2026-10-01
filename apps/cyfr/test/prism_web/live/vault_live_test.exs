@@ -5,6 +5,10 @@ defmodule PrismWeb.VaultLiveTest do
   @moduledoc """
   Tests sign-in gating, vault-entry server references and management of
   operator OAuth client credentials on the Vault page.
+
+  Storing client credentials is a sensitive change: the page meets the
+  `confirmation_required` signal, and nothing is stored until the
+  person proves it. Listing and removing them need the session alone.
   """
   use PrismWeb.ConnCase, async: false
 
@@ -29,13 +33,18 @@ defmodule PrismWeb.VaultLiveTest do
         authenticated: true
       )
 
+    # Entering the credential is a sensitive change, made under the
+    # confirmation its person proves (`Sanctum.TestContext.confirming/2`).
     {:ok, _} =
-      Grimoire.call_external("vault", ctx, %{
-        "action" => "create",
-        "name" => "bridge-token",
-        "kind" => "api_key",
-        "fields" => %{"TOKEN" => "t"}
-      })
+      Sanctum.TestContext.confirming(
+        ctx,
+        &Grimoire.call_external("vault", &1, %{
+          "action" => "create",
+          "name" => "bridge-token",
+          "kind" => "api_key",
+          "fields" => %{"TOKEN" => "t"}
+        })
+      )
 
     {:ok, _} =
       Grimoire.call_external("mcp_servers", ctx, %{
@@ -81,11 +90,6 @@ defmodule PrismWeb.VaultLiveTest do
     })
     |> render_submit()
 
-    rendered = render(view)
-    assert rendered =~ "google"
-    refute rendered =~ @client_secret
-    refute rendered =~ "abc.apps.googleusercontent.com"
-
     ctx =
       Sanctum.Context.build(
         user_id: user.user_id,
@@ -95,6 +99,36 @@ defmodule PrismWeb.VaultLiveTest do
         auth_method: :oidc,
         authenticated: true
       )
+
+    # The page meets the signal, naming the confirmation it opened, and
+    # stores nothing; the secret appears in neither the page nor the flash.
+    flash = Phoenix.Flash.get(:sys.get_state(view.pid).socket.assigns.flash, :error)
+    assert flash =~ "Confirmation required"
+
+    assert {:ok, [%{id: id, operation: "oauth.set_client"}]} =
+             Arca.PendingConfirmations.list_open(Sanctum.Context.actor(ctx), ctx.user_id)
+
+    assert flash =~ id
+    refute flash =~ @client_secret
+    rendered = render(view)
+    assert rendered =~ "No client credentials stored"
+    refute rendered =~ @client_secret
+    assert {:error, _} = Sanctum.ProviderCredentials.fetch_for_oauth(ctx.athanor_id, "google")
+
+    # Proven, the same change is made; the page lists the provider alone.
+    :ok =
+      Sanctum.TestContext.put_provider_credentials(
+        ctx,
+        "google",
+        "abc.apps.googleusercontent.com",
+        @client_secret
+      )
+
+    {view, rendered} = mount_athanor(conn, "/vault")
+    assert rendered =~ "google"
+    refute rendered =~ "No client credentials stored"
+    refute rendered =~ @client_secret
+    refute rendered =~ "abc.apps.googleusercontent.com"
 
     assert {:ok,
             %{"client_id" => "abc.apps.googleusercontent.com", "client_secret" => @client_secret}} =

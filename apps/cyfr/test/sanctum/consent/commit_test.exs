@@ -147,7 +147,7 @@ defmodule Sanctum.Consent.CommitTest do
 
   defp entry!(ctx, fields \\ %{"url" => "https://db.example", "anon_key" => "anon"}) do
     {:ok, view} =
-      Sanctum.Vault.create(ctx, %{
+      Sanctum.TestContext.create_vault(ctx, %{
         name: "conn-#{System.unique_integer([:positive])}",
         kind: "api_key",
         fields: fields

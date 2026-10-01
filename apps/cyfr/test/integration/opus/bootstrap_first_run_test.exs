@@ -168,7 +168,7 @@ defmodule Opus.BootstrapFirstRunTest do
 
     # The operator creates a vault entry and binds it through the walk.
     {:ok, entry} =
-      Sanctum.Vault.create(ctx, %{
+      Sanctum.TestContext.create_vault(ctx, %{
         name: "My Anthropic",
         kind: "api_key",
         fields: %{"ANTHROPIC_API_KEY" => "sk-first-run"}

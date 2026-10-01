@@ -4,9 +4,10 @@
 defmodule Arca.PendingConfirmationsTest do
   @moduledoc """
   Pending confirmations, athanor-scoped: one open record per person,
-  operation and argument digest; confirmed once, by a passkey or client
-  that still stands; consumed once, only confirmed, unexpired, unvoided and
-  for exactly the change it recorded; cancelled once; voided when the
+  operation, argument digest and opener; confirmed once, by a passkey or
+  client that still stands; consumed once, only confirmed, unexpired,
+  unvoided, for exactly the change it recorded and by the credential that
+  opened it; cancelled once; voided when the
   client or passkey that confirmed it is revoked; and the stored row
   rebuilds the `Prima.Confirmation` whose digest the proof covered.
   """
@@ -60,6 +61,11 @@ defmodule Arca.PendingConfirmationsTest do
 
   defp digest(seed), do: Prima.Digest.sha256("#{seed}-#{System.unique_integer()}")
 
+  # The credential that opens the records here, and another of the same
+  # person's.
+  @opener "session:opener-a"
+  @other_opener "session:opener-b"
+
   defp record(actor, overrides \\ []) do
     {:ok, record} =
       Prima.Confirmation.new(
@@ -89,7 +95,8 @@ defmodule Arca.PendingConfirmationsTest do
       user_id: record.person,
       operation: record.operation,
       args_digest: record.args_digest,
-      preview: record.preview
+      preview: record.preview,
+      opener: @opener
     }
   end
 
@@ -105,7 +112,7 @@ defmodule Arca.PendingConfirmationsTest do
   end
 
   defp confirmed!(actor, record) do
-    {:ok, _} = PendingConfirmations.open(actor, %{record: record})
+    {:ok, _} = PendingConfirmations.open(actor, %{record: record, opener: @opener})
     {:ok, confirmed} = PendingConfirmations.confirm(actor, record.id, %{proof: "oidc_reauth"})
     confirmed
   end
@@ -115,18 +122,18 @@ defmodule Arca.PendingConfirmationsTest do
       actor: actor
     } do
       first = record(actor)
-      assert {:ok, row} = PendingConfirmations.open(actor, %{record: first})
+      assert {:ok, row} = PendingConfirmations.open(actor, %{record: first, opener: @opener})
       assert row.state == "pending"
       assert row.digest == Prima.Confirmation.digest(first)
       assert {:ok, ^first} = PendingConfirmations.confirmation(row)
 
       again = record(actor, args_digest: first.args_digest)
-      assert {:ok, ^row} = PendingConfirmations.open(actor, %{record: again})
+      assert {:ok, ^row} = PendingConfirmations.open(actor, %{record: again, opener: @opener})
     end
 
     test "an open record whose preview differs is voided and a new one opened", %{actor: actor} do
       first = record(actor)
-      {:ok, _} = PendingConfirmations.open(actor, %{record: first})
+      {:ok, _} = PendingConfirmations.open(actor, %{record: first, opener: @opener})
 
       moved =
         record(actor,
@@ -135,7 +142,7 @@ defmodule Arca.PendingConfirmationsTest do
         )
 
       assert {:ok, %{id: id, state: "pending"}} =
-               PendingConfirmations.open(actor, %{record: moved})
+               PendingConfirmations.open(actor, %{record: moved, opener: @opener})
 
       assert id == moved.id
       assert {:ok, %{state: "voided"}} = PendingConfirmations.get(actor, first.id)
@@ -148,7 +155,7 @@ defmodule Arca.PendingConfirmationsTest do
 
     test "an open record past its expiry is expired and a new one written", %{actor: actor} do
       first = record(actor)
-      {:ok, _} = PendingConfirmations.open(actor, %{record: first})
+      {:ok, _} = PendingConfirmations.open(actor, %{record: first, opener: @opener})
 
       {1, _} =
         Arca.Repo.update_all(from(c in PendingConfirmation, where: c.id == ^first.id),
@@ -156,20 +163,65 @@ defmodule Arca.PendingConfirmationsTest do
         )
 
       second = record(actor, args_digest: first.args_digest)
-      assert {:ok, %{id: id}} = PendingConfirmations.open(actor, %{record: second})
+
+      assert {:ok, %{id: id}} =
+               PendingConfirmations.open(actor, %{record: second, opener: @opener})
+
       assert id == second.id
       assert {:ok, %{state: "expired"}} = PendingConfirmations.get(actor, first.id)
+    end
+
+    test "another credential's open of the same request writes its own record beside the first",
+         %{actor: actor} do
+      first = record(actor)
+
+      assert {:ok, %{id: first_id}} =
+               PendingConfirmations.open(actor, %{record: first, opener: @opener})
+
+      beside = record(actor, args_digest: first.args_digest)
+
+      assert {:ok, %{id: beside_id, opener: @other_opener}} =
+               PendingConfirmations.open(actor, %{record: beside, opener: @other_opener})
+
+      assert beside_id == beside.id
+      refute beside_id == first_id
+
+      assert {:ok, [%{id: ^first_id}, %{id: ^beside_id}]} =
+               PendingConfirmations.list_open(actor, "usr_cnf")
+
+      # Each opener's second open answers its own record.
+      assert {:ok, %{id: ^first_id}} =
+               PendingConfirmations.open(actor, %{
+                 record: record(actor, args_digest: first.args_digest),
+                 opener: @opener
+               })
+    end
+
+    test "an open that names no credential, or a malformed one, is refused", %{actor: actor} do
+      for attrs <- [
+            %{record: record(actor)},
+            %{record: record(actor), opener: ""},
+            %{record: record(actor), opener: nil},
+            %{record: record(actor), opener: String.duplicate("x", 256)}
+          ] do
+        assert {:error, {:invalid, %{opener: _}}} = PendingConfirmations.open(actor, attrs)
+      end
+
+      assert {:ok, []} = PendingConfirmations.list_open(actor, "usr_cnf")
     end
 
     test "a record of another athanor, or a local person's naming an epoch, is refused", %{
       actor: actor
     } do
       elsewhere = record(actor, athanor: "ath_elsewhere")
-      assert {:error, :cross_tenant} = PendingConfirmations.open(actor, %{record: elsewhere})
+
+      assert {:error, :cross_tenant} =
+               PendingConfirmations.open(actor, %{record: elsewhere, opener: @opener})
 
       assert {:error, :unexpected_key_epoch} =
                PendingConfirmations.open(actor, %{
                  record: record(actor),
+                 opener: @opener,
                  identity_key_epoch: digest("epoch")
                })
     end
@@ -178,7 +230,7 @@ defmodule Arca.PendingConfirmationsTest do
   describe "confirm/3" do
     test "confirms once", %{actor: actor} do
       rec = record(actor)
-      {:ok, _} = PendingConfirmations.open(actor, %{record: rec})
+      {:ok, _} = PendingConfirmations.open(actor, %{record: rec, opener: @opener})
 
       assert {:ok, %{state: "confirmed", proof: "oidc_reauth"}} =
                PendingConfirmations.confirm(actor, rec.id, %{proof: "oidc_reauth"})
@@ -191,7 +243,7 @@ defmodule Arca.PendingConfirmationsTest do
       actor: actor
     } do
       rec = record(actor)
-      {:ok, _} = PendingConfirmations.open(actor, %{record: rec})
+      {:ok, _} = PendingConfirmations.open(actor, %{record: rec, opener: @opener})
 
       assert {:error, {:invalid, %{proof: _}}} =
                PendingConfirmations.confirm(actor, rec.id, %{proof: "session"})
@@ -210,7 +262,7 @@ defmodule Arca.PendingConfirmationsTest do
       client = client!(actor)
       {:ok, _} = PairedClients.revoke(actor, client.id)
       rec = record(actor)
-      {:ok, _} = PendingConfirmations.open(actor, %{record: rec})
+      {:ok, _} = PendingConfirmations.open(actor, %{record: rec, opener: @opener})
 
       assert {:error, :revoked} =
                PendingConfirmations.confirm(actor, rec.id, %{
@@ -252,6 +304,18 @@ defmodule Arca.PendingConfirmationsTest do
                    }
                })
 
+      # Another credential of the same person, or none, consumes nothing.
+      for opener <- [@other_opener, nil] do
+        assert {:error, :mismatch} =
+                 PendingConfirmations.consume(actor, rec.id, %{expected(rec) | opener: opener})
+
+        assert {:error, :mismatch} =
+                 PendingConfirmations.check(actor, rec.id, %{expected(rec) | opener: opener})
+      end
+
+      assert {:error, :mismatch} =
+               PendingConfirmations.consume(actor, rec.id, Map.delete(expected(rec), :opener))
+
       assert {:ok, %{state: "consumed"}} =
                PendingConfirmations.consume(actor, rec.id, expected(rec))
 
@@ -262,7 +326,7 @@ defmodule Arca.PendingConfirmationsTest do
       actor: actor
     } do
       pending = record(actor)
-      {:ok, _} = PendingConfirmations.open(actor, %{record: pending})
+      {:ok, _} = PendingConfirmations.open(actor, %{record: pending, opener: @opener})
 
       assert {:error, :not_confirmed} =
                PendingConfirmations.consume(actor, pending.id, expected(pending))
@@ -296,14 +360,15 @@ defmodule Arca.PendingConfirmationsTest do
       actor: actor
     } do
       pending = record(actor)
-      {:ok, _} = PendingConfirmations.open(actor, %{record: pending})
+      {:ok, _} = PendingConfirmations.open(actor, %{record: pending, opener: @opener})
       written_first = record(actor)
 
       # The caller wrote before it consumed, and goes on as if the refusal
       # were only an answer: the refusal took the caller's write with it.
       assert {:error, :rollback} =
                Arca.Repo.transaction(fn ->
-                 {:ok, _} = PendingConfirmations.open(actor, %{record: written_first})
+                 {:ok, _} =
+                   PendingConfirmations.open(actor, %{record: written_first, opener: @opener})
 
                  {:error, :not_confirmed} =
                    PendingConfirmations.consume(actor, pending.id, expected(pending))
@@ -318,13 +383,16 @@ defmodule Arca.PendingConfirmationsTest do
       actor: actor
     } do
       pending = record(actor)
-      {:ok, _} = PendingConfirmations.open(actor, %{record: pending})
+      {:ok, _} = PendingConfirmations.open(actor, %{record: pending, opener: @opener})
       in_its_place = record(actor)
 
       assert {:ok, {:error, :not_confirmed}} =
                Arca.Repo.transaction(fn ->
                  refusal = PendingConfirmations.check(actor, pending.id, expected(pending))
-                 {:ok, _} = PendingConfirmations.open(actor, %{record: in_its_place})
+
+                 {:ok, _} =
+                   PendingConfirmations.open(actor, %{record: in_its_place, opener: @opener})
+
                  refusal
                end)
 
@@ -370,7 +438,7 @@ defmodule Arca.PendingConfirmationsTest do
     test "a record whose confirming client is revoked is voided and refused", %{actor: actor} do
       client = client!(actor)
       rec = record(actor)
-      {:ok, _} = PendingConfirmations.open(actor, %{record: rec})
+      {:ok, _} = PendingConfirmations.open(actor, %{record: rec, opener: @opener})
 
       {:ok, _} =
         PendingConfirmations.confirm(actor, rec.id, %{proof: "oidc_reauth", client_id: client.id})
@@ -384,7 +452,7 @@ defmodule Arca.PendingConfirmationsTest do
     test "void_for/2 voids what a client confirmed, in the actor's athanor only", %{actor: actor} do
       client = client!(actor)
       rec = record(actor)
-      {:ok, _} = PendingConfirmations.open(actor, %{record: rec})
+      {:ok, _} = PendingConfirmations.open(actor, %{record: rec, opener: @opener})
 
       {:ok, _} =
         PendingConfirmations.confirm(actor, rec.id, %{proof: "email_code", client_id: client.id})
@@ -402,7 +470,7 @@ defmodule Arca.PendingConfirmationsTest do
   describe "the member fence" do
     test "a stale member confirms nothing and holds no challenge", %{actor: actor, slot: slot} do
       rec = record(actor)
-      {:ok, _} = PendingConfirmations.open(actor, %{record: rec})
+      {:ok, _} = PendingConfirmations.open(actor, %{record: rec, opener: @opener})
 
       {1, _} =
         Arca.Repo.update_all(from(l in CellLease, where: l.node == ^slot.node),
@@ -423,7 +491,7 @@ defmodule Arca.PendingConfirmationsTest do
   describe "the email code" do
     test "is held hashed and cancels the record at its failure limit", %{actor: actor} do
       rec = record(actor)
-      {:ok, _} = PendingConfirmations.open(actor, %{record: rec})
+      {:ok, _} = PendingConfirmations.open(actor, %{record: rec, opener: @opener})
 
       assert {:ok, %{email_code_hash: "sha256:code", email_code_failures: 0}} =
                PendingConfirmations.put_challenge(actor, rec.id, %{email_code_hash: "sha256:code"})
@@ -440,7 +508,7 @@ defmodule Arca.PendingConfirmationsTest do
 
   test "lists the person's open records in the actor's athanor", %{actor: actor} do
     rec = record(actor)
-    {:ok, _} = PendingConfirmations.open(actor, %{record: rec})
+    {:ok, _} = PendingConfirmations.open(actor, %{record: rec, opener: @opener})
     assert {:ok, [%{id: id}]} = PendingConfirmations.list_open(actor, "usr_cnf")
     assert id == rec.id
     assert {:ok, []} = PendingConfirmations.list_open(actor, "usr_other")
@@ -567,7 +635,9 @@ defmodule Arca.PendingConfirmationsRaceTest do
             expires_at: System.system_time(:millisecond) + 300_000
           )
 
-        {:ok, _} = PendingConfirmations.open(actor, %{record: record})
+        {:ok, _} =
+          PendingConfirmations.open(actor, %{record: record, opener: "session:race-test"})
+
         {client, record}
       end)
 

@@ -79,7 +79,11 @@ defmodule Compendium.RegistryRemoveCascadeTest do
     {profile_id, consent} = seed_profile!(ctx, name_ref)
 
     {:ok, entry} =
-      Sanctum.Vault.create(ctx, %{name: "survivor", kind: "api_key", fields: %{"k" => "v"}})
+      Sanctum.TestContext.create_vault(ctx, %{
+        name: "survivor",
+        kind: "api_key",
+        fields: %{"k" => "v"}
+      })
 
     {:ok, _} = Compendium.Registry.delete(ctx, "cascade-target", "1.0.0", "local")
 
@@ -101,7 +105,7 @@ defmodule Compendium.RegistryRemoveCascadeTest do
       Sanctum.Test.ConsentFixtures.bindable_profile(ctx, "reagent:local.cascade-hooked:1.0.0")
 
     {:ok, _} =
-      Sanctum.Webhook.create(ctx, %{
+      Sanctum.TestContext.create_webhook(ctx, %{
         name: "cascade-hook",
         replay_protection: "none",
         target_ref: "reagent:local.cascade-hooked:1.0.0",

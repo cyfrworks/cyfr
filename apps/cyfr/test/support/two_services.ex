@@ -495,14 +495,24 @@ defmodule Cyfr.Test.TwoServices do
   @doc "`arm!/2` for the catalyst `ref`, whose need is the step stub's."
   @spec arm!(Sanctum.Context.t(), String.t(), key: String.t(), token: String.t()) :: [String.t()]
   def arm!(ctx, ref, key: key, token: token) do
-    {:ok, entry} =
-      Sanctum.Vault.create(ctx, %{
-        name: "#{ref} key",
-        kind: "oauth",
-        fields: %{@key_field => key},
-        oauth: %{"access_token" => token},
-        oauth_scopes: @stub_scopes
+    params = %{
+      name: "#{ref} key",
+      kind: "oauth",
+      fields: %{@key_field => key},
+      oauth: %{"access_token" => token},
+      oauth_scopes: @stub_scopes
+    }
+
+    # Entering the key is a sensitive change, confirmed as its person
+    # confirms it (`Sanctum.TestContext.confirmed/3`).
+    entering =
+      Sanctum.TestContext.confirmed(ctx, :credential_entry, %{
+        operation: "vault.create",
+        arguments: params,
+        resource: params.name
       })
+
+    {:ok, entry} = Sanctum.Vault.create(entering, params)
 
     {:ok, plan} = Plan.plan(ctx, %{ref: ref})
     decisions = %{ref: ref, bindings: [%{need: "api_key", entry_id: entry.id}]}

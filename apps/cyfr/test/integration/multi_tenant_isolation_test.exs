@@ -71,7 +71,7 @@ defmodule MultiTenantIsolationTest do
     test "list/1 from athanor A does not return webhooks created in athanor B",
          %{a: ctx_a, b: ctx_b, prof_a: prof_a, prof_b: prof_b} do
       {:ok, _} =
-        Sanctum.Webhook.create(ctx_a, %{
+        Sanctum.TestContext.create_webhook(ctx_a, %{
           name: "hk_a",
           replay_protection: "none",
           target_ref: "f:local.h",
@@ -79,7 +79,7 @@ defmodule MultiTenantIsolationTest do
         })
 
       {:ok, _} =
-        Sanctum.Webhook.create(ctx_b, %{
+        Sanctum.TestContext.create_webhook(ctx_b, %{
           name: "hk_b",
           replay_protection: "none",
           target_ref: "f:local.h",
@@ -102,7 +102,7 @@ defmodule MultiTenantIsolationTest do
     test "get/2 from athanor A returns :not_found for athanor B's webhook",
          %{a: ctx_a, b: ctx_b, prof_b: prof_b} do
       {:ok, _} =
-        Sanctum.Webhook.create(ctx_b, %{
+        Sanctum.TestContext.create_webhook(ctx_b, %{
           name: "private",
           replay_protection: "none",
           target_ref: "f:local.h",
@@ -115,7 +115,7 @@ defmodule MultiTenantIsolationTest do
     test "the same name in two athanors is allowed and the two never collide",
          %{a: ctx_a, b: ctx_b, prof_a: prof_a, prof_b: prof_b} do
       assert {:ok, %{slug: slug_a}} =
-               Sanctum.Webhook.create(ctx_a, %{
+               Sanctum.TestContext.create_webhook(ctx_a, %{
                  name: "shared",
                  replay_protection: "none",
                  target_ref: "f:local.h",
@@ -123,7 +123,7 @@ defmodule MultiTenantIsolationTest do
                })
 
       assert {:ok, %{slug: slug_b}} =
-               Sanctum.Webhook.create(ctx_b, %{
+               Sanctum.TestContext.create_webhook(ctx_b, %{
                  name: "shared",
                  replay_protection: "none",
                  target_ref: "f:local.h",
@@ -149,8 +149,12 @@ defmodule MultiTenantIsolationTest do
 
     test "list/1 from athanor A does not return athanor B's keys", %{a: ctx_a, b: ctx_b} do
       {ctx_a, ctx_b} = issuers(ctx_a, ctx_b)
-      {:ok, _} = Sanctum.ApiKey.create(ctx_a, %{name: "key_a", type: :application, scope: []})
-      {:ok, _} = Sanctum.ApiKey.create(ctx_b, %{name: "key_b", type: :application, scope: []})
+
+      {:ok, _} =
+        Sanctum.TestContext.create_key(ctx_a, %{name: "key_a", type: :application, scope: []})
+
+      {:ok, _} =
+        Sanctum.TestContext.create_key(ctx_b, %{name: "key_b", type: :application, scope: []})
 
       {:ok, list_a} = Sanctum.ApiKey.list(ctx_a)
       {:ok, list_b} = Sanctum.ApiKey.list(ctx_b)
@@ -168,8 +172,8 @@ defmodule MultiTenantIsolationTest do
     test "the same key name is allowed in both athanors", %{a: ctx_a, b: ctx_b} do
       {ctx_a, ctx_b} = issuers(ctx_a, ctx_b)
       attrs = %{name: "same", type: :application, scope: []}
-      assert {:ok, _} = Sanctum.ApiKey.create(ctx_a, attrs)
-      assert {:ok, _} = Sanctum.ApiKey.create(ctx_b, attrs)
+      assert {:ok, _} = Sanctum.TestContext.create_key(ctx_a, attrs)
+      assert {:ok, _} = Sanctum.TestContext.create_key(ctx_b, attrs)
     end
   end
 
@@ -220,9 +224,9 @@ defmodule MultiTenantIsolationTest do
   # isolation smoke lives here.
   describe "Sanctum.Vault isolation" do
     test "athanor A cannot read or enumerate athanor B's vault entries", %{a: ctx_a, b: ctx_b} do
-      {:ok, _} = Sanctum.Vault.create(ctx_a, %{name: "shared-name", kind: "api_key"})
-      {:ok, _} = Sanctum.Vault.create(ctx_b, %{name: "shared-name", kind: "api_key"})
-      {:ok, b_only} = Sanctum.Vault.create(ctx_b, %{name: "b-only", kind: "api_key"})
+      {:ok, _} = Sanctum.TestContext.create_vault(ctx_a, %{name: "shared-name", kind: "api_key"})
+      {:ok, _} = Sanctum.TestContext.create_vault(ctx_b, %{name: "shared-name", kind: "api_key"})
+      {:ok, b_only} = Sanctum.TestContext.create_vault(ctx_b, %{name: "b-only", kind: "api_key"})
 
       {:ok, list_a} = Sanctum.Vault.list(ctx_a)
       names_a = Enum.map(list_a, & &1.name)
@@ -237,7 +241,7 @@ defmodule MultiTenantIsolationTest do
 
     test "no Sanctum.Vault verb reaches another athanor's entry by id",
          %{a: ctx_a, b: ctx_b} do
-      {:ok, b_entry} = Sanctum.Vault.create(ctx_b, %{name: "b-cred", kind: "api_key"})
+      {:ok, b_entry} = Sanctum.TestContext.create_vault(ctx_b, %{name: "b-cred", kind: "api_key"})
 
       # The id must not resolve through any verb — read, rename, revoke,
       # rotate or delete.
@@ -246,7 +250,7 @@ defmodule MultiTenantIsolationTest do
       assert {:error, :not_found} = Sanctum.Vault.delete(ctx_a, b_entry.id)
 
       assert {:error, _} =
-               Sanctum.Vault.rotate(ctx_a, %{
+               Sanctum.TestContext.rotate_vault(ctx_a, %{
                  id: b_entry.id,
                  fields: %{"k" => "v"},
                  expected_payload_rev: 0
@@ -387,7 +391,9 @@ defmodule MultiTenantIsolationTest do
     test "an athanor-scoped context is still allowed", %{a: ctx} do
       assert ^ctx = Sanctum.Context.require_tenant!(ctx)
 
-      assert {:ok, view} = Sanctum.Vault.create(ctx, %{name: "ok-entry", kind: "api_key"})
+      assert {:ok, view} =
+               Sanctum.TestContext.create_vault(ctx, %{name: "ok-entry", kind: "api_key"})
+
       {:ok, listed} = Sanctum.Vault.list(ctx)
       assert Enum.any?(listed, &(&1.id == view.id))
     end

@@ -15,10 +15,13 @@ defmodule Sanctum.Consent.AuthzTest do
   without its client, is refused. Tincture sessions, the guest plane and
   key overrides stay refused. No client holds a rank.
 
-  `confirm/3`, `check/3` and `consume/2` decide a sensitive change: in
-  their first form no action asks for a fresh confirmation, a known action
-  and a well-formed change are answered `:ok`, and the deciding site's own
-  checks of who may act stand as they were.
+  `confirm/3`, `check/3` and `consume/2` decide a sensitive change: a
+  grant and an approval need the session alone; every sensitive change
+  opens, or answers, one pending confirmation for its exact person,
+  athanor, operation, argument digest and preview, and goes ahead only by
+  consuming that record once it was proven, with the person's standing
+  read again. A caller that could never confirm is refused rather than
+  asked, and so is a person whose keys are at another home.
   """
   use ExUnit.Case, async: true
 
@@ -102,11 +105,16 @@ defmodule Sanctum.Consent.AuthzTest do
     name = "authz-key-#{System.unique_integer([:positive])}"
     expires_at = DateTime.add(DateTime.utc_now(), 3600, :second)
 
-    {:ok, %{api_key: raw}} =
-      Sanctum.ApiKey.create(session_ctx, %{
-        name: name,
-        consent_capability: %{commit_digest: digest, expires_at: expires_at}
+    opts = %{name: name, consent_capability: %{commit_digest: digest, expires_at: expires_at}}
+
+    confirmed =
+      Sanctum.TestContext.confirmed(session_ctx, :credential_issuance, %{
+        operation: "key.create",
+        arguments: opts,
+        resource: name
       })
+
+    {:ok, %{api_key: raw}} = Sanctum.ApiKey.create(confirmed, opts)
 
     {:ok, key_ctx} = Sanctum.Caller.establish({:api_key, raw})
     {:ok, key_capability} = Sanctum.ApiKey.consent_capability(key_ctx, key_ctx.api_key_id)
@@ -120,7 +128,15 @@ defmodule Sanctum.Consent.AuthzTest do
     source = "192.0.2.#{rem(System.unique_integer([:positive]), 250) + 1}"
     glass = Context.build(%{authenticated: false, client_ip: source})
     {device_key, private} = :crypto.generate_key(:eddsa, :ed25519)
-    {:ok, invitation} = Sanctum.Pairing.begin(session_ctx, %{})
+
+    confirmed =
+      Sanctum.TestContext.confirmed(
+        session_ctx,
+        :device_pairing,
+        Sanctum.Pairing.invitation_change()
+      )
+
+    {:ok, invitation} = Sanctum.Pairing.begin(confirmed, %{})
 
     {:ok, %{challenge: challenge}} =
       Sanctum.Pairing.complete(glass, invitation.invitation_secret, %{device_key: device_key})
@@ -217,7 +233,16 @@ defmodule Sanctum.Consent.AuthzTest do
       device_ctx: device_ctx,
       session_ctx: session_ctx
     } do
-      {:ok, _row} = Sanctum.Pairing.revoke(session_ctx, device_ctx.client_id)
+      client_id = device_ctx.client_id
+
+      confirmed =
+        Sanctum.TestContext.confirmed(session_ctx, :pairing_revocation, %{
+          operation: "pairing.revoke",
+          arguments: %{"client_id" => client_id},
+          resource: client_id
+        })
+
+      {:ok, _row} = Sanctum.Pairing.revoke(confirmed, client_id)
 
       assert Authz.authorize(device_ctx, request()) == {:error, :not_standing}
     end
@@ -530,32 +555,302 @@ defmodule Sanctum.Consent.AuthzTest do
   end
 
   # ============================================================================
-  # Sensitive changes, first form
+  # Sensitive changes
   # ============================================================================
 
+  defp opened!(ctx, change \\ change()) do
+    assert {:error, {:confirmation_required, %{id: id, operation: operation, expires_at: at}}} =
+             Authz.check(ctx, :credential_entry, change)
+
+    assert operation == change.operation
+    assert %DateTime{} = at
+    id
+  end
+
+  defp record(ctx, id) do
+    {:ok, row} = Arca.PendingConfirmations.get(Context.actor(ctx), id)
+    row
+  end
+
+  # The announcements about `user_id`'s records alone: this module runs
+  # asynchronously, and a handler hears every test's.
+  defp capture(events, user_id) do
+    test = self()
+    id = {__MODULE__, make_ref()}
+
+    :telemetry.attach_many(
+      id,
+      events,
+      fn event, _measurements, meta, _ ->
+        if meta[:user_id] == user_id, do: send(test, {:announced, event, meta})
+      end,
+      nil
+    )
+
+    on_exit(fn -> :telemetry.detach(id) end)
+  end
+
   describe "a sensitive change" do
-    test "is answered as before, whatever the action and whoever the site admitted" do
-      for action <- Sanctum.Pairing.actions(),
-          caller <- [ctx(auth_method: :oidc), ctx(auth_method: :api_key)] do
-        assert Authz.confirm(caller, action, change()) == :ok
-        assert Authz.check(caller, action, change()) == :ok
-        assert Authz.consume(caller, {action, change()}) == :ok
+    setup [:checkout, :standing_session]
+
+    test "a grant or an approval needs the session alone", %{session_ctx: session_ctx} do
+      for action <- [:grant, :approval] do
+        assert Authz.confirm(session_ctx, action, change()) == :ok
+        assert Authz.check(session_ctx, action, change()) == :ok
+        assert Authz.consume(session_ctx, {action, change()}) == :ok
+      end
+
+      for action <- Sanctum.Pairing.actions(), action not in [:grant, :approval] do
+        assert Sanctum.Pairing.fresh_required?(action, session_ctx), inspect(action)
       end
     end
 
-    test "adds no refusal of its own to the deciding site's checks of who may act" do
-      # Who may enter a credential or mint a key is the site's to decide,
-      # as it was: until a proof can be given, the decision refuses nothing
-      # a site admitted.
-      for caller <- [
-            Context.enter_guest(ctx(auth_method: :oidc)),
-            Context.build(%{authenticated: false, auth_method: :oidc}),
-            ctx(auth_method: :oidc, anonymous: true)
-          ] do
-        assert Authz.confirm(caller, :credential_entry, change()) == :ok
-        assert Authz.check(caller, :credential_entry, change()) == :ok
-        assert Authz.consume(caller, {:credential_entry, change()}) == :ok
-      end
+    test "from a session with no proof, answers the signal naming one record for the change",
+         %{session_ctx: session_ctx, user: user} do
+      capture([[:cyfr, :sanctum, :confirmation, :opened]], user.id)
+      id = opened!(session_ctx)
+
+      # Asked again, the same record answers; nothing new is opened.
+      assert {:error, {:confirmation_required, %{id: ^id}}} =
+               Authz.confirm(session_ctx, :credential_entry, change())
+
+      row = record(session_ctx, id)
+
+      assert {row.user_id, row.operation, row.action, row.state} ==
+               {user.id, "vault.create", "credential_entry", "pending"}
+
+      assert_receive {:announced, [:cyfr, :sanctum, :confirmation, :opened], meta}
+      assert Enum.sort(Map.keys(meta)) == [:athanor_id, :expires_at, :id, :operation, :user_id]
+      assert meta.id == id
+      refute_receive {:announced, [:cyfr, :sanctum, :confirmation, :opened], _}
+    end
+
+    test "a caller that could never confirm is refused, not asked", %{session_ctx: session_ctx} do
+      assert Authz.confirm(Context.enter_guest(session_ctx), :credential_entry, change()) ==
+               {:error, :guest_plane}
+
+      assert Authz.confirm(%{session_ctx | authenticated: false}, :credential_entry, change()) ==
+               {:error, :not_authenticated}
+
+      assert Authz.confirm(%{session_ctx | anonymous: true}, :credential_entry, change()) ==
+               {:error, :anonymous}
+
+      assert Authz.confirm(ctx(auth_method: :oidc), :credential_entry, change()) ==
+               {:error, {:surface_not_permitted, :oidc}}
+
+      assert Authz.confirm(%{session_ctx | athanor_id: nil}, :credential_entry, change()) ==
+               {:error, :missing_tenant}
+    end
+
+    test "a proven record goes ahead once, and only for its own change",
+         %{session_ctx: session_ctx, user: user} do
+      capture(
+        [
+          [:cyfr, :sanctum, :confirmation, :confirmed],
+          [:cyfr, :sanctum, :confirmation, :consumed]
+        ],
+        user.id
+      )
+
+      confirmed = Sanctum.TestContext.confirmed(session_ctx, :credential_entry, change())
+      assert_receive {:announced, [:cyfr, :sanctum, :confirmation, :confirmed], _}
+
+      # Other arguments, a secret among them, are another change.
+      other = put_in(change().arguments[:fields], %{"KEY" => "sk-other"})
+
+      assert {:error, {:confirmation_required, %{id: fresh}}} =
+               Authz.confirm(confirmed, :credential_entry, other)
+
+      refute fresh == confirmed.confirmation_id
+      assert record(session_ctx, confirmed.confirmation_id).state == "confirmed"
+
+      assert Authz.confirm(confirmed, :credential_entry, change()) == :ok
+      assert record(session_ctx, confirmed.confirmation_id).state == "consumed"
+      assert_receive {:announced, [:cyfr, :sanctum, :confirmation, :consumed], meta}
+      assert meta.id == confirmed.confirmation_id
+
+      # Consumed twice: asked for again.
+      assert {:error, {:confirmation_required, %{id: again}}} =
+               Authz.confirm(confirmed, :credential_entry, change())
+
+      refute again == confirmed.confirmation_id
+    end
+
+    test "check/3 consumes nothing, and consume/2 consumes inside the caller's transaction",
+         %{session_ctx: session_ctx} do
+      confirmed = Sanctum.TestContext.confirmed(session_ctx, :credential_entry, change())
+
+      assert Authz.check(confirmed, :credential_entry, change()) == :ok
+      assert record(session_ctx, confirmed.confirmation_id).state == "confirmed"
+
+      assert {:ok, :ok} =
+               Arca.Repo.transaction(fn ->
+                 Authz.consume(confirmed, {:credential_entry, change()})
+               end)
+
+      assert record(session_ctx, confirmed.confirmation_id).state == "consumed"
+
+      # Once consumed, consume/2 opens nothing inside a transaction: it
+      # refuses, and the caller rolls back.
+      assert {:error, {:conflict, _}} = Authz.consume(confirmed, {:credential_entry, change()})
+
+      # consume/2 with no confirmation named was not asked first.
+      assert Authz.consume(session_ctx, {:credential_entry, change()}) ==
+               {:error, :invalid_request}
+    end
+
+    test "a record past its expiry is asked for again, and announced expired",
+         %{session_ctx: session_ctx, user: user} do
+      capture([[:cyfr, :sanctum, :confirmation, :expired]], user.id)
+      confirmed = Sanctum.TestContext.confirmed(session_ctx, :credential_entry, change())
+
+      Arca.Repo.update_all(
+        from(c in Arca.Schemas.PendingConfirmation, where: c.id == ^confirmed.confirmation_id),
+        set: [expires_at: DateTime.add(DateTime.utc_now(), -1, :second)]
+      )
+
+      assert {:error, {:confirmation_required, %{id: fresh}}} =
+               Authz.confirm(confirmed, :credential_entry, change())
+
+      refute fresh == confirmed.confirmation_id
+      assert_receive {:announced, [:cyfr, :sanctum, :confirmation, :expired], meta}
+      assert meta.id == confirmed.confirmation_id
+    end
+
+    test "another person's record is theirs: naming it opens one's own", %{
+      session_ctx: session_ctx,
+      athanor: athanor
+    } do
+      confirmed = Sanctum.TestContext.confirmed(session_ctx, :credential_entry, change())
+
+      n = System.unique_integer([:positive])
+
+      {:ok, other} =
+        Users.upsert_from_provider(%{
+          id: "github|https://github.com|authz-other-#{n}",
+          provider: "github",
+          email: "authz-other#{n}@example.com",
+          verified: true
+        })
+
+      {:ok, _} = Members.ensure(other.id, scope: "athanor", athanor_id: athanor.id)
+
+      theirs = %{
+        ctx(auth_method: :oidc, user_id: other.id, athanor_id: athanor.id)
+        | confirmation_id: confirmed.confirmation_id
+      }
+
+      assert {:error, {:confirmation_required, %{id: own}}} =
+               Authz.confirm(theirs, :credential_entry, change())
+
+      refute own == confirmed.confirmation_id
+      assert record(session_ctx, confirmed.confirmation_id).state == "confirmed"
+    end
+
+    test "another session of the same person never takes a record this one opened, even proven",
+         %{session_ctx: asking, user: user, athanor: athanor} do
+      # A second session of the same person, as a stolen one would be,
+      # listening for the proof on the person's confirmation stream.
+      built =
+        Context.build(
+          user_id: user.id,
+          email: user.email,
+          provider: "github",
+          athanor_id: athanor.id,
+          permissions: [:*],
+          auth_method: :oidc,
+          authenticated: true
+        )
+
+      {:ok, session} = Sanctum.TestContext.create_session(built)
+
+      {:ok, stolen} =
+        Sanctum.Caller.establish(session.token, focus: athanor.id, task_supervisor: nil)
+
+      refute stolen.session_token_hash == asking.session_token_hash
+
+      proven = Sanctum.TestContext.confirmed(asking, :credential_entry, change())
+      id = proven.confirmation_id
+      assert record(asking, id).state == "confirmed"
+
+      # The stolen session names the record: it is asked for its own proof,
+      # on a record of its own, and the proven one stands untouched.
+      assert {:error, {:confirmation_required, %{id: own}}} =
+               Authz.confirm(%{stolen | confirmation_id: id}, :credential_entry, change())
+
+      refute own == id
+      assert record(asking, id).state == "confirmed"
+
+      assert {:error, {:confirmation_required, %{id: ^own}}} =
+               Authz.check(%{stolen | confirmation_id: id}, :credential_entry, change())
+
+      assert {:error, {:conflict, _}} =
+               Authz.consume(%{stolen | confirmation_id: id}, {:credential_entry, change()})
+
+      # Asked for the same change, the asking session is answered its own
+      # record, never the stolen one's, and repeats under it once.
+      assert {:error, {:confirmation_required, %{id: ^id}}} =
+               Authz.check(asking, :credential_entry, change())
+
+      assert Authz.confirm(proven, :credential_entry, change()) == :ok
+      assert record(asking, id).state == "consumed"
+      assert record(asking, own).state == "pending"
+    end
+
+    test "the person's standing is read again as the record is consumed",
+         %{session_ctx: session_ctx, user: user} do
+      confirmed = Sanctum.TestContext.confirmed(session_ctx, :credential_entry, change())
+      {:ok, _denied} = Users.deny(user)
+
+      # The denial retired the session the context holds, and its open
+      # confirmations with it: the proven record goes nowhere.
+      assert Authz.confirm(confirmed, :credential_entry, change()) == {:error, :not_authenticated}
+      refute record(session_ctx, confirmed.confirmation_id).state == "consumed"
+    end
+
+    test "confirmed by a passkey then revoked: the record is void, and asked for again",
+         %{session_ctx: session_ctx} do
+      confirmed = Sanctum.TestContext.confirmed(session_ctx, :credential_entry, change())
+
+      %{passkey_id: passkey_id} =
+        record(session_ctx, confirmed.confirmation_id)
+        |> then(&%{passkey_id: &1.confirmed_passkey_id})
+
+      {:ok, %{voided_confirmation_ids: voided}} =
+        Arca.Passkeys.revoke(Prima.Actor.system(), passkey_id)
+
+      assert confirmed.confirmation_id in voided
+
+      assert {:error, {:confirmation_required, %{id: fresh}}} =
+               Authz.confirm(confirmed, :credential_entry, change())
+
+      refute fresh == confirmed.confirmation_id
+    end
+
+    test "a key's context asks for its creator's confirmation, and repeats one they gave",
+         %{session_ctx: session_ctx} do
+      name = "authz-plain-#{System.unique_integer([:positive])}"
+      opts = %{name: name}
+
+      confirmed =
+        Sanctum.TestContext.confirmed(session_ctx, :credential_issuance, %{
+          operation: "key.create",
+          arguments: opts,
+          resource: name
+        })
+
+      {:ok, %{api_key: raw}} = Sanctum.ApiKey.create(confirmed, opts)
+      {:ok, key_ctx} = Sanctum.Caller.establish({:api_key, raw})
+      minted = %{operation: "key.create", arguments: %{name: "minted"}, resource: "minted"}
+
+      assert {:error, {:confirmation_required, %{id: id}}} =
+               Authz.confirm(key_ctx, :credential_issuance, minted)
+
+      assert record(key_ctx, id).user_id == key_ctx.user_id
+
+      Sanctum.TestContext.prove!(key_ctx, id)
+
+      assert Authz.confirm(%{key_ctx | confirmation_id: id}, :credential_issuance, minted) == :ok
     end
 
     test "names an action of the table and a well-formed change" do
@@ -568,11 +863,88 @@ defmodule Sanctum.Consent.AuthzTest do
             %{operation: "vault.create"},
             %{operation: "vault.create", arguments: %{}, preview: %{"resource" => "x"}},
             %{operation: nil, arguments: %{}},
+            %{operation: "vault.create", arguments: %{ratio: 1.5}},
             "vault.create"
           ] do
         assert Authz.confirm(session, :credential_entry, bad) == {:error, :invalid_request},
                inspect(bad)
       end
+    end
+  end
+
+  describe "the argument digest" do
+    setup [:checkout]
+
+    test "the same arguments bind the same digest, however spelled" do
+      {:ok, digest} = Authz.args_digest(%{name: "k", fields: %{"KEY" => "sk-1"}, note: nil})
+
+      assert Authz.args_digest(%{"name" => "k", "fields" => %{"KEY" => "sk-1"}}) == {:ok, digest}
+      assert Authz.args_digest(%{fields: %{"KEY" => "sk-1"}, name: :k}) == {:ok, digest}
+      assert "sha256:" <> hex = digest
+      assert byte_size(hex) == 64
+
+      at = ~U[2026-09-30 12:00:00Z]
+
+      assert Authz.args_digest(%{until: at}) ==
+               Authz.args_digest(%{until: DateTime.to_iso8601(at)})
+    end
+
+    test "any changed argument, a secret value included, binds another digest" do
+      {:ok, one} = Authz.args_digest(%{name: "k", fields: %{"KEY" => "sk-1"}})
+      {:ok, two} = Authz.args_digest(%{name: "k", fields: %{"KEY" => "sk-2"}})
+      {:ok, three} = Authz.args_digest(%{name: "k2", fields: %{"KEY" => "sk-1"}})
+      assert Enum.uniq([one, two, three]) == [one, two, three]
+    end
+
+    test "is keyed: no plain hash of the arguments, or of a secret, is the digest" do
+      arguments = %{"name" => "k", "fields" => %{"KEY" => "sk-guessable"}}
+      {:ok, digest} = Authz.args_digest(arguments)
+      {:ok, plain} = Prima.JCS.hash(arguments)
+
+      refute digest == plain
+      refute digest == Prima.Digest.sha256("sk-guessable")
+    end
+
+    test "a float, a nil in a list, a string not UTF-8, another struct or colliding keys are no request" do
+      for arguments <- [
+            %{ratio: 1.5},
+            %{list: ["a", nil]},
+            %{bytes: <<255, 254>>},
+            %{at: ~D[2026-09-30]},
+            %{"name" => "a", name: "b"},
+            %{"name" => nil, name: "b"}
+          ] do
+        assert Authz.args_digest(arguments) == {:error, :invalid_request}, inspect(arguments)
+      end
+    end
+  end
+
+  describe "the stored record" do
+    setup [:checkout, :standing_session]
+
+    test "holds the keyed digest and a secret-free preview, never a plain hash of an argument",
+         %{session_ctx: session_ctx} do
+      secret = "sk-stored-#{System.unique_integer([:positive])}"
+      arguments = %{name: "prod-key", kind: "api_key", fields: %{"KEY" => secret}}
+      change = %{operation: "vault.create", arguments: arguments, resource: "prod-key"}
+      id = opened!(session_ctx, change)
+      row = record(session_ctx, id)
+
+      {:ok, digest} = Authz.args_digest(arguments)
+      assert row.args_digest == digest
+
+      {:ok, plain} =
+        Prima.JCS.hash(%{
+          "name" => "prod-key",
+          "kind" => "api_key",
+          "fields" => %{"KEY" => secret}
+        })
+
+      stored = inspect(row, limit: :infinity, printable_limit: :infinity)
+      refute stored =~ secret
+      refute stored =~ plain
+      refute stored =~ Prima.Digest.sha256(secret)
+      assert Jason.decode!(row.preview)["resource"] == "prod-key"
     end
   end
 end

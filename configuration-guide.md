@@ -61,7 +61,7 @@ carry the names other programs own as well.
 | `CYFR_MCP_ALLOWED_ORIGINS` | Extra origins, comma-separated, the MCP endpoint's Origin check accepts beside `https://CYFR_HOST` and the localhost defaults. |
 | `CYFR_METRICS_TOKEN` | The bearer token a `/metrics` scrape must present; unset, an enabled endpoint is unauthenticated, so bind it privately or allowlist it at the proxy. |
 | `CYFR_OCI_REGISTRY_URL` | The OCI registry host components are pulled from and pushed to (default `registry.<CYFR_REGISTRY_URL>`, and `none` when that is `none`). |
-| `CYFR_OIDC_CLIENT_ID` | The client ID at the OIDC issuer, with `CYFR_AUTH_PROVIDER=oidc`. |
+| `CYFR_OIDC_CLIENT_ID` | The client ID at the OIDC issuer, with `CYFR_AUTH_PROVIDER=oidc`. The issuer lists two redirect URIs for it: `<origin>/auth/oidcc/callback` for sign-in and `<origin>/auth/oidcc/reauth` for the fresh sign-in that confirms a sensitive change, which counts only when the issuer sends `auth_time` in its ID token. |
 | `CYFR_OIDC_CLIENT_SECRET` | The client secret at the OIDC issuer, with `CYFR_AUTH_PROVIDER=oidc`. |
 | `CYFR_OIDC_ISSUER` | The OIDC issuer's URL (Okta, Auth0, Keycloak, Azure AD and the like), with `CYFR_AUTH_PROVIDER=oidc`. |
 | `CYFR_OPUS_KEY` | The worker root, 32 random bytes as 64 hexadecimal digits, read by cyfr alone; every worker service's key derives from it. `cyfr init` mints it, every member of a cell holds the same one, and without it no component runs. |

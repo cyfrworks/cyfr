@@ -26,4 +26,16 @@ defmodule Prima.DigestTest do
 
     assert Enum.uniq([one, two, three]) == [one, two, three]
   end
+
+  test "a keyed digest is RFC 4231's HMAC-SHA256, spelled as every digest is" do
+    # RFC 4231, test case 2.
+    assert Prima.Digest.hmac_sha256("Jefe", "what do ya want for nothing?") ==
+             "sha256:5bdcc146bf60754e6a042426089575c75a003f089d2739839dec58b964ec3843"
+
+    refute Prima.Digest.hmac_sha256("another key", "what do ya want for nothing?") ==
+             Prima.Digest.hmac_sha256("Jefe", "what do ya want for nothing?")
+
+    refute Prima.Digest.hmac_sha256("Jefe", "what do ya want for nothing?") ==
+             Prima.Digest.sha256("what do ya want for nothing?")
+  end
 end

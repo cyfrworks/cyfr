@@ -26,7 +26,14 @@ defmodule Emissary.Web.OAuthCallbackControllerTest do
     person = Sanctum.TestContext.issuer!(Sanctum.TestContext.local())
     {:ok, session} = Sanctum.Session.create(person)
     {:ok, ctx} = Caller.establish(session.token)
-    :ok = Sanctum.ProviderCredentials.put(ctx, "google", "client-id-1", "client-secret-1")
+
+    :ok =
+      Sanctum.TestContext.put_provider_credentials(
+        ctx,
+        "google",
+        "client-id-1",
+        "client-secret-1"
+      )
 
     {:ok, bypass: bypass, ctx: ctx}
   end

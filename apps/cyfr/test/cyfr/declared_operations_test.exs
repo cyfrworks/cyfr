@@ -51,14 +51,7 @@ defmodule Cyfr.DeclaredOperationsTest do
        "challenge" => "chl_1",
        "action_id" => "act_1",
        "key_epoch" => @digest
-     }},
-    {"passkey", "register", %{}},
-    {"passkey", "list", %{}},
-    {"passkey", "revoke", %{"passkey_id" => "psk_1"}},
-    {"confirmation", "confirm", %{"id" => "cnf_1"}},
-    {"confirmation", "reauth", %{"id" => "cnf_1", "method" => "email"}},
-    {"confirmation", "pending", %{}},
-    {"confirmation", "cancel", %{"id" => "cnf_1"}}
+     }}
   ]
 
   defp operation(tool, action) do
@@ -107,15 +100,6 @@ defmodule Cyfr.DeclaredOperationsTest do
       for {tool, action, args} <- @stubs do
         assert call(ctx, tool, action, args) == {:error, :not_built}, "#{tool}.#{action}"
       end
-
-      # The platform administrator's authorization of a pending passkey.
-      admin = %{ctx | platform_admin: true}
-
-      assert call(admin, "passkey", "recover_admin", %{
-               "user_id" => "usr_1",
-               "passkey_id" => "psk_1",
-               "registration_digest" => @digest
-             }) == {:error, :not_built}
     end
 
     test "a stub's answer reads as unavailable, in its own sentence, and logs nothing unexpected",

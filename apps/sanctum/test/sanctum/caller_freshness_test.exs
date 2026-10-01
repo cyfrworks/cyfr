@@ -133,7 +133,7 @@ defmodule Sanctum.CallerFreshnessTest do
       assert %DateTime{} = ctx.validated_at
 
       {:ok, %{api_key: raw}} =
-        Sanctum.ApiKey.create(ctx, %{name: "fresh-key", type: :service})
+        Sanctum.TestContext.create_key(ctx, %{name: "fresh-key", type: :service})
 
       assert {:ok, %Context{validated_at: %DateTime{}}} = Caller.establish({:api_key, raw})
     end
@@ -286,7 +286,7 @@ defmodule Sanctum.CallerFreshnessTest do
       name = "key-#{System.unique_integer([:positive])}"
 
       {:ok, %{api_key: raw}} =
-        Sanctum.ApiKey.create(ctx, Map.merge(%{name: name, type: :service}, attrs))
+        Sanctum.TestContext.create_key(ctx, Map.merge(%{name: name, type: :service}, attrs))
 
       {:ok, key_ctx} = Caller.establish({:api_key, raw}, client_ip: "127.0.0.1")
       Map.merge(fixture, %{key_ctx: %{key_ctx | client_ip: "127.0.0.1"}, key_name: name})

@@ -25,11 +25,32 @@ defmodule Sanctum.VaultTest do
         over
       )
 
-    {:ok, view} = Vault.create(ctx, params)
+    {:ok, view} = create(ctx, params)
     view
   end
 
   defp actor(ctx), do: Sanctum.Context.actor(ctx)
+
+  # A credential entered, or rotated, as a person enters it: under the
+  # confirmation they proved (`Sanctum.TestContext.confirmed/3`), for
+  # exactly the change the vault decides, the entry named as it names it.
+  defp create(ctx, params),
+    do: Vault.create(entering(ctx, "vault.create", params, params[:name]), params)
+
+  defp rotate(ctx, %{id: id} = params) do
+    case Arca.VaultStorage.get(actor(ctx), id) do
+      {:ok, %{name: name}} -> Vault.rotate(entering(ctx, "vault.rotate", params, name), params)
+      _missing -> Vault.rotate(ctx, params)
+    end
+  end
+
+  defp entering(ctx, operation, params, name) do
+    Sanctum.TestContext.confirmed(ctx, :credential_entry, %{
+      operation: operation,
+      arguments: params,
+      resource: name
+    })
+  end
 
   defp resource_for(ctx, id) do
     {:ok, entry} = Arca.VaultStorage.get(actor(ctx), id)
@@ -97,6 +118,69 @@ defmodule Sanctum.VaultTest do
     end
   end
 
+  describe "a credential entry is a sensitive change" do
+    setup %{ctx: ctx} do
+      {person, _user} = Sanctum.TestContext.person!(ctx)
+      %{person: person}
+    end
+
+    test "entered from a session with no proof, it answers the signal and seals nothing",
+         %{person: person} do
+      params = %{name: "unproven", kind: "api_key", fields: %{"KEY" => "sk-unproven"}}
+
+      assert {:error, {:confirmation_required, %{id: id, operation: "vault.create"}}} =
+               Vault.create(person, params)
+
+      assert is_binary(id)
+      {:ok, listed} = Vault.list(person)
+      refute Enum.any?(listed, &(&1.name == "unproven"))
+    end
+
+    test "rotated from a session with no proof, the material stays", %{person: person} do
+      view = create!(person, %{fields: %{"key" => "before"}})
+      params = %{id: view.id, fields: %{"key" => "after"}, expected_payload_rev: 0}
+
+      assert {:error, {:confirmation_required, %{operation: "vault.rotate"}}} =
+               Vault.rotate(person, params)
+
+      assert {:ok, %{"key" => "before"}} =
+               VaultReader.fetch(person, resource_for(person, view.id))
+    end
+
+    test "a grant started, or client credentials stored, from a session with no proof ask first",
+         %{person: person} do
+      assert {:error, {:confirmation_required, %{operation: "vault.authorize"}}} =
+               Sanctum.Vault.OAuthGrant.authorize_url(person, %{
+                 name: "Mail",
+                 provider: "google",
+                 scopes: ["mail"]
+               })
+
+      assert {:error, {:confirmation_required, %{operation: "oauth.set_client"}}} =
+               Sanctum.ProviderCredentials.put(person, "google", "cid", "csec")
+
+      assert {:ok, []} = Sanctum.ProviderCredentials.list(person)
+    end
+
+    test "a confirmation enters its one credential: another name or other material asks again",
+         %{person: person} do
+      params = %{name: "one", kind: "api_key", fields: %{"KEY" => "sk-one"}}
+      confirmed = entering(person, "vault.create", params, "one")
+
+      other = %{params | fields: %{"KEY" => "sk-two"}}
+      assert {:error, {:confirmation_required, _}} = Vault.create(confirmed, other)
+      assert {:ok, %{name: "one"}} = Vault.create(confirmed, params)
+    end
+
+    test "renaming, revoking and deleting need the session alone", %{person: person} do
+      view = create!(person)
+
+      assert :ok = Vault.rename(person, view.id, "renamed-by-session")
+      assert {:ok, _} = Vault.revoke(person, view.id)
+      assert :ok = Vault.delete(person, view.id)
+    end
+  end
+
   describe "create + list" do
     test "creates sealed material and lists metadata only", %{ctx: ctx} do
       view = create!(ctx, %{name: "my-supabase"})
@@ -118,7 +202,7 @@ defmodule Sanctum.VaultTest do
     test "a living name cannot be reused", %{ctx: ctx} do
       create!(ctx, %{name: "taken"})
 
-      assert {:error, :name_taken} = Vault.create(ctx, %{name: "taken", kind: "api_key"})
+      assert {:error, :name_taken} = create(ctx, %{name: "taken", kind: "api_key"})
     end
 
     test "unknown kinds are refused", %{ctx: ctx} do
@@ -132,7 +216,7 @@ defmodule Sanctum.VaultTest do
       resource = resource_for(ctx, view.id)
 
       assert {:ok, 1} =
-               Vault.rotate(ctx, %{
+               rotate(ctx, %{
                  id: view.id,
                  fields: %{"key" => "new-material"},
                  expected_payload_rev: 0
@@ -148,14 +232,14 @@ defmodule Sanctum.VaultTest do
       view = create!(ctx, %{fields: %{"key" => "v"}})
 
       assert {:error, :payload_conflict} =
-               Vault.rotate(ctx, %{id: view.id, fields: %{"key" => "x"}, expected_payload_rev: 7})
+               rotate(ctx, %{id: view.id, fields: %{"key" => "x"}, expected_payload_rev: 7})
     end
 
     test "a schema change is not a rotation", %{ctx: ctx} do
       view = create!(ctx, %{fields: %{"key" => "v"}})
 
       assert {:error, :schema_change_requires_rebind} =
-               Vault.rotate(ctx, %{
+               rotate(ctx, %{
                  id: view.id,
                  fields: %{"other" => "v"},
                  expected_payload_rev: 0
@@ -167,7 +251,7 @@ defmodule Sanctum.VaultTest do
       :ok = Arca.VaultStorage.set_status(actor(ctx), view.id, "needs_reauth")
 
       assert {:ok, 1} =
-               Vault.rotate(ctx, %{
+               rotate(ctx, %{
                  id: view.id,
                  fields: %{"key" => "v2"},
                  expected_payload_rev: 0
@@ -186,7 +270,7 @@ defmodule Sanctum.VaultTest do
       # transaction: a lost race leaves neither, so the entry is still
       # readable at exactly the version it was readable at before.
       assert {:error, :payload_conflict} =
-               Vault.rotate(ctx, %{
+               rotate(ctx, %{
                  id: view.id,
                  fields: %{"key" => "after"},
                  expected_payload_rev: 7
@@ -282,7 +366,7 @@ defmodule Sanctum.VaultTest do
       assert row.sealed_payload == nil
 
       # The living-name unique index ignores tombstones.
-      assert {:ok, _} = Vault.create(ctx, %{name: "reusable", kind: "api_key"})
+      assert {:ok, _} = create(ctx, %{name: "reusable", kind: "api_key"})
     end
   end
 
@@ -297,7 +381,7 @@ defmodule Sanctum.VaultTest do
       assert_receive %Cyfr.Bus.VaultEntryChanged{kind: :create}
 
       {:ok, _} =
-        Vault.rotate(ctx, %{id: view.id, fields: view_fields(ctx, view), expected_payload_rev: 0})
+        rotate(ctx, %{id: view.id, fields: view_fields(ctx, view), expected_payload_rev: 0})
 
       assert_receive %Cyfr.Bus.VaultEntryChanged{kind: :rotate}
 

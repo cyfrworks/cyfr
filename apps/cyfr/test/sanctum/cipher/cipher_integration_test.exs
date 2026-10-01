@@ -56,7 +56,7 @@ defmodule Sanctum.CipherIntegrationTest do
       profile = Sanctum.Test.ConsentFixtures.bindable_profile(ctx, "catalyst:local.x:1.0.0")
 
       {:ok, %{secret: secret, slug: slug}} =
-        Webhook.create(ctx, %{
+        Sanctum.TestContext.create_webhook(ctx, %{
           name: "h",
           replay_protection: "none",
           target_ref: "catalyst:local.x:1.0.0",
@@ -81,7 +81,7 @@ defmodule Sanctum.CipherIntegrationTest do
       assert {:error, :secret_unreadable} =
                Webhook.verify_with_grace(%{row | athanor_id: "ath_b"}, body, sign(secret, body))
 
-      {:ok, %{secret: new_secret}} = Webhook.rotate(ctx, "h")
+      {:ok, %{secret: new_secret}} = Sanctum.TestContext.rotate_webhook(ctx, "h")
       {:ok, rotated} = Arca.WebhookStorage.get_by_slug(slug)
 
       assert :ok = Webhook.verify_with_grace(rotated, body, sign(new_secret, body))

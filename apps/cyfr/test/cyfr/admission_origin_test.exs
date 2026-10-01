@@ -681,7 +681,7 @@ defmodule Cyfr.AdmissionOriginTest do
 
   defp hook!(ctx, attrs \\ []) do
     {:ok, hook} =
-      Sanctum.Webhook.create(
+      Sanctum.TestContext.create_webhook(
         ctx,
         Map.merge(
           %{

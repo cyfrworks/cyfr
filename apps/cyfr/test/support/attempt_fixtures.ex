@@ -372,11 +372,18 @@ defmodule Cyfr.Test.AttemptFixtures do
           given
       end
 
-    {:ok, view} =
-      Sanctum.Vault.create(
-        ctx,
-        Map.put_new(attrs, :name, "attempt-fixture-#{System.unique_integer([:positive])}")
-      )
+    params = Map.put_new(attrs, :name, "attempt-fixture-#{System.unique_integer([:positive])}")
+
+    # Entering the credential is a sensitive change, confirmed as its
+    # person confirms it (`Sanctum.TestContext.confirmed/3`).
+    entering =
+      Sanctum.TestContext.confirmed(ctx, :credential_entry, %{
+        operation: "vault.create",
+        arguments: params,
+        resource: params.name
+      })
+
+    {:ok, view} = Sanctum.Vault.create(entering, params)
 
     {:ok, entry} = Arca.VaultStorage.get(Sanctum.Context.actor(ctx), view.id)
     {:ok, digest} = Sanctum.VaultReader.binding_digest(entry)

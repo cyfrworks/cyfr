@@ -15,8 +15,6 @@ defmodule CyfrWeb.WebhookFlowIntegrationTest do
 
   use CyfrWeb.ConnCase, async: false
 
-  alias Sanctum.Webhook
-
   setup do
     # Webhook controller dispatches `Crucible.Dispatch.run/4` async via
     # `Task.Supervisor.start_child/2`. Tests must synchronize on the task
@@ -61,7 +59,7 @@ defmodule CyfrWeb.WebhookFlowIntegrationTest do
     profile = Sanctum.Test.ConsentFixtures.bindable_profile(ctx, "f:local.#{comp}")
 
     {:ok, result} =
-      Webhook.create(
+      Sanctum.TestContext.create_webhook(
         ctx,
         Map.merge(%{name: name, target_ref: "f:local.#{comp}", profile_id: profile}, opts)
         # After the merge, so a fixture naming a real header still wins.

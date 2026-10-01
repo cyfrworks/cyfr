@@ -20,6 +20,17 @@ defmodule Prima.Digest do
   end
 
   @doc """
+  HMAC-SHA256 of the bytes under `key`, formatted `sha256:<lowercase hex>`:
+  a keyed digest, spelled as every digest is, for a record that binds a
+  value without holding anything a reader could guess the value from (a
+  pending confirmation's argument digest, `Sanctum.Consent.Authz`).
+  """
+  @spec hmac_sha256(binary(), binary()) :: String.t()
+  def hmac_sha256(key, bytes) when is_binary(key) and is_binary(bytes) do
+    "sha256:" <> Base.encode16(:crypto.mac(:hmac, :sha256, key, bytes), case: :lower)
+  end
+
+  @doc """
   SHA-256 of the bytes as bare lowercase hex — no `sha256:` prefix.
 
   The keyed-lookup spelling: a secret hashed into a cache key or an index

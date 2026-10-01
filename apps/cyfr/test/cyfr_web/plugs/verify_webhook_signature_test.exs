@@ -21,7 +21,7 @@ defmodule CyfrWeb.Plugs.VerifyWebhookSignatureTest do
     profile = Sanctum.Test.ConsentFixtures.bindable_profile(ctx, "f:local.handler")
 
     {:ok, result} =
-      Webhook.create(
+      Sanctum.TestContext.create_webhook(
         ctx,
         Map.merge(
           %{name: name, target_ref: "f:local.handler", profile_id: profile},

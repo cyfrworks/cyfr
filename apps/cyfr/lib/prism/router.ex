@@ -6,7 +6,8 @@ defmodule Prism.Router do
   The console's routes: the browser pipeline under the console's root
   layout, the browser sign-in pipelines and their throttles, the claim,
   legal-acceptance and attachment pipelines, browser sign-in and
-  sign-out with their callbacks, the claim and legal pages, the
+  sign-out with their callbacks, passkey sign-in's completion, the
+  OpenID Connect re-authentication's callback, the claim and legal pages, the
   attachment and file downloads and the `:athanor` LiveView session.
 
   The composition router invokes `routes/0` where these routes stand, so
@@ -48,6 +49,15 @@ defmodule Prism.Router do
       pipeline :device_complete_throttle do
         plug CyfrWeb.Plugs.AuthRateLimit,
           bucket: :device_complete,
+          max_requests: 30,
+          window_ms: 60_000
+      end
+
+      # A passkey sign-in's ticket, like a device flow's: looking one up
+      # consumes it, so attempts need their own request budget.
+      pipeline :passkey_complete_throttle do
+        plug CyfrWeb.Plugs.AuthRateLimit,
+          bucket: :passkey_complete,
           max_requests: 30,
           window_ms: 60_000
       end
@@ -121,6 +131,30 @@ defmodule Prism.Router do
 
           get "/device/complete/:ticket", AuthController, :device_complete,
             metadata: %{auth: :browser_oauth_flow}
+        end
+
+        # A passkey sign-in the sign-in page verified hands its one-time
+        # ticket here, which sets the cookie session.
+        scope "/" do
+          pipe_through :passkey_complete_throttle
+
+          get "/passkey/complete/:ticket", PasskeyController, :complete,
+            metadata: %{auth: :browser_oauth_flow}
+        end
+
+        # The issuer's answer to a re-authentication for one pending
+        # confirmation: its own redirect URI, beside the sign-in callback,
+        # which verifies the login and shows what it would confirm. The
+        # person's answer is a POST the browser pipeline's CSRF token
+        # guards, spending the verified proof's single-use ticket the
+        # cookie session holds.
+        scope "/" do
+          pipe_through :oauth_callback_throttle
+
+          get "/oidcc/reauth", ReauthController, :callback,
+            metadata: %{auth: :browser_oauth_callback}
+
+          post "/oidcc/reauth", ReauthController, :decide, metadata: %{auth: :browser_oauth_flow}
         end
 
         scope "/" do

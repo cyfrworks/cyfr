@@ -51,13 +51,16 @@ defmodule Sanctum.Vault.NoPlaintextLeakTest do
 
     log =
       capture_log(fn ->
-        {:ok, view} =
-          Vault.create(ctx, %{
-            name: "leaky",
-            kind: "api_key",
-            fields: %{"token" => value},
-            oauth: %{"access_token" => value, "refresh_token" => refresh}
-          })
+        params = %{
+          name: "leaky",
+          kind: "api_key",
+          fields: %{"token" => value},
+          oauth: %{"access_token" => value, "refresh_token" => refresh}
+        }
+
+        # Entering the credential is confirmed as a person confirms it; the
+        # confirmation binds the arguments by a keyed digest alone.
+        {:ok, view} = Vault.create(entering(ctx, "vault.create", params, "leaky"), params)
 
         # Everything the facade answers, on the success path.
         {:ok, stored} = Arca.VaultStorage.get(actor, view.id)
@@ -75,12 +78,18 @@ defmodule Sanctum.Vault.NoPlaintextLeakTest do
         # a crash report or a 500.
         refusals = [
           Vault.create(ctx, %{name: "leaky", kind: "api_key", fields: %{"token" => value}}),
-          Vault.rotate(ctx, %{
+          confirmed_call(ctx, "vault.create", "leaky", &Vault.create/2, %{
+            name: "leaky",
+            kind: "api_key",
+            fields: %{"token" => value}
+          }),
+          Vault.rotate(ctx, %{id: view.id, fields: %{"token" => value}, expected_payload_rev: 99}),
+          confirmed_call(ctx, "vault.rotate", "leaky", &Vault.rotate/2, %{
             id: view.id,
             fields: %{"token" => value},
             expected_payload_rev: 99
           }),
-          Vault.rotate(ctx, %{
+          confirmed_call(ctx, "vault.rotate", "leaky", &Vault.rotate/2, %{
             id: view.id,
             fields: %{"other" => value},
             expected_payload_rev: 0
@@ -180,4 +189,18 @@ defmodule Sanctum.Vault.NoPlaintextLeakTest do
 
     refute String.contains?(log, value)
   end
+
+  # A credential entry under the confirmation its person proved
+  # (`Sanctum.TestContext.confirmed/3`), for exactly the change the vault
+  # decides: its operation, its arguments and the entry by name.
+  defp entering(ctx, operation, params, name) do
+    Sanctum.TestContext.confirmed(ctx, :credential_entry, %{
+      operation: operation,
+      arguments: params,
+      resource: name
+    })
+  end
+
+  defp confirmed_call(ctx, operation, name, fun, params),
+    do: fun.(entering(ctx, operation, params, name), params)
 end

@@ -14,6 +14,8 @@ defmodule Sanctum.Providers.OAuth do
 
   alias Sanctum.Context
 
+  require Prima.ConsentSignal
+
   @doc false
   # The tool's wire definition — schema and access annotations beside the
   # handler they gate; Sanctum.Provider assembles its roster from these.
@@ -133,6 +135,22 @@ defmodule Sanctum.Providers.OAuth do
 
   # Keep authorization refusals typed for dispatch error rendering.
   defp format_reason(reason) when is_binary(reason), do: reason
+
+  # A credential entry's own answers (`Sanctum.Consent.Authz`) pass as they
+  # are: the confirmation signal, whose id the surface confirms, and the
+  # refusals the decision gives.
+  defp format_reason({tag, payload} = signal) when Prima.ConsentSignal.is_signal(tag, payload),
+    do: signal
+
+  defp format_reason(reason) when reason in [:remote_identity_unavailable, :missing_tenant],
+    do: reason
+
+  defp format_reason({:conflict, message} = conflict) when is_binary(message), do: conflict
+
+  # A caller the decision refused as one that could never confirm, in the
+  # consent vocabulary's words (`Sanctum.Consent.Authz.message/1`).
+  defp format_reason({:surface_not_permitted, _method} = refusal),
+    do: {:consent_class_required, refusal}
 
   defp format_reason(reason) do
     if Sanctum.Unauthorized.reason?(reason), do: reason, else: to_string(reason)

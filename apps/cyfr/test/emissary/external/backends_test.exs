@@ -190,7 +190,7 @@ defmodule Emissary.External.BackendsTest do
 
   defp vault_entry(ctx) do
     {:ok, entry} =
-      Sanctum.Vault.create(ctx, %{
+      Sanctum.TestContext.create_vault(ctx, %{
         name: "gh-token",
         kind: "api_key",
         fields: %{"token" => @secret}

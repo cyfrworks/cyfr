@@ -577,7 +577,18 @@ defmodule Cyfr.Cluster.Fixtures do
   @doc "Issue a key from `ctx` on this member: the issuance rereads the rows its binding names."
   @spec issue_key(Sanctum.Context.t()) :: {:ok, String.t()} | {:error, term()}
   def issue_key(ctx) do
-    case Sanctum.ApiKey.create(ctx, %{name: "cluster-#{System.unique_integer([:positive])}"}) do
+    name = "cluster-#{System.unique_integer([:positive])}"
+
+    # Issuing a key is a sensitive change, confirmed as its person confirms
+    # it (`Sanctum.TestContext.confirmed/3`), on this member.
+    issuing =
+      Sanctum.TestContext.confirmed(ctx, :credential_issuance, %{
+        operation: "key.create",
+        arguments: %{name: name},
+        resource: name
+      })
+
+    case Sanctum.ApiKey.create(issuing, %{name: name}) do
       {:ok, %{api_key: key}} -> {:ok, key}
       other -> other
     end

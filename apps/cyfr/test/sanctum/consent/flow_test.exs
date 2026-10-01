@@ -44,9 +44,13 @@ defmodule Sanctum.Consent.FlowTest do
     component
   end
 
+  # Entering a credential is a sensitive change: the entry is created
+  # under the confirmation its person proved
+  # (`Sanctum.TestContext.create_vault/2`). The walks and grants below
+  # then run on the session alone.
   defp entry!(ctx, over \\ %{}) do
     {:ok, view} =
-      Vault.create(
+      Sanctum.TestContext.create_vault(
         ctx,
         Map.merge(
           %{
@@ -109,6 +113,30 @@ defmodule Sanctum.Consent.FlowTest do
       })
 
       assert {:error, :shape_moved} = Commit.grant(ctx, %{grant | expected_consent_revision: 2})
+    end
+
+    test "a walk and a grant need the session alone: no confirmation is asked or opened",
+         %{ctx: ctx} do
+      {person, _user} = Sanctum.TestContext.person!(ctx)
+      publish!(person, "flow-grant-session")
+      entry = entry!(person)
+      actor = Sanctum.Context.actor(person)
+      assert {:ok, []} = Arca.PendingConfirmations.list_open(actor, person.user_id)
+
+      # The session itself, naming no confirmation.
+      assert person.confirmation_id == nil
+
+      assert {:ok, %{profile_id: profile_id, revision: 1}} =
+               walk!(person, "reagent:local.flow-grant-session")
+
+      assert {:ok, %{revision: 2}} =
+               Commit.grant(person, %{
+                 profile_id: profile_id,
+                 bindings: [%{need: "@ingress", entry_id: entry.id}],
+                 expected_consent_revision: 1
+               })
+
+      assert {:ok, []} = Arca.PendingConfirmations.list_open(actor, person.user_id)
     end
 
     test "only an active owner profile takes a grant", %{ctx: ctx} do

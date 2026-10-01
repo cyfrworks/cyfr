@@ -61,7 +61,7 @@ defmodule Sanctum.Consent.AgentConsentTest do
 
   defp bind_claude!(ctx, opts \\ []) do
     {:ok, entry} =
-      Sanctum.Vault.create(ctx, %{
+      Sanctum.TestContext.create_vault(ctx, %{
         name: Keyword.get(opts, :name, "claude key"),
         kind: "api_key",
         fields: %{"ANTHROPIC_API_KEY" => Keyword.get(opts, :key, "sk-test")}

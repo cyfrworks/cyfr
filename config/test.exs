@@ -16,6 +16,12 @@ config :cyfr, CyfrWeb.Endpoint,
 # The origin an absolute URL falls back to, the endpoint's own above.
 config :sanctum, :fallback_origin, "http://localhost:4002"
 
+# A one-time confirmation code's transport: the tree ships none, so the
+# suite captures each code where the test that asked for it reads it
+# (`Sanctum.TestContext.MailSink`); a home without one refuses the email
+# method (`Sanctum.Auth.EmailVerification`).
+config :sanctum, :confirmation_code_transport, Sanctum.TestContext.MailSink
+
 # Proofs likewise: unit tests run on the ETS store; proof_db_test.exs
 # exercises the durable adapter directly.
 config :sanctum, :consent_proof_store, Sanctum.Consent.Proof.Memory

@@ -150,7 +150,7 @@ defmodule Sanctum.Consent.RegistrationBindingTest do
       assert message =~ "profile binding refused"
 
       assert {:ok, created} =
-               Sanctum.Webhook.create(ctx, %{
+               Sanctum.TestContext.create_webhook(ctx, %{
                  name: "bound-hook",
                  replay_protection: "none",
                  target_ref: "#{@target}:1.0.0",
@@ -176,7 +176,7 @@ defmodule Sanctum.Consent.RegistrationBindingTest do
 
     test "webhook update cannot re-point to a profile without the class", %{ctx: ctx} do
       {:ok, _} =
-        Sanctum.Webhook.create(ctx, %{
+        Sanctum.TestContext.create_webhook(ctx, %{
           name: "plain-hook",
           replay_protection: "none",
           target_ref: "#{@target}:1.0.0",

@@ -100,12 +100,22 @@ defmodule Sanctum.Test.ConsentFixtures do
   def bind_key!(%Context{} = ctx, ref, fields, opts \\ []) when is_map(fields) do
     label = Keyword.get(opts, :label, "default")
 
-    {:ok, entry} =
-      Sanctum.Vault.create(ctx, %{
-        name: Keyword.get(opts, :name, "key #{System.unique_integer([:positive])}"),
-        kind: "api_key",
-        fields: fields
+    params = %{
+      name: Keyword.get(opts, :name, "key #{System.unique_integer([:positive])}"),
+      kind: "api_key",
+      fields: fields
+    }
+
+    # Entering the key is a sensitive change, confirmed as its person
+    # confirms it (`Sanctum.TestContext.confirmed/3`).
+    entering =
+      Sanctum.TestContext.confirmed(ctx, :credential_entry, %{
+        operation: "vault.create",
+        arguments: params,
+        resource: params.name
       })
+
+    {:ok, entry} = Sanctum.Vault.create(entering, params)
 
     {:ok, plan} = Sanctum.Consent.Plan.plan(ctx, %{ref: ref, label: label})
     decisions = %{ref: ref, label: label, bindings: [%{need: "api_key", entry_id: entry.id}]}

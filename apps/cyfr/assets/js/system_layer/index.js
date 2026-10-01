@@ -3,6 +3,7 @@
 
 import {nextStop, tabOrder} from "./focus.js"
 import {initial, transition} from "./state.js"
+import {assert as assertPasskey, register as registerPasskey} from "./webauthn.js"
 
 /**
  * SystemLayer hook — the browser half of the layer Prism alone draws above
@@ -23,12 +24,31 @@ import {initial, transition} from "./state.js"
  *
  * The show and hide decisions are `state.js`'s and the tab order is
  * `focus.js`'s; this hook only performs their effects.
+ *
+ * The same hook holds the passkey ceremony (`webauthn.js`), the one piece
+ * of the browser a proof comes from:
+ *
+ *   * On the system layer, the server asks for a ceremony with the pushed
+ *     events `webauthn:get` (`{purpose, id, public_key}`, request options)
+ *     and `webauthn:create` (`{purpose, public_key, registration}`,
+ *     creation options and the home's registration token); the hook
+ *     answers `webauthn_result` (`{purpose, id, credential}`) or
+ *     `webauthn_error` (`{purpose, id}`) to the layer.
+ *   * On the sign-in page, an element with `data-webauthn="sign-in"` is
+ *     a passkey sign-in: a click on its `[data-webauthn-start]` asks the
+ *     page for a challenge (`passkey_start`, whose reply carries
+ *     `public_key`), and answers it (`passkey_assertion`, `{credential}`)
+ *     or says the ceremony did not finish (`passkey_error`). Such an
+ *     element draws no prompt.
  */
 
 const FOCUSABLE = "a[href], button, input, select, textarea, [tabindex]"
 
 export default {
   mounted() {
+    if (this.el.dataset.webauthn === "sign-in") return this.mountSignIn()
+
+    this.handleCeremonies()
     this.layer = initial
     this.returnFocus = null
     this.dialog = this.el.querySelector("dialog")
@@ -56,16 +76,56 @@ export default {
   },
 
   updated() {
+    if (this.el.dataset.webauthn === "sign-in") return
     this.dialog = this.el.querySelector("dialog")
     this.sync()
   },
 
   destroyed() {
+    if (this.onSignIn) {
+      this.el.removeEventListener("click", this.onSignIn)
+      return
+    }
+
     this.dialog.removeEventListener("cancel", this.onCancel)
     this.dialog.removeEventListener("close", this.onClose)
     this.dialog.removeEventListener("keydown", this.onKeydown)
     globalThis.document.removeEventListener("fullscreenchange", this.onEscalated)
     globalThis.document.removeEventListener("pointerlockchange", this.onEscalated)
+  },
+
+  // A passkey sign-in: ask the page for its challenge, answer it once.
+  mountSignIn() {
+    this.onSignIn = (event) => {
+      const start = event.target && event.target.closest ? event.target.closest("[data-webauthn-start]") : null
+      if (!start) return
+      event.preventDefault()
+      this.pushEvent("passkey_start", {}, (reply) => {
+        if (!reply || !reply.public_key) return
+        assertPasskey(reply.public_key, globalThis.navigator.credentials)
+          .then((credential) => this.pushEvent("passkey_assertion", {credential}))
+          .catch(() => this.pushEvent("passkey_error", {}))
+      })
+    }
+    this.el.addEventListener("click", this.onSignIn)
+  },
+
+  // The ceremonies the system layer asks for; the layer decides nothing
+  // from their answers, the home does.
+  handleCeremonies() {
+    if (typeof this.handleEvent !== "function") return
+
+    this.handleEvent("webauthn:get", ({purpose, id, public_key: publicKey}) => {
+      assertPasskey(publicKey, globalThis.navigator.credentials)
+        .then((credential) => this.pushEventTo(this.el, "webauthn_result", {purpose, id, credential}))
+        .catch(() => this.pushEventTo(this.el, "webauthn_error", {purpose, id}))
+    })
+
+    this.handleEvent("webauthn:create", ({purpose, public_key: publicKey, registration}) => {
+      registerPasskey(publicKey, registration, globalThis.navigator.credentials)
+        .then((credential) => this.pushEventTo(this.el, "webauthn_result", {purpose, credential}))
+        .catch(() => this.pushEventTo(this.el, "webauthn_error", {purpose}))
+    })
   },
 
   sync() {

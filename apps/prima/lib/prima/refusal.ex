@@ -590,6 +590,21 @@ defmodule Prima.Refusal do
   # yet: a refusal the caller can read, not a failure of this server.
   defp row(:not_built), do: {:unavailable, "This operation is not built yet."}
 
+  # A sensitive change's refusals that are no denial: the proof the change
+  # needs cannot be given here, or not yet.
+  defp row(:remote_identity_unavailable),
+    do:
+      {:unavailable,
+       "Confirming a change for a person whose identity is at another home is not built yet."}
+
+  defp row(:email_unavailable),
+    do: {:unavailable, "No one-time code can be emailed to you here; confirm another way."}
+
+  defp row(:reauth_required),
+    do:
+      {:unauthenticated,
+       "Your first passkey needs a recent sign-in here: sign in again, then register it."}
+
   defp row(:execution_failed), do: {:internal, "The execution failed"}
 
   # Webhook ingress.

@@ -233,12 +233,18 @@ defmodule Cyfr.Test.StepBench do
   end
 
   defp bind_key!(ctx) do
-    {:ok, entry} =
-      Sanctum.Vault.create(ctx, %{
-        name: "step-stub key",
-        kind: "api_key",
-        fields: %{@key_field => "sk-step-stub"}
+    params = %{name: "step-stub key", kind: "api_key", fields: %{@key_field => "sk-step-stub"}}
+
+    # Entering the key is a sensitive change, confirmed as its person
+    # confirms it (`Sanctum.TestContext.confirmed/3`).
+    entering =
+      Sanctum.TestContext.confirmed(ctx, :credential_entry, %{
+        operation: "vault.create",
+        arguments: params,
+        resource: params.name
       })
+
+    {:ok, entry} = Sanctum.Vault.create(entering, params)
 
     {:ok, plan} = Plan.plan(ctx, %{ref: @stub})
     decisions = %{ref: @stub, bindings: [%{need: "api_key", entry_id: entry.id}]}

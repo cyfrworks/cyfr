@@ -43,7 +43,10 @@ defmodule Sanctum.ProviderVaultStatusTest do
            }}
         ] do
       name = "#{kind}-#{System.unique_integer([:positive])}"
-      {:ok, view} = Vault.create(ctx, Map.merge(%{name: name, kind: kind}, params))
+
+      {:ok, view} =
+        Sanctum.TestContext.create_vault(ctx, Map.merge(%{name: name, kind: kind}, params))
+
       {kind, view}
     end
   end

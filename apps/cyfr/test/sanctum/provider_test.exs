@@ -86,6 +86,12 @@ defmodule Sanctum.ProviderTest do
     end
   end
 
+  # The key tool as a person reaches it: a key it issues needs a proven
+  # confirmation, and the call repeats naming it
+  # (`Sanctum.TestContext.confirming/2`).
+  defp key_tool(ctx, args),
+    do: Sanctum.TestContext.confirming(ctx, &Provider.handle("key", &1, args))
+
   # A resource read is the declared `session.read_resource`, through the
   # gate like any other call.
   defp read(ctx, uri),
@@ -228,14 +234,14 @@ defmodule Sanctum.ProviderTest do
     setup %{ctx: ctx}, do: {:ok, ctx: Sanctum.TestContext.issuer!(ctx)}
 
     test "list returns empty initially", %{ctx: ctx} do
-      {:ok, result} = Provider.handle("key", ctx, %{"action" => "list"})
+      {:ok, result} = key_tool(ctx, %{"action" => "list"})
       assert result.keys == []
       assert result.count == 0
     end
 
     test "create and get a key", %{ctx: ctx} do
       {:ok, result} =
-        Provider.handle("key", ctx, %{
+        key_tool(ctx, %{
           "action" => "create",
           "name" => "test-key"
         })
@@ -243,36 +249,36 @@ defmodule Sanctum.ProviderTest do
       assert String.starts_with?(result.api_key, "cyfr_pk_")
       assert result.name == "test-key"
 
-      {:ok, result} = Provider.handle("key", ctx, %{"action" => "get", "name" => "test-key"})
+      {:ok, result} = key_tool(ctx, %{"action" => "get", "name" => "test-key"})
       assert result.name == "test-key"
       assert result.key_prefix =~ "cyfr_pk_"
     end
 
     test "create duplicate key returns error", %{ctx: ctx} do
-      Provider.handle("key", ctx, %{"action" => "create", "name" => "dup-key"})
+      key_tool(ctx, %{"action" => "create", "name" => "dup-key"})
 
-      {:error, msg} = Provider.handle("key", ctx, %{"action" => "create", "name" => "dup-key"})
+      {:error, msg} = key_tool(ctx, %{"action" => "create", "name" => "dup-key"})
       assert err_msg(msg) =~ "already exists"
     end
 
     test "revoke a key", %{ctx: ctx} do
-      Provider.handle("key", ctx, %{"action" => "create", "name" => "revoke-key"})
+      key_tool(ctx, %{"action" => "create", "name" => "revoke-key"})
 
-      {:ok, result} = Provider.handle("key", ctx, %{"action" => "revoke", "name" => "revoke-key"})
+      {:ok, result} = key_tool(ctx, %{"action" => "revoke", "name" => "revoke-key"})
       assert result.revoked == true
 
       # Key should not appear in list after revocation
-      {:ok, result} = Provider.handle("key", ctx, %{"action" => "list"})
+      {:ok, result} = key_tool(ctx, %{"action" => "list"})
       names = Enum.map(result.keys, & &1.name)
       refute "revoke-key" in names
     end
 
     test "rotate a key", %{ctx: ctx} do
       {:ok, original} =
-        Provider.handle("key", ctx, %{"action" => "create", "name" => "rotate-key"})
+        key_tool(ctx, %{"action" => "create", "name" => "rotate-key"})
 
       {:ok, rotated} =
-        Provider.handle("key", ctx, %{"action" => "rotate", "name" => "rotate-key"})
+        key_tool(ctx, %{"action" => "rotate", "name" => "rotate-key"})
 
       assert rotated.name == "rotate-key"
       assert String.starts_with?(rotated.api_key, "cyfr_pk_")
@@ -280,18 +286,18 @@ defmodule Sanctum.ProviderTest do
     end
 
     test "get missing key returns error", %{ctx: ctx} do
-      {:error, msg} = Provider.handle("key", ctx, %{"action" => "get", "name" => "missing"})
+      {:error, msg} = key_tool(ctx, %{"action" => "get", "name" => "missing"})
       assert err_msg(msg) =~ "not found"
     end
 
     test "invalid action returns error", %{ctx: ctx} do
-      {:error, msg} = Provider.handle("key", ctx, %{"action" => "invalid"})
+      {:error, msg} = key_tool(ctx, %{"action" => "invalid"})
       assert err_msg(msg) =~ "Invalid key action"
     end
 
     test "rejects invalid key type", %{ctx: ctx} do
       {:error, msg} =
-        Provider.handle("key", ctx, %{
+        key_tool(ctx, %{
           "action" => "create",
           "name" => "invalid-type-key",
           "type" => "INVALID"
@@ -305,7 +311,7 @@ defmodule Sanctum.ProviderTest do
     test "accepts valid key types", %{ctx: ctx} do
       # Application key type
       {:ok, result} =
-        Provider.handle("key", ctx, %{
+        key_tool(ctx, %{
           "action" => "create",
           "name" => "application-key",
           "type" => "application"
@@ -315,7 +321,7 @@ defmodule Sanctum.ProviderTest do
 
       # Service key type
       {:ok, result} =
-        Provider.handle("key", ctx, %{
+        key_tool(ctx, %{
           "action" => "create",
           "name" => "service-key",
           "type" => "service"
@@ -325,7 +331,7 @@ defmodule Sanctum.ProviderTest do
 
       # Admin key type
       {:ok, result} =
-        Provider.handle("key", ctx, %{
+        key_tool(ctx, %{
           "action" => "create",
           "name" => "admin-key",
           "type" => "admin"
@@ -570,7 +576,7 @@ defmodule Sanctum.ProviderTest do
     test "key.create: athanor-scoped succeeds, athanor-less is fail-closed",
          %{scoped: scoped, unresolved: unresolved} do
       assert {:ok, _} =
-               Provider.handle("key", scoped, %{"action" => "create", "name" => "ext-ok-key"})
+               key_tool(scoped, %{"action" => "create", "name" => "ext-ok-key"})
 
       assert_fail_closed(fn ->
         Provider.handle("key", unresolved, %{"action" => "create", "name" => "ext-no-key"})

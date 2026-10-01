@@ -302,7 +302,7 @@ defmodule Emissary.Web.MCPTransportTest do
       ctx: ctx
     } do
       name = "listen-#{System.unique_integer([:positive])}"
-      {:ok, %{api_key: raw}} = Sanctum.ApiKey.create(ctx, %{name: name, type: :service})
+      {:ok, %{api_key: raw}} = Sanctum.TestContext.create_key(ctx, %{name: name, type: :service})
 
       task = open_listen(conn, raw, 14)
       await_open(task)

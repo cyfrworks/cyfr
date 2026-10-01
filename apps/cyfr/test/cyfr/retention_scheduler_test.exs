@@ -197,7 +197,7 @@ defmodule Cyfr.RetentionSchedulerTest do
       profile = Sanctum.Test.ConsentFixtures.bindable_profile(ctx, "f:local.handler")
 
       {:ok, %{slug: slug}} =
-        Sanctum.Webhook.create(ctx, %{
+        Sanctum.TestContext.create_webhook(ctx, %{
           name: "retention-#{System.unique_integer([:positive])}",
           target_ref: "f:local.handler",
           profile_id: profile,

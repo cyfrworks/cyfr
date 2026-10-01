@@ -306,6 +306,7 @@ defmodule Arca.SecurityTransitions.Fixtures do
           rp_id: "home.example",
           challenge: :crypto.strong_rand_bytes(32),
           digest: Prima.Digest.sha256("record-#{uniq()}"),
+          opener: "session:security-transitions-test",
           state: if(confirmed_by == [], do: "pending", else: "confirmed"),
           proof: if(confirmed_by == [], do: nil, else: "passkey"),
           confirmed_client_id: confirmed_by[:client],

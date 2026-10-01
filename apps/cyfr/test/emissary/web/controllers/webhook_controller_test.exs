@@ -41,7 +41,7 @@ defmodule Emissary.Web.WebhookControllerTest do
     profile = Sanctum.Test.ConsentFixtures.bindable_profile(ctx, "f:local.#{comp}")
 
     {:ok, result} =
-      Webhook.create(
+      Sanctum.TestContext.create_webhook(
         ctx,
         Map.merge(%{name: name, target_ref: "f:local.#{comp}", profile_id: profile}, opts)
         |> Map.put_new(:replay_protection, "none")
@@ -113,7 +113,7 @@ defmodule Emissary.Web.WebhookControllerTest do
       profile = Sanctum.Test.ConsentFixtures.bindable_profile(in_group, "f:local.#{comp}")
 
       {:ok, %{slug: slug, secret: secret}} =
-        Webhook.create(in_group, %{
+        Sanctum.TestContext.create_webhook(in_group, %{
           name: "channel",
           replay_protection: "none",
           target_ref: "f:local.#{comp}",
@@ -404,7 +404,7 @@ defmodule Emissary.Web.WebhookControllerTest do
       start_supervised!({Cyfr.Test.ScriptedWorker, ref: reference, script: [%{"ran" => true}]})
 
       {:ok, hook} =
-        Webhook.create(ctx, %{
+        Sanctum.TestContext.create_webhook(ctx, %{
           name: "audited",
           target_ref: "#{reference}:1.0.0",
           profile_id: profile_id,

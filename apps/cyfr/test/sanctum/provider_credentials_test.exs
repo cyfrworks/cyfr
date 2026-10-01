@@ -26,29 +26,44 @@ defmodule Sanctum.ProviderCredentialsTest do
 
   describe "put/4 + fetch_for_oauth/4" do
     test "round-trips client credentials through the sealed store", %{ctx: ctx} do
-      assert :ok = ProviderCredentials.put(ctx, "google", "client-abc", "secret-xyz")
+      assert :ok =
+               Sanctum.TestContext.put_provider_credentials(
+                 ctx,
+                 "google",
+                 "client-abc",
+                 "secret-xyz"
+               )
 
       assert {:ok, %{"client_id" => "client-abc", "client_secret" => "secret-xyz"}} =
                ProviderCredentials.fetch_for_oauth(ctx.athanor_id, "google")
     end
 
     test "public clients store a nil client_secret", %{ctx: ctx} do
-      assert :ok = ProviderCredentials.put(ctx, "github", "public-client")
+      assert :ok = Sanctum.TestContext.put_provider_credentials(ctx, "github", "public-client")
 
       assert {:ok, %{"client_id" => "public-client", "client_secret" => nil}} =
                ProviderCredentials.fetch_for_oauth(ctx.athanor_id, "github")
     end
 
     test "put replaces existing credentials", %{ctx: ctx} do
-      assert :ok = ProviderCredentials.put(ctx, "google", "old-id", "old-secret")
-      assert :ok = ProviderCredentials.put(ctx, "google", "new-id", "new-secret")
+      assert :ok =
+               Sanctum.TestContext.put_provider_credentials(ctx, "google", "old-id", "old-secret")
+
+      assert :ok =
+               Sanctum.TestContext.put_provider_credentials(ctx, "google", "new-id", "new-secret")
 
       assert {:ok, %{"client_id" => "new-id", "client_secret" => "new-secret"}} =
                ProviderCredentials.fetch_for_oauth(ctx.athanor_id, "google")
     end
 
     test "fetch takes tenant coordinates, never the caller's permissions", %{ctx: ctx} do
-      assert :ok = ProviderCredentials.put(ctx, "google", "client-abc", "secret-xyz")
+      assert :ok =
+               Sanctum.TestContext.put_provider_credentials(
+                 ctx,
+                 "google",
+                 "client-abc",
+                 "secret-xyz"
+               )
 
       # No Context argument exists on this path — the read is keyed by tenant
       # alone, which is exactly why an executing component's context can no
@@ -83,7 +98,7 @@ defmodule Sanctum.ProviderCredentialsTest do
 
     test "configured? reports presence", %{ctx: ctx} do
       refute ProviderCredentials.configured?(ctx, "google")
-      assert :ok = ProviderCredentials.put(ctx, "google", "id", "sec")
+      assert :ok = Sanctum.TestContext.put_provider_credentials(ctx, "google", "id", "sec")
       assert ProviderCredentials.configured?(ctx, "google")
     end
   end
@@ -116,7 +131,7 @@ defmodule Sanctum.ProviderCredentialsTest do
     end
 
     test "reads stay available to a key", %{ctx: ctx} do
-      assert :ok = ProviderCredentials.put(ctx, "google", "id", "sec")
+      assert :ok = Sanctum.TestContext.put_provider_credentials(ctx, "google", "id", "sec")
       assert ProviderCredentials.configured?(key_ctx(), "google")
     end
 
@@ -131,7 +146,7 @@ defmodule Sanctum.ProviderCredentialsTest do
 
   describe "delete/2" do
     test "removes stored credentials", %{ctx: ctx} do
-      assert :ok = ProviderCredentials.put(ctx, "google", "id", "sec")
+      assert :ok = Sanctum.TestContext.put_provider_credentials(ctx, "google", "id", "sec")
       assert :ok = ProviderCredentials.delete(ctx, "google")
       refute ProviderCredentials.configured?(ctx, "google")
 
@@ -142,8 +157,16 @@ defmodule Sanctum.ProviderCredentialsTest do
 
   describe "oauth.set_client MCP action" do
     test "stores credentials via the tool surface", %{ctx: ctx} do
+      confirmed =
+        Sanctum.TestContext.confirmed_change(
+          ctx,
+          "oauth.set_client",
+          %{provider: "google", client_id: "tool-id", client_secret: "tool-secret"},
+          "google"
+        )
+
       assert {:ok, %{status: "ok"}} =
-               Sanctum.Providers.OAuth.handle(ctx, %{
+               Sanctum.Providers.OAuth.handle(confirmed, %{
                  "action" => "set_client",
                  "provider" => "google",
                  "client_id" => "tool-id",

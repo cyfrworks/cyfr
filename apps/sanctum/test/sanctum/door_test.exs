@@ -246,10 +246,7 @@ defmodule Sanctum.DoorTest do
       tenant = Sanctum.TestContext.local()
       ctx = %{tenant | user_id: stranger.id, email: stranger.email}
 
-      {:ok, key} =
-        Sanctum.ApiKey.create(ctx, %{name: "stranger-key"},
-          generation_snapshot: Sanctum.TestContext.snapshot!(ctx)
-        )
+      {:ok, key} = Sanctum.TestContext.create_key(ctx, %{name: "stranger-key"})
 
       assert Enum.any?(elem(Sanctum.ApiKey.list(ctx), 1), &(&1.name == "stranger-key"))
 

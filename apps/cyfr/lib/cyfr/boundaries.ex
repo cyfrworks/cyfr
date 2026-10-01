@@ -465,9 +465,9 @@ defmodule Cyfr.Boundaries do
       into: "Sanctum",
       allow: ~w(
         Sanctum.ApiKey Sanctum.Auth Sanctum.BearerToken Sanctum.Caller Sanctum.ClientIp
-        Sanctum.Consent Sanctum.Context Sanctum.Door Sanctum.Pairing Sanctum.Session
-        Sanctum.SignIn Sanctum.Tenancy Sanctum.TinctureAuth Sanctum.Unauthorized
-        Sanctum.Webhook
+        Sanctum.Consent Sanctum.Context Sanctum.Door Sanctum.Pairing Sanctum.Passkeys
+        Sanctum.Session Sanctum.SignIn Sanctum.Tenancy Sanctum.TinctureAuth
+        Sanctum.Unauthorized Sanctum.Webhook
       ),
       reason:
         "the console, its browser sign-in (`PrismWeb.AuthController`, which asks the " <>
@@ -481,6 +481,12 @@ defmodule Cyfr.Boundaries do
           "`Sanctum.Pairing` is the system layer's reading of the action table and of " <>
           "whether this client has a person behind it who can confirm, which hides a " <>
           "control and never decides: the operation a confirmation dispatches decides. " <>
+          "`Sanctum.Passkeys` is the sign-in page's passkey door: the challenge it holds " <>
+          "and the answer it verifies into a session, as the device flow's poll is " <>
+          "(`sign_in_challenge/0`, `sign_in/2`); `Sanctum.Auth.OIDC.reauth_callback/1` and " <>
+          "`reauth_decide/3` are the re-authentication's callback and its person's answer " <>
+          "(`PrismWeb.ReauthController`), which confirm one pending confirmation on that " <>
+          "answer and mint nothing. " <>
           "In the console, `Sanctum.ClientIp` is `PrismWeb.AuthHelpers.socket_client_ip/1` " <>
           "alone: the `/live` socket is handled by the endpoint BEFORE the router, so " <>
           "it passes no rate-limit plug, which makes the console the only per-address " <>
@@ -1266,7 +1272,7 @@ defmodule Cyfr.Boundaries do
     "Sanctum.Auth.DeviceFlow" => [configured_providers: 0, impl: 0, provider?: 1, providers: 0],
     "Sanctum.Auth.EmailVerification" => [verify_with_claim: 3],
     "Sanctum.Auth.Identity" => [reserved_issuer?: 1],
-    "Sanctum.Auth.OIDC" => [issuer: 0],
+    "Sanctum.Auth.OIDC" => [issuer: 0, reauth_callback: 1, reauth_decide: 3],
     "Sanctum.Authority" => [guard_invoke: 1, release_invoke: 1, step: 3, take_over_invoke: 2],
     "Sanctum.Authority.BudgetCounter" => [release: 1],
     "Sanctum.BearerToken" => [read: 1],
@@ -1320,6 +1326,7 @@ defmodule Cyfr.Boundaries do
     "Sanctum.Network" => [pin: 2, validate_redirect_url: 2],
     "Sanctum.Notify" => [broadcast: 3],
     "Sanctum.Pairing" => [actions: 0, can_confirm?: 1],
+    "Sanctum.Passkeys" => [sign_in: 2, sign_in_challenge: 0],
     "Sanctum.Policy.Enforcement" => [record: 1],
     "Sanctum.Provisioning" => [
       athanor: 1,
@@ -1716,6 +1723,10 @@ defmodule Cyfr.Boundaries do
     device_flow_endpoints: :seam,
     provisioning_inline: :seam,
     record_sink_inline: :seam,
+    # The issuer's side of an OpenID Connect re-authentication
+    # (`Sanctum.Auth.OIDC`): a test stands in its own for the token
+    # exchange, as `device_flow` does for the device flow's.
+    oidc_reauth_client: :seam,
     # Compiled in by `config/test.exs` alone; with the runtime switch off it
     # lets the sandboxed suite boot omit `Cyfr.Bootstrap`
     # (`Cyfr.Application.bootstrap_skipped?/2`).
@@ -1760,6 +1771,11 @@ defmodule Cyfr.Boundaries do
 
   @test_only_config_key_classes %{
     namespace_cache_ttl_ms: :seam,
+    # A one-time confirmation code's transport
+    # (`Sanctum.Auth.EmailVerification`): the tree ships none, so only the
+    # suite sets one, its capture sink; with none the email method refuses
+    # `:email_unavailable`.
+    confirmation_code_transport: :seam,
     # The registry probe's switch, read by `Compendium.Provider.status/0`.
     registry_health_probe: :seam,
 

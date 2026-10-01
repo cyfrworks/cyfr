@@ -203,7 +203,7 @@ defmodule Emissary.Web.TinctureControllerTest do
       ctx = Sanctum.TestContext.issuer!(Sanctum.TestContext.local())
 
       {:ok, %{api_key: key}} =
-        Sanctum.ApiKey.create(ctx, %{
+        Sanctum.TestContext.create_key(ctx, %{
           name: "tincture-address-key-#{:rand.uniform(1_000_000)}",
           type: :service,
           scope: ["execute", "component_read", "storage_read"]
@@ -616,7 +616,7 @@ defmodule Emissary.Web.TinctureControllerTest do
       ctx = Sanctum.TestContext.issuer!(Sanctum.TestContext.local())
 
       {:ok, %{api_key: key}} =
-        Sanctum.ApiKey.create(ctx, %{
+        Sanctum.TestContext.create_key(ctx, %{
           name: "allowlisted-#{:rand.uniform(1_000_000)}",
           type: :service,
           scope: ["execute", "component_read", "storage_read"],

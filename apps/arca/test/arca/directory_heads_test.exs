@@ -189,6 +189,7 @@ defmodule Arca.DirectoryHeadsTest do
     {:ok, row} =
       PendingConfirmations.open(athanor, %{
         record: record(athanor, user_id),
+        opener: "session:directory-heads-test",
         identity_key_epoch: epoch
       })
 
@@ -352,6 +353,7 @@ defmodule Arca.DirectoryHeadsTest do
     assert {:error, :stale_key_epoch} =
              PendingConfirmations.open(athanor, %{
                record: record(athanor, person.id),
+               opener: "session:directory-heads-test",
                identity_key_epoch: old
              })
 

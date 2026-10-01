@@ -9,6 +9,14 @@ defmodule PrismWeb.LoginLive do
   ticket to `GET /auth/device/complete/:ticket`, which sets the cookie
   session this origin has.
 
+  A passkey registered here signs its person in too: the page holds a
+  sign-in challenge (`Sanctum.Passkeys.sign_in_challenge/0`), the browser's
+  ceremony (`system_layer/webauthn.js`, through the `SystemLayer` hook in
+  its WebAuthn mode) answers it, and `Sanctum.Passkeys.sign_in/2` verifies
+  the answer against the challenge, which is spent on the first answer,
+  and mints the session. A one-time ticket bound to this browser hands it
+  to `GET /auth/passkey/complete/:ticket`, as the device flow's does.
+
   A refused sign-in never reaches a session — the door answers on the
   poll; a signed-in person who has no athanor yet is told so.
 
@@ -25,6 +33,11 @@ defmodule PrismWeb.LoginLive do
 
   @ticket_ttl_ms 60_000
   @default_poll_interval_s 5
+  # Passkey challenges per address: the page is reached over the LiveView
+  # socket, which passes no rate-limit plug, so this is its per-address
+  # bound, per node, before any signature is checked.
+  @passkey_starts 30
+  @passkey_window_ms 60_000
   @not_owner "This server is not accepting sign-ins right now. Try again in a moment."
 
   @impl true
@@ -49,10 +62,54 @@ defmodule PrismWeb.LoginLive do
      |> assign(:verification_uri, nil)
      |> assign(:device_code, nil)
      |> assign(:poll_interval, @default_poll_interval_s)
+     # The passkey sign-in challenge this page holds, answered at most once.
+     |> assign(:passkey_challenge, nil)
      |> assign(:error, error_from_params(params)), layout: false}
   end
 
   @impl true
+  def handle_event("passkey_start", _params, socket) do
+    cond do
+      not Arca.ControlPlane.held?() ->
+        {:reply, %{error: @not_owner}, assign(socket, :error, @not_owner)}
+
+      Prima.RateLimiter.check(
+        {:passkey_sign_in, socket.assigns.client_ip},
+        @passkey_starts,
+        @passkey_window_ms
+      ) != :ok ->
+        message = "Too many passkey sign-ins from here. Try again in a minute."
+        {:reply, %{error: message}, assign(socket, :error, message)}
+
+      true ->
+        held = Sanctum.Passkeys.sign_in_challenge()
+
+        {:reply, %{public_key: held.public_key},
+         assign(socket, :passkey_challenge, Map.take(held, [:challenge, :expires_at]))}
+    end
+  end
+
+  def handle_event("passkey_assertion", %{"credential" => credential}, socket)
+      when is_map(credential) do
+    case socket.assigns.passkey_challenge do
+      nil ->
+        {:noreply, assign(socket, :error, "That passkey sign-in expired. Please try again.")}
+
+      held ->
+        # The challenge is spent on its first answer, whatever it says.
+        socket = assign(socket, :passkey_challenge, nil)
+        finish_passkey(socket, Sanctum.Passkeys.sign_in(held, credential))
+    end
+  end
+
+  def handle_event("passkey_assertion", _params, socket),
+    do: {:noreply, assign(socket, passkey_challenge: nil, error: passkey_refused())}
+
+  def handle_event("passkey_error", _params, socket) do
+    {:noreply,
+     assign(socket, passkey_challenge: nil, error: "The passkey sign-in did not finish.")}
+  end
+
   def handle_event("start", %{"provider" => provider}, socket) do
     now = System.monotonic_time(:millisecond)
     last = socket.assigns[:last_start_at]
@@ -197,6 +254,39 @@ defmodule PrismWeb.LoginLive do
     {:noreply, assign_idle(socket, "Couldn't complete sign-in. Try again in a moment.")}
   end
 
+  defp finish_passkey(socket, {:ok, result}) do
+    ticket = mint_ticket({:login_passkey_ticket, result}, socket.assigns.browser_binding)
+    {:noreply, redirect(socket, to: ~p"/auth/passkey/complete/#{ticket}")}
+  end
+
+  defp finish_passkey(socket, {:error, {:door, _reason}}),
+    do: {:noreply, assign(socket, :error, Sanctum.Door.refusal_message())}
+
+  defp finish_passkey(socket, {:error, :unavailable}),
+    do:
+      {:noreply, assign(socket, :error, "The server could not sign you in just now. Try again.")}
+
+  defp finish_passkey(socket, {:error, _refused}),
+    do: {:noreply, assign(socket, :error, passkey_refused())}
+
+  defp passkey_refused, do: "That passkey did not sign you in here."
+
+  defp mint_ticket({:login_passkey_ticket, result}, browser_binding) do
+    ticket = Base.url_encode64(:crypto.strong_rand_bytes(32), padding: false)
+
+    Arca.Cache.put(
+      {:login_passkey_ticket, ticket},
+      %{
+        session_token: result.session_token,
+        outcome: result.outcome,
+        browser_binding: browser_binding
+      },
+      @ticket_ttl_ms
+    )
+
+    ticket
+  end
+
   defp mint_ticket(result, browser_binding) do
     ticket = Base.url_encode64(:crypto.strong_rand_bytes(32), padding: false)
 
@@ -336,6 +426,22 @@ defmodule PrismWeb.LoginLive do
 
           <div :if={@login_state == :idle} class="flex flex-col gap-3">
             <.provider_button :for={provider <- @providers} provider={provider} />
+          </div>
+
+          <div
+            :if={@login_state == :idle}
+            id="passkey-sign-in"
+            phx-hook="SystemLayer"
+            data-webauthn="sign-in"
+            class="flex flex-col gap-3"
+          >
+            <button
+              type="button"
+              data-webauthn-start
+              class="flex items-center justify-center gap-3 w-full px-4 py-3 bg-indigo-900/60 hover:bg-indigo-900 text-white rounded-lg border border-indigo-700 transition-colors cursor-pointer"
+            >
+              <span>Sign in with a passkey</span>
+            </button>
           </div>
         </div>
       </div>

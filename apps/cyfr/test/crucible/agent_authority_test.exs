@@ -65,7 +65,7 @@ defmodule Crucible.AgentAuthorityTest do
              Crucible.run_child(unbound, "catalyst:local.claude", nil, describe, child_opts)
 
     {:ok, entry} =
-      Sanctum.Vault.create(ctx, %{
+      Sanctum.TestContext.create_vault(ctx, %{
         name: "claude key",
         kind: "api_key",
         fields: %{"ANTHROPIC_API_KEY" => "sk-test-claude"}
@@ -191,7 +191,7 @@ defmodule Crucible.AgentAuthorityTest do
 
   defp bind_claude!(ctx, opts) do
     {:ok, entry} =
-      Sanctum.Vault.create(ctx, %{
+      Sanctum.TestContext.create_vault(ctx, %{
         name: Keyword.fetch!(opts, :name),
         kind: "api_key",
         fields: Keyword.get(opts, :fields, %{"ANTHROPIC_API_KEY" => "sk-test-claude"})

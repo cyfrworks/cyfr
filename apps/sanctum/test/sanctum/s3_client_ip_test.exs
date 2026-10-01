@@ -131,7 +131,7 @@ defmodule Sanctum.S3ClientIpTest do
       ctx = Sanctum.TestContext.issuer!(Sanctum.TestContext.local())
 
       {:ok, %{api_key: key}} =
-        Sanctum.ApiKey.create(ctx, %{name: "ip-key", ip_allowlist: ["203.0.113.0/24"]})
+        Sanctum.TestContext.create_key(ctx, %{name: "ip-key", ip_allowlist: ["203.0.113.0/24"]})
 
       # Resolve the missing IP before validation; 0.0.0.0 must fail this allowlist.
       no_ip = ClientIp.resolve(conn(nil))
@@ -149,7 +149,7 @@ defmodule Sanctum.S3ClientIpTest do
       ctx = Sanctum.TestContext.issuer!(Sanctum.TestContext.local())
 
       {:ok, %{api_key: key}} =
-        Sanctum.ApiKey.create(ctx, %{name: "xff-key", ip_allowlist: ["203.0.113.0/24"]})
+        Sanctum.TestContext.create_key(ctx, %{name: "xff-key", ip_allowlist: ["203.0.113.0/24"]})
 
       # Attacker at 8.8.8.8 claims an allowlisted IP; the proxy appends the
       # real peer. Resolution must pick 8.8.8.8 and the allowlist must reject.

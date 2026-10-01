@@ -5,7 +5,6 @@ defmodule Sanctum.Vault.OAuthGrantTest do
   use ExUnit.Case, async: false
 
   alias Sanctum.CipherAAD
-  alias Sanctum.Vault
   alias Sanctum.Vault.OAuthGrant
   alias Sanctum.Vault.Payload
 
@@ -30,7 +29,14 @@ defmodule Sanctum.Vault.OAuthGrantTest do
     end)
 
     ctx = Sanctum.TestContext.local()
-    :ok = Sanctum.ProviderCredentials.put(ctx, @provider, "client-id-1", "client-secret-1")
+
+    :ok =
+      Sanctum.TestContext.put_provider_credentials(
+        ctx,
+        @provider,
+        "client-id-1",
+        "client-secret-1"
+      )
 
     {:ok, ctx: ctx}
   end
@@ -115,7 +121,7 @@ defmodule Sanctum.Vault.OAuthGrantTest do
   describe "authorize_url/2" do
     test "builds a preset-provider URL with PKCE and stores the pending", %{ctx: ctx} do
       assert {:ok, %{url: url, state: state}} =
-               OAuthGrant.authorize_url(ctx, %{
+               Sanctum.TestContext.authorize_vault(ctx, %{
                  name: "My Google",
                  provider: @provider,
                  scopes: @scopes
@@ -146,17 +152,21 @@ defmodule Sanctum.Vault.OAuthGrantTest do
     end
 
     test "an unknown provider without endpoints is refused", %{ctx: ctx} do
-      :ok = Sanctum.ProviderCredentials.put(ctx, "acme", "cid", "cs")
+      :ok = Sanctum.TestContext.put_provider_credentials(ctx, "acme", "cid", "cs")
 
       assert {:error, :endpoints_required} =
-               OAuthGrant.authorize_url(ctx, %{name: "Acme", provider: "acme", scopes: []})
+               Sanctum.TestContext.authorize_vault(ctx, %{
+                 name: "Acme",
+                 provider: "acme",
+                 scopes: []
+               })
     end
 
     test "plaintext endpoints are refused", %{ctx: ctx} do
-      :ok = Sanctum.ProviderCredentials.put(ctx, "acme", "cid", "cs")
+      :ok = Sanctum.TestContext.put_provider_credentials(ctx, "acme", "cid", "cs")
 
       assert {:error, :endpoints_must_use_https} =
-               OAuthGrant.authorize_url(ctx, %{
+               Sanctum.TestContext.authorize_vault(ctx, %{
                  name: "Acme",
                  provider: "acme",
                  scopes: [],
@@ -168,14 +178,14 @@ defmodule Sanctum.Vault.OAuthGrantTest do
     end
 
     test "extra_params may not steer the flow's security parameters", %{ctx: ctx} do
-      :ok = Sanctum.ProviderCredentials.put(ctx, "acme", "cid", "cs")
+      :ok = Sanctum.TestContext.put_provider_credentials(ctx, "acme", "cid", "cs")
 
       # Each of these, if honoured, breaks the callback's own checks:
       # "plain" downgrades PKCE, and a caller-chosen state or redirect_uri
       # substitutes the values `complete/3` compares against.
       for reserved <- ~w(code_challenge_method state redirect_uri client_id scope) do
         assert {:error, {:reserved_extra_param, ^reserved}} =
-                 OAuthGrant.authorize_url(ctx, %{
+                 Sanctum.TestContext.authorize_vault(ctx, %{
                    name: "Acme",
                    provider: "acme",
                    scopes: ["read"],
@@ -189,10 +199,10 @@ defmodule Sanctum.Vault.OAuthGrantTest do
     end
 
     test "a legitimate extra_param still rides along", %{ctx: ctx} do
-      :ok = Sanctum.ProviderCredentials.put(ctx, "acme", "cid", "cs")
+      :ok = Sanctum.TestContext.put_provider_credentials(ctx, "acme", "cid", "cs")
 
       assert {:ok, %{url: url, state: state}} =
-               OAuthGrant.authorize_url(ctx, %{
+               Sanctum.TestContext.authorize_vault(ctx, %{
                  name: "Acme",
                  provider: "acme",
                  scopes: ["read"],
@@ -214,7 +224,7 @@ defmodule Sanctum.Vault.OAuthGrantTest do
 
     test "an unconfigured provider names oauth.set_client", %{ctx: ctx} do
       assert {:error, message} =
-               OAuthGrant.authorize_url(ctx, %{
+               Sanctum.TestContext.authorize_vault(ctx, %{
                  name: "Slack",
                  provider: "slack",
                  scopes: [],
@@ -229,7 +239,7 @@ defmodule Sanctum.Vault.OAuthGrantTest do
 
     test "re-auth target comes from the entry's own binding fields", %{ctx: ctx} do
       {:ok, view} =
-        Vault.create(ctx, %{
+        Sanctum.TestContext.create_vault(ctx, %{
           name: "G",
           kind: "oauth",
           provider_hint: @provider,
@@ -240,16 +250,21 @@ defmodule Sanctum.Vault.OAuthGrantTest do
           oauth_scopes: @scopes
         })
 
-      assert {:ok, %{url: url}} = OAuthGrant.authorize_url(ctx, %{entry_id: view.id})
+      assert {:ok, %{url: url}} = Sanctum.TestContext.authorize_vault(ctx, %{entry_id: view.id})
       query = URI.decode_query(URI.parse(url).query)
       assert query["scope"] == Enum.join(@scopes, " ")
     end
 
     test "a non-oauth entry cannot be authorized", %{ctx: ctx} do
-      {:ok, view} = Vault.create(ctx, %{name: "K", kind: "api_key", fields: %{"key" => "v"}})
+      {:ok, view} =
+        Sanctum.TestContext.create_vault(ctx, %{
+          name: "K",
+          kind: "api_key",
+          fields: %{"key" => "v"}
+        })
 
       assert {:error, {:not_an_oauth_entry, "api_key"}} =
-               OAuthGrant.authorize_url(ctx, %{entry_id: view.id})
+               Sanctum.TestContext.authorize_vault(ctx, %{entry_id: view.id})
     end
   end
 
@@ -315,7 +330,7 @@ defmodule Sanctum.Vault.OAuthGrantTest do
       bypass = Bypass.open()
 
       {:ok, view} =
-        Vault.create(ctx, %{
+        Sanctum.TestContext.create_vault(ctx, %{
           name: "G",
           kind: "oauth",
           provider_hint: @provider,
@@ -357,7 +372,7 @@ defmodule Sanctum.Vault.OAuthGrantTest do
         })
 
       {:ok, view} =
-        Vault.create(ctx, %{
+        Sanctum.TestContext.create_vault(ctx, %{
           name: "G2",
           kind: "oauth",
           provider_hint: @provider,

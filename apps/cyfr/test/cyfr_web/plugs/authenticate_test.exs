@@ -435,7 +435,7 @@ defmodule CyfrWeb.Plugs.AuthenticateTest do
       ctx = Sanctum.TestContext.issuer!(Sanctum.TestContext.local())
 
       {:ok, key_result} =
-        Sanctum.ApiKey.create(ctx, %{
+        Sanctum.TestContext.create_key(ctx, %{
           name: "test-mcp-key",
           type: :application
         })
