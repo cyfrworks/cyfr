@@ -133,6 +133,7 @@ defmodule Sanctum.Context do
           plane: plane()
         }
 
+  @derive {Inspect, except: [:confirmation_id]}
   defstruct [
     :user_id,
     :email,
@@ -182,10 +183,13 @@ defmodule Sanctum.Context do
     # through (`auth_method: :device`), or nil for every other ingress.
     # Only that channel sets it; nothing a caller sends can name one.
     :client_id,
-    # The pending confirmation a surface repeats a sensitive change under
-    # (`Sanctum.Consent.Authz.confirm/3`), or nil. It names the record to
-    # consume and proves nothing by itself: the record is checked, and its
-    # person's standing, where the change is decided.
+    # The secret of the pending confirmation a surface repeats a sensitive
+    # change under (`Sanctum.Consent.Authz.confirm/3`), or nil: the asking
+    # client's own, which the signal answered to it alone. It proves
+    # nothing by itself: the record its ref names is checked, with its
+    # opener and its person's standing, where the change is decided. It is
+    # never inspected (the derived `Inspect` leaves it out), so a crash
+    # report carrying the context does not carry it.
     :confirmation_id,
     # How the run this context starts began (`Prima.Origin`): set by the
     # admission entry that builds the context, never from a caller's

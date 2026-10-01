@@ -19,23 +19,31 @@ defmodule Prima.Sanitizer do
   # missing is the crypto half — `keyring` names the boot config the entire
   # at-rest scheme hangs on, and `master_key` / `encryption_key` / `hmac_key`
   # are the material itself.
+  #
+  # `confirmation_id` and `confirmationId` are a pending confirmation's
+  # secret, which only the asking client holds, under the names it travels
+  # by: a context's `confirmation_id` and the MCP request metadata key
+  # `cyfr/confirmationId`. Both spellings are listed because Phoenix's
+  # `:filter_parameters` matches case-sensitive substrings.
   @sensitive_keys ~w(
     password secret token api_key apikey access_token refresh_token
     private_key secret_key auth bearer credential credentials
     passwd pwd api-key x-api-key authorization session_token
     session_id registry_token cosign_key signing_key jwt client_secret
     device_code stripe basic_auth cookie signature code_verifier
-    proof ticket
+    proof ticket confirmation_id confirmationId
     keyring crypto_keyring master_key encryption_key hmac_key
     derived_key key_material keystore passphrase
   )
 
-  # Match code, state, key and fields only as whole keys after stripping
-  # separators. These can carry credentials — `fields` is a vault entry's
-  # material, name → value, whatever the names are; longer names such as
-  # error_code, keyboard, connection_state and field_names must remain
-  # readable.
-  @exact_sensitive_keys ~w(code state key fields)
+  # Match code, state, key, fields and invitation_url only as whole keys
+  # after stripping separators. These can carry credentials — `fields` is a
+  # vault entry's material, name → value, whatever the names are, and
+  # `invitation_url` is a pairing link whose fragment is the bearer
+  # invitation; longer names such as error_code, keyboard, connection_state
+  # and field_names, and a plain `url`, must remain readable.
+  @exact_sensitive_keys ~w(code state key fields invitation_url)
+  @exact_sensitive_normalized Enum.map(@exact_sensitive_keys, &String.replace(&1, ["-", "_"], ""))
 
   # Compared against the key as written, separators and all. `_t` and
   # `_session` are the tincture credential query params
@@ -134,7 +142,7 @@ defmodule Prima.Sanitizer do
     normalized = String.downcase(key) |> String.replace(["-", "_"], "")
 
     String.downcase(key) in @exact_raw_sensitive_keys or
-      normalized in @exact_sensitive_keys or
+      normalized in @exact_sensitive_normalized or
       Enum.any?(@sensitive_keys, fn pattern ->
         case tokenize(pattern) do
           [single] ->
