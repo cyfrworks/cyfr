@@ -178,7 +178,9 @@ const (
 	PasskeyRevoke           = "revoke"
 	PersonAssert            = "assert"
 	PersonCarryBegin        = "carry_begin"
+	PersonCarryCancel       = "carry_cancel"
 	PersonCarryComplete     = "carry_complete"
+	PersonCarryList         = "carry_list"
 	PersonCertify           = "certify"
 	PersonEnroll            = "enroll"
 	PersonEnrollHolder      = "enroll_holder"
@@ -305,7 +307,7 @@ var Actions = map[string][]string{
 	"oauth":               {"delete_client", "list", "set_client"},
 	"pairing":             {"begin", "complete", "list", "renew", "revoke"},
 	"passkey":             {"list", "recover_admin", "register", "revoke"},
-	"person":              {"assert", "carry_begin", "carry_complete", "certify", "enroll", "enroll_holder", "kit", "kit_ack", "link_door", "rotate", "unlink_door"},
+	"person":              {"assert", "carry_begin", "carry_cancel", "carry_complete", "carry_list", "certify", "enroll", "enroll_holder", "kit", "kit_ack", "link_door", "rotate", "unlink_door"},
 	"policy_log":          {"correlate", "get", "list"},
 	"profile":             {"commit", "grant", "grants", "list", "plan", "preview", "publish", "revoke"},
 	"record":              {"get", "list", "payload"},
@@ -2609,6 +2611,21 @@ func (args PersonCarryBeginArgs) MarshalJSON() ([]byte, error) {
 	}{Action: PersonCarryBegin, fields: fields(args)})
 }
 
+// PersonCarryCancelArgs carries arguments for person.carry_cancel.
+type PersonCarryCancelArgs struct {
+	// The pending sign-in carry, by its action id
+	ActionId string `json:"action_id"`
+}
+
+// MarshalJSON supplies the operation's fixed action discriminator.
+func (args PersonCarryCancelArgs) MarshalJSON() ([]byte, error) {
+	type fields PersonCarryCancelArgs
+	return json.Marshal(struct {
+		Action string `json:"action"`
+		fields
+	}{Action: PersonCarryCancel, fields: fields(args)})
+}
+
 // PersonCarryCompleteArgs carries arguments for person.carry_complete.
 type PersonCarryCompleteArgs struct {
 	// The pending sign-in carry, by its action id
@@ -2624,6 +2641,19 @@ func (args PersonCarryCompleteArgs) MarshalJSON() ([]byte, error) {
 		Action string `json:"action"`
 		fields
 	}{Action: PersonCarryComplete, fields: fields(args)})
+}
+
+// PersonCarryListArgs carries arguments for person.carry_list.
+type PersonCarryListArgs struct {
+}
+
+// MarshalJSON supplies the operation's fixed action discriminator.
+func (args PersonCarryListArgs) MarshalJSON() ([]byte, error) {
+	type fields PersonCarryListArgs
+	return json.Marshal(struct {
+		Action string `json:"action"`
+		fields
+	}{Action: PersonCarryList, fields: fields(args)})
 }
 
 // PersonCertifyArgs carries arguments for person.certify.

@@ -18,6 +18,11 @@ defmodule CyfrWeb.SignInResponse do
       cookie for a person who still has a publisher namespace to claim;
       absent retires any stash.
     * `:retry_path` — where the 503 page's "Try again" points.
+    * `:to` — where a proceeding sign-in goes instead of the post-login
+      landing, answered `303`: an absolute URL its caller has already
+      verified. Only the `cyfr` door's callback passes one, the fixed
+      return URL of the signing home's `/carry` that the carry's envelope
+      signed, so the person's browser reports the outcome there.
 
   Every outcome is a redirect or a page; the session token travels in
   the cookie and nowhere else.
@@ -49,7 +54,7 @@ defmodule CyfrWeb.SignInResponse do
       conn
       |> carry_or_retire_probe(opts)
       |> flash_report(report)
-      |> CyfrWeb.SafeRedirect.post_login()
+      |> landing(Keyword.get(opts, :to))
     end)
   end
 
@@ -64,6 +69,15 @@ defmodule CyfrWeb.SignInResponse do
 
     {title, inner} = unavailable_page(reason, Keyword.get(opts, :retry_path, "/login"))
     CyfrWeb.MinimalPage.send_page(conn, 503, title, inner)
+  end
+
+  # The post-login landing, or the verified `:to` its caller named.
+  defp landing(conn, nil), do: CyfrWeb.SafeRedirect.post_login(conn)
+
+  defp landing(conn, to) when is_binary(to) do
+    conn
+    |> put_status(303)
+    |> Phoenix.Controller.redirect(external: to)
   end
 
   # The outage copy, per reason: `{title, message}`.

@@ -380,7 +380,7 @@ defmodule Cyfr.Boundaries do
       ],
       into: "Sanctum",
       allow: ~w(
-        Sanctum Sanctum.Atoms Sanctum.Auth Sanctum.Authority Sanctum.Caller
+        Sanctum Sanctum.Atoms Sanctum.Auth Sanctum.Authority Sanctum.Caller Sanctum.Carry
         Sanctum.Cipher Sanctum.Consent Sanctum.Context Sanctum.Door Sanctum.Egress
         Sanctum.ExecutionStanding Sanctum.Grimoire Sanctum.Network
         Sanctum.Policy Sanctum.Session
@@ -407,6 +407,8 @@ defmodule Cyfr.Boundaries do
           "outbound host, which it pins under the attempt's authority. " <>
           "`Sanctum.TinctureAccess` is that invocation's reread of the tincture it " <>
           "roots at: its public-profile and private-access policy. " <>
+          "`Sanctum.Carry` is `Cyfr.RetentionScheduler`'s periodic sweep of every " <>
+          "person's expired sign-in carries (`sweep/1`), which names no store. " <>
           "Boundary's exports are global, and `Sanctum` exports more than this roster to " <>
           "every boundary that lists it, so no declaration can say it."
     },
@@ -485,8 +487,10 @@ defmodule Cyfr.Boundaries do
           "(`sign_in_challenge/0`, `sign_in/2`); `Sanctum.Auth.CyfrDoor` is the `cyfr` door's: " <>
           "the signing home the sign-in page sends a person to (`signing_home/1`), the " <>
           "challenge it mints for the carry they bring back (`challenge/1`), where the " <>
-          "callback's hop returns them (`redirect_url/1`), and the assertion the callback " <>
-          "admits into a session, behind the door (`callback/2`); " <>
+          "callback's hop returns them (`redirect_url/1`), the assertion the callback " <>
+          "admits into a session, behind the door (`callback/2`), and the carry's " <>
+          "lifetime the sign-in and `/carry` pages hand their script " <>
+          "(`carry_lifetime_ms/0`); " <>
           "`Sanctum.Auth.OIDC.reauth_callback/1` and " <>
           "`reauth_decide/3` are the re-authentication's callback and its person's answer " <>
           "(`PrismWeb.ReauthController`), which confirm one pending confirmation on that " <>
@@ -1273,7 +1277,13 @@ defmodule Cyfr.Boundaries do
     "Sanctum.ApiKey" => [default_scopes: 1, looks_like_key?: 1, valid_scopes: 1],
     "Sanctum.Atoms" => [known_permissions: 0],
     "Sanctum.Auth" => [provider: 0],
-    "Sanctum.Auth.CyfrDoor" => [callback: 2, challenge: 1, redirect_url: 1, signing_home: 1],
+    "Sanctum.Auth.CyfrDoor" => [
+      callback: 2,
+      carry_lifetime_ms: 0,
+      challenge: 1,
+      redirect_url: 1,
+      signing_home: 1
+    ],
     "Sanctum.Auth.DeviceFlow" => [configured_providers: 0, impl: 0, provider?: 1, providers: 0],
     "Sanctum.Auth.EmailVerification" => [verify_with_claim: 3],
     "Sanctum.Auth.Identity" => [reserved_issuer?: 1],
@@ -1289,6 +1299,7 @@ defmodule Cyfr.Boundaries do
       peek: 1,
       revalidate_session: 1
     ],
+    "Sanctum.Carry" => [sweep: 1],
     "Sanctum.Cipher" => [keyring!: 0],
     "Sanctum.Cipher.Rotation" => [audit: 0, reencrypt_all: 1],
     "Sanctum.ClientIp" => [from_connect_info: 1, resolve: 1],

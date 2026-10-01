@@ -93,6 +93,9 @@ defmodule Cyfr.RetentionScheduler do
   @default_interval_ms :timer.hours(6)
 
   @kind "retention"
+  # The carry sweep's batch, and how many batches one cycle takes.
+  @carry_batch 500
+  @carry_batches 10
   @lease_ms :timer.minutes(5)
   @renew_ms :timer.minutes(1)
 
@@ -104,6 +107,7 @@ defmodule Cyfr.RetentionScheduler do
     {"retention", "retention cleanup"},
     {"decisions_global", "host decision purge"},
     {"sessions", "expired session sweep"},
+    {"carry", "carry action sweep"},
     {"webhooks", "webhook delivery sweep"},
     {"rates", "rate window sweep"},
     {"tmp", "stale tmp sweep"},
@@ -425,6 +429,7 @@ defmodule Cyfr.RetentionScheduler do
 
   defp step_fun("decisions_global"), do: &purge_host_decisions/0
   defp step_fun("sessions"), do: &sweep_expired_sessions/0
+  defp step_fun("carry"), do: fn -> sweep_carry_actions(@carry_batches, 0, 0) end
   defp step_fun("webhooks"), do: &sweep_webhook_deliveries/0
   defp step_fun("rates"), do: &sweep_rate_windows/0
   defp step_fun("tmp"), do: &sweep_stale_tmp_files/0
@@ -480,6 +485,38 @@ defmodule Cyfr.RetentionScheduler do
       {:error, reason} ->
         Logger.warning("[RetentionScheduler] Expired-session sweep failed: #{inspect(reason)}")
     end
+  end
+
+  # Every person's sign-in carries past their expiry move to expired with
+  # their payloads cleared, and terminal ones and login receipts past their
+  # retention go (`Sanctum.Carry.sweep/1`): opening a carry ends only its
+  # own person's, so this is what reaches a person who opens none. Batch
+  # after batch until one moves fewer than a batch's worth of either, and
+  # at most `@carry_batches` a cycle, so a backlog is taken over several
+  # cycles rather than holding the claim.
+  defp sweep_carry_actions(0, expired, removed), do: carried(expired, removed)
+
+  defp sweep_carry_actions(left, expired, removed) do
+    case Sanctum.Carry.sweep(@carry_batch) do
+      {:ok, %{expired: more_expired, removed: more_removed}}
+      when more_expired < @carry_batch and more_removed < @carry_batch ->
+        carried(expired + more_expired, removed + more_removed)
+
+      {:ok, %{expired: more_expired, removed: more_removed}} ->
+        sweep_carry_actions(left - 1, expired + more_expired, removed + more_removed)
+
+      {:error, reason} ->
+        Logger.warning("[RetentionScheduler] Carry action sweep failed: #{inspect(reason)}")
+        carried(expired, removed)
+    end
+  end
+
+  defp carried(0, 0), do: :ok
+
+  defp carried(expired, removed) do
+    Logger.info(
+      "[RetentionScheduler] Expired #{expired} and removed #{removed} sign-in carry action(s)"
+    )
   end
 
   # One crash barrier for every step: retention must never take the

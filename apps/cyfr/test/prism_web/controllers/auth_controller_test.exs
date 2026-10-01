@@ -1044,13 +1044,20 @@ defmodule PrismWeb.AuthControllerTest do
       assert redirected_to(get(build_conn(), "/auth/cyfr")) == "/login"
     end
 
-    test "the callback admits under the challenge the session holds and sets the session; a retry resumes it",
+    # Where the browser reports how the sign-in ended: the person's home's
+    # `/carry`, the return URL the carry's envelope signed, with the outcome.
+    defp carry_return(held, outcome) do
+      {:ok, return} = Prima.Carry.Return.new(held["action_id"], outcome)
+      "https://a.example/carry#" <> Prima.Carry.Return.fragment(return)
+    end
+
+    test "the callback admits under the challenge the session holds, sets the session and reports back to the person's home; a retry resumes it",
          %{conn: conn, held: held, identity: identity} do
       {:ok, _} = Sanctum.Door.Store.allow("identifier", identity.identifier, "test")
       fragment = DirectoryServer.assertion_fragment(identity, held, Sanctum.Person.home())
 
       signed_in = callback(conn, held, fragment)
-      assert redirected_to(signed_in) == "/"
+      assert redirected_to(signed_in, 303) == carry_return(held, :admitted)
       token = get_session(signed_in, :sanctum_session_token)
       assert token == CyfrDoor.session_token(held)
       refute get_session(signed_in, "cyfr_challenge")
@@ -1061,18 +1068,38 @@ defmodule PrismWeb.AuthControllerTest do
       assert redirected_to(landed) == "/login?error=no_athanor"
 
       # The response was lost: the browser still holds the challenge, and
-      # its retry resumes the one session.
+      # its retry resumes the one session and reports the same outcome.
       again = callback(build_conn(), held, fragment)
-      assert redirected_to(again) == "/"
+      assert redirected_to(again, 303) == carry_return(held, :admitted)
       assert get_session(again, :sanctum_session_token) == token
     end
 
-    test "an identity the door refuses gets 403 and no session",
+    test "the report goes only to the signed source's fixed return URL, never to one the request names",
+         %{conn: conn, held: held, identity: identity} do
+      {:ok, _} = Sanctum.Door.Store.allow("identifier", identity.identifier, "test")
+      fragment = DirectoryServer.assertion_fragment(identity, held, Sanctum.Person.home())
+
+      signed_in =
+        conn
+        |> holding(held)
+        |> post(~p"/auth/cyfr/callback", %{
+          "cyfr" => fragment,
+          "return_url" => "https://evil.example/carry",
+          "to" => "https://evil.example/"
+        })
+
+      assert redirected_to(signed_in, 303) == carry_return(held, :admitted)
+    end
+
+    test "an identity the door refuses gets 403, no session, and a link home reporting the refusal",
          %{conn: conn, held: held} = ctx do
       fragment = DirectoryServer.assertion_fragment(ctx.identity, held, Sanctum.Person.home())
       refused = callback(conn, held, fragment)
 
-      assert html_response(refused, 403) =~ "Not allowed on this server"
+      body = html_response(refused, 403)
+      assert body =~ "Not allowed on this server"
+      assert body =~ "Back to your home"
+      assert body =~ ~s(href="#{carry_return(held, :refused)}")
       refute get_session(refused, :sanctum_session_token)
     end
 
@@ -1086,9 +1113,12 @@ defmodule PrismWeb.AuthControllerTest do
         )
 
       refused = callback(conn, held, fragment)
-      assert html_response(refused, 401) =~ "Begin it again from your home"
+      body = html_response(refused, 401)
+      assert body =~ "Begin it again from your home"
+      assert body =~ ~s(href="#{carry_return(held, :refused)}")
       refute get_session(refused, :sanctum_session_token)
 
+      # A browser holding no challenge has no home to report to.
       unheld =
         build_conn()
         |> Plug.Test.init_test_session(%{})
@@ -1096,18 +1126,35 @@ defmodule PrismWeb.AuthControllerTest do
           "cyfr" => DirectoryServer.assertion_fragment(identity, held, Sanctum.Person.home())
         })
 
-      assert html_response(unheld, 401)
+      refute html_response(unheld, 401) =~ "Back to your home"
       refute get_session(unheld, :sanctum_session_token)
     end
 
-    test "a directory that cannot be read answers try again, and signs nobody in",
+    test "a retried login under another assertion, after the first was admitted, reports nothing new",
+         %{conn: conn, held: held, identity: identity} do
+      {:ok, _} = Sanctum.Door.Store.allow("identifier", identity.identifier, "test")
+      first = DirectoryServer.assertion_fragment(identity, held, Sanctum.Person.home())
+      assert redirected_to(callback(conn, held, first), 303) == carry_return(held, :admitted)
+
+      another =
+        DirectoryServer.assertion_fragment(identity, held, Sanctum.Person.home(),
+          expires_at: System.os_time(:millisecond) + 200_000
+        )
+
+      conflicted = callback(build_conn(), held, another)
+      refute html_response(conflicted, 401) =~ "Back to your home"
+    end
+
+    test "a directory that cannot be read answers try again, signs nobody in, and reports nothing home",
          %{conn: conn, held: held, identity: identity, directory: directory} do
       {:ok, _} = Sanctum.Door.Store.allow("identifier", identity.identifier, "test")
       fragment = DirectoryServer.assertion_fragment(identity, held, Sanctum.Person.home())
       DirectoryServer.Server.stop(directory.server)
 
       paused = callback(conn, held, fragment)
-      assert html_response(paused, 503) =~ "Try again shortly"
+      body = html_response(paused, 503)
+      assert body =~ "Try again shortly"
+      refute body =~ "Back to your home"
       refute get_session(paused, :sanctum_session_token)
     end
   end

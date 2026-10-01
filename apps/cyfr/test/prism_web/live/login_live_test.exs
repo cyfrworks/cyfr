@@ -259,16 +259,48 @@ defmodule PrismWeb.LoginLiveTest do
       %{identity: DirectoryServer.identity!(directory.dir, directory.url)}
     end
 
-    test "the entry sends the person to their own home's /carry, naming this home", %{conn: conn} do
+    test "the entry has the script keep the expectation, then sends the person to their own home's /carry, naming this home in the fragment",
+         %{conn: conn} do
       {:ok, view, html} = live(conn, ~p"/login")
       assert html =~ "Sign in with your CYFR"
+      assert html =~ ~s(data-carry="login")
+      assert html =~ ~s(data-lifetime-ms="#{Arca.CarryActions.lifetime_ms()}")
 
-      assert {:error, {:redirect, %{to: to}}} =
-               view |> element("#cyfr-sign-in") |> render_submit(%{"home" => "a.example"})
+      view |> element("#cyfr-sign-in") |> render_submit(%{"home" => "a.example"})
+
+      assert_push_event(view, "cyfr:expect", %{home: "https://a.example", to: to})
 
       assert to ==
-               "https://a.example/carry?" <>
+               "https://a.example/carry#" <>
                  URI.encode_query(%{"destination" => Sanctum.Person.home()})
+    end
+
+    test "naming the home whose challenge this browser holds resumes that exchange: the same challenge goes back",
+         %{conn: conn, identity: identity} do
+      %{fragment: carry} = DirectoryServer.carry_fragment(identity, Sanctum.Person.home())
+      {:ok, held} = Sanctum.Auth.CyfrDoor.challenge(carry)
+
+      browser =
+        conn |> Plug.Test.init_test_session(%{"cyfr_challenge" => held}) |> get(~p"/login")
+
+      {:ok, view, _} = live(browser, ~p"/login")
+      view |> element("#cyfr-sign-in") |> render_submit(%{"home" => "https://a.example"})
+      assert_push_event(view, "cyfr:expect", %{home: "https://a.example", to: path})
+      assert String.starts_with?(path, "/auth/cyfr?ticket=")
+
+      hop = get(browser, path)
+      assert hop.status == 303
+      assert get_resp_header(hop, "location") == [Sanctum.Auth.CyfrDoor.redirect_url(held)]
+      assert get_session(hop, "cyfr_challenge") == held
+
+      # Another home's name begins a new exchange there instead.
+      {:ok, view, _} = live(browser, ~p"/login")
+      view |> element("#cyfr-sign-in") |> render_submit(%{"home" => "b.example"})
+
+      assert_push_event(view, "cyfr:expect", %{
+        home: "https://b.example",
+        to: "https://b.example/carry#" <> _
+      })
     end
 
     test "an address that is no home's, or this home's, is told so", %{conn: conn} do
@@ -291,8 +323,21 @@ defmodule PrismWeb.LoginLiveTest do
       # One browser start to finish: the ticket is bound to it.
       browser = get(conn, ~p"/login")
       {:ok, view, _} = live(browser, ~p"/login")
-      render_hook(view, "cyfr_carry", %{"fragment" => carry})
-      {path, _flash} = assert_redirect(view)
+
+      html =
+        render_hook(view, "cyfr_carry", %{
+          "fragment" => carry,
+          "expected_source" => "https://a.example"
+        })
+
+      # The code of the challenge this home issued, which the person's
+      # home names too; nothing moves until the person continues.
+      [_, code] = Regex.run(~r/data-test="code"[^>]*>\s*([0-9A-Z]{4}-[0-9A-Z]{4})/, html)
+      assert html =~ "https://a.example"
+
+      assert {:error, {:redirect, %{to: path}}} =
+               view |> element("[data-test=cyfr-continue]") |> render_click()
+
       assert String.starts_with?(path, "/auth/cyfr?ticket=")
 
       hop = get(browser, path)
@@ -301,31 +346,112 @@ defmodule PrismWeb.LoginLiveTest do
       assert [location] = get_resp_header(hop, "location")
       assert String.starts_with?(location, "https://a.example/carry#")
 
+      {:ok, challenge} = Prima.Identity.Encoding.unb64(held["challenge"], 32)
+      assert code == Prima.PersonAssertion.comparison_code(challenge)
+
       # The person's home answers with the assertion, back to this page.
       assertion = DirectoryServer.assertion_fragment(identity, held, Sanctum.Person.home())
       back = recycle(hop)
       {:ok, view, _} = live(back, ~p"/login")
       render_hook(view, "cyfr_assertion", %{"fragment" => assertion})
 
+      # Signed in, the browser goes back to the person's home to say so,
+      # at the return URL the carry's envelope signed.
       signed_in = follow_trigger_action(element(view, "#cyfr-callback"), back)
-      assert redirected_to(signed_in) == "/"
+      {:ok, admitted} = Prima.Carry.Return.new(held["action_id"], :admitted)
+
+      assert redirected_to(signed_in, 303) ==
+               "https://a.example/carry#" <> Prima.Carry.Return.fragment(admitted)
 
       assert get_session(signed_in, :sanctum_session_token) ==
                Sanctum.Auth.CyfrDoor.session_token(held)
+    end
+
+    test "a carry from another home than the one the person named is refused before any directory is read, and nobody is signed in",
+         %{conn: conn, identity: identity} do
+      {:ok, _} = Sanctum.Door.Store.allow("identifier", identity.identifier, "test")
+      %{fragment: carry} = DirectoryServer.carry_fragment(identity, Sanctum.Person.home())
+      browser = get(conn, ~p"/login")
+      {:ok, view, _} = live(browser, ~p"/login")
+      _ = DirectoryServer.requests()
+
+      html =
+        render_hook(view, "cyfr_carry", %{
+          "fragment" => carry,
+          "expected_source" => "https://other.example"
+        })
+
+      assert html =~ "another home than the one you named"
+      refute has_element?(view, "#cyfr-code")
+      assert DirectoryServer.requests() == []
+
+      # Without the named home at all, the carry is one this page did not
+      # ask for.
+      html = render_hook(view, "cyfr_carry", %{"fragment" => carry})
+      assert html =~ "did not ask for"
+      refute has_element?(view, "#cyfr-code")
+
+      html = render_hook(view, "cyfr_unsolicited", %{})
+      assert html =~ "did not ask for"
+
+      # No session was made: the browser is still signed out.
+      assert redirected_to(get(recycle(browser), ~p"/chat")) =~ "/login"
+    end
+
+    test "cancelling at the code leaves nothing pending; a code past its challenge's expiry goes nowhere",
+         %{conn: conn, identity: identity} do
+      %{fragment: carry} = DirectoryServer.carry_fragment(identity, Sanctum.Person.home())
+      {:ok, view, _} = live(conn, ~p"/login")
+
+      render_hook(view, "cyfr_carry", %{
+        "fragment" => carry,
+        "expected_source" => "https://a.example"
+      })
+
+      assert has_element?(view, "#cyfr-code")
+
+      view |> element("#cyfr-code button", "Cancel") |> render_click()
+      refute has_element?(view, "#cyfr-code")
+      assert render_click(view, "cyfr_continue", %{}) =~ "Sign in with your CYFR"
+
+      render_hook(view, "cyfr_carry", %{
+        "fragment" => carry,
+        "expected_source" => "https://a.example"
+      })
+
+      :sys.replace_state(view.pid, fn state ->
+        update_in(state.socket.assigns.cyfr_pending.held, &Map.put(&1, "expires_at", 0))
+      end)
+
+      html = view |> element("[data-test=cyfr-continue]") |> render_click()
+      assert html =~ "That sign-in expired"
     end
 
     test "a carry that does not verify leaves the person here, told to begin again; nothing is posted",
          %{conn: conn, identity: identity} do
       {:ok, view, _} = live(conn, ~p"/login")
 
-      html = render_hook(view, "cyfr_carry", %{"fragment" => "not a carry"})
+      html =
+        render_hook(view, "cyfr_carry", %{
+          "fragment" => "not a carry",
+          "expected_source" => "https://a.example"
+        })
+
       assert html =~ "Begin it again from your home"
 
       %{fragment: elsewhere} =
         DirectoryServer.carry_fragment(identity, "https://elsewhere.example")
 
-      html = render_hook(view, "cyfr_carry", %{"fragment" => elsewhere})
+      html =
+        render_hook(view, "cyfr_carry", %{
+          "fragment" => elsewhere,
+          "expected_source" => "https://a.example"
+        })
+
       assert html =~ "begun for another home"
+
+      html = render_hook(view, "cyfr_oversized", %{})
+      assert html =~ "larger than this home accepts"
 
       html =
         render_hook(view, "cyfr_assertion", %{

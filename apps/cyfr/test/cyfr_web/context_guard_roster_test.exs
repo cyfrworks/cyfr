@@ -24,7 +24,7 @@ defmodule CyfrWeb.ContextGuardRosterTest do
     RootRedirectLive ChatRedirectLive ChatLive AquaLive FilesLive ActivitiesLive
     EnforcementsLive ExecutionsLive ComponentsLive ComponentDetailLive RegistryLive
     MyReportsLive BuildsLive VaultLive ApiKeysLive MembersLive WebhooksLive
-    SchedulesLive SettingsLive McpServersLive ShellLive LegalLive
+    SchedulesLive SettingsLive McpServersLive ShellLive LegalLive CarryLive
   )
 
   # The sign-in page and the pairing page are what an anonymous caller

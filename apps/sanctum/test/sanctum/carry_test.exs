@@ -204,12 +204,123 @@ defmodule Sanctum.CarryTest do
     end
   end
 
+  describe "pending/1" do
+    test "lists the person's own unexpired pending carries, and nothing a carry signs or carries" do
+      person = enrolled!()
+      other = enrolled!()
+      {:ok, first} = Sanctum.Carry.begin(person.ctx, @destination, "join")
+      {:ok, second} = Sanctum.Carry.begin(person.ctx, "https://other-hub.example", "join")
+      {:ok, theirs} = Sanctum.Carry.begin(other.ctx, @destination, "join")
+      {:ok, done} = Sanctum.Carry.begin(person.ctx, @destination, "join")
+      {:ok, _} = Sanctum.Carry.complete(person.ctx, done.action_id, "admitted")
+      {:ok, gone} = Sanctum.Carry.begin(person.ctx, @destination, "join")
+
+      {1, _} =
+        Arca.Repo.update_all(from(a in CarryAction, where: a.id == ^gone.action_id),
+          set: [expires_at: DateTime.add(DateTime.utc_now(), -1, :second)]
+        )
+
+      assert {:ok, listed} = Sanctum.Carry.pending(person.ctx)
+      assert Enum.map(listed, & &1.action_id) == [first.action_id, second.action_id]
+
+      [entry, _] = listed
+      head = row(person.user.id).head_hash
+
+      assert entry == %{
+               action_id: first.action_id,
+               destination: @destination,
+               phase: "pending",
+               expires_at: first.expires_at,
+               began_at: Arca.Repo.get!(CarryAction, first.action_id).inserted_at,
+               key_epoch: head
+             }
+
+      # The other person's is theirs alone.
+      assert {:ok, [%{action_id: action_id}]} = Sanctum.Carry.pending(other.ctx)
+      assert action_id == theirs.action_id
+    end
+
+    test "answers nobody without a person behind the context" do
+      person = enrolled!()
+      {:ok, _} = Sanctum.Carry.begin(person.ctx, @destination, "join")
+
+      assert {:error, :unauthenticated} =
+               Sanctum.Carry.pending(%{person.ctx | authenticated: false})
+
+      assert {:error, :unauthenticated} = Sanctum.Carry.pending(%{person.ctx | plane: :guest})
+    end
+  end
+
+  describe "sweep/1" do
+    test "expires every person's carries past their expiry and clears their payloads; open ones stand" do
+      person = enrolled!()
+      other = enrolled!()
+      {:ok, gone} = Sanctum.Carry.begin(person.ctx, @destination, "join")
+      {:ok, open} = Sanctum.Carry.begin(other.ctx, @destination, "join")
+
+      {1, _} =
+        Arca.Repo.update_all(from(a in CarryAction, where: a.id == ^gone.action_id),
+          set: [expires_at: DateTime.add(DateTime.utc_now(), -1, :second)]
+        )
+
+      assert {:ok, %{expired: 1, removed: 0}} = Sanctum.Carry.sweep(500)
+      assert %{phase: "expired", payload: nil} = Arca.Repo.get!(CarryAction, gone.action_id)
+      assert %{phase: "pending", payload: payload} = Arca.Repo.get!(CarryAction, open.action_id)
+      assert is_binary(payload)
+    end
+  end
+
+  describe "cancel/2" do
+    test "ends the person's own open carry, clears its payload, and is the same again" do
+      person = enrolled!()
+      {:ok, began} = Sanctum.Carry.begin(person.ctx, @destination, "join")
+
+      assert {:ok, %{action_id: action_id, phase: "cancelled"}} =
+               Sanctum.Carry.cancel(person.ctx, began.action_id)
+
+      assert action_id == began.action_id
+      assert %{phase: "cancelled", payload: nil} = Arca.Repo.get!(CarryAction, began.action_id)
+      assert {:ok, []} = Sanctum.Carry.pending(person.ctx)
+
+      assert {:ok, %{phase: "cancelled"}} = Sanctum.Carry.cancel(person.ctx, began.action_id)
+
+      # Cancelled, nothing more is recorded for it.
+      assert {:error, {:conflict, _}} =
+               Sanctum.Carry.complete(person.ctx, began.action_id, "admitted")
+    end
+
+    test "another person's carry, or none, is not found, and stays as it was" do
+      person = enrolled!()
+      other = enrolled!()
+      {:ok, began} = Sanctum.Carry.begin(person.ctx, @destination, "join")
+
+      assert {:error, {:not_found, "carry", _}} =
+               Sanctum.Carry.cancel(other.ctx, began.action_id)
+
+      assert {:error, {:not_found, "carry", _}} = Sanctum.Carry.cancel(person.ctx, "car_nobody")
+      assert %{phase: "pending"} = Arca.Repo.get!(CarryAction, began.action_id)
+    end
+
+    test "a carry whose outcome is recorded has nothing left to cancel" do
+      person = enrolled!()
+      {:ok, began} = Sanctum.Carry.begin(person.ctx, @destination, "join")
+      {:ok, _} = Sanctum.Carry.complete(person.ctx, began.action_id, "refused")
+
+      assert {:error, {:conflict, _}} = Sanctum.Carry.cancel(person.ctx, began.action_id)
+
+      assert %{phase: "completed", outcome: "refused"} =
+               Arca.Repo.get!(CarryAction, began.action_id)
+    end
+  end
+
   describe "complete/3" do
     test "records the outcome once; an exact retry answers it and applies nothing again" do
       person = enrolled!()
       {:ok, began} = Sanctum.Carry.begin(person.ctx, @destination, "join")
 
-      assert {:ok, %{phase: "completed", outcome: "admitted"}} =
+      # It answers the destination this home's row names, where the
+      # person's browser goes next.
+      assert {:ok, %{phase: "completed", outcome: "admitted", destination: @destination}} =
                Sanctum.Carry.complete(person.ctx, began.action_id, "admitted")
 
       done = Arca.Repo.get!(CarryAction, began.action_id)

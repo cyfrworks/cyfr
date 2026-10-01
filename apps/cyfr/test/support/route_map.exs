@@ -667,6 +667,15 @@
         },
         %{
           verb: "GET",
+          path: "/carry",
+          plug: "Phoenix.LiveView.Plug",
+          plug_opts: ":index",
+          auth: "browser_authenticated",
+          live_view: "PrismWeb.CarryLive",
+          pipe_through: ["browser"]
+        },
+        %{
+          verb: "GET",
           path: "/chat",
           plug: "Phoenix.LiveView.Plug",
           plug_opts: ":index",

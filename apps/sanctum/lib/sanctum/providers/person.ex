@@ -42,7 +42,14 @@ defmodule Sanctum.Providers.Person do
       unlinked, by its key, provider, issuer and subject.
     * `person.carry_begin` and `person.carry_complete`
       (`Sanctum.Carry.begin/3`, `complete/3`) — the pending carry, its
-      envelope, payload and fragment; then its recorded outcome.
+      envelope, payload and fragment; then its recorded outcome and the
+      destination this home's row names.
+    * `person.carry_list` (`Sanctum.Carry.pending/1`) — `%{actions: [...]}`,
+      the person's unexpired pending carries, each its `action_id`,
+      `destination`, `phase`, `expires_at`, `began_at` and `key_epoch`;
+      never a challenge, assertion, envelope or payload.
+    * `person.carry_cancel` (`Sanctum.Carry.cancel/2`) — the carry's
+      `action_id` and `phase: "cancelled"`.
     * `person.certify` — `%{certificate: _}`, a device certificate with an
       identity subject (`Sanctum.Person.issue_device_cert/4`) for another
       home, after the `device_pairing` confirmation; this home pairs its
@@ -62,7 +69,7 @@ defmodule Sanctum.Providers.Person do
     Operation.tool(
       operations() ++ Assertion.operations(),
       description:
-        "A person's identity at their own home: enroll and print the recovery kit, add another kit, rotate the live key, link or unlink a sign-in door, certify a device for another home, and begin or complete a sign-in carry to another home.",
+        "A person's identity at their own home: enroll and print the recovery kit, add another kit, rotate the live key, link or unlink a sign-in door, certify a device for another home, and begin, list, cancel or complete a sign-in carry to another home.",
       title: "Person"
     )
   end
@@ -184,10 +191,7 @@ defmodule Sanctum.Providers.Person do
         "carry_complete",
         "Record a sign-in carry's outcome",
         [
-          Arg.new("action_id", :string,
-            required: true,
-            description: "The pending sign-in carry, by its action id"
-          ),
+          carry_action_id(),
           Arg.new("outcome", :string,
             required: true,
             enum: ["admitted", "refused"],
@@ -195,6 +199,20 @@ defmodule Sanctum.Providers.Person do
           )
         ],
         kind: :write,
+        planes: [:external],
+        consent: :interactive
+      ),
+      Operation.new(
+        "person",
+        "carry_cancel",
+        "Cancel a pending sign-in carry",
+        [carry_action_id()],
+        kind: :write,
+        planes: [:external],
+        consent: :interactive
+      ),
+      Operation.new("person", "carry_list", "List the pending sign-in carries", [],
+        kind: :read,
         planes: [:external],
         consent: :interactive
       ),
@@ -227,6 +245,15 @@ defmodule Sanctum.Providers.Person do
       )
     ]
   end
+
+  # The same argument as `person.assert`'s, in the same words: one tool,
+  # one schema for a name.
+  defp carry_action_id,
+    do:
+      Arg.new("action_id", :string,
+        required: true,
+        description: "The pending sign-in carry, by its action id"
+      )
 
   defp recovery_secret(description),
     do:
@@ -296,6 +323,20 @@ defmodule Sanctum.Providers.Person do
 
   def handle(%Context{}, %{"action" => "carry_complete"}),
     do: {:error, {:invalid_argument, "carry_complete needs the action_id and its outcome"}}
+
+  def handle(%Context{} = ctx, %{"action" => "carry_list"}) do
+    case Carry.pending(ctx) do
+      {:ok, actions} -> {:ok, %{actions: actions}}
+      {:error, reason} -> {:error, refusal(reason)}
+    end
+  end
+
+  def handle(%Context{} = ctx, %{"action" => "carry_cancel", "action_id" => action_id})
+      when is_binary(action_id),
+      do: answer(Carry.cancel(ctx, action_id))
+
+  def handle(%Context{}, %{"action" => "carry_cancel"}),
+    do: {:error, {:invalid_argument, "carry_cancel needs the action_id"}}
 
   def handle(%Context{} = ctx, %{"action" => "certify"} = args), do: answer(certify(ctx, args))
 

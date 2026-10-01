@@ -53,9 +53,16 @@ defmodule Cyfr.DeclaredOperationsTest do
             {"pairing", "list"},
             {"passkey", "list"},
             {"confirmation", "pending"},
-            {"person", "kit"}
+            {"person", "kit"},
+            {"person", "carry_list"}
           ] do
         assert operation(tool, action).kind == :read, "#{tool}.#{action}"
+      end
+
+      # A carry is cancelled and listed as it is completed: on the same
+      # plane and consent class, the list a read.
+      for action <- ~w(carry_cancel carry_complete) do
+        assert operation("person", action).kind == :write, "person.#{action}"
       end
 
       assert operation("passkey", "recover_admin").scope == :platform
