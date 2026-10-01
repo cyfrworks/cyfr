@@ -292,12 +292,14 @@ defmodule Cyfr.Bus do
       match: {:prefix, "bus:confirmations:"},
       template: "tenant:<athanor_id>:bus:confirmations:<user_id>",
       producers: ["Cyfr.TelemetryBridge"],
-      consumers: ["Emissary.Web.DeviceChannel", "PrismWeb.ShellLive"],
-      pending: true,
+      # Heard through the stream's delivery: the system layer's listener in
+      # Prism and the device channel's forwarder for a paired glass.
+      consumers: ["stream:confirmation.changes"],
       reason:
         "one person's pending confirmations moved, on that person's own topic, so no other " <>
-          "member learns of their sensitive changes; it carries the ref, the operation and " <>
-          "the expiry, and a client reads the preview under its own session"
+          "member learns of their sensitive changes; it carries the ref, what happened to " <>
+          "the record (its kind), the operation and the expiry, and a client reads the " <>
+          "preview under its own session"
     },
     # --- global: unscoped on purpose ---
     %{

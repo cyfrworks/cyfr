@@ -63,10 +63,18 @@ defmodule PrismWeb.SystemLayerTest do
   confirm control to a client with no person behind it, dispatches the
   same operations the consent sheet and the vault page dispatch through
   the gate, so the operation decides every confirmation that arrives,
-  reports each outcome to its parent, a refusal and the confirmation
-  signal as their sentences, queues a second prompt behind the open one,
-  keeps a typed credential out of the page, the socket and the logs, and
-  offers safe mode's ways out with no dismissal.
+  reports each outcome to its parent, a refusal as its sentence, queues
+  a second prompt behind the open one, keeps a typed credential out of
+  the page, the socket and the logs, and offers safe mode's ways out with
+  no dismissal.
+
+  A change that needs a fresh confirmation waits on its record: the
+  asking layer keeps the signal's secret in its process and never
+  renders it, shows the home's preview and the client that asked, takes
+  a passkey's proof by the record's ref, and repeats the change once the
+  record reads confirmed on `confirmation.changes`. Another client of the
+  person, listening on the same stream, shows the same record before any
+  proof and confirms it by its ref.
 
   Each test mounts the layer the way the shell does, in a small host view
   that forwards what the layer tells its parent to the test.
@@ -75,9 +83,13 @@ defmodule PrismWeb.SystemLayerTest do
   use PrismWeb.ConnCase, async: false
 
   import ExUnit.CaptureLog
+  import Ecto.Query, only: [from: 2]
+  import Prima.Test.Wait
 
+  alias PrismWeb.SystemLayer.Prompt
   alias PrismWeb.SystemLayerTest.{BareHost, Host}
   alias Sanctum.Context
+  alias Sanctum.TestContext.Authenticator
 
   # ---------------------------------------------------------------------------
   # Fixtures
@@ -137,6 +149,73 @@ defmodule PrismWeb.SystemLayerTest do
   end
 
   defp layer(view), do: with_target(view, "#system-layer")
+
+  # The secret the layer holds for the change it asked for: in its process
+  # alone, read here from the view's state.
+  defp held_secret(view) do
+    state = inspect(:sys.get_state(view.pid), limit: :infinity, printable_limit: :infinity)
+    [secret] = Regex.run(~r/cnf_[A-Za-z0-9_-]{43}/, state)
+    secret
+  end
+
+  # A passkey's proof given on this client: the ceremony the layer asks
+  # for, answered by the person's authenticator over the record's digest.
+  defp prove_here!(view, ref, authenticator) do
+    view |> element(~s([data-test="confirm-passkey"][phx-value-ref="#{ref}"])) |> render_click()
+
+    assert_push_event(view, "webauthn:get", %{
+      purpose: "confirmation",
+      id: ^ref,
+      public_key: %{"challenge" => challenge}
+    })
+
+    {:ok, digest} = Prima.Identity.Encoding.unb64(challenge, 32)
+    credential = Authenticator.assertion(authenticator, digest)
+
+    view
+    |> layer()
+    |> render_hook("webauthn_result", %{
+      "purpose" => "confirmation",
+      "id" => ref,
+      "credential" => credential
+    })
+  end
+
+  # Another session of the same person, in the same athanor.
+  defp other_session!(ctx) do
+    {:ok, session} = Sanctum.TestContext.create_session(%{ctx | provider: "github"})
+
+    {:ok, other} =
+      Sanctum.Caller.establish(session.token, focus: ctx.athanor_id, task_supervisor: nil)
+
+    other
+  end
+
+  # What the request log and the decision log hold.
+  defp logged do
+    inspect(
+      {Arca.Repo.all(from(l in Arca.Schemas.McpLog, select: {l.input, l.output, l.error})),
+       Arca.Repo.all(from(d in Arca.Schemas.DecisionLog, select: {d.reason, d.tool, d.action}))},
+      limit: :infinity,
+      printable_limit: :infinity
+    )
+  end
+
+  defp end_views, do: Cyfr.Test.Sandbox.end_views()
+
+  defp person_context(user, athanor) do
+    Context.build(
+      user_id: user.user_id,
+      athanor_id: athanor.id,
+      permissions: Context.person_permissions(),
+      scope: :athanor,
+      auth_method: :oidc,
+      authenticated: true
+    )
+  end
+
+  defp restore_env(app, key, nil), do: Application.delete_env(app, key)
+  defp restore_env(app, key, value), do: Application.put_env(app, key, value)
 
   defp grant(id, attrs \\ %{}) do
     ref = "tincture:local.system-layer-probe"
@@ -290,14 +369,15 @@ defmodule PrismWeb.SystemLayerTest do
       assert open_prompt(view) == "n2"
     end
 
-    test "is offered no credential input, and a sent credential is refused by the vault", %{
+    test "is offered a request for confirmation in place of saving, and the vault refuses it", %{
       view: view,
       ctx: ctx
     } do
       name = "none-client-entry-#{System.unique_integer([:positive])}"
       prompt(view, credential("n3", name))
 
-      refute has_element?(view, ~s(input[type="password"]))
+      assert has_element?(view, ~s([data-test="credential-submit"]), "Request confirmation")
+      refute has_element?(view, ~s([data-test="credential-submit"]), "Save to vault")
 
       view
       |> layer()
@@ -442,12 +522,13 @@ defmodule PrismWeb.SystemLayerTest do
   describe "credential entry" do
     setup :signed_in
 
-    # Entering a credential is a sensitive change: from a session with no
-    # proof, the entry meets the `confirmation_required` signal, the
-    # prompt stays open showing it, and the value reaches neither the
-    # vault nor the page, its state, the log or the confirmation record.
-    test "the value meets the confirmation signal and goes nowhere else",
-         %{view: view, ctx: ctx} do
+    # Entering a credential is a sensitive change: the entry waits on its
+    # record, the person proves it with a passkey here, the browser types
+    # the value again once the record reads confirmed, and the value goes
+    # to the vault and nowhere else.
+    test "the value goes to the vault and nowhere else, once its record is confirmed",
+         %{view: view, ctx: ctx, user: user} do
+      authenticator = Sanctum.TestContext.passkey!(user.user_id)
       name = "system-layer-#{System.unique_integer([:positive])}"
       secret = "sk-system-layer-#{System.unique_integer([:positive])}-sentinel"
 
@@ -472,29 +553,30 @@ defmodule PrismWeb.SystemLayerTest do
           |> form("#system-layer-credential", %{"secret" => secret})
           |> render_submit()
 
-          assert {:refused, {:confirmation_required, %{id: id, operation: "vault.create"}}} =
-                   outcome("c1")
-
-          render(view)
-          id
+          # The prompt stays, waiting on its record, and reports nothing.
+          no_outcome("c1")
+          assert open_prompt(view) == "c1"
+          held_secret(view)
         end)
 
-      Logger.configure(level: previous)
-
-      # The page shows the change waiting, never the request's secret.
+      # The page shows the change waiting, with the home's preview and this
+      # client as the asker, never the request's secret or the value.
       html = render(view)
-      assert html =~ "Confirmation required"
+      assert html =~ ~s(data-status="waiting")
+      assert html =~ ~s(data-own="true")
+      assert has_element?(view, ~s([data-test="confirmation-preview"]), name)
+      assert has_element?(view, ~s([data-test="confirmation-asker"]), "a browser signed in")
       refute html =~ id
       refute log =~ id
       refute html =~ secret
 
-      refute inspect(:sys.get_state(view.pid), limit: :infinity, printable_limit: :infinity) =~
-               secret
-
-      # The event was logged, with the value under its redacted name.
+      # The asking submission was logged, with the value under its redacted
+      # name, and the value nowhere.
       assert log =~ ~s("secret" => "[FILTERED]")
       refute log =~ secret
-      assert open_prompt(view) == "c1"
+
+      refute inspect(:sys.get_state(view.pid), limit: :infinity, printable_limit: :infinity) =~
+               secret
 
       # Nothing sealed; the open record binds the change by its keyed
       # digest and names the entry, never the value.
@@ -507,6 +589,82 @@ defmodule PrismWeb.SystemLayerTest do
       assert ref == Prima.Confirmation.ref(id)
       refute inspect(record, limit: :infinity, printable_limit: :infinity) =~ secret
       refute inspect(record, limit: :infinity, printable_limit: :infinity) =~ id
+
+      # The person proves it here with a passkey, over the record's digest,
+      # naming it by its ref.
+      prove_here!(view, ref, authenticator)
+
+      # The record reads confirmed: approved, and the browser is asked to
+      # type the value again, which it still holds.
+      assert_push_event(view, "system_layer:resubmit", %{form: "system-layer-credential"}, 2_000)
+      assert render(view) =~ ~s(data-status="approved")
+
+      # A fact delivered again repeats nothing: the change is made once.
+      {:ok, row} = Arca.PendingConfirmations.get(Context.actor(ctx), ref)
+      Sanctum.Consent.Authz.announce(:confirmed, row)
+      refute_push_event(view, "system_layer:resubmit", _again, 200)
+
+      log =
+        capture_log([level: :debug], fn ->
+          view
+          |> form("#system-layer-credential", %{"secret" => secret})
+          |> render_submit()
+
+          assert outcome("c1") == :confirmed
+          render(view)
+        end)
+
+      Logger.configure(level: previous)
+
+      # The event was logged, with the value under its redacted name.
+      assert log =~ ~s("secret" => "[FILTERED]")
+      refute log =~ secret
+      refute log =~ id
+      assert open_prompt(view) == nil
+      refute render(view) =~ secret
+
+      {:ok, entries} = Sanctum.Vault.list(ctx)
+      assert Enum.any?(entries, &(&1.name == name and &1.field_names == ["API_KEY"]))
+
+      # The secret reached no request-log row or decision.
+      refute logged() =~ id
+      refute logged() =~ secret
+      assert {:ok, []} = Arca.PendingConfirmations.list_open(Context.actor(ctx), ctx.user_id)
+    end
+
+    test "a repeat before the proof keeps waiting on the same record", %{view: view, ctx: ctx} do
+      name = "system-layer-early-#{System.unique_integer([:positive])}"
+      prompt(view, credential("c3", name))
+
+      view |> form("#system-layer-credential", %{"secret" => "sk-early"}) |> render_submit()
+      id = held_secret(view)
+
+      # Submitted again before anyone proved it: the same record, still
+      # waiting, and nothing new opened.
+      view |> form("#system-layer-credential", %{"secret" => "sk-early"}) |> render_submit()
+      assert held_secret(view) == id
+      assert render(view) =~ ~s(data-status="waiting")
+
+      assert {:ok, [_one]} = Arca.PendingConfirmations.list_open(Context.actor(ctx), ctx.user_id)
+      no_outcome("c3")
+    end
+
+    test "a request cancelled from its prompt ends the wait and says so", %{view: view, ctx: ctx} do
+      prompt(view, credential("c4", "system-layer-cancel-#{System.unique_integer([:positive])}"))
+      view |> form("#system-layer-credential", %{"secret" => "sk-cancel"}) |> render_submit()
+      ref = Prima.Confirmation.ref(held_secret(view))
+
+      view |> element(~s([data-test="confirm-cancel"])) |> render_click()
+
+      wait_until(
+        fn -> render(view) =~ ~s(data-status="cancelled") end,
+        2_000,
+        "the cancelled fact"
+      )
+
+      assert render(view) =~ "Cancelled. Nothing was changed."
+      assert {:ok, %{state: "cancelled"}} = Arca.PendingConfirmations.get(Context.actor(ctx), ref)
+      end_views()
     end
 
     test "an empty value is asked for again and dispatches nothing", %{view: view} do
@@ -517,6 +675,186 @@ defmodule PrismWeb.SystemLayerTest do
       assert html =~ "Enter the credential to save it."
       assert open_prompt(view) == "c2"
       no_outcome("c2")
+    end
+  end
+
+  # ---------------------------------------------------------------------------
+  # A confirmation another client asked for
+  # ---------------------------------------------------------------------------
+
+  describe "a confirmation another client of the person asked for" do
+    setup :signed_in
+
+    test "opens on every client from the stream, shows the preview and the asker before the proof, and is confirmed by its ref",
+         %{view: view, ctx: ctx, user: user} do
+      authenticator = Sanctum.TestContext.passkey!(user.user_id)
+      other = other_session!(ctx)
+      name = "asked-elsewhere-#{System.unique_integer([:positive])}"
+      args = %{"name" => name, "kind" => "api_key", "fields" => %{"KEY" => "sk-elsewhere"}}
+
+      # Another session of the person asks; it alone holds the secret.
+      assert {:error, {:confirmation_required, %{id: id}}} =
+               PrismWeb.Ops.call_tool(other, "vault/create", args)
+
+      ref = Prima.Confirmation.ref(id)
+      prompt_id = Prompt.confirmation_id(ref)
+      wait_until(fn -> open_prompt(view) == prompt_id end, 2_000, "the opened fact")
+
+      # Before any proof: what it would change, where, and which client
+      # asked; this client did not.
+      html = render(view)
+      assert html =~ ~s(data-kind="confirmation")
+      assert html =~ ~s(data-own="false")
+      assert has_element?(view, ~s([data-test="confirmation-preview"]), "vault.create")
+      assert has_element?(view, ~s([data-test="confirmation-preview"]), name)
+      assert has_element?(view, ~s([data-test="confirmation-asker"]), "a browser signed in")
+      assert has_element?(view, ~s([data-test="confirm-passkey"]))
+      refute html =~ id
+      refute html =~ "sk-elsewhere"
+
+      prove_here!(view, ref, authenticator)
+      wait_until(fn -> render(view) =~ ~s(data-status="confirmed") end, 2_000, "confirmed")
+
+      # The asker repeats under its secret; the record is consumed and the
+      # prompt here goes.
+      assert {:ok, _entry} =
+               PrismWeb.Ops.call_tool(other, "vault/create", args, confirmation_id: id)
+
+      wait_until(fn -> open_prompt(view) == nil end, 2_000, "the consumed fact")
+      no_outcome(prompt_id)
+      end_views()
+    end
+
+    test "an assertion that does not prove the record is refused, and the prompt still waits",
+         %{view: view, ctx: ctx} do
+      other = other_session!(ctx)
+
+      assert {:error, {:confirmation_required, %{id: id}}} =
+               PrismWeb.Ops.call_tool(other, "vault/create", %{
+                 "name" => "ref-alone-#{System.unique_integer([:positive])}",
+                 "kind" => "api_key",
+                 "fields" => %{"KEY" => "x"}
+               })
+
+      ref = Prima.Confirmation.ref(id)
+      wait_until(fn -> open_prompt(view) == Prompt.confirmation_id(ref) end, 2_000, "opened")
+
+      # An assertion this person's passkey never made is refused, and the
+      # prompt says so.
+      view
+      |> layer()
+      |> render_hook("webauthn_result", %{
+        "purpose" => "confirmation",
+        "id" => ref,
+        "credential" => %{"id" => "nobody", "response" => %{}}
+      })
+
+      assert render(view) =~ ~s(role="alert")
+      assert render(view) =~ ~s(data-status="pending")
+      end_views()
+    end
+  end
+
+  describe "a record pending before the layer listened" do
+    test "is shown as the layer mounts, with its preview and the client that asked",
+         %{conn: conn} do
+      user = test_user()
+      conn = log_in_user(conn, user)
+      athanor = seated_athanor()
+      other = other_session!(person_context(user, athanor))
+      name = "asked-before-#{System.unique_integer([:positive])}"
+
+      # Asked, and announced, before any layer of this person listened.
+      assert {:error, {:confirmation_required, %{id: id}}} =
+               PrismWeb.Ops.call_tool(other, "vault/create", %{
+                 "name" => name,
+                 "kind" => "api_key",
+                 "fields" => %{"KEY" => "sk-before"}
+               })
+
+      {:ok, view, _html} =
+        live_isolated(conn, Host, session: %{"athanor_id" => athanor.id, "test" => self()})
+
+      ref = Prima.Confirmation.ref(id)
+      assert open_prompt(view) == Prompt.confirmation_id(ref)
+      html = render(view)
+      assert html =~ ~s(data-own="false")
+      assert html =~ ~s(data-status="pending")
+      assert has_element?(view, ~s([data-test="confirmation-preview"]), name)
+      assert has_element?(view, ~s([data-test="confirmation-asker"]), "a browser signed in")
+      refute html =~ id
+      end_views()
+    end
+  end
+
+  describe "while the store cannot answer" do
+    test "a safe-mode prompt is drawn, and trying again is reported", %{conn: conn} do
+      user = test_user()
+      conn = log_in_user(conn, user)
+      athanor = seated_athanor()
+      built = person_context(user, athanor)
+      {:ok, session} = Sanctum.TestContext.create_session(%{built | provider: "github"})
+
+      {:ok, ctx} =
+        Sanctum.Caller.establish(session.token, focus: athanor.id, task_supervisor: nil)
+
+      safe = %{id: "safe-outage", kind: :safe_mode, action: nil, subject: safe_mode(ctx)}
+
+      {:ok, view, _html} =
+        live_isolated(conn, BareHost, session: %{"context" => ctx, "test" => self()})
+
+      # Every context is revalidated, and the sessions it is read from are
+      # gone for the moment.
+      bound = Application.get_env(:sanctum, :caller_memo_ttl_ms)
+      Application.put_env(:sanctum, :caller_memo_ttl_ms, 0)
+      on_exit(fn -> restore_env(:sanctum, :caller_memo_ttl_ms, bound) end)
+      Arca.Repo.query!("ALTER TABLE sessions RENAME TO sessions_unavailable")
+      assert CyfrWeb.ContextGuard.check(ctx) == {:error, :unavailable}
+
+      html = prompt(view, safe)
+      assert html =~ ~s(data-kind="safe_mode")
+      assert html =~ "Your desktop stopped working."
+      assert open_prompt(view) == "safe-outage"
+
+      view |> element(~s(button[phx-value-offer="retry"])) |> render_click()
+      assert outcome("safe-outage") == :confirmed
+      assert open_prompt(view) == nil
+    end
+  end
+
+  describe "a confirmation prompt on a client with no person behind it" do
+    setup :none_client
+
+    test "shows the record and no confirm control", %{view: view} do
+      ref = Prima.Confirmation.ref("cnf_" <> String.duplicate("A", 43))
+
+      {:ok, confirmation} =
+        Prompt.confirmation(
+          %{
+            ref: ref,
+            operation: "vault.create",
+            action: "credential_entry",
+            preview: %{
+              "home" => "https://home.example",
+              "athanor" => "Home",
+              "operation" => "vault.create"
+            },
+            asker: %{"kind" => "session", "name" => "github"},
+            expires_at: DateTime.add(DateTime.utc_now(), 300),
+            webauthn: %{"challenge" => "AAAA"},
+            methods: ["passkey", "oidc", "email"]
+          },
+          false
+        )
+
+      html = prompt(view, confirmation)
+
+      assert html =~ ~s(data-kind="confirmation")
+      assert html =~ ~s(data-standing="none")
+      assert has_element?(view, ~s([data-test="confirmation-preview"]), "vault.create")
+      refute has_element?(view, ~s([data-test="confirm-passkey"]))
+      refute has_element?(view, ~s([data-test="confirm-reauth"]))
+      refute has_element?(view, ~s([data-test="confirm-email"]))
     end
   end
 

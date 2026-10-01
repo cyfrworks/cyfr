@@ -182,7 +182,7 @@ defmodule Cyfr.BusPayloadTest do
       assert roster_gaps(row) == [:no_producer, :no_consumer]
     end
 
-    test "only a pending row goes without its consumers, and the confirmations row is the one" do
+    test "only a pending row goes without its consumers, and no row is pending" do
       later = %{key: :later, struct: Webhooks, producers: ["X"], consumers: [], pending: true}
       assert roster_gaps(later) == []
       assert roster_gaps(%{later | pending: false}) == [:no_consumer]
@@ -190,7 +190,13 @@ defmodule Cyfr.BusPayloadTest do
       # A pending row still needs its producer.
       assert roster_gaps(%{later | producers: []}) == [:no_producer]
 
-      assert for(row <- Bus.topics(), pending?(row), do: row.key) == [:confirmations]
+      assert for(row <- Bus.topics(), pending?(row), do: row.key) == []
+    end
+
+    test "a person's confirmations are heard through their stream alone" do
+      row = Enum.find(Bus.topics(), &(&1.key == :confirmations))
+      assert row.consumers == ["stream:confirmation.changes"]
+      assert row.reason =~ "kind"
     end
 
     test "the global rows are global/0, in order" do

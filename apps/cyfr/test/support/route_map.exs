@@ -666,6 +666,15 @@
           auth: "browser_public_login",
           live_view: "PrismWeb.LoginLive",
           pipe_through: ["browser"]
+        },
+        %{
+          verb: "GET",
+          path: "/pair",
+          plug: "Phoenix.LiveView.Plug",
+          plug_opts: ":pair",
+          auth: "browser_public_login",
+          live_view: "PrismWeb.PairLive",
+          pipe_through: ["browser"]
         }
       ]
     }

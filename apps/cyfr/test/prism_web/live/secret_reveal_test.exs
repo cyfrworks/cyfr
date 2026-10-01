@@ -3,26 +3,49 @@
 
 defmodule PrismWeb.SecretRevealTest do
   @moduledoc """
-  The one-time reveal cards, and what a page reveals when the change that
-  would mint a secret is not yet confirmed.
+  The one-time reveal cards, and letting go of what they showed.
 
   Minting an API key and rotating a webhook's secret are sensitive
-  changes: from a session with no proof, the page meets the
-  `confirmation_required` signal, naming the change and never the
-  secret of the confirmation it opened, and reveals no card, since
-  nothing was minted.
+  changes: the page asks through its system layer, the person confirms
+  the record, and the page makes the change once, revealing the secret in
+  its card. Dismissing the card removes the plaintext from socket assigns
+  and the DOM. The request's own secret, which only the page holds,
+  reaches neither the page nor its flash.
   """
   use PrismWeb.ConnCase, async: false
 
+  import Prima.Test.Wait
+
   defp assigns(view), do: :sys.get_state(view.pid).socket.assigns
 
-  defp open_confirmations(user_id) do
-    ctx = %{Sanctum.TestContext.local() | athanor_id: seated_athanor().id, user_id: user_id}
-    {:ok, rows} = Arca.PendingConfirmations.list_open(Sanctum.Context.actor(ctx), user_id)
+  defp open_confirmations(ctx) do
+    {:ok, rows} = Arca.PendingConfirmations.list_open(Sanctum.Context.actor(ctx), ctx.user_id)
     rows
   end
 
-  test "a key minted from the page meets the confirmation signal, and no card is revealed",
+  defp person(user) do
+    %{Sanctum.TestContext.local() | athanor_id: seated_athanor().id, user_id: user.user_id}
+  end
+
+  # The page's own request waits on its record; the person proves it, by
+  # its ref, as any client of theirs would, and the page repeats it.
+  defp confirm!(view, ctx, operation) do
+    assert [%{ref: ref, operation: ^operation}] = open_confirmations(ctx)
+    wait_until(fn -> render(view) =~ ~s(data-ref="#{ref}") end, 2_000, "the page's own prompt")
+
+    html = render(view)
+    assert html =~ ~s(data-own="true")
+    assert html =~ ~s(data-status="waiting")
+    refute html =~ "cnf_"
+    refute flash(view) =~ "cnf_"
+
+    Sanctum.TestContext.prove!(ctx, ref)
+    ref
+  end
+
+  defp flash(view), do: inspect(assigns(view).flash)
+
+  test "a minted API key is dismissible and leaves the assigns with the card",
        %{conn: conn} do
     user = test_user()
     {view, _html} = conn |> log_in_user(user) |> mount_athanor("/api-keys")
@@ -30,21 +53,28 @@ defmodule PrismWeb.SecretRevealTest do
     render_click(view, "toggle_create")
     render_submit(view, "create", %{"name" => "reveal-probe", "type" => "application"})
 
-    assert [%{ref: "cnr_" <> _, operation: "key.create"}] = open_confirmations(user.user_id)
+    # Nothing minted until the record is confirmed.
+    refute assigns(view).new_key
+    confirm!(view, person(user), "key.create")
 
-    flash = Phoenix.Flash.get(assigns(view).flash, :error)
-    assert flash =~ "Confirmation required"
-    refute flash =~ "cnf_"
+    wait_until(fn -> is_map(assigns(view).new_key) end, 2_000, "the repeated create")
+    key = assigns(view).new_key
+    assert is_binary(key[:api_key])
+    assert render(view) =~ "not be shown again"
+    assert render(view) =~ ~s(data-status="completed")
+    refute flash(view) =~ "cnf_"
+
+    render_click(view, "dismiss_key")
 
     refute assigns(view).new_key
-    refute render(view) =~ "not be shown again"
+    refute settled_render(view) =~ "not be shown again"
+    Cyfr.Test.Sandbox.end_views()
   end
 
-  test "a webhook secret rotated from the page meets the signal, and the old one stands",
-       %{conn: conn} do
+  test "a webhook secret is dismissible too", %{conn: conn} do
     user = test_user()
     conn = log_in_user(conn, user)
-    ctx = %{Sanctum.TestContext.local() | athanor_id: seated_athanor().id, user_id: user.user_id}
+    ctx = person(user)
     name = "reveal-hook-#{System.unique_integer([:positive])}"
 
     wasm = File.read!(Path.join(__DIR__, "../../support/test_wasm/math.wasm"))
@@ -62,7 +92,7 @@ defmodule PrismWeb.SecretRevealTest do
 
     # Created under the confirmation its person proved
     # (`Sanctum.TestContext.create_webhook/2`).
-    {:ok, %{secret: secret}} =
+    {:ok, %{secret: first}} =
       Sanctum.TestContext.create_webhook(ctx, %{
         name: name,
         replay_protection: "none",
@@ -72,28 +102,21 @@ defmodule PrismWeb.SecretRevealTest do
 
     {view, _html} = mount_athanor(conn, "/webhooks")
 
-    # Rotating from the page asks first: no new secret is revealed, and
-    # the secret minted before still verifies.
+    # Rotating asks first, then reveals the new secret the way creating does.
     render_click(view, "rotate", %{"id" => name})
+    refute assigns(view).new_secret
+    confirm!(view, ctx, "webhook.rotate")
 
-    assert [%{ref: "cnr_" <> _, operation: "webhook.rotate"}] = open_confirmations(user.user_id)
+    wait_until(fn -> is_map(assigns(view).new_secret) end, 2_000, "the repeated rotation")
+    secret = assigns(view).new_secret
+    assert is_binary(secret[:secret])
+    refute secret[:secret] == first
+    refute flash(view) =~ "cnf_"
 
-    flash = Phoenix.Flash.get(assigns(view).flash, :error)
-    assert flash =~ "Confirmation required"
-    refute flash =~ "cnf_"
+    render_click(view, "dismiss_secret")
 
     refute assigns(view).new_secret
-    refute render(view) =~ secret
-
-    {:ok, %{slug: slug}} = Sanctum.Webhook.get(ctx, name)
-    {:ok, hook} = Arca.WebhookStorage.get_by_slug(slug)
-    # No rotation happened: there is no previous secret in its grace.
-    assert hook.previous_secret_encrypted == nil
-    body = "reveal"
-
-    signature =
-      "sha256=" <> Base.encode16(:crypto.mac(:hmac, :sha256, secret, body), case: :lower)
-
-    assert :ok = Sanctum.Webhook.verify_with_grace(hook, body, signature)
+    settled_render(view)
+    Cyfr.Test.Sandbox.end_views()
   end
 end

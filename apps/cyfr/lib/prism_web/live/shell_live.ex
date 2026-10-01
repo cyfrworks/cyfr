@@ -43,7 +43,8 @@ defmodule PrismWeb.ShellLive do
   entry was saved and nothing else. A frame refused because the person
   has not granted what its tincture declares now is offered the grant
   prompt, built from the consent walk's own plan and preview, and opened
-  again once it is confirmed.
+  again once it is confirmed. The shell's `Devices` control opens the
+  pairing prompt, where the person pairs or revokes a device.
 
   ## Frames
 
@@ -107,6 +108,7 @@ defmodule PrismWeb.ShellLive do
       |> assign(:safe_mode, nil)
       |> assign(:credential_prompts, %{})
       |> assign(:grant_prompts, %{})
+      |> assign(:pairing_prompt, nil)
       |> assign(:prompt_seq, 0)
       |> assign(:tinctures, [])
       |> assign(:focused_index, 0)
@@ -345,6 +347,17 @@ defmodule PrismWeb.ShellLive do
   # button, or the chord the canvas hook hears on the shell's page.
   def handle_event("safe_mode", _params, socket),
     do: {:noreply, enter_safe_mode(socket, :requested)}
+
+  # The person's devices: the system layer's pairing prompt, one at a time.
+  def handle_event("devices", _params, socket) do
+    if socket.assigns.pairing_prompt do
+      {:noreply, socket}
+    else
+      {prompt_id, socket} = next_prompt_id(socket, "pairing")
+      show_prompt(%{id: prompt_id, kind: :pairing, action: :device_pairing, subject: %{}})
+      {:noreply, assign(socket, :pairing_prompt, prompt_id)}
+    end
+  end
 
   # ============================================================================
   # Tracking + loading
@@ -678,6 +691,9 @@ defmodule PrismWeb.ShellLive do
       match?(%{id: ^id}, safe_mode) ->
         if outcome == :confirmed, do: leave_safe_mode(socket), else: socket
 
+      socket.assigns.pairing_prompt == id ->
+        if outcome == :dismissed, do: assign(socket, :pairing_prompt, nil), else: socket
+
       Map.has_key?(credentials, id) ->
         credential_closed(socket, id, Map.fetch!(credentials, id), outcome)
 
@@ -797,9 +813,10 @@ defmodule PrismWeb.ShellLive do
   defp prompting?(%{
          safe_mode: safe_mode,
          credential_prompts: credentials,
-         grant_prompts: grants
+         grant_prompts: grants,
+         pairing_prompt: pairing
        }),
-       do: not is_nil(safe_mode) or credentials != %{} or grants != %{}
+       do: not is_nil(safe_mode) or credentials != %{} or grants != %{} or not is_nil(pairing)
 
   defp visibility_label(true), do: "public"
   defp visibility_label(false), do: "private"
@@ -1061,6 +1078,17 @@ defmodule PrismWeb.ShellLive do
         class="absolute bottom-2 left-2 z-[55] rounded-md bg-black/60 px-2 py-1 text-[11px] text-white/80 hover:text-white focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-300 disabled:opacity-50"
       >
         Safe mode
+      </button>
+
+      <button
+        id="shell-devices"
+        type="button"
+        phx-click="devices"
+        data-test="shell-devices"
+        title="Pair or revoke a device"
+        class="absolute bottom-2 left-24 z-[55] rounded-md bg-black/60 px-2 py-1 text-[11px] text-white/80 hover:text-white focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-300"
+      >
+        Devices
       </button>
 
       <.live_component module={PrismWeb.SystemLayer} id="system-layer" context={@context} />

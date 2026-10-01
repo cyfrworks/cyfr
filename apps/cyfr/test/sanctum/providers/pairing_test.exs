@@ -6,12 +6,14 @@ defmodule Sanctum.Providers.PairingTest do
   The `pairing` tool through the gate, as the wire reaches it.
 
   A person begins a pairing under their session and is answered the
-  invitation's secret for the pairing code; the new glass, holding no
+  invitation's secret for the pairing code and the link the pairing QR
+  encodes, this home's `/pair` page with the secret in its fragment; the
+  new glass, holding no
   credential, completes it anonymously in two calls, the challenge and
   then its proof, and is answered its client and certificate, bound to
   the person the invitation names whatever session asks. The person lists
   and revokes their paired clients. Renewal is the device channel's alone.
-  The invitation's secret and the proof reach no log.
+  The invitation's secret, its link and the proof reach no log.
   """
 
   # The rate limiter's table is the node's.
@@ -83,7 +85,10 @@ defmodule Sanctum.Providers.PairingTest do
 
   defp pair!(session_ctx, completing \\ glass()) do
     {device_key, private} = :crypto.generate_key(:eddsa, :ed25519)
-    {:ok, %{invitation_secret: secret}} = confirmed_call(session_ctx, "begin", %{})
+
+    {:ok, %{invitation_secret: secret, invitation_url: url}} =
+      confirmed_call(session_ctx, "begin", %{})
+
     submission = %{"invitation_secret" => secret, "device_key" => Encoding.b64(device_key)}
 
     {:ok, %{challenge: challenge}} = call(completing, "complete", submission)
@@ -94,15 +99,25 @@ defmodule Sanctum.Providers.PairingTest do
       call(completing, "complete", Map.put(submission, "proof", proof))
 
     {:ok, certificate} = DeviceCert.decode(certificate)
-    %{secret: secret, client_id: client_id, certificate: certificate, proof: proof}
+    %{secret: secret, url: url, client_id: client_id, certificate: certificate, proof: proof}
   end
 
   test "a session begins, a glass holding nothing completes, and the certificate is the person's",
        %{session_ctx: session_ctx, user: user, athanor: athanor} do
-    assert {:ok, %{invitation_secret: secret, client_id: reserved, expires_at: expires_at}} =
-             confirmed_call(session_ctx, "begin", %{})
+    assert {:ok,
+            %{
+              invitation_secret: secret,
+              invitation_url: url,
+              client_id: reserved,
+              expires_at: expires_at
+            }} = confirmed_call(session_ctx, "begin", %{})
 
     assert {:ok, <<_::binary-size(16)>>} = Encoding.unb64(secret, 16)
+
+    # The link the QR encodes: this home's `/pair` page, the secret in the
+    # fragment's `code`, which no request line carries.
+    assert url == Sanctum.Person.home() <> "/pair#code=" <> secret
+    assert %URI{path: "/pair", query: nil, fragment: "code=" <> ^secret} = URI.parse(url)
     assert "pcl_" <> _ = reserved
     assert {:ok, _at, 0} = DateTime.from_iso8601(expires_at)
 
@@ -227,7 +242,7 @@ defmodule Sanctum.Providers.PairingTest do
     assert %Prima.Refusal{} = refusal(call(glass(), "revoke", %{"client_id" => "pcl_1"}))
   end
 
-  test "the invitation's secret and the device's proof reach no log", %{
+  test "the invitation's secret, its link and the device's proof reach no log", %{
     session_ctx: session_ctx
   } do
     device = pair!(session_ctx)
@@ -239,6 +254,19 @@ defmodule Sanctum.Providers.PairingTest do
 
     refute logged == []
     refute inspect(logged) =~ device.secret
+    refute inspect(logged) =~ device.url
     refute inspect(logged) =~ sig
+
+    # The begin's answer is logged, its link under a redacted name.
+    begun =
+      Arca.Repo.all(
+        from(l in Arca.Schemas.McpLog,
+          where: l.tool == "pairing" and l.action == "begin" and l.status == "success",
+          select: l.output
+        )
+      )
+
+    assert [output] = begun
+    assert %{"invitation_url" => "[REDACTED]"} = Jason.decode!(output)
   end
 end

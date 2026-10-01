@@ -204,11 +204,14 @@ defmodule Prism.Router do
 
       # Sign in from the browser. `/login` starts GitHub/Google device flow
       # (or links to `/auth/oidcc`); signing out is `POST /auth/logout`
-      # above.
+      # above. `/pair` is the page a pairing code opens on a new glass:
+      # sessionless like `/login`, it reads no session, and the invitation
+      # in its fragment names the person.
       scope "/", PrismWeb do
         pipe_through :browser
 
         live "/login", LoginLive, :login, metadata: %{auth: :browser_public_login}
+        live "/pair", PairLive, :pair, metadata: %{auth: :browser_public_login}
       end
 
       scope "/a/:athanor", PrismWeb do
