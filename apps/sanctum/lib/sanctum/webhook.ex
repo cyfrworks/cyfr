@@ -65,7 +65,11 @@ defmodule Sanctum.Webhook do
   @doc """
   Create a new webhook. Returns the plaintext secret exactly once. Its
   secret outlives the session that mints it, so issuing one is a
-  sensitive change (`credential_issuance`), decided here.
+  sensitive change (`credential_issuance`), decided here. From a paired
+  device, the row is written in a transaction that holds the device's
+  client and certificate (`Sanctum.Issuance.device_hold/1`): a revocation
+  that commits after the request was verified writes nothing, and answers
+  `{:error, :not_standing}`.
 
   Required: `name`, `target_ref`, `profile_id` (deliveries fire under the
   bound profile's consent). Optional: `input_template` (map; default
@@ -85,6 +89,7 @@ defmodule Sanctum.Webhook do
          :ok <- validate_target_ref(ctx, target_ref),
          :ok <- authorize_profile_binding(ctx, target_ref, Map.get(opts, :profile_id)),
          {:ok, input_template_json} <- encode_input_template(Map.get(opts, :input_template, %{})),
+         {:ok, hold} <- Sanctum.Issuance.device_hold(ctx),
          :ok <-
            Sanctum.Consent.Authz.confirm(ctx, :credential_issuance, %{
              operation: "webhook.create",
@@ -106,7 +111,7 @@ defmodule Sanctum.Webhook do
              input_template_json,
              opts
            ),
-         :ok <- WebhookStorage.create_webhook(attrs) do
+         :ok <- WebhookStorage.create_webhook(attrs, hold) do
       now = DateTime.utc_now() |> DateTime.to_iso8601()
 
       {:ok,
@@ -409,8 +414,8 @@ defmodule Sanctum.Webhook do
 
   @doc """
   Rotate the HMAC secret for a webhook. Returns the new plaintext secret
-  exactly once. A sensitive change (`credential_issuance`), as at
-  `create/2`.
+  exactly once. A sensitive change (`credential_issuance`), held to a
+  paired device's client and certificate as at `create/2`.
 
   Not a hard cutover: the outgoing secret stays valid for
   `#{@previous_secret_grace_seconds}` seconds (`verify_with_grace/4` accepts
@@ -426,6 +431,7 @@ defmodule Sanctum.Webhook do
       DateTime.add(DateTime.utc_now(), @previous_secret_grace_seconds, :second)
 
     with {:ok, existing} <- get(ctx, name),
+         {:ok, hold} <- Sanctum.Issuance.device_hold(ctx),
          :ok <-
            Sanctum.Consent.Authz.confirm(ctx, :credential_issuance, %{
              operation: "webhook.rotate",
@@ -440,7 +446,8 @@ defmodule Sanctum.Webhook do
              Prima.Actor.in_athanor(athanor_id),
              name,
              new_secret_encrypted,
-             previous_expires_at
+             previous_expires_at,
+             hold
            ) do
       now = DateTime.utc_now() |> DateTime.to_iso8601()
 

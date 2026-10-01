@@ -11,6 +11,7 @@ defmodule Sanctum.Providers.Webhook do
 
   require Logger
   require Prima.ConsentSignal
+  require Sanctum.Issuance
 
   # A sensitive change's own answers (`Sanctum.Consent.Authz`), which pass
   # as they are: the confirmation signal is matched apart, by its shape.
@@ -250,6 +251,9 @@ defmodule Sanctum.Providers.Webhook do
       {:error, {:conflict, message} = conflict} when is_binary(message) ->
         {:error, conflict}
 
+      {:error, reason} when Sanctum.Issuance.standing_refusal?(reason) ->
+        {:error, Sanctum.Issuance.standing_refusal(reason)}
+
       {:error, reason} ->
         Logger.error("[Sanctum.Providers.Webhook] Failed to create webhook: #{inspect(reason)}")
         {:error, "Failed to create webhook"}
@@ -335,6 +339,9 @@ defmodule Sanctum.Providers.Webhook do
 
       {:error, {:conflict, message} = conflict} when is_binary(message) ->
         {:error, conflict}
+
+      {:error, reason} when Sanctum.Issuance.standing_refusal?(reason) ->
+        {:error, Sanctum.Issuance.standing_refusal(reason)}
 
       {:error, reason} ->
         Logger.error("[Sanctum.Providers.Webhook] Failed to rotate webhook: #{inspect(reason)}")

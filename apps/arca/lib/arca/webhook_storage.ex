@@ -40,9 +40,29 @@ defmodule Arca.WebhookStorage do
   Required attrs: `name`, `slug`, `target_ref`, `secret_encrypted`,
   `signature_header`, `athanor_id`. Optional: `input_template`,
   `description`, `rate_limit`, `created_by`.
+
+  `opts` may name the issuance the secret is written under (`lock:` and
+  `verify:`, `Arca.SecurityTransitions.Issuance.held/2`): the row is then
+  inserted in that transaction, once the caller's standing rows are
+  locked and its policy agrees, and a refusal writes nothing.
   """
-  @spec create_webhook(map()) :: :ok | {:error, term()}
-  def create_webhook(attrs) do
+  @spec create_webhook(map(), keyword()) :: :ok | {:error, term()}
+  def create_webhook(attrs, opts \\ []) when is_list(opts) do
+    case Arca.SecurityTransitions.Issuance.held(opts, fn -> insert_webhook(attrs) end) do
+      {:ok, :inserted} -> :ok
+      {:error, _reason} = refusal -> refusal
+    end
+  rescue
+    e in Arca.Repo.Errors.db_errors() ->
+      if Arca.Repo.Errors.unique_constraint_violation?(e) do
+        {:error, :already_exists}
+      else
+        Logger.error("[WebhookStorage] Database error in create_webhook: #{Exception.message(e)}")
+        {:error, :database_error}
+      end
+  end
+
+  defp insert_webhook(attrs) do
     now = DateTime.utc_now() |> DateTime.truncate(:microsecond)
 
     row = %{
@@ -69,15 +89,7 @@ defmodule Arca.WebhookStorage do
     }
 
     Arca.Repo.insert_all(Webhook, [row])
-    :ok
-  rescue
-    e in Arca.Repo.Errors.db_errors() ->
-      if Arca.Repo.Errors.unique_constraint_violation?(e) do
-        {:error, :already_exists}
-      else
-        Logger.error("[WebhookStorage] Database error in create_webhook: #{Exception.message(e)}")
-        {:error, :database_error}
-      end
+    {:ok, :inserted}
   end
 
   @doc """
@@ -278,52 +290,70 @@ defmodule Arca.WebhookStorage do
   Compare-and-swap on the secret being replaced: a concurrent rotation
   answers `{:error, :conflict}` rather than overwriting the grace secret
   the other one just installed.
+
+  `opts` may name the issuance the new secret is written under, as at
+  `create_webhook/2`.
   """
-  @spec rotate_secret(Prima.Actor.t(), String.t(), binary(), DateTime.t()) ::
-          :ok | {:error, :no_athanor | :not_found | :conflict | :database_error}
+  @spec rotate_secret(Prima.Actor.t(), String.t(), binary(), DateTime.t(), keyword()) ::
+          :ok | {:error, term()}
+  def rotate_secret(actor, name, new_secret_encrypted, previous_expires_at, opts \\ [])
+
   def rotate_secret(
         %Prima.Actor{athanor_id: athanor_id},
         name,
         new_secret_encrypted,
-        previous_expires_at
+        previous_expires_at,
+        opts
       )
-      when is_binary(athanor_id) and athanor_id != "" do
+      when is_binary(athanor_id) and athanor_id != "" and is_list(opts) do
     Arca.Repo.Errors.with_db_rescue("WebhookStorage.rotate_secret", fn ->
-      now = DateTime.utc_now() |> DateTime.truncate(:microsecond)
+      rotate = fn ->
+        rotate_row(athanor_id, name, new_secret_encrypted, previous_expires_at)
+      end
 
-      query =
-        from(w in Webhook, where: w.name == ^name and w.enabled == ^true)
-        |> where_athanor(athanor_id)
-
-      # Capture the outgoing secret so it stays valid through the grace window.
-      case Arca.Repo.one(from(w in query, select: w.secret_encrypted, limit: 1)) do
-        nil ->
-          {:error, :not_found}
-
-        current_secret ->
-          # Compare against the secret read by this call. A concurrent rotation
-          # returns :conflict without overwriting the other rotation's grace secret.
-          result =
-            from(w in query, where: w.secret_encrypted == ^current_secret)
-            |> Arca.Repo.update_all(
-              set: [
-                secret_encrypted: new_secret_encrypted,
-                previous_secret_encrypted: current_secret,
-                previous_secret_expires_at: DateTime.truncate(previous_expires_at, :microsecond),
-                rotated_at: now,
-                updated_at: now
-              ]
-            )
-
-          case result do
-            {0, _} -> {:error, :conflict}
-            {_, _} -> :ok
-          end
+      case Arca.SecurityTransitions.Issuance.held(opts, rotate) do
+        {:ok, :rotated} -> :ok
+        {:error, _reason} = refusal -> refusal
       end
     end)
     |> Arca.Data.project()
   end
 
-  def rotate_secret(%Prima.Actor{}, _name, _new_secret_encrypted, _previous_expires_at),
-    do: {:error, :no_athanor}
+  def rotate_secret(%Prima.Actor{}, _name, _new_secret_encrypted, _previous_expires_at, opts)
+      when is_list(opts),
+      do: {:error, :no_athanor}
+
+  defp rotate_row(athanor_id, name, new_secret_encrypted, previous_expires_at) do
+    now = DateTime.utc_now() |> DateTime.truncate(:microsecond)
+
+    query =
+      from(w in Webhook, where: w.name == ^name and w.enabled == ^true)
+      |> where_athanor(athanor_id)
+
+    # Capture the outgoing secret so it stays valid through the grace window.
+    case Arca.Repo.one(from(w in query, select: w.secret_encrypted, limit: 1)) do
+      nil ->
+        {:error, :not_found}
+
+      current_secret ->
+        # Compare against the secret read by this call. A concurrent rotation
+        # returns :conflict without overwriting the other rotation's grace secret.
+        result =
+          from(w in query, where: w.secret_encrypted == ^current_secret)
+          |> Arca.Repo.update_all(
+            set: [
+              secret_encrypted: new_secret_encrypted,
+              previous_secret_encrypted: current_secret,
+              previous_secret_expires_at: DateTime.truncate(previous_expires_at, :microsecond),
+              rotated_at: now,
+              updated_at: now
+            ]
+          )
+
+        case result do
+          {0, _} -> {:error, :conflict}
+          {_, _} -> {:ok, :rotated}
+        end
+    end
+  end
 end

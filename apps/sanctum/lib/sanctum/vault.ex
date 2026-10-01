@@ -21,7 +21,11 @@ defmodule Sanctum.Vault do
   surface, external plane) — no permission wildcard and no scoped key
   reaches these verbs. Entering and rotating material are sensitive
   changes (`credential_entry`), decided here by
-  `Sanctum.Consent.Authz.confirm/3`. Each announces the change by entry, verb and name
+  `Sanctum.Consent.Authz.confirm/3`; from a paired device, their write's
+  own transaction holds the device's client and certificate
+  (`Sanctum.Issuance.device_hold/1`), so a revocation that commits after
+  the request was verified writes nothing and answers
+  `{:error, :not_standing}`. Each announces the change by entry, verb and name
   (`Sanctum.Telemetry.vault_entry_changed/4`) so dependents (external MCP
   server processes holding resolved headers) reconcile immediately.
 
@@ -141,6 +145,7 @@ defmodule Sanctum.Vault do
     with {:ok, :interactive} <- Authz.authorize_interactive(ctx),
          {:ok, name} <- required_name(params),
          {:ok, kind} <- required_kind(params),
+         {:ok, hold} <- Sanctum.Issuance.device_hold(ctx),
          :ok <-
            Authz.confirm(ctx, :credential_entry, %{
              operation: "vault.create",
@@ -174,7 +179,8 @@ defmodule Sanctum.Vault do
                  status: "active",
                  sealed_payload: sealed,
                  binding_digest: digest
-               })
+               }),
+               hold
              ) do
         broadcast(ctx, id, :create, %{name: entry.name})
         {:ok, view(entry)}
@@ -226,6 +232,7 @@ defmodule Sanctum.Vault do
       when is_map(fields) and is_integer(expected) do
     with {:ok, :interactive} <- Authz.authorize_interactive(ctx),
          {:ok, entry} <- get_rotatable(ctx, id),
+         {:ok, hold} <- Sanctum.Issuance.device_hold(ctx),
          :ok <-
            Authz.confirm(ctx, :credential_entry, %{
              operation: "vault.rotate",
@@ -249,7 +256,7 @@ defmodule Sanctum.Vault do
         rebind: nil
       }
 
-      case Arca.VaultStorage.commit_payload(Context.actor(ctx), id, plan) do
+      case Arca.VaultStorage.commit_payload(Context.actor(ctx), id, plan, hold) do
         {:ok, %{payload_rev: rev}} ->
           broadcast(ctx, id, :rotate, %{name: entry.name})
           {:ok, rev}

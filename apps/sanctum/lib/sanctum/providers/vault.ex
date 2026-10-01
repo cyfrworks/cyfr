@@ -18,6 +18,7 @@ defmodule Sanctum.Providers.Vault do
 
   require Logger
   require Prima.ConsentSignal
+  require Sanctum.Issuance
   alias Sanctum.Vault
 
   @doc false
@@ -390,6 +391,12 @@ defmodule Sanctum.Providers.Vault do
     do: "oauth_pointer_requires_reauth: re-authorize the provider to convert this entry"
 
   defp fmt(:not_found), do: "not_found"
+
+  # The caller's standing, refused where the entry is written
+  # (`Sanctum.Issuance`, held from a paired device): a standing refusal in
+  # its own sentence, never an unavailable store.
+  defp fmt(reason) when Sanctum.Issuance.standing_refusal?(reason),
+    do: Sanctum.Issuance.standing_refusal(reason)
 
   defp fmt(:name_required), do: "name_required: an entry needs a name"
 

@@ -294,7 +294,9 @@ defmodule Sanctum.Pairing do
   (`Sanctum.Consent.Authz.check/3`) and consumed inside the transaction
   that opens the invitation (`Sanctum.Consent.Authz.consume/2`), under the
   person, athanor and seat locked and checked at the generations the
-  context read (`Sanctum.Issuance`). Answers `t:invitation/0`.
+  context read, and the credential the context holds (its session, or a
+  paired device's client and certificate) locked and checked after them
+  (`Sanctum.Issuance`). Answers `t:invitation/0`.
   """
   @spec begin(Context.t(), map()) :: {:ok, invitation()} | {:error, refusal()}
   def begin(%Context{} = ctx, args) when is_map(args) do
@@ -311,14 +313,14 @@ defmodule Sanctum.Pairing do
         membership_id: membership_id,
         secret_hash: secret_hash(secret),
         audience_home: Person.home(),
-        lifetime_ms: @invitation_ms
+        lifetime_ms: @invitation_ms,
+        source: expectation.source
       }
 
-      # The invitation opens under the standing the context read, and its
-      # confirmation is consumed with it; either refusing writes nothing.
-      # The session is not among the rows the invitation's transaction
-      # locks, so the check reads no source of the caller's.
-      policy = Sanctum.Issuance.verify(%{expectation | source: nil})
+      # The invitation opens under the standing the context read and the
+      # credential it holds, locked last of them, and its confirmation is
+      # consumed with it; any of them refusing writes nothing.
+      policy = Sanctum.Issuance.verify(expectation)
 
       verify = fn locked ->
         with :ok <- policy.(locked), do: Authz.consume(ctx, {:device_pairing, change})

@@ -305,7 +305,10 @@ defmodule Sanctum.Caller do
 
   The context is the person's own interactive client there
   (`auth_method: :device`, its `client_id`, `origin: :interactive`),
-  whose credential deadline is the certificate's expiry. A renewal's
+  whose credential deadline is the certificate's expiry and whose
+  credential binding is the device's (`source_kind: :device`, naming the
+  client, and the remote identity row for an identity subject), so a
+  credential issued from it holds that client (`Sanctum.Issuance`). A renewal's
   context carries no certificate and so no deadline: it is the fixed
   renewal exchange's, and the one operation it is used for,
   `Sanctum.Pairing.renew/2`, takes no other. Nothing is memoized: the
@@ -407,19 +410,40 @@ defmodule Sanctum.Caller do
 
   # What the device's context was read against
   # (`t:Sanctum.Context.credential_binding/0`): the person's and the
-  # athanor's generations and the seat that grants the athanor, so an
-  # issuance from it locks and rereads them. Its source is `:identity`,
-  # the kind that names no stored credential of its own: the paired client
-  # is read again on every request, not held.
+  # athanor's generations and the seat that grants the athanor, and the
+  # paired client the context stands on, with the remote identity row an
+  # identity subject's person was resolved by and the `key_epoch` its
+  # certificate was verified under (both nil for a local subject). An
+  # issuance from it locks and rereads them all, the client after the
+  # person, athanor and seat, so a revocation that commits after this
+  # verification and before the issuance refuses it (`Sanctum.Issuance`).
   defp device_binding(device) do
+    {identity, key_epoch} = binding_subject(device.certificate, Map.get(device, :identity))
+
     %{
-      source_kind: :identity,
-      source_id: nil,
+      source_kind: :device,
+      source_id: device.client.id,
       focus_basis: device.seat.id,
       user_generation: device.user.security_generation,
-      athanor_generation: device.athanor.security_generation
+      athanor_generation: device.athanor.security_generation,
+      identity: identity,
+      key_epoch: key_epoch
     }
   end
+
+  # `device_stands?/1` has already held a handed row to the certificate's
+  # subject and the client's person; the binding keeps the columns that
+  # bind it and nothing else, with the `key_epoch` the verifier checked the
+  # certificate's subject against the person's head under
+  # (`Sanctum.DeviceCerts.remote_subject/3`). A renewal's context stands
+  # under no certificate, so no row was held to one, and it carries none.
+  defp binding_subject(
+         %Prima.DeviceCert{subject: %{kind: :identity, key_epoch: key_epoch}},
+         %{} = identity
+       ),
+       do: {Map.take(identity, [:user_id, :provenance, :identifier]), key_epoch}
+
+  defp binding_subject(_certificate, _identity), do: {nil, nil}
 
   defp device_deadline(nil), do: nil
 
