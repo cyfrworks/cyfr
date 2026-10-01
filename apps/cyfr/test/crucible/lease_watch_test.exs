@@ -6,9 +6,8 @@ defmodule Crucible.LeaseWatchTest do
 
   alias Crucible.LeaseWatch
 
-  setup do
-    :ok = Ecto.Adapters.SQL.Sandbox.checkout(Arca.Repo)
-    Ecto.Adapters.SQL.Sandbox.mode(Arca.Repo, {:shared, self()})
+  setup tags do
+    Cyfr.Test.Sandbox.setup!(tags)
     ctx = Sanctum.TestContext.local()
 
     {:ok, %{execution: execution, attempt: attempt}} =

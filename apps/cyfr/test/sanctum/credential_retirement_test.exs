@@ -22,10 +22,9 @@ defmodule Sanctum.CredentialRetirementTest do
   alias Sanctum.{ApiKey, Caller, Context, Session}
   alias Sanctum.Tenancy.{Athanors, Members, Users}
 
-  setup do
+  setup tags do
     Arca.Cache.init()
-    :ok = Ecto.Adapters.SQL.Sandbox.checkout(Arca.Repo)
-    Ecto.Adapters.SQL.Sandbox.mode(Arca.Repo, {:shared, self()})
+    Cyfr.Test.Sandbox.setup!(tags)
     :ok
   end
 

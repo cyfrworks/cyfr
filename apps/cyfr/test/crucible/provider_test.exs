@@ -12,7 +12,7 @@ defmodule Crucible.ProviderTest do
   @math_wasm_path Path.join(__DIR__, "../support/test_wasm/math.wasm")
   @test_ref "reagent:local.test-math:0.1.0"
 
-  setup do
+  setup tags do
     # Use a test-specific base path to avoid state leaking between tests
     test_path = Path.join(System.tmp_dir!(), "execution_mcp_test_#{:rand.uniform(100_000)}")
     original_base_path = Application.get_env(:arca, :base_path)
@@ -22,8 +22,7 @@ defmodule Crucible.ProviderTest do
     # through the production DB source, and the loader reads it back.
 
     # Checkout the Ecto sandbox to isolate SQLite data between tests
-    :ok = Ecto.Adapters.SQL.Sandbox.checkout(Arca.Repo)
-    Ecto.Adapters.SQL.Sandbox.mode(Arca.Repo, {:shared, self()})
+    Cyfr.Test.Sandbox.setup!(tags)
 
     rand_id = :rand.uniform(100_000)
 

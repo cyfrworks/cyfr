@@ -17,15 +17,14 @@ defmodule Arca.IntegrationTest do
   alias Arca.Retention
   alias Sanctum.Context
 
-  setup do
+  setup tags do
     rand_id = :rand.uniform(100_000)
     test_path = Path.join(System.tmp_dir!(), "arca_integration_#{rand_id}")
     original_base_path = Application.get_env(:arca, :base_path)
     Application.put_env(:arca, :base_path, test_path)
 
     # Checkout Ecto sandbox for SQLite-based operations
-    :ok = Ecto.Adapters.SQL.Sandbox.checkout(Arca.Repo)
-    Ecto.Adapters.SQL.Sandbox.mode(Arca.Repo, {:shared, self()})
+    Cyfr.Test.Sandbox.setup!(tags)
 
     # Use a unique athanor per test: execution retention/listing is
     # per-athanor, so a unique id isolates each test from shared-state pollution.

@@ -12,9 +12,8 @@ defmodule Sanctum.Providers.AthanorMemberDoorToolsTest do
   alias Sanctum.Context
   alias Sanctum.Tenancy.{Athanors, Members, Users}
 
-  setup do
-    :ok = Ecto.Adapters.SQL.Sandbox.checkout(Arca.Repo)
-    Ecto.Adapters.SQL.Sandbox.mode(Arca.Repo, {:shared, self()})
+  setup tags do
+    Cyfr.Test.Sandbox.setup!(tags)
 
     original = Application.get_env(:sanctum, :platform_admin_emails, [])
     Application.put_env(:sanctum, :platform_admin_emails, ["ops@example.com"])

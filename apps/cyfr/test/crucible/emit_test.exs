@@ -19,9 +19,8 @@ defmodule Crucible.EmitTest do
 
   @secret "sk-live-0123456789abcdef"
 
-  setup do
-    :ok = Ecto.Adapters.SQL.Sandbox.checkout(Arca.Repo)
-    Ecto.Adapters.SQL.Sandbox.mode(Arca.Repo, {:shared, self()})
+  setup tags do
+    Cyfr.Test.Sandbox.setup!(tags)
 
     ctx = Sanctum.TestContext.local()
     stream_id = "exec_emit_#{System.unique_integer([:positive])}"

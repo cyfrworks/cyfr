@@ -52,9 +52,8 @@ defmodule Sanctum.ToolGrantsTest do
     def tool_server_candidate(_ctx, _name), do: {:error, :not_found}
   end
 
-  setup do
-    :ok = Ecto.Adapters.SQL.Sandbox.checkout(Arca.Repo)
-    Ecto.Adapters.SQL.Sandbox.mode(Arca.Repo, {:shared, self()})
+  setup tags do
+    Arca.Test.Sandbox.setup!(tags)
 
     installed =
       try do

@@ -25,9 +25,8 @@ defmodule Arca.ExecutionAttemptsWriteTest do
   @runner "runner_a"
   @path ["data", "intent.txt"]
 
-  setup do
-    :ok = Ecto.Adapters.SQL.Sandbox.checkout(Arca.Repo)
-    Ecto.Adapters.SQL.Sandbox.mode(Arca.Repo, {:shared, self()})
+  setup tags do
+    Cyfr.Test.Sandbox.setup!(tags)
     Arca.Cache.init()
     Arca.Cache.delete_match({:scope_usage, :_, :_, :_})
 

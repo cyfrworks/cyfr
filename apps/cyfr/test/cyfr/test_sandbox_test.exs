@@ -3,6 +3,57 @@
 
 Code.require_file("../integration/opus/support/nested_execution_helper.exs", __DIR__)
 
+defmodule Cyfr.Test.SandboxTest.WorkingView do
+  @moduledoc false
+  # A view that, once connected, starts work beside itself, unlinked, on a
+  # task supervisor, and hands the test the work's pid. The work outlives
+  # the view: it ends `work_ms` (100 unless the session names it) after the
+  # view has gone. Told `{:busy, ms}`, the view is busy that long before it
+  # reads its next message, a stop included; told `:stick`, it waits in its
+  # `handle_info` until it is told `:release`. Either way it tells the test
+  # first.
+  use Phoenix.LiveView
+
+  @impl true
+  def mount(_params, %{"test" => test} = session, socket) do
+    if connected?(socket) do
+      view = self()
+      work_ms = Map.get(session, "work_ms", 100)
+
+      {:ok, work} =
+        Task.Supervisor.start_child(Prism.TaskSupervisor, fn ->
+          ref = Process.monitor(view)
+
+          receive do
+            {:DOWN, ^ref, :process, ^view, _reason} -> Process.sleep(work_ms)
+          end
+        end)
+
+      send(test, {:work, work})
+    end
+
+    {:ok, assign(socket, :test, test)}
+  end
+
+  @impl true
+  def handle_info({:busy, ms}, socket) do
+    send(socket.assigns.test, {:busy, self()})
+    Process.sleep(ms)
+    {:noreply, socket}
+  end
+
+  def handle_info(:stick, socket) do
+    send(socket.assigns.test, {:stuck, self()})
+
+    receive do
+      :release -> {:noreply, socket}
+    end
+  end
+
+  @impl true
+  def render(assigns), do: ~H"<p>working</p>"
+end
+
 defmodule Cyfr.Test.SandboxTest do
   @moduledoc """
   A sync test's background work is stopped before its sandbox owner is:
@@ -11,13 +62,22 @@ defmodule Cyfr.Test.SandboxTest do
   the connection. The Opus service's runners are swept through their pool
   instead: a runner the test left busy is ended and its exit reported,
   and the fresh runners stay pooled for the next test.
+
+  `end_views/0` finds each view a test mounted as the test supervisor's
+  LiveView child and the views' work by the test among its callers, and
+  awaits both within a deadline past which it names what still runs.
   """
 
   use ExUnit.Case, async: false
 
+  import Phoenix.LiveViewTest
+
   alias Cyfr.Test.{Sandbox, TwoServices}
+  alias Cyfr.Test.SandboxTest.WorkingView
   alias Opus.Test.NestedExecution, as: Probe
   alias Sanctum.Consent.{Bootstrap}
+
+  @endpoint CyfrWeb.Endpoint
 
   @apps_root Path.expand("../../..", __DIR__) <> "/"
 
@@ -132,6 +192,107 @@ defmodule Cyfr.Test.SandboxTest do
       assert [%{id: busy}] = for(%{state: :busy} = runner <- runners, do: runner)
       fresh = for %{state: :fresh, id: id} <- runners, do: id
       Agent.update(seen, fn _ -> %{busy: busy, fresh: fresh} end)
+    end
+  end
+
+  describe "end_views/0" do
+    setup tags do
+      Sandbox.setup!(tags)
+      {:ok, conn: Phoenix.ConnTest.build_conn()}
+    end
+
+    test "ends each view the test mounted and awaits the work the view started beside itself",
+         %{conn: conn} do
+      {:ok, view, _html} = live_isolated(conn, WorkingView, session: %{"test" => self()})
+      assert_receive {:work, work}, 5_000
+
+      # The view is the test supervisor's child under LiveView's own spec,
+      # and its work names the test among its callers, not its ancestors.
+      {:ok, supervisor} = ExUnit.fetch_test_supervisor()
+      pid = view.pid
+
+      assert Enum.any?(
+               Supervisor.which_children(supervisor),
+               &match?({_id, ^pid, :worker, [Phoenix.LiveView.Channel]}, &1)
+             )
+
+      {:dictionary, dictionary} = Process.info(work, :dictionary)
+      assert self() in Keyword.fetch!(dictionary, :"$callers")
+      refute supervisor in Keyword.get(dictionary, :"$ancestors", [])
+
+      assert :ok = Sandbox.end_views()
+      refute Process.alive?(pid)
+      refute Process.alive?(work), "end_views/0 returned before the view's work ended"
+    end
+
+    test "fails at its deadline naming each process still running" do
+      assert Sandbox.end_views_deadline_ms() < ExUnit.configuration()[:timeout]
+
+      # Work the test started that never ends on its own.
+      {:ok, work} =
+        Task.Supervisor.start_child(Prism.TaskSupervisor, fn ->
+          receive do: (:finish -> :ok)
+        end)
+
+      ref = Process.monitor(work)
+
+      error = assert_raise ExUnit.AssertionError, fn -> Sandbox.end_views(200) end
+      assert error.message =~ "200 ms deadline"
+      assert error.message =~ inspect(work)
+
+      send(work, :finish)
+      assert_receive {:DOWN, ^ref, :process, ^work, :normal}, 5_000
+    end
+
+    test "a view stuck in its handle_info fails it at the deadline, named", %{conn: conn} do
+      {:ok, view, _html} = live_isolated(conn, WorkingView, session: %{"test" => self()})
+      assert_receive {:work, _work}, 5_000
+      send(view.pid, :stick)
+      assert_receive {:stuck, pid}, 5_000
+
+      error = assert_raise ExUnit.AssertionError, fn -> Sandbox.end_views(300) end
+      assert error.message =~ "300 ms deadline"
+      assert error.message =~ inspect(pid)
+
+      # Released, it reads the stop it was sent.
+      ref = Process.monitor(pid)
+      send(pid, :release)
+      assert_receive {:DOWN, ^ref, :process, ^pid, _reason}, 5_000
+    end
+
+    test "every process still running at the deadline is named, not only the first" do
+      works =
+        for _ <- 1..2 do
+          {:ok, work} =
+            Task.Supervisor.start_child(Prism.TaskSupervisor, fn ->
+              receive do: (:finish -> :ok)
+            end)
+
+          {work, Process.monitor(work)}
+        end
+
+      error = assert_raise ExUnit.AssertionError, fn -> Sandbox.end_views(200) end
+
+      for {work, ref} <- works do
+        assert error.message =~ inspect(work)
+        send(work, :finish)
+        assert_receive {:DOWN, ^ref, :process, ^work, :normal}, 5_000
+      end
+    end
+
+    test "a view's stop and its work's end share one deadline", %{conn: conn} do
+      # Each fits the deadline on its own; together they outlast it.
+      {:ok, view, _html} =
+        live_isolated(conn, WorkingView, session: %{"test" => self(), "work_ms" => 700})
+
+      assert_receive {:work, work}, 5_000
+      send(view.pid, {:busy, 700})
+      assert_receive {:busy, _pid}, 5_000
+
+      error = assert_raise ExUnit.AssertionError, fn -> Sandbox.end_views(1_000) end
+      assert error.message =~ "1000 ms deadline"
+      # The work, unless a loaded host kept the view's stop past it too.
+      assert error.message =~ inspect(work) or error.message =~ inspect(view.pid)
     end
   end
 

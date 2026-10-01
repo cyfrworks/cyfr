@@ -11,9 +11,8 @@ defmodule Compendium.OCI.AuthTest do
   @registry "registry.test.example"
   @user "oci_auth_test_user"
 
-  setup do
-    :ok = Ecto.Adapters.SQL.Sandbox.checkout(Arca.Repo)
-    Ecto.Adapters.SQL.Sandbox.mode(Arca.Repo, {:shared, self()})
+  setup tags do
+    Cyfr.Test.Sandbox.setup!(tags)
 
     for slug <- ["alice", "stripe.com"] do
       CredentialStore.delete(ctx(), @registry, slug)

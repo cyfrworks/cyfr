@@ -102,6 +102,12 @@ defmodule Cyfr.Test.Sandbox do
   @lines :cyfr_test_ownership_lines
   @running :cyfr_test_sandbox_running
 
+  # How long `end_views/0` waits, in all, for the views and the work they
+  # started to end: well under ExUnit's 60-second test timeout, so a view
+  # or its work that never ends fails the test naming each such process,
+  # rather than timing the test out with no process named.
+  @end_views_deadline_ms 30_000
+
   # Sandboxed tests whose own end loses the connection under work they
   # started: a LiveView or request process linked to the test process dies
   # with it, before any `on_exit` runs, while it holds the shared
@@ -176,9 +182,17 @@ defmodule Cyfr.Test.Sandbox do
   reached, and their work is stopped by the sweep, at whatever point it
   has reached: either one, inside a query, takes the connection with it,
   and the next query of the work still running finds no owner.
+
+  The views and their work are awaited within one deadline,
+  `end_views_deadline_ms/0` unless `deadline_ms` names another; past it
+  the test fails naming each process still running, and the sweep stops
+  them.
   """
-  @spec end_views() :: :ok
-  def end_views do
+  @spec end_views(pos_integer()) :: :ok
+  def end_views(deadline_ms \\ @end_views_deadline_ms)
+      when is_integer(deadline_ms) and deadline_ms > 0 do
+    deadline = System.monotonic_time(:millisecond) + deadline_ms
+
     {supervisor, views} =
       case ExUnit.fetch_test_supervisor() do
         {:ok, supervisor} ->
@@ -198,16 +212,18 @@ defmodule Cyfr.Test.Sandbox do
 
     # A nested view stops with its parent, and every view of a client with
     # the client, so a view may already be on its way out when its turn
-    # comes; the monitors say when each has gone.
+    # comes; the monitors say when each has gone. A stop still waiting at
+    # the deadline is given up here, and its view is named below. With only
+    # a few milliseconds left the stop can raise as well as exit.
     for pid <- views do
       try do
-        GenServer.stop(pid, :normal)
+        GenServer.stop(pid, :normal, time_left(deadline))
       catch
-        :exit, _gone -> :ok
+        kind, _gone_or_late when kind in [:exit, :error] -> :ok
       end
     end
 
-    await_down(watched)
+    await_down(watched, deadline, deadline_ms)
 
     # What a view started unlinked goes on without it and ends on its own,
     # a view the page closed during the test included: every view names
@@ -225,18 +241,52 @@ defmodule Cyfr.Test.Sandbox do
           supervisor not in Keyword.get(dictionary, :"$ancestors", []),
           do: {Process.monitor(pid), pid}
 
-    await_down(work)
+    await_down(work, deadline, deadline_ms)
   end
 
-  defp await_down(watched) do
-    for {ref, pid} <- watched do
-      receive do
-        {:DOWN, ^ref, :process, ^pid, _reason} -> :ok
-      end
+  @doc "How long `end_views/0` waits for the views and their work, in milliseconds."
+  @spec end_views_deadline_ms() :: pos_integer()
+  def end_views_deadline_ms, do: @end_views_deadline_ms
+
+  # Once the deadline has passed, each wait left only reads the mailbox, so
+  # the failure names every process still running, not just the first.
+  defp await_down(watched, deadline, deadline_ms) do
+    running = for {ref, pid} <- watched, not down?(ref, pid, deadline), do: pid
+
+    if running != [] do
+      ExUnit.Assertions.flunk(
+        "end_views/0 waited out its #{deadline_ms} ms deadline, and these still run: " <>
+          Enum.map_join(running, "; ", &still_running/1)
+      )
     end
 
     :ok
   end
+
+  defp down?(ref, pid, deadline) do
+    receive do
+      {:DOWN, ^ref, :process, ^pid, _reason} -> true
+    after
+      time_left(deadline) -> false
+    end
+  end
+
+  defp time_left(deadline), do: max(deadline - System.monotonic_time(:millisecond), 0)
+
+  # A process still running, by what it was started as and where it is now.
+  defp still_running(pid) do
+    case Process.info(pid, [:dictionary, :initial_call, :current_function]) do
+      [dictionary: dictionary, initial_call: initial, current_function: current] ->
+        started = Keyword.get(dictionary, :"$initial_call", initial)
+        "#{inspect(pid)} started as #{mfa(started)}, now in #{mfa(current)}"
+
+      nil ->
+        "#{inspect(pid)}, gone since"
+    end
+  end
+
+  defp mfa({module, function, arity}), do: Exception.format_mfa(module, function, arity)
+  defp mfa(other), do: inspect(other)
 
   # A child stopped can take work it started that the pass already walked
   # past (a runner's loop is killed as the runner ends): passes repeat, at

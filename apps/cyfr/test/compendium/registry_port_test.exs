@@ -12,9 +12,8 @@ defmodule Compendium.RegistryPortTest do
   alias Compendium.OCI.Errors
   alias Compendium.RegistryHost
 
-  setup do
-    :ok = Ecto.Adapters.SQL.Sandbox.checkout(Arca.Repo)
-    Ecto.Adapters.SQL.Sandbox.mode(Arca.Repo, {:shared, self()})
+  setup tags do
+    Cyfr.Test.Sandbox.setup!(tags)
 
     previous = {
       Application.get_env(:cyfr, :registry_url),

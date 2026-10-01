@@ -81,9 +81,8 @@ defmodule Crucible.Host.StorageTest do
 
   @math_wasm_path Path.expand("../../support/test_wasm/math.wasm", __DIR__)
 
-  setup do
-    :ok = Ecto.Adapters.SQL.Sandbox.checkout(Arca.Repo)
-    Ecto.Adapters.SQL.Sandbox.mode(Arca.Repo, {:shared, self()})
+  setup tags do
+    Cyfr.Test.Sandbox.setup!(tags)
     Arca.Cache.init()
     Arca.Cache.delete_match({:scope_usage, :_, :_, :_})
 

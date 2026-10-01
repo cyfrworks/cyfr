@@ -18,9 +18,8 @@ defmodule Arca.ThreadStorageTest do
   alias Arca.ThreadStorage, as: Threads
   alias Sanctum.Context
 
-  setup do
-    :ok = Ecto.Adapters.SQL.Sandbox.checkout(Arca.Repo)
-    Ecto.Adapters.SQL.Sandbox.mode(Arca.Repo, {:shared, self()})
+  setup tags do
+    Cyfr.Test.Sandbox.setup!(tags)
     {:ok, ctx: user_actor("local|idp|alice", "ath_a"), bob: user_actor("local|idp|bob", "ath_a")}
   end
 

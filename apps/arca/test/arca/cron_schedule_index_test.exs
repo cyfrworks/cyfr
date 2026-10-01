@@ -12,9 +12,8 @@ defmodule Arca.CronScheduleIndexTest do
   # the name, everything else (active AND paused) holds it, and the name is
   # scoped to the athanor — a schedule is the athanor's, whoever created it.
 
-  setup do
-    :ok = Ecto.Adapters.SQL.Sandbox.checkout(Arca.Repo)
-    Ecto.Adapters.SQL.Sandbox.mode(Arca.Repo, {:shared, self()})
+  setup tags do
+    Arca.Test.Sandbox.setup!(tags)
 
     actor = Arca.Test.Actor.local()
     {:ok, actor: actor}

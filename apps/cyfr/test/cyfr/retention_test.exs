@@ -18,15 +18,14 @@ defmodule Arca.RetentionTest do
   alias Arca.Schemas.{RetentionSettings, StorageProjectionChange}
   alias Arca.{StorageProjectionChanges, StorageProjectionRoots, StorageUnits}
 
-  setup do
+  setup tags do
     # Use a test-specific base path for file-based operations (blobs)
     rand_id = System.unique_integer([:positive])
     test_path = Path.join(System.tmp_dir!(), "retention_test_#{rand_id}")
     original_base_path = Application.get_env(:arca, :base_path)
     Application.put_env(:arca, :base_path, test_path)
 
-    :ok = Ecto.Adapters.SQL.Sandbox.checkout(Arca.Repo)
-    Ecto.Adapters.SQL.Sandbox.mode(Arca.Repo, {:shared, self()})
+    Cyfr.Test.Sandbox.setup!(tags)
 
     # A unique athanor per test: retention is per athanor, so a unique id
     # isolates each test's rows from every other's.

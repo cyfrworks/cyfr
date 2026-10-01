@@ -23,10 +23,9 @@ defmodule Opus.BootstrapFirstRunTest do
 
   @seed_root Path.expand("../../../../../seed", __DIR__)
 
-  setup do
+  setup tags do
     Arca.Cache.init()
-    :ok = Ecto.Adapters.SQL.Sandbox.checkout(Arca.Repo)
-    Ecto.Adapters.SQL.Sandbox.mode(Arca.Repo, {:shared, self()})
+    Cyfr.Test.Sandbox.setup!(tags)
 
     test_path = Path.join(System.tmp_dir!(), "first_run_#{:rand.uniform(1_000_000)}")
     original_base_path = Application.get_env(:arca, :base_path)

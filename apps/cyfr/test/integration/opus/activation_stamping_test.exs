@@ -14,13 +14,12 @@ defmodule Opus.ActivationStampingTest do
 
   @probe_node "formula:local.nested-probe"
 
-  setup do
+  setup tags do
     test_path = Path.join(System.tmp_dir!(), "activation_stamp_#{:rand.uniform(1_000_000)}")
     original_base_path = Application.get_env(:arca, :base_path)
     Application.put_env(:arca, :base_path, test_path)
 
-    :ok = Ecto.Adapters.SQL.Sandbox.checkout(Arca.Repo)
-    Ecto.Adapters.SQL.Sandbox.mode(Arca.Repo, {:shared, self()})
+    Cyfr.Test.Sandbox.setup!(tags)
 
     ctx = Sanctum.TestContext.local()
     :ok = Probe.publish_probe!(ctx)

@@ -22,10 +22,9 @@ defmodule Sanctum.Consent.BootstrapSelectionTest do
   @aqua "agent:local.aqua"
   @claude "catalyst:local.claude"
 
-  setup do
+  setup tags do
     Arca.Cache.init()
-    :ok = Ecto.Adapters.SQL.Sandbox.checkout(Arca.Repo)
-    Ecto.Adapters.SQL.Sandbox.mode(Arca.Repo, {:shared, self()})
+    Cyfr.Test.Sandbox.setup!(tags)
 
     test_dir =
       Path.join(System.tmp_dir!(), "cyfr_selection_#{System.unique_integer([:positive])}")

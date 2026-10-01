@@ -91,9 +91,8 @@ defmodule Cyfr.GenServerCatchallTest do
     # One unnamed buffer per execution, so it is probed on an instance of
     # its own. It reads the execution's row for its durable prefix when it
     # starts, so it needs the sandbox connection.
-    setup do
-      :ok = Ecto.Adapters.SQL.Sandbox.checkout(Arca.Repo)
-      Ecto.Adapters.SQL.Sandbox.mode(Arca.Repo, {:shared, self()})
+    setup tags do
+      Cyfr.Test.Sandbox.setup!(tags)
       :ok
     end
 

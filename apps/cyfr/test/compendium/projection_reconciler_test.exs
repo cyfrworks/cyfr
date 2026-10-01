@@ -62,9 +62,8 @@ defmodule Compendium.ProjectionReconcilerTest do
 
   @moduletag :capture_log
 
-  setup do
-    :ok = Ecto.Adapters.SQL.Sandbox.checkout(Arca.Repo)
-    Ecto.Adapters.SQL.Sandbox.mode(Arca.Repo, {:shared, self()})
+  setup tags do
+    Cyfr.Test.Sandbox.setup!(tags)
 
     base = Path.join(System.tmp_dir!(), "projection_#{System.unique_integer([:positive])}")
     prev_base = Application.fetch_env!(:arca, :base_path)

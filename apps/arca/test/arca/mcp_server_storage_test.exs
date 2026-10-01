@@ -18,9 +18,8 @@ defmodule Arca.McpServerStorageTest do
     {Arca.ControlPlane, :slot}
   ]
 
-  setup do
-    :ok = Ecto.Adapters.SQL.Sandbox.checkout(Arca.Repo)
-    Ecto.Adapters.SQL.Sandbox.mode(Arca.Repo, {:shared, self()})
+  setup tags do
+    Arca.Test.Sandbox.setup!(tags)
     saved = Map.new(@standing, &{&1, :persistent_term.get(&1, :absent)})
 
     on_exit(fn ->

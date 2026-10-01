@@ -17,6 +17,7 @@ defmodule Grimoire.DecisionsTest do
   @root Path.expand("../../../..", __DIR__)
 
   setup do
+    # By hand: `without_connection/1` withdraws every connection, which setup!/1's watch would fail.
     :ok = Ecto.Adapters.SQL.Sandbox.checkout(Arca.Repo)
     Ecto.Adapters.SQL.Sandbox.mode(Arca.Repo, {:shared, self()})
     :ok

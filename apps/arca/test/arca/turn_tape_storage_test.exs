@@ -21,9 +21,8 @@ defmodule Arca.TurnTapeStorageTest do
 
   import Ecto.Query, only: [from: 2]
 
-  setup do
-    :ok = Ecto.Adapters.SQL.Sandbox.checkout(Arca.Repo)
-    Ecto.Adapters.SQL.Sandbox.mode(Arca.Repo, {:shared, self()})
+  setup tags do
+    Arca.Test.Sandbox.setup!(tags)
     Arca.Test.Actor.athanor!()
     actor = Arca.Test.Actor.local()
     {:ok, thread} = Threads.create(actor)
@@ -116,7 +115,9 @@ defmodule Arca.TurnTapeStorageTest do
 
   # One live member of the cell that is not this boot, under a node name
   # nothing else writes: the row's own slot, so the case measures its own
-  # delta rather than whatever the suite left in a shared table.
+  # delta rather than whatever the suite left in a shared table. The row is
+  # the sandbox's and goes with it: a delete on another connection would
+  # wait behind the owner's write lock until the owner stops.
   defp peer_member!(lease_ms \\ 60_000) do
     node = "h1-peer-#{System.unique_integer([:positive])}@test"
     owner = "#{node}#boot_#{System.unique_integer([:positive])}"
@@ -134,12 +135,6 @@ defmodule Arca.TurnTapeStorageTest do
           updated_at: DateTime.utc_now()
         }
       ])
-
-    on_exit(fn ->
-      Ecto.Adapters.SQL.Sandbox.unboxed_run(Arca.Repo, fn ->
-        Arca.Repo.delete_all(from(l in Arca.Schemas.CellLease, where: l.node == ^node))
-      end)
-    end)
 
     %{node: node, owner: owner}
   end

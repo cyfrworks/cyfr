@@ -22,9 +22,8 @@ defmodule Arca.FilesTest do
 
   @shipped ["components", "reagents", "local", "shelf", "1.0.0"]
 
-  setup do
-    :ok = Ecto.Adapters.SQL.Sandbox.checkout(Arca.Repo)
-    Ecto.Adapters.SQL.Sandbox.mode(Arca.Repo, {:shared, self()})
+  setup tags do
+    Cyfr.Test.Sandbox.setup!(tags)
 
     base = Path.join(System.tmp_dir!(), "files_#{System.unique_integer([:positive])}")
     seed = Path.join(base, "seed")

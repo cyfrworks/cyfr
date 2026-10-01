@@ -15,9 +15,8 @@ defmodule Arca.DecisionLogTest do
   alias Arca.DecisionLog.AuditFailure
   alias Prima.Decision
 
-  setup do
-    :ok = Ecto.Adapters.SQL.Sandbox.checkout(Arca.Repo)
-    Ecto.Adapters.SQL.Sandbox.mode(Arca.Repo, {:shared, self()})
+  setup tags do
+    Arca.Test.Sandbox.setup!(tags)
 
     n = System.unique_integer([:positive])
 
@@ -597,12 +596,16 @@ defmodule Arca.DecisionLogBudgetTest do
 
     refused = for {{:error, %AuditFailure{kind: :capacity}}, ms} <- answers, do: ms
     waited = for {{:error, %AuditFailure{kind: :timeout}}, _ms} <- answers, do: :timeout
+    # Under load the store can fail an admitted writer outright (on
+    # PostgreSQL a `Postgrex.Error`) before its caller's budget runs out,
+    # and that caller is answered `:unavailable` instead of `:timeout`.
+    unavailable = for {{:error, %AuditFailure{kind: :unavailable}}, _ms} <- answers, do: :failed
 
     # Every writer past the cap was refused, each answered before the
     # budget an admitted writer's caller waits out: none waited for the
     # database.
     assert length(refused) >= length(ids) - DecisionLog.max_writers()
-    assert length(refused) + length(waited) == length(ids)
+    assert length(refused) + length(waited) + length(unavailable) == length(ids)
     assert Enum.all?(refused, &(&1 < DecisionLog.budget_ms())), "a refusal waited"
 
     send(blocker, :release)

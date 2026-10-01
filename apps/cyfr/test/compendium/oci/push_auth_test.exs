@@ -20,9 +20,8 @@ defmodule Compendium.OCI.PushAuthTest do
   @user "oci_push_auth_test_user"
   @namespace "alice"
 
-  setup do
-    :ok = Ecto.Adapters.SQL.Sandbox.checkout(Arca.Repo)
-    Ecto.Adapters.SQL.Sandbox.mode(Arca.Repo, {:shared, self()})
+  setup tags do
+    Cyfr.Test.Sandbox.setup!(tags)
 
     bypass = Bypass.open()
     # `Reference.api_base/1` maps `localhost:` to http:// (not 127.0.0.1) so Bypass works.

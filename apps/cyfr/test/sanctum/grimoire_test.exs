@@ -43,9 +43,8 @@ defmodule Sanctum.GrimoireTest do
     assert Sanctum.Consent.ShapeDerivation.all_tool_actions() == Grimoire.tool_actions()
   end
 
-  test "a grant's tool servers are answered through the port" do
-    :ok = Ecto.Adapters.SQL.Sandbox.checkout(Arca.Repo)
-    Ecto.Adapters.SQL.Sandbox.mode(Arca.Repo, {:shared, self()})
+  test "a grant's tool servers are answered through the port", tags do
+    Cyfr.Test.Sandbox.setup!(tags)
     ctx = Sanctum.TestContext.local()
 
     assert is_list(Grimoire.tool_server_candidates(ctx))

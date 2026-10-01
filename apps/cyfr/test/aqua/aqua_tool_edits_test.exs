@@ -13,7 +13,7 @@ defmodule Aqua.AquaToolEditsTest do
   alias Compendium.AquaAgent
   alias Compendium.AquaPath
 
-  setup do
+  setup tags do
     test_path = Path.join(System.tmp_dir!(), "aqua_tool_edits_#{:rand.uniform(1_000_000)}")
     original = Application.get_env(:arca, :base_path)
     Application.put_env(:arca, :base_path, test_path)
@@ -27,8 +27,7 @@ defmodule Aqua.AquaToolEditsTest do
     end)
 
     # The tool's door logs to the database; the runner it may reach does too.
-    :ok = Ecto.Adapters.SQL.Sandbox.checkout(Arca.Repo)
-    Ecto.Adapters.SQL.Sandbox.mode(Arca.Repo, {:shared, self()})
+    Cyfr.Test.Sandbox.setup!(tags)
 
     ctx = Sanctum.TestContext.local()
     :ok = Sanctum.TestContext.shipped!(ctx.athanor_id)

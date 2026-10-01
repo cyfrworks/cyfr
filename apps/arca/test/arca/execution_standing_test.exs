@@ -18,9 +18,8 @@ defmodule Arca.ExecutionStandingTest do
   alias Arca.ExecutionAttempts
   alias Arca.Test.Actor
 
-  setup do
-    :ok = Ecto.Adapters.SQL.Sandbox.checkout(Arca.Repo)
-    Ecto.Adapters.SQL.Sandbox.mode(Arca.Repo, {:shared, self()})
+  setup tags do
+    Arca.Test.Sandbox.setup!(tags)
     Actor.athanor!()
     {:ok, actor: Actor.local()}
   end

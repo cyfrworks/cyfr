@@ -11,13 +11,12 @@ defmodule Opus.ResourceLimitsTest do
   @test_ref "reagent:local.test-math:0.1.0"
   @test_node "reagent:local.test-math"
 
-  setup do
+  setup tags do
     test_path = Path.join(System.tmp_dir!(), "opus_limits_test_#{:rand.uniform(100_000)}")
     original_base_path = Application.get_env(:arca, :base_path)
     Application.put_env(:arca, :base_path, test_path)
 
-    :ok = Ecto.Adapters.SQL.Sandbox.checkout(Arca.Repo)
-    Ecto.Adapters.SQL.Sandbox.mode(Arca.Repo, {:shared, self()})
+    Cyfr.Test.Sandbox.setup!(tags)
 
     ctx = Sanctum.TestContext.local()
 

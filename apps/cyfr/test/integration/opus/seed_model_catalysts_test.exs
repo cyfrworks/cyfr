@@ -30,10 +30,9 @@ defmodule Opus.SeedModelCatalystsTest do
     {"openrouter", "OPENROUTER_API_KEY", :keyed}
   ]
 
-  setup do
+  setup tags do
     Arca.Cache.init()
-    :ok = Ecto.Adapters.SQL.Sandbox.checkout(Arca.Repo)
-    Ecto.Adapters.SQL.Sandbox.mode(Arca.Repo, {:shared, self()})
+    Cyfr.Test.Sandbox.setup!(tags)
 
     test_path = Path.join(System.tmp_dir!(), "seed_models_#{System.unique_integer([:positive])}")
     keys = [:base_path, :seed_path]

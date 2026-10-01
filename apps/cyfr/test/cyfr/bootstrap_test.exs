@@ -18,6 +18,8 @@ defmodule Cyfr.BootstrapTest do
   """
   use ExUnit.Case, async: false
 
+  import Prima.Test.Wait
+
   alias Arca.JobClaims
   alias Sanctum.Tenancy.{Members, Users}
 
@@ -28,10 +30,7 @@ defmodule Cyfr.BootstrapTest do
   ]
 
   setup tags do
-    unless tags[:unboxed] do
-      :ok = Ecto.Adapters.SQL.Sandbox.checkout(Arca.Repo)
-      Ecto.Adapters.SQL.Sandbox.mode(Arca.Repo, {:shared, self()})
-    end
+    unless tags[:unboxed], do: Cyfr.Test.Sandbox.setup!(tags)
 
     prev = Application.get_env(:sanctum, :platform_admin_emails, [])
     claim_enabled = Application.get_env(:arca, :control_plane_claim_enabled)
@@ -317,9 +316,31 @@ defmodule Cyfr.BootstrapTest do
 
     test "a database error and any other raise are refusals of their own class", %{key: key} do
       Application.put_env(:sanctum, :platform_admin_emails, [])
+      test = self()
 
-      db = fn _claim, _opts -> raise DBConnection.ConnectionError, "connection lost" end
-      assert {:error, :database_error} = Cyfr.Bootstrap.run(key: key, reconcile: db)
+      db = fn claim, _opts ->
+        send(test, {:reconciled_under, claim})
+        raise DBConnection.ConnectionError, "connection lost"
+      end
+
+      # The run's claim is the case's first write, and a loaded
+      # single-writer store can refuse it: that run is refused as a
+      # database error too, before its reconcile and with no claim to give
+      # back. The case waits for a run whose reconcile raised under the
+      # claim it wrote.
+      wait_until(
+        fn ->
+          assert {:error, :database_error} = Cyfr.Bootstrap.run(key: key, reconcile: db)
+
+          receive do
+            {:reconciled_under, _claim} -> true
+          after
+            0 -> false
+          end
+        end,
+        30_000,
+        "a run refused under the claim it wrote"
+      )
 
       # The claim a refusal took is given back, so the next attempt is not
       # held behind a lease nobody uses.

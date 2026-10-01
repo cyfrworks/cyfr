@@ -37,8 +37,8 @@ defmodule Arca.SchemaBaselineTest do
     {:ok, declared: path |> Prima.Test.SourceTree.read() |> declared_tables()}
   end
 
-  setup do
-    :ok = Ecto.Adapters.SQL.Sandbox.checkout(Arca.Repo)
+  setup tags do
+    Cyfr.Test.Sandbox.setup!(tags)
     :ok
   end
 

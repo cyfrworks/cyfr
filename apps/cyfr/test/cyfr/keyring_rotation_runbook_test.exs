@@ -30,9 +30,8 @@ defmodule Cyfr.KeyringRotationRunbookTest do
 
   @athanor "ath_runbook"
 
-  setup do
-    :ok = Ecto.Adapters.SQL.Sandbox.checkout(Arca.Repo)
-    Ecto.Adapters.SQL.Sandbox.mode(Arca.Repo, {:shared, self()})
+  setup tags do
+    Cyfr.Test.Sandbox.setup!(tags)
 
     prev = Application.get_env(:sanctum, :crypto_keyring)
     on_exit(fn -> restore(prev) end)

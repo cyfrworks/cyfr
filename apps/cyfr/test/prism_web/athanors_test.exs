@@ -9,8 +9,8 @@ defmodule PrismWeb.AthanorsTest do
 
   alias Sanctum.Tenancy.{Athanors, Members, Users}
 
-  setup do
-    :ok = Ecto.Adapters.SQL.Sandbox.checkout(Arca.Repo)
+  setup tags do
+    Cyfr.Test.Sandbox.setup!(tags)
     n = System.unique_integer([:positive])
 
     {:ok, user} =

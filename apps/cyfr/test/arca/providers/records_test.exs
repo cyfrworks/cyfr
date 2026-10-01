@@ -13,9 +13,8 @@ defmodule Arca.Providers.RecordsTest do
   alias Sanctum.Context
   alias Arca.Providers.Records, as: MCP
 
-  setup do
-    :ok = Ecto.Adapters.SQL.Sandbox.checkout(Arca.Repo)
-    Ecto.Adapters.SQL.Sandbox.mode(Arca.Repo, {:shared, self()})
+  setup tags do
+    Cyfr.Test.Sandbox.setup!(tags)
 
     # Use a test-specific base path to avoid polluting real config
     test_path = Path.join(System.tmp_dir!(), "arca_mcp_test_#{:rand.uniform(100_000)}")

@@ -12,8 +12,8 @@ defmodule Arca.ToolGrantStorageTest do
 
   alias Arca.ToolGrantStorage
 
-  setup do
-    :ok = Ecto.Adapters.SQL.Sandbox.checkout(Arca.Repo)
+  setup tags do
+    Arca.Test.Sandbox.setup!(tags)
     n = System.unique_integer([:positive])
 
     thread = %{

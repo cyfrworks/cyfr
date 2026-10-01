@@ -8,9 +8,8 @@ defmodule Sanctum.NamespaceTest do
   alias Sanctum.Namespace
   alias Sanctum.Tenancy.Users
 
-  setup do
-    :ok = Ecto.Adapters.SQL.Sandbox.checkout(Arca.Repo)
-    Ecto.Adapters.SQL.Sandbox.mode(Arca.Repo, {:shared, self()})
+  setup tags do
+    Cyfr.Test.Sandbox.setup!(tags)
     :ok
   end
 
@@ -110,7 +109,7 @@ defmodule Sanctum.NamespaceTest do
     # (distinct from :not_claimed) — is exercised end-to-end by
     # Arca.AuditHandlerTest, where a DBConnection.OwnershipError from an
     # un-owned process is rescued into {:error, _} (and collapsed to nil by
-    # lookup/1). It cannot be induced here under this module's
-    # {:shared, self()} sandbox.
+    # lookup/1). It cannot be induced here under this module's shared
+    # sandbox.
   end
 end

@@ -83,9 +83,8 @@ defmodule Arca.StorageGCTest do
   @sentinel "cyfr-manifest.json"
   @day :timer.hours(24)
 
-  setup do
-    :ok = Ecto.Adapters.SQL.Sandbox.checkout(Arca.Repo)
-    Ecto.Adapters.SQL.Sandbox.mode(Arca.Repo, {:shared, self()})
+  setup tags do
+    Arca.Test.Sandbox.setup!(tags)
 
     base = Path.join(System.tmp_dir!(), "storage_gc_#{System.unique_integer([:positive])}")
     prev_base = Application.fetch_env!(:arca, :base_path)
@@ -704,7 +703,7 @@ defmodule Arca.StorageGCTest do
       nobody = %Prima.Actor{athanor_id: nil, user_id: "usr_nobody"}
 
       # No connection to query with: a query would raise, not refuse.
-      Ecto.Adapters.SQL.Sandbox.checkin(Arca.Repo)
+      Ecto.Adapters.SQL.Sandbox.mode(Arca.Repo, :manual)
 
       assert {:error, :no_athanor} = StorageGC.sweep(nobody)
       assert {:error, :no_athanor} = StorageGC.roots(nobody)

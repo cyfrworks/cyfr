@@ -13,9 +13,8 @@ defmodule Cyfr.SeedOfferTest do
   alias Arca.JobClaims
   alias Cyfr.SeedOffer
 
-  setup do
-    :ok = Ecto.Adapters.SQL.Sandbox.checkout(Arca.Repo)
-    Ecto.Adapters.SQL.Sandbox.mode(Arca.Repo, {:shared, self()})
+  setup tags do
+    Cyfr.Test.Sandbox.setup!(tags)
 
     # `job_claims` is shared, cross-node state; each case claims under a
     # key of its own.

@@ -51,9 +51,8 @@ defmodule Emissary.External.InChainProbeTest do
     end
   end
 
-  setup do
-    :ok = Ecto.Adapters.SQL.Sandbox.checkout(Arca.Repo)
-    Ecto.Adapters.SQL.Sandbox.mode(Arca.Repo, {:shared, self()})
+  setup tags do
+    Cyfr.Test.Sandbox.setup!(tags)
 
     # A seated member with a session, as the suite's sign-in leaves it.
     issuer = Sanctum.TestContext.issuer!(Sanctum.TestContext.local())

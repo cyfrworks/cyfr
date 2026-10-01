@@ -14,9 +14,8 @@ defmodule Arca.Providers.FilesTest do
   alias Grimoire.Catalog
   alias Arca.Providers.Files, as: Tool
 
-  setup do
-    :ok = Ecto.Adapters.SQL.Sandbox.checkout(Arca.Repo)
-    Ecto.Adapters.SQL.Sandbox.mode(Arca.Repo, {:shared, self()})
+  setup tags do
+    Cyfr.Test.Sandbox.setup!(tags)
 
     base = Path.join(System.tmp_dir!(), "file_tool_#{System.unique_integer([:positive])}")
     prev_base = Application.fetch_env!(:arca, :base_path)

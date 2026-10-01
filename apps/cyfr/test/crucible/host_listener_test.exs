@@ -36,9 +36,8 @@ defmodule Crucible.HostListenerTest do
   @external_resource @vectors_path
   @vectors @vectors_path |> File.read!() |> Jason.decode!()
 
-  setup do
-    :ok = Ecto.Adapters.SQL.Sandbox.checkout(Arca.Repo)
-    Ecto.Adapters.SQL.Sandbox.mode(Arca.Repo, {:shared, self()})
+  setup tags do
+    Cyfr.Test.Sandbox.setup!(tags)
     listener = start_supervised!({HostListener, port: 0})
     {:ok, listener: listener, url: "http://127.0.0.1:#{HostListener.port(listener)}"}
   end

@@ -7,9 +7,9 @@ defmodule Compendium.OCI.ClientTest do
   alias Compendium.OCI.{Blob, Cache, Client, Errors, Reference, Transport}
   alias Compendium.Registry.CredentialStore
 
-  setup do
-    :ok = Ecto.Adapters.SQL.Sandbox.checkout(Arca.Repo)
-    Ecto.Adapters.SQL.Sandbox.mode(Arca.Repo, {:shared, self()})
+  setup tags do
+    Cyfr.Test.Sandbox.setup!(tags)
+    :ok
   end
 
   describe "pull_bytes/1 - input validation" do

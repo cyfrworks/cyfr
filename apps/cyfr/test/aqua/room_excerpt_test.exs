@@ -10,9 +10,8 @@ defmodule Aqua.RoomExcerptTest do
   alias Arca.ThreadStorage, as: Threads
   alias Arca.Schemas.Message
 
-  setup do
-    :ok = Ecto.Adapters.SQL.Sandbox.checkout(Arca.Repo)
-    Ecto.Adapters.SQL.Sandbox.mode(Arca.Repo, {:shared, self()})
+  setup tags do
+    Cyfr.Test.Sandbox.setup!(tags)
 
     n = System.unique_integer([:positive])
     user = "local|idp|reader-#{n}"

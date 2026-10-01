@@ -10,9 +10,8 @@ defmodule Emissary.MCP.ToolServerGrantTest do
   alias Prima.Authority
   alias Prima.Authority.Blob
 
-  setup do
-    :ok = Ecto.Adapters.SQL.Sandbox.checkout(Arca.Repo)
-    Ecto.Adapters.SQL.Sandbox.mode(Arca.Repo, {:shared, self()})
+  setup tags do
+    Cyfr.Test.Sandbox.setup!(tags)
     Arca.Cache.init()
 
     ctx = Sanctum.TestContext.local()

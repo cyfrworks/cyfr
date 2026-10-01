@@ -12,9 +12,8 @@ defmodule Sanctum.ContextFocusTest do
   alias Sanctum.Context
   alias Sanctum.Tenancy.{Athanors, Members}
 
-  setup do
-    :ok = Ecto.Adapters.SQL.Sandbox.checkout(Arca.Repo)
-    Ecto.Adapters.SQL.Sandbox.mode(Arca.Repo, {:shared, self()})
+  setup tags do
+    Cyfr.Test.Sandbox.setup!(tags)
 
     alice = "github|https://github.com|alice-#{System.unique_integer([:positive])}"
     ops = "github|https://github.com|ops-#{System.unique_integer([:positive])}"

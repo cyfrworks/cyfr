@@ -224,9 +224,8 @@ defmodule Cyfr.StartupAdmissionBarrierTest do
     {Arca.ControlPlane, :slot}
   ]
 
-  setup do
-    :ok = Ecto.Adapters.SQL.Sandbox.checkout(Arca.Repo)
-    Ecto.Adapters.SQL.Sandbox.mode(Arca.Repo, {:shared, self()})
+  setup tags do
+    Cyfr.Test.Sandbox.setup!(tags)
 
     saved_env = for {app, key, _} <- @flags, do: {app, key, Application.fetch_env(app, key)}
     saved_emails = Application.fetch_env(:sanctum, :platform_admin_emails)

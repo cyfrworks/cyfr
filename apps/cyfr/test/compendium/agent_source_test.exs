@@ -16,7 +16,7 @@ defmodule Compendium.AgentSourceTest do
 
   @soul "agent:local.aqua"
 
-  setup do
+  setup tags do
     test_path = Path.join(System.tmp_dir!(), "agent_source_#{System.unique_integer([:positive])}")
     original = Application.get_env(:arca, :base_path)
     Application.put_env(:arca, :base_path, test_path)
@@ -30,8 +30,7 @@ defmodule Compendium.AgentSourceTest do
     end)
 
     Arca.Cache.init()
-    :ok = Ecto.Adapters.SQL.Sandbox.checkout(Arca.Repo)
-    Ecto.Adapters.SQL.Sandbox.mode(Arca.Repo, {:shared, self()})
+    Cyfr.Test.Sandbox.setup!(tags)
 
     Cyfr.Test.SeedBundle.lay!(~w(claude gemini files http))
     ctx = Sanctum.TestContext.local()

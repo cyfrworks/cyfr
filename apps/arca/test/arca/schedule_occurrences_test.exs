@@ -18,9 +18,8 @@ defmodule Arca.ScheduleOccurrencesTest do
     {Arca.ControlPlane, :slot}
   ]
 
-  setup do
-    :ok = Ecto.Adapters.SQL.Sandbox.checkout(Arca.Repo)
-    Ecto.Adapters.SQL.Sandbox.mode(Arca.Repo, {:shared, self()})
+  setup tags do
+    Arca.Test.Sandbox.setup!(tags)
 
     saved = for key <- @standing_keys, do: {key, :persistent_term.get(key, :absent)}
 

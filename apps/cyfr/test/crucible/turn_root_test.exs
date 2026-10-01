@@ -25,10 +25,9 @@ defmodule Crucible.TurnRootTest do
   @soul "agent:local.aqua"
   @slots Crucible.Slots
 
-  setup do
+  setup tags do
     Arca.Cache.init()
-    :ok = Ecto.Adapters.SQL.Sandbox.checkout(Arca.Repo)
-    Ecto.Adapters.SQL.Sandbox.mode(Arca.Repo, {:shared, self()})
+    Cyfr.Test.Sandbox.setup!(tags)
 
     test_path = Path.join(System.tmp_dir!(), "turn_root_#{System.unique_integer([:positive])}")
     keys = [:base_path, :seed_path]
