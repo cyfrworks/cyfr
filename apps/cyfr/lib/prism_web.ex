@@ -47,6 +47,7 @@ defmodule PrismWeb do
       PasskeyController,
       ReauthController,
       RegistryLive,
+      RestoreLive,
       RootRedirectLive,
       SchedulesLive,
       SettingsLive,

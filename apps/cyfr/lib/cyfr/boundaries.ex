@@ -1638,7 +1638,8 @@ defmodule Cyfr.Boundaries do
     {:get, "/directory/v1/:identifier"},
     {:get, "/directory/v1/:identifier/requests/:request_id"},
     {:post, "/directory/v1/genesis"},
-    {:get, "/login"}
+    {:get, "/login"},
+    {:get, "/restore"}
   ]
 
   # The routes anyone will reach once the work that declares them lands:

@@ -45,12 +45,22 @@ defmodule PrismWeb.SystemLayer.Prompt do
       `methods` the person can prove it by, and `own`, whether this client
       asked for it. A client that asked but cannot read the list carries
       the ref, operation and expiry alone, the rest `nil`. The secret the
-      asking request was answered never enters a prompt.
+      asking request was answered never enters a prompt;
+    * `:enrollment`, `:kit` and `:holder` — recovery material, each under
+      the action `:recovery_material` (`PrismWeb.SystemLayer.Recovery`
+      builds them): enrollment names the `directory_url` this home pins,
+      which its form shows before anything is asked; a kit names the
+      `attempt_id` of the enrollment or added kit whose kit is delivered
+      again; another kit names nothing. No seed, kit line or installation
+      token is ever a prompt's subject: the browser draws and holds the
+      seed, and a kit's lines go to the browser alone.
 
   Anything else is refused as `:invalid_prompt`: nothing is drawn.
   """
 
-  @kinds [:grant, :unlock, :sign_in, :credential_entry, :safe_mode, :pairing, :confirmation]
+  @recovery_kinds [:enrollment, :kit, :holder]
+  @kinds [:grant, :unlock, :sign_in, :credential_entry, :safe_mode, :pairing, :confirmation] ++
+           @recovery_kinds
   @keys [:id, :kind, :action, :subject]
   @max_id_bytes 128
 
@@ -68,6 +78,9 @@ defmodule PrismWeb.SystemLayer.Prompt do
           | :safe_mode
           | :pairing
           | :confirmation
+          | :enrollment
+          | :kit
+          | :holder
 
   @typedoc "A prompt."
   @type t :: %{
@@ -80,6 +93,10 @@ defmodule PrismWeb.SystemLayer.Prompt do
   @doc "The kinds of prompt the layer draws."
   @spec kinds() :: [kind()]
   def kinds, do: @kinds
+
+  @doc "The kinds of prompt that show recovery material, which only the layer draws."
+  @spec recovery_kinds() :: [kind()]
+  def recovery_kinds, do: @recovery_kinds
 
   @doc "The field a credential entry is stored under when its subject names none."
   @spec default_field() :: String.t()
@@ -148,6 +165,7 @@ defmodule PrismWeb.SystemLayer.Prompt do
   end
 
   defp action(:pairing, :device_pairing), do: :ok
+  defp action(kind, :recovery_material) when kind in @recovery_kinds, do: :ok
 
   defp action(_kind, _action), do: {:error, :invalid_prompt}
 
@@ -187,6 +205,22 @@ defmodule PrismWeb.SystemLayer.Prompt do
   end
 
   defp subject(:pairing, subject) when map_size(subject) == 0, do: {:ok, %{}}
+
+  # The directory the form names is this home's pinned one, an https
+  # directory URL; a kit is named by its attempt's id; neither carries a
+  # seed.
+  defp subject(:enrollment, %{directory_url: url} = subject)
+       when map_size(subject) == 1 and is_binary(url) do
+    if Prima.Identity.Encoding.directory_url?(url) and String.starts_with?(url, "https://"),
+      do: {:ok, %{directory_url: url}},
+      else: {:error, :invalid_prompt}
+  end
+
+  defp subject(:kit, %{attempt_id: id} = subject)
+       when map_size(subject) == 1 and is_binary(id) and id != "" and byte_size(id) <= 128,
+       do: {:ok, %{attempt_id: id}}
+
+  defp subject(:holder, subject) when map_size(subject) == 0, do: {:ok, %{}}
 
   defp subject(
          :confirmation,

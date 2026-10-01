@@ -3,6 +3,7 @@
 
 import {codeFromFragment, Glass, generateKeyPair, openingPlan, openStore, promptModel, prove, publicKeyB64} from "./device_key.js"
 import {nextStop, tabOrder} from "./focus.js"
+import {clearFields, clearKit, drawKit, fieldValue, Material, RestorePage} from "./recovery.js"
 import {initial, transition} from "./state.js"
 import {assert as assertPasskey, register as registerPasskey, supported as passkeysSupported} from "./webauthn.js"
 
@@ -78,6 +79,20 @@ import {assert as assertPasskey, register as registerPasskey, supported as passk
  * page reconnects,
  * since its waiting requests ended with the old page process. Keys typed
  * into a prompt stay in it: none drives the page behind it.
+ *
+ * A recovery prompt's form (`data-recovery`, `PrismWeb.SystemLayer.Recovery`)
+ * is the browser's: a submit draws the new kit's seed and its request id
+ * here (`recovery.js`'s `Material`), held in memory for that one request,
+ * and sends them to the layer (`recovery_submit`); the same is sent again
+ * on `recovery:resubmit` (`{layer, prompt}`), once its record is
+ * confirmed, and on a retry. A kit's lines arrive on `recovery:kit`
+ * (`{layer, prompt, kit}`) and are drawn as text into the prompt's own
+ * place (`data-recovery-kit`); `recovery:clear` (`{layer, prompt}`), the
+ * prompt's close and a reconnect forget the material and empty it.
+ *
+ * On the restore page (`/restore`), an element with `data-restore="page"`
+ * holds the restore form (`recovery.js`'s `RestorePage`), which posts the
+ * installation token and the kit to the restore ingress from the browser.
  *
  * On the glass's own page (`/pair`), an element with `data-glass="pair"`
  * is the glass. It reads a pairing code from the address's fragment and
@@ -217,6 +232,10 @@ export default {
   mounted() {
     if (this.el.dataset.webauthn === "sign-in") return this.mountSignIn()
     if (this.el.dataset.glass === "pair") return this.mountGlass()
+    if (this.el.dataset.restore === "page") {
+      this.restorePage = new RestorePage(this.el)
+      return
+    }
 
     this.handleCeremonies()
     this.gone = false
@@ -250,6 +269,7 @@ export default {
 
   updated() {
     if (this.el.dataset.webauthn === "sign-in" || this.el.dataset.glass === "pair") return
+    if (this.el.dataset.restore === "page") return
     this.dialog = this.el.querySelector("dialog")
     this.sync()
   },
@@ -262,9 +282,20 @@ export default {
 
     if (this.glass) return this.destroyGlass()
 
+    if (this.restorePage) {
+      this.restorePage.destroy()
+      return
+    }
+
     // A layer that goes covers nothing and does nothing more: its state
     // machine ends, and a fullscreen exit still settling finds it gone.
+    // The recovery material it held goes with it.
     this.gone = true
+    this.forgetAllRecovery()
+    if (this.onRecoverySubmit && typeof this.el.removeEventListener === "function") {
+      this.el.removeEventListener("submit", this.onRecoverySubmit)
+      this.el.removeEventListener("click", this.onRecoveryClick)
+    }
     this.layer = {...initial, attempt: this.layer ? this.layer.attempt + 1 : 0}
     this.cover(false)
     this.dialog.removeEventListener("cancel", this.onCancel)
@@ -324,12 +355,88 @@ export default {
     // that prompt ends.
     on("system_layer:mark", ({form, prompt}) => markForm(this.marks, form, prompt))
     on("system_layer:clear", ({prompt, form}) => clearMarked(globalThis.document, this.marks, prompt, form))
+
+    this.handleRecovery(on)
+  },
+
+  // ---------------------------------------------------------------------------
+  // Recovery material
+  // ---------------------------------------------------------------------------
+
+  // A recovery prompt's form is submitted here, never by the browser: the
+  // material is drawn or typed, held, and sent to the layer. The kit's
+  // lines are drawn into the prompt's own place, and forgotten with it.
+  handleRecovery(on) {
+    this.material = new Material()
+
+    on("recovery:resubmit", ({prompt}) => this.recoverySubmit(prompt))
+    on("recovery:kit", ({prompt, kit}) => {
+      // The request answered: the seed now lives in the kit's lines alone.
+      this.material.forget(prompt)
+      const form = this.recoveryForm(prompt)
+      if (form) form.hidden = true
+      drawKit(globalThis.document, this.kitSlot(prompt), kit)
+    })
+    on("recovery:clear", ({prompt}) => this.forgetRecovery(prompt))
+
+    if (typeof this.el.addEventListener !== "function") return
+
+    this.onRecoverySubmit = (event) => {
+      const form = event.target
+      if (!form || !form.dataset || !form.dataset.recovery) return
+      event.preventDefault()
+      this.recoverySubmit(form.dataset.prompt)
+    }
+    this.onRecoveryClick = (event) => {
+      const target = event.target && event.target.closest ? event.target.closest("[data-recovery-print]") : null
+      if (!target) return
+      event.preventDefault()
+      if (typeof globalThis.print === "function") globalThis.print()
+    }
+    this.el.addEventListener("submit", this.onRecoverySubmit)
+    this.el.addEventListener("click", this.onRecoveryClick)
+  },
+
+  // What the prompt's form submits: the material held for it, or drawn now.
+  recoverySubmit(promptId) {
+    const form = this.recoveryForm(promptId)
+    if (!form || !this.material) return
+    const payload = this.material.submission(promptId, form.dataset.recovery, fieldValue(form, "recovery_secret"))
+    this.pushEventTo(this.el, "recovery_submit", payload || {prompt_id: promptId})
+  },
+
+  recoveryForm(promptId) {
+    if (typeof promptId !== "string" || typeof this.el.querySelector !== "function") return null
+    return this.el.querySelector(`form[data-recovery][data-prompt="${promptId}"]`)
+  },
+
+  kitSlot(promptId) {
+    if (typeof promptId !== "string" || typeof this.el.querySelector !== "function") return null
+    return this.el.querySelector(`[data-recovery-kit="${promptId}"]`)
+  },
+
+  // The prompt's material forgotten, its kit's lines and typed secret
+  // emptied, its form ready again.
+  forgetRecovery(promptId) {
+    if (this.material) this.material.forget(promptId)
+    clearKit(this.kitSlot(promptId))
+    const form = this.recoveryForm(promptId)
+    if (form) {
+      clearFields(form)
+      form.hidden = false
+    }
+  },
+
+  forgetAllRecovery() {
+    forgetAllRecovery(this)
   },
 
   // A reconnect is a new page process: every request this page was waiting
-  // on ended with the old one, so every form it typed for is emptied.
+  // on ended with the old one, so every form it typed for is emptied, and
+  // the recovery material it held is forgotten.
   reconnected() {
     clearAllMarked(globalThis.document, this.marks)
+    forgetAllRecovery(this)
   },
 
   sync() {
@@ -403,6 +510,7 @@ export default {
 
       case "close":
         clearForms(this.dialog)
+        this.forgetAllRecovery()
         if (popoverOpen(this.dialog)) this.dialog.hidePopover()
         if (this.dialog.open) this.dialog.close()
         break
@@ -640,6 +748,17 @@ export default {
     event.preventDefault()
     if (next >= 0) stops[next].focus()
   }
+}
+
+// Every recovery prompt of the layer `hook` forgotten: the material it
+// holds, each kit's lines and each typed secret.
+export function forgetAllRecovery(hook) {
+  if (!hook) return
+  if (hook.material) hook.material.forgetAll()
+  const el = hook.el
+  const all = (selector) => (el && typeof el.querySelectorAll === "function" ? el.querySelectorAll(selector) : [])
+  for (const slot of all("[data-recovery-kit]")) clearKit(slot)
+  for (const form of all("form[data-recovery]")) clearFields(form)
 }
 
 // Submit the form `id` names again, as its own submit would.

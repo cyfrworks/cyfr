@@ -9,7 +9,9 @@ defmodule Sanctum.RecoveryTest do
   Enrollment is asked for its `recovery_material` proof before anything is
   opened, consumes it with its one durable attempt, registers the same
   genesis bytes however often its reply is lost, and answers the kit until
-  its acknowledgment erases the seed. Another kit is a `recover` an
+  its acknowledgment erases the seed. One the directory has not accepted
+  is abandoned, and a retry under its request id then registers nothing;
+  an accepted one is not. Another kit is a `recover` an
   existing kit signs, keeping the online keys and moving the head.
 
   Restore checks the installation capability first, holds the kit to the
@@ -335,6 +337,7 @@ defmodule Sanctum.RecoveryTest do
       assert %{identifier: nil, enrollment: "none"} = row(person.user.id)
       assert [%{phase: "refused", kit_seed_sealed: nil}] = attempts("enrollment")
       assert Directory.log(context.directory.dir, genesis.identifier) == nil
+      assert {:error, :not_found} = Recovery.abandon_enrollment(person.ctx)
     end
 
     test "a lost reply resumes the one attempt, registering the same genesis bytes", context do
@@ -395,6 +398,149 @@ defmodule Sanctum.RecoveryTest do
 
       assert {:error, :no_directory} =
                Recovery.enroll(other.ctx, args(seed(), request_id()), context.opts)
+    end
+  end
+
+  describe "an unfinished enrollment" do
+    test "abandoned at submitted, a retry under its request id registers nothing, and a new kit enrolls anew",
+         context do
+      person = seated!()
+      seed = seed()
+      id = request_id()
+
+      {:ok, genesis} =
+        Sanctum.Person.sign_genesis(person.user.id, [public(seed)], context.directory.url)
+
+      # The directory registers the genesis and its answer is lost.
+      Directory.next(context.directory.dir, genesis.identifier, :drop)
+
+      assert {:error, :directory_unavailable} =
+               confirmed(person, &Recovery.enroll(&1, args(seed, id), context.opts))
+
+      assert %{enrollment: "pending"} = row(person.user.id)
+      _ = Directory.requests()
+
+      assert {:ok, %{request_id: ^id, phase: "superseded"}} =
+               Recovery.abandon_enrollment(person.ctx)
+
+      assert %{identifier: nil, enrollment: "none"} = row(person.user.id)
+      assert [%{phase: "superseded", kit_seed_sealed: nil}] = attempts("enrollment")
+
+      # The browser that still held the seed retries: it is told the
+      # enrollment was abandoned, and nothing reaches the directory.
+      assert {:error, :enrollment_abandoned} =
+               Recovery.enroll(person.ctx, args(seed, id), context.opts)
+
+      assert writes() == []
+      assert %{identifier: nil, enrollment: "none"} = row(person.user.id)
+      assert {:error, :not_found} = Recovery.abandon_enrollment(person.ctx)
+
+      # The genesis the directory registered stays there, unused.
+      assert [_genesis] = Directory.log(context.directory.dir, genesis.identifier)
+
+      # A new kit enrolls anew, under a new identifier.
+      anew = args(seed(), request_id())
+
+      assert {:ok, %{phase: "accepted", identifier: identifier}} =
+               confirmed(person, &Recovery.enroll(&1, anew, context.opts))
+
+      assert identifier != genesis.identifier
+      assert %{identifier: ^identifier, enrollment: "enrolled"} = row(person.user.id)
+    end
+
+    test "abandoned after the directory registered it and before its acceptance moved, it answers abandoned",
+         context do
+      person = seated!()
+      seed = seed()
+      id = request_id()
+      args = args(seed, id)
+      test = self()
+      handler = "recovery-abandon-between-#{System.unique_integer([:positive])}"
+
+      # The registration's answer has arrived, on the request's own process,
+      # and the attempt has not moved: the person abandons it then.
+      :ok =
+        :telemetry.attach(
+          handler,
+          [:finch, :request, :stop],
+          fn _event, _measurements, %{request: request}, _config ->
+            if request.method == "POST" and String.ends_with?(request.path, "/genesis") do
+              :telemetry.detach(handler)
+              send(test, {:abandoned, Recovery.abandon_enrollment(person.ctx)})
+            end
+          end,
+          nil
+        )
+
+      on_exit(fn -> :telemetry.detach(handler) end)
+
+      assert {:error, :enrollment_abandoned} =
+               confirmed(person, &Recovery.enroll(&1, args, context.opts))
+
+      assert_received {:abandoned, {:ok, %{request_id: ^id, phase: "superseded"}}}
+
+      # The acceptance wrote nothing: the person is unenrolled, and the
+      # genesis the directory registered stays there unused.
+      {:ok, genesis} =
+        Sanctum.Person.sign_genesis(person.user.id, [public(seed)], context.directory.url)
+
+      assert %{identifier: nil, enrollment: "none"} = row(person.user.id)
+      assert [%{phase: "superseded", kit_seed_sealed: nil}] = attempts("enrollment")
+      assert [_registered] = Directory.log(context.directory.dir, genesis.identifier)
+    end
+
+    test "abandoned at staged, killed before its submission, ends with nothing sent", context do
+      person = seated!()
+      assert {:error, :not_found} = Recovery.abandon_enrollment(person.ctx)
+
+      seed = seed()
+      id = request_id()
+
+      {:ok, genesis} =
+        Sanctum.Person.sign_genesis(person.user.id, [public(seed)], context.directory.url)
+
+      # Opened, and killed before its move to submitted.
+      {:ok, _staged} =
+        Arca.IdentityAttempts.open(Context.actor(person.ctx), %{
+          kind: "enrollment",
+          request_id: id,
+          user_id: person.user.id,
+          identifier: genesis.identifier,
+          directory_url: context.directory.url,
+          genesis: genesis.genesis,
+          request_digest: genesis.genesis_hash,
+          kit_seed_sealed: "sealed-kit-seed"
+        })
+
+      assert %{enrollment: "pending"} = row(person.user.id)
+
+      assert {:error, {:attempt_in_progress, ^id}} =
+               Recovery.enroll(person.ctx, args(seed(), request_id()), context.opts)
+
+      assert {:ok, %{request_id: ^id, phase: "superseded"}} =
+               Recovery.abandon_enrollment(person.ctx)
+
+      assert [%{phase: "superseded", kit_seed_sealed: nil}] = attempts("enrollment")
+      assert %{identifier: nil, enrollment: "none"} = row(person.user.id)
+      assert writes() == []
+      assert Directory.log(context.directory.dir, genesis.identifier) == nil
+    end
+
+    test "an accepted one is registered: not abandoned, its kit still delivered", context do
+      person = enrolled!(context)
+      attempt_id = person.enrolled.attempt_id
+
+      assert {:error, :registered} = Recovery.abandon_enrollment(person.ctx)
+      assert %{enrollment: "enrolled", identifier: identifier} = row(person.user.id)
+      assert identifier == person.enrolled.identifier
+
+      assert {:ok, %{kit: kit}} = confirmed(person, &Recovery.kit(&1, attempt_id))
+      assert kit.recovery_secret == b64(person.seed)
+
+      # Saved, it is no longer in progress: nothing is left to abandon.
+      assert {:ok, %{phase: "completed"}} = Recovery.kit_ack(person.ctx, attempt_id)
+      assert {:error, :not_found} = Recovery.abandon_enrollment(person.ctx)
+      assert %{enrollment: "enrolled", identifier: ^identifier} = row(person.user.id)
     end
   end
 
@@ -715,6 +861,82 @@ defmodule Sanctum.RecoveryTest do
 
       assert {:error, :not_empty} =
                Recovery.restore(other.kit, String.duplicate("6b", 32), context.opts)
+    end
+
+    test "killed at staged, before its submission reached the directory, resumes and submits once",
+         context do
+      reserved!()
+      identity = elsewhere!(context.directory)
+      before = Directory.log(context.directory.dir, identity.identifier)
+      Directory.next(context.directory.dir, identity.identifier, :drop)
+
+      assert {:error, {:retry, "submitted", _}} =
+               Recovery.restore(identity.kit, @token, context.opts)
+
+      [attempt] = attempts("restore")
+
+      # The instant after the attempt opened with its claim, and before its
+      # submission was recorded or reached the directory: the directory
+      # holds neither the recovery nor its outcome.
+      Directory.publish(context.directory.dir, identity.identifier, before)
+      Agent.update(context.directory.dir, &%{&1 | recorded: %{}})
+
+      {1, _} =
+        Arca.Repo.update_all(from(a in IdentityAttempt, where: a.id == ^attempt.id),
+          set: [phase: "staged"]
+        )
+
+      # Another kit under this token wins nothing meanwhile.
+      other = elsewhere!(context.directory)
+      assert {:error, :token_claimed} = Recovery.restore(other.kit, @token, context.opts)
+
+      assert {:ok, %{status: "completed", user_id: user_id}} =
+               Recovery.restore(identity.kit, @token, context.opts)
+
+      assert [%{id: same, phase: "completed"}] = attempts("restore")
+      assert same == attempt.id
+      assert row(user_id).live_public_key == attempt.staged_live_public_key
+      assert row(user_id).operational_public_key == attempt.staged_operational_public_key
+
+      log = Directory.log(context.directory.dir, identity.identifier)
+      assert [%{request: %{request_id: request_id}}] = Enum.filter(log, &(&1.kind == :recover))
+      assert request_id == attempt.request_id
+      assert count(User) == 1
+    end
+
+    test "killed at keys_active, before the mint, resumes into the mint without a directory write",
+         context do
+      reserved!()
+      identity = elsewhere!(context.directory)
+      Directory.next(context.directory.dir, identity.identifier, :drop)
+
+      assert {:error, {:retry, "submitted", _}} =
+               Recovery.restore(identity.kit, @token, context.opts)
+
+      [attempt] = attempts("restore")
+      log = Directory.log(context.directory.dir, identity.identifier)
+      entry_hash = Identity.hash(List.last(log))
+
+      # The instant after the head was read again and named this attempt's
+      # keys, and before the mint's transaction: no person yet.
+      {1, _} =
+        Arca.Repo.update_all(from(a in IdentityAttempt, where: a.id == ^attempt.id),
+          set: [phase: "keys_active", entry_hash: entry_hash, outcome: "accepted"]
+        )
+
+      assert count(User) == 0
+      _drained = Directory.requests()
+
+      assert {:ok, %{status: "completed", user_id: user_id, session_token: _}} =
+               Recovery.restore(identity.kit, @token, context.opts)
+
+      # Nothing was written to the directory on the way: the mint followed.
+      assert writes() == []
+      assert [%{phase: "completed"}] = attempts("restore")
+      assert row(user_id).head_hash == entry_hash
+      assert row(user_id).live_public_key == attempt.staged_live_public_key
+      assert count(User) == 1
+      assert {:ok, %{state: "ended", outcome: "completed"}} = InstallationClaims.get(system())
     end
 
     test "accepted, its reply lost, superseded elsewhere, then resumed: it activates nothing",

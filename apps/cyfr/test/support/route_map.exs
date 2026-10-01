@@ -736,6 +736,15 @@
           auth: "browser_public_login",
           live_view: "PrismWeb.PairLive",
           pipe_through: ["browser"]
+        },
+        %{
+          verb: "GET",
+          path: "/restore",
+          plug: "Phoenix.LiveView.Plug",
+          plug_opts: ":restore",
+          auth: "browser_public_login",
+          live_view: "PrismWeb.RestoreLive",
+          pipe_through: ["browser"]
         }
       ]
     }

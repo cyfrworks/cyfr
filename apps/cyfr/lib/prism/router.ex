@@ -227,12 +227,16 @@ defmodule Prism.Router do
       # (or links to `/auth/oidcc`); signing out is `POST /auth/logout`
       # above. `/pair` is the page a pairing code opens on a new glass:
       # sessionless like `/login`, it reads no session, and the invitation
-      # in its fragment names the person.
+      # in its fragment names the person. `/restore` is the page a fresh
+      # installation serves its returning person: sessionless too, its form
+      # posts the kit and the installation token to the restore ingress
+      # (`POST /restore`) from the browser, never through this view.
       scope "/", PrismWeb do
         pipe_through :browser
 
         live "/login", LoginLive, :login, metadata: %{auth: :browser_public_login}
         live "/pair", PairLive, :pair, metadata: %{auth: :browser_public_login}
+        live "/restore", RestoreLive, :restore, metadata: %{auth: :browser_public_login}
       end
 
       scope "/a/:athanor", PrismWeb do
