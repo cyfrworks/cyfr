@@ -8,13 +8,29 @@ defmodule Prima.MCP.MessageTest do
   refusal answers with over its data. A message carrying `method` is a
   request or a notification whatever else it carries, and a response
   carries a result or an error, never both — so no side reads a peer's
-  request as the answer to its own.
+  request as the answer to its own. A pending confirmation's error is
+  the shared vector's (`tests/fixtures/confirmation.json`'s `signal`),
+  byte for byte.
   """
   use ExUnit.Case, async: true
 
   alias Prima.MCP.{Message, Protocol}
 
   doctest Prima.MCP.Message
+
+  @vectors Path.expand("../../../../../tests/fixtures/confirmation.json", __DIR__)
+
+  defp signal_vector, do: @vectors |> File.read!() |> Jason.decode!() |> Map.fetch!("signal")
+
+  # The vector's signal as its producer builds it: atom keys, the expiry a
+  # UTC `DateTime`.
+  defp produced(value) do
+    %{"tag" => tag, "payload" => payload} = Jason.decode!(value)
+    {:ok, expires_at, 0} = DateTime.from_iso8601(payload["expires_at"])
+
+    {String.to_existing_atom(tag),
+     %{id: payload["id"], operation: payload["operation"], expires_at: expires_at}}
+  end
 
   describe "decode/1" do
     test "decodes a valid request" do
@@ -379,6 +395,24 @@ defmodule Prima.MCP.MessageTest do
                  }
                }
              } = encoded |> Jason.encode!() |> Jason.decode!()
+    end
+
+    test "the shared vector's pending confirmation is the error the codec writes, byte for byte" do
+      %{"value" => value, "mcp" => %{"request_id" => id, "body" => body}} = signal_vector()
+      signal = produced(value)
+      refusal = Prima.Refusal.classify(signal)
+
+      for where <- [:tools_call, :resources_read, :transport] do
+        encoded =
+          Message.encode_error(
+            id,
+            Message.refusal_code(refusal, where, nil),
+            refusal.message,
+            Prima.ConsentSignal.data(signal)
+          )
+
+        assert Jason.encode!(encoded) == body, "at #{where}"
+      end
     end
 
     test "without an override the class answers" do

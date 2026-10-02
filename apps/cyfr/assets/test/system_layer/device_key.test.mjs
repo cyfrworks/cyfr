@@ -49,7 +49,10 @@ import {
   expectedChallenge,
   homeOrigin,
   issuedElsewhere,
+  NONCE_BYTES,
   PENDING_MS,
+  PROOF_PROTOCOL,
+  PURPOSES,
   RENEW_RETRY_MS,
   renewElsewhere,
   UNREACHABLE_OFFER
@@ -116,6 +119,89 @@ describe("device_cert.json", () => {
   test("renewal falls at half the certificate's life", () => {
     const certificate = certs.certificates.local.certificate
     assert.equal(renewAt(certificate), certificate.not_before + (certificate.expires_at - certificate.not_before) / 2)
+  })
+
+  // What the glass asks for when it would take `challenge` as asked: its
+  // purpose, its home, its key and its client. What it refuses then, it
+  // refuses by the challenge's own shape.
+  const askedFor = (challenge) => ({
+    purpose: challenge.purpose,
+    home: challenge.home,
+    deviceKey: challenge.device_key,
+    clientId: challenge.client_id
+  })
+
+  test("a challenge is read as the home issues one: its protocol, purposes and nonce length", () => {
+    assert.equal(PROOF_PROTOCOL, certs.proof_protocol)
+    assert.deepEqual(PURPOSES, certs.purposes)
+
+    for (const [name, challenge] of Object.entries(certs.challenges)) {
+      assert.equal(challenge.protocol, PROOF_PROTOCOL, name)
+      assert.equal(fromB64url(challenge.nonce).length, NONCE_BYTES, name)
+      assert.equal(expectedChallenge(challenge, askedFor(challenge)), true, name)
+    }
+  })
+
+  test("the glass refuses to sign each challenge the home refuses to read", async () => {
+    const key = await privateKey("device_1")
+    assert.ok(certs.challenge_refusals.length > 0)
+
+    for (const {name, challenge} of certs.challenge_refusals) {
+      assert.equal(expectedChallenge(challenge, askedFor(challenge)), false, name)
+      await assert.rejects(prove(challenge, key, askedFor(challenge), subtle), (error) => error.refused === true, name)
+    }
+
+    // A nonce the home reads only one way: padded, or one byte short.
+    const connect = certs.challenges.connect
+    for (const nonce of [connect.nonce + "=", connect.nonce.slice(0, -2), "", 7]) {
+      const challenge = {...connect, nonce}
+      await assert.rejects(prove(challenge, key, askedFor(challenge), subtle), (error) => error.refused === true, String(nonce))
+    }
+  })
+
+  // The glass decides a proof case when the proof answers a challenge it
+  // did not ask for: another purpose, home, key or client. Another athanor
+  // or nonce, a signature and an expiry are the home's to judge.
+  const glassCompares = ["purpose", "home", "device_key", "client_id"]
+
+  test("each proof case the glass decides: it signs what the home takes, and nothing it asked otherwise", async () => {
+    const decided = certs.proof_cases.filter(({result, error, field}) => result === "ok" || (error === "challenge_mismatch" && glassCompares.includes(field)))
+    assert.ok(decided.some(({result}) => result === "ok"))
+    assert.ok(decided.some(({error}) => error === "challenge_mismatch"))
+
+    for (const {name, held, proof: proofName, result} of decided) {
+      const proof = certs.proofs[proofName]
+      const asked = askedFor(certs.challenges[held])
+      const signer = proofName === "by_another_key" ? "device_2" : "device_1"
+
+      if (result === "ok") {
+        assert.deepEqual(await prove(proof, await privateKey(signer), asked, subtle), proof, name)
+      } else {
+        await assert.rejects(prove(proof, await privateKey(signer), asked, subtle), (error) => error.refused === true, name)
+      }
+    }
+  })
+
+  // The certificate refusals the glass decides: one that names another
+  // device key, client, audience, issuer or athanor than the glass's own is
+  // never taken as its certificate. The rest are the home's to refuse when
+  // the glass presents it.
+  test("a certificate refusal naming another device, home or issuer is not taken as this device's", () => {
+    const own = certs.certificates.local.certificate
+    const expected = {deviceKey: own.device_key, clientId: own.client_id, home: own.audience, issuer: own.issuer, athanor: own.athanor}
+    assert.equal(certifies(own, expected), true)
+
+    const decided = certs.refusals.filter(
+      ({certificate: c}) =>
+        c.device_key !== own.device_key ||
+        c.client_id !== own.client_id ||
+        c.audience !== own.audience ||
+        c.issuer !== own.issuer ||
+        c.athanor !== own.athanor
+    )
+    assert.ok(decided.length > 0)
+
+    for (const {name, certificate} of decided) assert.equal(certifies(certificate, expected), false, name)
   })
 })
 

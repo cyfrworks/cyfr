@@ -328,6 +328,19 @@
       }
     }
   ],
+  "signal": {
+    "comment": "The confirmation_required consent signal that answers the request this record waits on, as each wire carries it, byte for byte. value is the {tag, payload} error.data carries: the payload names the secret (ref.id), the record's operation and its expiry as the store holds it, to the microsecond, in ISO 8601. message is the signal's sentence, which names the change and never the secret. mcp is the JSON-RPC error answering request_id: code -33505, the sentence, and value as error.data. http is the HTTP API's answer: status 428 and a body naming the class as code, the sentence, and value as data. Every Elixir producer writes exactly these bytes, and the CLI reads them.",
+    "http": {
+      "body": "{\"code\":\"confirmation_required\",\"data\":{\"payload\":{\"expires_at\":\"2026-09-21T14:18:20.000000Z\",\"id\":\"cnf_AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8\",\"operation\":\"vault.create\"},\"tag\":\"confirmation_required\"},\"message\":\"Confirmation required: vault.create needs a fresh confirmation — confirm it in Prism\"}",
+      "status": 428
+    },
+    "mcp": {
+      "body": "{\"error\":{\"code\":-33505,\"data\":{\"payload\":{\"expires_at\":\"2026-09-21T14:18:20.000000Z\",\"id\":\"cnf_AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8\",\"operation\":\"vault.create\"},\"tag\":\"confirmation_required\"},\"message\":\"Confirmation required: vault.create needs a fresh confirmation — confirm it in Prism\"},\"id\":1,\"jsonrpc\":\"2.0\"}",
+      "request_id": 1
+    },
+    "message": "Confirmation required: vault.create needs a fresh confirmation — confirm it in Prism",
+    "value": "{\"payload\":{\"expires_at\":\"2026-09-21T14:18:20.000000Z\",\"id\":\"cnf_AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8\",\"operation\":\"vault.create\"},\"tag\":\"confirmation_required\"}"
+  },
   "variations": [
     {
       "digest": "sha256:4c84aaec81595792353003f6cce4bdfbdec2dc6f4f2a54c3b26a9c5570d4a39d",

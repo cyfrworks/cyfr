@@ -493,6 +493,11 @@ func TestEnsureEnvFileKeys(t *testing.T) {
 	if err := os.WriteFile(path, []byte(partial), 0640); err != nil {
 		t.Fatal(err)
 	}
+	// WriteFile's mode passes through the process umask (077 under
+	// scripts/heavy-check.sh); the mode init must keep is set outright.
+	if err := os.Chmod(path, 0640); err != nil {
+		t.Fatal(err)
+	}
 	changes, err := ensureEnvFileKeys(path)
 	if err != nil || len(changes) == 0 {
 		t.Fatalf("changes %v, %v", changes, err)

@@ -5,7 +5,9 @@ defmodule CyfrWeb.ApiErrorTest do
   @moduledoc """
   The plain-HTTP rejection every controller and plug writes: the class of
   its refusal as `code`, a public sentence as `message`, the class→HTTP
-  status table, the 401 challenge, and `data` for a consent signal.
+  status table, the 401 challenge, and `data` for a consent signal. A
+  pending confirmation's 428 is the shared vector's
+  (`tests/fixtures/confirmation.json`'s `signal`), byte for byte.
   """
 
   use ExUnit.Case, async: true
@@ -13,6 +15,20 @@ defmodule CyfrWeb.ApiErrorTest do
   import Plug.Test
 
   alias CyfrWeb.ApiError
+
+  @vectors Path.expand("../../../../../tests/fixtures/confirmation.json", __DIR__)
+
+  defp signal_vector, do: @vectors |> File.read!() |> Jason.decode!() |> Map.fetch!("signal")
+
+  # The vector's signal as its producer builds it: atom keys, the expiry a
+  # UTC `DateTime`.
+  defp produced(value) do
+    %{"tag" => tag, "payload" => payload} = Jason.decode!(value)
+    {:ok, expires_at, 0} = DateTime.from_iso8601(payload["expires_at"])
+
+    {String.to_existing_atom(tag),
+     %{id: payload["id"], operation: payload["operation"], expires_at: expires_at}}
+  end
 
   @statuses %{
     invalid_argument: 400,
@@ -132,6 +148,15 @@ defmodule CyfrWeb.ApiErrorTest do
                }
              }
            }
+  end
+
+  test "the shared vector's pending confirmation answers its status and body, byte for byte" do
+    %{"value" => value, "http" => %{"status" => status, "body" => body}} = signal_vector()
+
+    conn = ApiError.refuse(conn(:post, "/"), produced(value))
+
+    assert conn.status == status
+    assert conn.resp_body == body
   end
 
   test "a confirmation signal that names no confirmation is internal, not 428" do
