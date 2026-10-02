@@ -175,13 +175,19 @@ defmodule Sanctum.Providers.PersonTest do
       assert %Prima.Refusal{class: :unavailable, message: message} = refusal(answer)
       assert message =~ "retry shortly"
       assert [%{phase: "submitted"} = attempt] = attempts(person.user.id, "enrollment")
-      assert [%{state: "consumed"}] = confirmations(person.user.id)
+
+      # The enrollment's own record (the person's passkey registration was
+      # confirmed by one of its own).
+      assert [%{state: "consumed"}] =
+               for(c <- confirmations(person.user.id), c.action == "recovery_material", do: c)
 
       # The retry needs no second proof and opens no second attempt.
       {_answer, _log} = with_log(fn -> call(person.ctx, enroll_args(seed, id)) end)
       assert [%{id: same}] = attempts(person.user.id, "enrollment")
       assert same == attempt.id
-      assert [%{state: "consumed"}] = confirmations(person.user.id)
+
+      assert [%{state: "consumed"}] =
+               for(c <- confirmations(person.user.id), c.action == "recovery_material", do: c)
 
       # Once the directory's acceptance is recorded, the retry answers the kit.
       as = %Prima.Actor{user_id: person.user.id}

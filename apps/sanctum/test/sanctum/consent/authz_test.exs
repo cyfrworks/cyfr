@@ -855,6 +855,10 @@ defmodule Sanctum.Consent.AuthzTest do
 
     test "a proven record goes ahead once, and only for its own change",
          %{session_ctx: session_ctx, user: user} do
+      # The person's passkey first: its registration is confirmed too, and
+      # its records' announcements are not this change's.
+      Sanctum.TestContext.passkey!(session_ctx.user_id)
+
       capture(
         [
           [:cyfr, :sanctum, :confirmation, :confirmed],

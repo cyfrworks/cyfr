@@ -551,12 +551,9 @@ defmodule PrismWeb.SettingsLiveTest do
   end
 
   describe "passkeys" do
-    test "one is registered through the layer's ceremony, then revoked under a fresh confirmation",
-         %{conn: conn} do
-      person = test_user()
-      {view, _html} = conn |> log_in_user(person) |> mount_athanor("/settings")
-      assert render(view) =~ "No passkey is registered here."
-
+    # The page's registration ceremony, answered by the person's software
+    # authenticator and handed to the layer: answers the authenticator.
+    defp ceremony!(view, person) do
       view |> element(~s([data-test="passkey-register"])) |> render_click()
 
       assert_push_event(view, "webauthn:create", %{
@@ -574,11 +571,22 @@ defmodule PrismWeb.SettingsLiveTest do
           registration: registration
         })
 
-      # The ceremony's answer goes to the layer, which hands it to the page:
-      # a first passkey, right after the sign-in, needs no other proof.
       view
       |> layer()
       |> render_hook("webauthn_result", %{"purpose" => "passkey", "credential" => credential})
+
+      authenticator
+    end
+
+    test "one is registered through the layer's ceremony, then revoked under a fresh confirmation",
+         %{conn: conn} do
+      # No email, so no fresh method here: a first passkey, right after the
+      # sign-in, needs no other proof.
+      person = test_user(%{email: nil})
+      {view, _html} = conn |> log_in_user(person) |> mount_athanor("/settings")
+      assert render(view) =~ "No passkey is registered here."
+
+      authenticator = ceremony!(view, person)
 
       html = render(view)
       assert html =~ "Passkey registered."
@@ -595,6 +603,32 @@ defmodule PrismWeb.SettingsLiveTest do
       wait_until(fn -> render(view) =~ "Passkey revoked." end, 2_000, "the passkey revoked")
 
       refute has_element?(view, ~s([data-test="passkey"]))
+    end
+
+    test "a person with a verified email is asked by the layer to confirm their first passkey, and the code mailed to them registers it",
+         %{conn: conn} do
+      # A verified email the suite's transport reaches: a fresh method, so
+      # a recent sign-in alone registers nothing.
+      person = test_user()
+      {view, _html} = conn |> log_in_user(person) |> mount_athanor("/settings")
+      ceremony!(view, person)
+
+      render(view)
+      assert has_element?(view, ~s(#system-layer [data-test="confirmation"][data-own="true"]))
+      refute render(view) =~ "Passkey registered."
+      refute has_element?(view, ~s([data-test="passkey"]))
+      assert {:ok, %{passkeys: []}} = passkeys(person)
+
+      view |> element(~s([data-test="confirm-email"])) |> render_click()
+      assert_receive {:confirmation_code_mail, mail}, 2_000
+
+      view
+      |> form("#system-layer-code", %{"code" => Sanctum.TestContext.MailSink.code(mail)})
+      |> render_submit()
+
+      # Confirmed, the page makes the registration again under the record.
+      wait_until(fn -> render(view) =~ "Passkey registered." end, 2_000, "the passkey registered")
+      assert has_element?(view, ~s([data-test="passkey"][data-state="active"]))
     end
 
     test "a ceremony the browser did not finish registers nothing, and says so", %{conn: conn} do

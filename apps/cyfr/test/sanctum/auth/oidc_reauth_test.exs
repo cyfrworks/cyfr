@@ -26,7 +26,10 @@ defmodule Sanctum.Auth.OIDCReauthTest do
   The issuer here is a stand-in for the token exchange alone
   (`:sanctum, :oidc_reauth_client`): it answers the claims a test hands
   it, as a real issuer's validated ID token would carry them, and every
-  check of them is `Sanctum.Auth.OIDC`'s.
+  check of them is `Sanctum.Auth.OIDC`'s. The authorization URL is the
+  real one (`Sanctum.Auth.OIDC.Oidcc.authorize_url/1`, through `Oidcc`),
+  built against the issuer's configuration as the `:cyfr_oidc` worker
+  holds it.
   """
 
   use CyfrWeb.ConnCase, async: false
@@ -37,25 +40,50 @@ defmodule Sanctum.Auth.OIDCReauthTest do
 
   @issuer "https://idp.example.com"
 
+  defmodule ProviderConfiguration do
+    @moduledoc false
+
+    # The issuer's configuration as the `:cyfr_oidc` worker
+    # `ueberauth_oidcc` starts holds it once it read the issuer's discovery
+    # document: decoded here from such a document, with no network, and
+    # answered to `Oidcc` as that worker answers it.
+    use GenServer
+
+    def start_link(issuer), do: GenServer.start_link(__MODULE__, issuer, name: :cyfr_oidc)
+
+    @impl true
+    def init(issuer) do
+      {:ok, configuration} =
+        :oidcc_provider_configuration.decode_configuration(%{
+          "issuer" => issuer,
+          "authorization_endpoint" => issuer <> "/authorize",
+          "token_endpoint" => issuer <> "/token",
+          "jwks_uri" => issuer <> "/jwks",
+          "scopes_supported" => ["openid", "email"],
+          "response_types_supported" => ["code"],
+          "subject_types_supported" => ["public"],
+          "id_token_signing_alg_values_supported" => ["ES256"],
+          "code_challenge_methods_supported" => ["S256"]
+        })
+
+      {:ok, %{configuration: configuration, jwks: :jose_jwk.generate_key({:ec, "P-256"})}}
+    end
+
+    @impl true
+    def handle_call(:get_provider_configuration, _from, state),
+      do: {:reply, state.configuration, state}
+
+    def handle_call(:get_jwks, _from, state), do: {:reply, state.jwks, state}
+  end
+
   defmodule Issuer do
     @moduledoc false
 
-    # The URL a real issuer would be sent to, with the request's fields.
+    # The URL the browser is sent to, built by the real exchange; the
+    # request is kept for the test to read.
     def authorize_url(request) do
       send(self(), {:authorize, request})
-
-      query =
-        URI.encode_query(%{
-          "redirect_uri" => request.redirect_uri,
-          "nonce" => request.nonce,
-          "state" => request.state,
-          "prompt" => "login",
-          "max_age" => "0",
-          "code_challenge" =>
-            Base.url_encode64(:crypto.hash(:sha256, request.pkce_verifier), padding: false)
-        })
-
-      {:ok, "https://idp.example.com/authorize?" <> query}
+      OIDC.Oidcc.authorize_url(request)
     end
 
     # The claims a test encoded into the code, as the validated ID token's.
@@ -90,6 +118,7 @@ defmodule Sanctum.Auth.OIDCReauthTest do
       restore(:ueberauth, Ueberauth, ueberauth)
     end)
 
+    start_supervised!({ProviderConfiguration, @issuer})
     seated!()
   end
 
@@ -199,10 +228,27 @@ defmodule Sanctum.Auth.OIDCReauthTest do
     test "forces a fresh login for one record, at the second redirect URI", %{ctx: ctx} do
       {secret, id} = asked!(ctx)
       {url, request} = begun!(ctx, id)
-      query = url |> URI.parse() |> Map.fetch!(:query) |> URI.decode_query()
+      uri = URI.parse(url)
+      query = URI.decode_query(uri.query)
 
+      # The URL `Oidcc` built at the issuer's authorization endpoint, from
+      # what the exchange handed it: the login forced fresh, the request's
+      # own redirect, nonce and state, and the PKCE challenge of its
+      # verifier.
+      assert %URI{scheme: "https", host: "idp.example.com", path: "/authorize"} = uri
       assert query["prompt"] == "login"
       assert query["max_age"] == "0"
+      assert query["response_type"] == "code"
+      assert query["client_id"] == "cid"
+      assert query["scope"] == "openid"
+      assert query["redirect_uri"] == request.redirect_uri
+      assert query["nonce"] == request.nonce
+      assert query["state"] == request.state
+      assert query["code_challenge_method"] == "S256"
+
+      assert query["code_challenge"] ==
+               Base.url_encode64(:crypto.hash(:sha256, request.pkce_verifier), padding: false)
+
       assert request.redirect_uri == Sanctum.Person.home() <> "/auth/oidcc/reauth"
       assert record(ctx, id).reauth_nonce == request.nonce
       refute request.nonce == id

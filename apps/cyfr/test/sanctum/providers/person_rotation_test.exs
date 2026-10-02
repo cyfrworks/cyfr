@@ -189,7 +189,10 @@ defmodule Sanctum.Providers.PersonRotationTest do
       assert row(person.user.id).live_public_key == before.live_public_key
 
       # The proof was asked for and never consumed: the repeat may use it.
-      assert [%{action: "key_rotation", state: "confirmed"}] = confirmations(person)
+      # (The person's passkey registration was confirmed by a record of its
+      # own.)
+      assert [%{state: "confirmed"}] =
+               for(c <- confirmations(person), c.action == "key_rotation", do: c)
     end
 
     test "a retry under a standing request id resumes it: no second key, no second proof" do

@@ -257,8 +257,10 @@ defmodule Sanctum.TestContext do
     * the context is given a real person when it names none
       (`person!/2`);
     * the person's software passkey (`Sanctum.TestContext.Authenticator`)
-      is registered once, through `Sanctum.Passkeys.register/2`'s local
-      first-method rule, on a new session of a local door;
+      is registered once, as `Sanctum.Passkeys.register/2` has the person
+      register their first (`passkey!/1`): confirmed with the code mailed
+      to their verified email, or, for a person who holds no fresh method,
+      at once under the local first-method rule;
     * the record is opened by `Sanctum.Consent.Authz.check/3` under
       `ctx`, so `ctx`'s own credential is its opener and alone repeats
       the change, and proven by the passkey's assertion over its digest
@@ -266,8 +268,9 @@ defmodule Sanctum.TestContext do
       surface, whatever surface `ctx` itself is: a key's context repeats
       the change it asked for once its person proved it in Prism.
 
-  A person whose first method was ever used, and who holds no passkey
-  this helper made, raises: a test that needs that path drives it itself.
+  A person whose first method was ever used, who holds no fresh method
+  and no passkey this helper made, raises: a test that needs that path
+  drives it itself.
   """
   @spec confirmed(Context.t(), atom(), map()) :: Context.t()
   def confirmed(%Context{} = ctx, action, change) do
@@ -479,9 +482,19 @@ defmodule Sanctum.TestContext do
     do: %{ctx | auth_method: :oidc, client_id: nil, plane: :external}
 
   @doc """
-  The person `user_id`'s software passkey, registered at this home once:
-  on a new session of a local door, under the local first-method rule
-  (`Sanctum.Passkeys.register/2`). Answers the authenticator.
+  The person `user_id`'s software passkey, registered at this home once,
+  as `Sanctum.Passkeys.register/2` has the person register their first.
+  Answers the authenticator.
+
+  A person who holds a fresh method here confirms the registration. A
+  fixture person (`person!/2`) holds one: a verified email, whose code the
+  suite's transport (`MailSink`) delivers to the asking process. The
+  registration is asked and confirmed on a new session of a local door
+  focused on the person's own athanor, minted for them as admission
+  mints one (`Sanctum.Provisioning.ensure_personal_athanor/1`) when they
+  have none, and the code mailed to them proves it. A person who holds no
+  fresh method (one with no email) registers it at once under the local
+  first-method rule; a test of that rule builds such a person itself.
   """
   def passkey!(user_id) when is_binary(user_id) do
     authenticator = Sanctum.TestContext.Authenticator.for_person(user_id)
@@ -496,34 +509,98 @@ defmodule Sanctum.TestContext do
         authenticator
 
       _none ->
-        # Focused nowhere: a passkey is the person's, and the write rechecks
-        # the session and the person alone, whatever seat a fixture's person
-        # holds or lacks.
-        session = %{session!(user_id) | athanor_id: nil}
-        {:ok, options} = Sanctum.Passkeys.register(session, %{})
-        credential = Sanctum.TestContext.Authenticator.registration(authenticator, options)
+        person = Context.build(user_id: user_id, auth_method: :oidc, authenticated: true)
 
-        case Sanctum.Passkeys.register(session, %{credential: credential}) do
-          {:ok, %{status: "active"}} ->
-            authenticator
-
-          other ->
-            raise "passkey!/1: #{user_id}'s first passkey was not registered: #{inspect(other)}"
+        if Sanctum.Passkeys.fresh_method?(person) do
+          confirmed_passkey!(user_id, authenticator)
+        else
+          first_passkey!(user_id, authenticator)
         end
+    end
+  end
+
+  # The local first-method rule, on a session focused nowhere: a passkey is
+  # the person's, and the write rechecks the session and the person alone,
+  # whatever seat a fixture's person holds or lacks.
+  defp first_passkey!(user_id, authenticator) do
+    session = %{session!(user_id) | athanor_id: nil}
+    {:ok, options} = Sanctum.Passkeys.register(session, %{})
+    credential = Sanctum.TestContext.Authenticator.registration(authenticator, options)
+
+    case Sanctum.Passkeys.register(session, %{credential: credential}) do
+      {:ok, %{status: "active"}} ->
+        authenticator
+
+      other ->
+        raise "passkey!/1: #{user_id}'s first passkey was not registered: #{inspect(other)}"
+    end
+  end
+
+  # The registration a fresh method confirms, asked on a session focused on
+  # the person's own athanor (a confirmation is opened in an athanor) and
+  # proven with the code mailed to their verified email.
+  defp confirmed_passkey!(user_id, authenticator) do
+    session = session!(user_id, "local", own_athanor!(user_id))
+    {:ok, options} = Sanctum.Passkeys.register(session, %{})
+    credential = Sanctum.TestContext.Authenticator.registration(authenticator, options)
+
+    with {:error, {:confirmation_required, %{id: id}}} <-
+           Sanctum.Passkeys.register(session, %{credential: credential}),
+         :ok <- mailed_proof(session, Prima.Confirmation.ref(id)),
+         {:ok, %{status: "active"}} <-
+           Sanctum.Passkeys.register(%{session | confirmation_id: id}, %{credential: credential}) do
+      authenticator
+    else
+      other ->
+        raise "passkey!/1: #{user_id}'s first passkey was not confirmed and registered: " <>
+                inspect(other)
+    end
+  end
+
+  # The confirmation `ref` proven with the code the suite's transport
+  # delivers to this process.
+  defp mailed_proof(session, ref) do
+    with {:ok, %{method: "email"}} <- Sanctum.Auth.EmailVerification.send_code(session, ref) do
+      receive do
+        {:confirmation_code_mail, mail} ->
+          code = Sanctum.TestContext.MailSink.code(mail)
+
+          case Sanctum.Auth.EmailVerification.verify_code(session, ref, code) do
+            {:ok, %{state: "confirmed"}} -> :ok
+            other -> other
+          end
+      after
+        5_000 -> {:error, :no_code_mailed}
+      end
+    end
+  end
+
+  # The person's own athanor, minted as admission mints it when they have
+  # none.
+  defp own_athanor!(user_id) do
+    case Sanctum.Tenancy.Users.personal_athanor_id(user_id) do
+      {:ok, athanor_id} ->
+        athanor_id
+
+      :none ->
+        {:ok, user} = Sanctum.Tenancy.Users.get(user_id)
+        {:ok, athanor} = Sanctum.Provisioning.ensure_personal_athanor(user)
+        athanor.id
     end
   end
 
   @doc """
   A context loaded from a new session of the person `user_id`, as the
   console holds one: `provider` (default `"local"`) is the door the
-  session records, which the first-method rule reads.
+  session records, which the first-method rule reads, and `athanor_id`
+  (default none) the athanor it is focused on, one the person stands in.
   """
-  def session!(user_id, provider \\ "local") when is_binary(user_id) do
+  def session!(user_id, provider \\ "local", athanor_id \\ nil) when is_binary(user_id) do
     base =
       Context.build(
         user_id: user_id,
         provider: provider,
-        athanor_id: nil,
+        athanor_id: athanor_id,
         permissions: Context.person_permissions(),
         auth_method: :oidc
       )

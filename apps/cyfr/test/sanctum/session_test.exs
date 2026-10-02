@@ -321,6 +321,116 @@ defmodule Sanctum.SessionTest do
     end
   end
 
+  describe "a remote person's key epoch" do
+    import Ecto.Query, only: [from: 2]
+
+    alias Sanctum.Test.DirectoryServer
+
+    setup %{ctx: ctx} do
+      tls = DirectoryServer.tls()
+      DirectoryServer.listen!()
+      DirectoryServer.seam!(tls)
+
+      on_exit(fn ->
+        Arca.Cache.delete_match(Arca.Cache.Keys.match_identity_unreachable())
+      end)
+
+      directory = DirectoryServer.start!(tls)
+      identity = DirectoryServer.identity!(directory.dir, directory.url)
+      :ok = DirectoryServer.remote_person!(ctx.user_id, identity)
+      %{dir: directory.dir, identity: identity}
+    end
+
+    defp sessions(user_id),
+      do: Arca.Repo.all(from(s in Arca.Schemas.Session, where: s.user_id == ^user_id))
+
+    defp recorded_epoch(%{token: token}) do
+      {:ok, %{identity_key_epoch: epoch}} =
+        Arca.SessionStorage.get_session(Session.token_hash(token))
+
+      epoch
+    end
+
+    test "a door's verified epoch must be the one the fresh read answers: a head moved since mints nothing",
+         %{ctx: ctx, dir: dir, identity: identity} do
+      verified = DirectoryServer.key_epoch(identity)
+      assert {:ok, session} = Session.create(ctx, key_epoch: verified)
+      assert recorded_epoch(session) == verified
+
+      # A rotation lands after the door verified under `verified`: the
+      # mint's own fresh read takes it in, retiring the session above, and
+      # mints nothing under either epoch.
+      rotated = DirectoryServer.rotate!(dir, identity)
+      assert {:error, :stale_key_epoch} = Session.create(ctx, key_epoch: verified)
+      assert sessions(ctx.user_id) == []
+
+      # The door verifies again, under the new head, and mints.
+      assert {:ok, again} = Session.create(ctx, key_epoch: DirectoryServer.key_epoch(rotated))
+      assert recorded_epoch(again) == DirectoryServer.key_epoch(rotated)
+
+      # A remote person's proof always stood on some head: none is no epoch
+      # of theirs.
+      assert {:error, :stale_key_epoch} = Session.create(ctx, key_epoch: nil)
+    end
+
+    test "a head advanced at this home between create's read and the insert leaves no session on the retired epoch, whichever door",
+         %{ctx: ctx, dir: dir, identity: identity} do
+      # A session under the first head, so that the mint's own fresh read,
+      # advancing the cache past it, announces its retirement: the
+      # observable point between that read and the insert.
+      assert {:ok, _first} = Session.create(ctx)
+      rotated = DirectoryServer.rotate!(dir, identity)
+      test = self()
+      user_id = ctx.user_id
+      handler = {__MODULE__, :between_read_and_insert, make_ref()}
+
+      :telemetry.attach(
+        handler,
+        [:cyfr, :sanctum, :sessions, :revoked],
+        fn _event, _measurements, meta, _ ->
+          if self() == test and meta[:user_id] == user_id and
+               Process.get(:advanced_in_window) == nil do
+            again = DirectoryServer.rotate!(dir, rotated)
+            {:ok, _head} = Sanctum.IdentityFreshness.fresh!(identity.identifier)
+            Process.put(:advanced_in_window, again)
+          end
+        end,
+        nil
+      )
+
+      on_exit(fn -> :telemetry.detach(handler) end)
+
+      # No `key_epoch:`, as every door but the passkey's: the insert's own
+      # fence, under the person's lock, holds the session to the head.
+      assert {:error, :stale_key_epoch} = Session.create(ctx)
+      :telemetry.detach(handler)
+      assert %{} = advanced = Process.get(:advanced_in_window)
+
+      assert {:ok, %{key_epoch: current}} =
+               Arca.DirectoryHeads.get(Prima.Actor.system(), identity.identifier)
+
+      assert current == DirectoryServer.key_epoch(advanced)
+      assert sessions(ctx.user_id) == []
+    end
+
+    test "a local person's door verified under no head, and nothing else stands for them" do
+      local =
+        Context.build(
+          user_id: "github|https://github.com|local-#{System.unique_integer([:positive])}",
+          email: "local@example.com",
+          provider: "github",
+          permissions: [:read]
+        )
+        |> Sanctum.TestContext.issuer!()
+
+      assert {:ok, session} = Session.create(local, key_epoch: nil)
+      assert recorded_epoch(session) == nil
+
+      assert {:error, :stale_key_epoch} =
+               Session.create(local, key_epoch: Prima.Digest.sha256("an epoch"))
+    end
+  end
+
   describe "the reserved provider restore" do
     # A restore attempt of the person's, at `phase`: the row the restore's
     # mint leaves, written as it is for the session store to read.

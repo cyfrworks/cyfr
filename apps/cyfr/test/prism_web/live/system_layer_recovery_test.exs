@@ -288,11 +288,13 @@ defmodule PrismWeb.SystemLayerRecoveryTest do
       refute log =~ seed
       assert log =~ ~s("recovery_secret" => "[FILTERED]")
 
-      # The preview the record stores says what the form said.
+      # The preview the record stores says what the form said (the
+      # enrollment's record; the person's passkey registration was confirmed
+      # by one of its own).
       [%{preview: preview}] =
         Arca.Repo.all(
           from(c in "pending_confirmations",
-            where: c.user_id == ^user.user_id,
+            where: c.user_id == ^user.user_id and c.action == "recovery_material",
             select: %{preview: c.preview}
           )
         )
