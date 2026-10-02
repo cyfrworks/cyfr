@@ -19,7 +19,7 @@ defmodule Sanctum.Auth.CyfrDoor do
 
   ## The challenge
 
-  `challenge/2` takes the carry fragment the person's browser brought
+  `challenge/1` takes the carry fragment the person's browser brought
   from their signing home (`Prima.Carry`: the signed envelope and its
   payload, `%{"genesis" => genesis}`) and, before any network use, holds
   the envelope's destination to this home (`Sanctum.Person.home/0`) and
@@ -31,6 +31,18 @@ defmodule Sanctum.Auth.CyfrDoor do
   private, metadata or redirected address) and verifies the envelope under
   the current live key (`Prima.Carry.Envelope.verify/4`): its signature,
   destination, action, payload digest, `key_epoch` and age.
+
+  That read, and the head it caches, come before any signature can be
+  checked: the envelope is signed by the live key, which only the head
+  names. So every carry that reaches it is counted first against the
+  installation's bound, 200 a minute, as the device families' unproven
+  attempts are (`Sanctum.DeviceCerts`): this node's count, which sheds a
+  flood without a database read, then the cell's, shared by every member
+  (`Arca.RequestRateWindows`), which reads its window first and writes
+  nothing past the cap. A carry refused there reads no directory. The
+  sign-in page bounds each address on its own (`PrismWeb.LoginLive`). A
+  head cached for an identifier no person here holds is removed once a
+  carry could no longer rely on it (`Sanctum.Carry.sweep/1`).
 
   It answers the challenge this home holds for that carry, as the string
   keyed map the browser's session cookie carries
@@ -77,6 +89,8 @@ defmodule Sanctum.Auth.CyfrDoor do
     * `:expired` — the challenge the cookie holds is past its expiry.
     * `:no_challenge` — the cookie holds no challenge.
     * `:identity_stale` — the directory could not be read fresh.
+    * `{:rate_limited, retry_after_ms}` — the installation's bound on
+      carries is spent; no directory was read.
     * `{:door, reason}` — the door refused the identity.
     * `:session_ended` — a retried login whose session has ended since.
     * `:receipt_conflict` — a retried login under another browser secret
@@ -96,9 +110,12 @@ defmodule Sanctum.Auth.CyfrDoor do
   @challenge_bytes 32
   @secret_bytes 32
   @held ~w(challenge challenge_id browser_secret action_id identifier source return_url key_epoch expires_at)
+  # The installation's bound on carries that reach a directory read.
+  @installation_cap 200
+  @window_ms 60_000
 
   @typedoc """
-  The challenge a browser's session cookie carries between `challenge/2`
+  The challenge a browser's session cookie carries between `challenge/1`
   and `callback/2`, string keyed: `challenge` (unpadded base64url of its
   32 bytes), `challenge_id`, `browser_secret`, `action_id`, `identifier`,
   `source`, `return_url`, `key_epoch` and `expires_at` (Unix
@@ -186,6 +203,7 @@ defmodule Sanctum.Auth.CyfrDoor do
          :ok <- destination(envelope, home),
          {:ok, genesis} <- payload_genesis(payload, envelope.identifier),
          {:ok, digest} <- payload_digest(payload),
+         :ok <- installation_room(),
          {:ok, state} <- fresh_state(envelope.identifier, genesis),
          {:ok, skew} <- skew_ms(),
          {:ok, envelope} <- verified_envelope(envelope, state, home, digest, skew) do
@@ -260,6 +278,30 @@ defmodule Sanctum.Auth.CyfrDoor do
     case Carry.payload_digest(payload) do
       {:ok, digest} -> {:ok, digest}
       {:error, _unread} -> {:error, :invalid_carry}
+    end
+  end
+
+  # Counted before the directory is read, whoever sent it: this node's
+  # count first, so past it a flood asks no database, then the cell's,
+  # whose claim reads the window before it counts and writes nothing past
+  # the cap. A store that cannot count reads no directory either.
+  defp installation_room do
+    case Prima.RateLimiter.check({:cyfr_carry, :installation}, @installation_cap, @window_ms) do
+      :ok ->
+        case Arca.RequestRateWindows.claim(
+               Prima.Actor.system(),
+               :cyfr_carry_installation,
+               "installation",
+               @installation_cap,
+               @window_ms
+             ) do
+          :ok -> :ok
+          {:error, {:rate_limited, retry_after_ms}} -> {:error, {:rate_limited, retry_after_ms}}
+          {:error, _unanswered} -> {:error, :unavailable}
+        end
+
+      {:deny, retry_after_s} ->
+        {:error, {:rate_limited, retry_after_s * 1_000}}
     end
   end
 

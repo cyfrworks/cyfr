@@ -8,14 +8,16 @@ defmodule Sanctum.CarryTest do
   key under the head the person's row holds, the genesis carried as its
   payload, bounded before anything is stored; and the navigation outcome
   recorded once, an exact retry answering it with nothing applied again
-  and with the requester's standing read again.
+  and with the requester's standing read again. The sweep also removes a
+  head a relying home's challenge cached for no one here, once a carry
+  could no longer rely on it.
   """
 
   use ExUnit.Case, async: false
 
   import Ecto.Query, only: [from: 2]
 
-  alias Arca.Schemas.{CarryAction, PersonIdentity}
+  alias Arca.Schemas.{CarryAction, DirectoryHead, PersonIdentity}
   alias Prima.Carry
   alias Prima.Carry.Envelope
   alias Prima.Identity
@@ -128,6 +130,35 @@ defmodule Sanctum.CarryTest do
     {:ok, digest} = Carry.payload_digest(began.payload)
     digest
   end
+
+  # A head cached for `identifier`, as a relying home's challenge caches
+  # one, last verified `ms` before the database's clock.
+  defp head!(identifier, ms) do
+    epoch = Prima.Digest.sha256("head-#{System.unique_integer()}")
+
+    {:ok, _} =
+      Arca.DirectoryHeads.put(Prima.Actor.system(), %{
+        identifier: identifier,
+        genesis: "genesis-bytes",
+        directory_url: "https://dir.example",
+        head_hash: epoch,
+        key_epoch: epoch,
+        recovery_epoch: epoch,
+        state: "{}"
+      })
+
+    {1, _} =
+      Arca.Repo.update_all(from(h in DirectoryHead, where: h.identifier == ^identifier),
+        set: [verified_at: DateTime.add(Arca.ServerMetaStorage.now!(), -ms, :millisecond)]
+      )
+
+    identifier
+  end
+
+  defp nobody, do: "per_" <> Prima.Digest.sha256_hex("nobody-#{System.unique_integer()}")
+
+  defp cached?(identifier),
+    do: Arca.Repo.exists?(from(h in DirectoryHead, where: h.identifier == ^identifier))
 
   describe "begin/3" do
     test "signs one action for one destination, carrying the genesis, and stores it pending" do
@@ -263,10 +294,66 @@ defmodule Sanctum.CarryTest do
           set: [expires_at: DateTime.add(DateTime.utc_now(), -1, :second)]
         )
 
-      assert {:ok, %{expired: 1, removed: 0}} = Sanctum.Carry.sweep(500)
+      assert {:ok, %{expired: 1, removed: 0}} = Sanctum.Carry.sweep(carries: 500, heads: 500)
       assert %{phase: "expired", payload: nil} = Arca.Repo.get!(CarryAction, gone.action_id)
       assert %{phase: "pending", payload: payload} = Arca.Repo.get!(CarryAction, open.action_id)
       assert is_binary(payload)
+    end
+
+    test "removes a head cached for no one here once a carry could no longer rely on it, and keeps a person's" do
+      lifetime = Arca.CarryActions.lifetime_ms()
+
+      # A person with a carry open: their head stays whatever its age.
+      person = enrolled!()
+      {:ok, _open} = Sanctum.Carry.begin(person.ctx, @destination, "join")
+      held = head!(Identity.identifier(person.genesis), 10 * lifetime)
+
+      orphan = head!(nobody(), lifetime + 1_000)
+      young = head!(nobody(), lifetime - 60_000)
+
+      assert {:ok, %{expired: 0, removed: 0, heads: 1}} =
+               Sanctum.Carry.sweep(carries: 500, heads: 500)
+
+      refute cached?(orphan)
+      assert cached?(held)
+      assert cached?(young)
+    end
+
+    test "removes at most its batch of heads in one pass" do
+      lifetime = Arca.CarryActions.lifetime_ms()
+      first = head!(nobody(), 3 * lifetime)
+      second = head!(nobody(), 2 * lifetime)
+
+      assert {:ok, %{heads: 1}} = Sanctum.Carry.sweep(heads: 1)
+      refute cached?(first)
+      assert cached?(second)
+
+      assert {:ok, %{heads: 1}} = Sanctum.Carry.sweep(heads: 1)
+      refute cached?(second)
+    end
+
+    test "sweeps only the kinds it names: heads alone move no carry, and carries alone no head" do
+      person = enrolled!()
+      {:ok, gone} = Sanctum.Carry.begin(person.ctx, @destination, "join")
+
+      {1, _} =
+        Arca.Repo.update_all(from(a in CarryAction, where: a.id == ^gone.action_id),
+          set: [expires_at: DateTime.add(DateTime.utc_now(), -1, :second)]
+        )
+
+      orphan = head!(nobody(), 2 * Arca.CarryActions.lifetime_ms())
+
+      assert {:ok, %{expired: 0, removed: 0, heads: 1}} = Sanctum.Carry.sweep(heads: 500)
+      refute cached?(orphan)
+      assert %{phase: "pending"} = Arca.Repo.get!(CarryAction, gone.action_id)
+
+      orphan = head!(nobody(), 2 * Arca.CarryActions.lifetime_ms())
+
+      assert {:ok, %{expired: 1, removed: 0, heads: 0}} = Sanctum.Carry.sweep(carries: 500)
+      assert cached?(orphan)
+      assert %{phase: "expired"} = Arca.Repo.get!(CarryAction, gone.action_id)
+
+      assert_raise ArgumentError, fn -> Sanctum.Carry.sweep(threads: 500) end
     end
   end
 

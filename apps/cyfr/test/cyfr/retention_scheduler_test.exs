@@ -419,6 +419,72 @@ defmodule Cyfr.RetentionSchedulerTest do
       assert stands.phase == "pending"
       assert is_binary(stands.payload)
     end
+
+    test "the scheduler keeps sweeping while a batch of heads fills", %{key: key} do
+      # One more head cached for no one here than one batch of the sweep
+      # takes, each verified longer ago than a carry lives, and one
+      # expired carry beside them.
+      heads = orphan_heads!(501)
+      expired = carry!()
+
+      {1, _} =
+        Arca.Repo.update_all(
+          from(a in Arca.Schemas.CarryAction, where: a.id == ^expired.id),
+          set: [expires_at: DateTime.add(Arca.ServerMetaStorage.now!(), -1, :second)]
+        )
+
+      previous = Logger.level()
+      Logger.configure(level: :info)
+      on_exit(fn -> Logger.configure(level: previous) end)
+
+      log =
+        ExUnit.CaptureLog.capture_log(fn ->
+          assert {:ok, summary} = RetentionScheduler.cycle(key: key, owner: "member-a")
+          assert "carry" in summary.steps
+        end)
+
+      Logger.configure(level: previous)
+
+      # A first batch filled with heads alone, so a second one ran.
+      assert Arca.Repo.aggregate(
+               from(h in Arca.Schemas.DirectoryHead, where: h.identifier in ^heads),
+               :count
+             ) == 0
+
+      assert log =~
+               "Expired 1 and removed 0 sign-in carry action(s), " <>
+                 "and removed 501 cached identity head(s) no one here holds"
+    end
+  end
+
+  # `n` heads cached for identifiers no person or invitation here names,
+  # each last verified twice a carry's lifetime ago.
+  defp orphan_heads!(n) do
+    now = Arca.ServerMetaStorage.now!()
+    verified_at = DateTime.add(now, -2 * Arca.CarryActions.lifetime_ms(), :millisecond)
+    batch = System.unique_integer([:positive])
+
+    rows =
+      for i <- 1..n do
+        epoch = Prima.Digest.sha256("orphan-#{batch}-#{i}")
+
+        %{
+          identifier: "per_" <> Prima.Digest.sha256_hex("orphan-#{batch}-#{i}"),
+          genesis: "genesis-bytes",
+          directory_url: "https://dir.example",
+          head_hash: epoch,
+          key_epoch: epoch,
+          recovery_epoch: epoch,
+          state: "{}",
+          verified_at: verified_at,
+          revision: 1,
+          inserted_at: now,
+          updated_at: now
+        }
+      end
+
+    {^n, _} = Arca.Repo.insert_all(Arca.Schemas.DirectoryHead, rows)
+    Enum.map(rows, & &1.identifier)
   end
 
   # A person of their own, and a pending carry of theirs to a hub.

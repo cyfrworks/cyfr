@@ -87,9 +87,12 @@ defmodule PrismWeb.LoginLive do
   @passkey_starts 30
   @passkey_window_ms 60_000
   # A `cyfr` sign-in's carry reads the person's directory before anything
-  # else answers, so each address has its own bound here, per node.
+  # else answers, so each address has its own bound here, per node; the
+  # installation's bound across every address is the door's
+  # (`Sanctum.Auth.CyfrDoor`), and both answer the same sentence.
   @cyfr_starts 30
   @cyfr_window_ms 60_000
+  @cyfr_rate_limited "Too many sign-ins from here. Try again in a minute."
   @not_owner "This server is not accepting sign-ins right now. Try again in a moment."
   @wrong_source "That sign-in came from another home than the one you named, so nobody was " <>
                   "signed in. Name your home below and begin again."
@@ -462,11 +465,14 @@ defmodule PrismWeb.LoginLive do
         {:ok, _another} ->
           assign(socket, error: @wrong_source, cyfr_pending: nil)
 
+        {:error, {:rate_limited, _retry_after_ms}} ->
+          assign(socket, error: @cyfr_rate_limited, cyfr_pending: nil)
+
         {:error, reason} ->
           assign(socket, error: cyfr_refused(reason), cyfr_pending: nil)
       end
     else
-      assign(socket, :error, "Too many sign-ins from here. Try again in a minute.")
+      assign(socket, :error, @cyfr_rate_limited)
     end
   end
 

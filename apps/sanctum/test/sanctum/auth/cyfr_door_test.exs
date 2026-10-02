@@ -16,7 +16,10 @@ defmodule Sanctum.Auth.CyfrDoorTest do
   door judges the identity by its identifier. An admitted person is a
   remote person here, with no key and no athanor of their own; their
   session records the head's `key_epoch` and commits with its login
-  receipt, and a retried login resumes it.
+  receipt, and a retried login resumes it. Every carry that reaches a
+  directory read is counted against the installation's 200 a minute
+  first, on this member and then in the cell: past it no directory is
+  read, and past this member's own count no database is asked.
   """
 
   # The resolver's observer, the directory seam, the private-egress
@@ -25,7 +28,7 @@ defmodule Sanctum.Auth.CyfrDoorTest do
 
   import Ecto.Query, only: [from: 2]
 
-  alias Arca.Schemas.{PersonIdentity, Session}
+  alias Arca.Schemas.{PersonIdentity, RequestRateWindow, Session}
   alias Sanctum.Auth.CyfrDoor
   alias Sanctum.Door.Store
   alias Sanctum.Test.DirectoryServer
@@ -74,6 +77,58 @@ defmodule Sanctum.Auth.CyfrDoorTest do
     do: Arca.Repo.one(from(p in PersonIdentity, where: p.identifier == ^identifier))
 
   defp drain, do: DirectoryServer.requests()
+
+  # `n` carries counted in the cell's installation window, as members
+  # before this one counted them.
+  defp spend!(n) do
+    for _ <- 1..n,
+        do:
+          :ok =
+            Arca.RequestRateWindows.claim(
+              Prima.Actor.system(),
+              :cyfr_carry_installation,
+              "installation",
+              200,
+              60_000
+            )
+  end
+
+  defp installation_window do
+    hash = Prima.Digest.sha256("installation")
+
+    Arca.Repo.one(
+      from(w in RequestRateWindow,
+        where: w.bucket == "cyfr_carry_installation" and w.key_hash == ^hash
+      )
+    )
+  end
+
+  # The tables this process's statements read or write from here on.
+  defp watch_sources! do
+    handler = "cyfr-door-sources-#{System.unique_integer([:positive])}"
+    parent = self()
+
+    :ok =
+      :telemetry.attach(
+        handler,
+        [:arca, :repo, :query],
+        fn _event, _measurements, meta, _config ->
+          if self() == parent and is_binary(meta[:source]),
+            do: send(parent, {:source, meta[:source]})
+        end,
+        nil
+      )
+
+    on_exit(fn -> :telemetry.detach(handler) end)
+  end
+
+  defp sources(acc \\ []) do
+    receive do
+      {:source, source} -> sources([source | acc])
+    after
+      0 -> acc |> Enum.reverse() |> Enum.uniq()
+    end
+  end
 
   # ---------------------------------------------------------------------------
   # The signing home
@@ -152,6 +207,9 @@ defmodule Sanctum.Auth.CyfrDoorTest do
       assert drain() == []
       refute_received {:resolved, _}
       refute_received :connected
+
+      # Nor does it cost the installation's bound anything.
+      assert installation_window() == nil
     end
 
     test "an envelope the directory's head does not vouch for is refused", context do
@@ -219,6 +277,69 @@ defmodule Sanctum.Auth.CyfrDoorTest do
       # It asked the one directory once, and never the address it named.
       assert [_one] = drain()
       refute_received {:resolved, "metadata.test"}
+    end
+  end
+
+  # ---------------------------------------------------------------------------
+  # The installation's bound
+  # ---------------------------------------------------------------------------
+
+  describe "the installation's bound on carries" do
+    test "200 a minute reach a directory, counted alike by every member: past them none does",
+         context do
+      identity = identity!(context)
+
+      # Every other member counted all but one of the minute's carries.
+      spend!(199)
+      %{fragment: last} = carry(identity, context.home)
+      assert {:ok, _held} = CyfrDoor.challenge(last)
+      assert [_read] = drain()
+
+      %{fragment: past} = carry(identity, context.home)
+      assert {:error, {:rate_limited, retry_after_ms}} = CyfrDoor.challenge(past)
+      assert retry_after_ms in 1..60_000
+      assert drain() == []
+
+      # Another member: its own count is fresh, the cell's is not.
+      Prima.RateLimiter.reset()
+      assert {:error, {:rate_limited, _}} = CyfrDoor.challenge(past)
+      assert drain() == []
+
+      # Nothing was counted past the cap.
+      assert %{count: 200} = installation_window()
+    end
+
+    test "past this member's own count a carry asks no database and reads no directory",
+         context do
+      identity = identity!(context)
+      spend!(200)
+      %{fragment: fragment} = carry(identity, context.home)
+
+      # Refused by the cell's count, each still counted on this member.
+      for _ <- 1..200, do: {:error, {:rate_limited, _}} = CyfrDoor.challenge(fragment)
+
+      watch_sources!()
+      assert {:error, {:rate_limited, retry_after_ms}} = CyfrDoor.challenge(fragment)
+      assert retry_after_ms in 1..60_000
+      assert sources() == []
+      assert drain() == []
+      assert %{count: 200} = installation_window()
+    end
+
+    test "a sign-in whose challenge was held before the bound was spent still completes",
+         context do
+      identity = identity!(context)
+      allow!(identity)
+      held = challenge!(identity, context.home)
+
+      spend!(199)
+      %{fragment: past} = carry(identity, context.home)
+      assert {:error, {:rate_limited, _}} = CyfrDoor.challenge(past)
+
+      assert {:ok, %{resumed: false}} =
+               CyfrDoor.callback(assertion(identity, held, context.home), held)
+
+      assert person_of(identity.identifier).provenance == "remote"
     end
   end
 

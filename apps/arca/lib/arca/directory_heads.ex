@@ -42,16 +42,26 @@ defmodule Arca.DirectoryHeads do
   before the advance and is retired by it, or waits for it and is
   refused.
 
+  ## A head no one holds
+
+  A sign-in carry's challenge caches its person's head before any
+  signature is checked (`Sanctum.Auth.CyfrDoor`), so a carry no one
+  completes would leave its head behind. `sweep/3` removes a head whose
+  identifier no person's identity row and no pending invitation names,
+  once it was last verified longer ago than the caller's bound. A head a
+  person holds stays whatever its age.
+
   ## Who writes
 
-  The platform's own actor, for the home's identity freshness. Rows are
-  plain maps (`Arca.Data`) with `state` as the JSON the caller stored.
+  The platform's own actor, for the home's identity freshness and its
+  housekeeping. Rows are plain maps (`Arca.Data`) with `state` as the JSON
+  the caller stored.
   """
 
   import Ecto.Query
 
   alias Arca.{DeviceCertificates, Passkeys, PendingConfirmations, SessionStorage}
-  alias Arca.Schemas.{DirectoryHead, PersonIdentity, User}
+  alias Arca.Schemas.{DirectoryHead, Membership, PersonIdentity, User}
 
   @typedoc "A cached head, as a plain map."
   @type row :: map()
@@ -237,7 +247,67 @@ defmodule Arca.DirectoryHeads do
 
   def delete(%Prima.Actor{}, _identifier), do: {:error, :cross_tenant}
 
+  @doc """
+  Remove at most `limit` cached heads no one here holds, least recently
+  verified first: a head whose identifier no person's identity row names
+  (`Arca.PersonIdentities`, whatever its provenance) and no pending
+  invitation names (an invited membership's `person_identifier`), last
+  verified more than `older_than_ms` before the database's clock now.
+  Answers how many went.
+
+  A person's own carry begins only once they hold an identity row here,
+  so a head an open carry action relies on is a person's and stays. A
+  head verified again while the sweep runs is judged on the row the
+  delete reaches, so one a challenge has just refreshed stays too.
+  """
+  @spec sweep(Prima.Actor.t(), pos_integer(), pos_integer()) ::
+          {:ok, non_neg_integer()} | {:error, :cross_tenant | :database_error}
+  def sweep(%Prima.Actor{scope: :platform, system: true}, older_than_ms, limit)
+      when is_integer(older_than_ms) and older_than_ms > 0 and is_integer(limit) and limit > 0 do
+    Arca.Repo.Errors.with_db_rescue("Arca.DirectoryHeads.sweep", fn ->
+      Arca.Repo.locking_transaction(fn -> unheld_swept(older_than_ms, limit) end)
+    end)
+  end
+
+  def sweep(%Prima.Actor{}, _older_than_ms, _limit), do: {:error, :cross_tenant}
+
   # ---- internals -------------------------------------------------------------
+
+  # The heads to go are chosen by a subquery, and the delete names the age
+  # again on the row it reaches: on PostgreSQL a delete that waited on a
+  # refresh re-reads the refreshed row's own columns, never the subquery's
+  # choice, so a head verified meanwhile is kept.
+  # arca:unscoped-ok the platform's housekeeping keeps a head any athanor's pending invitation names, whichever athanor it is.
+  defp unheld_swept(older_than_ms, limit) do
+    before = DateTime.add(Arca.ServerMetaStorage.now!(), -older_than_ms, :millisecond)
+
+    people = from(p in PersonIdentity, where: not is_nil(p.identifier), select: p.identifier)
+
+    invited =
+      from(m in Membership,
+        where: m.status == "invited" and not is_nil(m.person_identifier),
+        select: m.person_identifier
+      )
+
+    unheld =
+      from(h in DirectoryHead,
+        where:
+          h.verified_at < ^before and h.identifier not in subquery(people) and
+            h.identifier not in subquery(invited),
+        order_by: [asc: h.verified_at],
+        limit: ^limit,
+        select: h.identifier
+      )
+
+    {count, _} =
+      Arca.Repo.delete_all(
+        from(h in DirectoryHead,
+          where: h.identifier in subquery(unheld) and h.verified_at < ^before
+        )
+      )
+
+    count
+  end
 
   defp advance_in(identifier, expected_head, attrs) do
     lock_people!(identifier)
