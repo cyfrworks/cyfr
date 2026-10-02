@@ -13,9 +13,8 @@ defmodule Sanctum.Cipher.RotationTest do
   @k1 :crypto.strong_rand_bytes(32)
   @k2 :crypto.strong_rand_bytes(32)
 
-  setup do
-    :ok = Ecto.Adapters.SQL.Sandbox.checkout(Arca.Repo)
-    Ecto.Adapters.SQL.Sandbox.mode(Arca.Repo, {:shared, self()})
+  setup tags do
+    Arca.Test.Sandbox.setup!(tags)
 
     orig_kr = Application.get_env(:sanctum, :crypto_keyring)
 

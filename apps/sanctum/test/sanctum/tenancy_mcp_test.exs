@@ -34,9 +34,8 @@ defmodule Sanctum.TenancyMCPTest do
   alias Sanctum.Tenancy.Athanors
   alias Sanctum.Tenancy.Members
 
-  setup do
-    :ok = Ecto.Adapters.SQL.Sandbox.checkout(Arca.Repo)
-    Ecto.Adapters.SQL.Sandbox.mode(Arca.Repo, {:shared, self()})
+  setup tags do
+    Arca.Test.Sandbox.setup!(tags)
 
     user = "github|https://github.com|tenancy_#{System.unique_integer([:positive])}"
     {:ok, athanor} = Athanors.create_group(user, "Tenancy #{System.unique_integer([:positive])}")

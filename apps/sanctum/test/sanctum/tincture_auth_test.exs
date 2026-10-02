@@ -10,9 +10,8 @@ defmodule Sanctum.TinctureAuthTest do
   alias Sanctum.Context
   alias Sanctum.TinctureAuth
 
-  setup do
-    :ok = Ecto.Adapters.SQL.Sandbox.checkout(Arca.Repo)
-    Ecto.Adapters.SQL.Sandbox.mode(Arca.Repo, {:shared, self()})
+  setup tags do
+    Arca.Test.Sandbox.setup!(tags)
     {:ok, ctx: Sanctum.TestContext.local()}
   end
 

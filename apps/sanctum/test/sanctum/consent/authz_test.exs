@@ -60,9 +60,9 @@ defmodule Sanctum.Consent.AuthzTest do
   # Standing, from the store
   # ============================================================================
 
-  defp checkout(_tags) do
+  defp checkout(tags) do
     Arca.Cache.init()
-    :ok = Ecto.Adapters.SQL.Sandbox.checkout(Arca.Repo)
+    Arca.Test.Sandbox.setup!(tags)
     :ok
   end
 

@@ -20,10 +20,9 @@ defmodule Sanctum.Vault.OAuthGrantStandingTest do
 
   @redirect "https://cyfr.test/auth/oauth/callback"
 
-  setup do
+  setup tags do
     Arca.Cache.init()
-    :ok = Ecto.Adapters.SQL.Sandbox.checkout(Arca.Repo)
-    Ecto.Adapters.SQL.Sandbox.mode(Arca.Repo, {:shared, self()})
+    Arca.Test.Sandbox.setup!(tags)
     :ok
   end
 

@@ -30,9 +30,8 @@ defmodule Sanctum.Consent.LoaderSelectionTest do
     "projection" => %{"fields" => ["ANTHROPIC_API_KEY", "ANTHROPIC_ORG"]}
   }
 
-  setup do
-    :ok = Ecto.Adapters.SQL.Sandbox.checkout(Arca.Repo)
-    Ecto.Adapters.SQL.Sandbox.mode(Arca.Repo, {:shared, self()})
+  setup tags do
+    Arca.Test.Sandbox.setup!(tags)
 
     ctx = %Context{
       user_id: "loader_selection_user",

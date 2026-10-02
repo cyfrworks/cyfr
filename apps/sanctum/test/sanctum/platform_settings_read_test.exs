@@ -17,9 +17,8 @@ defmodule Sanctum.PlatformSettingsReadTest do
 
   alias Arca.PlatformSettings
 
-  setup do
-    :ok = Ecto.Adapters.SQL.Sandbox.checkout(Arca.Repo)
-    Ecto.Adapters.SQL.Sandbox.mode(Arca.Repo, {:shared, self()})
+  setup tags do
+    Arca.Test.Sandbox.setup!(tags)
 
     before = PlatformSettings.installed()
 

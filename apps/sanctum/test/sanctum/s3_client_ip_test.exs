@@ -10,9 +10,8 @@ defmodule Sanctum.S3ClientIpTest do
 
   alias Sanctum.ClientIp
 
-  setup do
-    :ok = Ecto.Adapters.SQL.Sandbox.checkout(Arca.Repo)
-    Ecto.Adapters.SQL.Sandbox.mode(Arca.Repo, {:shared, self()})
+  setup tags do
+    Arca.Test.Sandbox.setup!(tags)
 
     originals =
       for key <- [:trust_x_forwarded_for, :trusted_proxy_hops, :trusted_proxy_cidrs] do

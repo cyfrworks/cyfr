@@ -14,9 +14,8 @@ defmodule Sanctum.Tenancy.AthanorsDestroyTest do
   alias Sanctum.Context
   alias Sanctum.Tenancy.{Athanors, Users}
 
-  setup do
-    :ok = Ecto.Adapters.SQL.Sandbox.checkout(Arca.Repo)
-    Ecto.Adapters.SQL.Sandbox.mode(Arca.Repo, {:shared, self()})
+  setup tags do
+    Arca.Test.Sandbox.setup!(tags)
 
     test_path = Path.join(System.tmp_dir!(), "destroy_#{:rand.uniform(1_000_000)}")
     prev = Application.get_env(:arca, :base_path)

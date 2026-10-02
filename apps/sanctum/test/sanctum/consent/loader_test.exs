@@ -10,9 +10,8 @@ defmodule Sanctum.Consent.LoaderTest do
   alias Prima.JCS
   alias Prima.Test.AuthorityFixtures, as: Fixtures
 
-  setup do
-    :ok = Ecto.Adapters.SQL.Sandbox.checkout(Arca.Repo)
-    Ecto.Adapters.SQL.Sandbox.mode(Arca.Repo, {:shared, self()})
+  setup tags do
+    Arca.Test.Sandbox.setup!(tags)
 
     # A person at Prism: the admission path every case here models but the
     # origin cases below.

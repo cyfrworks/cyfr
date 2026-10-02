@@ -30,10 +30,9 @@ defmodule Sanctum.CallerFreshnessTest do
 
   @keys [:caller_memo_ttl_ms]
 
-  setup do
+  setup tags do
     Arca.Cache.init()
-    :ok = Ecto.Adapters.SQL.Sandbox.checkout(Arca.Repo)
-    Ecto.Adapters.SQL.Sandbox.mode(Arca.Repo, {:shared, self()})
+    Arca.Test.Sandbox.setup!(tags)
 
     prev = Map.new(@keys, &{&1, Application.get_env(:sanctum, &1)})
 
