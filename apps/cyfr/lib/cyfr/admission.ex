@@ -18,9 +18,11 @@ defmodule Cyfr.Admission do
     * `:device_channel` — a paired glass's socket on the endpoint, whose
       discrete intents reach the gate once the glass has proven its key.
 
-  Two are declared and refused as not built (`fetch/1`): `:unix_socket`,
-  a local socket on a device, and `:compositor`, a compositor or physical
-  jack, which appears as a body and never as a namespace.
+  Two are declared and deferred (`fetch/1`): `:unix_socket`, a local
+  socket on a device, and `:compositor`, a compositor or physical jack,
+  which appears as a body and never as a namespace. A deferred row is
+  refused by its shape: it names no listener, socket or entry, and the
+  boot refuses any listener or socket no built path names.
 
   Each built path names the listener it enters by, the endpoint sockets
   it enters through, and the modules of the admission entries it carries,
@@ -128,7 +130,7 @@ defmodule Cyfr.Admission do
       listener: nil,
       sockets: [],
       entries: [],
-      reason: "a local socket on a device; not built, so it admits nothing"
+      reason: "a local socket on a device; deferred, so it admits nothing"
     },
     %{
       path: :compositor,
@@ -138,7 +140,7 @@ defmodule Cyfr.Admission do
       entries: [],
       reason:
         "a compositor or physical jack, which appears as a body and never as a namespace; " <>
-          "not built, so it admits nothing"
+          "deferred, so it admits nothing"
     }
   ]
 
@@ -159,15 +161,15 @@ defmodule Cyfr.Admission do
   def built, do: Enum.map(@built, & &1.path)
 
   @doc """
-  The row of a built path. A path the roster declares and has not built
-  is `{:error, :not_built}`; anything else is `{:error, :not_on_roster}`.
+  The row of a built path. A path the roster declares and defers is
+  `{:error, :deferred}`; anything else is `{:error, :not_on_roster}`.
   Either way it admits nothing.
   """
-  @spec fetch(term()) :: {:ok, row()} | {:error, :not_built | :not_on_roster}
+  @spec fetch(term()) :: {:ok, row()} | {:error, :deferred | :not_on_roster}
   def fetch(path) do
     case Enum.find(@roster, &(&1.path == path)) do
       %{built: true} = row -> {:ok, row}
-      %{built: false} -> {:error, :not_built}
+      %{built: false} -> {:error, :deferred}
       nil -> {:error, :not_on_roster}
     end
   end

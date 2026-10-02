@@ -80,6 +80,15 @@ defmodule Prima.Confirmation.Preview do
 
   def decode(_value), do: {:error, {:invalid_field, "preview"}}
 
+  @doc """
+  The longest text a preview holds, in bytes: its `athanor`, its
+  `resource` and each detail value or list item. A value a change must
+  name in its preview, such as an enrollment's directory URL, fits within
+  it or the change cannot be previewed.
+  """
+  @spec max_text() :: pos_integer()
+  def max_text, do: @max_text
+
   @doc "The JSON map of a preview; `resource` and empty `details` are absent."
   @spec encode(t()) :: map()
   def encode(%__MODULE__{} = preview) do

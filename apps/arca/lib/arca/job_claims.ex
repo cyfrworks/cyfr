@@ -109,8 +109,9 @@ defmodule Arca.JobClaims do
 
   @doc """
   The `key` of a job the cell has exactly one of — retention, the boot
-  reconciliation, the seed release. The kinds that name a thing of their
-  own (a worker service, a credential) carry that thing's id instead.
+  reconciliation, the seed release, the notice of stored grants to make
+  again. The kinds that name a thing of their own (a worker service, a
+  credential) carry that thing's id instead.
   """
   @spec cell_key() :: String.t()
   def cell_key, do: "cell"

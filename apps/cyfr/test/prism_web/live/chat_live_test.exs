@@ -864,6 +864,35 @@ defmodule PrismWeb.ChatLiveTest do
     Cyfr.Test.Sandbox.end_views()
   end
 
+  # A text size under the 12 px a 720×720 glass is held to (WCAG 2.2 AA at
+  # that viewport, as the join proof measures it).
+  @under_12px ~r/text-\[(?:\d|1[01])(?:\.\d+)?px\]/
+
+  test "at 720×720 the page and its drawer draw no text under 12 px and no target under 24 px",
+       %{conn: conn} do
+    conn = log_in_user(conn, test_user(), athanor_id: athanor().id)
+    {view, _html} = mount_chat(conn)
+
+    # The pane at rest, with no model yet: the phone's Chats button, the
+    # workbench link and the way to a model are each at least 24 px high
+    # (`min-h-6`), and nothing it draws is smaller than `text-xs`.
+    refute render(pane(view)) =~ @under_12px
+    assert has_element?(pane(view), "button.min-h-6.text-xs[phx-click=toggle_rail]", "Chats")
+    assert has_element?(pane(view), "header a.min-h-6.text-xs", "AQUA")
+    assert has_element?(pane(view), "a.min-h-6", "Connect a model")
+
+    # The drawer the Chats button opens.
+    pane(view) |> element("button[phx-click=toggle_rail]") |> render_click()
+    refute view |> element("#thread-list") |> render() =~ @under_12px
+    assert has_element?(view, "#thread-list button.min-h-6.text-xs[phx-click=new_thread]")
+
+    row = "#athanor-#{athanor().id}"
+    assert has_element?(view, "#{row} button.min-h-6.w-6[phx-click=toggle_athanor]")
+    assert has_element?(view, "#{row} button.min-h-6[phx-click=open_athanor]")
+
+    Cyfr.Test.Sandbox.end_views()
+  end
+
   test "on a phone the drawer opens from the pane's Chats button and closes from its own ×",
        %{conn: conn} do
     conn = log_in_user(conn, test_user(), athanor_id: athanor().id)

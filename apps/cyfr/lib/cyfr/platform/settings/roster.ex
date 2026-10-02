@@ -167,7 +167,7 @@ defmodule Cyfr.Platform.Settings.Roster do
     {"CYFR_DB_POOL_SIZE", "The database connection pool's size (default 20)."},
     {"CYFR_DB_SSL", "TLS to the PostgreSQL server (default off)."},
     {"CYFR_DIRECTORY_URL",
-     "The identity directory this deployment enrolls its local people at, an `https` URL chosen explicitly: there is no hosted default, and choosing one is a choice about how long an identity lasts. Unset, local work and local pairing still work and enrollment is refused; a malformed value refuses the boot."},
+     "The identity directory this deployment enrolls its local people at, an `https` URL chosen explicitly: there is no hosted default, and choosing one is a choice about how long an identity lasts. Unset, local work and local pairing still work and enrollment is refused; a malformed value, or one longer than the 1,024 bytes an enrollment's confirmation preview can name, refuses the boot."},
     {"CYFR_GITHUB_CLIENT_ID",
      "The GitHub OAuth app's client ID for the device flow; `.env.example` ships a public one, which your own app's replaces."},
     {"CYFR_GOOGLE_CLIENT_ID",

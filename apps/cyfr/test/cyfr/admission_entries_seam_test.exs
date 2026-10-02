@@ -9,8 +9,7 @@ defmodule Cyfr.AdmissionEntriesSeamTest do
   caller had been established, and no second row from the transport.
 
   One driver per roster row: a row without a driver, or a driver without
-  a row, fails the seam. A row marked `pending: true` names an entry not
-  built yet; it has no driver and is not driven until it is. HTTP entries are driven through the endpoint;
+  a row, fails the seam. HTTP entries are driven through the endpoint;
   the gate heads and the HostAPI entry by direct call; the scheduler by
   a due schedule whose run admission fails; the device channel through
   its transport callbacks, since no WebSocket client is in the
@@ -28,8 +27,8 @@ defmodule Cyfr.AdmissionEntriesSeamTest do
 
   @mcp_unknown_tool_class "not_found"
 
-  # The rows this seam drives: every entry but a pending one.
-  @entries Enum.reject(Boundaries.admission_entries(), &Map.get(&1, :pending, false))
+  # The rows this seam drives: every entry.
+  @entries Boundaries.admission_entries()
 
   setup do
     Prima.RateLimiter.reset()
@@ -96,16 +95,12 @@ defmodule Cyfr.AdmissionEntriesSeamTest do
     assert Enum.sort(roster) == Enum.sort(Map.keys(@drivers))
   end
 
-  test "only a pending row goes undriven" do
-    undriven = Boundaries.admission_entries() -- @entries
-    assert Enum.all?(undriven, &(&1.pending == true))
-    refute Enum.any?(undriven, &Map.has_key?(@drivers, {&1.module, &1.site}))
+  test "no row is marked pending, so none goes undriven" do
+    refute Enum.any?(@entries, &Map.has_key?(&1, :pending))
   end
 
-  test "the device channel's row is active and driven" do
-    assert [row] = Enum.filter(Boundaries.admission_entries(), &(&1.module == DeviceChannel))
-    refute Map.has_key?(row, :pending)
-    assert row in @entries
+  test "the device channel's row is driven" do
+    assert [_row] = Enum.filter(@entries, &(&1.module == DeviceChannel))
     assert Map.fetch!(@drivers, {DeviceChannel, :handle_in}) == :device_channel_unproven
   end
 

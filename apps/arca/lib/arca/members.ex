@@ -730,6 +730,9 @@ defmodule Arca.Members do
   a seat and an archived room is not a room.
   """
   @spec shared_athanor?(Prima.Actor.t(), String.t(), String.t()) :: {:ok, boolean()} | refusal()
+  # arca:unscoped-ok whether two people share any athanor is asked across tenants by
+  # design, under the platform actor alone: the query is keyed by the two people, the
+  # athanor column only joins their memberships, and the answer is a boolean.
   def shared_athanor?(%Prima.Actor{scope: :platform}, user_a, user_b)
       when is_binary(user_a) and is_binary(user_b) do
     Arca.Repo.Errors.with_db_rescue("Arca.Members.shared_athanor?", fn ->

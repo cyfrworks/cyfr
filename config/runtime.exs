@@ -728,12 +728,14 @@ if config_env() != :test do
     # The directory this deployment enrolls its local people at: an https
     # directory URL, with no default, so an unset one leaves local operation
     # and local pairing working and enrollment refused. Nothing reads a
-    # directory from a request.
+    # directory from a request. An enrollment's confirmation preview names
+    # the directory, so it is no longer than a preview's text.
     {:ok, directory_url} = Prima.EnvValue.text(getenv, "CYFR_DIRECTORY_URL")
 
     unless is_nil(directory_url) or Sanctum.enrollment_directory?(directory_url) do
       raise "[Cyfr] FATAL: CYFR_DIRECTORY_URL must be an https directory URL: an origin " <>
-              "and an optional path, with no user, query or fragment."
+              "and an optional path, with no user, query or fragment, at most " <>
+              "#{Prima.Confirmation.Preview.max_text()} bytes long."
     end
 
     config :sanctum, :directory_url, directory_url

@@ -1299,7 +1299,7 @@ defmodule PrismWeb.ThreadPaneLive do
             :if={not @panel?}
             type="button"
             phx-click="toggle_rail"
-            class="md:hidden rounded px-1.5 py-1 text-[11px] uppercase tracking-wider text-gray-400 hover:bg-gray-800 hover:text-gray-200"
+            class="md:hidden min-h-6 rounded px-1.5 py-1 text-xs uppercase tracking-wider text-gray-400 hover:bg-gray-800 hover:text-gray-200"
             title="Chats"
           >
             Chats
@@ -1312,7 +1312,7 @@ defmodule PrismWeb.ThreadPaneLive do
           </span>
           <span
             :if={@athanor && @athanor.roster == "frozen"}
-            class="shrink-0 rounded bg-gray-800 px-1.5 py-0.5 text-[10px] text-gray-400"
+            class="shrink-0 rounded bg-gray-800 px-1.5 py-0.5 text-xs text-gray-400"
             title="A DM — a frozen two-person athanor; it ends when either of you leaves"
           >
             DM
@@ -1332,14 +1332,14 @@ defmodule PrismWeb.ThreadPaneLive do
           </span>
           <span
             :if={@queued > 0}
-            class="shrink-0 inline-flex items-center rounded bg-gray-800 px-1.5 py-0.5 text-[10px] text-gray-300"
+            class="shrink-0 inline-flex items-center rounded bg-gray-800 px-1.5 py-0.5 text-xs text-gray-300"
             title="Messages waiting for AQUA"
           >
             {@queued} queued
           </span>
           <span
             :if={MapSet.size(@grants) > 0}
-            class="shrink-0 inline-flex items-center rounded bg-gray-800 px-1.5 py-0.5 text-[10px] text-gray-300"
+            class="shrink-0 inline-flex items-center rounded bg-gray-800 px-1.5 py-0.5 text-xs text-gray-300"
             title="Standing answers in this chat"
           >
             +{MapSet.size(@grants)} this chat
@@ -1348,7 +1348,7 @@ defmodule PrismWeb.ThreadPaneLive do
             :if={@models_loaded and @models_by_provider != %{}}
             phx-change="select_model"
             name="model"
-            class="bg-transparent text-[10px] text-gray-600 hover:text-gray-300 border-none focus:ring-0 focus:outline-none cursor-pointer max-w-[14rem] truncate font-mono"
+            class="min-h-6 bg-transparent text-xs text-gray-600 hover:text-gray-300 border-none focus:ring-0 focus:outline-none cursor-pointer max-w-[14rem] truncate font-mono"
             title="Override model"
             aria-label="Override model"
           >
@@ -1365,7 +1365,7 @@ defmodule PrismWeb.ThreadPaneLive do
         <div class="flex items-center gap-1">
           <span
             :if={@running and @turn_user}
-            class="text-[11px] text-gray-500 truncate max-w-[12rem]"
+            class="text-xs text-gray-500 truncate max-w-[12rem]"
           >
             {label_for(@members, @turn_user, @context)} is asking…
           </span>
@@ -1373,7 +1373,7 @@ defmodule PrismWeb.ThreadPaneLive do
           <.link
             :if={not @panel?}
             navigate={PrismWeb.Focus.path(@athanor_route, "/aqua")}
-            class="rounded px-2 py-1 text-[11px] uppercase tracking-wider text-gray-500 hover:bg-gray-800 hover:text-gray-300"
+            class="inline-flex min-h-6 items-center rounded px-2 py-1 text-xs uppercase tracking-wider text-gray-500 hover:bg-gray-800 hover:text-gray-300"
           >
             AQUA
           </.link>
@@ -1422,7 +1422,7 @@ defmodule PrismWeb.ThreadPaneLive do
               <.link
                 :if={not @panel?}
                 navigate={PrismWeb.Focus.path(@athanor_route, "/aqua")}
-                class="text-blue-400 hover:text-blue-300"
+                class="inline-flex min-h-6 items-center text-blue-400 hover:text-blue-300"
               >
                 Connect a model
               </.link>
@@ -1437,7 +1437,7 @@ defmodule PrismWeb.ThreadPaneLive do
 
         <div
           :if={MapSet.size(@grants) > 0}
-          class="flex flex-wrap items-center gap-1.5 text-[10px] text-gray-500"
+          class="flex flex-wrap items-center gap-1.5 text-xs text-gray-500"
           data-test="standing-answers"
         >
           <span>standing answers in this chat:</span>
@@ -1453,7 +1453,7 @@ defmodule PrismWeb.ThreadPaneLive do
               phx-value-agent={agent}
               phx-value-tool={tool}
               phx-value-action={action}
-              class="text-gray-500 hover:text-gray-200"
+              class="inline-flex min-h-6 min-w-6 items-center justify-center text-gray-500 hover:text-gray-200"
               title="withdraw this standing answer"
             >
               ×
@@ -1464,20 +1464,20 @@ defmodule PrismWeb.ThreadPaneLive do
         <% pending = @pending_approvals %>
         <div
           :if={length(pending) > 1}
-          class="sticky top-0 z-10 flex items-center gap-2 rounded bg-amber-900/30 border border-amber-800/50 px-2.5 py-1 text-[11px] text-amber-200"
+          class="sticky top-0 z-10 flex items-center gap-2 rounded bg-amber-900/30 border border-amber-800/50 px-2.5 py-1 text-xs text-amber-200"
         >
           <span>{length(pending)} pending approvals</span>
           <button
             type="button"
             phx-click="approve_all_pending"
-            class="ml-auto rounded bg-amber-700 px-2 py-0.5 text-white hover:bg-amber-600"
+            class="ml-auto min-h-6 rounded bg-amber-700 px-2 py-0.5 text-white hover:bg-amber-600"
           >
             Approve all
           </button>
           <button
             type="button"
             phx-click="decline_all_pending"
-            class="rounded bg-gray-800 px-2 py-0.5 text-gray-300 hover:bg-gray-700"
+            class="min-h-6 rounded bg-gray-800 px-2 py-0.5 text-gray-300 hover:bg-gray-700"
           >
             Decline all
           </button>
@@ -1554,7 +1554,7 @@ defmodule PrismWeb.ThreadPaneLive do
         </div>
 
         <ul :if={@tool_activity != []} class="space-y-1">
-          <li :for={entry <- @tool_activity} class="flex items-center gap-2 text-[11px]">
+          <li :for={entry <- @tool_activity} class="flex items-center gap-2 text-xs">
             <span class="inline-flex items-center px-2 py-0.5 rounded bg-gray-800 text-gray-300 font-mono shrink-0">
               {entry.tool}
             </span>
@@ -1603,14 +1603,14 @@ defmodule PrismWeb.ThreadPaneLive do
         <button
           type="button"
           phx-click="restart_send"
-          class="ml-auto rounded bg-blue-700 px-2 py-0.5 text-white hover:bg-blue-600"
+          class="ml-auto min-h-6 rounded bg-blue-700 px-2 py-0.5 text-white hover:bg-blue-600"
         >
           Re-send
         </button>
         <button
           type="button"
           phx-click="dismiss_restart"
-          class="rounded px-2 py-0.5 text-gray-400 hover:text-gray-200"
+          class="min-h-6 rounded px-2 py-0.5 text-gray-400 hover:text-gray-200"
         >
           Dismiss
         </button>
@@ -1626,14 +1626,14 @@ defmodule PrismWeb.ThreadPaneLive do
         <button
           type="button"
           phx-click="retry_send"
-          class="ml-auto rounded bg-amber-700 px-2 py-0.5 text-white hover:bg-amber-600"
+          class="ml-auto min-h-6 rounded bg-amber-700 px-2 py-0.5 text-white hover:bg-amber-600"
         >
           Retry
         </button>
         <button
           type="button"
           phx-click="discard_send"
-          class="rounded px-2 py-0.5 text-gray-400 hover:text-gray-200"
+          class="min-h-6 rounded px-2 py-0.5 text-gray-400 hover:text-gray-200"
         >
           Discard
         </button>
@@ -1642,17 +1642,19 @@ defmodule PrismWeb.ThreadPaneLive do
       <div
         :if={@links != []}
         id={@dom <> "-links"}
-        class="flex flex-col gap-1 border-t border-gray-800 px-3 py-1.5 text-[11px] text-gray-500"
+        class="flex flex-col gap-1 border-t border-gray-800 px-3 py-1.5 text-xs text-gray-500"
       >
         <div :for={to <- @links} class="flex min-w-0 items-center gap-2">
           <span class="shrink-0">AQUA points to</span>
-          <.link navigate={to} class="truncate text-blue-400 hover:text-blue-300">{to}</.link>
+          <.link navigate={to} class="truncate leading-6 text-blue-400 hover:text-blue-300">
+            {to}
+          </.link>
           <button
             type="button"
             phx-click="dismiss_link"
             phx-value-to={to}
             aria-label="Dismiss"
-            class="ml-auto shrink-0 px-1 text-gray-500 hover:text-gray-200"
+            class="ml-auto min-h-6 min-w-6 shrink-0 px-1 text-gray-500 hover:text-gray-200"
           >
             ×
           </button>
@@ -1663,13 +1665,13 @@ defmodule PrismWeb.ThreadPaneLive do
         :if={@panel? and reads_room?(@room, @thread)}
         id={@dom <> "-read-room"}
         title="Each message you send here carries what the room shows — read for you, never kept"
-        class="flex cursor-pointer items-center gap-2 border-t border-gray-800 px-3 py-1 text-[11px] text-gray-500"
+        class="flex cursor-pointer items-center gap-2 border-t border-gray-800 px-3 py-1 text-xs text-gray-500"
       >
         <input
           type="checkbox"
           phx-click="toggle_read_room"
           checked={@read_room?}
-          class="h-3 w-3 rounded border-gray-700 bg-gray-900"
+          class="h-6 w-6 rounded border-gray-700 bg-gray-900"
         />
         <span class="truncate">Read {PrismWeb.RoomFeed.label(@room)} with each message</span>
       </label>
@@ -1682,7 +1684,7 @@ defmodule PrismWeb.ThreadPaneLive do
         <div :if={@uploads.attachments.entries != []} class="flex flex-wrap gap-1">
           <div
             :for={entry <- @uploads.attachments.entries}
-            class="flex items-center gap-1 rounded bg-gray-800 px-2 py-0.5 text-[11px]"
+            class="flex items-center gap-1 rounded bg-gray-800 px-2 py-0.5 text-xs"
           >
             <span class="text-gray-300 truncate max-w-[12rem]">{entry.client_name}</span>
             <span :if={entry.progress > 0 and entry.progress < 100} class="text-gray-500">
@@ -1692,7 +1694,7 @@ defmodule PrismWeb.ThreadPaneLive do
               type="button"
               phx-click="cancel_upload"
               phx-value-ref={entry.ref}
-              class="text-gray-500 hover:text-red-400"
+              class="inline-flex min-h-6 min-w-6 items-center justify-center text-gray-500 hover:text-red-400"
               aria-label="Remove"
             >
               ×
@@ -1741,7 +1743,7 @@ defmodule PrismWeb.ThreadPaneLive do
         </div>
       </form>
 
-      <div class="border-t border-gray-800 px-3 py-1.5 text-[11px] text-gray-500 flex items-center justify-between gap-3">
+      <div class="border-t border-gray-800 px-3 py-1.5 text-xs text-gray-500 flex items-center justify-between gap-3">
         <span class="truncate">
           {if @thread, do: @thread.title, else: "New thread"}
         </span>
@@ -1767,7 +1769,7 @@ defmodule PrismWeb.ThreadPaneLive do
 
     ~H"""
     <div class={["flex flex-col", role_align(@role)]}>
-      <span :if={@author} class="text-[10px] text-gray-500 mb-0.5 px-1">{@author}</span>
+      <span :if={@author} class="text-xs text-gray-500 mb-0.5 px-1">{@author}</span>
       <div class={[
         "max-w-[85%] rounded-lg px-3 py-1.5 text-sm break-words",
         role_class(@role)
@@ -1790,13 +1792,13 @@ defmodule PrismWeb.ThreadPaneLive do
               :if={@attachment_href && a["stored_name"]}
               href={@attachment_href.(a["stored_name"])}
               download={a["filename"]}
-              class="inline-flex items-center rounded bg-black/20 px-1.5 py-0.5 text-[10px] hover:bg-black/40 underline-offset-2 hover:underline"
+              class="inline-flex min-h-6 items-center rounded bg-black/20 px-1.5 py-0.5 text-xs hover:bg-black/40 underline-offset-2 hover:underline"
             >
               📎 {a["filename"]}
             </a>
             <span
               :if={!(@attachment_href && a["stored_name"])}
-              class="inline-flex items-center rounded bg-black/20 px-1.5 py-0.5 text-[10px]"
+              class="inline-flex items-center rounded bg-black/20 px-1.5 py-0.5 text-xs"
             >
               📎 {a["filename"]}
             </span>
@@ -1819,7 +1821,7 @@ defmodule PrismWeb.ThreadPaneLive do
   # hover to reach it by on a narrow screen, so there it always shows.
   defp aloud_button_class do
     "opacity-0 group-hover/aloud:opacity-100 group-focus-within/aloud:opacity-100 " <>
-      "focus-visible:opacity-100 max-md:opacity-100 text-[10px] text-gray-500 hover:text-gray-300 px-1"
+      "focus-visible:opacity-100 max-md:opacity-100 min-h-6 text-xs text-gray-500 hover:text-gray-300 px-1"
   end
 
   defp role_of(%{kind: "error"}), do: "error"

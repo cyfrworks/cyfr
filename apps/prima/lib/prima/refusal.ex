@@ -586,10 +586,6 @@ defmodule Prima.Refusal do
   defp row(:service_unavailable),
     do: {:unavailable, "The service is unavailable — retry shortly"}
 
-  # An operation declared on the table whose handler does not do its work
-  # yet: a refusal the caller can read, not a failure of this server.
-  defp row(:not_built), do: {:unavailable, "This operation is not built yet."}
-
   # A sensitive change's refusals that are no denial: the proof the change
   # needs cannot be given here, or not yet.
   defp row(:remote_identity_unavailable),

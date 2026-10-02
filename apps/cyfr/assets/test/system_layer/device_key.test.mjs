@@ -1221,6 +1221,55 @@ describe("a certificate another home issued", () => {
     assert.equal(h.sockets.length, 1, "no connection is opened under the refused certificate")
   })
 
+  // The threshold by its number, not the constant: two unreachable
+  // renewals after a 4408 are not yet a lost home, and the third is.
+  test("after a close 4408, two unreachable renewals make no offer; the third does", async () => {
+    assert.equal(UNREACHABLE_OFFER, 3)
+    const {glass, h, deviceKey, certificate, issuer} = await remoteGlass({fetchOptions: {unreachable: true}})
+    await glass.start()
+    const socket = h.socket()
+    socket.onopen()
+    await proved(socket, deviceKey)
+    home(socket, standing(certificate))
+    await settle()
+    socket.onclose({code: 4408, reason: "unauthenticated"})
+
+    for (const tries of [1, 2]) {
+      h.timers.at(-1).fun()
+      await until(() => issuer.calls.length >= tries && glass.status === "waiting", `renewal try ${tries}`)
+      await settle()
+      assert.equal(glass.certifyAgain, false, `no offer after ${tries} unreachable renewals`)
+      assert.equal(glass.certifyReason, null)
+    }
+
+    h.timers.at(-1).fun()
+    await until(() => issuer.calls.length >= 3, "renewal try 3")
+    await settle()
+    assert.equal(glass.certifyAgain, true, "the offer after 3 unreachable renewals")
+    assert.equal(glass.certifyReason, "unreachable")
+  })
+
+  // An issuer this home never refused the certificate for is only slow:
+  // the glass keeps asking it, and does not offer to certify again.
+  test("without a close 4408, an issuer unreachable however often makes no offer", async () => {
+    const {glass, h, issuer} = await remoteGlass({clock: 0, expiresAt: 1, fetchOptions: {unreachable: true}})
+    h.advance(10)
+    await glass.start()
+    await until(() => issuer.calls.length >= 1 && glass.status === "waiting", "the first renewal at the issuer")
+
+    for (let tries = 2; tries <= 6; tries++) {
+      h.timers.at(-1).fun()
+      await until(() => issuer.calls.length >= tries && glass.status === "waiting", `renewal try ${tries}`)
+      await settle()
+    }
+
+    assert.ok(issuer.calls.length >= 6, "the issuer was asked six times")
+    assert.equal(glass.refusedHere, false, "this home never refused the certificate")
+    assert.equal(glass.certifyAgain, false)
+    assert.equal(glass.certifyReason, null)
+    assert.equal(h.sockets.length, 0, "no connection is opened under the expired certificate")
+  })
+
   test("the offer made while the issuer could not be reached is withdrawn once it renews", async () => {
     const keys = await generateKeyPair(subtle)
     const deviceKey = await publicKeyB64(keys.publicKey, subtle)

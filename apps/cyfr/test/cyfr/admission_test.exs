@@ -7,8 +7,8 @@ defmodule Cyfr.AdmissionTest do
 
   Every admission entry `Cyfr.Boundaries.admission_entries/0` rosters
   belongs to a built path, and every module a built path names is an
-  entry's; a path the roster declares and has not built, and one it does
-  not name, admit nothing. The boot reads the roster: a socket the
+  entry's; a path the roster declares and defers, and one it does not
+  name, admit nothing. The boot reads the roster: a socket the
   endpoint mounts, or a listener the running tree holds, that no built
   path names refuses it, naming what it found.
   """
@@ -68,9 +68,9 @@ defmodule Cyfr.AdmissionTest do
       assert Enum.sort(row.entries) == ["Emissary.Web.DeviceChannel", "Grimoire"]
     end
 
-    test "a path declared and not built admits nothing, and names nothing it would carry" do
+    test "a path declared and deferred admits nothing, and names nothing it would carry" do
       for path <- [:unix_socket, :compositor] do
-        assert Admission.fetch(path) == {:error, :not_built}
+        assert Admission.fetch(path) == {:error, :deferred}
         row = Enum.find(Admission.roster(), &(&1.path == path))
         assert %{built: false, listener: nil, sockets: [], entries: []} = row
       end

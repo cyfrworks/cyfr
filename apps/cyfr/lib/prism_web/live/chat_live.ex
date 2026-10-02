@@ -843,7 +843,7 @@ defmodule PrismWeb.ChatLive do
               type="button"
               phx-click="new_thread"
               disabled={is_nil(@athanor)}
-              class="rounded px-2 py-1 text-[11px] uppercase tracking-wider text-gray-400 hover:bg-gray-800 hover:text-gray-200 disabled:opacity-50"
+              class="min-h-6 rounded px-2 py-1 text-xs uppercase tracking-wider text-gray-400 hover:bg-gray-800 hover:text-gray-200 disabled:opacity-50"
               title={
                 if @athanor,
                   do: "Start a new thread in #{@athanor_label}",
@@ -874,7 +874,7 @@ defmodule PrismWeb.ChatLive do
             <% current? = @athanor && row.athanor.id == @athanor.id %>
             <% unfolded? = MapSet.member?(@expanded, row.athanor.id) %>
             <div class={[
-              "flex items-center gap-1 pl-1 pr-3 py-1.5 text-[11px] uppercase tracking-wider",
+              "flex items-center gap-1 pl-1 pr-3 py-1.5 text-xs uppercase tracking-wider",
               if(current?, do: "text-gray-200", else: "text-gray-500")
             ]}>
               <button
@@ -883,7 +883,7 @@ defmodule PrismWeb.ChatLive do
                 phx-value-id={row.athanor.id}
                 aria-expanded={to_string(unfolded?)}
                 aria-label={"Threads of " <> row.label}
-                class="w-5 shrink-0 rounded text-center text-gray-600 hover:text-gray-300"
+                class="min-h-6 w-6 shrink-0 rounded text-center text-gray-600 hover:text-gray-300"
               >
                 <span aria-hidden="true">{if unfolded?, do: "▾", else: "▸"}</span>
               </button>
@@ -892,13 +892,13 @@ defmodule PrismWeb.ChatLive do
                 phx-click="open_athanor"
                 phx-value-route={row.route}
                 aria-current={current? && "true"}
-                class="flex flex-1 min-w-0 items-center gap-2 text-left hover:text-gray-200"
+                class="flex min-h-6 flex-1 min-w-0 items-center gap-2 text-left hover:text-gray-200"
               >
                 <span class="truncate">{row.label}</span>
-                <span :if={row.kind == :dm} class="text-[9px] text-gray-600 normal-case">
+                <span :if={row.kind == :dm} class="text-xs text-gray-600 normal-case">
                   DM
                 </span>
-                <span class="ml-auto text-[10px] text-gray-600 normal-case">
+                <span class="ml-auto text-xs text-gray-600 normal-case">
                   {length(row.threads)}
                 </span>
               </button>
@@ -926,7 +926,7 @@ defmodule PrismWeb.ChatLive do
                   phx-click="toggle_other"
                   phx-value-id={row.athanor.id}
                   aria-expanded={to_string(other_open?)}
-                  class="w-full px-4 py-1 text-left text-[10px] uppercase tracking-wider text-gray-600 hover:text-gray-400"
+                  class="min-h-6 w-full px-4 py-1 text-left text-xs uppercase tracking-wider text-gray-600 hover:text-gray-400"
                 >
                   Other threads ({length(other)})
                 </button>
@@ -951,7 +951,7 @@ defmodule PrismWeb.ChatLive do
           <%!-- People you share an athanor with: a click is a DM, found or
                 minted, opened here — the athanor switcher does not move. --%>
           <div :if={@people != []} class="border-b border-gray-800/60">
-            <p class="px-3 py-1.5 text-[11px] uppercase tracking-wider text-gray-500">People</p>
+            <p class="px-3 py-1.5 text-xs uppercase tracking-wider text-gray-500">People</p>
             <ul>
               <li :for={person <- @people}>
                 <button
@@ -987,7 +987,7 @@ defmodule PrismWeb.ChatLive do
               <button
                 type="button"
                 phx-click="provision"
-                class="shrink-0 rounded px-2 py-1 text-[11px] uppercase tracking-wider bg-amber-800/60 text-amber-100 hover:bg-amber-700/80"
+                class="min-h-6 shrink-0 rounded px-2 py-1 text-xs uppercase tracking-wider bg-amber-800/60 text-amber-100 hover:bg-amber-700/80"
               >
                 Retry
               </button>
@@ -1015,7 +1015,7 @@ defmodule PrismWeb.ChatLive do
       <.modal id="aloud-picker" show={not is_nil(@aloud_for)} on_cancel={JS.push("aloud_cancel")}>
         <div class="space-y-3">
           <h3 class="text-sm font-medium text-gray-200">Say aloud</h3>
-          <p class="text-[11px] text-gray-500">
+          <p class="text-xs text-gray-500">
             A copy of the line lands on an athanor's thread, attributed to you.
             This thread keeps the original.
           </p>
@@ -1025,7 +1025,7 @@ defmodule PrismWeb.ChatLive do
           </div>
 
           <div :if={@aloud_targets != []} class="space-y-1">
-            <p class="text-[10px] uppercase tracking-wider text-gray-500">Athanor</p>
+            <p class="text-xs uppercase tracking-wider text-gray-500">Athanor</p>
             <button
               :for={t <- @aloud_targets}
               type="button"
@@ -1040,12 +1040,12 @@ defmodule PrismWeb.ChatLive do
               ]}
             >
               {t.name}
-              <span :if={t.kind == :dm} class="text-[10px] text-gray-500 ml-1">DM</span>
+              <span :if={t.kind == :dm} class="text-xs text-gray-500 ml-1">DM</span>
             </button>
           </div>
 
           <div :if={@aloud_athanor} class="space-y-1">
-            <p class="text-[10px] uppercase tracking-wider text-gray-500">Thread</p>
+            <p class="text-xs uppercase tracking-wider text-gray-500">Thread</p>
             <div :if={@aloud_threads == []} class="text-xs text-gray-500">
               That athanor has no threads yet.
             </div>
@@ -1153,7 +1153,7 @@ defmodule PrismWeb.ChatLive do
         <p class={["truncate", if(@followed, do: "text-gray-200", else: "text-gray-400")]}>
           {@thread.title}
         </p>
-        <p class="text-[10px] text-gray-600 mt-0.5">
+        <p class="text-xs text-gray-600 mt-0.5">
           {Calendar.strftime(@thread.last_message_at || @thread.inserted_at, "%b %d %H:%M")}
         </p>
       </button>
@@ -1162,7 +1162,7 @@ defmodule PrismWeb.ChatLive do
         type="button"
         phx-click={if @followed, do: "unfollow_thread", else: "follow_thread"}
         phx-value-id={@thread.id}
-        class="shrink-0 py-2 text-[10px] text-gray-500 hover:text-gray-200 md:opacity-0 md:group-hover:opacity-100 md:group-focus-within:opacity-100 md:focus-visible:opacity-100"
+        class="shrink-0 py-2 text-xs text-gray-500 hover:text-gray-200 md:opacity-0 md:group-hover:opacity-100 md:group-focus-within:opacity-100 md:focus-visible:opacity-100"
       >
         {if @followed, do: "Unfollow", else: "Follow"}
       </button>
@@ -1171,7 +1171,7 @@ defmodule PrismWeb.ChatLive do
         type="button"
         phx-click="delete_thread"
         phx-value-id={@thread.id}
-        class="shrink-0 py-2 text-gray-500 hover:text-red-400 md:opacity-0 md:group-hover:opacity-100 md:group-focus-within:opacity-100 md:focus-visible:opacity-100"
+        class="min-w-6 shrink-0 py-2 text-gray-500 hover:text-red-400 md:opacity-0 md:group-hover:opacity-100 md:group-focus-within:opacity-100 md:focus-visible:opacity-100"
         data-confirm="Delete this thread for everyone?"
         aria-label="Delete"
       >

@@ -24,7 +24,7 @@ defmodule Arca.Schemas.JobClaim do
 
   @primary_key {:id, :string, autogenerate: false}
 
-  @kinds ~w(retention bootstrap seed_release oauth_refresh worker_watch mcp_backend)
+  @kinds ~w(retention bootstrap seed_release regrant_notice oauth_refresh worker_watch mcp_backend)
 
   @type t :: %__MODULE__{}
 

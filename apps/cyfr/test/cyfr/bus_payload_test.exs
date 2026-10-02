@@ -165,9 +165,6 @@ defmodule Cyfr.BusPayloadTest do
       assert Enum.sort(exported) == Bus.topics() |> Enum.map(& &1.key) |> Enum.sort()
     end
 
-    # A pending row is published before the modules it names as consumers
-    # exist: its consumers are neither required nor looked for until the
-    # row stops being pending.
     test "every topic has a scope, a template, a reason, producers and consumers" do
       for row <- Bus.topics() do
         assert row.scope in [:tenant, :global, :page]
@@ -182,15 +179,11 @@ defmodule Cyfr.BusPayloadTest do
       assert roster_gaps(row) == [:no_producer, :no_consumer]
     end
 
-    test "only a pending row goes without its consumers, and no row is pending" do
+    test "no row is pending, and a marker excuses none from its consumers" do
+      assert for(row <- Bus.topics(), Map.has_key?(row, :pending), do: row.key) == []
+
       later = %{key: :later, struct: Webhooks, producers: ["X"], consumers: [], pending: true}
-      assert roster_gaps(later) == []
-      assert roster_gaps(%{later | pending: false}) == [:no_consumer]
-
-      # A pending row still needs its producer.
-      assert roster_gaps(%{later | producers: []}) == [:no_producer]
-
-      assert for(row <- Bus.topics(), pending?(row), do: row.key) == []
+      assert roster_gaps(later) == [:no_consumer]
     end
 
     test "a person's confirmations are heard through their stream alone" do
@@ -219,7 +212,6 @@ defmodule Cyfr.BusPayloadTest do
       found =
         for row <- Bus.topics(),
             {role, names} <- [consumers: row.consumers, producers: row.producers],
-            not (role == :consumers and pending?(row)),
             name <- names,
             # A stream's grant holder hears the topic through the stream
             # delivery, which matches the roster's struct for the topic.
@@ -420,13 +412,11 @@ defmodule Cyfr.BusPayloadTest do
     Enum.reject(
       [
         if(row.producers == [], do: :no_producer),
-        if(row.consumers == [] and not pending?(row), do: :no_consumer)
+        if(row.consumers == [], do: :no_consumer)
       ],
       &is_nil/1
     )
   end
-
-  defp pending?(row), do: Map.get(row, :pending, false) == true
 
   defp source_of(name) do
     module = Module.concat([name])
