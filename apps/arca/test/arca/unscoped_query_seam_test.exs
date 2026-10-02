@@ -208,6 +208,10 @@ defmodule Arca.UnscopedQuerySeamTest do
     "Arca.Schemas.Passkey" =>
       "a person's credential at this home, keyed by the person and its RP ID; revoked " <>
         "with the person, never with an athanor",
+    "Arca.Schemas.DeviceCertification" =>
+      "a person's certification of a device at another home, keyed by the person, that " <>
+        "home and its client; the athanor it names is the other home's, not one of this " <>
+        "home's",
     "Arca.Schemas.InstallationClaim" =>
       "the node's one claim by a restore, before any person or athanor exists",
     "Arca.Schemas.RequestRateWindow" =>

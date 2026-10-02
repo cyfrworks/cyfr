@@ -14,10 +14,17 @@ defmodule PrismWeb.PairLive do
   view: `pair_start` with the secret and the device key, answered with
   the `pair` challenge to sign, then `pair_proof` with the signature,
   answered with the paired client's id and its first certificate. The
-  script then connects the device channel under that certificate. A
-  person whose identity is at another home brings, with both steps, the
-  `certificate` their own home issued for this device and the client id
-  the invitation reserved, and pairs under it.
+  script then connects the device channel under that certificate.
+
+  A person whose identity is at another home pairs under the certificate
+  their own home issues. Their first `pair_start`, with no certificate, is
+  answered beside the challenge `certify: {audience, athanor,
+  client_id}`, what their home is to certify. The script keeps the code
+  and the key pair for at most the invitation's five minutes, asks for
+  their home's address, and goes there (`<home>/carry#certify=…`), where
+  they confirm the certification; their home sends the browser back here
+  with the certificate in the fragment (`/pair#certificate=…`), and both
+  steps are made again with it.
 
   Each step is `pairing.complete` through `PrismWeb.Ops.call_tool/3`
   under a context this view builds itself (`Sanctum.Context.build/1`):
@@ -30,7 +37,8 @@ defmodule PrismWeb.PairLive do
 
   Opened again with no fragment, by a glass that holds its key and
   certificate, the page connects the device channel directly, renewing
-  first when the certificate has expired. The script draws the glass's
+  first when the certificate has expired: at this home for a certificate
+  it issued, and at the person's own home for one that home issued. The script draws the glass's
   confirmation prompts itself, from `confirmation.pending` and the
   `confirmation.changes` stream read over the channel.
 
@@ -104,8 +112,10 @@ defmodule PrismWeb.PairLive do
 
   defp complete(socket, args) do
     case PrismWeb.Ops.call_tool(socket.assigns.context, "pairing/complete", args) do
-      {:ok, %{challenge: challenge}} ->
-        {:reply, %{challenge: challenge}, assign(socket, :error, nil)}
+      # A remote person's glass with no certificate yet is told what their
+      # own home is to certify beside the challenge.
+      {:ok, %{challenge: _challenge} = answer} ->
+        {:reply, Map.take(answer, [:challenge, :certify]), assign(socket, :error, nil)}
 
       {:ok, %{client_id: client_id, certificate: certificate}} ->
         {:reply, %{client_id: client_id, certificate: certificate},

@@ -208,6 +208,37 @@ defmodule CyfrWeb.Plugs.CORSTest do
     end
   end
 
+  # A certified device's renewal at its person's home: asked from another
+  # home's page, whose proof is its only credential.
+  describe "any origin" do
+    defp from(origin, method, opts) do
+      conn(method, "/certify/v1/renew")
+      |> put_req_header("origin", origin)
+      |> CORS.call(CORS.init(opts))
+    end
+
+    test "the mount answers every origin `*`, whatever the deployment's list, never with credentials" do
+      for allowed <- [[], ["https://app.cyfr.run"]],
+          method <- [:options, :post],
+          origin <- ["https://hub.example", "https://app.cyfr.run"] do
+        Application.put_env(:cyfr, :cors_allowed_origins, allowed)
+        conn = from(origin, method, methods: ~w(POST), any_origin: true)
+        assert get_resp_header(conn, "access-control-allow-origin") == ["*"]
+        assert get_resp_header(conn, "access-control-allow-credentials") == []
+        assert conn.halted == (method == :options)
+      end
+    end
+
+    test "it still answers no null origin, and no other mount answers every origin" do
+      Application.put_env(:cyfr, :cors_allowed_origins, [])
+      null = from("null", :post, methods: ~w(POST), any_origin: true)
+      assert get_resp_header(null, "access-control-allow-origin") == []
+
+      elsewhere = from("https://hub.example", :post, methods: ~w(POST))
+      assert get_resp_header(elsewhere, "access-control-allow-origin") == []
+    end
+  end
+
   describe "non-OPTIONS requests" do
     test "adds CORS headers without halting" do
       Application.put_env(:cyfr, :cors_allowed_origins, ["*"])

@@ -222,6 +222,29 @@ defmodule Prima.SanitizerTest do
       refute Prima.Sanitizer.sensitive_key?("url")
       refute Prima.Sanitizer.sensitive_key?("invitation_url_label")
     end
+
+    # A sign-in carry's fragment, as a page hands it to its LiveView
+    # (`cyfr_carry`, `cyfr_assertion`, `carry_challenge`, `carry_return`) and
+    # as the sign-in page posts an assertion to its callback.
+    test "a sign-in carry's fragment is redacted as a whole key, and longer names stay readable" do
+      carried = "eyJhc3NlcnRpb24iOnsiYXVkaWVuY2UiOiJodHRwczovL2h1Yi5leGFtcGxlIn19"
+
+      assert Prima.Sanitizer.sanitize(%{
+               "fragment" => carried,
+               "expected_source" => "https://a.example",
+               "fragment_id" => "f1"
+             }) == %{
+               "fragment" => "[REDACTED]",
+               "expected_source" => "https://a.example",
+               "fragment_id" => "f1"
+             }
+
+      assert Prima.Sanitizer.sensitive_key?(:fragment)
+      refute Prima.Sanitizer.sensitive_key?("fragments_seen")
+
+      # Phoenix's request and LiveView event logs filter by substring.
+      assert Enum.any?(Prima.Sanitizer.filter_parameters(), &String.contains?("fragment", &1))
+    end
   end
 
   # A pending confirmation's secret travels as a context's `confirmation_id`

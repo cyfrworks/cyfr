@@ -378,6 +378,63 @@ defmodule Sanctum.Providers.PersonTest do
 
       assert cert.subject.key_epoch ==
                Arca.Repo.get_by!(PersonIdentity, user_id: person.user.id).head_hash
+
+      # What it certified is recorded here, under that head.
+      assert [record] =
+               Arca.Repo.all(
+                 from(c in Arca.Schemas.DeviceCertification, where: c.user_id == ^person.user.id)
+               )
+
+      assert {record.audience_home, record.client_id, record.key_epoch} ==
+               {"https://hub.example", "pcl_hub", cert.subject.key_epoch}
+    end
+
+    test "person.renew_certificate is anonymous: the device key's proof over this home's challenge is its only credential" do
+      person = enrolled!()
+      {device_key, private} = :crypto.generate_key(:eddsa, :ed25519)
+
+      certify = %{
+        "action" => "certify",
+        "device_key" => Encoding.b64(device_key),
+        "audience" => "https://hub.example",
+        "athanor" => "ath_hub",
+        "client_id" => "pcl_hub"
+      }
+
+      {:ok, %{certificate: certificate}} = TestContext.confirming(person.ctx, &call(&1, certify))
+
+      # A caller holding no session of this home's: the device at the hub.
+      device = Context.build(%{authenticated: false, client_ip: "198.51.100.61"})
+      renew = %{"action" => "renew_certificate", "certificate" => certificate}
+
+      assert {:ok, %{challenge: challenge}} = call(device, renew)
+      {:ok, held} = Prima.DeviceCert.Challenge.decode(challenge)
+      proof = Prima.DeviceCert.Proof.encode(Prima.DeviceCert.Proof.sign(held, private))
+
+      assert {:ok, %{certificate: replacement}} = call(device, Map.put(renew, "proof", proof))
+      assert {:ok, renewed} = Prima.DeviceCert.decode(replacement)
+      assert renewed.device_key == device_key
+
+      # The refusals a device reads: a proof used again, a certification
+      # this home does not hold, and one whose head has moved since.
+      assert %Prima.Refusal{class: :unauthenticated} =
+               refusal(call(device, Map.put(renew, "proof", proof)))
+
+      assert %Prima.Refusal{class: :not_found} =
+               refusal(
+                 call(device, %{renew | "certificate" => %{certificate | "client_id" => "pcl_x"}})
+               )
+
+      {1, _} =
+        Arca.Repo.update_all(
+          from(p in PersonIdentity, where: p.user_id == ^person.user.id),
+          set: [head_hash: Prima.Digest.sha256("rotated")]
+        )
+
+      assert %Prima.Refusal{class: :conflict, reason: :certification_ended, message: message} =
+               refusal(call(device, renew))
+
+      assert message =~ "certify it again"
     end
 
     test "this home is refused as the audience, and an unenrolled person certifies nothing" do

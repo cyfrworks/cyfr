@@ -419,6 +419,7 @@ one annotation. It is short:
 | Tool | Actions | Why Public |
 |------|---------|------------|
 | `pairing` | `complete` | A new device holds neither a session nor a certificate: the short-lived, single-use pairing code a signed-in person's `pairing.begin` issued names the person and athanor, the device proves its key, and a session cookie the browser holds never chooses the person |
+| `person` | `renew_certificate` | A device paired at another home renews the certificate this home issued it, holding no session here: it proves the device key the certification names over a single-use challenge this home issued, and only a certification still standing under the person's current keys is extended |
 | `session` | `login`, `logout`, `whoami`, `device_init`, `device_poll`, `read_resource` | Needed to authenticate in the first place; `read_resource` tells a caller only its own identity and permissions |
 | `system` | `status` | Health checks |
 | `tincture` | `invoke_public` | A published tincture is public by definition: named by its public address (`athanor`, the URL's `@namespace` or group slug, with `publisher` and `tincture_name`), the call runs one of its declared dependencies under its active public profile, as its public page does; the address confers no authority, and one with no active public profile answers `not_found` |

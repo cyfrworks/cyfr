@@ -36,13 +36,16 @@ defmodule Prima.Sanitizer do
     derived_key key_material keystore passphrase
   )
 
-  # Match code, state, key, fields and invitation_url only as whole keys
-  # after stripping separators. These can carry credentials — `fields` is a
-  # vault entry's material, name → value, whatever the names are, and
-  # `invitation_url` is a pairing link whose fragment is the bearer
-  # invitation; longer names such as error_code, keyboard, connection_state
-  # and field_names, and a plain `url`, must remain readable.
-  @exact_sensitive_keys ~w(code state key fields invitation_url)
+  # Match code, state, key, fields, invitation_url and fragment only as
+  # whole keys after stripping separators. These can carry credentials —
+  # `fields` is a vault entry's material, name → value, whatever the names
+  # are; `invitation_url` is a pairing link whose fragment is the bearer
+  # invitation; and `fragment` is a sign-in carry's URL fragment as a page
+  # hands it to its LiveView or posts it (a carry, a challenge, an
+  # assertion); longer names such as error_code, keyboard,
+  # connection_state, field_names and fragment_id, and a plain `url`, must
+  # remain readable.
+  @exact_sensitive_keys ~w(code state key fields invitation_url fragment)
   @exact_sensitive_normalized Enum.map(@exact_sensitive_keys, &String.replace(&1, ["-", "_"], ""))
 
   # Compared against the key as written, separators and all. `_t` and

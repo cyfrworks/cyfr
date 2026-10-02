@@ -73,6 +73,7 @@ defmodule Sanctum.ProviderDispatchContractTest do
       "carry_cancel",
       "carry_list",
       "certify",
+      "renew_certificate",
       "assert"
     ],
     "pairing" => ["begin", "complete", "renew", "revoke", "list"],

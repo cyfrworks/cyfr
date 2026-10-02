@@ -22,6 +22,13 @@
           "CyfrWeb.Plugs.MCPRateLimit",
           "CyfrWeb.Plugs.Authenticate"
         ],
+        "certificate_renewal" => [
+          "CyfrWeb.Plugs.CallIdentity",
+          ":accepts",
+          "CyfrWeb.Plugs.ApiSecurityHeaders",
+          "CyfrWeb.Plugs.CORS",
+          "CyfrWeb.Plugs.AuthRateLimit"
+        ],
         "health_throttle" => ["CyfrWeb.Plugs.AuthRateLimit"],
         "mcp" => [
           "CyfrWeb.Plugs.CallIdentity",
@@ -191,6 +198,24 @@
           pipe_through: ["api", "auth_api_throttle"]
         },
         %{
+          verb: "OPTIONS",
+          path: "/certify/v1/renew",
+          plug: "Emissary.Web.CertificateRenewalController",
+          plug_opts: ":renew_certificate",
+          auth: "device_key_proof",
+          live_view: nil,
+          pipe_through: ["certificate_renewal"]
+        },
+        %{
+          verb: "POST",
+          path: "/certify/v1/renew",
+          plug: "Emissary.Web.CertificateRenewalController",
+          plug_opts: ":renew_certificate",
+          auth: "device_key_proof",
+          live_view: nil,
+          pipe_through: ["certificate_renewal"]
+        },
+        %{
           verb: "GET",
           path: "/directory/v1/:identifier",
           plug: "Emissary.Web.DirectoryController",
@@ -353,6 +378,7 @@
         ],
         "claim_submit_throttle" => ["CyfrWeb.Plugs.AuthRateLimit"],
         "device_complete_throttle" => ["CyfrWeb.Plugs.AuthRateLimit"],
+        "glass" => ["CyfrWeb.Plugs.BrowserCSP"],
         "legal_accept_throttle" => ["CyfrWeb.Plugs.AuthRateLimit"],
         "oauth_callback_throttle" => ["CyfrWeb.Plugs.AuthRateLimit"],
         "oauth_start_throttle" => ["CyfrWeb.Plugs.AuthRateLimit"],
@@ -735,7 +761,7 @@
           plug_opts: ":pair",
           auth: "browser_public_login",
           live_view: "PrismWeb.PairLive",
-          pipe_through: ["browser"]
+          pipe_through: ["browser", "glass"]
         },
         %{
           verb: "GET",

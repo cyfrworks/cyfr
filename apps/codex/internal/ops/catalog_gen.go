@@ -188,6 +188,7 @@ const (
 	PersonKit               = "kit"
 	PersonKitAck            = "kit_ack"
 	PersonLinkDoor          = "link_door"
+	PersonRenewCertificate  = "renew_certificate"
 	PersonRotate            = "rotate"
 	PersonStatus            = "status"
 	PersonUnlinkDoor        = "unlink_door"
@@ -309,7 +310,7 @@ var Actions = map[string][]string{
 	"oauth":               {"delete_client", "list", "set_client"},
 	"pairing":             {"begin", "complete", "list", "renew", "revoke"},
 	"passkey":             {"list", "recover_admin", "register", "revoke"},
-	"person":              {"assert", "carry_begin", "carry_cancel", "carry_complete", "carry_list", "certify", "enroll", "enroll_abandon", "enroll_holder", "kit", "kit_ack", "link_door", "rotate", "status", "unlink_door"},
+	"person":              {"assert", "carry_begin", "carry_cancel", "carry_complete", "carry_list", "certify", "enroll", "enroll_abandon", "enroll_holder", "kit", "kit_ack", "link_door", "renew_certificate", "rotate", "status", "unlink_door"},
 	"policy_log":          {"correlate", "get", "list"},
 	"profile":             {"commit", "grant", "grants", "list", "plan", "preview", "publish", "revoke"},
 	"record":              {"get", "list", "payload"},
@@ -2791,6 +2792,23 @@ func (args PersonLinkDoorArgs) MarshalJSON() ([]byte, error) {
 		Action string `json:"action"`
 		fields
 	}{Action: PersonLinkDoor, fields: fields(args)})
+}
+
+// PersonRenewCertificateArgs carries arguments for person.renew_certificate.
+type PersonRenewCertificateArgs struct {
+	// renew_certificate: a certificate this home issued for the device, which only locates its certification
+	Certificate any `json:"certificate"`
+	// renew_certificate: the device key's signature over the renew challenge; absent, the answer is the challenge to sign
+	Proof Field[any] `json:"proof,omitzero"`
+}
+
+// MarshalJSON supplies the operation's fixed action discriminator.
+func (args PersonRenewCertificateArgs) MarshalJSON() ([]byte, error) {
+	type fields PersonRenewCertificateArgs
+	return json.Marshal(struct {
+		Action string `json:"action"`
+		fields
+	}{Action: PersonRenewCertificate, fields: fields(args)})
 }
 
 // PersonRotateArgs carries arguments for person.rotate.

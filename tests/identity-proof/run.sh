@@ -104,15 +104,16 @@ for cell in c c2 c3; do
   openssl rand -hex 32 | tr -d '\n' >"$SECRETS/token-$cell"
 done
 
+identity_directory dir.test 127.77.0.1
 identity_env "$DIR" CYFR_DIRECTORY_SERVE writer
-identity_reaches_directory "$A"
-identity_reaches_directory "$B" "CYFR_IDENTITY_FRESHNESS_SECONDS=$FRESH"
+identity_reaches_directory "$A" dir.test
+identity_reaches_directory "$B" dir.test "CYFR_IDENTITY_FRESHNESS_SECONDS=$FRESH"
 # C holds one athanor no person owns under a cap of one, so the restored
 # person's own is refused until the cap goes: the restore stops at minted.
-identity_reaches_directory "$C" "CYFR_RESTORE_TOKEN=$(cat "$SECRETS/token-c")" \
+identity_reaches_directory "$C" dir.test "CYFR_RESTORE_TOKEN=$(cat "$SECRETS/token-c")" \
   "CYFR_REAUTH_SECONDS=$REAUTH" "CYFR_MAX_ATHANORS=1"
-identity_reaches_directory "$C2" "CYFR_RESTORE_TOKEN=$(cat "$SECRETS/token-c2")"
-identity_reaches_directory "$C3" "CYFR_RESTORE_TOKEN=$(cat "$SECRETS/token-c3")"
+identity_reaches_directory "$C2" dir.test "CYFR_RESTORE_TOKEN=$(cat "$SECRETS/token-c2")"
+identity_reaches_directory "$C3" dir.test "CYFR_RESTORE_TOKEN=$(cat "$SECRETS/token-c3")"
 
 step "starting the directory, its front, and the homes"
 server_start "$DIR"
@@ -235,7 +236,7 @@ PY
       log_before="$(identity_fixture "$DIR" log "$IDENTIFIER")"
       # submitted: the directory's reply lost, a thief rotating at the same
       # moment on the copy of A.
-      identity_front_fault drop-recover
+      identity_front_fault dir.test drop-recover
       identity_fixture "$THIEF" thief_rotate "$USER_A" >"$WORK/thief-1.json" &
       thief_pid=$!
       submitted="$(post_restore "$C" "$kit")"
@@ -250,9 +251,9 @@ PY
       replay="$(identity_fixture "$C" replay_recover)"
       thief_2="$(identity_fixture "$THIEF" thief_rotate "$USER_A")"
       # accepted: the recovery answered, the head it must read again unread.
-      identity_front_fault block-reads-after-recover
+      identity_front_fault dir.test block-reads-after-recover
       accepted="$(post_restore "$C" "$kit")"
-      identity_front_fault none
+      identity_front_fault dir.test none
       accepted_phase="$(last_restore "$C" phase)"
       accepted_entry="$(last_restore "$C" entry_hash)"
       identity_kill "$C"
@@ -340,22 +341,22 @@ PY
       ;;
     c2_accepted)
       kit="$(kit_file "$ask" kit-1.json)"
-      identity_front_fault block-reads-after-recover
+      identity_front_fault dir.test block-reads-after-recover
       accepted="$(post_restore "$C2" "$kit")"
-      identity_front_fault none
+      identity_front_fault dir.test none
       phase="$(last_restore "$C2" phase)"
       server_stop "$C2"
       answer="$(printf '%s' "$accepted" | python3 -c "import json, sys; a = json.load(sys.stdin); a['attempt_phase'] = sys.argv[1]; print(json.dumps(a))" "$phase")"
       ;;
     front_mark)
       b_resolve
-      answer="$(identity_front_seen | python3 -c "import json, sys; print(json.dumps({'mark': len(json.load(sys.stdin)['seen'])}))")"
+      answer="$(identity_front_seen dir.test | python3 -c "import json, sys; print(json.dumps({'mark': len(json.load(sys.stdin)['seen'])}))")"
       ;;
     front_since)
       mark="$(field "$(cat "$ask")" "['mark']")"
       a_port="$(cell_port "$A")"
       if curl -fsS -m 2 -o /dev/null "http://127.0.0.1:$a_port/api/health" 2>/dev/null; then a_up=True; else a_up=False; fi
-      answer="$(identity_front_seen | python3 -c "
+      answer="$(identity_front_seen dir.test | python3 -c "
 import json, sys
 seen = json.load(sys.stdin)['seen'][int(sys.argv[1]):]
 print(json.dumps({'directory_only': bool(seen) and all(r['path'].startswith('/directory/v1/') for r in seen), 'requests': len(seen), 'a_answers': $a_up}))" "$mark")"
@@ -379,12 +380,12 @@ PY
     directory_down)
       b_resolve
       within_verify="$(cat "$WORK/resolved.json")"
-      identity_front_fault down
+      identity_front_fault dir.test down
       within="$(identity_fixture "$B" fresh "$IDENTIFIER")"
       wait_s=$((B_VERIFIED_AT + FRESH + 3 - $(now)))
       [ "$wait_s" -gt 0 ] && sleep "$wait_s"
       past="$(identity_fixture "$B" fresh "$IDENTIFIER")"
-      identity_front_fault none
+      identity_front_fault dir.test none
       answer="$(python3 -c "import json, sys; print(json.dumps({'verified': json.loads(sys.argv[1]), 'within': json.loads(sys.argv[2]), 'past': json.loads(sys.argv[3]), 'bound': $FRESH}))" "$within_verify" "$within" "$past")"
       ;;
     *) fail "the proof asked for '$op', which this script does not do" ;;

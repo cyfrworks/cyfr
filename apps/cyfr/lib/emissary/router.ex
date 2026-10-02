@@ -6,8 +6,8 @@ defmodule Emissary.Router do
   Emissary's routes, with the pipelines they pass through: MCP, the HTTP
   API's sign-out and session read, the vault's OAuth grant callback,
   tincture serving and the tincture data routes, health, the
-  execution-events stream, inbound webhooks, the identity directory and
-  the restore ingress.
+  execution-events stream, inbound webhooks, the identity directory, a
+  certified device's renewal and the restore ingress.
 
   The composition router invokes `routes/0` where the adapter's routes
   stand, so its `__routes__/0` stays the total table. The quoted calls
@@ -181,6 +181,25 @@ defmodule Emissary.Router do
           window_ms: 60_000
       end
 
+      # A certified device's renewal at its person's home
+      # (`Sanctum.RemoteCertification`), asked from a page of the other
+      # home the device is at: JSON, no session fetched and no CSRF token,
+      # since the device key's proof over this home's challenge is the only
+      # credential. So any origin may ask and no credential travels
+      # (`any_origin`). Metered per address here, before the operation
+      # counts it against the verification bounds.
+      pipeline :certificate_renewal do
+        plug CyfrWeb.Plugs.CallIdentity, tool: "person"
+        plug :accepts, ["json"]
+        plug CyfrWeb.Plugs.ApiSecurityHeaders
+        plug CyfrWeb.Plugs.CORS, methods: ~w(POST), any_origin: true
+
+        plug CyfrWeb.Plugs.AuthRateLimit,
+          bucket: :certificate_renewal,
+          max_requests: 60,
+          window_ms: 60_000
+      end
+
       # MCP endpoint. POST is the only verb this revision defines: a request's own
       # response stream carries its progress, so there is no standalone stream to
       # open, and there is no session to terminate.
@@ -304,6 +323,19 @@ defmodule Emissary.Router do
 
         get "/:identifier/requests/:request_id", DirectoryController, :outcome,
           metadata: %{auth: :public_directory}
+      end
+
+      # A certified device's renewal (`person.renew_certificate`), from the
+      # page of the home it is at. A JSON body always preflights; the CORS
+      # plug answers the preflight before the controller.
+      scope "/certify/v1", Emissary.Web do
+        pipe_through :certificate_renewal
+
+        post "/renew", CertificateRenewalController, :renew_certificate,
+          metadata: %{auth: :device_key_proof}
+
+        match :options, "/renew", CertificateRenewalController, :renew_certificate,
+          metadata: %{auth: :device_key_proof}
       end
 
       # Restore (`Sanctum.Recovery`): an identity brought back onto this

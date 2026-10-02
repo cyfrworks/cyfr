@@ -29,7 +29,10 @@ defmodule PrismWeb.LoginLive do
       goes. When this browser's session already holds an unexpired
       challenge of that home's carry, the same challenge goes back there
       instead, by a new ticket through `GET /auth/cyfr`: the exchange
-      resumes under its own action.
+      resumes under its own action. That answer is `cyfr:go`, which keeps
+      no expectation: a resumed exchange comes back with its assertion,
+      never a carry, so it opens no window for a carry no gesture asked
+      for.
     * **The carry.** Their home sends the browser back here with the
       carry in the fragment (`#carry=`). The script reads and clears it,
       and raises `cyfr_carry` only while the expectation that entry left
@@ -46,9 +49,15 @@ defmodule PrismWeb.LoginLive do
       challenge in the browser's session and returns the browser to their
       home.
     * **The callback.** Their home's assertion comes back the same way
-      (`#cyfr=`), to `cyfr_assertion`, and the page posts it, with its
-      CSRF token, to `POST /auth/cyfr/callback`, which reports the outcome
-      back to their home.
+      (`#cyfr=`), to `cyfr_assertion`, and the page posts it as
+      `fragment`, which the request log redacts (`Prima.Sanitizer`), with
+      its CSRF token, to `POST /auth/cyfr/callback`, which reports the
+      outcome back to their home.
+
+  A held challenge carries the browser secret its login is bound to. The
+  page keeps it whole for the hop, inside `PrismWeb.LoginLive.Held`,
+  whose inspection omits that secret, so a crash report that prints the
+  page's assigns never prints it.
 
   The script on this page also keeps a carry fragment meant for this home
   as a signing home (a destination, a challenge or a return that arrived
@@ -66,6 +75,7 @@ defmodule PrismWeb.LoginLive do
 
   use PrismWeb, :live_view
 
+  alias PrismWeb.LoginLive.Held
   alias Sanctum.Auth.{CyfrDoor, DeviceFlow}
   require Logger
 
@@ -132,16 +142,20 @@ defmodule PrismWeb.LoginLive do
       {:ok, url} ->
         home = signing_origin(url)
 
-        to =
-          case resumable(socket.assigns.cyfr_held, home) do
-            {:ok, held} -> challenge_hop(held, socket.assigns.browser_binding)
-            :none -> url
-          end
+        socket = assign(socket, error: nil, cyfr_pending: nil)
 
-        {:noreply,
-         socket
-         |> assign(error: nil, cyfr_pending: nil)
-         |> push_event("cyfr:expect", %{home: home, to: to})}
+        # A resumed exchange keeps no expectation: what comes back is its
+        # assertion, never a carry.
+        case resumable(socket.assigns.cyfr_held, home) do
+          {:ok, held} ->
+            {:noreply,
+             push_event(socket, "cyfr:go", %{
+               to: challenge_hop(held, socket.assigns.browser_binding)
+             })}
+
+          :none ->
+            {:noreply, push_event(socket, "cyfr:expect", %{home: home, to: url})}
+        end
 
       {:error, :this_home} ->
         {:noreply,
@@ -443,7 +457,7 @@ defmodule PrismWeb.LoginLive do
        ) == :ok do
       case CyfrDoor.challenge(fragment) do
         {:ok, %{"source" => ^expected} = held} ->
-          assign(socket, error: nil, cyfr_pending: pending(held))
+          assign(socket, error: nil, cyfr_pending: pending(Held.new(held)))
 
         {:ok, _another} ->
           assign(socket, error: @wrong_source, cyfr_pending: nil)
@@ -472,18 +486,18 @@ defmodule PrismWeb.LoginLive do
   # named and the comparison code of the challenge this home issued, which
   # that home's confirmation names too. The challenge stays in this process
   # until Continue hands it to the hop.
-  defp pending(held) do
+  defp pending(%Held{held: inner} = held) do
     {:ok, challenge} =
-      Prima.Identity.Encoding.unb64(held["challenge"], Prima.PersonAssertion.challenge_bytes())
+      Prima.Identity.Encoding.unb64(inner["challenge"], Prima.PersonAssertion.challenge_bytes())
 
-    %{held: held, home: held["source"], code: Prima.PersonAssertion.comparison_code(challenge)}
+    %{held: held, home: inner["source"], code: Prima.PersonAssertion.comparison_code(challenge)}
   end
 
   # The challenge an earlier hop left in this browser's session
   # (`PrismWeb.AuthController.cyfr_challenge_key/0`), if any.
   defp held_challenge(session) do
     case session[PrismWeb.AuthController.cyfr_challenge_key()] do
-      %{} = held -> held
+      %{} = held -> Held.new(held)
       _none -> nil
     end
   end
@@ -491,17 +505,17 @@ defmodule PrismWeb.LoginLive do
   # The exchange this browser holds the challenge of resumes when the
   # person names its home again before it expires: the same action and
   # challenge go back, never a new one.
-  defp resumable(%{"source" => home} = held, home),
+  defp resumable(%Held{held: %{"source" => home}} = held, home),
     do: if(unexpired?(held), do: {:ok, held}, else: :none)
 
   defp resumable(_held, _home), do: :none
 
-  defp unexpired?(%{"expires_at" => at}) when is_integer(at),
+  defp unexpired?(%Held{held: %{"expires_at" => at}}) when is_integer(at),
     do: at > System.os_time(:millisecond)
 
   defp unexpired?(_held), do: false
 
-  defp challenge_hop(held, browser_binding) do
+  defp challenge_hop(%Held{held: held}, browser_binding) do
     ticket = mint_ticket({:login_cyfr_ticket, held}, browser_binding)
     "/auth/cyfr?" <> URI.encode_query(%{ticket: ticket})
   end
@@ -785,7 +799,7 @@ defmodule PrismWeb.LoginLive do
             method="post"
             phx-trigger-action={@cyfr_trigger}
           >
-            <input type="hidden" name="cyfr" value={@cyfr_fragment} />
+            <input type="hidden" name="fragment" value={@cyfr_fragment} />
           </.form>
         </div>
       </div>
@@ -853,5 +867,33 @@ defmodule PrismWeb.LoginLive do
       <span>Sign in with {@provider}</span>
     </a>
     """
+  end
+end
+
+defmodule PrismWeb.LoginLive.Held do
+  @moduledoc """
+  A `cyfr` sign-in's held challenge (`Sanctum.Auth.CyfrDoor`) as the
+  sign-in page keeps it: whole, for the hop that keeps it in the
+  browser's session, and inspected without its `browser_secret`, the
+  secret its login is bound to, so a crash report that prints the page's
+  assigns never prints it.
+  """
+
+  @enforce_keys [:held]
+  defstruct [:held]
+
+  @type t :: %__MODULE__{held: map()}
+
+  @doc "The held challenge `held`, kept for the page."
+  @spec new(map()) :: t()
+  def new(%{} = held), do: %__MODULE__{held: held}
+
+  defimpl Inspect, for: PrismWeb.LoginLive.Held do
+    use Boundary, classify_to: PrismWeb
+    import Inspect.Algebra
+
+    def inspect(%{held: held}, opts) do
+      concat(["#PrismWeb.LoginLive.Held<", to_doc(Map.delete(held, "browser_secret"), opts), ">"])
+    end
   end
 end

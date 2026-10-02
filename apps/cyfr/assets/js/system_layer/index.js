@@ -1,7 +1,22 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright 2026 CYFR Works Inc.
 
-import {codeFromFragment, Glass, generateKeyPair, openingPlan, openStore, promptModel, prove, publicKeyB64} from "./device_key.js"
+import {
+  answersCertify,
+  certificateFromFragment,
+  certifyUrl,
+  codeFromFragment,
+  freshCertify,
+  freshPending,
+  Glass,
+  generateKeyPair,
+  homeOrigin,
+  openingPlan,
+  openStore,
+  promptModel,
+  prove,
+  publicKeyB64
+} from "./device_key.js"
 import {nextStop, tabOrder} from "./focus.js"
 import {clearFields, clearKit, drawKit, fieldValue, Material, RestorePage} from "./recovery.js"
 import {initial, transition} from "./state.js"
@@ -114,9 +129,26 @@ import {assert as assertPasskey, register as registerPasskey, supported as passk
  * until it is revoked), so someone else's link never silently rebinds a
  * glass.
  *
+ * A pairing for a person whose keys are at another home is answered, with
+ * its challenge, what their home is to certify (`certify`). The glass
+ * keeps the code and its key pair as the pending pairing, for the
+ * invitation's five minutes at most, asks for the address of their home,
+ * keeps what it asked of that home (the store's certify record, as long),
+ * and goes there (`<home>/carry#certify=…`). Their home sends the browser
+ * back with the certificate (`/pair#certificate=…`), which is taken only
+ * while that request stands and only when it answers it: issued by that
+ * home, for this device's key and client, this home and the athanor. It
+ * completes the pending pairing, or is presented in place of the
+ * certificate of the device the glass holds, which it replaces once this
+ * home stands it; any other changes nothing. The same address form is
+ * offered whenever `Glass` offers to certify again: the person's home
+ * ended the certification, or could not renew it after this home refused
+ * it.
+ *
  * Its controls carry `data-test` names: `glass-status` (with
  * `data-state`), `glass-error`, `glass-replace-ask`, `glass-replace`,
- * `glass-keep`, `glass-prompt` (with `data-ref`), `glass-preview`,
+ * `glass-keep`, `glass-certify`, `glass-home`, `glass-home-submit`,
+ * `glass-prompt` (with `data-ref`), `glass-preview`,
  * `glass-asker`, `glass-passkey`, `glass-email`, `glass-code-form`,
  * `glass-code`, `glass-code-submit`, `glass-reauth-note`, `glass-cancel`
  * and `glass-outcome` (with `data-ok`).
@@ -543,6 +575,7 @@ export default {
     const doc = globalThis.document
     const location = globalThis.location
     const code = codeFromFragment(location && location.hash)
+    const returned = certificateFromFragment(location && location.hash)
     // The code is a bearer secret: it leaves the address at once.
     if (location && location.hash && globalThis.history) {
       globalThis.history.replaceState(null, "", location.pathname + location.search)
@@ -550,11 +583,13 @@ export default {
 
     this.store = this.store || openStore()
     this.codeSent = new Set()
+    this.home = `${location && location.protocol}//${location && location.host}`
     const scheme = location && location.protocol === "https:" ? "wss:" : "ws:"
     this.glass = new Glass({
       url: `${scheme}//${location && location.host}/device/websocket`,
       socket: (url) => new globalThis.WebSocket(url),
       store: this.store,
+      home: this.home,
       onChange: (glass) => this.drawGlass(glass)
     })
 
@@ -569,6 +604,7 @@ export default {
     this.el.addEventListener("submit", this.onGlassSubmit)
 
     return this.store.load().then((stored) => {
+      if (returned) return this.certificateReturned(returned, stored)
       switch (openingPlan(code, stored)) {
         case "ask":
           // A device is paired here already: nothing changes until the
@@ -576,7 +612,7 @@ export default {
           this.pendingCode = code
           return this.drawGlass(this.glass)
         case "pair":
-          return this.pairGlass(code).then(() => this.glass.start())
+          return this.pairGlass(code).then((outcome) => (outcome === "certify" ? undefined : this.glass.start()))
         default:
           return this.glass.start()
       }
@@ -594,9 +630,66 @@ export default {
     this.pendingCode = null
     if (replace && code) {
       await this.glass.unpair()
-      await this.pairGlass(code)
+      if ((await this.pairGlass(code)) === "certify") return
     }
     return this.glass.start()
+  },
+
+  // The certificate the person's home sent back, taken only while what
+  // the person asked of that home stands and only when it answers it: the
+  // pending pairing it completes, or the certificate of the device this
+  // glass holds, which this home must stand before it is kept. Anything
+  // else, a link no request of this device led to included, changes
+  // nothing.
+  async certificateReturned(certificate, stored) {
+    const now = Date.now()
+    const asked = await freshCertify(this.store, now)
+    const pending = await freshPending(this.store, now)
+
+    if (asked && pending && asked.client === pending.certify.client_id && answersCertify(certificate, asked, {deviceKey: pending.publicKey, home: this.home})) {
+      await this.store.clearCertify()
+      await this.pairRemote(pending, certificate)
+      return this.glass.start()
+    }
+
+    if (asked && stored && asked.client === stored.clientId && answersCertify(certificate, asked, {deviceKey: stored.publicKey, home: this.home})) {
+      await this.store.clearCertify()
+      return this.glass.start(certificate)
+    }
+
+    this.pairRefused("That certificate is not one this device asked its home for, so nothing changed.")
+    return stored ? this.glass.start() : this.drawGlass(this.glass)
+  },
+
+  // The pending pairing completed under its person's home's certificate:
+  // the same two steps, each bringing the certificate.
+  async pairRemote(pending, certificate) {
+    this.drawStatus("pairing", "Pairing this device…")
+
+    try {
+      const base = {invitation_secret: pending.code, device_key: pending.publicKey, certificate}
+      const started = await this.pushAsync("pair_start", base)
+      if (!started || started.error) return this.endPending((started && started.error) || "The pairing did not start.")
+
+      const expected = {purpose: "pair", home: this.home, deviceKey: pending.publicKey, clientId: pending.certify.client_id}
+      const proof = await prove(started.challenge, pending.privateKey, expected)
+      const paired = await this.pushAsync("pair_proof", {...base, proof})
+      if (!paired || paired.error) return this.endPending((paired && paired.error) || "The pairing did not finish.")
+
+      await this.store.save({privateKey: pending.privateKey, publicKey: pending.publicKey, clientId: paired.client_id, certificate: paired.certificate})
+      await this.store.clearPending()
+      this.certifyAsk = null
+    } catch (error) {
+      await this.endPending(error.refused ? error.message : "This browser cannot hold a device key here.")
+    }
+  },
+
+  // A pending pairing that cannot finish holds its code no longer.
+  async endPending(text) {
+    await this.store.clearPending()
+    await this.store.clearCertify()
+    this.certifyAsk = null
+    this.pairRefused(text)
   },
 
   destroyGlass() {
@@ -618,13 +711,28 @@ export default {
       const started = await this.pushAsync("pair_start", {invitation_secret: code, device_key: deviceKey})
       if (!started || started.error) return this.pairRefused((started && started.error) || "The pairing did not start.")
 
-      const proof = await prove(started.challenge, privateKey)
+      // The person's keys are at another home, which certifies this device:
+      // the code and key pair wait for its certificate, at most the
+      // invitation's life, while the person goes there.
+      if (started.certify) {
+        await this.store.savePending({code, privateKey, publicKey: deviceKey, certify: started.certify, at: Date.now()})
+        this.certifyAsk = {request: {...started.certify, device_key: deviceKey}, home: ""}
+        this.drawStatus("certify", "Your keys are held at another home. Certify this device there to pair it here.")
+        return "certify"
+      }
+
+      // This home's own pairing challenge, for the key just made: the
+      // client it names is the one this home's invitation reserved for the
+      // device, which the device learns here first.
+      const reserved = started.challenge && started.challenge.client_id
+      const proof = await prove(started.challenge, privateKey, {purpose: "pair", home: this.home, deviceKey, clientId: reserved})
       const paired = await this.pushAsync("pair_proof", {invitation_secret: code, device_key: deviceKey, proof})
       if (!paired || paired.error) return this.pairRefused((paired && paired.error) || "The pairing did not finish.")
 
       await this.store.save({privateKey, publicKey: deviceKey, clientId: paired.client_id, certificate: paired.certificate})
-    } catch (_error) {
-      this.pairRefused("This browser cannot hold a device key here.")
+      return "paired"
+    } catch (error) {
+      this.pairRefused(error.refused ? error.message : "This browser cannot hold a device key here.")
     }
   },
 
@@ -664,10 +772,50 @@ export default {
 
   glassSubmit(event) {
     const form = event.target
+    if (form && form.dataset && form.dataset.form === "certify-home") {
+      event.preventDefault()
+      return this.certifyAt(form.elements && form.elements.home ? form.elements.home.value : "")
+    }
     if (!form || !form.dataset || !form.dataset.ref) return
     event.preventDefault()
     const code = form.elements && form.elements.code ? form.elements.code.value.trim() : ""
     if (code) this.glass.confirmWithCode(form.dataset.ref, code)
+  },
+
+  // The person named their own home: there, they certify this device for
+  // what this home reserved, under a fresh confirmation. What was asked of
+  // that home is kept first: only a certificate answering it is taken when
+  // the browser comes back.
+  async certifyAt(typed) {
+    const ask = this.certifyOffer()
+    const home = homeOrigin(typed)
+    if (!ask || !home) {
+      this.pairError = "That is not a home's address, like https://home.example."
+      return this.drawGlass(this.glass)
+    }
+    if (home === this.home) {
+      this.pairError = "That is this home's address; name the home that holds your keys."
+      return this.drawGlass(this.glass)
+    }
+    const {request} = ask
+    try {
+      await this.store.saveCertify({home, client: request.client_id, audience: request.audience, athanor: request.athanor, at: Date.now()})
+    } catch (_error) {
+      this.pairError = "This browser would not keep what this device asks of your home. Allow site storage for this page and try again."
+      return this.drawGlass(this.glass)
+    }
+    globalThis.location.assign(certifyUrl(home, request))
+  },
+
+  // What to certify, and the home to suggest: a pending pairing's, or the
+  // held device's once its certification ended at the home that issued it.
+  certifyOffer() {
+    if (this.certifyAsk) return this.certifyAsk
+    const glass = this.glass
+    if (glass && glass.certifyAgain && glass.device) {
+      return {request: glass.certifyRequest(), home: glass.device.certificate.issuer}
+    }
+    return null
   },
 
   drawStatus(state, text) {
@@ -693,6 +841,27 @@ export default {
           ),
           element(doc, "button", {type: "button", "data-test": "glass-replace", "data-action": "replace"}, "Forget this device and pair again"),
           element(doc, "button", {type: "button", "data-test": "glass-keep", "data-action": "keep"}, "Keep this device")
+        ])
+      )
+    }
+    const offer = this.certifyOffer()
+    if (offer) {
+      nodes.push(
+        element(doc, "section", {"data-test": "glass-certify", class: "space-y-2"}, [
+          element(
+            doc,
+            "p",
+            {class: "text-sm"},
+            this.certifyAsk
+              ? "Your keys are held at another home. Name it to certify this device there; you confirm it there, then come back here."
+              : glass.certifyReason === "unreachable"
+                ? "Your home could not be reached to renew this device's certificate. If your keys are now held at another home, name it; you confirm it there, then come back here. This device keeps trying meanwhile."
+                : "Your home ended this device's certification, as it does when your keys change. Certify it again there; you confirm it there, then come back here."
+          ),
+          element(doc, "form", {"data-form": "certify-home", class: "flex gap-2"}, [
+            element(doc, "input", {"data-test": "glass-home", name: "home", type: "text", inputmode: "url", autocomplete: "url", value: offer.home || "", "aria-label": "The address of the home that holds your keys"}),
+            element(doc, "button", {type: "submit", "data-test": "glass-home-submit"}, this.certifyAsk ? "Certify at my home" : "Certify this device again at your home")
+          ])
         ])
       )
     }
@@ -820,6 +989,8 @@ export function glassStatus(glass, drawn) {
       return {state: "waiting", text: "Disconnected; trying again."}
     case "revoked":
       return {state: "revoked", text: "This device's pairing was revoked. Pair it again from a signed-in browser."}
+    case "recertify":
+      return {state: "recertify", text: "This device's certification at your home ended. Certify it again there."}
     default:
       return drawn || {state: "starting", text: "Starting…"}
   }

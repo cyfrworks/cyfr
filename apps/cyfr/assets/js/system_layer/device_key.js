@@ -26,6 +26,28 @@
  * close `4408` reconnects through the renewal; a close `4403`, or a
  * `revoke` naming no grant, means the pairing ended: the stored key and
  * certificate are erased.
+ *
+ * A device of a person whose keys are at another home holds a certificate
+ * that home issued (`issuer`). This home does not renew it: the glass
+ * renews it at the issuer (`renewElsewhere`, `POST <issuer>/certify/v1/renew`,
+ * by `fetch`, with no credentials), proving its device key over the
+ * issuer's challenge, and connects again under the replacement. When the
+ * issuer answers that the certification ended (the person's keys changed),
+ * or, after this home refused the certificate, it could not renew it three
+ * times in a row, the glass offers to certify the device again at the
+ * person's home (`<home>/carry#certify=<…>`), which needs the person's
+ * fresh confirmation; that home sends the browser back with the new
+ * certificate in the fragment (`/pair#certificate=<…>`). A pairing that
+ * waits for its first such certificate keeps its code and key pair, for
+ * the invitation's five minutes at most, as the store's pending record.
+ *
+ * The device key signs only a challenge the glass asked for, naming its
+ * own key and client: a `connect` of this home, a `renew` of the home that
+ * issued its certificate, a `pair` of this home. A certificate in the
+ * fragment is taken only while the person's request to their home stands
+ * (made as they name it, five minutes at most) and only when it answers
+ * it: that home's, for this device, its client, this home and the
+ * athanor. It replaces the stored one only once this home stands it.
  */
 
 export const PROTOCOL = "cyfr-device/v1"
@@ -125,10 +147,40 @@ export function signedBytes(challenge) {
 }
 
 /**
+ * Whether `challenge` is the one this device asked for: it names the
+ * device's own key and client, the purpose it asked for, and the home it
+ * asked: `connect` at the home this page is at, `renew` at the home that
+ * issued the certificate it holds, `pair` at this home.
+ */
+export function expectedChallenge(challenge, expected) {
+  const {purpose, home, deviceKey, clientId} = expected || {}
+  return Boolean(
+    challenge &&
+      typeof challenge === "object" &&
+      !Array.isArray(challenge) &&
+      typeof purpose === "string" &&
+      challenge.purpose === purpose &&
+      typeof home === "string" &&
+      challenge.home === home &&
+      typeof deviceKey === "string" &&
+      challenge.device_key === deviceKey &&
+      typeof clientId === "string" &&
+      challenge.client_id === clientId
+  )
+}
+
+/**
  * The proof of possession answering `challenge` (the JSON map the home
  * sent): the challenge's fields and the device key's signature over them.
+ * Only a challenge the device asked for (`expectedChallenge`) is signed;
+ * any other is refused, with an error whose `refused` is true, and nothing
+ * is signed: a challenge relayed from another home, or for another
+ * purpose, buys no proof.
  */
-export async function prove(challenge, privateKey, subtle = globalThis.crypto.subtle) {
+export async function prove(challenge, privateKey, expected, subtle = globalThis.crypto.subtle) {
+  if (!expectedChallenge(challenge, expected)) {
+    throw Object.assign(new Error("The challenge is not one this device asked for, so it was not signed."), {refused: true})
+  }
   const {sig: _sig, ...fields} = challenge
   const sig = await subtle.sign(ED25519, privateKey, signedBytes(fields))
   return {...fields, sig: b64url(sig)}
@@ -218,13 +270,162 @@ export function codeFromFragment(hash) {
 }
 
 // ---------------------------------------------------------------------------
+// A device certified at another home
+// ---------------------------------------------------------------------------
+
+/** How long a pairing waiting for its person's home keeps its code and key: the invitation's life. */
+export const PENDING_MS = 5 * 60 * 1000
+/** How long the glass waits before asking the issuer again after it could not answer. */
+export const RENEW_RETRY_MS = 15_000
+/** How many renewals in a row the issuer could not give, after this home refused the certificate, before the person is offered to certify again. */
+export const UNREACHABLE_OFFER = 3
+
+/** The certificate a person's home sent back in the fragment's `certificate`, or null. */
+export function certificateFromFragment(hash) {
+  const fragment = (hash || "").replace(/^#/, "")
+  if (!fragment.startsWith("certificate=")) return null
+  return decodeObject(fragment.slice("certificate=".length))
+}
+
+/** An unpadded base64url JSON object, or null. */
+export function decodeObject(text) {
+  if (typeof text !== "string" || !/^[A-Za-z0-9_-]+$/.test(text)) return null
+  try {
+    const object = JSON.parse(new TextDecoder("utf-8", {fatal: true}).decode(fromB64url(text)))
+    return object && typeof object === "object" && !Array.isArray(object) ? object : null
+  } catch (_error) {
+    return null
+  }
+}
+
+/** Whether `certificate` was issued by another home than `home`, the origin this page is at. */
+export const issuedElsewhere = (certificate, home) =>
+  Boolean(certificate && typeof certificate.issuer === "string" && certificate.issuer !== home)
+
+/**
+ * Whether a certificate is this device's at `home`: its device key, its
+ * client and this home as audience, and, when they are given, the issuer
+ * and the athanor the device asked for.
+ */
+export function certifies(certificate, {deviceKey, clientId, home, issuer, athanor}) {
+  return Boolean(
+    certificate &&
+      typeof certificate === "object" &&
+      typeof deviceKey === "string" &&
+      certificate.device_key === deviceKey &&
+      typeof clientId === "string" &&
+      certificate.client_id === clientId &&
+      typeof home === "string" &&
+      certificate.audience === home &&
+      typeof certificate.issuer === "string" &&
+      (issuer === undefined || certificate.issuer === issuer) &&
+      (athanor === undefined || certificate.athanor === athanor) &&
+      typeof certificate.expires_at === "number"
+  )
+}
+
+/**
+ * A home's origin from the address a person typed (`https://` when it
+ * names no scheme), or null when it is none: no credentials, no other
+ * scheme than http or https.
+ */
+export function homeOrigin(text) {
+  const value = String(text || "").trim()
+  if (value === "") return null
+  const withScheme = /^[a-z][a-z0-9+.-]*:\/\//i.test(value) ? value : `https://${value}`
+  let url
+  try {
+    url = new URL(withScheme)
+  } catch (_error) {
+    return null
+  }
+  if (!["https:", "http:"].includes(url.protocol) || url.username || url.password || !url.hostname) return null
+  return url.origin
+}
+
+/**
+ * The address that asks the person's home `issuer` to certify this
+ * device for `request`: this home as `audience`, the `athanor`, the
+ * `client_id` this home reserved and the `device_key`. Only the person's
+ * click there certifies it.
+ */
+export function certifyUrl(issuer, request) {
+  const body = {audience: request.audience, athanor: request.athanor, client_id: request.client_id, device_key: request.device_key}
+  return `${issuer}/carry#certify=${b64url(new TextEncoder().encode(jcs(body)))}`
+}
+
+/**
+ * Renew `certificate`, the one the device holds, at the home that issued
+ * it: the certificate locates its certification there, the home answers a
+ * challenge, and the device key's proof over it is answered with the
+ * replacement. Only a `renew` challenge of that home for this device's own
+ * key and client is signed; any other is refused before anything more is
+ * sent. Sent with no credentials. Answers the replacement, or throws an
+ * error whose `ended` says the certification ended there (the device is
+ * certified again) rather than that the home could not answer now (it is
+ * asked again).
+ */
+export async function renewElsewhere({certificate, privateKey, deviceKey, clientId, fetch, subtle = globalThis.crypto.subtle}) {
+  const url = `${certificate.issuer}/certify/v1/renew`
+  const {challenge} = await askIssuer(fetch, url, {certificate})
+  let proof
+  try {
+    proof = await prove(challenge, privateKey, {purpose: "renew", home: certificate.issuer, deviceKey, clientId}, subtle)
+  } catch (error) {
+    throw Object.assign(new Error("The home that certified this device answered a challenge this device did not ask for."), {
+      ended: false,
+      refused: Boolean(error.refused)
+    })
+  }
+  const answer = await askIssuer(fetch, url, {certificate, proof})
+  return answer.certificate
+}
+
+// One renewal call. A refusal that ends the certification (404, 409), and
+// one that refuses this device (401, 403), mean certifying it again; any
+// other is asked again later.
+async function askIssuer(fetchFn, url, body) {
+  let response
+  try {
+    response = await fetchFn(url, {
+      method: "POST",
+      mode: "cors",
+      credentials: "omit",
+      cache: "no-store",
+      headers: {"content-type": "application/json", accept: "application/json"},
+      body: JSON.stringify(body)
+    })
+  } catch (_error) {
+    throw Object.assign(new Error("The home that certified this device could not be reached."), {ended: false})
+  }
+
+  let answer = null
+  try {
+    answer = await response.json()
+  } catch (_error) {
+    answer = null
+  }
+  if (response.ok && answer && typeof answer === "object") return answer
+  const ended = [401, 403, 404, 409].includes(response.status)
+  const message = answer && typeof answer.message === "string" ? answer.message : `The home that certified this device answered ${response.status}.`
+  throw Object.assign(new Error(message), {ended, status: response.status})
+}
+
+// ---------------------------------------------------------------------------
 // The stored key and certificate
 // ---------------------------------------------------------------------------
 
 /**
  * The glass's store in IndexedDB: one record, the key pair (the private
  * key unexportable), the public key's encoding, the client id and the
- * certificate. `load` answers it or null.
+ * certificate. `load` answers it or null. Beside it, the pending record of
+ * a pairing that waits for the person's own home to certify it: the
+ * invitation's code, the key pair, what to certify and when it began
+ * (`loadPending`, `savePending`, `clearPending`); and the certification
+ * the person asked of their home when they named it: that home, the
+ * client, this home as audience, the athanor and when (`loadCertify`,
+ * `saveCertify`, `clearCertify`). A certificate coming back is taken only
+ * while that request stands, and only when it answers it.
  */
 export function openStore(indexedDB = globalThis.indexedDB, name = "cyfr-glass") {
   const open = () =>
@@ -249,18 +450,64 @@ export function openStore(indexedDB = globalThis.indexedDB, name = "cyfr-glass")
   return {
     load: () => run("readonly", (store) => store.get("device")).then((value) => value || null),
     save: (record) => run("readwrite", (store) => store.put(record, "device")).then(() => record),
-    clear: () => run("readwrite", (store) => store.delete("device")).then(() => null)
+    clear: () => run("readwrite", (store) => store.delete("device")).then(() => null),
+    loadPending: () => run("readonly", (store) => store.get("pending")).then((value) => value || null),
+    savePending: (record) => run("readwrite", (store) => store.put(record, "pending")).then(() => record),
+    clearPending: () => run("readwrite", (store) => store.delete("pending")).then(() => null),
+    loadCertify: () => run("readonly", (store) => store.get("certify")).then((value) => value || null),
+    saveCertify: (record) => run("readwrite", (store) => store.put(record, "certify")).then(() => record),
+    clearCertify: () => run("readwrite", (store) => store.delete("certify")).then(() => null)
   }
 }
 
-/** A store in memory, with the same three calls. */
-export function memoryStore(record = null) {
+/** A store in memory, with the same calls. */
+export function memoryStore(record = null, pendingRecord = null, certifyRecord = null) {
   let held = record
+  let pending = pendingRecord
+  let asked = certifyRecord
   return {
     load: async () => held,
     save: async (next) => (held = next),
-    clear: async () => (held = null)
+    clear: async () => (held = null),
+    loadPending: async () => pending,
+    savePending: async (next) => (pending = next),
+    clearPending: async () => (pending = null),
+    loadCertify: async () => asked,
+    saveCertify: async (next) => (asked = next),
+    clearCertify: async () => (asked = null)
   }
+}
+
+// A record within `PENDING_MS` of `now`; a stale one is erased.
+async function fresh(record, clear, now) {
+  if (!record) return null
+  if (typeof record.at === "number" && now >= record.at && now - record.at < PENDING_MS) return record
+  await clear()
+  return null
+}
+
+/** The pending pairing in `store` while it is within `PENDING_MS` of `now`; a stale one is erased. */
+export async function freshPending(store, now) {
+  return fresh(await store.loadPending(), () => store.clearPending(), now)
+}
+
+/** The certification the person asked of their home, while it is within `PENDING_MS` of `now`; a stale one is erased. */
+export async function freshCertify(store, now) {
+  return fresh(await store.loadCertify(), () => store.clearCertify(), now)
+}
+
+/**
+ * Whether `certificate`, come back in the fragment, answers `asked`, the
+ * certification the person asked of their home, for the device key
+ * `deviceKey` at this home, `home`: issued by that home, for that client,
+ * this home and that athanor.
+ */
+export function answersCertify(certificate, asked, {deviceKey, home}) {
+  return Boolean(
+    asked &&
+      asked.audience === home &&
+      certifies(certificate, {deviceKey, clientId: asked.client, home, issuer: asked.home, athanor: asked.athanor})
+  )
 }
 
 // ---------------------------------------------------------------------------
@@ -329,13 +576,36 @@ export function askerName(asker) {
  * hears each change of `status`, `pending` or `outcome`.
  *
  * `status` is `starting`, `unpaired`, `connecting`, `renewing`, `ready`,
- * `waiting` (closed, about to try again) or `revoked`.
+ * `waiting` (closed, about to try again), `recertify` (its person's home
+ * ended the certification: certify it again there) or `revoked`.
+ *
+ * `home` is the origin this page is at (by default, the device channel's),
+ * and `fetch` reaches the home that issued a certificate this home did not.
+ *
+ * `certifyAgain` says the person is offered to certify the device again at
+ * their home, and `certifyReason` why: `ended`, that home ended the
+ * certification, or `unreachable`, this home refused the certificate
+ * (`4408`) and that home could not renew it `UNREACHABLE_OFFER` times in a
+ * row, as when it was lost and the person restored elsewhere; then it is
+ * still asked again in the background.
  */
 export class Glass {
   // The browser's timers are called unbound: a browser refuses its own
   // `setTimeout` called as a method of anything else (Illegal invocation).
-  constructor({url, socket, store, subtle = globalThis.crypto?.subtle, now = () => Date.now(), setTimer = (act, ms) => setTimeout(act, ms), clearTimer = (timer) => clearTimeout(timer), onChange = () => {}}) {
-    Object.assign(this, {url, makeSocket: socket, store, subtle, now, setTimer, clearTimer, onChange})
+  constructor({url, socket, store, home = null, fetch = (resource, init) => globalThis.fetch(resource, init), subtle = globalThis.crypto?.subtle, now = () => Date.now(), setTimer = (act, ms) => setTimeout(act, ms), clearTimer = (timer) => clearTimeout(timer), onChange = () => {}}) {
+    Object.assign(this, {url, makeSocket: socket, store, home: home || socketOrigin(url), fetch, subtle, now, setTimer, clearTimer, onChange})
+    this.certifyAgain = false
+    this.certifyReason = null
+    // What this glass last asked of the home it is connected to (`connect`
+    // or `renew`): the one challenge it answers.
+    this.asked = null
+    // A certificate the person's home just issued, presented in place of
+    // the stored one until this home stands it.
+    this.candidate = null
+    // This home refused the certificate (`4408`), and the issuer's renewals
+    // that could not be had since.
+    this.refusedHere = false
+    this.unreachable = 0
     this.status = "starting"
     this.device = null
     this.ws = null
@@ -352,25 +622,34 @@ export class Glass {
     this.listenTimer = null
   }
 
-  async start() {
+  /**
+   * Connect the stored device under its certificate, or, given
+   * `candidate`, under a certificate the person's home just issued for it,
+   * which replaces the stored one only once this home stands it.
+   */
+  async start(candidate = null) {
     this.device = await this.store.load()
     if (!this.device || !this.device.certificate) return this.set("unpaired")
+    this.candidate = candidate
     this.connect()
   }
 
   // A new connection: `renew` under an expired certificate, `connect`
-  // otherwise. Nothing is sent but the exchange until `standing`.
+  // otherwise. Nothing is sent but the exchange until `standing`. A
+  // certificate another home issued is renewed there first.
   connect() {
     this.closeSocket()
-    const renewing = this.mustRenew || expired(this.device.certificate, this.now())
+    this.dropRequests()
+    const candidate = this.candidate
+    const renewing = !candidate && (this.mustRenew || expired(this.device.certificate, this.now()))
+    if (renewing && this.remote()) return this.renewAtIssuer()
     this.set(renewing ? "renewing" : "connecting")
     const ws = this.makeSocket(this.url)
     this.ws = ws
     ws.onopen = () => {
-      const opening = renewing
-        ? renewMessage(this.device.clientId, this.device.certificate)
-        : connectMessage(this.device.clientId, this.device.certificate)
-      this.send(opening)
+      const certificate = candidate || this.device.certificate
+      this.asked = renewing ? "renew" : "connect"
+      this.send(renewing ? renewMessage(this.device.clientId, certificate) : connectMessage(this.device.clientId, certificate))
     }
     ws.onmessage = (event) => this.receive(event.data)
     ws.onclose = (event) => this.closed(ws, event)
@@ -410,7 +689,7 @@ export class Glass {
 
     switch (type) {
       case "challenge":
-        return this.send(proofMessage(await prove(body.challenge, this.device.privateKey, this.subtle)))
+        return this.answer(body.challenge)
 
       case "certificate":
         this.device = {...this.device, certificate: body.certificate}
@@ -450,8 +729,41 @@ export class Glass {
     }
   }
 
-  standing() {
+  // The one challenge this glass asked for, answered: a `connect` of this
+  // home, or a `renew` of the home that issued its certificate, for its own
+  // key and client. Any other is left unanswered and nothing is signed;
+  // the home closes the connection.
+  async answer(challenge) {
+    const asked = this.asked
+    this.asked = null
+    if (!asked || !this.device) return
+    const home = asked === "renew" ? this.device.certificate.issuer : this.home
+    const expected = {purpose: asked, home, deviceKey: this.device.publicKey, clientId: this.device.clientId}
+    let proof
+    try {
+      proof = await prove(challenge, this.device.privateKey, expected, this.subtle)
+    } catch (_error) {
+      return
+    }
+    this.send(proofMessage(proof))
+  }
+
+  async standing() {
+    if (this.candidate) {
+      // This home stood the certificate the person's home just issued: it
+      // replaces the stored one now, and not before.
+      this.device = {...this.device, certificate: this.candidate}
+      this.candidate = null
+      this.offer(null)
+      try {
+        await this.store.save(this.device)
+      } catch (_error) {
+        // Kept for this page; the next page asks the person again.
+      }
+    }
     this.attempts = 0
+    this.refusedHere = false
+    this.unreachable = 0
     this.set("ready")
     this.scheduleRenewal()
     this.listen()
@@ -500,14 +812,116 @@ export class Glass {
   }
 
   // Half the certificate's life: renewed over the open connection, which
-  // keeps working under the old one until the replacement stands.
+  // keeps working under the old one until the replacement stands; one
+  // another home issued is renewed there, and presented on a new
+  // connection.
   scheduleRenewal() {
     if (this.renewTimer) this.clearTimer(this.renewTimer)
     const wait = Math.max(renewAt(this.device.certificate) - this.now(), 1_000)
     this.renewTimer = this.setTimer(() => {
       this.renewTimer = null
-      if (this.status === "ready") this.send(renewMessage(this.device.clientId))
+      if (this.status !== "ready") return
+      if (this.remote()) return this.refreshAtIssuer()
+      this.asked = "renew"
+      this.send(renewMessage(this.device.clientId))
     }, wait)
+  }
+
+  /** Whether the certificate this glass holds was issued by another home than this one. */
+  remote() {
+    return Boolean(this.home && this.device && issuedElsewhere(this.device.certificate, this.home))
+  }
+
+  /** What its person's home certifies this device for: this home, its athanor, its client and its key. */
+  certifyRequest() {
+    if (!this.device || !this.device.certificate) return null
+    return {audience: this.home, athanor: this.device.certificate.athanor, client_id: this.device.clientId, device_key: this.device.publicKey}
+  }
+
+  // An expired certificate, or one this home refused, renewed at the home
+  // that issued it before any connection: the replacement, or the offer to
+  // certify again, or another try shortly. After this home refused the
+  // certificate, an issuer that cannot renew it `UNREACHABLE_OFFER` times
+  // in a row may be lost for good: the offer is made, and the issuer is
+  // still asked again in the background.
+  async renewAtIssuer() {
+    const device = this.device
+    this.set("renewing")
+    try {
+      const certificate = await this.fromIssuer(device)
+      if (this.device !== device) return
+      this.device = {...device, certificate}
+      this.mustRenew = false
+      this.unreachable = 0
+      this.offer(null)
+      await this.store.save(this.device)
+      this.connect()
+    } catch (error) {
+      if (this.device !== device || this.status === "revoked") return
+      if (error.ended) {
+        this.offer("ended")
+        return this.set("recertify")
+      }
+      if (this.refusedHere && ++this.unreachable >= UNREACHABLE_OFFER && !this.certifyAgain) this.offer("unreachable")
+      return this.retry(Math.min(30_000, 1_000 * 2 ** Math.min(this.attempts, 5)))
+    }
+  }
+
+  // At half the certificate's life, while connected: the replacement from
+  // the issuing home is presented on a new connection; until then, and if
+  // the issuer cannot answer, the connection stands under the old one.
+  async refreshAtIssuer() {
+    const device = this.device
+    try {
+      const certificate = await this.fromIssuer(device)
+      if (this.device !== device) return
+      this.device = {...device, certificate}
+      this.offer(null)
+      await this.store.save(this.device)
+      this.connect()
+    } catch (error) {
+      if (this.device !== device || this.status === "revoked") return
+      if (error.ended) {
+        this.offer("ended")
+        return this.onChange(this)
+      }
+      if (this.renewTimer) this.clearTimer(this.renewTimer)
+      this.renewTimer = this.setTimer(() => {
+        this.renewTimer = null
+        if (this.status === "ready") this.refreshAtIssuer()
+      }, RENEW_RETRY_MS)
+    }
+  }
+
+  // The replacement from the home that issued the certificate held: this
+  // device's, for this home, from that same home and for the same athanor.
+  async fromIssuer(device) {
+    const held = device.certificate
+    const certificate = await renewElsewhere({
+      certificate: held,
+      privateKey: device.privateKey,
+      deviceKey: device.publicKey,
+      clientId: device.clientId,
+      fetch: this.fetch,
+      subtle: this.subtle
+    })
+    if (!certifies(certificate, {deviceKey: device.publicKey, clientId: device.clientId, home: this.home, issuer: held.issuer, athanor: held.athanor})) {
+      throw Object.assign(new Error("The home that certified this device answered another device's certificate."), {ended: false})
+    }
+    return certificate
+  }
+
+  // The offer to certify the device again at its person's home, and why;
+  // `null` withdraws it.
+  offer(reason) {
+    this.certifyAgain = Boolean(reason)
+    this.certifyReason = reason || null
+  }
+
+  // Requests on a connection being replaced are never answered there.
+  dropRequests() {
+    for (const {reject} of this.requests.values()) reject(new Error("closed"))
+    this.requests.clear()
   }
 
   /**
@@ -517,6 +931,11 @@ export class Glass {
    */
   async unpair() {
     this.closeSocket()
+    this.offer(null)
+    this.candidate = null
+    this.asked = null
+    this.refusedHere = false
+    this.unreachable = 0
     this.stopListenRetry()
     if (this.renewTimer) this.clearTimer(this.renewTimer)
     if (this.retryTimer) this.clearTimer(this.retryTimer)
@@ -539,6 +958,7 @@ export class Glass {
   closed(ws, event) {
     if (ws !== this.ws) return
     this.ws = null
+    this.asked = null
     for (const {reject} of this.requests.values()) reject(new Error("closed"))
     this.requests.clear()
     this.grants.clear()
@@ -553,7 +973,11 @@ export class Glass {
         return this.revoked()
       case 4408:
         // The certificate must be replaced: straight back, through renewal.
+        // One just brought from the person's home that this home refused
+        // is dropped, and the stored one stays.
+        this.candidate = null
         this.mustRenew = true
+        this.refusedHere = true
         return this.retry(0)
       case 1013:
         return this.retry(retryAfter(event.reason))
@@ -620,6 +1044,17 @@ export class Glass {
   set(status) {
     this.status = status
     this.onChange(this)
+  }
+}
+
+// The origin of the home whose device channel is at `url`.
+function socketOrigin(url) {
+  try {
+    const parsed = new URL(url)
+    const scheme = {"wss:": "https:", "ws:": "http:"}[parsed.protocol]
+    return scheme ? `${scheme}//${parsed.host}` : null
+  } catch (_error) {
+    return null
   }
 }
 

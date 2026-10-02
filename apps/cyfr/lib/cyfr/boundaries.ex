@@ -306,7 +306,7 @@ defmodule Cyfr.Boundaries do
     Arca.ProviderCredentialStorage Arca.WebhookStorage Arca.FrameCredentials
     Arca.PairedClients Arca.Users Arca.Members Arca.Athanors Arca.Doors
     Arca.PersonIdentities Arca.IdentityAttempts Arca.IdentityLog Arca.DirectoryHeads
-    Arca.DeviceCertificates Arca.PairingInvitations Arca.Passkeys
+    Arca.DeviceCertificates Arca.DeviceCertifications Arca.PairingInvitations Arca.Passkeys
     Arca.PendingConfirmations Arca.CarryActions Arca.InstallationClaims
     Arca.RequestRateWindows
   )
@@ -841,8 +841,8 @@ defmodule Cyfr.Boundaries do
       allow: ~w(
         CyfrWeb CyfrWeb.ContextGuard CyfrWeb.Endpoint CyfrWeb.MinimalPage CyfrWeb.PendingProbe
         CyfrWeb.Pipelines CyfrWeb.Plugs.ApiSecurityHeaders CyfrWeb.Plugs.AuthRateLimit
-        CyfrWeb.Plugs.ConfiguredUeberauth CyfrWeb.Plugs.FrameRequest CyfrWeb.Plugs.Headless
-        CyfrWeb.Router CyfrWeb.SafeRedirect CyfrWeb.SignInResponse
+        CyfrWeb.Plugs.BrowserCSP CyfrWeb.Plugs.ConfiguredUeberauth CyfrWeb.Plugs.FrameRequest
+        CyfrWeb.Plugs.Headless CyfrWeb.Router CyfrWeb.SafeRedirect CyfrWeb.SignInResponse
       ),
       reason:
         "the console reads the host's shared web tier and the composition triple its " <>
@@ -853,7 +853,8 @@ defmodule Cyfr.Boundaries do
           "public URL reads a global fact off the endpoint, `PrismWeb.verified_routes/0` " <>
           "names the endpoint and the router beside `CyfrWeb.static_paths/0`, because " <>
           "that is the triple `use Phoenix.VerifiedRoutes` takes, and `Prism.Router` " <>
-          "declares its pipelines from the shared browser definition and plugs. " <>
+          "declares its pipelines from the shared browser definition and plugs, the " <>
+          "glass's page's wider `connect-src` among them (`CyfrWeb.Plugs.BrowserCSP`). " <>
           "Boundary's exports are global, and `CyfrWeb` exports more of the shared tier than " <>
           "this roster to every surface that lists it, so no declaration can say it."
     },
@@ -1612,6 +1613,15 @@ defmodule Cyfr.Boundaries do
       why:
         "a directory entry or recovery, signed by a key the identifier's verified chain " <>
           "authorizes and verified against that chain before anything is written; no session"
+    },
+    device_key_proof: %{
+      admits: :credential,
+      why:
+        "a certified device's renewal at its person's home: the device key's proof over a " <>
+          "renewal challenge this home issued for a certification it recorded, under the " <>
+          "person's current `key_epoch` (`Sanctum.RemoteCertification`); no session or cookie " <>
+          "is read, and CORS answers any origin with no credentials, since the proof is the " <>
+          "only credential"
     },
     installation_capability: %{
       admits: :credential,

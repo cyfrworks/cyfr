@@ -9,8 +9,12 @@ defmodule Sanctum.Providers.Person do
   certificate for another home, and the sign-in carry that begins and
   completes here. The carry stores no saved-home list.
 
-  Every action is a person's, on the external plane, through an
-  interactive session (`consent: :interactive`). Enrolling, the kit and
+  Every action but one is a person's, on the external plane, through an
+  interactive session (`consent: :interactive`). The exception is
+  `person.renew_certificate`, `auth: :anonymous` as `pairing.complete` is:
+  a device at another home renews here holding no session of this home's,
+  and the proof of its device key over this home's challenge is its only
+  credential (`Sanctum.RemoteCertification`). Enrolling, the kit and
   adding a kit change recovery material; rotating changes the live key;
   linking and unlinking change the sign-in methods; certifying a device
   pairs it: each is a sensitive change Sanctum decides where it is made
@@ -60,16 +64,19 @@ defmodule Sanctum.Providers.Person do
       never a challenge, assertion, envelope or payload.
     * `person.carry_cancel` (`Sanctum.Carry.cancel/2`) — the carry's
       `action_id` and `phase: "cancelled"`.
-    * `person.certify` — `%{certificate: _}`, a device certificate with an
-      identity subject (`Sanctum.Person.issue_device_cert/4`) for another
-      home, after the `device_pairing` confirmation; this home pairs its
-      own devices through `pairing`.
+    * `person.certify` (`Sanctum.RemoteCertification.certify/2`) —
+      `%{certificate: _}`, a device certificate with an identity subject
+      for another home, after the `device_pairing` confirmation, recorded
+      as a certification here; this home pairs its own devices through
+      `pairing`.
+    * `person.renew_certificate` (`Sanctum.RemoteCertification.renew/2`) —
+      `%{challenge: _}` for a certificate this home issued, then
+      `%{certificate: _}`, its replacement, for the device key's proof
+      over that challenge, while the certification stands.
   """
 
   alias Prima.{Arg, Operation}
-  alias Prima.Identity.Encoding
-  alias Sanctum.{Carry, Context, IdentityFreshness, Recovery, SignIn}
-  alias Sanctum.Consent.Authz
+  alias Sanctum.{Carry, Context, IdentityFreshness, Recovery, RemoteCertification, SignIn}
   alias Sanctum.Providers.Assertion
 
   @doc false
@@ -79,7 +86,7 @@ defmodule Sanctum.Providers.Person do
     Operation.tool(
       operations() ++ Assertion.operations(),
       description:
-        "A person's identity at their own home: read its status, enroll and print the recovery kit, abandon an unfinished enrollment, add another kit, rotate the live key, link or unlink a sign-in door, certify a device for another home, and begin, list, cancel or complete a sign-in carry to another home.",
+        "A person's identity at their own home: read its status, enroll and print the recovery kit, abandon an unfinished enrollment, add another kit, rotate the live key, link or unlink a sign-in door, certify a device for another home and renew that certificate, and begin, list, cancel or complete a sign-in carry to another home.",
       title: "Person"
     )
   end
@@ -266,6 +273,25 @@ defmodule Sanctum.Providers.Person do
         kind: :write,
         planes: [:external],
         consent: :interactive
+      ),
+      Operation.new(
+        "person",
+        "renew_certificate",
+        "Renew a device certificate this home issued for another home",
+        [
+          Arg.new("certificate", :json,
+            required: true,
+            description:
+              "renew_certificate: a certificate this home issued for the device, which only locates its certification"
+          ),
+          Arg.new("proof", :json,
+            description:
+              "renew_certificate: the device key's signature over the renew challenge; absent, the answer is the challenge to sign"
+          )
+        ],
+        auth: :anonymous,
+        kind: :write,
+        planes: [:external]
       )
     ]
   end
@@ -371,7 +397,11 @@ defmodule Sanctum.Providers.Person do
   def handle(%Context{}, %{"action" => "carry_cancel"}),
     do: {:error, {:invalid_argument, "carry_cancel needs the action_id"}}
 
-  def handle(%Context{} = ctx, %{"action" => "certify"} = args), do: answer(certify(ctx, args))
+  def handle(%Context{} = ctx, %{"action" => "certify"} = args),
+    do: answer(RemoteCertification.certify(ctx, args))
+
+  def handle(%Context{} = ctx, %{"action" => "renew_certificate"} = args),
+    do: renewal(RemoteCertification.renew(ctx, Map.take(args, ["certificate", "proof"])))
 
   # The live key's rotation (`Sanctum.IdentityFreshness.rotate_live/3`):
   # the `key_rotation` confirmation, one durable attempt per request id,
@@ -393,91 +423,6 @@ defmodule Sanctum.Providers.Person do
 
   def handle(_ctx, %{"action" => action}), do: {:error, {:unknown_action, "person.#{action}"}}
   def handle(_ctx, _args), do: {:error, :action_missing}
-
-  # ---- certify -----------------------------------------------------------------
-
-  # A certificate for another home names the person's identifier and the
-  # `key_epoch` their row holds: the person must be enrolled. A device for
-  # this home pairs through `pairing`, whose certificate is local.
-  defp certify(%Context{user_id: user_id} = ctx, args) when is_binary(user_id) do
-    with {:ok, device_key} <- device_key(args["device_key"]),
-         {:ok, request} <- certify_request(args),
-         :ok <- identity_subject(user_id),
-         change = certify_change(args, request),
-         :ok <- Authz.confirm(ctx, :device_pairing, change),
-         {:ok, cert} <-
-           Sanctum.Person.issue_device_cert(user_id, device_key, request.client_id, %{
-             subject: :identity,
-             audience: request.audience,
-             athanor: request.athanor
-           }) do
-      {:ok, %{certificate: Prima.DeviceCert.encode(cert)}}
-    end
-  end
-
-  defp certify(%Context{}, _args), do: {:error, :not_found}
-
-  # Asked before the proof: a person with no identifier is told to enroll,
-  # and no confirmation is spent on a certificate that cannot be issued.
-  defp identity_subject(user_id) do
-    case Sanctum.Tenancy.Users.identifier(user_id) do
-      {:ok, identifier} when is_binary(identifier) -> :ok
-      {:ok, nil} -> {:error, :not_enrolled}
-      {:error, :not_found} -> {:error, :not_found}
-      {:error, _unanswered} -> {:error, :unavailable}
-    end
-  end
-
-  defp device_key(value) when is_binary(value) do
-    case Encoding.unb64(value, Encoding.key_bytes()) do
-      {:ok, key} -> {:ok, key}
-      :error -> {:error, {:invalid_argument, "The device_key is a 32-byte public key, base64url"}}
-    end
-  end
-
-  defp device_key(_value),
-    do: {:error, {:invalid_argument, "The device_key is a 32-byte public key, base64url"}}
-
-  defp certify_request(%{"audience" => audience, "athanor" => athanor, "client_id" => client_id})
-       when is_binary(audience) and is_binary(athanor) and is_binary(client_id) do
-    cond do
-      not Encoding.home?(audience) ->
-        {:error, {:invalid_argument, "The audience is a home's origin, like https://hub.example"}}
-
-      audience == Sanctum.Person.home() ->
-        {:error,
-         {:invalid_argument,
-          "certify is for another home; a device for this home pairs here through pairing"}}
-
-      true ->
-        {:ok, %{audience: audience, athanor: athanor, client_id: client_id}}
-    end
-  end
-
-  defp certify_request(_args),
-    do: {:error, {:invalid_argument, "certify needs the audience, the athanor and the client_id"}}
-
-  # What confirming a certificate approves: this device key, for this
-  # client at that home and athanor.
-  defp certify_change(args, request) do
-    %{
-      operation: "person.certify",
-      arguments: %{
-        "device_key" => args["device_key"],
-        "audience" => request.audience,
-        "athanor" => request.athanor,
-        "client_id" => request.client_id
-      },
-      resource: "a device at " <> request.audience,
-      details: %{
-        "audience" => request.audience,
-        "athanor" => request.athanor,
-        "client_id" => request.client_id,
-        "effect" =>
-          "Lets a device act for you at that home until its certificate expires or is revoked."
-      }
-    }
-  end
 
   # ---- answers -----------------------------------------------------------------
 
@@ -557,6 +502,12 @@ defmodule Sanctum.Providers.Person do
   defp refusal(:wrong_audience),
     do: {:invalid_argument, "A certificate for this home is a pairing's"}
 
+  defp refusal(:stale_key_epoch),
+    do:
+      {:conflict,
+       "Your identity's keys changed while this was confirmed, so nothing was certified; " <>
+         "certify again."}
+
   defp refusal(:unauthenticated),
     do: refused(:unauthenticated, :unauthenticated, "Sign in to change your identity.")
 
@@ -574,6 +525,46 @@ defmodule Sanctum.Providers.Person do
     do: {:invalid_argument, "The #{field} is not valid"}
 
   defp refusal(reason), do: reason
+
+  # A renewal's own refusals: the glass reads the class, and is certified
+  # again at its person's home for the ones that end a certification.
+  defp renewal({:ok, value}), do: {:ok, value}
+  defp renewal({:error, reason}), do: {:error, renewal_refusal(reason)}
+
+  defp renewal_refusal(:not_found),
+    do:
+      refused(
+        :not_found,
+        :not_found,
+        "This home holds no certification of that device; certify it again at your home."
+      )
+
+  defp renewal_refusal(:certification_ended),
+    do:
+      refused(
+        :conflict,
+        :certification_ended,
+        "Your keys changed since this device was certified; certify it again at your home."
+      )
+
+  defp renewal_refusal(:binding_changed),
+    do:
+      refused(
+        :conflict,
+        :binding_changed,
+        "This device was certified again since, for another key or athanor; certify it again."
+      )
+
+  defp renewal_refusal(:revoked),
+    do: refused(:conflict, :revoked, "This device's certification was withdrawn.")
+
+  defp renewal_refusal(:not_standing),
+    do: refused(:forbidden, :not_standing, "The person behind this device cannot sign here now.")
+
+  defp renewal_refusal(reason) when reason in [:proof_refused, :replayed],
+    do: refused(:unauthenticated, reason, "The device's proof of its key was refused.")
+
+  defp renewal_refusal(reason), do: refusal(reason)
 
   defp refused(class, reason, message),
     do: %Prima.Refusal{class: class, reason: reason, message: message}

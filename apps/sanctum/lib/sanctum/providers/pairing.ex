@@ -35,6 +35,9 @@ defmodule Sanctum.Providers.Pairing do
       person whose identity is at another home it carries, with both
       calls, the `certificate` their home issued for the reserved client,
       and that certificate is the answer; for anyone else it carries none.
+      Such a person's first call without one is answered the challenge and
+      `certify`, `{audience, athanor, client_id}`: what their home is to
+      certify (`person.certify` there).
     * `renew` answers the client's id and its replacement certificate. It
       is reached from the device channel's renewal exchange alone, under
       the renewal context the channel obtains for the client that proved
@@ -276,6 +279,9 @@ defmodule Sanctum.Providers.Pairing do
     end
   end
 
+  defp completed(%{challenge: challenge, certify: certify}),
+    do: %{challenge: Challenge.encode(challenge), certify: certify}
+
   defp completed(%{challenge: challenge}), do: %{challenge: Challenge.encode(challenge)}
 
   defp completed(%{client_id: client_id, certificate: certificate}),
@@ -315,8 +321,8 @@ defmodule Sanctum.Providers.Pairing do
       refused(
         :forbidden,
         :remote_identity_unavailable,
-        "A device of a person whose identity is at another home is certified again there, " <>
-          "not renewed here"
+        "A device of a person whose identity is at another home renews its certificate " <>
+          "there, not here"
       )
 
   defp refusal(:certificate_required),

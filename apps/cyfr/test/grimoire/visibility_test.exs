@@ -337,7 +337,7 @@ defmodule Grimoire.VisibilityTest do
       end
     end
 
-    test "the anonymous set is exactly session, the health check, a public tincture and a pairing's completion" do
+    test "the anonymous set is exactly session, the health check, a public tincture, a pairing's completion and a certificate's renewal" do
       anonymous =
         for tool_def <- live_tools(),
             name = tool_def["name"],
@@ -352,6 +352,7 @@ defmodule Grimoire.VisibilityTest do
           session.login session.logout session.whoami
           session.device_init session.device_poll session.read_resource
           system.status tincture.invoke_public pairing.complete
+          person.renew_certificate
         ))
 
       assert anonymous == expected

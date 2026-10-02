@@ -329,3 +329,77 @@ describe("at the signing home's /carry", () => {
     assert.deepEqual(win.assigned, ["x"])
   })
 })
+
+const certify = "certify=" + b64url({audience: "https://hub.example", athanor: "ath_hub", client_id: "pcl_hub", device_key: "k"})
+
+describe("what the first carry tests left open", () => {
+  test("a kept fragment /carry takes past the carry's lifetime is dropped, and hands nothing on", () => {
+    const storage = memoryStorage()
+    mount(fakeWindow("/login", "#" + challenge("car_9"), storage), "login", 1_000_000)
+
+    const late = mount(fakeWindow("/carry", "", storage), "source", 1_000_000 + LIFETIME_MS)
+    assert.deepEqual(late.pushed, [])
+    assert.equal(storage.getItem(SOURCE_KEY), null)
+
+    // Within the lifetime, the same fragment is handed on.
+    mount(fakeWindow("/login", "#" + challenge("car_9"), storage), "login", 2_000_000)
+    const fresh = mount(fakeWindow("/carry", "", storage), "source", 2_000_000 + LIFETIME_MS - 1)
+    assert.deepEqual(events(fresh.pushed), ["carry_challenge"])
+  })
+
+  test("the informational events carry nothing of the fragment", () => {
+    assert.deepEqual(mount(fakeWindow("/login", "#" + carry), "login").pushed, [{event: "cyfr_unsolicited", payload: {}}])
+
+    const oversized = "#carry=" + "A".repeat(MAX_FRAGMENT_BYTES + 1)
+    assert.deepEqual(mount(fakeWindow("/login", oversized), "login").pushed, [{event: "cyfr_oversized", payload: {}}])
+    assert.deepEqual(mount(fakeWindow("/carry", oversized), "source").pushed, [{event: "carry_oversized", payload: {}}])
+
+    const {handlers, pushed} = mount(fakeWindow("/carry"), "source")
+    handlers["carry:go"]({to: "https://hub.example/login#cyfr=" + "A".repeat(MAX_FRAGMENT_BYTES + 1)})
+    assert.deepEqual(pushed, [{event: "carry_oversized", payload: {}}])
+  })
+
+  test("a resumed exchange goes back to its home keeping no expectation, so no carry can use one", () => {
+    const storage = memoryStorage()
+    const win = fakeWindow("/login", "", storage)
+    const {handlers} = mount(win, "login", 5_000)
+
+    handlers["cyfr:go"]({to: "/auth/cyfr?ticket=abc"})
+    assert.deepEqual(win.assigned, ["/auth/cyfr?ticket=abc"])
+    assert.equal(storage.getItem(EXPECT_KEY), null)
+
+    // A carry arriving after it is unsolicited.
+    const after = mount(fakeWindow("/login", "#" + carry, storage), "login", 6_000)
+    assert.deepEqual(events(after.pushed), ["cyfr_unsolicited"])
+  })
+})
+
+describe("a device to certify", () => {
+  test("is its own kind, bounded like the others", () => {
+    assert.deepEqual(classify(certify), {kind: "certify", value: certify.slice(8)})
+    assert.equal(classify("certify=").kind, "unknown")
+    assert.equal(classify("certify=" + "A".repeat(MAX_FRAGMENT_BYTES + 1)).kind, "too_large")
+  })
+
+  test("is kept through the signing home's sign-in, then handed to /carry once, only to show", () => {
+    const storage = memoryStorage()
+    const atLogin = mount(fakeWindow("/login", "#" + certify, storage), "login", 1_000_000)
+    assert.deepEqual(atLogin.pushed, [])
+    assert.equal(sourceState(storage).transport.fragment, certify)
+
+    const landed = fakeWindow("/", "", storage)
+    assert.equal(resume(landed, 1_000_100), true)
+    assert.deepEqual(landed.assigned, ["/carry"])
+
+    const {pushed} = mount(fakeWindow("/carry", "", storage), "source", 1_000_200)
+    assert.deepEqual(pushed, [{event: "carry_certify", payload: {fragment: certify.slice(8)}}])
+    assert.equal(sourceState(storage).transport, null)
+  })
+
+  test("arriving at /carry signed in, it is handed on and cleared from the address", () => {
+    const win = fakeWindow("/carry", "#" + certify)
+    const {pushed} = mount(win, "source")
+    assert.deepEqual(events(pushed), ["carry_certify"])
+    assert.equal(win.location.hash, "")
+  })
+})

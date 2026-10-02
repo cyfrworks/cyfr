@@ -24,6 +24,7 @@ defmodule Emissary.Web do
     top_level?: true,
     deps: [Emissary, Grimoire, Sanctum, Arca, Cyfr, Compendium, Crucible, CyfrWeb],
     exports: [
+      CertificateRenewalController,
       DeviceChannel,
       DirectoryController,
       ExecutionEventsController,

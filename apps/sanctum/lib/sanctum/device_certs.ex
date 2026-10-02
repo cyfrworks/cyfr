@@ -73,8 +73,11 @@ defmodule Sanctum.DeviceCerts do
   rotated key is). This home never calls the person's home. Pairing reads
   the head live instead (`Sanctum.Pairing.complete/3`). A remote
   certificate is not renewed here: a `renew` for a remote person's client
-  is refused `:remote_identity_unavailable`, and the glass is certified
-  again at the person's home.
+  is refused `:remote_identity_unavailable`. The glass renews it at the
+  person's home by a proof of its device key
+  (`Sanctum.RemoteCertification`), and connects here again under the
+  replacement, which this home checks as it checks any certificate and
+  records nothing for.
 
   ## Verification bounds
 
@@ -121,7 +124,7 @@ defmodule Sanctum.DeviceCerts do
     * `:identity_stale` — a remote person's directory could not confirm
       their head fresh: the request pauses.
     * `:remote_identity_unavailable` — a renewal for a remote person's
-      client, which their own home certifies again.
+      client, which their own home renews.
     * `{:rate_limited, retry_after_ms}` — a verification bound is spent.
     * `:unavailable` — the store or a setting could not answer; never a
       verdict either way.

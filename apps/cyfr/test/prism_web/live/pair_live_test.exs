@@ -211,6 +211,50 @@ defmodule PrismWeb.PairLiveTest do
     assert [_one] = paired_clients(ctx)
   end
 
+  test "a code whose person's keys are at another home answers what that home is to certify, and pairs nothing without its certificate",
+       %{conn: conn} do
+    %{user: user, athanor: athanor, ctx: ctx, code: code} = invited!()
+
+    # From here the person is this home's remote person: their keys are at
+    # another home, which certifies their devices.
+    Arca.Repo.delete_all(
+      from(p in Arca.Schemas.PersonIdentity, where: p.user_id == ^user.user_id)
+    )
+
+    {:ok, _} =
+      Arca.PersonIdentities.create(Prima.Actor.system(), %{
+        user_id: user.user_id,
+        provenance: "remote",
+        identifier: "per_" <> String.duplicate("ab", 32),
+        directory_url: "https://dir.example"
+      })
+
+    {device_key, private} = key_pair()
+    key = Encoding.b64(device_key)
+    {:ok, view, _html} = live(conn, "/pair")
+    render_hook(view, "pair_start", %{"invitation_secret" => code, "device_key" => key})
+
+    assert %{challenge: challenge, certify: certify} = reply(view)
+
+    assert certify == %{
+             audience: Sanctum.Person.home(),
+             athanor: athanor.id,
+             client_id: challenge["client_id"]
+           }
+
+    {:ok, held} = Challenge.decode(challenge)
+
+    render_hook(view, "pair_proof", %{
+      "invitation_secret" => code,
+      "device_key" => key,
+      "proof" => Proof.encode(Proof.sign(held, private))
+    })
+
+    assert %{error: sentence} = reply(view)
+    assert sentence =~ "bring the certificate"
+    assert paired_clients(ctx) == []
+  end
+
   test "the completion is decided by the gate, and no decision holds the code", %{conn: conn} do
     %{code: code} = invited!()
     {:ok, view, _html} = live(conn, "/pair")
