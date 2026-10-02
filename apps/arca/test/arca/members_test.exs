@@ -77,6 +77,7 @@ defmodule Arca.MembersTest do
       assert {:error, :no_athanor} = Members.seat(nobody, %{user_id: "usr_1"})
       assert {:error, :no_athanor} = Members.find(nobody, "usr_1")
       assert {:error, :no_athanor} = Members.find_invited(nobody, "a@example.com")
+      assert {:error, :no_athanor} = Members.withdraw_invitation(nobody, "mem_x")
       assert {:error, :no_athanor} = Members.list(nobody)
       assert {:error, :no_athanor} = Members.count_active(nobody)
       assert {:error, :no_athanor} = Members.count_seats(nobody)
@@ -99,6 +100,7 @@ defmodule Arca.MembersTest do
       assert {:error, :no_athanor} = Members.seat(unresolved, %{user_id: "usr_1"})
       assert {:error, :no_athanor} = Members.find(unresolved, "usr_1")
       assert {:error, :no_athanor} = Members.find_invited(unresolved, "a@example.com")
+      assert {:error, :no_athanor} = Members.withdraw_invitation(unresolved, "mem_x")
       assert {:error, :no_athanor} = Members.list(unresolved)
       assert {:error, :no_athanor} = Members.count_active(unresolved)
       assert {:error, :no_athanor} = Members.count_seats(unresolved)
@@ -109,12 +111,10 @@ defmodule Arca.MembersTest do
     test "an athanor-scoped actor is refused by every across-tenants function" do
       watch_queries!()
       member = in_athanor("ath_somewhere")
-      row = %Arca.Schemas.Membership{id: "mem_x"}
 
       assert {:error, :cross_tenant} = Members.grant_platform(member, %{user_id: "usr_1"})
       assert {:error, :cross_tenant} = Members.get(member, "mem_x")
       assert {:error, :cross_tenant} = Members.find_platform(member, "usr_1")
-      assert {:error, :cross_tenant} = Members.delete(member, row.id)
       assert {:error, :cross_tenant} = Members.list_platform(member)
       assert {:error, :cross_tenant} = Members.list_active_for_user(member, "usr_1")
       assert {:error, :cross_tenant} = Members.shared_athanor?(member, "usr_1", "usr_2")
@@ -223,6 +223,42 @@ defmodule Arca.MembersTest do
       assert {:ok, %{status: "invited"}} =
                Members.find_invited(in_athanor(athanor.id), "invitee@example.com")
     end
+
+    test "an invitation is withdrawn by id while it is one; a seat, a grant, another athanor's row or no row is not found and stays" do
+      a = group!()
+      b = group!()
+      user = person_id()
+      email = "withdraw-#{System.unique_integer([:positive])}@example.com"
+      {:ok, seat} = Members.seat(in_athanor(a.id), %{user_id: user, added_by: "x"})
+      {:ok, grant} = Members.grant_platform(server(), %{user_id: user, added_by: "x"})
+
+      {:ok, invitation} =
+        Members.seat(in_athanor(a.id), %{email: email, status: "invited", added_by: "x"})
+
+      for {actor, id} <- [
+            {in_athanor(a.id), "mem_nobody"},
+            {in_athanor(a.id), seat.id},
+            {in_athanor(a.id), grant.id},
+            {in_athanor(b.id), invitation.id}
+          ] do
+        assert {:error, :not_found} = Members.withdraw_invitation(actor, id)
+      end
+
+      assert {:ok, 2} = Members.count_seats(in_athanor(a.id))
+      assert {:ok, [^user]} = Members.active_user_ids(in_athanor(a.id))
+      assert {:ok, %{id: grant_id}} = Members.find_platform(server(), user)
+      assert grant_id == grant.id
+
+      # The row that goes is the invitation the id names, and it goes once.
+      id = invitation.id
+
+      assert {:ok, %{id: ^id, status: "invited", email: ^email}} =
+               Members.withdraw_invitation(in_athanor(a.id), id)
+
+      assert {:error, :not_found} = Members.withdraw_invitation(in_athanor(a.id), id)
+      assert {:error, :not_found} = Members.find_invited(in_athanor(a.id), email)
+      assert {:ok, 1} = Members.count_seats(in_athanor(a.id))
+    end
   end
 
   describe "across tenants" do
@@ -239,22 +275,6 @@ defmodule Arca.MembersTest do
 
       assert {:ok, %{removed: 1, session_hashes: []}} = Members.revoke_platform(server(), user)
       assert {:error, :not_found} = Members.find_platform(server(), user)
-    end
-
-    test "a delete is addressed by id and rereads the row; an id with no row writes nothing" do
-      user = person_id()
-      {:ok, row} = Members.grant_platform(server(), %{user_id: user, added_by: "system"})
-      {:ok, before_rows} = Members.list_platform(server())
-
-      assert {:error, :not_found} = Members.delete(server(), "mem_nobody")
-      assert {:ok, ^before_rows} = Members.list_platform(server())
-      assert {:ok, %{id: id}} = Members.get(server(), row.id)
-      assert id == row.id
-
-      # The row that goes is the one the id names, as it reads now.
-      assert {:ok, %{id: ^id, user_id: ^user, scope: "platform"}} = Members.delete(server(), id)
-      assert {:error, :not_found} = Members.get(server(), id)
-      assert {:error, :not_found} = Members.delete(server(), id)
     end
 
     test "a person's rows are read across every athanor they sat in" do
@@ -325,6 +345,24 @@ defmodule Arca.MembersTest do
 
       assert {:ok, []} = Members.activate_invited(server(), user, email, DateTime.utc_now())
       assert {:ok, [%{status: "active", user_id: ^user}]} = Members.list(in_athanor(athanor.id))
+    end
+
+    test "an invitation claimed after it was read is a seat: withdrawing it by id is not found" do
+      athanor = group!()
+      user = person_id()
+      email = "raced-#{System.unique_integer([:positive])}@example.com"
+
+      {:ok, invitation} =
+        Members.seat(in_athanor(athanor.id), %{email: email, status: "invited", added_by: "x"})
+
+      assert {:ok, [_]} = Members.activate_invited(server(), user, email, DateTime.utc_now())
+
+      assert {:error, :not_found} =
+               Members.withdraw_invitation(in_athanor(athanor.id), invitation.id)
+
+      assert {:ok, [^user]} = Members.active_user_ids(in_athanor(athanor.id))
+      assert {:ok, %{id: id, status: "active"}} = Members.get(server(), invitation.id)
+      assert id == invitation.id
     end
 
     test "an invitation already withdrawn claims nothing" do
@@ -646,7 +684,8 @@ defmodule Arca.MembersLockTest do
   waiting at the lock its transaction takes at entry. Every writer of a
   row naming a person — a seat, an email or identifier claim, a platform
   grant — takes the person's lock first, so none overtakes a leave or a
-  denial holding them.
+  denial holding them. A withdrawal waiting behind an uncommitted claim
+  of its invitation meets the seat the claim made, and deletes nothing.
   """
 
   use ExUnit.Case, async: false
@@ -767,6 +806,72 @@ defmodule Arca.MembersLockTest do
     assert {:error, :stale_identity} = Task.await(granter, 25_000)
 
     assert {:error, :not_found} = unboxed(fn -> Members.find_platform(server(), user.id) end)
+  end
+
+  test "a withdrawal waiting behind an uncommitted claim of the invitation deletes nothing", %{
+    user: user
+  } do
+    n = System.unique_integer([:positive])
+    email = "lock-withdraw#{n}@example.com"
+
+    {:ok, athanor} =
+      unboxed(fn ->
+        Arca.Athanors.insert(server(), %{
+          kind: "group",
+          name: "W#{n}",
+          slug: "mem-withdraw-#{n}",
+          created_by: "system"
+        })
+      end)
+
+    on_exit(fn ->
+      unboxed(fn ->
+        Arca.Repo.delete_all(where(Membership, athanor_id: ^athanor.id))
+        Arca.Repo.delete_all(where(Athanor, id: ^athanor.id))
+      end)
+    end)
+
+    {:ok, invitation} =
+      unboxed(fn ->
+        Members.seat(in_athanor(athanor.id), %{email: email, status: "invited", added_by: "x"})
+      end)
+
+    test = self()
+
+    # The claim's statement, held uncommitted: the invited row is already
+    # the seat inside this transaction.
+    claimer =
+      Task.async(fn ->
+        unboxed(fn ->
+          Arca.Repo.locking_transaction(fn ->
+            {1, _} =
+              Arca.Repo.update_all(where(Membership, id: ^invitation.id, status: "invited"),
+                set: [user_id: user.id, status: "active", email: nil]
+              )
+
+            send(test, :claimed)
+
+            receive do
+              :commit -> :ok
+            end
+          end)
+        end)
+      end)
+
+    assert_receive :claimed, 5_000
+
+    withdrawer =
+      Task.async(fn ->
+        unboxed(fn -> Members.withdraw_invitation(in_athanor(athanor.id), invitation.id) end)
+      end)
+
+    refute Task.yield(withdrawer, 300), "the withdrawal decided while the claim was uncommitted"
+    send(claimer.pid, :commit)
+    assert {:ok, :ok} = Task.await(claimer, 25_000)
+    assert {:error, :not_found} = Task.await(withdrawer, 25_000)
+
+    assert {:ok, [seated]} = unboxed(fn -> Members.active_user_ids(in_athanor(athanor.id)) end)
+    assert seated == user.id
   end
 
   @tag :postgres

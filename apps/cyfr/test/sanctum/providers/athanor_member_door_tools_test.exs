@@ -442,6 +442,91 @@ defmodule Sanctum.Providers.AthanorMemberDoorToolsTest do
              })
   end
 
+  test "member.remove with invitation withdraws only a pending invitation: a claimed one is not found and its member stays",
+       %{alice: alice, ctx: ctx, n: n} do
+    a = ctx.(alice, Sanctum.TestContext.athanor_id(), [])
+    {:ok, group} = call(a, "athanor", %{"action" => "create", "name" => "Withdraw #{n}"})
+    identifier = "per_" <> Prima.Digest.sha256_hex("member-withdraw-#{n}")
+    email = "withdraw#{n}@example.com"
+
+    withdraw =
+      &Map.merge(%{"action" => "remove", "athanor" => group.id, "invitation" => true}, &1)
+
+    # Pending: each is withdrawn, and a second withdrawal finds nothing.
+    for person <- [%{"identifier" => identifier}, %{"email" => email}] do
+      {:ok, _} = call(a, "member", Map.merge(%{"action" => "add", "athanor" => group.id}, person))
+      assert {:ok, %{state: "removed"}} = call(a, "member", withdraw.(person))
+      assert {:error, {:not_found, "Invitation", _}} = call(a, "member", withdraw.(person))
+    end
+
+    refute Enum.any?(rows!(Members.list_by_athanor(group.id)), &(&1.status == "invited"))
+
+    # Claimed by the invitees' first sign-ins: the invitation is a seat
+    # now, and a withdrawal reaches no seat.
+    for person <- [%{"identifier" => identifier}, %{"email" => email}] do
+      {:ok, _} = call(a, "member", Map.merge(%{"action" => "add", "athanor" => group.id}, person))
+    end
+
+    {:ok, by_identifier} =
+      Sanctum.SignIn.admitted(
+        %{
+          id: Sanctum.Auth.Identity.cyfr_key("https://dir.example", identifier),
+          provider: "cyfr",
+          email: nil,
+          verified: :unknown,
+          name: nil,
+          remote: %{identifier: identifier, directory_url: "https://dir.example"}
+        },
+        :allowed
+      )
+
+    {:ok, by_email} =
+      Users.upsert_from_provider(%{
+        id: "github|https://github.com|withdraw-#{n}",
+        provider: "github",
+        email: email,
+        verified: true
+      })
+
+    {:ok, 1} = Members.activate_invited(by_email)
+    assert Members.member?(by_identifier.id, group.id)
+    assert Members.member?(by_email.id, group.id)
+
+    assert {:error, {:not_found, "Invitation", ^identifier}} =
+             call(a, "member", withdraw.(%{"identifier" => identifier}))
+
+    assert {:error, {:not_found, "Invitation", ^email}} =
+             call(a, "member", withdraw.(%{"email" => email}))
+
+    assert Members.member?(by_identifier.id, group.id)
+    assert Members.member?(by_email.id, group.id)
+
+    # A user id holds no invitation; the flag beside one is refused before
+    # anything is read.
+    assert {:error, {:invalid_argument, "invitation names an email or an identifier"}} =
+             call(a, "member", withdraw.(%{"user_id" => by_email.id}))
+
+    assert Members.member?(by_email.id, group.id)
+
+    # The flag is a boolean, as declared: the gate refuses anything else.
+    assert {:error,
+            %Prima.Refusal{
+              stage: :admission,
+              reason: {:invalid_argument, "Field 'invitation' must be a boolean"}
+            }} =
+             call(a, "member", withdraw.(%{"identifier" => identifier, "invitation" => "yes"}))
+
+    # Without the flag, the identifier names its holder, who is removed.
+    assert {:ok, %{state: "removed"}} =
+             call(a, "member", %{
+               "action" => "remove",
+               "athanor" => group.id,
+               "identifier" => identifier
+             })
+
+    refute Members.member?(by_identifier.id, group.id)
+  end
+
   test "a person here is added and removed by their identifier, and keeps their identity",
        %{alice: alice, ctx: ctx, n: n} do
     a = ctx.(alice, Sanctum.TestContext.athanor_id(), [])

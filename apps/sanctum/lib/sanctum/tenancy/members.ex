@@ -557,12 +557,50 @@ defmodule Sanctum.Tenancy.Members do
   def withdraw_invites_for_identifier(_), do: 0
 
   @doc """
-  Delete one membership row as it stands: how an invitation is withdrawn.
-  It retires nothing a seat held; a person leaves an athanor through
-  `remove_member/2`.
+  Withdraw one invitation row, and answer the row that went. The row goes
+  only while it is still an invitation (`Arca.Members.withdraw_invitation/2`):
+  a first sign-in claims an invitation by turning its row into the seat
+  in place, so a row read as an invitation may be a seat by the time it
+  is withdrawn, and then the answer is `{:error, :not_found}` and the seat
+  stands. A person leaves an athanor only through `remove_member/2`.
   """
   @spec remove(membership()) :: {:ok, membership()} | {:error, term()}
-  def remove(%{id: id}) when is_binary(id), do: Arca.Members.delete(server(), id)
+  def remove(%{id: id, athanor_id: athanor_id}) when is_binary(id) and is_binary(athanor_id),
+    do: Arca.Members.withdraw_invitation(in_athanor(athanor_id), id)
+
+  # A row naming no athanor is a platform grant, never an invitation.
+  def remove(%{id: id}) when is_binary(id), do: {:error, :not_found}
+
+  @doc """
+  Withdraw the pending invitation an address or a person identifier holds
+  in the athanor, and nothing else: `{:error, :not_found}` when there is
+  none, including once a first sign-in has claimed it, even between this
+  lookup and the delete. A claimed invitation is a seat, and a seat is
+  removed only through `remove_member/2`.
+  """
+  @spec withdraw_invitation(
+          Sanctum.Tenancy.Athanors.athanor(),
+          [email: String.t()] | [identifier: String.t()]
+        ) :: :ok | {:error, term()}
+  def withdraw_invitation(%{id: athanor_id}, email: email) when is_binary(email) do
+    with {:ok, row} <- Arca.Members.find_invited(in_athanor(athanor_id), String.downcase(email)) do
+      withdrawn(athanor_id, row)
+    end
+  end
+
+  def withdraw_invitation(%{id: athanor_id}, identifier: identifier)
+      when is_binary(identifier) do
+    with {:ok, row} <- Arca.Members.find_invited_identifier(in_athanor(athanor_id), identifier) do
+      withdrawn(athanor_id, row)
+    end
+  end
+
+  defp withdrawn(athanor_id, row) do
+    with {:ok, _row} <- remove(row) do
+      Sanctum.Notify.member_changed(athanor_id)
+      :ok
+    end
+  end
 
   @doc """
   Remove a person from an athanor (or a pending invite by email or by
@@ -578,8 +616,11 @@ defmodule Sanctum.Tenancy.Members do
   retired here with it. A follow left behind would resume the moment they
   are re-added, so a returning member starts unfollowed like a new one.
 
-  `identifier:` withdraws the invitation that identifier holds here, or,
-  when it holds none, removes the person here who holds the identifier.
+  `email:` withdraws the invitation that address holds here, as
+  `withdraw_invitation/2` does. `identifier:` withdraws the invitation that
+  identifier holds here, or, when it holds none (a claim that lands
+  between the lookup and the delete included), removes the person here
+  who holds the identifier, through the same transition.
   """
   @spec remove_member(
           Sanctum.Tenancy.Athanors.athanor(),
@@ -607,31 +648,19 @@ defmodule Sanctum.Tenancy.Members do
     end
   end
 
-  def remove_member(%{id: athanor_id}, email: email) when is_binary(email) do
-    with {:ok, row} <- Arca.Members.find_invited(in_athanor(athanor_id), String.downcase(email)),
-         {:ok, _} <- remove(row) do
-      Sanctum.Notify.member_changed(athanor_id)
-      :ok
-    end
-  end
+  def remove_member(%{id: _} = athanor, email: email) when is_binary(email),
+    do: withdraw_invitation(athanor, email: email)
 
-  def remove_member(%{id: athanor_id} = athanor, identifier: identifier)
-      when is_binary(identifier) do
-    case Arca.Members.find_invited_identifier(in_athanor(athanor_id), identifier) do
-      {:ok, row} ->
-        with {:ok, _} <- remove(row) do
-          Sanctum.Notify.member_changed(athanor_id)
-          :ok
-        end
-
+  def remove_member(%{id: _} = athanor, identifier: identifier) when is_binary(identifier) do
+    case withdraw_invitation(athanor, identifier: identifier) do
       {:error, :not_found} ->
         case Users.get_by_identifier(identifier) do
           {:ok, %{id: user_id}} -> remove_member(athanor, user_id: user_id)
           {:error, _} = err -> err
         end
 
-      {:error, _} = err ->
-        err
+      other ->
+        other
     end
   end
 

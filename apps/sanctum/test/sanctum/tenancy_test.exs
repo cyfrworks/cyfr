@@ -193,8 +193,8 @@ defmodule Sanctum.TenancyTest do
 
       assert {:ok, %{platform_admin: true}} = Tenancy.revalidate(ctx)
 
-      [m] = rows!(Members.list_by_user(uid))
-      {:ok, _} = Members.remove(m)
+      [_grant] = rows!(Members.list_by_user(uid))
+      :ok = Members.revoke_platform(uid)
 
       # No memberships → no capability, no athanor; the tenant gate then
       # rejects tenant-scoped routes.

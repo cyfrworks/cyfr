@@ -15,9 +15,13 @@ defmodule Sanctum.Providers.Member do
   used to enumerate the server's people. Removing a member or leaving
   retires what the person holds in that athanor
   (`Sanctum.Tenancy.Members.remove_member/2`); removing by identifier
-  withdraws its invitation, or removes the person who holds it. An
-  identifier stands alone, never beside an email or a user id. Mutations
-  are a person's act; an API-key context is refused.
+  withdraws its invitation, or removes the person who holds it. With
+  `invitation: true`, removing by email or identifier withdraws only a
+  pending invitation and answers not found once it has been accepted, so
+  a withdrawal that loses the race with the invitee's first sign-in
+  leaves them seated. An identifier stands alone, never beside an email
+  or a user id. Mutations are a person's act; an API-key context is
+  refused.
   """
 
   require Logger
@@ -90,6 +94,10 @@ defmodule Sanctum.Providers.Member do
             Arg.new("identifier", :string,
               description:
                 "The person's identifier (per_…), in place of an email or a user id (add, remove)"
+            ),
+            Arg.new("invitation", :boolean,
+              description:
+                "With an email or an identifier: withdraw only its pending invitation, never a member, and answer not found once it has been accepted (remove)"
             )
           ],
           kind: :destructive,
@@ -184,13 +192,22 @@ defmodule Sanctum.Providers.Member do
   def handle(%Context{} = ctx, %{"action" => "remove"} = args) do
     # The person named is checked for its shape before the athanor is read.
     with {:ok, target} <- target(args),
+         {:ok, invitation_only} <- invitation_only(args, target),
          {:ok, athanor, _focused} <- Athanor.resolve(ctx, args) do
-      case Members.remove_member(athanor, target) do
+      removed =
+        if invitation_only,
+          do: Members.withdraw_invitation(athanor, target),
+          else: Members.remove_member(athanor, target)
+
+      case removed do
         :ok ->
           {:ok, %{athanor: athanor.id, member: shown(target), state: "removed"}}
 
         {:error, :person_athanor} ->
           {:error, {:invalid_argument, "You cannot remove the owner of a person's athanor"}}
+
+        {:error, :not_found} when invitation_only ->
+          {:error, {:not_found, "Invitation", named(target)}}
 
         {:error, :not_found} ->
           {:error, {:not_found, "Member", named(target)}}
@@ -239,6 +256,15 @@ defmodule Sanctum.Providers.Member do
 
   defp target(_),
     do: {:error, {:invalid_argument, "Missing required argument: email, user_id or identifier"}}
+
+  # `invitation: true` withdraws a pending invitation and never reaches a
+  # seat. Only an address or an identifier holds one; a user id names a
+  # person already here.
+  defp invitation_only(%{"invitation" => true}, user_id: _),
+    do: {:error, {:invalid_argument, "invitation names an email or an identifier"}}
+
+  defp invitation_only(%{"invitation" => true}, _target), do: {:ok, true}
+  defp invitation_only(_args, _target), do: {:ok, false}
 
   defp shown(email: email), do: %{email: String.downcase(email)}
   defp shown(user_id: user_id), do: %{user_id: user_id}
