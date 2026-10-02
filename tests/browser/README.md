@@ -28,8 +28,8 @@ installed (`browser_picker_layout`), so the shell runs no desktop and draws
 the picker the frame experiments launch from; the desktop itself is the
 canvas proof's (`tests/canvas-proof/`). The tincture, containment and
 canvas proofs (`tests/tincture-proof/`, `tests/hostile-frame-proof/`,
-`tests/canvas-proof/`) use the same shape. The `browser` job of
-`.github/workflows/test.yml` runs them.
+`tests/canvas-proof/`) use the same shape; [The proofs](#the-proofs) lists
+every proof and its shape.
 
 Every browser reaches the cell through the harness's proxy (`startProxy`),
 which forwards `cyfr.test` to it and `attacker.test` to the attacker's
@@ -132,6 +132,27 @@ It writes `multi-home-smoke.json` and `multi-home-smoke.md` into
 breaks a run on purpose: `unsigned` has the stranger sign `beta.test`, so
 every browser refuses beta and the smoke fails; `silent` stops beta's
 server before the browsers start, so the run fails naming the cell.
+
+## The proofs
+
+Every proof the harness serves, with its shape. The `browser` job of
+`.github/workflows/test.yml` runs each one, in this order, on the release
+the frame-facts experiment built (`RELEASE_BOOT_SKIP_BUILD=1`). A passkey
+ceremony is Chromium's alone, whose virtual authenticator a proof drives,
+so a proof that needs one runs its passkey steps in Chromium. Each proof's
+own README holds its steps and its record.
+
+| Proof | Directory | Shape | Browsers |
+|---|---|---|---|
+| frame facts | `tests/browser/` (`run.sh`) | one cell, `cyfr.test` | Chromium, Firefox and WebKit |
+| tincture | `tests/tincture-proof/` | one cell, `cyfr.test` | Chromium, Firefox and WebKit |
+| containment (the hostile frame) | `tests/hostile-frame-proof/` | one cell, `cyfr.test` | Chromium, Firefox and WebKit; the prompt and pointer-lock attempts in Chromium's full build alone |
+| pairing | `tests/pairing-proof/` | one home, `home.test` | Chromium |
+| multi-home smoke | `tests/multi-home-smoke/` | two homes, `alpha.test` and `beta.test` | Chromium, Firefox and WebKit; the passkey in Chromium |
+| identity | `tests/identity-proof/` | the homes `a.test`, `b.test`, `c.test`, `c2.test` and `c3.test`, and the directory `dir.test` | Chromium |
+| join | `tests/join-proof/` | the homes `a.test`, `a2.test` and `h.test`, and the directories `dir.test` and `dir2.test` | Chromium; the sign-in at the hub, the carry and a second browser profile in Firefox and WebKit as well |
+| grant | `tests/grant-proof/` | one home, `home.test` | Chromium |
+| canvas | `tests/canvas-proof/` | one cell, `cyfr.test`, and a PostgreSQL cell when `CANVAS_PROOF_PG_URL` names a database | Chromium, Firefox and WebKit |
 
 ## The record
 

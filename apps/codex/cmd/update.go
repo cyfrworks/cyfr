@@ -56,7 +56,7 @@ var updateCmd = &cobra.Command{
 			return fmt.Errorf("Failed to update scaffold files: %w", err)
 		}
 
-		fmt.Println("Scaffold files updated (component-guide.md, tincture-guide.md, integration-guide.md, wit/, aqua/).")
+		fmt.Printf("Scaffold files updated (%s, wit/, aqua/).\n", strings.Join(scaffold.Guides, ", "))
 
 		// Ensure docker-compose.yml has all the cyfr-server fields. Auto-adds
 		// any missing volume mounts, container_name, env_file, and ports under

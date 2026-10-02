@@ -1068,40 +1068,16 @@ A typical live-data pipeline:
 
 ---
 
-## Environment Variables Reference
+## Configuration
 
-### Required for Production
-
-| Variable | Description | Example |
-|----------|-------------|---------|
-| `CYFR_SECRET_KEY_BASE` | Phoenix secret key base (generated during project init) | `<64-byte random base64>` |
-
-### Server
-
-| Variable | Default | Description |
-|----------|---------|-------------|
-| `CYFR_HOST` | `localhost` | Hostname for URL generation (not the bind address) |
-| `CYFR_PORT` | `4000` | Server port |
-| `CYFR_BIND_ADDRESS` | `0.0.0.0` | Network bind address for the MCP endpoint |
-| `CYFR_DATABASE_PATH` | `data/cyfr.db` | SQLite database path |
-| `CYFR_DB_POOL_SIZE` | `20` | Database connection pool size |
-| `CYFR_DATA_PATH` | `data` | The one runtime storage root (athanor data and components, caches) |
-| `CYFR_SEED_PATH` | `seed` | Seed tree (component bundle + AQUA template), read in place |
-| `CYFR_BEHIND_PROXY` | — | Set to `true` when behind a TLS-terminating reverse proxy |
-
-### Authentication
-
-| Variable | Default | Description |
-|----------|---------|-------------|
-| `CYFR_GITHUB_CLIENT_ID` | — | GitHub OAuth app client ID (for `cyfr login`) |
-| `CYFR_GOOGLE_CLIENT_ID` | — | Google OAuth client ID (alternative sign-in provider) |
-| `CYFR_GOOGLE_CLIENT_SECRET` | — | Google OAuth client secret |
-| `CYFR_SESSION_TTL_HOURS` | `720` | Session idle timeout in hours (30 days; `0` = never expire) |
-| `CYFR_AUTH_PROVIDER` | auto-detect | Force auth provider: `oauth` (GitHub/Google) or `oidc` (federated) |
-| `CYFR_PLATFORM_ADMIN_EMAILS` | — | Comma-separated emails of the server's operators (platform admins). They are always let in and manage the door — the server allowlist (`cyfr admin allow <email\|user_id\|*>`) that decides who else may sign in. Everyone not on either list is refused at sign-in (403). |
-| `CYFR_MAX_ATHANORS`, `CYFR_MAX_GROUPS_PER_PERSON`, `CYFR_MAX_MEMBERS_PER_GROUP`, `CYFR_MINT_PER_HOUR`, `CYFR_ATHANOR_STORAGE_BYTES` | unset (off) | Public-door caps for a server whose allowlist is `*`. Note `CYFR_ATHANOR_STORAGE_BYTES` in particular: unset, an athanor's storage has no total-byte ceiling (each write is still bounded, and files per scope are backstopped) — a server exposed to others sets it deliberately. |
-| `CYFR_MAX_THREADS_PER_ATHANOR` | `1000` | Threads one athanor may hold (`0` = off). A thread is a row any member — or any headless client of theirs, via `thread.create` — can mint, each with a follow row of its own, so an athanor's count needs a ceiling the way its DMs do. |
-| `CYFR_MAX_PAIRS_PER_PERSON` | `200` | Active DMs one person may hold open (`0` = off). A DM is minted for two and asks nobody else's consent, so the cap is checked for both people; without it one member of a large room could spend `CYFR_MAX_ATHANORS` for everyone by opening a DM with every co-member. |
+Every variable the `cyfr` server reads and every platform setting, each
+with what it sets and its default, is in
+[configuration-guide.md](configuration-guide.md), rendered from the
+server's settings roster; this guide does not repeat them. `.env.example`
+is the starting `.env`, and the execution worker's and the Locus
+services' own settings are in `.env.opus.example` and
+`.env.locus.example`. What follows is what an integrator needs beyond
+the values themselves.
 
 ### Platform admins
 
@@ -1114,7 +1090,7 @@ own athanor past the server caps, and able to run the operator verbs
 (`door.*`, `execution.force_release`)
 — but working inside one athanor at a time like everyone else; there is no
 cross-athanor reach. The **server allowlist** (the door — `cyfr admin allow
-<email|user_id|*>`, `cyfr admin deny …`, or the Settings page) is who else may
+<email|user_id|identifier|*>`, `cyfr admin deny …`, or the Settings page) is who else may
 sign in at all: a match on first sign-in lets them in, no match is a 403, and
 `*` lets in anyone the configured provider authenticates. Groups never open the
 door: adding an unknown email to a group leaves an invitation that activates on
@@ -1142,22 +1118,6 @@ three variables are required when oidc is selected — the server refuses to boo
 otherwise rather than silently degrading to no authentication. The issuer must
 not be `github.com`/`accounts.google.com` (use GitHub/Google OAuth directly).
 
-| Variable | Description |
-|----------|-------------|
-| `CYFR_OIDC_ISSUER` | OIDC issuer URL (e.g., `https://auth.example.com`) |
-| `CYFR_OIDC_CLIENT_ID` | OIDC client ID |
-| `CYFR_OIDC_CLIENT_SECRET` | OIDC client secret |
-
-### Storage and database
-
-| Variable | Default | Description |
-|----------|---------|-------------|
-| `CYFR_STORAGE` | `local` | `local` (filesystem) or `s3`. `s3` requires the `CYFR_S3_*` set |
-| `CYFR_S3_BUCKET` / `CYFR_S3_REGION` | — | Required for S3 |
-| `CYFR_S3_ACCESS_KEY_ID` / `CYFR_S3_SECRET_ACCESS_KEY` | — | Required for S3 |
-| `CYFR_S3_ENDPOINT` / `CYFR_S3_PREFIX` / `CYFR_S3_PATH_STYLE` | — | Optional (MinIO etc.) |
-| `CYFR_DATABASE_URL` | — | Required for a Postgres build (adapter is chosen at build time via `CYFR_DATABASE=postgres`; the published image is SQLite) |
-
 ### Several members on one database (a cell)
 
 One server per database is the default: a second one pointed at the same
@@ -1165,15 +1125,10 @@ database refuses to boot. A **cell** is several control-plane members
 sharing one database, one object store and one set of workers, each
 holding its own slot and taking a peer's work only after that peer's
 lease has run out on the database's clock. `CYFR_CLUSTER=1` turns it on,
-and it boots only with every condition below — each missing one is a
-named refusal at boot.
-
-| Variable | Default | Description |
-|----------|---------|-------------|
-| `CYFR_CLUSTER` | `false` | Several members share this database as one cell. Needs Postgres, `CYFR_STORAGE=s3`, TLS distribution, `CYFR_CELL_COOKIE`, a topology, `CYFR_OPUS_KEY` and this member's own `CYFR_HOST_API_URL` |
-| `CYFR_CELL_COOKIE` | — | The cookie that bounds this cell: at least 32 characters, the same on every member, and the value each member's BEAM runs under (`RELEASE_COOKIE`, or `-setcookie`). An ambient `~/.erlang.cookie` is the machine's, not the cell's |
-| `CYFR_CLUSTER_NODES` | — | The members, comma-separated (`cyfr@10.0.0.1,cyfr@10.0.0.2`) |
-| `CYFR_CLUSTER_DNS_QUERY` / `CYFR_CLUSTER_NODE_BASENAME` | — | The alternative to the list: a headless service to resolve, and the basename each member's node name uses (`<basename>@<address>`) |
+and it boots only with Postgres, `CYFR_STORAGE=s3`, TLS distribution,
+`CYFR_CELL_COOKIE`, a discovery topology, a shared `CYFR_OPUS_KEY` and
+this member's own `CYFR_HOST_API_URL`; each missing one is a named
+refusal at boot, and the configuration guide says what each one sets.
 
 Distribution must be TLS: start every member with `-proto_dist inet_tls`
 and an `-ssl_dist_optfile` naming its certificate, key and CA. A cell of
@@ -1227,18 +1182,6 @@ rather than misread it. The engine resolves no name: a run's outbound
 address is the one CYFR pins for it under the run's grant (see [What a
 grant enforces](#what-a-grant-enforces)).
 
-| Variable | Default | Description |
-|----------|---------|-------------|
-| `CYFR_OPUS_KEY` | — | The root every worker key derives from, 32 random bytes as 64 hex digits (`cyfr init` mints it; by hand, `openssl rand -hex 32`). Only CYFR holds it; without it no worker service can authenticate, so no component runs |
-| `CYFR_OPUS_WORKERS` | `wrk_local=http://127.0.0.1:4200` | The worker services runs are dispatched to: comma-separated `<service_id>=<url>` entries, tried in order. A service id is `wrk_` followed by 1 to 64 letters, digits, `_` or `-`; the URL is the base URL of the service's listener. Compose sets `wrk_opus=http://opus:4200` |
-| `CYFR_HOST_API_BIND` / `CYFR_HOST_API_PORT` | `127.0.0.1` / `4300` | Where CYFR's host API listens for the workers' host calls and exit reports |
-| `CYFR_HOST_API_URL` | — | The address a worker service reaches *this* member's host API at (`http://cyfr:4300`). Every assignment this member issues carries it, and a worker posts that attempt's host calls there. Unset, the assignment carries no address and the worker uses `OPUS_HOST_URL`; a cell refuses to boot without it |
-| `OPUS_SERVICE_ID` | `wrk_local` (compose: `wrk_opus`) | The worker's service id, the one CYFR lists it under in `CYFR_OPUS_WORKERS` |
-| `OPUS_SERVICE_KEY` | — | The worker's key, derived from the root for its id: `cyfr init` derives it, and `CYFR_OPUS_KEY=… mix cyfr.opus.key <service_id>` prints it. Required by the `opus` release |
-| `OPUS_HOST_URL` | — | The base URL of CYFR's host API as the worker reaches it (compose: `http://cyfr:4300`). Required by the `opus` release. It is where an attempt's host calls go only when the attempt's assignment names no address of its own; an assignment that names one wins, because it knows which member issued the work |
-| `OPUS_RUNNER_MEMORY_BYTES` | `402653184` (384 MiB) | The memory bound of every runner, 16 MiB to 1 TiB: its VM, every guest's linear memory, its home and the kernel memory charged to it. A runner that reaches it is ended whole and never reused |
-| `OPUS_MEMORY_LIMIT` / `OPUS_CPU_LIMIT` | `4G` / `4` | The `opus` container's limits, read by compose from `.env`: the memory limit holds all eight runner uids at their bound and the service (8 × 384 MiB + 1 GiB) |
-
 ### Builds
 
 Components and tinctures are built on the Locus builds service (the
@@ -1248,12 +1191,6 @@ mints the key into `.env`. Set both variables or neither: with neither,
 CYFR builds nothing and refuses every build; with one, or a malformed
 value, it refuses to boot. `.env.locus.example` documents the builder's own
 `LOCUS_BUILDS_*` side.
-
-| Variable | Default | Description |
-|----------|---------|-------------|
-| `CYFR_LOCUS_BUILDS_URL` | — | The base URL of the builds service's listener (compose: `http://locus-builds:4100`, which `cyfr init` writes). Naming the compose service makes `cyfr up` start it |
-| `CYFR_LOCUS_BUILDS_KEY` | — | The builds key, 32 random bytes as 64 hex digits (`cyfr init` mints it; by hand, `openssl rand -hex 32`); compose hands the same value to the builder as `LOCUS_BUILDS_KEY` |
-| `LOCUS_BUILDS_MEMORY_LIMIT` / `LOCUS_BUILDS_CPU_LIMIT` | `4G` / `2` | The `locus-builds` container's limits, read by compose from `.env`: the memory limit holds `LOCUS_BUILDS_MAX_CONCURRENT` builds at their bound and the service (2 × (1 GiB + 1 GiB)) |
 
 ### Stdio MCP servers
 
@@ -1267,13 +1204,6 @@ restarts. With the URL or the key unset CYFR refuses stdio servers; with a
 malformed value it refuses to boot. Stdio servers are not available in a
 cell. `.env.locus.example` documents the service's own `LOCUS_BACKENDS_*`
 side.
-
-| Variable | Default | Description |
-|----------|---------|-------------|
-| `CYFR_LOCUS_BACKENDS_URL` | — | The base URL of the backends service's listener (compose: `http://locus-backends:4101`). A service elsewhere is also named in `CYFR_PRIVATE_EGRESS_TARGETS` |
-| `CYFR_LOCUS_BACKENDS_KEY` | — | The backends key, 32 random bytes as 64 hex digits (`cyfr init` mints it; by hand, `openssl rand -hex 32`); compose hands the same value to the service as `LOCUS_BACKENDS_KEY`. It signs every control message and tool call and seals every backend's environment; the builds key cannot stand in for it, nor it for the builds key |
-| `CYFR_LOCUS_BACKENDS_LEASE_MS` | `30000` | How long the service runs a server's backends without a renewal from CYFR (1000–60000); CYFR renews every third of it |
-| `CYFR_LOCUS_BACKENDS_IDLE_MS` | `900000` | How long a backend runs with no tool call before the service stops it (1000–86400000); its tools stay listed and its next call starts it again |
 
 ### Running a worker outside Compose
 
@@ -1333,23 +1263,6 @@ backend is ended at its own bound, though neither the container nor its
 release was touched. Read it as a runner, a build or a backend that passed
 its bound (the service's log says which), not as the container running out
 of memory.
-
-### Registry and signing
-
-| Variable | Default | Description |
-|----------|---------|-------------|
-| `CYFR_REGISTRY_URL` | `cyfr.run` | Component registry host the CLI/server publish to and pull from |
-| `CYFR_OCI_REGISTRY_URL` | `registry.<CYFR_REGISTRY_URL>` | OCI registry endpoint for component blobs |
-| `CYFR_COSIGN_KEY` / `CYFR_COSIGN_PASSWORD` | — | Cosign signing key (and its password) used when publishing components |
-
-### Operations
-
-| Variable | Default | Description |
-|----------|---------|-------------|
-| `CYFR_MCP_ALLOWED_ORIGINS` | — | Comma-separated origins allowed to call `/mcp` cross-origin (e.g. a PWA hosted on another domain) |
-| `CYFR_LOG_FORMAT` | text | Set to `json` for structured (machine-parseable) logs |
-| `CYFR_OTEL_ENABLED` | `false` | Set to `true` to enable OpenTelemetry distributed tracing |
-| `CYFR_CRUCIBLE_MAX_CONCURRENT` | runtime default | Cap on concurrent component executions |
 
 ---
 

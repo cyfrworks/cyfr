@@ -15,6 +15,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"time"
 )
@@ -88,12 +89,25 @@ func isManagedAqua(path string) bool {
 // so `cyfr update`, which pulls the image, refreshes it too.
 const SeccompProfile = "keeper.seccomp.json"
 
+// Guides are the guides the scaffold tarball ships at a project's root
+// (scripts/scaffold-tarball.sh's items), each managed, so `cyfr update`
+// refreshes it. `cyfr init` and `cyfr update` name them from here, and
+// TestShippedGuidesAreManaged binds the tarball's list and the repository's
+// root guides to this one.
+var Guides = []string{
+	"configuration-guide.md",
+	"component-guide.md",
+	"tincture-guide.md",
+	"integration-guide.md",
+	"identity-guide.md",
+	"devices-guide.md",
+}
+
 // isManaged returns true for files that are maintained by cyfr and should be
 // overwritten during an upgrade (guides, WIT interface definitions, the
 // keeper's seccomp profile, and the shipped AQUA soul, roles and scrolls).
 func isManaged(path string) bool {
-	switch path {
-	case "configuration-guide.md", "component-guide.md", "tincture-guide.md", "integration-guide.md", SeccompProfile:
+	if path == SeccompProfile || slices.Contains(Guides, path) {
 		return true
 	}
 	// Everything under wit/ is managed.
