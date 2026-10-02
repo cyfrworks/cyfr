@@ -37,9 +37,9 @@
 //                drawn and marked disconnected, a frame's actions fail
 //                closed; on reconnect the desktop acts again.
 //
-// Then, with a tab open in every browser at once, run.sh kills the release
-// (`stop-server` in OUT_DIR, answered by `server-stopped`): the last layout
-// stays drawn and every stream and action fails closed.
+// Then, with a tab open in every browser at once, run.sh stops the release
+// gracefully (`stop-server` in OUT_DIR, answered by `server-stopped`): the
+// last layout stays drawn and every stream and action fails closed.
 //
 // Measurements, recorded and not gated: card.refresh through the endpoint
 // from the desktop, 50 in a row; vault.status through the endpoint from the

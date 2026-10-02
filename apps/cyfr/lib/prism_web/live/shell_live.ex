@@ -1058,7 +1058,7 @@ defmodule PrismWeb.ShellLive do
         disabled={not is_nil(@safe_mode)}
         aria-keyshortcuts="Control+Alt+S"
         title="Safe mode (Ctrl+Alt+S)"
-        class="absolute bottom-2 left-2 z-[55] rounded-md bg-black/60 px-2 py-1 text-[11px] text-white/80 hover:text-white focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-300 disabled:opacity-50"
+        class="absolute bottom-2 left-2 z-[55] min-h-6 rounded-md bg-black/60 px-2 py-1 text-xs text-white/80 hover:text-white focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-300 disabled:opacity-50"
       >
         Safe mode
       </button>
@@ -1069,7 +1069,7 @@ defmodule PrismWeb.ShellLive do
         phx-click="devices"
         data-test="shell-devices"
         title="Pair or revoke a device"
-        class="absolute bottom-2 left-24 z-[55] rounded-md bg-black/60 px-2 py-1 text-[11px] text-white/80 hover:text-white focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-300"
+        class="absolute bottom-2 left-24 z-[55] min-h-6 rounded-md bg-black/60 px-2 py-1 text-xs text-white/80 hover:text-white focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-300"
       >
         Devices
       </button>
@@ -1231,7 +1231,7 @@ defmodule PrismWeb.ShellLive do
           <span
             data-tincture-visibility={visibility_label(@tincture.public)}
             class={[
-              "shrink-0 rounded px-1.5 py-0.5 text-[10px] font-medium",
+              "shrink-0 rounded px-1.5 py-0.5 text-xs font-medium",
               case @tincture.public do
                 true -> "bg-green-500/15 text-green-500"
                 false -> "bg-yellow-500/15 text-yellow-500"
@@ -1295,20 +1295,24 @@ defmodule PrismWeb.ShellLive do
 
   defp tincture_dots(assigns) do
     ~H"""
-    <div class="flex items-center gap-1.5">
+    <div class="flex items-center">
+      <%!-- Each dot sits in a 24 CSS px touch target: the handheld
+           viewport's smallest control (tests/browser/handheld.mjs). --%>
       <%= for {_t, i} <- Enum.with_index(@tinctures) do %>
         <button
           phx-click="focus_tincture"
           phx-value-index={i}
-          class={[
-            "rounded-full transition-all duration-300",
+          class="flex h-6 min-w-6 items-center justify-center px-0.5"
+          aria-label={"Tincture #{i + 1} of #{length(@tinctures)}"}
+        >
+          <span class={[
+            "block rounded-full transition-all duration-300",
             if(i == @focused_index,
               do: "h-1.5 w-6 bg-accent-primary",
               else: "h-1.5 w-1.5 bg-text-muted/30 hover:bg-text-muted/50"
             )
-          ]}
-          aria-label={"Tincture #{i + 1} of #{length(@tinctures)}"}
-        >
+          ]}>
+          </span>
         </button>
       <% end %>
     </div>
