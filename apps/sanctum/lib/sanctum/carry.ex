@@ -56,7 +56,8 @@ defmodule Sanctum.Carry do
   It does not undo a session the destination already admitted. Both read
   only the context's own person's actions; another person's is
   `:not_found`. `sweep/1` is the platform's own housekeeping over every
-  person's carries, which the retention cycle runs.
+  person's carries, and the heads a relying home's challenges cached for
+  no one here, which the retention cycle runs.
   """
 
   alias Prima.Carry
@@ -201,22 +202,54 @@ defmodule Sanctum.Carry do
   end
 
   @doc """
-  Housekeeping, the platform's own: every person's open carries past their
-  expiry move to expired with their payloads cleared, and terminal carries
-  and login receipts past their retention are removed, at most `limit` of
-  each (`Arca.CarryActions.sweep/2`). Opening a carry ends only its own
+  Housekeeping, the platform's own, over the kinds `batches` names, each
+  with its own batch: `carries:` and `heads:`, a positive count each, at
+  least one of them. A kind it does not name is not swept and counts zero,
+  so a caller bounds each kind's batches on its own.
+
+  `carries:` — every person's open carries past their expiry move to
+  expired with their payloads cleared, and terminal carries and login
+  receipts past their retention are removed, at most that many of each
+  (`Arca.CarryActions.sweep/2`). Opening a carry ends only its own
   person's expired ones, so this is what reaches a person who opens none.
-  Answers the counts.
+
+  `heads:` — a relying home's challenge caches the carrying person's head
+  before any signature is checked (`Sanctum.Auth.CyfrDoor`). A head whose
+  identifier no person here and no pending invitation names goes, at most
+  that many, once it was last verified longer ago than a carry lives
+  (`Arca.DirectoryHeads.sweep/3`), so a challenge leaves no row behind.
+  The challenge that verified it lives no longer than that, and its
+  callback reads the head again from the genesis it carries.
+
+  Answers the counts: `expired` and `removed` carries, and the `heads`
+  removed.
   """
-  @spec sweep(pos_integer()) ::
-          {:ok, %{expired: non_neg_integer(), removed: non_neg_integer()}}
+  @spec sweep(carries: pos_integer(), heads: pos_integer()) ::
+          {:ok,
+           %{expired: non_neg_integer(), removed: non_neg_integer(), heads: non_neg_integer()}}
           | {:error, :database_error}
-  def sweep(limit) when is_integer(limit) and limit > 0 do
-    case Arca.CarryActions.sweep(Prima.Actor.system(), limit) do
-      {:ok, counts} -> {:ok, counts}
+  def sweep([_ | _] = batches) do
+    batches = Keyword.validate!(batches, [:carries, :heads])
+    system = Prima.Actor.system()
+
+    with {:ok, %{expired: expired, removed: removed}} <-
+           carries_swept(system, batches[:carries]),
+         {:ok, heads} <- heads_swept(system, batches[:heads]) do
+      {:ok, %{expired: expired, removed: removed, heads: heads}}
+    else
       {:error, _reason} -> {:error, :database_error}
     end
   end
+
+  defp carries_swept(_system, nil), do: {:ok, %{expired: 0, removed: 0}}
+
+  defp carries_swept(system, batch) when is_integer(batch) and batch > 0,
+    do: Arca.CarryActions.sweep(system, batch)
+
+  defp heads_swept(_system, nil), do: {:ok, 0}
+
+  defp heads_swept(system, batch) when is_integer(batch) and batch > 0,
+    do: Arca.DirectoryHeads.sweep(system, Arca.CarryActions.lifetime_ms(), batch)
 
   @doc """
   Cancel the person's own open carry `action_id` (the module doc). Answers

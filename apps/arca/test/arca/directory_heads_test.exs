@@ -9,7 +9,9 @@ defmodule Arca.DirectoryHeadsTest do
   in the same transaction, the sessions, pending confirmations and device
   certificates bound to the old one, and a changed `recovery_epoch` the
   passkeys registered under the old one, after which the old epoch binds
-  nothing new.
+  nothing new. A head no person and no pending invitation here names is
+  swept once it was last verified past the caller's bound; every other
+  stays.
   """
 
   # Takes the cell's slot, which is process-wide; each case restores it.
@@ -464,6 +466,105 @@ defmodule Arca.DirectoryHeadsTest do
     assert {:error, :cross_tenant} = DirectoryHeads.put(member, %{})
     assert :ok = DirectoryHeads.delete(server(), identifier())
   end
+
+  # A carry's lifetime, the bound the carry sweep passes.
+  @bound 300_000
+
+  # The head's last verification moved `ms` before the database's clock.
+  defp aged!(identifier, ms) do
+    {1, _} =
+      Arca.Repo.update_all(from(h in DirectoryHead, where: h.identifier == ^identifier),
+        set: [verified_at: DateTime.add(Arca.ServerMetaStorage.now!(), -ms, :millisecond)]
+      )
+
+    :ok
+  end
+
+  # A head no one here holds, last verified `ms` ago.
+  defp orphan!(ms) do
+    id = identifier()
+    cached!(id, digest("orphan"))
+    aged!(id, ms)
+    id
+  end
+
+  defp cached?(identifier),
+    do: Arca.Repo.exists?(from(h in DirectoryHead, where: h.identifier == ^identifier))
+
+  # A group's pending invitation naming `identifier`.
+  defp invited!(identifier) do
+    n = System.unique_integer([:positive])
+
+    {:ok, athanor} =
+      Arca.Athanors.insert(server(), %{
+        kind: "group",
+        name: "Heads #{n}",
+        slug: "dh-g-#{n}",
+        created_by: "system"
+      })
+
+    {:ok, _} =
+      Arca.Members.seat(%{server() | athanor_id: athanor.id, scope: :athanor}, %{
+        person_identifier: identifier,
+        status: "invited",
+        added_by: "x"
+      })
+
+    :ok
+  end
+
+  describe "sweep/3" do
+    test "removes a head no one here holds once it is past the bound, and keeps every head someone holds" do
+      orphan = orphan!(@bound + 1_000)
+      young = orphan!(@bound - 60_000)
+
+      # A person's head stays whatever its age.
+      held = identifier()
+      cached!(held, digest("held"))
+      remote_person!(held)
+      aged!(held, 10 * @bound)
+
+      # So does the head of an identifier a pending invitation names.
+      invited = identifier()
+      cached!(invited, digest("invited"))
+      invited!(invited)
+      aged!(invited, 10 * @bound)
+
+      assert {:ok, 1} = DirectoryHeads.sweep(server(), @bound, 100)
+      refute cached?(orphan)
+      assert cached?(young)
+      assert cached?(held)
+      assert cached?(invited)
+
+      assert {:ok, 0} = DirectoryHeads.sweep(server(), @bound, 100)
+    end
+
+    test "takes at most its limit, the least recently verified first" do
+      older = orphan!(3 * @bound)
+      newer = orphan!(2 * @bound)
+
+      assert {:ok, 1} = DirectoryHeads.sweep(server(), @bound, 1)
+      refute cached?(older)
+      assert cached?(newer)
+
+      assert {:ok, 1} = DirectoryHeads.sweep(server(), @bound, 1)
+      refute cached?(newer)
+    end
+
+    test "runs under the platform's own actor alone" do
+      orphan = orphan!(2 * @bound)
+
+      for actor <- [
+            Prima.Actor.in_athanor("ath_test"),
+            %{server() | athanor_id: "ath_test", scope: :athanor},
+            %Prima.Actor{user_id: "usr_admin", scope: :platform, platform_admin: true}
+          ] do
+        assert {:error, :cross_tenant} = DirectoryHeads.sweep(actor, @bound, 100)
+      end
+
+      assert cached?(orphan)
+    end
+  end
 end
 
 defmodule Arca.DirectoryHeadsRaceTest do
@@ -475,7 +576,8 @@ defmodule Arca.DirectoryHeadsRaceTest do
   order: an advance waiting behind a session retires it, and a session
   waiting behind an advance reads the new epoch and is refused. On
   PostgreSQL the waiter blocks on the person's row; on SQLite at the lock
-  its transaction takes at entry.
+  its transaction takes at entry. A sweep waiting behind a refresh of a
+  head it chose keeps the refreshed head.
   """
 
   use ExUnit.Case, async: false
@@ -807,5 +909,68 @@ defmodule Arca.DirectoryHeadsRaceTest do
     assert {:ok, %{retired: %{session_hashes: []}}} = Task.await(advancer, 25_000)
     assert {:error, :stale_key_epoch} = Task.await(issuer, 25_000)
     refute unboxed(fn -> Arca.Repo.exists?(where(Session, token_hash: ^hash)) end)
+  end
+
+  test "a sweep waiting behind a refresh of the head it chose keeps the refreshed head" do
+    test = self()
+    orphan = "per_" <> Prima.Digest.sha256_hex("orphan-#{System.unique_integer([:positive])}")
+    head = digest("orphan")
+
+    on_exit(fn ->
+      unboxed(fn -> Arca.Repo.delete_all(where(DirectoryHead, identifier: ^orphan)) end)
+    end)
+
+    # A head no one here holds, last verified an hour ago.
+    unboxed(fn ->
+      {:ok, _} =
+        DirectoryHeads.put(server(), %{
+          identifier: orphan,
+          genesis: "genesis-bytes",
+          directory_url: "https://dir.example",
+          head_hash: head,
+          key_epoch: head,
+          recovery_epoch: head,
+          state: "{}"
+        })
+
+      {1, _} =
+        Arca.Repo.update_all(where(DirectoryHead, identifier: ^orphan),
+          set: [verified_at: DateTime.add(Arca.ServerMetaStorage.now!(), -3_600, :second)]
+        )
+    end)
+
+    # A challenge verifies it again, and holds before its commit.
+    refresher =
+      Task.async(fn ->
+        unboxed(fn ->
+          Arca.Repo.locking_transaction(fn ->
+            {:ok, _} = DirectoryHeads.touch(server(), orphan, head)
+            send(test, :refreshed)
+
+            receive do
+              :go -> :ok
+            end
+          end)
+        end)
+      end)
+
+    assert_receive :refreshed, 5_000
+
+    sweeper =
+      Task.async(fn ->
+        unboxed(fn ->
+          send(test, {:sweeper, backend()})
+          DirectoryHeads.sweep(server(), 300_000, 100)
+        end)
+      end)
+
+    assert_receive {:sweeper, sweeping}, 5_000
+    if postgres?(), do: await_wait!(sweeping, [~s(DELETE FROM "directory_heads")])
+    refute Task.yield(sweeper, 300), "the sweep went ahead of a refresh holding the head"
+
+    send(refresher.pid, :go)
+    assert {:ok, :ok} = Task.await(refresher, 25_000)
+    assert {:ok, 0} = Task.await(sweeper, 25_000)
+    assert unboxed(fn -> Arca.Repo.exists?(where(DirectoryHead, identifier: ^orphan)) end)
   end
 end

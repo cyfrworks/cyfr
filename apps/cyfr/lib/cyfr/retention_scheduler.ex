@@ -93,9 +93,18 @@ defmodule Cyfr.RetentionScheduler do
   @default_interval_ms :timer.hours(6)
 
   @kind "retention"
-  # The carry sweep's batch, and how many batches one cycle takes.
+  # The carry sweep's batch, how many batches of carry actions one cycle
+  # takes, and its counts before the first.
   @carry_batch 500
   @carry_batches 10
+  # How many batches of heads one cycle takes. The heads a relying home's
+  # challenges cache for no one here are bounded by the installation's
+  # 200 carries a minute (`Sanctum.Auth.CyfrDoor`): 72,000 in a six-hour
+  # cycle. 150 batches, 75,000 heads, clear that within the cycle, so a
+  # flood at the cap never leaves more behind than one cycle cached.
+  @head_batches 150
+  @carry_left %{carries: @carry_batches, heads: @head_batches}
+  @carry_none %{expired: 0, removed: 0, heads: 0}
   @lease_ms :timer.minutes(5)
   @renew_ms :timer.minutes(1)
 
@@ -429,7 +438,7 @@ defmodule Cyfr.RetentionScheduler do
 
   defp step_fun("decisions_global"), do: &purge_host_decisions/0
   defp step_fun("sessions"), do: &sweep_expired_sessions/0
-  defp step_fun("carry"), do: fn -> sweep_carry_actions(@carry_batches, 0, 0) end
+  defp step_fun("carry"), do: fn -> sweep_carry_actions(@carry_left, @carry_none) end
   defp step_fun("webhooks"), do: &sweep_webhook_deliveries/0
   defp step_fun("rates"), do: &sweep_rate_windows/0
   defp step_fun("tmp"), do: &sweep_stale_tmp_files/0
@@ -488,34 +497,53 @@ defmodule Cyfr.RetentionScheduler do
   end
 
   # Every person's sign-in carries past their expiry move to expired with
-  # their payloads cleared, and terminal ones and login receipts past their
-  # retention go (`Sanctum.Carry.sweep/1`): opening a carry ends only its
-  # own person's, so this is what reaches a person who opens none. Batch
-  # after batch until one moves fewer than a batch's worth of either, and
-  # at most `@carry_batches` a cycle, so a backlog is taken over several
-  # cycles rather than holding the claim.
-  defp sweep_carry_actions(0, expired, removed), do: carried(expired, removed)
+  # their payloads cleared, terminal ones and login receipts past their
+  # retention go, and so do the heads a relying home's challenges cached
+  # for no one here (`Sanctum.Carry.sweep/1`): opening a carry ends only its
+  # own person's, so this is what reaches a person who opens none, and
+  # nothing else removes such a head. Each kind batch after batch until one
+  # moves fewer than a batch's worth of it: carry actions at most
+  # `@carry_batches` a cycle, so their backlog is taken over several
+  # cycles rather than holding the claim, and heads at most
+  # `@head_batches`. `left` holds the batches each kind has left; a kind
+  # that came up short has none.
+  defp sweep_carry_actions(%{carries: 0, heads: 0}, swept), do: carried(swept)
 
-  defp sweep_carry_actions(left, expired, removed) do
-    case Sanctum.Carry.sweep(@carry_batch) do
-      {:ok, %{expired: more_expired, removed: more_removed}}
-      when more_expired < @carry_batch and more_removed < @carry_batch ->
-        carried(expired + more_expired, removed + more_removed)
+  defp sweep_carry_actions(left, swept) do
+    batches =
+      for {kind, n} <- [carries: left.carries, heads: left.heads], n > 0, do: {kind, @carry_batch}
 
-      {:ok, %{expired: more_expired, removed: more_removed}} ->
-        sweep_carry_actions(left - 1, expired + more_expired, removed + more_removed)
+    case Sanctum.Carry.sweep(batches) do
+      {:ok, %{expired: expired, removed: removed, heads: heads}} ->
+        swept = %{
+          expired: swept.expired + expired,
+          removed: swept.removed + removed,
+          heads: swept.heads + heads
+        }
+
+        left = %{
+          carries: next(left.carries, expired >= @carry_batch or removed >= @carry_batch),
+          heads: next(left.heads, heads >= @carry_batch)
+        }
+
+        sweep_carry_actions(left, swept)
 
       {:error, reason} ->
         Logger.warning("[RetentionScheduler] Carry action sweep failed: #{inspect(reason)}")
-        carried(expired, removed)
+        carried(swept)
     end
   end
 
-  defp carried(0, 0), do: :ok
+  # A kind with batches left and a full one behind it goes on; otherwise it is done.
+  defp next(left, true) when left > 0, do: left - 1
+  defp next(_left, _full?), do: 0
 
-  defp carried(expired, removed) do
+  defp carried(%{expired: 0, removed: 0, heads: 0}), do: :ok
+
+  defp carried(%{expired: expired, removed: removed, heads: heads}) do
     Logger.info(
-      "[RetentionScheduler] Expired #{expired} and removed #{removed} sign-in carry action(s)"
+      "[RetentionScheduler] Expired #{expired} and removed #{removed} sign-in carry action(s), " <>
+        "and removed #{heads} cached identity head(s) no one here holds"
     )
   end
 

@@ -451,6 +451,55 @@ defmodule PrismWeb.LoginLiveTest do
       assert redirected_to(get(recycle(browser), ~p"/chat")) =~ "/login"
     end
 
+    test "the installation's bound holds across addresses: past it a carry from a fresh address reads no directory and is told it is rate limited",
+         %{conn: conn, identity: identity} do
+      # Every other member counted all but two of the minute's carries.
+      for _ <- 1..198 do
+        :ok =
+          Arca.RequestRateWindows.claim(
+            Prima.Actor.system(),
+            :cyfr_carry_installation,
+            "installation",
+            200,
+            60_000
+          )
+      end
+
+      # Each carry from its own address, none near that address's bound.
+      carried = fn address ->
+        %{fragment: carry} = DirectoryServer.carry_fragment(identity, Sanctum.Person.home())
+
+        {:ok, view, _} =
+          conn
+          |> Plug.Test.put_peer_data(%{address: address, port: 40_000, ssl_cert: nil})
+          |> live(~p"/login")
+
+        assert :sys.get_state(view.pid).socket.assigns.client_ip ==
+                 address |> :inet.ntoa() |> to_string()
+
+        html =
+          render_hook(view, "cyfr_carry", %{
+            "fragment" => carry,
+            "expected_source" => "https://a.example"
+          })
+
+        {view, html}
+      end
+
+      _ = DirectoryServer.requests()
+
+      for address <- [{198, 51, 100, 1}, {198, 51, 100, 2}] do
+        {view, _html} = carried.(address)
+        assert has_element?(view, "#cyfr-code")
+        assert [_read] = DirectoryServer.requests()
+      end
+
+      {view, html} = carried.({198, 51, 100, 3})
+      assert html =~ "Too many sign-ins from here. Try again in a minute."
+      refute has_element?(view, "#cyfr-code")
+      assert DirectoryServer.requests() == []
+    end
+
     test "cancelling at the code leaves nothing pending; a code past its challenge's expiry goes nowhere",
          %{conn: conn, identity: identity} do
       %{fragment: carry} = DirectoryServer.carry_fragment(identity, Sanctum.Person.home())
