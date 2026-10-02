@@ -88,7 +88,7 @@ cyfr -h
 open http://localhost:4000
 ```
 
-`cyfr init` downloads your project files and pulls the server images: `docker-compose.yml`, `Caddyfile`, `keeper.seccomp.json` (the `opus` service's seccomp profile), `.env.example` and the services' own env examples, `cyfr.yaml`, WIT interface definitions, the `aqua/` soul, roles and scrolls, and the included guides ([configuration-guide.md](configuration-guide.md), [integration-guide.md](integration-guide.md), [component-guide.md](component-guide.md), [tincture-guide.md](tincture-guide.md)). It writes `.env` from `.env.example`, prompting for the hostname, the operator's sign-in email (the first platform admin), and — for a real hostname — a Let's Encrypt email, and mints the stack's keys into it: `CYFR_SECRET_KEY_BASE`, `CYFR_LOCUS_BACKENDS_KEY`, the worker root `CYFR_OPUS_KEY` with the `OPUS_SERVICE_KEY` derived from it, and `CYFR_LOCUS_BUILDS_KEY` beside `CYFR_LOCUS_BUILDS_URL`, so builds are on. Pass `--no-interactive` to take the defaults. It does not install Docker itself. The scaffolded `docker-compose.yml` is the full self-hosted stack — `cyfr` (the one endpoint on `:4000`: Prism, API, MCP, tinctures), `opus` (the execution worker that runs components), `locus-builds` (the builds service behind `cyfr build compile`), `locus-backends` (the backends service that runs stdio MCP servers) and `caddy` (TLS + reverse proxy at `:80`/`:443`, for real-hostname deployments); `cyfr up` brings up the first four, and `caddy` too when you enabled TLS at init. See [Deploy to a Server](#deploy-to-a-server) for the same stack on a VPS.
+`cyfr init` downloads your project files and pulls the server images: `docker-compose.yml`, `Caddyfile`, `keeper.seccomp.json` (the `opus` service's seccomp profile), `.env.example` and the services' own env examples, `cyfr.yaml`, WIT interface definitions, the `aqua/` soul, roles and scrolls, and the included guides ([configuration-guide.md](configuration-guide.md), [integration-guide.md](integration-guide.md), [component-guide.md](component-guide.md), [tincture-guide.md](tincture-guide.md), [identity-guide.md](identity-guide.md), [devices-guide.md](devices-guide.md)). It writes `.env` from `.env.example`, prompting for the hostname, the operator's sign-in email (the first platform admin), and — for a real hostname — a Let's Encrypt email, and mints the stack's keys into it: `CYFR_SECRET_KEY_BASE`, `CYFR_LOCUS_BACKENDS_KEY`, the worker root `CYFR_OPUS_KEY` with the `OPUS_SERVICE_KEY` derived from it, and `CYFR_LOCUS_BUILDS_KEY` beside `CYFR_LOCUS_BUILDS_URL`, so builds are on. Pass `--no-interactive` to take the defaults. It does not install Docker itself. The scaffolded `docker-compose.yml` is the full self-hosted stack — `cyfr` (the one endpoint on `:4000`: Prism, API, MCP, tinctures), `opus` (the execution worker that runs components), `locus-builds` (the builds service behind `cyfr build compile`), `locus-backends` (the backends service that runs stdio MCP servers) and `caddy` (TLS + reverse proxy at `:80`/`:443`, for real-hostname deployments); `cyfr up` brings up the first four, and `caddy` too when you enabled TLS at init. See [Deploy to a Server](#deploy-to-a-server) for the same stack on a VPS.
 
 ## Prism — the web face
 
@@ -114,6 +114,8 @@ your-project/
 ├── integration-guide.md   # How to use CYFR as your app backend
 ├── component-guide.md      # Full guide to building components
 ├── tincture-guide.md       # Guide to building tinctures
+├── identity-guide.md       # Your identifier, keys and printed kit, restore, and joining another home
+├── devices-guide.md        # Pairing devices and confirming sensitive changes
 ├── docker-compose.yml      # Self-hosted stack: cyfr, opus, locus-builds, locus-backends (+ caddy in TLS mode)
 ├── Caddyfile               # Reverse proxy (TLS mode only): everything → cyfr:4000
 ├── keeper.seccomp.json     # The seccomp profile the opus service runs under (see "Execution workers")
@@ -450,7 +452,7 @@ Builds are on after `cyfr init`: it writes both settings into `.env`, and `cyfr 
 
 - **The seed `local.http` catalyst asks for wildcard egress** (`domains: ["*"]`, http+https; private IPs stay denied) and first-run provisioning consents the bundle automatically — on a server whose allowlist is `*`, that is a consented HTTP relay per signed-in stranger. The minted grant is pinned byte-for-byte by `apps/cyfr/test/sanctum/consent/bootstrap_golden_test.exs`, so widening or narrowing it is always a reviewed diff; narrow the seed manifest before opening the door if that posture is too generous for your deployment.
 - **The audit trail carries identity fields, email included.** The door's refusal telemetry carries the attempted email (that is the audit content — who was turned away), and `Prima.Sanitizer` deliberately does not redact identity fields on the audit plane. Every entry is logged, and is also emitted once as the `[:cyfr, :audit, :recorded]` telemetry event carrying the sanitized `Arca.Audit.Event`: attach your own handler there to write the trail to a SIEM or an object store, and only to one that may hold PII.
-- **A first sign-in needs cyfr.run reachable once** (to find or claim the person's namespace) and pulls the AQUA formula's provider catalysts from the registry. On an air-gapped or registry-unreachable install the athanor is created but left unprovisioned — retried on the next sign-in, with the cause in the server log and the `[:cyfr, :sanctum, :provisioning, :failed]` telemetry event. AQUA stays unavailable until a retry succeeds.
+- **A first sign-in proceeds whatever the registry answers; filling the athanor needs it.** Sign-in asks cyfr.run once, under a short budget, for the person's publishing namespace and push tokens, and proceeds whatever that probe answers. The person and their own athanor are minted at sign-in, and the athanor is then filled in the background, pulling the bundle's published dependencies, the AQUA formula's provider catalysts among them, from the registry. On an air-gapped or registry-unreachable install the athanor is created but left unprovisioned — retried on the next sign-in, with the cause in the server log and the `[:cyfr, :sanctum, :provisioning, :failed]` telemetry event. AQUA stays unavailable until a retry succeeds. A cyfr.run namespace is needed only to publish (`cyfr push`, above), never to sign in.
 - **A webhook's replay store is part of its delivery.** A webhook configured with an idempotency key header runs a delivery only once its claim is recorded; when the store cannot answer the claim, the delivery answers 503 `unavailable` with `Retry-After: 5` and runs nothing, and the `[:cyfr, :emissary, :webhook, :dedup_unavailable]` telemetry event is the alarm for the outage. The sender's retry runs it once the store answers.
 
 ### Reaching Prism on the server
@@ -539,19 +541,33 @@ you may come in.
 
 ### The door, and what a first sign-in needs
 
-A person's first sign-in on a server asks cyfr.run once for their personal
-namespace — the same on every server, claimed once — and mints their own
-athanor, seeded and baseline-consented (the bundled `catalyst:local.http`
+A person signs in at a server through one of its doors: GitHub, Google or
+your OIDC provider, a passkey they registered at this server, or, for a
+person whose keys another home holds, the CYFR door (**Sign in with your
+CYFR** on the sign-in page; [identity-guide.md](identity-guide.md)). The
+server allowlist decides who may come in by any of them, by email, IdP
+subject or person identifier, `per_…` (`cyfr admin allow
+<email|user_id|identifier|*>`).
+
+A person's first sign-in through one of the server's own doors mints them
+with their own keys and their own athanor, seeded and baseline-consented
+(the bundled `catalyst:local.http`
 is granted `egress.domains ["*"]` for public hosts, GET/POST/HEAD, 60/min;
 private addresses it cannot reach at all — its manifest declares no
 `egress.private_ips`, which is the only private-address grant `cyfr` reads
 when it pins a running component's outbound address, so a LAN device is
 reachable from a chain as an MCP server on `CYFR_PRIVATE_EGRESS_TARGETS`,
-which is the server's own, and not as a URL to fetch). If cyfr.run
-cannot be reached at that moment, nothing is set up and the person is told
-to try again; later sign-ins do not need cyfr.run at all — the namespace is
-recorded on their `users` row. `cyfr admin deny <email>` revokes their
-sessions and keys, archives their own athanor, removes them from every group
+which is the server's own, and not as a URL to fetch). Sign-in proceeds
+whatever cyfr.run's short probe for a publishing namespace answers: the
+athanor is filled in the background (see [Operator
+notes](#operator-notes-for-shared-and-open-door-servers)), and a cyfr.run
+namespace is needed only to publish. A person admitted through the CYFR
+door is minted no keys and no athanor: theirs stay at their own home, and
+here they hold what their memberships give them. An installation set up
+for a restore (`CYFR_RESTORE_TOKEN`) reserves its first person for the
+restore: no door signs anyone in before it ([Backup and
+restore](#backup-and-restore)). `cyfr admin deny <email>` revokes a
+person's sessions and keys, archives their own athanor, removes them from every group
 and withdraws the invitations that address was still holding; `cyfr admin
 allow` lets them back in and reopens their own athanor — group seats are not
 restored, a member adds them again. Work running in an athanor when it is
@@ -560,7 +576,8 @@ a reopen admits only runs started after it.
 
 ### Opening the door to everyone (`*`), and the caps that bound it
 
-`cyfr admin allow '*'` admits any identity your provider authenticates —
+`cyfr admin allow '*'` admits any identity your provider authenticates,
+and anyone who signs in through the CYFR door —
 that is the public-hosting configuration, and it is the one where the limits
 matter. They are the platform settings of the `tenancy` group in
 [configuration-guide.md](configuration-guide.md): athanors on the server,
@@ -583,6 +600,41 @@ group seat is lost); that is what `deny` is for. The eject happens when the
 entry is removed, so an allowlist row edited directly in the database, or a
 `*` removed while the server is down, leaves live credentials behind — remove
 it through `cyfr admin` on a running server.
+
+### A hub for a household or a team
+
+A **hub** is a server that is the always-on home of shared athanors: a
+household's, a team's, or two people's. Someone with no home of their own
+signs in through one of the hub's doors, as on any server; someone with a
+home of their own joins from it, and keeps their keys and their own
+athanor there:
+
+- **Letting them in.** The hub's platform admin allows their person
+  identifier, `per_…`, which their own home's **Settings → Your identity**
+  shows (`cyfr admin allow per_…`), and a member adds them to a group by
+  the same identifier (**Members**, or `cyfr member add per_…`). An
+  identifier the hub has not seen yet leaves an invitation that activates
+  at their first sign-in.
+- **Signing in.** On the hub's sign-in page they choose **Sign in with your
+  CYFR** and name their own home's address; they confirm there, and both
+  homes show the same short code. The hub reads their identity at the
+  directory it names, which need not be the hub's own, and mints them no
+  keys and no athanor.
+- **Confirming at the hub.** A sign-in through the CYFR door is not a fresh
+  proof. Their first passkey at the hub, which the hub's sensitive changes
+  need, is authorized by its platform admin under the admin's own fresh
+  confirmation; after that they confirm for themselves. A phone they pair
+  with the hub is certified at their own home ([devices-guide.md](devices-guide.md)).
+- **Leaving.** Leaving one athanor, or being removed from it, ends that
+  membership, the sessions bound to it and the devices paired for it;
+  their other athanors at the hub, and their own home, are untouched.
+
+A home enrolls its own people at the directory `CYFR_DIRECTORY_URL` names,
+with no hosted default. Any operator, a household or a team included, may
+serve one (`CYFR_DIRECTORY_SERVE`), but the only writer on the home it
+recovers loses that recovery with the home. Who runs the directory decides
+how long the identities it orders last: [identity-guide.md](identity-guide.md)
+says what each loss costs.
 
 ### Postgres (bring your own)
 
@@ -776,6 +828,16 @@ separately from the data backup if you can, and exclude `erl_crash.dump` and
 `tmp/` from backup jobs — a crash dump can contain decrypted key material
 from process memory.
 
+A backup restores the server. A person's identity has its own recovery,
+for a home lost with no backup to put back: someone who enrolled (their
+own home's **Settings → Your identity**) restores their identifier and new
+keys onto a fresh installation from their printed kit, never their data.
+The operator sets a one-time `CYFR_RESTORE_TOKEN` there and hands it to
+them, and they open `https://<installation>/restore`; until it completes,
+no door signs anyone in. Their memberships at other homes stand, and they
+pair their devices again. [identity-guide.md](identity-guide.md) has the
+steps and what each loss costs.
+
 ## CLI Reference
 
 Commands marked with `[i]` support interactive selection when run without arguments.
@@ -917,6 +979,28 @@ Each part of CYFR has one name, and the name is its directory, its binary or ima
 | attempt | one try at running an execution on a worker service | — | — | — | — | — | — | — |
 | backend | one stdio process of an external MCP server, run by the Locus backends service | — | — | — | — | — | — | — |
 | cell | several control-plane members sharing one database | — | — | — | — | — | — | — |
+| home | the node that decides everything about an athanor; every athanor has exactly one home, and a single server is the home of every athanor it holds | — | — | — | — | — | — | — |
+| hub | a home that keeps shared athanors (a household's, a team's, two people's) always on, which people join from their own homes | — | — | — | — | — | — | — |
+| glass | the client: a browser or an application showing a home's Prism, holding device keys it never exports and no store, vault or person key | — | — | — | — | — | — | — |
+| door | a way a person signs in at a home: GitHub, Google, an OIDC provider, a passkey, or the CYFR door for a person whose keys another home holds; the server allowlist decides who may come in by each | — | — | — | — | — | — | — |
+| person identifier | `per_…`, the hash of the first entry of a person's identity log: it names them at every home and grants no membership anywhere | — | — | — | — | — | — | — |
+| directory | the CYFR node that orders an identifier's identity log and serves its current public keys, holding no private key and no home address | — | — | — | — | — | — | — |
+| live key | the key a person's home holds for them to sign their sign-ins at other homes and their devices' certificates | — | — | — | — | — | — | — |
+| operational key | the key a person's home holds for them to rotate the live key, and nothing else | — | — | — | — | — | — | — |
+| recovery key | a key held away from the home that replaces the live and operational keys without their cooperation | — | — | — | — | — | — | — |
+| recovery kit | three printed lines, the identifier, the directory and a recovery secret, from which a person restores their identity | — | — | — | — | — | — | — |
+| `key_epoch` | the identity log entry that introduced a person's current live key; when it changes, other homes retire what they bound to the old one | — | — | — | — | — | — | — |
+| `recovery_epoch` | the first entry of a person's identity log, or the latest recovery that replaced their live key; a passkey another home registered for them is bound to it | — | — | — | — | — | — | — |
+| restore | bringing a person's identity onto a fresh installation from their recovery kit, under that installation's single-use restore token; it restores no data | — | — | — | — | — | — | — |
+| carry | a sign-in at another home, begun at the person's own home and carried between the two by their browser | — | — | — | — | — | — | — |
+| pending action | the durable record of one carry: its destination, challenge and return address, resumed by an exact retry | — | — | — | — | — | — | — |
+| passkey | a credential registered at one home, under that home's host, that signs the person in there and gives their fresh confirmations there | — | — | — | — | — | — | — |
+| device key | the key pair a glass makes and never exports, which its device certificates name | — | — | — | — | — | — | — |
+| device certificate | a short-lived statement, signed with the person's live key at their home, naming a device key, its client, the home and the athanor | — | — | — | — | — | — | — |
+| paired client | a glass paired with a home for one athanor, revocable on its own and renewed only while it stands | — | — | — | — | — | — | — |
+| fresh confirmation | a proof that the person approved one pending confirmation: a passkey, a fresh sign-in, or, where the home has a mail transport configured, an emailed code; each sensitive change needs one | — | — | — | — | — | — | — |
+| pending confirmation | one sensitive change waiting for its fresh confirmation, with the preview the home stores and shows on every device of the person's | — | — | — | — | — | — | — |
+| origin | how a run started, `interactive`, `programmatic`, `schedule` or `webhook`, set by the path that admitted it; a grant names the origins it admits | — | — | — | — | — | — | — |
 
 Every setting of the control plane is a `CYFR_` variable; a part named with a prefix of its own beneath it owns those settings. A setting an island's release reads carries the island's own prefix, and the control plane's copy of an island's key carries `CYFR_` before it: `CYFR_LOCUS_BACKENDS_KEY` in `.env` is `LOCUS_BACKENDS_KEY` in the `locus-backends` service. `HostAPI` and `WorkerAPI` are protocol names, and `CYFR_HOST_API_` serves the first.
 
@@ -928,6 +1012,8 @@ Every setting of the control plane is a `CYFR_` variable; a part named with a pr
 | [Integration Guide](integration-guide.md) | How to use CYFR as your application backend |
 | [Component Guide](component-guide.md) | Practical guide to building catalysts, reagents, and formulas |
 | [Tincture Guide](tincture-guide.md) | Practical guide to building tinctures |
+| [Identity Guide](identity-guide.md) | A person's identifier, keys and printed kit, restoring them on a fresh installation, and joining a home that is not your own |
+| [Devices Guide](devices-guide.md) | Pairing a device with a home, how it stays connected, and confirming a sensitive change from any of your devices |
 | [Architecture](ARCHITECTURE.md) | What each part of CYFR owns, how the parts talk to each other, and why |
 
 ## Verifying Releases

@@ -543,7 +543,7 @@ database_path: ./data/cyfr.db
 			if caddyfileExists {
 				fmt.Println("  Caddyfile ready")
 			}
-			fmt.Println("  configuration-guide.md / component-guide.md / tincture-guide.md / integration-guide.md downloaded")
+			fmt.Printf("  %s downloaded\n", strings.Join(scaffold.Guides, " / "))
 			fmt.Println("  wit/ interface definitions downloaded")
 			fmt.Println("  aqua/ soul, roles and scrolls downloaded")
 		}

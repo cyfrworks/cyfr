@@ -8,6 +8,7 @@ OUTPUT="${1:-cyfr-scaffold.tar.gz}"
 
 ITEMS=(
   configuration-guide.md component-guide.md tincture-guide.md integration-guide.md
+  identity-guide.md devices-guide.md
   LICENSE LICENSES/ FAIR_SOURCE.md
   wit/
   # Package deployment files for cyfr init: the app, the execution worker,

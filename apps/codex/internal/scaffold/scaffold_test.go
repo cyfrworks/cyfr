@@ -25,6 +25,8 @@ func TestIsManaged(t *testing.T) {
 		"component-guide.md",
 		"tincture-guide.md",
 		"integration-guide.md",
+		"identity-guide.md",
+		"devices-guide.md",
 		"keeper.seccomp.json",
 		"wit",
 		"wit/cyfr/oauth/token.wit",
@@ -63,11 +65,14 @@ func TestIsManaged(t *testing.T) {
 }
 
 // TestShippedGuidesAreManaged binds the guides the scaffold tarball packs
-// (scripts/scaffold-tarball.sh's items) to the managed set: a guide shipped
-// but not managed would never be refreshed by `cyfr update`, and one
-// managed but not shipped would name nothing.
+// (scripts/scaffold-tarball.sh's items) to Guides and to the managed set: a
+// guide shipped but not managed would never be refreshed by `cyfr update`,
+// and one managed but not shipped would name nothing. Every guide at the
+// repository's root ships, so a new root guide fails here until it is
+// listed.
 func TestShippedGuidesAreManaged(t *testing.T) {
-	raw, err := os.ReadFile(filepath.Join("..", "..", "..", "..", "scripts", "scaffold-tarball.sh"))
+	root := filepath.Join("..", "..", "..", "..")
+	raw, err := os.ReadFile(filepath.Join(root, "scripts", "scaffold-tarball.sh"))
 	if err != nil {
 		t.Fatalf("read scaffold-tarball.sh: %v", err)
 	}
@@ -86,15 +91,28 @@ func TestShippedGuidesAreManaged(t *testing.T) {
 			}
 		}
 	}
-	want := []string{"component-guide.md", "configuration-guide.md", "integration-guide.md", "tincture-guide.md"}
+	want := slices.Clone(Guides)
+	slices.Sort(want)
 	slices.Sort(shipped)
 	if !slices.Equal(shipped, want) {
-		t.Errorf("the tarball ships the guides %v, want %v", shipped, want)
+		t.Errorf("the tarball ships the guides %v, and Guides names %v", shipped, want)
 	}
 	for _, guide := range shipped {
 		if !isManaged(guide) {
 			t.Errorf("the tarball ships %s, which `cyfr update` does not refresh", guide)
 		}
+	}
+	paths, err := filepath.Glob(filepath.Join(root, "*-guide.md"))
+	if err != nil {
+		t.Fatalf("glob the root guides: %v", err)
+	}
+	var present []string
+	for _, path := range paths {
+		present = append(present, filepath.Base(path))
+	}
+	slices.Sort(present)
+	if !slices.Equal(present, want) {
+		t.Errorf("the repository's root guides are %v, and Guides names %v", present, want)
 	}
 }
 

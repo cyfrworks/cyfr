@@ -17,6 +17,9 @@ on:
       # Rendered from the settings roster; the guide check and the drift test
       # read it.
       - 'configuration-guide.md'
+      # Shipped beside the others; the drift and vocabulary tests read them.
+      - 'identity-guide.md'
+      - 'devices-guide.md'
       # Release-critical surfaces with no workflow of their own: run the
       # suite so a change here at least builds against a green tree.
       - 'Dockerfile*'
@@ -54,6 +57,9 @@ on:
       # Rendered from the settings roster; the guide check and the drift test
       # read it.
       - 'configuration-guide.md'
+      # Shipped beside the others; the drift and vocabulary tests read them.
+      - 'identity-guide.md'
+      - 'devices-guide.md'
       # Release-critical surfaces with no workflow of their own: run the
       # suite so a change here at least builds against a green tree.
       - 'Dockerfile*'
@@ -245,6 +251,25 @@ jobs:
       # that no longer matches it fails here.
       - name: The configuration guide is the roster's
         run: mix cyfr.gen.configuration_guide --check
+      # The tincture SDK is built from apps/cyfr/assets/js/sdk into
+      # priv/static/sdk/cyfr.js and tracked, since a tincture's entry page
+      # embeds it at compile time, and Plug.Static serves cyfr.js.gz beside
+      # it to a client that accepts gzip. A source edit without a rebuild
+      # fails here, and so does a gzip that is not the build.
+      - name: The built SDK is its source's
+        run: |
+          set -euo pipefail
+          mix esbuild sdk
+          if [ -n "$(git status --porcelain -- apps/cyfr/priv/static/sdk/)" ]; then
+            echo "::error::apps/cyfr/priv/static/sdk/ is not the build of apps/cyfr/assets/js/sdk: run mix esbuild sdk and commit the result"
+            git status --porcelain -- apps/cyfr/priv/static/sdk/
+            git diff --stat -- apps/cyfr/priv/static/sdk/
+            exit 1
+          fi
+          if ! zcat apps/cyfr/priv/static/sdk/cyfr.js.gz | cmp -s - apps/cyfr/priv/static/sdk/cyfr.js; then
+            echo "::error::apps/cyfr/priv/static/sdk/cyfr.js.gz does not hold cyfr.js: gzip the build again"
+            exit 1
+          fi
       # --warnings-as-errors covers the .exs files `mix test` loads, which a
       # forced compile never reads: a warning in a test fails the build as
       # one in the application does.
@@ -703,14 +728,10 @@ jobs:
             fail=1
           fi
           exit "$fail"
-      # The isolated pool clones every runner into a user and network
-      # namespace of its own, so the host must allow unprivileged user
-      # namespaces; Ubuntu's AppArmor restricts them by default, and the
-      # keeper refuses to serve on such a host, naming this setting.
-      - name: Allow unprivileged user namespaces
-        run: |
-          sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
-          sysctl user.max_user_namespaces
+      # The host's AppArmor restriction on unprivileged user namespaces stays
+      # as the runner image sets it: the keeper clones each runner's
+      # namespaces under Docker's default AppArmor profile, which allows
+      # the clone (docker-compose.yml's opus service says why).
       - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
       - name: Build the worker image
         uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
@@ -929,9 +950,13 @@ jobs:
   # tests/browser/run.sh, so no browser binary is fetched here; Playwright's
   # library comes from tests/browser/package-lock.json, JavaScript only.
   # The experiment records what each browser allowed and fails only when it
-  # could not observe an attempt.
+  # could not observe an attempt. Every proof after it reuses the release
+  # the experiment built (RELEASE_BOOT_SKIP_BUILD), each on its own cells
+  # behind the harness's HTTPS front; a proof that uses a passkey drives
+  # Chromium's virtual authenticator, so its passkey steps run in Chromium
+  # alone.
   browser:
-    name: Browser harness (frame facts, the SDK, the tincture, containment and canvas proofs on Chromium, Firefox and WebKit)
+    name: Browser harness (frame facts, the SDK, the multi-home smoke, and the tincture, containment, pairing, identity, join, grant and canvas proofs on Chromium, Firefox and WebKit)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
@@ -940,6 +965,11 @@ jobs:
         with:
           otp-version: '29'
           elixir-version: '1.20.3'
+      # The grant proof builds the command line from apps/codex.
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
+        with:
+          go-version-file: apps/codex/go.mod
+          cache-dependency-path: apps/codex/go.sum
       - name: Cache deps and the prod build
         uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
         with:
@@ -968,6 +998,34 @@ jobs:
         env:
           RELEASE_BOOT_SKIP_BUILD: '1'
         run: tests/pairing-proof/run.sh
+      # Two homes on hostnames of their own over HTTPS, the shape the identity
+      # and join proofs stand on: each a secure context, names the run's
+      # authority did not sign refused, no cookie crossing between them, a
+      # framed request refused, a fragment carried intact, and a passkey per
+      # home in Chromium (tests/browser/README.md).
+      - name: The multi-home smoke
+        env:
+          RELEASE_BOOT_SKIP_BUILD: '1'
+        run: tests/multi-home-smoke/run.sh
+      # Enrollment, printed kits, a rotation, the restores and what each home
+      # sees, against a directory of its own (tests/identity-proof/README.md).
+      - name: The identity proof (Chromium alone, with its virtual WebAuthn authenticator)
+        env:
+          RELEASE_BOOT_SKIP_BUILD: '1'
+        run: tests/identity-proof/run.sh
+      # A person joining a hub from their own home, on two directories: the
+      # sign-in, the carry and a second profile in every browser, the passkey
+      # steps and a paired device's in Chromium (tests/join-proof/README.md).
+      - name: The join proof
+        env:
+          RELEASE_BOOT_SKIP_BUILD: '1'
+        run: tests/join-proof/run.sh
+      # The steps that need no execution engine and no model; the others are
+      # the suite's (tests/grant-proof/README.md).
+      - name: The grant proof (Chromium alone)
+        env:
+          RELEASE_BOOT_SKIP_BUILD: '1'
+        run: tests/grant-proof/run.sh
       - name: The canvas proof
         env:
           RELEASE_BOOT_SKIP_BUILD: '1'
@@ -1179,7 +1237,7 @@ jobs:
       - name: Tier A/B fossil patterns must be absent
         run: |
           set -uo pipefail
-          paths='apps config wit scripts tests Caddyfile docker-compose.yml Dockerfile Dockerfile.locus Dockerfile.opus docker-entrypoint.sh .env.example .env.locus.example .env.opus.example .gitignore .dockerignore README.md ARCHITECTURE.md CONTRIBUTING.md component-guide.md configuration-guide.md integration-guide.md tincture-guide.md'
+          paths='apps config wit scripts tests Caddyfile docker-compose.yml Dockerfile Dockerfile.locus Dockerfile.opus docker-entrypoint.sh .env.example .env.locus.example .env.opus.example .gitignore .dockerignore README.md ARCHITECTURE.md CONTRIBUTING.md component-guide.md configuration-guide.md integration-guide.md tincture-guide.md identity-guide.md devices-guide.md'
           excl=':(exclude)**/node_modules/** :(exclude)**/package-lock.json :(exclude)**/priv/static/**'
           fail=0
           for p in \
@@ -1295,7 +1353,7 @@ jobs:
           # Operator-facing docs describe the unified athanor layout — not the
           # old two-segment one, not the split components/{athanor} roots, and
           # not a bare components/ tree at the project root.
-          docs_hits="$(git grep -InE 'components/local/default|/t/:publisher/|/t/<publisher>/|components/\{athanor|^components/$' -- README.md component-guide.md integration-guide.md tincture-guide.md .env.example || true)"
+          docs_hits="$(git grep -InE 'components/local/default|/t/:publisher/|/t/<publisher>/|components/\{athanor|^components/$' -- README.md component-guide.md configuration-guide.md integration-guide.md tincture-guide.md identity-guide.md devices-guide.md .env.example || true)"
           if [ -n "$docs_hits" ]; then
             echo "::error::guides still describe a pre-unification layout"; echo "$docs_hits"; fail=1
           fi
@@ -1303,7 +1361,7 @@ jobs:
           # The names below are not tenant roots. `data/` is no longer among
           # them: the guest's scope and the athanor's root are one name now
           # (Arca.Storage.tenant_roots/0).
-          phantom_hits="$(git grep -InE '^ +[├└│|]+─* *(config|builds)/ ' -- README.md component-guide.md integration-guide.md tincture-guide.md || true)"
+          phantom_hits="$(git grep -InE '^ +[├└│|]+─* *(config|builds)/ ' -- README.md component-guide.md configuration-guide.md integration-guide.md tincture-guide.md identity-guide.md devices-guide.md || true)"
           if [ -n "$phantom_hits" ]; then
             echo "::error::guide tree diagrams name a scope that is not a tenant root (see Arca.Storage.tenant_roots/0)"; echo "$phantom_hits"; fail=1
           fi
