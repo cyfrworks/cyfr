@@ -39,7 +39,9 @@ defmodule Cyfr.DeclaredOperationsTest do
           assert op.planes == [:external], "#{tool}.#{op.action}"
           assert op.recovery == nil, "#{tool}.#{op.action}"
 
-          if {tool, op.action} == {"pairing", "complete"} do
+          # A glass completing its pairing, and a device renewing at its
+          # person's home, hold no session: their proof is their credential.
+          if {tool, op.action} in [{"pairing", "complete"}, {"person", "renew_certificate"}] do
             assert {op.auth, op.consent, op.kind} == {:anonymous, nil, :write}
           else
             assert op.consent == :interactive, "#{tool}.#{op.action}"

@@ -943,8 +943,8 @@ defmodule Emissary.Web.DeviceChannel do
 
   defp sentence(:remote_identity_unavailable),
     do:
-      "This device's certificate is issued by its person's own home; certify it there again " <>
-        "rather than renew it here"
+      "This device's certificate is issued by its person's own home; renew it there, " <>
+        "not here"
 
   defp sentence(:identity_stale),
     do: "This device's person's identity could not be confirmed fresh just now; retry shortly"

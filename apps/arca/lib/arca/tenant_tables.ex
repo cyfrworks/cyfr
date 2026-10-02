@@ -139,6 +139,10 @@ defmodule Arca.TenantTables do
   # `passkeys` are a person's own credentials at this home, revoked with
   # the person (`Arca.SecurityTransitions`), never with an athanor.
   #
+  # `device_certifications` are what this home certified for its people's
+  # devices at other homes: the athanor each names is the other home's,
+  # and the row goes with the person.
+  #
   # `installation_claims` are the node's claims by a restore, and
   # `request_rate_windows` the node's pre-authentication limits: no
   # session, and so no athanor, stands behind either.
@@ -155,6 +159,7 @@ defmodule Arca.TenantTables do
     "directory_heads",
     "carry_actions",
     "passkeys",
+    "device_certifications",
     "installation_claims",
     "request_rate_windows"
   ]

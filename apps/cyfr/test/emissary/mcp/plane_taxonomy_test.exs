@@ -210,7 +210,10 @@ defmodule Emissary.MCP.PlaneTaxonomyTest do
                  {"tincture", "invoke_public"},
                  # A new device holds no credential: the single-use pairing
                  # invitation names the person and athanor.
-                 {"pairing", "complete"}
+                 {"pairing", "complete"},
+                 # A device paired at another home holds no credential
+                 # here: it proves the key this home certified.
+                 {"person", "renew_certificate"}
                ])
              )
     end

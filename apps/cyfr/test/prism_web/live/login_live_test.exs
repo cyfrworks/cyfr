@@ -275,7 +275,7 @@ defmodule PrismWeb.LoginLiveTest do
                  URI.encode_query(%{"destination" => Sanctum.Person.home()})
     end
 
-    test "naming the home whose challenge this browser holds resumes that exchange: the same challenge goes back",
+    test "naming the home whose challenge this browser holds resumes that exchange: the same challenge goes back, and no expectation is kept",
          %{conn: conn, identity: identity} do
       %{fragment: carry} = DirectoryServer.carry_fragment(identity, Sanctum.Person.home())
       {:ok, held} = Sanctum.Auth.CyfrDoor.challenge(carry)
@@ -285,7 +285,12 @@ defmodule PrismWeb.LoginLiveTest do
 
       {:ok, view, _} = live(browser, ~p"/login")
       view |> element("#cyfr-sign-in") |> render_submit(%{"home" => "https://a.example"})
-      assert_push_event(view, "cyfr:expect", %{home: "https://a.example", to: path})
+
+      # What comes back on a resumed exchange is its assertion, never a
+      # carry: the script is told to go, and keeps no expectation that a
+      # carry could use.
+      assert_push_event(view, "cyfr:go", %{to: path})
+      refute_push_event(view, "cyfr:expect", %{})
       assert String.starts_with?(path, "/auth/cyfr?ticket=")
 
       hop = get(browser, path)
@@ -301,6 +306,54 @@ defmodule PrismWeb.LoginLiveTest do
         home: "https://b.example",
         to: "https://b.example/carry#" <> _
       })
+    end
+
+    test "a held challenge past its expiry resumes nothing: naming its home begins a new exchange there",
+         %{conn: conn, identity: identity} do
+      %{fragment: carry} = DirectoryServer.carry_fragment(identity, Sanctum.Person.home())
+      {:ok, held} = Sanctum.Auth.CyfrDoor.challenge(carry)
+      expired = Map.put(held, "expires_at", System.os_time(:millisecond) - 1)
+
+      browser =
+        conn |> Plug.Test.init_test_session(%{"cyfr_challenge" => expired}) |> get(~p"/login")
+
+      {:ok, view, _} = live(browser, ~p"/login")
+      view |> element("#cyfr-sign-in") |> render_submit(%{"home" => "https://a.example"})
+
+      assert_push_event(view, "cyfr:expect", %{home: "https://a.example", to: to})
+      assert String.starts_with?(to, "https://a.example/carry#")
+      refute_push_event(view, "cyfr:go", %{})
+    end
+
+    test "the browser secret a held challenge binds is never in what the page's assigns print",
+         %{conn: conn, identity: identity} do
+      %{fragment: carry} = DirectoryServer.carry_fragment(identity, Sanctum.Person.home())
+      {:ok, held} = Sanctum.Auth.CyfrDoor.challenge(carry)
+
+      browser =
+        conn |> Plug.Test.init_test_session(%{"cyfr_challenge" => held}) |> get(~p"/login")
+
+      {:ok, view, _} = live(browser, ~p"/login")
+
+      # A second exchange's challenge, waiting for the person's Continue.
+      %{fragment: another} = DirectoryServer.carry_fragment(identity, Sanctum.Person.home())
+
+      render_hook(view, "cyfr_carry", %{
+        "fragment" => another,
+        "expected_source" => "https://a.example"
+      })
+
+      assigns = :sys.get_state(view.pid).socket.assigns
+      assert %PrismWeb.LoginLive.Held{held: %{"browser_secret" => secret}} = assigns.cyfr_held
+
+      assert %PrismWeb.LoginLive.Held{held: %{"browser_secret" => pending}} =
+               assigns.cyfr_pending.held
+
+      # A crash report prints the page's state, its assigns included.
+      printed = inspect(:sys.get_state(view.pid), limit: :infinity, printable_limit: :infinity)
+      refute printed =~ secret
+      refute printed =~ pending
+      assert printed =~ held["challenge_id"]
     end
 
     test "an address that is no home's, or this home's, is told so", %{conn: conn} do
@@ -420,7 +473,7 @@ defmodule PrismWeb.LoginLiveTest do
       })
 
       :sys.replace_state(view.pid, fn state ->
-        update_in(state.socket.assigns.cyfr_pending.held, &Map.put(&1, "expires_at", 0))
+        update_in(state.socket.assigns.cyfr_pending.held.held, &Map.put(&1, "expires_at", 0))
       end)
 
       html = view |> element("[data-test=cyfr-continue]") |> render_click()

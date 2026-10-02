@@ -1008,7 +1008,7 @@ defmodule PrismWeb.AuthControllerTest do
       do: Plug.Test.init_test_session(conn, %{"cyfr_challenge" => held})
 
     defp callback(conn, held, fragment),
-      do: conn |> holding(held) |> post(~p"/auth/cyfr/callback", %{"cyfr" => fragment})
+      do: conn |> holding(held) |> post(~p"/auth/cyfr/callback", %{"fragment" => fragment})
 
     test "the hop keeps the challenge in this browser's session and answers 303 to the carry's signed return URL",
          %{conn: conn, held: held} do
@@ -1074,6 +1074,32 @@ defmodule PrismWeb.AuthControllerTest do
       assert get_session(again, :sanctum_session_token) == token
     end
 
+    test "the assertion is posted as `fragment`, which the request log redacts; no other field is read",
+         %{conn: conn, held: held, identity: identity} do
+      {:ok, _} = Sanctum.Door.Store.allow("identifier", identity.identifier, "test")
+      fragment = DirectoryServer.assertion_fragment(identity, held, Sanctum.Person.home())
+
+      # The parameters Phoenix logs for this request, as its logger filters
+      # them (`Prima.Sanitizer.filter_parameters/0`, installed at boot).
+      assert %{"fragment" => "[FILTERED]"} =
+               Phoenix.Logger.filter_values(%{"fragment" => fragment})
+
+      # A field of another name admits nobody and keeps the challenge.
+      refused =
+        conn
+        |> holding(held)
+        |> post(~p"/auth/cyfr/callback", %{"cyfr" => fragment})
+
+      refute get_session(refused, :sanctum_session_token)
+
+      assert Arca.CarryActions.receipt(
+               Prima.Actor.system(),
+               Sanctum.Person.home(),
+               held["challenge_id"]
+             ) ==
+               {:error, :not_found}
+    end
+
     test "the report goes only to the signed source's fixed return URL, never to one the request names",
          %{conn: conn, held: held, identity: identity} do
       {:ok, _} = Sanctum.Door.Store.allow("identifier", identity.identifier, "test")
@@ -1083,7 +1109,7 @@ defmodule PrismWeb.AuthControllerTest do
         conn
         |> holding(held)
         |> post(~p"/auth/cyfr/callback", %{
-          "cyfr" => fragment,
+          "fragment" => fragment,
           "return_url" => "https://evil.example/carry",
           "to" => "https://evil.example/"
         })
@@ -1123,7 +1149,7 @@ defmodule PrismWeb.AuthControllerTest do
         build_conn()
         |> Plug.Test.init_test_session(%{})
         |> post(~p"/auth/cyfr/callback", %{
-          "cyfr" => DirectoryServer.assertion_fragment(identity, held, Sanctum.Person.home())
+          "fragment" => DirectoryServer.assertion_fragment(identity, held, Sanctum.Person.home())
         })
 
       refute html_response(unheld, 401) =~ "Back to your home"

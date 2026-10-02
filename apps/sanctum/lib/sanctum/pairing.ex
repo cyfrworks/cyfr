@@ -28,6 +28,9 @@ defmodule Sanctum.Pairing do
       challenge with its device key and presents the proof, and the home
       records the paired client and issues its first certificate, or, for
       a remote person, records the one their own home issued (below).
+      A remote person's glass that brings no certificate is answered the
+      challenge with what their home must certify (`certify`), and its
+      proof is refused until it brings one.
       The invitation names the person
       and athanor, and nothing about the caller does: a session cookie
       the browser still holds never chooses the person. The person's
@@ -56,11 +59,14 @@ defmodule Sanctum.Pairing do
   ## Pairing a remote person's device
 
   This home cannot sign for a person whose keys are at another home. Their
-  invitation reserves the client id as any does; their own home certifies
-  that id, the device key, this home and the athanor
-  (`person.certify`, after a fresh confirmation there), and the glass
-  presents that certificate with its completion (`complete/3`'s
-  `:certificate`). Here the person's head is read fresh from their
+  invitation reserves the client id as any does. A first call with no
+  certificate is answered, beside the `pair` challenge, `certify:
+  %{audience, athanor, client_id}`: this home, the invitation's athanor
+  and the reserved client id, which the invitation's bearer may know and
+  the glass takes to the person's own home. That home certifies that id,
+  the device key, this home and the athanor (`person.certify`, after a
+  fresh confirmation there), and the glass presents that certificate with
+  its completion (`complete/3`'s `:certificate`). Here the person's head is read fresh from their
   directory, and the certificate must be signed by its current live key,
   under its current `key_epoch`, for exactly the person's identifier, the
   reserved client id, the submitted device key, this home as its audience
@@ -68,9 +74,10 @@ defmodule Sanctum.Pairing do
   `pair` challenge shows it holds that device key. Then the client is
   recorded with that certificate, bound to the epoch under the person's
   lock, in the invitation's one transaction. A certificate offered for a
-  local person's invitation, or none for a remote person's, is refused.
-  A remote certificate is not renewed here: the glass is certified again
-  at the person's home when it expires.
+  local person's invitation, or a proof with none for a remote person's,
+  is refused. A remote certificate is not renewed here: the glass renews
+  it at the person's own home by a proof of its device key
+  (`person.renew_certificate`), or is certified there again.
 
   Every completion and every renewal is counted against the verification
   bounds before it is verified (`Sanctum.DeviceCerts.claim_verification/1`):
@@ -224,6 +231,12 @@ defmodule Sanctum.Pairing do
           optional(:certificate) => DeviceCert.t() | nil
         }
 
+  @typedoc """
+  What a remote person's own home is to certify for the glass: this home
+  as the audience, the invitation's athanor and the client id it reserved.
+  """
+  @type certify :: %{audience: String.t(), athanor: String.t(), client_id: String.t()}
+
   @typedoc "A paired client and the certificate it connects under."
   @type paired :: %{client_id: String.t(), certificate: DeviceCert.t()}
 
@@ -245,9 +258,9 @@ defmodule Sanctum.Pairing do
       device key submitted, or the challenge is not one this home issued
       for that invitation or client.
     * `:wrong_audience` — the invitation is for another home.
-    * `:certificate_required` — a remote person's invitation completed
-      without their home's certificate; `:certificate_unexpected`, a
-      local person's offered one.
+    * `:certificate_required` — a remote person's invitation's proof
+      presented without their home's certificate; `:certificate_unexpected`,
+      a local person's offered one.
     * `:certificate_refused` — the certificate offered is not their home's
       for exactly this person, client, device key, home and athanor under
       their current live key, or has expired.
@@ -372,7 +385,9 @@ defmodule Sanctum.Pairing do
   second call, its proof (`t:submission/0`).
 
   Without a proof, answers `%{challenge: challenge}`, the `pair`
-  challenge for this invitation and device key. With the proof over it,
+  challenge for this invitation and device key, and for a remote person's
+  invitation offered no certificate also `certify: %{audience, athanor,
+  client_id}`, what their own home is to certify. With the proof over it,
   locks and checks the person's standing and seat, records the paired
   client under the reserved id, issues its first certificate and consumes
   the invitation, in one transaction, and answers `t:paired/0`.
@@ -382,7 +397,9 @@ defmodule Sanctum.Pairing do
   person. Every call is counted before anything is verified.
   """
   @spec complete(Context.t(), binary(), submission()) ::
-          {:ok, %{challenge: Challenge.t()}} | {:ok, paired()} | {:error, refusal()}
+          {:ok, %{required(:challenge) => Challenge.t(), optional(:certify) => certify()}}
+          | {:ok, paired()}
+          | {:error, refusal()}
   def complete(%Context{} = ctx, secret, %{device_key: device_key} = submission)
       when is_binary(secret) and byte_size(secret) == @secret_bytes and is_binary(device_key) and
              byte_size(device_key) == 32 do
@@ -393,9 +410,11 @@ defmodule Sanctum.Pairing do
          :ok <- this_home(invitation),
          {:ok, issuer} <-
            issuer(invitation, device_key, Map.get(submission, :certificate), now) do
-      case Map.get(submission, :proof) do
-        nil -> challenged(secret, invitation, device_key, now)
-        proof -> redeem(secret, invitation, device_key, proof, issuer, now)
+      case {Map.get(submission, :proof), issuer} do
+        {nil, :certify} -> certify_first(secret, invitation, device_key, now)
+        {nil, _issuer} -> challenged(secret, invitation, device_key, now)
+        {_proof, :certify} -> {:error, :certificate_required}
+        {proof, issuer} -> redeem(secret, invitation, device_key, proof, issuer, now)
       end
     end
   end
@@ -456,8 +475,8 @@ defmodule Sanctum.Pairing do
 
   defp local_issuer(_user_id, _certificate), do: {:error, :certificate_unexpected}
 
-  defp remote_issuer(_invitation, _identifier, _device_key, nil, _now),
-    do: {:error, :certificate_required}
+  # No certificate yet: the glass is told what to have certified.
+  defp remote_issuer(_invitation, _identifier, _device_key, nil, _now), do: {:ok, :certify}
 
   defp remote_issuer(invitation, identifier, device_key, %DeviceCert{} = certificate, now) do
     with :ok <- binds?(certificate, invitation, identifier, device_key),
@@ -489,6 +508,19 @@ defmodule Sanctum.Pairing do
       {:ok, subject} -> {:ok, subject}
       {:error, reason} when reason in [:identity_stale, :unavailable] -> {:error, reason}
       {:error, _refused} -> {:error, :certificate_refused}
+    end
+  end
+
+  # A remote person's glass that brings no certificate: the challenge, and
+  # what their own home is to certify for it.
+  defp certify_first(secret, invitation, device_key, now) do
+    with {:ok, answer} <- challenged(secret, invitation, device_key, now) do
+      {:ok,
+       Map.put(answer, :certify, %{
+         audience: Person.home(),
+         athanor: invitation.athanor_id,
+         client_id: invitation.prospective_client_id
+       })}
     end
   end
 

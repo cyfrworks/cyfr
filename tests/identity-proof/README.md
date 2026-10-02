@@ -25,20 +25,24 @@ own directory client speaks HTTPS to the URL an identity names,
 resolves no name. So this proof adds, in pieces another proof sources
 (`tests/join-proof/` among them):
 
-- `front.sh` and `front.mjs` — one container of the pinned Playwright
-  image per run, `cyfr-identity-front-<pid>`, on the host network as
-  root so it can listen on port 443 of the proof's own loopback address
-  (`127.77.0.1`), presenting the certificate the run's authority issued
-  for `dir.test` and forwarding to the directory cell as Caddy forwards.
-  Its control listener (port 9443) breaks the directory on purpose:
-  `down`, `drop-recover` (a recovery forwarded, its answer never
-  delivered) and `block-reads-after-recover` (once a recovery is
-  answered, every read of a log closed unanswered), and reports every
-  request that reached it.
+- `front.sh` and `front.mjs` — each directory a proof runs is declared
+  by its name and its front's address (`identity_directory dir.test
+  127.77.0.1`; this proof runs one, the join proof two). Each front is
+  one container of the pinned Playwright image per run and directory,
+  `cyfr-identity-front-<pid>-<name>`, on the host network as root so it
+  can listen on port 443 of its own loopback address, presenting the
+  certificate the run's authority issued for its name and forwarding to
+  its directory cell as Caddy forwards. Its control listener (port 9443
+  of that address) breaks the directory on purpose
+  (`identity_front_fault NAME MODE`): `down`, `drop-recover` (a recovery
+  forwarded, its answer never delivered) and `block-reads-after-recover`
+  (once a recovery is answered, every read of a log closed unanswered),
+  and reports every request that reached it (`identity_front_seen NAME`).
 - `cells.sh` — each home's deployment file gains `ERL_INETRC` (an inetrc
-  of the run's own naming `dir.test` at the front's address), the
-  front's address in `CYFR_PRIVATE_EGRESS_TARGETS`, and
-  `CYFR_DIRECTORY_URL`; once its server answers, the node takes the run's
+  of the run's own naming every declared directory at its front's
+  address), every front's address in `CYFR_PRIVATE_EGRESS_TARGETS`, and
+  `CYFR_DIRECTORY_URL`, the one directory it enrolls at
+  (`identity_reaches_directory CELL NAME`); once its server answers, the node takes the run's
   authority as its trusted store (`:public_key.cacerts_load/1` over
   `bin/cyfr rpc`), as an operator adds a certificate authority to a
   node's store. No test seam is set in any release. It also holds the
@@ -48,7 +52,7 @@ resolves no name. So this proof adds, in pieces another proof sources
 
 No DNS, `/etc/hosts`, trust store or other configuration outside the
 scratch directory is read or changed. Everything the run starts — the
-cells' servers, the front, the Playwright container — and the scratch
+cells' servers, the fronts, the Playwright container — and the scratch
 directory, with the run's authority key, every token and every kit line,
 is removed when it ends, whether it succeeds or fails.
 

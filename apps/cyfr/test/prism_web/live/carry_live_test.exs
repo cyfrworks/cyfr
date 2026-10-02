@@ -15,6 +15,7 @@ defmodule PrismWeb.CarryLiveTest do
   """
   use PrismWeb.ConnCase, async: false
 
+  import Ecto.Query, only: [from: 2]
   import Prima.Test.Wait
 
   alias Arca.Schemas.{CarryAction, PersonIdentity}
@@ -333,6 +334,167 @@ defmodule PrismWeb.CarryLiveTest do
     assert left == second.action_id
     refute has_element?(view, "#carry-#{first.action_id}")
     Cyfr.Test.Sandbox.end_views()
+  end
+
+  test "an assertion that came back for another home than the action's is never sent anywhere",
+       %{conn: conn} do
+    %{conn: conn, user: user} = enrolled!(conn)
+    {:ok, view, _html} = live(conn, ~p"/carry")
+    begun = begin!(view)
+    {fragment, challenge} = challenge_fragment(begun.action_id)
+
+    # The action's recorded assertion, as a corrupted row would hold it,
+    # names another home: the page's callback names it too.
+    as = %Prima.Actor{user_id: user.user_id}
+
+    {:ok, _} =
+      Arca.CarryActions.attach_challenge(as, begun.action_id, %{
+        challenge: Encoding.b64(challenge),
+        challenge_digest: Prima.Digest.sha256(Encoding.b64(challenge))
+      })
+
+    {_public, private} = :crypto.generate_key(:eddsa, :ed25519)
+
+    {:ok, unsigned} =
+      Prima.PersonAssertion.new(
+        identifier: Arca.Repo.get_by!(PersonIdentity, user_id: user.user_id).identifier,
+        audience: "https://elsewhere.example",
+        challenge: challenge,
+        action_id: begun.action_id,
+        key_epoch: head(user),
+        expires_at: System.os_time(:millisecond) + 60_000
+      )
+
+    bytes =
+      Encoding.jcs!(Prima.PersonAssertion.encode(Prima.PersonAssertion.sign(unsigned, private)))
+
+    {:ok, _} =
+      Arca.CarryActions.record_assertion(as, begun.action_id, %{
+        assertion: bytes,
+        assertion_digest: Prima.Digest.sha256(bytes)
+      })
+
+    html = render_hook(view, "carry_challenge", %{"fragment" => fragment, "own" => true})
+    assert html =~ "came back for another home"
+    refute_push_event(view, "carry:go", %{})
+    Cyfr.Test.Sandbox.end_views()
+  end
+
+  test "Resume of an action whose challenge the page holds asks for the assertion again, never the destination's sign-in",
+       %{conn: conn} do
+    %{conn: conn, ctx: ctx} = enrolled!(conn)
+    {:ok, view, _html} = live(conn, ~p"/carry")
+    begun = begin!(view)
+    {fragment, _challenge} = challenge_fragment(begun.action_id)
+
+    # A challenge this tab did not begin, set aside.
+    render_hook(view, "carry_challenge", %{"fragment" => fragment, "own" => false})
+    view |> element("[data-test=carry-continue] button", "Not now") |> render_click()
+    assert open_confirmations(ctx) == []
+
+    view
+    |> element("#carry-#{begun.action_id} button", "Resume")
+    |> render_click()
+
+    assert [%{operation: "person.assert"}] = open_confirmations(ctx)
+    refute_push_event(view, "carry:go", %{})
+    Cyfr.Test.Sandbox.end_views()
+  end
+
+  describe "a device to certify" do
+    # What a glass at the hub asks its person's home to certify.
+    defp certify_fragment(overrides \\ %{}) do
+      {device_key, _} = :crypto.generate_key(:eddsa, :ed25519)
+
+      request =
+        Map.merge(
+          %{
+            "audience" => @hub,
+            "athanor" => "ath_hub",
+            "client_id" => "pcl_hub",
+            "device_key" => Encoding.b64(device_key)
+          },
+          overrides
+        )
+
+      {request |> Encoding.jcs!() |> Encoding.b64(), request}
+    end
+
+    defp certifications(user) do
+      Arca.Repo.all(
+        from(c in Arca.Schemas.DeviceCertification, where: c.user_id == ^user.user_id)
+      )
+    end
+
+    test "is only shown until the person certifies it; then, after a fresh confirmation, the certificate goes to that home's /pair alone",
+         %{conn: conn} do
+      %{conn: conn, user: user, ctx: ctx} = enrolled!(conn)
+      {:ok, view, _html} = live(conn, ~p"/carry")
+      {fragment, request} = certify_fragment()
+
+      html = render_hook(view, "carry_certify", %{"fragment" => fragment})
+      assert html =~ ~s(data-test="carry-certify")
+      assert html =~ @hub
+      assert html =~ "ath_hub"
+      assert open_confirmations(ctx) == []
+      assert certifications(user) == []
+
+      view |> element("[data-test=certify-continue]") |> render_click()
+
+      assert [%{ref: ref, operation: "person.certify", preview: preview}] =
+               open_confirmations(ctx)
+
+      assert preview =~ @hub
+      assert certifications(user) == []
+
+      Sanctum.TestContext.prove!(ctx, ref)
+
+      assert_push_event(
+        view,
+        "carry:go",
+        %{to: "https://hub.example/pair#certificate=" <> encoded},
+        2_000
+      )
+
+      {:ok, certificate} = Prima.Carry.decode_object(encoded)
+      assert {:ok, cert} = Prima.DeviceCert.decode(certificate)
+      assert Encoding.b64(cert.device_key) == request["device_key"]
+      assert {cert.audience, cert.athanor, cert.client_id} == {@hub, "ath_hub", "pcl_hub"}
+      assert [%{key_epoch: epoch}] = certifications(user)
+      assert epoch == head(user)
+      refute has_element?(view, "[data-test=carry-certify]")
+      Cyfr.Test.Sandbox.end_views()
+    end
+
+    test "Not now certifies nothing; a request that does not read, or for this home, certifies nothing",
+         %{conn: conn} do
+      %{conn: conn, user: user, ctx: ctx} = enrolled!(conn)
+      {:ok, view, _html} = live(conn, ~p"/carry")
+      {fragment, _request} = certify_fragment()
+
+      render_hook(view, "carry_certify", %{"fragment" => fragment})
+      view |> element("[data-test=carry-certify] button", "Not now") |> render_click()
+      refute has_element?(view, "[data-test=carry-certify]")
+
+      html = render_hook(view, "carry_certify", %{"fragment" => "not a request"})
+      assert html =~ "could not be read"
+
+      {extra, _} = certify_fragment(%{"extra" => "field"})
+      assert render_hook(view, "carry_certify", %{"fragment" => extra}) =~ "could not be read"
+
+      oversized = fragment <> String.duplicate("A", Prima.Carry.max_fragment_bytes())
+      assert render_hook(view, "carry_certify", %{"fragment" => oversized}) =~ "larger than"
+
+      {here, _} = certify_fragment(%{"audience" => Sanctum.Person.home()})
+      render_hook(view, "carry_certify", %{"fragment" => here})
+      html = view |> element("[data-test=certify-continue]") |> render_click()
+      assert html =~ "through pairing"
+      refute_push_event(view, "carry:go", %{})
+
+      assert open_confirmations(ctx) == []
+      assert certifications(user) == []
+      Cyfr.Test.Sandbox.end_views()
+    end
   end
 
   test "an oversized carry or a refused begin sends nothing", %{conn: conn} do

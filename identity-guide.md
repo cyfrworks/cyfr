@@ -109,6 +109,31 @@ Signing in at another home with your CYFR identity begins at your own home, whic
 
 ---
 
+## Joining a Home That Is Not Your Own
+
+A hub, or anyone's home, lets you in by your identifier (`per_…`, shown on your settings page), as it lets in an email address: its platform administrator allows your identifier at its door, and a member invites it to an athanor there. Nothing about this reaches your own home, and nothing at the hub learns your keys.
+
+1. Open the hub's address. On its sign-in page, under **Sign in with your CYFR**, give your own home's address. The hub sends you there; a link someone sends you only fills that form, and never begins or confirms anything.
+2. At your home's `/carry` page, press **Begin**: the sign-in is for that one hub. Sign in at your home first if you are not.
+3. The hub shows a short code, and your home's confirmation names the same code. Confirm at your home with a fresh proof only if they match. Your home signs an assertion for that hub's challenge alone, and the browser takes it back.
+4. The hub reads your identity at the directory your identity names, which need not be the hub's own, checks the assertion under your current keys, admits you, and makes you a member of the athanors you were invited to. Your home's `/carry` page records that you were admitted, and sends you on to the hub.
+
+No cookie or session crosses from one home to the other, and no home keeps a list of the homes you sign in at. A step that is interrupted, a closed tab or a lost answer, resumes from your home's `/carry` page (**Resume**), under the same sign-in; a sign-in already admitted answers with the session it made, never a second one. **Cancel** ends one you no longer want.
+
+At the hub, a sign-in through the CYFR door is not a fresh proof. Register a passkey there for the changes that need one: its administrator authorizes your first one (`Passkeys at Each Home` below). To pair a phone with the hub, open the hub's pairing code on it: the phone asks for your home's address, you certify it at your home under a fresh confirmation there, and it comes back and pairs. It renews its certificate at your home by proving its key, with no confirmation, until your keys change (`devices-guide.md`).
+
+- **Leaving one athanor**, or being removed from it, ends that membership, your sessions bound to it and the devices you paired for it. Your other athanors at the hub, and your own home, are untouched.
+- **After you rotate your live key**, the hub ends your sessions there within its `identity_freshness_seconds` (five minutes by default); sign in again. Your passkeys at the hub stay, and your devices there are certified again at your home.
+- **After a recovery**, the hub ends your sessions there within the same bound, and with them the passkeys and device certificates bound to the old keys. Sign in again, naming your home's new address if it moved; your next passkey at the hub is authorized by its administrator again, and your devices are certified again at your home.
+- **With your identity's directory unreachable**, the hub keeps admitting you on the head it last read for its `identity_freshness_seconds`, then pauses your protected work there with a sentence saying so, until the directory answers again. A new sign-in waits for the directory.
+- **A new browser or device** starts with no saved homes and imports none: you open each home by its address or an invitation, and sign in there.
+
+### Where joining is proven
+
+The join proof (`tests/join-proof/`) runs every step in Chromium on the desktop, and a paired device's steps again in Chromium at a 720×720 touch viewport; in Firefox and WebKit it runs the sign-in at the hub, the carry between the homes and a second browser profile, each fresh confirmation those need given on a device paired in Chromium. Steps that use a passkey run in Chromium alone, whose virtual authenticator the proof drives. In-app browsers and mail clients that rewrite links are not covered.
+
+---
+
 ## Passkeys at Each Home
 
 A passkey belongs to the one home it was registered at, under that home's host, and proves things only there. Register one at each home where you confirm changes.

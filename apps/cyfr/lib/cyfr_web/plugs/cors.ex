@@ -21,6 +21,16 @@ defmodule CyfrWeb.Plugs.CORS do
   Both sides therefore read `Prima.MCP.Protocol.request_headers/0`, and
   `CyfrWeb.Plugs.CORSTest` asserts they agree.
 
+  ## Any origin
+
+  A mount that sets `any_origin: true` answers every origin `*`, whatever
+  the deployment's list, and never allows credentials: a route whose only
+  credential is in the request itself, with no session read, as a
+  certified device's renewal at its person's home is (`/certify/v1/renew`,
+  reached from the other home's page). A wildcard never carries cookies, so
+  nothing ambient is ever sent or read on its behalf. The `null` origin is
+  still answered only where `null_origin: true` says so.
+
   ## Configuration
 
       # Default — no cross-origin browser caller
@@ -82,6 +92,8 @@ defmodule CyfrWeb.Plugs.CORS do
       endpoint claimed support for something no MCP handler reads.
     * `:null_origin` — answer the `null` origin (default `false`); see
       "The null origin" above.
+    * `:any_origin` — answer every other origin `*`, never with
+      credentials (default `false`); see "Any origin" above.
 
   Mounts share this plug but route different verbs and accept different
   headers — `/mcp` is POST-only in this protocol revision, while
@@ -108,6 +120,7 @@ defmodule CyfrWeb.Plugs.CORS do
     |> Keyword.put(:allowed_methods, methods)
     |> Keyword.put(:allowed_headers, headers)
     |> Keyword.put(:null_origin, Keyword.get(opts, :null_origin, false) == true)
+    |> Keyword.put(:any_origin, Keyword.get(opts, :any_origin, false) == true)
   end
 
   @impl true
@@ -140,6 +153,7 @@ defmodule CyfrWeb.Plugs.CORS do
     allow_origin =
       cond do
         origin == "null" -> if Keyword.get(opts, :null_origin, false), do: "null"
+        Keyword.get(opts, :any_origin, false) -> "*"
         "*" in allowed -> "*"
         origin != nil and origin in allowed -> origin
         true -> nil

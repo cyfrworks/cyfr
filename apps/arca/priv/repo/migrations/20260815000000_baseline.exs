@@ -844,6 +844,43 @@ defmodule Arca.Repo.Migrations.Baseline do
     create index(:device_certificates, [:user_id, :state])
     create index(:device_certificates, [:key_epoch], where: "key_epoch IS NOT NULL")
 
+    certification_state =
+      known("device_certifications_state_known", "state", ~w(active revoked))
+
+    # What this home certified for one of its people's devices at another
+    # home: the client id that home reserved, the device key, that home and
+    # its athanor, the `key_epoch` the person confirmed it under and the
+    # latest certificate's expiry. One row per person, audience and client,
+    # replaced by each fresh certification; a renewal that proves the
+    # device key extends it only under the same `key_epoch`. The athanor is
+    # the other home's, so it is no tenant column here.
+    create table(:device_certifications, primary_key: false) do
+      add :id, :string, primary_key: true
+      add :user_id, references(:users, type: :string, on_delete: :delete_all), null: false
+      add :identifier, :string, null: false
+      add :key_epoch, :string, null: false
+      add :client_id, :string, null: false
+      add :device_public_key, :binary, null: false
+      add :audience_home, :text, null: false
+      add :audience_athanor, :string, null: false
+      add :expires_at, :utc_datetime_usec, null: false
+
+      add :state, :string,
+        null: false,
+        default: "active",
+        check: if(sqlite?, do: certification_state)
+
+      add :revision, :bigint, null: false, default: 1
+
+      timestamps(type: :utc_datetime_usec)
+    end
+
+    checked(sqlite?, :device_certifications, [certification_state])
+
+    create unique_index(:device_certifications, [:user_id, :audience_home, :client_id],
+             name: :device_certifications_binding_index
+           )
+
     confirmation_checks = [
       known(
         "pending_confirmations_state_known",

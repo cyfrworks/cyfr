@@ -228,7 +228,7 @@ defmodule PrismWeb.AuthController do
   sign-in does, then goes back to the person's home with `admitted`; a
   refused one's page links back there with `refused` (the module doc).
   """
-  def cyfr_callback(conn, %{"cyfr" => fragment}) when is_binary(fragment) do
+  def cyfr_callback(conn, %{"fragment" => fragment}) when is_binary(fragment) do
     held = get_session(conn, @cyfr_challenge)
 
     case Sanctum.Auth.CyfrDoor.callback(fragment, held) do

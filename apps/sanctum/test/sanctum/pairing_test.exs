@@ -39,9 +39,8 @@ defmodule Sanctum.PairingTest do
     if tags[:database] == false do
       :ok
     else
+      Arca.Test.Sandbox.setup!(tags)
       Arca.Cache.init()
-      :ok = Ecto.Adapters.SQL.Sandbox.checkout(Arca.Repo)
-      Ecto.Adapters.SQL.Sandbox.mode(Arca.Repo, {:shared, self()})
       Prima.RateLimiter.reset()
       directory = Application.get_env(:sanctum, :directory_url)
 
@@ -1234,18 +1233,37 @@ defmodule Sanctum.PairingTest do
       assert invitation_row(invitation.invitation_secret).state == "consumed"
     end
 
-    test "no certificate for a remote person, or one for a local person, is refused",
-         %{identity: identity, invitation: invitation, user: user} do
-      {device_key, _} = key = device_key()
+    test "a remote person's glass with no certificate is told what to certify, and its proof without one is refused; a local person's offered one is refused",
+         %{identity: identity, invitation: invitation, user: user, athanor: athanor} do
+      {device_key, private} = key = device_key()
 
-      assert {:error, :certificate_required} =
+      # The challenge, and what the person's own home is to certify: this
+      # home, the invitation's athanor and the client it reserved.
+      assert {:ok, %{challenge: challenge, certify: certify}} =
                Pairing.complete(glass(), invitation.invitation_secret, %{device_key: device_key})
+
+      assert certify == %{
+               audience: Person.home(),
+               athanor: athanor.id,
+               client_id: invitation.client_id
+             }
+
+      assert challenge.client_id == invitation.client_id
+
+      # Its proof, with no certificate, pairs nothing.
+      assert {:error, :certificate_required} =
+               Pairing.complete(glass(), invitation.invitation_secret, %{
+                 device_key: device_key,
+                 proof: Proof.sign(challenge, private)
+               })
 
       assert {:error, :certificate_required} =
                Pairing.complete(glass(), invitation.invitation_secret, %{
                  device_key: device_key,
                  proof: %{}
                })
+
+      assert invitation_row(invitation.invitation_secret).state == "pending"
 
       local = seated!()
       {:ok, local_invitation} = begin!(local.session_ctx)

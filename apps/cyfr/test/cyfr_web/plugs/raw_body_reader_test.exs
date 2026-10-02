@@ -152,6 +152,17 @@ defmodule CyfrWeb.Plugs.RawBodyReaderTest do
       assert {:ok, ^body, _conn} = RawBodyReader.read_body(conn, length: 28_000_000)
     end
 
+    test "caps a certified device's renewal the same way" do
+      body = :binary.copy(<<?x>>, Prima.Identity.max_entry_bytes() + 1)
+
+      for url <- ["/certify/v1/renew", "http://www.example.com//certify//v1/renew"] do
+        conn = build_conn(:post, url, body)
+
+        assert {:more, chunk, _conn} = RawBodyReader.read_body(conn, length: 28_000_000)
+        assert byte_size(chunk) == Prima.Identity.max_entry_bytes()
+      end
+    end
+
     test "never raises a smaller cap set upstream" do
       conn = build_conn(:post, "/directory/v1/per_x/recover", :binary.copy(<<?x>>, 200))
 
