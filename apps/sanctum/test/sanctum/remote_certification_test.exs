@@ -8,7 +8,10 @@ defmodule Sanctum.RemoteCertificationTest do
   proof, recorded with that proof's consumption under the person's head;
   and its renewal by the device key's proof over a challenge only this
   home makes, used once, while the person, the record and the head stand.
-  A changed head ends every certification made under the old one.
+  A changed head ends every certification made under the old one. The
+  challenge reads nothing; a proof the certification's key made counts
+  against its person, any other against its address and the
+  installation, so a flood naming the person never stops their device.
   """
 
   # The rate limiter's table is the node's.
@@ -149,10 +152,48 @@ defmodule Sanctum.RemoteCertificationTest do
   end
 
   # The device's two calls: the challenge, then its proof over it.
-  defp renewed(certificate, {_key, private}) do
-    with {:ok, %{challenge: challenge}} <- renew(certificate) do
+  defp renewed(certificate, {_key, private}, source \\ @source) do
+    with {:ok, %{challenge: challenge}} <- renew(certificate, nil, source) do
       {:ok, challenge} = Challenge.decode(challenge)
-      renew(certificate, Proof.encode(Proof.sign(challenge, private)))
+      renew(certificate, Proof.encode(Proof.sign(challenge, private)), source)
+    end
+  end
+
+  # The cell's verification window `bucket` holds for `key`, or nil.
+  defp window(bucket, key) do
+    hash = Prima.Digest.sha256(key)
+
+    Arca.Repo.one(
+      from(w in Arca.Schemas.RequestRateWindow,
+        where: w.bucket == ^Atom.to_string(bucket) and w.key_hash == ^hash
+      )
+    )
+  end
+
+  # The tables this process's statements read or write from here on.
+  defp watch_sources! do
+    handler = "remote-certification-sources-#{System.unique_integer([:positive])}"
+    parent = self()
+
+    :ok =
+      :telemetry.attach(
+        handler,
+        [:arca, :repo, :query],
+        fn _event, _measurements, meta, _config ->
+          if self() == parent and is_binary(meta[:source]),
+            do: send(parent, {:source, meta[:source]})
+        end,
+        nil
+      )
+
+    on_exit(fn -> :telemetry.detach(handler) end)
+  end
+
+  defp sources(acc \\ []) do
+    receive do
+      {:source, source} -> sources([source | acc])
+    after
+      0 -> acc |> Enum.reverse() |> Enum.uniq()
     end
   end
 
@@ -312,30 +353,38 @@ defmodule Sanctum.RemoteCertificationTest do
       assert window_ms == Challenge.lifetime_ms() + 7_000
     end
 
-    test "a changed head ends the certification, before the challenge and after it",
-         %{certificate: certificate, device: {_key, private}, user: user} do
+    test "a changed head ends the certification: the challenge is still answered, the proof refused",
+         %{certificate: certificate, device: device, user: user} do
       {:ok, %{challenge: challenge}} = renew(certificate)
       move_head!(user)
 
       {:ok, held} = Challenge.decode(challenge)
+      {_key, private} = device
 
       assert {:error, :certification_ended} =
                renew(certificate, Proof.encode(Proof.sign(held, private)))
 
-      assert {:error, :certification_ended} = renew(certificate)
+      # The challenge reads nothing, so it cannot know; the proof over it
+      # is refused the same way.
+      assert {:error, :certification_ended} = renewed(certificate, device)
     end
 
     test "what the certificate locates must stand here: another issuer, client, device key or a denied person renews nothing",
          %{certificate: certificate, device: device, user: user} do
+      # Another issuer is refused from what the certificate says alone.
       assert {:error, :not_found} =
                renew(%{certificate | "issuer" => "https://elsewhere.example"})
 
-      assert {:error, :not_found} = renew(%{certificate | "client_id" => "pcl_unknown"})
+      # The rest need the record, so the proof call refuses them.
+      assert {:error, :not_found} = renewed(%{certificate | "client_id" => "pcl_unknown"}, device)
 
-      {other_key, _} = :crypto.generate_key(:eddsa, :ed25519)
+      {other_key, other_private} = :crypto.generate_key(:eddsa, :ed25519)
 
       assert {:error, :binding_changed} =
-               renew(%{certificate | "device_key" => Encoding.b64(other_key)})
+               renewed(
+                 %{certificate | "device_key" => Encoding.b64(other_key)},
+                 {other_key, other_private}
+               )
 
       assert {:error, {:invalid_argument, _}} = renew(%{"not" => "a certificate"})
       assert {:error, {:invalid_argument, _}} = RemoteCertification.renew(glass(), %{})
@@ -346,11 +395,220 @@ defmodule Sanctum.RemoteCertificationTest do
       assert {:error, :not_standing} = renewed(certificate, device)
     end
 
-    test "every call counts against the verification bounds before anything is read",
+    test "the challenge call reads nothing and counts nothing",
          %{certificate: certificate} do
-      for _ <- 1..20, do: assert({:ok, _} = renew(certificate, nil, "198.51.100.77"))
-      assert {:error, {:rate_limited, _}} = renew(certificate, nil, "198.51.100.77")
-      assert {:error, {:rate_limited, _}} = renew(%{"bogus" => true}, nil, "198.51.100.77")
+      watch_sources!()
+
+      for _ <- 1..30,
+          do: assert({:ok, %{challenge: _}} = renew(certificate, nil, "198.51.100.77"))
+
+      assert sources() == []
+      assert window(:device_verification_source, "198.51.100.77") == nil
+    end
+
+    test "a proof call nothing attributes counts against its address, and a spent address refuses both calls",
+         %{certificate: certificate, device: device} do
+      {_key, private} = device
+      {:ok, %{challenge: challenge}} = renew(certificate)
+      {:ok, held} = Challenge.decode(challenge)
+      {_stranger, stranger} = :crypto.generate_key(:eddsa, :ed25519)
+      bogus = Proof.encode(Proof.sign(held, stranger))
+
+      for _ <- 1..20 do
+        assert {:error, :proof_refused} = renew(certificate, bogus, "198.51.100.78")
+      end
+
+      assert %{count: 20} = window(:device_verification_source, "198.51.100.78")
+
+      assert {:error, {:rate_limited, retry_after_ms}} =
+               renew(certificate, bogus, "198.51.100.78")
+
+      assert retry_after_ms in 1..60_000
+
+      # Read before anything, on this member's own count: the device's
+      # own proof and the challenge call from that address are refused too.
+      assert {:error, {:rate_limited, _}} = renew(certificate, nil, "198.51.100.78")
+
+      assert {:error, {:rate_limited, _}} =
+               renew(certificate, Proof.encode(Proof.sign(held, private)), "198.51.100.78")
+
+      assert {:error, {:rate_limited, _}} = renew(%{"bogus" => true}, nil, "198.51.100.78")
+    end
+
+    test "a flood naming the person and the client, from 200 addresses across two members, leaves the device renewing",
+         %{certificate: certificate, device: device, user: user} do
+      # Each sends the certificate under a key of its own: the challenge is
+      # answered for that binding and its proof verifies, and only the
+      # certification can tell it is not the device's.
+      for n <- 1..200 do
+        if n == 101, do: Prima.RateLimiter.reset()
+        {key, private} = :crypto.generate_key(:eddsa, :ed25519)
+        forged = %{certificate | "device_key" => Encoding.b64(key)}
+        source = "10.8.#{div(n, 250)}.#{rem(n, 250)}"
+
+        assert {:error, :binding_changed} = renewed(forged, {key, private}, source)
+      end
+
+      # The installation's ceiling holds for what no person proved.
+      {key, private} = :crypto.generate_key(:eddsa, :ed25519)
+      forged = %{certificate | "device_key" => Encoding.b64(key)}
+
+      assert {:error, {:rate_limited, retry_after_ms}} =
+               renewed(forged, {key, private}, "10.9.0.1")
+
+      assert retry_after_ms in 1..60_000
+      Prima.RateLimiter.reset()
+      assert {:error, {:rate_limited, _}} = renewed(forged, {key, private}, "10.9.0.2")
+      assert %{count: 200} = window(:device_verification_installation, "installation")
+
+      # Named 200 times, the person spent nothing of their own, and their
+      # device renews from its own address.
+      assert window(:device_verification_person, user.id) == nil
+      assert {:ok, %{certificate: _}} = renewed(certificate, device, "10.9.0.3")
+      assert %{count: 1} = window(:device_verification_person, user.id)
+    end
+
+    test "the challenge binds the identifier, the other home and the key_epoch: a proof over it renews no other",
+         %{certificate: certificate, device: {_key, private}, user: user} do
+      {:ok, %{challenge: challenge}} = renew(certificate)
+      {:ok, held} = Challenge.decode(challenge)
+      proof = Proof.encode(Proof.sign(held, private))
+
+      another = "per_" <> Prima.Digest.sha256_hex("another-#{System.unique_integer()}")
+
+      for {what, claimed} <- [
+            identifier: put_in(certificate, ["subject", "identifier"], another),
+            audience: %{certificate | "audience" => "https://other-hub.example"},
+            key_epoch: put_in(certificate, ["subject", "key_epoch"], Prima.Digest.sha256("e"))
+          ] do
+        assert {:ok, _} = DeviceCert.decode(claimed)
+        assert renew(claimed, proof) == {:error, :proof_refused}, inspect(what)
+      end
+
+      # The proof is still the device's own, for what it was asked for.
+      assert head(user) == certificate["subject"]["key_epoch"]
+      assert {:ok, %{certificate: _}} = renew(certificate, proof)
+    end
+
+    test "a proof call reads nothing before the challenge's HMAC and the proof's signature are checked",
+         %{certificate: certificate, device: {_key, private}} do
+      {:ok, %{challenge: challenge}} = renew(certificate)
+      {:ok, held} = Challenge.decode(challenge)
+      {_stranger, stranger} = :crypto.generate_key(:eddsa, :ed25519)
+      forged_nonce = %{held | nonce: :crypto.strong_rand_bytes(32)}
+
+      watch_sources!()
+
+      # Another key's signature, and a challenge this home did not make.
+      assert {:error, :proof_refused} =
+               renew(certificate, Proof.encode(Proof.sign(held, stranger)), "198.51.100.90")
+
+      assert {:error, :proof_refused} =
+               renew(
+                 certificate,
+                 Proof.encode(Proof.sign(forged_nonce, private)),
+                 "198.51.100.91"
+               )
+
+      # Only the address's windows: no person, no certification.
+      assert sources() == ["request_rate_windows"]
+    end
+
+    test "the record is held to the key_epoch the certificate claims, which the challenge covered",
+         %{certificate: certificate, device: device, user: user} do
+      claimed =
+        put_in(certificate, ["subject", "key_epoch"], Prima.Digest.sha256("not-the-record"))
+
+      refute claimed["subject"]["key_epoch"] == head(user)
+      assert {:ok, _} = DeviceCert.decode(claimed)
+
+      assert renewed(claimed, device, "198.51.100.92") == {:error, :certification_ended}
+
+      # No one's: the address paid for it, the person not.
+      assert window(:device_verification_person, user.id) == nil
+      assert %{count: 1} = window(:device_verification_source, "198.51.100.92")
+    end
+
+    test "a challenge issued before the record moved to another key_epoch renews nothing",
+         %{certificate: certificate, device: {_key, private}, user: user} do
+      {:ok, %{challenge: challenge}} = renew(certificate)
+      {:ok, held} = Challenge.decode(challenge)
+      [before] = records(user)
+
+      # The certification made again under a new head, for the same device
+      # key, other home, athanor and client.
+      moved = move_head!(user)
+
+      {1, _} =
+        Arca.Repo.update_all(from(c in DeviceCertification, where: c.user_id == ^user.id),
+          set: [key_epoch: moved]
+        )
+
+      assert renew(certificate, Proof.encode(Proof.sign(held, private))) ==
+               {:error, :certification_ended}
+
+      # Nothing was minted: the record's expiry did not move.
+      [record] = records(user)
+      assert record.expires_at == before.expires_at
+      assert window(:device_verification_person, user.id) == nil
+    end
+
+    test "a revoked certification's key cannot spend the person's own budget",
+         %{certificate: certificate, device: device, ctx: ctx, user: user} do
+      other = :crypto.generate_key(:eddsa, :ed25519)
+
+      {:ok, %{certificate: other_certificate}} =
+        TestContext.confirming(
+          ctx,
+          &RemoteCertification.certify(&1, args(other, %{"client_id" => "pcl_two"}))
+        )
+
+      {1, _} =
+        Arca.Repo.update_all(
+          from(c in DeviceCertification,
+            where: c.user_id == ^user.id and c.client_id == "pcl_hub"
+          ),
+          set: [state: "revoked"]
+        )
+
+      for n <- 1..20 do
+        assert {:error, :revoked} = renewed(certificate, device, "10.20.0.#{n}")
+      end
+
+      assert window(:device_verification_person, user.id) == nil
+      assert %{count: 20} = window(:device_verification_installation, "installation")
+
+      # The person's standing device, from an address of its own.
+      assert {:ok, %{certificate: _}} = renewed(other_certificate, other, "10.21.0.1")
+    end
+
+    test "an ended certification's key cannot spend the person's own budget either",
+         %{certificate: certificate, device: device, user: user} do
+      move_head!(user)
+
+      for n <- 1..20 do
+        assert {:error, :certification_ended} = renewed(certificate, device, "10.22.0.#{n}")
+      end
+
+      assert window(:device_verification_person, user.id) == nil
+      assert %{count: 20} = window(:device_verification_installation, "installation")
+    end
+
+    test "a person past their own budget is refused with its retry bound, on every member",
+         %{certificate: certificate, device: device, user: user} do
+      for n <- 1..20, do: assert({:ok, _} = renewed(certificate, device, "10.10.0.#{n}"))
+      assert %{count: 20} = window(:device_verification_person, user.id)
+
+      assert {:error, {:rate_limited, retry_after_ms}} =
+               renewed(certificate, device, "10.10.1.1")
+
+      assert retry_after_ms in 1..60_000
+      Prima.RateLimiter.reset()
+      assert {:error, {:rate_limited, _}} = renewed(certificate, device, "10.10.1.2")
+
+      # Nothing of it was the address's or the installation's.
+      assert window(:device_verification_source, "10.10.0.1") == nil
+      assert window(:device_verification_installation, "installation") == nil
     end
   end
 end

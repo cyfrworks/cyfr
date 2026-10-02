@@ -119,6 +119,14 @@ defmodule Sanctum.Providers.PersonTest do
   defp call(ctx, args), do: Grimoire.call_external("person", ctx, args)
   defp refusal({:error, reason}), do: Grimoire.Error.classify(reason)
 
+  # A renewal's challenge for `renew`, signed by `private`: the proof its
+  # second call carries.
+  defp proved(device, renew, private) do
+    {:ok, %{challenge: challenge}} = call(device, renew)
+    {:ok, held} = Prima.DeviceCert.Challenge.decode(challenge)
+    Prima.DeviceCert.Proof.encode(Prima.DeviceCert.Proof.sign(held, private))
+  end
+
   defp enroll_args(seed, id),
     do: %{"action" => "enroll", "recovery_secret" => Encoding.b64(seed), "request_id" => id}
 
@@ -416,14 +424,17 @@ defmodule Sanctum.Providers.PersonTest do
       assert renewed.device_key == device_key
 
       # The refusals a device reads: a proof used again, a certification
-      # this home does not hold, and one whose head has moved since.
+      # this home does not hold, and one whose head has moved since. The
+      # challenge reads nothing, so those that need the certification are
+      # the proof's.
       assert %Prima.Refusal{class: :unauthenticated} =
                refusal(call(device, Map.put(renew, "proof", proof)))
 
+      unknown = %{renew | "certificate" => %{certificate | "client_id" => "pcl_x"}}
+      assert {:ok, %{challenge: _}} = call(device, unknown)
+
       assert %Prima.Refusal{class: :not_found} =
-               refusal(
-                 call(device, %{renew | "certificate" => %{certificate | "client_id" => "pcl_x"}})
-               )
+               refusal(call(device, Map.put(unknown, "proof", proved(device, unknown, private))))
 
       {1, _} =
         Arca.Repo.update_all(
@@ -432,9 +443,46 @@ defmodule Sanctum.Providers.PersonTest do
         )
 
       assert %Prima.Refusal{class: :conflict, reason: :certification_ended, message: message} =
-               refusal(call(device, renew))
+               refusal(call(device, Map.put(renew, "proof", proved(device, renew, private))))
 
       assert message =~ "certify it again"
+    end
+
+    test "a rate-limited renewal answers its retry in whole seconds, never more than a minute" do
+      person = enrolled!()
+      {device_key, private} = :crypto.generate_key(:eddsa, :ed25519)
+
+      certify = %{
+        "action" => "certify",
+        "device_key" => Encoding.b64(device_key),
+        "audience" => "https://hub.example",
+        "athanor" => "ath_hub",
+        "client_id" => "pcl_hub"
+      }
+
+      {:ok, %{certificate: certificate}} = TestContext.confirming(person.ctx, &call(&1, certify))
+      device = Context.build(%{authenticated: false, client_ip: "198.51.100.62"})
+      renew = %{"action" => "renew_certificate", "certificate" => certificate}
+      valid = proved(device, renew, private)
+
+      # Proofs no key of the certification made are no one's: they spend
+      # the address's bound.
+      {_stranger, stranger} = :crypto.generate_key(:eddsa, :ed25519)
+      bogus = Map.put(renew, "proof", proved(device, renew, stranger))
+
+      for _ <- 1..20 do
+        assert %Prima.Refusal{class: :unauthenticated} = refusal(call(device, bogus))
+      end
+
+      # The challenge and the device's own proof from that address are
+      # refused, each with when to retry in seconds.
+      for args <- [renew, Map.put(renew, "proof", valid)] do
+        assert %Prima.Refusal{class: :rate_limited, message: message} =
+                 refusal(call(device, args))
+
+        assert [_, seconds] = Regex.run(~r/retry in (\d+) s/, message)
+        assert String.to_integer(seconds) in 1..60
+      end
     end
 
     test "this home is refused as the audience, and an unenrolled person certifies nothing" do

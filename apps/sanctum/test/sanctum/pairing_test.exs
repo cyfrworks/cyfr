@@ -13,8 +13,10 @@ defmodule Sanctum.PairingTest do
   certificate, in one transaction with the invitation's consumption and
   the person's standing and seat locked and rechecked. A device renews
   through its channel under the key its row stores while it stands, and a
-  person revokes their own. Completions share per-source and
-  per-installation bounds. Local pairing reads no directory.
+  person revokes their own. A completion whose code names an invitation
+  counts against that invitation's person; any other against its address
+  and the installation, so guessed codes never stop the bearer. Local
+  pairing reads no directory.
 
   The closed action table, the operations that confirm each action, no
   change asking for a proof before one exists, and who can confirm: a
@@ -112,6 +114,17 @@ defmodule Sanctum.PairingTest do
   defp glass(source \\ @source), do: Context.build(%{authenticated: false, client_ip: source})
 
   defp device_key, do: :crypto.generate_key(:eddsa, :ed25519)
+
+  # The cell's verification window `bucket` holds for `key`, or nil.
+  defp window(bucket, key) do
+    hash = Prima.Digest.sha256(key)
+
+    Arca.Repo.one(
+      from(w in Arca.Schemas.RequestRateWindow,
+        where: w.bucket == ^Atom.to_string(bucket) and w.key_hash == ^hash
+      )
+    )
+  end
 
   # The glass's two calls: the challenge for its key, then its proof.
   defp complete(secret, {device_key, private}, source \\ @source) do
@@ -881,11 +894,17 @@ defmodule Sanctum.PairingTest do
                }) == {:error, :invalid_invitation}
       end
 
-      assert {:error, {:rate_limited, _}} =
+      assert %{count: 20} = window(:device_verification_source, "198.51.100.99")
+
+      assert {:error, {:rate_limited, retry_after_ms}} =
                Pairing.complete(glass("198.51.100.99"), :crypto.strong_rand_bytes(16), %{
                  device_key: device_key
                })
 
+      assert retry_after_ms in 1..60_000
+
+      # The address is read before the code: a spent one refuses the
+      # bearer's too.
       assert {:error, {:rate_limited, _}} =
                Pairing.complete(glass("198.51.100.99"), invitation.invitation_secret, %{
                  device_key: device_key
@@ -898,10 +917,11 @@ defmodule Sanctum.PairingTest do
                })
     end
 
-    test "a code brute-forced from many addresses across two members: the installation bound holds",
-         %{session_ctx: session_ctx} do
+    test "codes guessed from 200 addresses across two members spend the installation's bound, and the bearer still pairs",
+         %{session_ctx: session_ctx, user: user} do
       {:ok, invitation} = begin!(session_ctx)
-      {device_key, _} = device_key()
+      key = device_key()
+      {device_key, _} = key
 
       for n <- 1..200 do
         # The first half reach one member, the second another.
@@ -914,12 +934,91 @@ defmodule Sanctum.PairingTest do
                ) == {:error, :invalid_invitation}
       end
 
+      # The 201st guess is refused for the installation, on either member.
+      assert {:error, {:rate_limited, retry_after_ms}} =
+               Pairing.complete(glass("10.3.0.1"), :crypto.strong_rand_bytes(16), %{
+                 device_key: device_key
+               })
+
+      assert retry_after_ms in 1..60_000
       Prima.RateLimiter.reset()
 
       assert {:error, {:rate_limited, _}} =
-               Pairing.complete(glass("10.3.0.1"), invitation.invitation_secret, %{
+               Pairing.complete(glass("10.3.0.2"), :crypto.strong_rand_bytes(16), %{
                  device_key: device_key
                })
+
+      assert %{count: 200} = window(:device_verification_installation, "installation")
+
+      # None of the guesses was the person's.
+      assert window(:device_verification_person, user.id) == nil
+
+      # The code's bearer, from an address of its own, pairs: both calls
+      # count against the invitation's person and nothing else.
+      assert {:ok, %{client_id: client_id}} =
+               complete(invitation.invitation_secret, key, "10.3.0.3")
+
+      assert client_id == invitation.client_id
+      assert %{count: 2} = window(:device_verification_person, user.id)
+      assert window(:device_verification_source, "10.3.0.3") == nil
+    end
+
+    test "a code already used names no standing invitation: presenting it spends the address, never the person's budget",
+         %{session_ctx: session_ctx, user: user} do
+      {:ok, invitation} = begin!(session_ctx)
+      key = device_key()
+      {device_key, _} = key
+      assert {:ok, %{client_id: _}} = complete(invitation.invitation_secret, key, "10.11.0.1")
+      assert %{count: 2} = window(:device_verification_person, user.id)
+
+      for n <- 1..20 do
+        assert Pairing.complete(glass("10.11.1.#{n}"), invitation.invitation_secret, %{
+                 device_key: device_key
+               }) == {:error, :invalid_invitation}
+      end
+
+      assert %{count: 2} = window(:device_verification_person, user.id)
+      assert %{count: 20} = window(:device_verification_installation, "installation")
+
+      # The person pairs another device as ever.
+      assert %{client_id: _} = pair!(session_ctx)
+    end
+
+    test "a person past their own budget of completions is refused with its retry bound", %{
+      session_ctx: session_ctx,
+      user: user
+    } do
+      {:ok, invitation} = begin!(session_ctx)
+      {device_key, _} = device_key()
+
+      # The bearer asking again and again, from many addresses: each call
+      # names the invitation, so each is the person's.
+      for n <- 1..20 do
+        assert {:ok, %{challenge: _}} =
+                 Pairing.complete(glass("10.7.0.#{n}"), invitation.invitation_secret, %{
+                   device_key: device_key
+                 })
+      end
+
+      assert %{count: 20} = window(:device_verification_person, user.id)
+
+      assert {:error, {:rate_limited, retry_after_ms}} =
+               Pairing.complete(glass("10.7.1.1"), invitation.invitation_secret, %{
+                 device_key: device_key
+               })
+
+      assert retry_after_ms in 1..60_000
+
+      # On another member too, and no address was charged for any of it.
+      Prima.RateLimiter.reset()
+
+      assert {:error, {:rate_limited, _}} =
+               Pairing.complete(glass("10.7.1.2"), invitation.invitation_secret, %{
+                 device_key: device_key
+               })
+
+      assert window(:device_verification_source, "10.7.0.1") == nil
+      assert window(:device_verification_installation, "installation") == nil
     end
   end
 

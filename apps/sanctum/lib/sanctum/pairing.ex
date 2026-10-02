@@ -79,9 +79,15 @@ defmodule Sanctum.Pairing do
   it at the person's own home by a proof of its device key
   (`person.renew_certificate`), or is certified there again.
 
-  Every completion and every renewal is counted against the verification
-  bounds before it is verified (`Sanctum.DeviceCerts.claim_verification/1`):
-  20 a minute per source address and 200 a minute for the installation.
+  A completion is counted against the verification bounds
+  (`Sanctum.DeviceCerts`, its module doc): the source address's window
+  is read first, counting nothing. A secret that names a pending
+  invitation makes the attempt that invitation's person's, counted
+  against their own 20 a minute before anything more is read, and never
+  against the address or the installation. Any other is no one's: it is
+  counted against the address (20 a minute) and the installation (200 a
+  minute) and refused. So a flood of guessed codes, from any number of
+  addresses, leaves the invitation's bearer able to complete.
 
   ## The pair challenge
 
@@ -392,9 +398,10 @@ defmodule Sanctum.Pairing do
   client under the reserved id, issues its first certificate and consumes
   the invitation, in one transaction, and answers `t:paired/0`.
 
-  `ctx` is the caller's, and anonymous: its address is what the
-  verification bounds are counted by, and nothing in it chooses the
-  person. Every call is counted before anything is verified.
+  `ctx` is the caller's, and anonymous: its address is what a call that
+  names no invitation is counted by, and nothing in it chooses the
+  person. A call that names one is counted against its person's budget
+  before anything more is read (the module doc).
   """
   @spec complete(Context.t(), binary(), submission()) ::
           {:ok, %{required(:challenge) => Challenge.t(), optional(:certify) => certify()}}
@@ -404,9 +411,11 @@ defmodule Sanctum.Pairing do
       when is_binary(secret) and byte_size(secret) == @secret_bytes and is_binary(device_key) and
              byte_size(device_key) == 32 do
     now = now_ms()
+    source = ctx.client_ip
 
-    with :ok <- DeviceCerts.claim_verification(ctx.client_ip),
-         {:ok, invitation} <- pending_invitation(secret, now),
+    with :ok <- DeviceCerts.verification_room(source),
+         {:ok, invitation} <- invitation(secret, now, source),
+         :ok <- DeviceCerts.claim_attributed({:person, invitation.user_id}),
          :ok <- this_home(invitation),
          {:ok, issuer} <-
            issuer(invitation, device_key, Map.get(submission, :certificate), now) do
@@ -420,6 +429,18 @@ defmodule Sanctum.Pairing do
   end
 
   def complete(%Context{}, _secret, _submission), do: {:error, :invalid_invitation}
+
+  # The invitation the secret names, which makes the attempt its person's:
+  # only the invitation's bearer holds the secret. A secret that names no
+  # pending invitation is no one's, counted against the address and the
+  # installation.
+  defp invitation(secret, now, source) do
+    case pending_invitation(secret, now) do
+      {:ok, invitation} -> {:ok, invitation}
+      {:error, :unavailable} -> {:error, :unavailable}
+      {:error, refused} -> DeviceCerts.refuse_unattributed(source, refused)
+    end
+  end
 
   # Routing only, before any lock: the redemption rechecks the state and
   # expiry on the database's clock under the invitation's lock.

@@ -81,28 +81,72 @@ defmodule Sanctum.DeviceCerts do
 
   ## Verification bounds
 
-  Pairing completions and renewals count against two bounds
-  (`claim_verification/1`): 20 a minute per source address and 200 a
-  minute for the installation, shared by every member of the cell
-  (`Arca.RequestRateWindows`), behind a per-node check
-  (`Prima.RateLimiter`) that sheds a flood before it reaches the
-  database. Each is counted before it is verified, so a flood past the
-  bound is refused before any verification work.
+  Two families of bounds, each in two layers: this node's count
+  (`Prima.RateLimiter`), which answers a flood without a database read,
+  then the cell's, shared by every member (`Arca.RequestRateWindows`).
+  Pairing completions and renewals count in one family
+  (`:device_verification_*`), connects in another (`:device_connect_*`),
+  so bad connects cannot starve renewals.
 
-  Failed connect proofs count in bounds of their own, 20 a minute per
-  source and 200 for the installation, in the same two layers
-  (`claim_connect_failure/1`), and never in the completion and renewal
-  bounds, so bad connects cannot starve renewals. A connect is counted
-  only when its proof or certificate fails, so a paired device
+  An attempt is charged to a name only once it has proven what only that
+  name's holder can, against the stored row; what it merely names counts
+  for nothing, since a certificate, a client id and an identifier are not
+  secret, and a flood naming a real client must not spend that client's
+  budget. So, on every path:
+
+    1. The source address's window is read without counting, this
+       node's and then the cell's, before any row or signature: a spent
+       one refuses with nothing verified and nothing counted.
+    2. The attempt is attributed, or not:
+        * a connect, when its proof verifies over the challenge under the
+          certificate's device key and that key is the one the named
+          paired-client row stores (the row read at any standing);
+        * a renewal on the channel, when its proof verifies under the
+          device key the named paired-client row stores;
+        * a completion, when the secret's hash names a pending invitation
+          (`Sanctum.Pairing`);
+        * a renewal at a person's home, when the certification the
+          certificate locates holds the key a verified proof was made by
+          (`Sanctum.RemoteCertification`).
+    3. An attributed attempt is charged to its name: its client
+       (`:device_connect_client`, `:device_verification_client`) or its
+       person (`:device_verification_person`), 20 a minute each, this
+       node's count and then the cell's. A spent budget refuses with its
+       own retry bound. It never spends the source's or the
+       installation's.
+    4. An attempt nothing attributes is charged to the source (20 a
+       minute) and the installation (200 a minute), this node's two
+       counts and then the cell's, and is refused with the word the
+       checks always gave it. A connect whose proof verified but whose
+       key no client's row stores is counted first and only then checked
+       as every connect always was, so its word is unchanged: a
+       certificate this home cannot verify says so, and a verified one
+       whose client is gone is `:not_standing`. A spent bound refuses
+       `{:rate_limited, retry_after_ms}` instead, and once this node's
+       count of either is spent, nothing more is written.
+
+  So the installation's 200 a minute is the ceiling on everything no name
+  proved, and a flood of that, from any number of addresses, leaves every
+  client and person that proves itself admitted within its own budget. An
+  attempt refused there has still cost its source's read and the one to
+  four keyed reads that attribute it, bounded only per address. Only a
+  name that stands is charged: a person's budget is charged only for a
+  pending invitation or an active certification under their current
+  `key_epoch`, so a dead device key cannot spend what the person's other
+  devices need. A client's own budget is charged by its own key even once
+  the client is revoked, which harms only that client.
+
+  A connect's own budget counts only its failures, so a paired device
   reconnecting spends nothing, and a burst of devices reconnecting after
-  a restart does not spend the installation's bound. Before any signature
-  is checked, the connect bounds are read without counting
-  (`connect_budget/1`): this node's first, then the cell's
-  (`Prima.RateLimiter.peek/3`, `Arca.RequestRateWindows.check/5`). A spent
-  bound refuses the connect `{:rate_limited, retry_after_ms}` with nothing
-  verified and nothing counted, and so does a failure that finds its bound
-  spent. A read and a later count can race between concurrent failing
-  connects; the overshoot is bounded by that concurrency.
+  a restart spends nothing either: before its certificate is checked, an
+  attributed connect reads its client's budget without counting
+  (`Prima.RateLimiter.peek/3`, `Arca.RequestRateWindows.check/5`), and
+  counts only when it fails. Completions and renewals count every
+  attributed attempt, before the work it asks for. A spent client budget
+  refuses a connect or a renewal on the channel
+  `{:device_rate_limited, retry_after_ms}`, so the channel can say which
+  bound it was. A read and a later count can race between concurrent
+  attempts; the overshoot is bounded by that concurrency.
 
   ## Refusals
 
@@ -125,7 +169,10 @@ defmodule Sanctum.DeviceCerts do
       their head fresh: the request pauses.
     * `:remote_identity_unavailable` — a renewal for a remote person's
       client, which their own home renews.
-    * `{:rate_limited, retry_after_ms}` — a verification bound is spent.
+    * `{:rate_limited, retry_after_ms}` — the source address's or the
+      installation's verification bound is spent.
+    * `{:device_rate_limited, retry_after_ms}` — the client's own budget
+      is spent.
     * `:unavailable` — the store or a setting could not answer; never a
       verdict either way.
   """
@@ -139,11 +186,13 @@ defmodule Sanctum.DeviceCerts do
   @window_ms 60_000
   @source_cap 20
   @installation_cap 200
+  @name_cap 20
 
   @typedoc """
   What the connection presented: the client id and the certificate it
   sent (a `connect`'s, or a `renew`'s locator), and the source address it
-  came from, which the verification bounds are counted by.
+  came from, which the verification bounds count an attempt nothing
+  attributes by.
   """
   @type connection :: %{
           required(:client_id) => String.t(),
@@ -165,7 +214,21 @@ defmodule Sanctum.DeviceCerts do
           | :identity_stale
           | :remote_identity_unavailable
           | {:rate_limited, non_neg_integer()}
+          | {:device_rate_limited, non_neg_integer()}
           | :unavailable
+
+  @typedoc """
+  A name an attempt proved itself to be (the module doc): a paired client
+  by its id, or a person by theirs.
+  """
+  @type name :: {:client, String.t()} | {:person, String.t()}
+
+  @typedoc """
+  What counting answers: `:ok`, the bound's retry in milliseconds once it
+  is spent, or `:unavailable` when the store cannot count, which refuses
+  as a spent bound would.
+  """
+  @type counted :: :ok | {:error, {:rate_limited, non_neg_integer()} | :unavailable}
 
   @typedoc """
   A person's standing in an athanor, as read now: the users row, the
@@ -203,35 +266,15 @@ defmodule Sanctum.DeviceCerts do
     now = now_ms()
     source = Map.get(connection, :source)
 
-    # The connect bounds are read before any signature is checked, and a
+    # The address's bound is read before any signature is checked, and a
     # spent one refuses with nothing verified and nothing counted.
-    result =
-      with :ok <- connect_budget(source),
-           :ok <- held(challenge, client_id, certificate),
-           :ok <- possession(proof, challenge, now) do
-        checked_request(certificate, %{client_id: client_id}, now, client_ip: source)
+    with :ok <- source_room(:device_connect, source) do
+      case connect_attribution(certificate, client_id, proof, challenge, now) do
+        {:ok, row} -> attributed_connect(row, certificate, client_id, source, now)
+        :not_the_clients -> unattributed_connect(certificate, client_id, source, now)
+        {:unattributed, refused} -> unattributed(:device_connect, source, refused)
+        {:error, :unavailable} = unanswered -> unanswered
       end
-
-    # Only a failed connect counts, in the connect bounds: a paired device
-    # reconnecting is no guess, and a flood of failures neither locks the
-    # paired out nor spends the bounds renewals are held to. A failure
-    # that finds its bound spent says so.
-    case result do
-      {:ok, _ctx} ->
-        result
-
-      # A store or a directory that could not answer is no failed proof.
-      {:error, reason} when reason in [:unavailable, :identity_stale] ->
-        result
-
-      {:error, {:rate_limited, _retry_after_ms}} ->
-        result
-
-      {:error, refused} ->
-        case claim_connect_failure(source) do
-          {:error, {:rate_limited, _retry_after_ms}} = spent -> spent
-          _counted -> {:error, refused}
-        end
     end
   end
 
@@ -240,18 +283,131 @@ defmodule Sanctum.DeviceCerts do
     now = now_ms()
     source = Map.get(connection, :source)
 
-    with :ok <- claim_verification(source),
-         :ok <- renewal_held(c, client_id),
-         :ok <- possession(proof, c, now),
-         {:ok, row} <- paired_client(c.athanor, nil, client_id),
-         :ok <- stored_key(row, c.device_key),
+    with :ok <- source_room(:device_verification, source) do
+      case renewal_attribution(c, client_id, proof, now) do
+        {:ok, row} -> attributed_renewal(row, source)
+        {:unattributed, refused} -> unattributed(:device_verification, source, refused)
+        {:error, :unavailable} = unanswered -> unanswered
+      end
+    end
+  end
+
+  def verify_connect(_connection, _proof, _challenge), do: {:error, :proof_refused}
+
+  # A connect is the named client's once its proof, made by the
+  # certificate's device key over the challenge held for it, shows that
+  # key is the one the client's row stores. A proof or a challenge that
+  # fails first is no one's, refused with its own word; one the client's
+  # row does not stand behind is no one's either (`:not_the_clients`).
+  defp connect_attribution(certificate, client_id, proof, challenge, now) do
+    with :ok <- held(challenge, client_id, certificate),
+         :ok <- possession(proof, challenge, now),
+         :ok <- names_client(certificate, %{client_id: client_id}) do
+      case attribution(certificate.athanor, client_id, certificate.device_key) do
+        {:ok, row} -> {:ok, row}
+        {:unattributed, _row_says} -> :not_the_clients
+        {:error, :unavailable} -> {:error, :unavailable}
+      end
+    else
+      {:error, refused} -> {:unattributed, refused}
+    end
+  end
+
+  # A connect no client's row stands behind is counted against the address
+  # and the installation first, so past either bound it is refused having
+  # cost nothing more. Under them it is answered the word its certificate's
+  # own check gives, in the order every connect was always checked: a
+  # certificate this home cannot verify says so, and a verified one whose
+  # client is gone is told its standing ended (`:not_standing`), so a
+  # glass whose pairing is gone, after a restore for instance, pairs
+  # again. That check reads the person's key, or for a remote person
+  # their head, as it always did, within the installation's bound.
+  defp unattributed_connect(certificate, client_id, source, now) do
+    case claim_unattributed(:device_connect, source) do
+      {:error, {:rate_limited, _retry_after_ms}} = spent -> spent
+      _counted -> checked_request(certificate, %{client_id: client_id}, now, client_ip: source)
+    end
+  end
+
+  # The client's own connect budget is read before its certificate is
+  # checked, and counts only a failure: a paired device reconnecting is
+  # no guess. A failure that finds the budget spent says so. The row read
+  # to attribute the connect only attributes it: its standing is read
+  # again once the certificate is checked, so a revocation committed
+  # meanwhile is seen.
+  defp attributed_connect(row, certificate, client_id, source, now) do
+    name = {:client, row.id}
+
+    with :ok <- device_bound(named_room(:device_connect, name)) do
+      case checked_request(certificate, %{client_id: client_id}, now, client_ip: source) do
+        {:ok, _ctx} = verified ->
+          verified
+
+        # A store or a directory that could not answer is no failed proof.
+        {:error, reason} = unanswered when reason in [:unavailable, :identity_stale] ->
+          unanswered
+
+        {:error, refused} ->
+          case device_bound(claim_named(:device_connect, name)) do
+            {:error, {:device_rate_limited, _retry_after_ms}} = spent -> spent
+            _counted -> {:error, refused}
+          end
+      end
+    end
+  end
+
+  # A renewal is the named client's once its proof shows the device key
+  # the client's row stores; the certificate the glass brought only
+  # located the client.
+  defp renewal_attribution(%Challenge{} = challenge, client_id, proof, now) do
+    with :ok <- renewal_held(challenge, client_id),
+         :ok <- possession(proof, challenge, now) do
+      attribution(challenge.athanor, client_id, challenge.device_key)
+    else
+      {:error, refused} -> {:unattributed, refused}
+    end
+  end
+
+  # Counted against the client's own budget before anything more is read.
+  defp attributed_renewal(row, source) do
+    with :ok <- device_bound(claim_named(:device_verification, {:client, row.id})),
+         {:ok, row} <- row_standing(row),
          :ok <- local_identity(row.user_id),
          {:ok, standing} <- standing(row.user_id, row.athanor_id) do
       established(row, standing, nil, client_ip: source)
     end
   end
 
-  def verify_connect(_connection, _proof, _challenge), do: {:error, :proof_refused}
+  # The client `client_id` names in `athanor_id`, read at any standing,
+  # and whether `device_key`, which a verified proof was just made by, is
+  # the key its row stores: only then is the attempt that client's.
+  # Otherwise answers the refusal the row itself gives, as reading it as
+  # standing (`paired_client/3`) and then its key would.
+  defp attribution(athanor_id, client_id, device_key)
+       when is_binary(athanor_id) and athanor_id != "" and is_binary(client_id) and
+              is_binary(device_key) do
+    case Arca.PairedClients.list(Prima.Actor.in_athanor(athanor_id), standing: :all) do
+      {:ok, rows} ->
+        case Enum.find(rows, &(&1.id == client_id)) do
+          %{device_public_key: ^device_key} = row ->
+            {:ok, row}
+
+          nil ->
+            {:unattributed, :not_standing}
+
+          row ->
+            case row_standing(row) do
+              {:ok, _standing_row} -> {:unattributed, :proof_refused}
+              {:error, refused} -> {:unattributed, refused}
+            end
+        end
+
+      {:error, _unanswered} ->
+        {:error, :unavailable}
+    end
+  end
+
+  defp attribution(_athanor_id, _client_id, _device_key), do: {:unattributed, :not_standing}
 
   # The challenge the channel holds for this connect: this home's, for
   # this client, bound to the certificate's athanor and device key.
@@ -328,7 +484,7 @@ defmodule Sanctum.DeviceCerts do
          {:ok, subject} <- subject(certificate, now),
          certificate = subject.certificate,
          {:ok, row} <- paired_client(certificate.athanor, subject.user_id, certificate.client_id),
-         :ok <- stored_key(row, certificate.device_key, :client_mismatch),
+         :ok <- stored_key(row, certificate.device_key),
          {:ok, standing} <- standing(subject.user_id, certificate.athanor) do
       established(row, standing, certificate, carried, subject.identity)
     end
@@ -553,9 +709,8 @@ defmodule Sanctum.DeviceCerts do
     case Arca.PairedClients.list(Prima.Actor.in_athanor(athanor_id), filters) do
       {:ok, rows} ->
         case Enum.find(rows, &(&1.id == client_id)) do
-          %{standing: "active", source_kind: "device_cert"} = row -> {:ok, row}
-          %{standing: "revoked"} -> {:error, :revoked}
-          _absent_or_no_device -> {:error, :not_standing}
+          nil -> {:error, :not_standing}
+          row -> row_standing(row)
         end
 
       {:error, _unanswered} ->
@@ -565,8 +720,12 @@ defmodule Sanctum.DeviceCerts do
 
   def paired_client(_athanor_id, _user_id, _client_id), do: {:error, :not_standing}
 
-  defp stored_key(row, device_key, mismatch \\ :proof_refused) do
-    if row.device_public_key == device_key, do: :ok, else: {:error, mismatch}
+  defp row_standing(%{standing: "active", source_kind: "device_cert"} = row), do: {:ok, row}
+  defp row_standing(%{standing: "revoked"}), do: {:error, :revoked}
+  defp row_standing(_no_device), do: {:error, :not_standing}
+
+  defp stored_key(row, device_key) do
+    if row.device_public_key == device_key, do: :ok, else: {:error, :client_mismatch}
   end
 
   @doc """
@@ -667,45 +826,56 @@ defmodule Sanctum.DeviceCerts do
   # ---------------------------------------------------------------------------
 
   @doc """
-  Count one pairing completion or renewal from `source` (a client
-  address, or `nil` where the ingress knew none) against the source and
-  installation bounds (the module doc): this node's own count first,
-  which answers a flood without a database read, then the cell's.
-  `{:rate_limited, retry_after_ms}` once either is spent, `:unavailable`
-  when the store cannot count, which refuses as the bound would.
+  Whether the address `source` (a client address, or `nil` where the
+  ingress knew none) may attempt a pairing completion or a renewal now,
+  counting nothing: this node's window, then, for `:cell`, the cell's
+  (the module doc's first step). `:node` reads this node's alone, for an
+  attempt that does no database work of its own. `:ok`, `{:rate_limited,
+  retry_after_ms}` once a window is spent, or `:unavailable` when the
+  store cannot answer, which refuses as a spent bound would.
   """
-  @spec claim_verification(String.t() | nil) ::
+  @spec verification_room(String.t() | nil, :cell | :node) ::
           :ok | {:error, {:rate_limited, non_neg_integer()} | :unavailable}
-  def claim_verification(source),
-    do: claim(:device_verification, source)
+  def verification_room(source, layers \\ :cell)
+
+  def verification_room(source, :cell), do: source_room(:device_verification, source)
+
+  def verification_room(source, :node),
+    do: node_room({:device_verification, :source, source_key(source)}, @source_cap)
 
   @doc """
-  Count one failed connect proof from `source` against the connect bounds
-  (the module doc), which are the connect's own: the same caps and the
-  same two layers as `claim_verification/1`, in buckets no completion or
-  renewal spends. Answers as `claim_verification/1` does.
+  Count one pairing completion or renewal against the name it proved
+  itself to be (`t:name/0`, the module doc's third step): 20 a minute,
+  this node's count and then the cell's. Never against the source's or
+  the installation's bounds. Answers `t:counted/0`, the retry the name's
+  own window gives.
   """
-  @spec claim_connect_failure(String.t() | nil) ::
-          :ok | {:error, {:rate_limited, non_neg_integer()} | :unavailable}
-  def claim_connect_failure(source),
-    do: claim(:device_connect, source)
+  @spec claim_attributed(name()) :: counted()
+  def claim_attributed(name), do: claim_named(:device_verification, name)
 
   @doc """
-  Whether the connect bounds of `source` have room, counting nothing: the
-  per-node window first, which answers a flood without a database read,
-  then the cell's (the module doc). `:ok`, `{:rate_limited,
-  retry_after_ms}` once either is spent, or `:unavailable` when the store
-  cannot answer, which refuses as a spent bound would.
+  Count one pairing completion or renewal that proved itself to be no
+  one, from `source`, against the source's and the installation's bounds
+  (the module doc's fourth step), and refuse it: `{:error, refusal}`, or
+  `{:error, {:rate_limited, retry_after_ms}}` once either bound is spent.
+  A store that cannot count leaves the refusal as it was.
   """
-  @spec connect_budget(String.t() | nil) ::
-          :ok | {:error, {:rate_limited, non_neg_integer()} | :unavailable}
-  def connect_budget(source) do
+  @spec refuse_unattributed(String.t() | nil, term()) ::
+          {:error, term() | {:rate_limited, non_neg_integer()}}
+  def refuse_unattributed(source, refusal),
+    do: unattributed(:device_verification, source, refusal)
+
+  defp source_room(family, source) do
     key = source_key(source)
 
-    with :ok <- node_room({:device_connect, :source, key}, @source_cap),
-         :ok <- node_room({:device_connect, :installation}, @installation_cap),
-         :ok <- cell_room(bucket(:device_connect, :source), key, @source_cap) do
-      cell_room(bucket(:device_connect, :installation), "installation", @installation_cap)
+    with :ok <- node_room({family, :source, key}, @source_cap) do
+      cell_room(bucket(family, :source), key, @source_cap)
+    end
+  end
+
+  defp named_room(family, {kind, id}) do
+    with :ok <- node_room({family, kind, id}, @name_cap) do
+      cell_room(bucket(family, kind), id, @name_cap)
     end
   end
 
@@ -724,22 +894,52 @@ defmodule Sanctum.DeviceCerts do
     end
   end
 
-  defp claim(kind, source) do
-    key = source_key(source)
-
-    with :ok <- on_node({kind, :source, key}, @source_cap),
-         :ok <- on_node({kind, :installation}, @installation_cap),
-         :ok <- in_cell(bucket(kind, :source), key, @source_cap) do
-      in_cell(bucket(kind, :installation), "installation", @installation_cap)
+  # A proven name's own budget. Only a name an attempt proved reaches this
+  # node's table, so no caller chooses how many keys it holds.
+  defp claim_named(family, {kind, id}) when kind in [:client, :person] and is_binary(id) do
+    with :ok <- on_node({family, kind, id}, @name_cap) do
+      in_cell(bucket(family, kind), id, @name_cap)
     end
   end
+
+  # The source's and then the installation's bounds, this node's before
+  # the cell's: past this node's installation count nothing more is
+  # written, so a flood from many addresses writes at most the cap.
+  defp claim_unattributed(family, source) do
+    key = source_key(source)
+
+    with :ok <- on_node({family, :source, key}, @source_cap),
+         :ok <- on_node({family, :installation}, @installation_cap),
+         :ok <- in_cell(bucket(family, :source), key, @source_cap) do
+      in_cell(bucket(family, :installation), "installation", @installation_cap)
+    end
+  end
+
+  # An attempt nothing attributed is counted and refused; one that finds
+  # its bound spent says so.
+  defp unattributed(family, source, refusal) do
+    case claim_unattributed(family, source) do
+      {:error, {:rate_limited, _retry_after_ms}} = spent -> spent
+      _counted_or_unanswered -> {:error, refusal}
+    end
+  end
+
+  # On the channel, a client's own spent budget is told apart from the
+  # address's and the installation's.
+  defp device_bound({:error, {:rate_limited, retry_after_ms}}),
+    do: {:error, {:device_rate_limited, retry_after_ms}}
+
+  defp device_bound(answer), do: answer
 
   # The durable buckets, spelled in code: the completion and renewal
   # bounds, and the connect bounds beside them.
   defp bucket(:device_verification, :source), do: :device_verification_source
   defp bucket(:device_verification, :installation), do: :device_verification_installation
+  defp bucket(:device_verification, :client), do: :device_verification_client
+  defp bucket(:device_verification, :person), do: :device_verification_person
   defp bucket(:device_connect, :source), do: :device_connect_source
   defp bucket(:device_connect, :installation), do: :device_connect_installation
+  defp bucket(:device_connect, :client), do: :device_connect_client
 
   defp on_node(key, cap) do
     case Prima.RateLimiter.check(key, cap, @window_ms) do
