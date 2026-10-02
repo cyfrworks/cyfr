@@ -5,8 +5,9 @@ defmodule PrismWeb.MembersLive do
   @moduledoc """
   Who is in the focused athanor: the members, the pending invites, and the
   controls every member has — add by email or by person identifier
-  (`per_…`), remove, withdraw an invite, leave. A person's own athanor has
-  one member and no controls beyond the list.
+  (`per_…`), remove, withdraw an invite, leave. Withdraw reaches only an
+  invitation: one accepted since the page loaded stays a member. A
+  person's own athanor has one member and no controls beyond the list.
   """
 
   use PrismWeb, :live_view
@@ -70,10 +71,21 @@ defmodule PrismWeb.MembersLive do
     end
   end
 
+  # Withdraw names the invitation only: once the invitee's first sign-in
+  # has claimed it, the row is their seat, and Withdraw must never remove a
+  # member. The roster this page shows may be older than that claim.
   def handle_event("remove_invite", params, socket) do
-    case call_tool(socket, "member/remove", Map.take(params, ["identifier", "email"])) do
+    args = params |> Map.take(["identifier", "email"]) |> Map.put("invitation", true)
+
+    case call_tool(socket, "member/remove", args) do
       {:ok, _} ->
         {:noreply, socket |> load() |> put_flash(:info, "Invitation withdrawn.")}
+
+      {:error, {:not_found, "Invitation", _named}} ->
+        {:noreply,
+         socket
+         |> load()
+         |> put_flash(:info, "That invitation was already accepted — they are a member now.")}
 
       {:error, reason} ->
         {:noreply, put_flash(socket, :error, "Could not withdraw: #{error_message(reason)}")}

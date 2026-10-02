@@ -12,7 +12,8 @@ defmodule Arca.Members do
   athanor comes from.
 
     * **Inside one tenant.** `seat/2`, `find/2`, `find_invited/2`,
-      `list/2`, `count_active/1` and `count_seats/1` work in the athanor
+      `withdraw_invitation/2`, `list/2`, `count_active/1` and
+      `count_seats/1` work in the athanor
       the actor's `athanor_id` names. The id comes from the actor, never
       from an argument, so a roster read or a seat written for one actor
       cannot touch another athanor's rows; an actor whose athanor is nil
@@ -205,6 +206,43 @@ defmodule Arca.Members do
   def find_invited_identifier(%Prima.Actor{}, _identifier), do: {:error, :no_athanor}
 
   @doc """
+  Withdraw the invitation `id` names in the actor's athanor, and answer
+  the row that went. One DELETE matches the row only while it is still an
+  invitation, so `{:error, :not_found}` answers an id with no invitation
+  behind it: none was there, it was withdrawn already, or a first sign-in
+  claimed it, which turns the invited row into that person's seat in
+  place. A seat is never deleted here; it leaves only through
+  `Arca.SecurityTransitions.leave_athanor/3`.
+  """
+  @spec withdraw_invitation(Prima.Actor.t(), String.t()) ::
+          {:ok, map()} | {:error, :not_found | :no_athanor | :database_error}
+  def withdraw_invitation(%Prima.Actor{athanor_id: athanor_id}, id)
+      when is_binary(athanor_id) and athanor_id != "" and is_binary(id) do
+    Arca.Repo.Errors.with_db_rescue("Arca.Members.withdraw_invitation", fn ->
+      # The status is decided by the DELETE itself, never by an earlier
+      # read: a claim that commits first leaves this statement nothing to
+      # match, on both adapters.
+      {_count, withdrawn} =
+        Arca.Repo.delete_all(
+          from(m in Membership,
+            where:
+              m.id == ^id and m.athanor_id == ^athanor_id and m.scope == "athanor" and
+                m.status == "invited",
+            select: m
+          )
+        )
+
+      case withdrawn do
+        [%Membership{} = row] -> {:ok, row}
+        _none -> {:error, :not_found}
+      end
+    end)
+    |> Arca.Data.project()
+  end
+
+  def withdraw_invitation(%Prima.Actor{}, _id), do: {:error, :no_athanor}
+
+  @doc """
   The actor's athanor's members — active and invited — as display rows,
   oldest first: `%{user_id, email, person_identifier, display_name, namespace, status,
   added_by, since}`. Paged with `limit:` (default and ceiling
@@ -373,24 +411,6 @@ defmodule Arca.Members do
   end
 
   def find_platform(%Prima.Actor{}, _user_id), do: {:error, :cross_tenant}
-
-  @doc """
-  Delete the membership `id` names, as the row reads now, and answer the
-  row that went. `{:error, :not_found}` when there is none.
-  """
-  @spec delete(Prima.Actor.t(), String.t()) ::
-          {:ok, map()} | {:error, :not_found} | refusal() | write_refusal()
-  # arca:unscoped-ok a membership is fabric, deleted by its own id; the athanor may be nil (platform).
-  def delete(%Prima.Actor{scope: :platform}, id) when is_binary(id) do
-    Arca.Repo.Errors.with_db_rescue("Arca.Members.delete", fn ->
-      with {:ok, membership} <- found(Arca.Repo.get(Membership, id)) do
-        membership |> Arca.Repo.delete() |> settled()
-      end
-    end)
-    |> Arca.Data.project()
-  end
-
-  def delete(%Prima.Actor{}, _id), do: {:error, :cross_tenant}
 
   @doc "Every platform row — the server's operators, as the rows say."
   @spec list_platform(Prima.Actor.t()) :: {:ok, [map()]} | refusal()

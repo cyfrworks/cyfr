@@ -2213,6 +2213,8 @@ type MemberRemoveArgs struct {
 	UserId Field[string] `json:"user_id,omitzero"`
 	// The person's identifier (per_…), in place of an email or a user id (add, remove)
 	Identifier Field[string] `json:"identifier,omitzero"`
+	// With an email or an identifier: withdraw only its pending invitation, never a member, and answer not found once it has been accepted (remove)
+	Invitation Field[bool] `json:"invitation,omitzero"`
 }
 
 // MarshalJSON supplies the operation's fixed action discriminator.

@@ -152,10 +152,134 @@ defmodule Sanctum.Tenancy.MembersTest do
   end
 
   describe "remove/1" do
-    test "deletes a membership", %{athanor: athanor} do
-      {:ok, mem} = Members.create(attrs(athanor.id))
-      assert {:ok, _} = Members.remove(mem)
-      assert {:error, :not_found} = Members.get(mem.id)
+    test "withdraws an invitation", %{athanor: athanor} do
+      {:ok, invitation} =
+        Members.create(%{
+          email: "withdrawn-#{System.unique_integer([:positive])}@example.com",
+          scope: "athanor",
+          athanor_id: athanor.id,
+          status: "invited"
+        })
+
+      assert {:ok, %{id: id, status: "invited"}} = Members.remove(invitation)
+      assert id == invitation.id
+      assert {:error, :not_found} = Members.get(invitation.id)
+      assert {:error, :not_found} = Members.remove(invitation)
+    end
+
+    test "an active row is not an invitation: not found, and it stays", %{athanor: athanor} do
+      {:ok, seat} = Members.create(attrs(athanor.id))
+      assert {:error, :not_found} = Members.remove(seat)
+      assert {:ok, %{status: "active"}} = Members.get(seat.id)
+      assert Members.member?(seat.user_id, athanor.id)
+
+      # A platform grant names no athanor and is never an invitation either.
+      {:ok, grant} = Members.ensure_platform("user_" <> Ecto.UUID.generate())
+      assert {:error, :not_found} = Members.remove(grant)
+      assert {:ok, %{scope: "platform"}} = Members.get(grant.id)
+    end
+
+    test "an invitation claimed since it was read is the claimant's seat: not found, and the seat stands",
+         %{athanor: athanor} do
+      email = "claimed-#{System.unique_integer([:positive])}@example.com"
+      user_id = "user_" <> Ecto.UUID.generate()
+
+      {:ok, invitation} =
+        Members.create(%{
+          email: email,
+          scope: "athanor",
+          athanor_id: athanor.id,
+          status: "invited"
+        })
+
+      {:ok, [_]} = Arca.Members.activate_invited(server(), user_id, email, DateTime.utc_now())
+      assert Members.member?(user_id, athanor.id)
+
+      assert {:error, :not_found} = Members.remove(invitation)
+      assert Members.member?(user_id, athanor.id)
+      assert {:ok, %{id: id, status: "active"}} = Members.get(invitation.id)
+      assert id == invitation.id
+    end
+  end
+
+  # A first sign-in claims an invitation by turning its row into the seat
+  # in place, so a withdrawal that read the invitation can meet the seat
+  # at its delete. The claim is run between the two, in this process.
+  describe "a withdrawal racing the invitee's first sign-in" do
+    test "an address claimed between the lookup and the delete: the seat stands and the withdraw is not found",
+         %{athanor: athanor} do
+      n = System.unique_integer([:positive])
+      email = "racing#{n}@example.com"
+      {:ok, :invited} = Members.add(athanor, [email: email], "system")
+      invitee = verified!("racing-#{n}", email)
+
+      claim_after_lookup!(fn ->
+        {:ok, 1} = Members.activate_invited(invitee)
+        # The claimant's first session, bound to the seat they just took.
+        session!(invitee.id, athanor.id)
+      end)
+
+      assert {:error, :not_found} = Members.remove_member(athanor, email: email)
+      assert_received {:claimed, session}
+
+      # Nothing is orphaned: the seat is the row the invitation became,
+      # and what the claimant was issued for it still stands beside it.
+      assert Members.member?(invitee.id, athanor.id)
+      assert session?(session)
+
+      assert [%{user_id: user_id, status: "active", email: ^email}] =
+               Enum.filter(
+                 rows!(Members.list_by_athanor(athanor.id)),
+                 &(&1.user_id == invitee.id or &1.email == email)
+               )
+
+      assert user_id == invitee.id
+    end
+
+    test "an identifier claimed between the lookup and the delete: withdrawing the invitation is not found, and the holder stays",
+         %{athanor: athanor} do
+      id = identifier()
+      {:ok, :invited} = Members.add(athanor, [identifier: id], "system")
+      holder = remote!(id)
+
+      claim_after_lookup!(fn ->
+        {:ok, 1} = Members.activate_invited(holder)
+        client = paired!(athanor.id, holder.id)
+        {client, certificate!(athanor.id, holder.id, client)}
+      end)
+
+      assert {:error, :not_found} = Members.withdraw_invitation(athanor, identifier: id)
+      assert_received {:claimed, {client, cert}}
+
+      assert Members.member?(holder.id, athanor.id)
+      assert standing(PairedClient, client) == "active"
+      assert state(DeviceCertificate, cert) == "active"
+      refute Enum.any?(rows!(Members.list_by_athanor(athanor.id)), &(&1.status == "invited"))
+    end
+
+    test "an identifier claimed between the lookup and the delete is removed through the leave",
+         %{athanor: athanor} do
+      n = System.unique_integer([:positive])
+      id = identifier()
+      {:ok, :invited} = Members.add(athanor, [identifier: id], "system")
+      {:ok, :added} = Members.add(athanor, [user_id: person(n).id], "system")
+      holder = remote!(id)
+
+      claim_after_lookup!(fn ->
+        {:ok, 1} = Members.activate_invited(holder)
+        client = paired!(athanor.id, holder.id)
+        {client, certificate!(athanor.id, holder.id, client)}
+      end)
+
+      # Without the invitation-only form, the identifier names whoever
+      # holds it once the invitation is gone, and they leave as any
+      # removed member does.
+      assert :ok = Members.remove_member(athanor, identifier: id)
+      assert_received {:claimed, {client, cert}}
+
+      refute Members.member?(holder.id, athanor.id)
+      assert standing(PairedClient, client) == "revoked"
+      assert state(DeviceCertificate, cert) == "revoked"
     end
   end
 
@@ -736,6 +860,45 @@ defmodule Sanctum.Tenancy.MembersTest do
   end
 
   defp session?(hash), do: match?({:ok, _}, Arca.SessionStorage.get_session(hash))
+
+  # A person whose provider proved `email`: the address claims what is held for it.
+  defp verified!(subject, email) do
+    {:ok, user} =
+      Sanctum.Tenancy.Users.upsert_from_provider(%{
+        id: "github|https://github.com|#{subject}",
+        provider: "github",
+        email: email,
+        verified: true
+      })
+
+    user
+  end
+
+  # Runs `claim` once, in this process, right after the first statement
+  # that reads an invitation from the memberships table, and sends its
+  # result back as `{:claimed, result}`: the claim commits between a
+  # withdrawal's lookup and its delete. The event fires in the querying
+  # process after the statement has returned its connection, so the claim
+  # runs its own statements as an invitee's sign-in would.
+  defp claim_after_lookup!(claim) do
+    test = self()
+    handler = "claim-after-lookup-#{System.unique_integer([:positive])}"
+
+    :telemetry.attach(
+      handler,
+      [:arca, :repo, :query],
+      fn _event, _measure, meta, _config ->
+        if self() == test and is_nil(Process.get(handler)) and meta[:source] == "memberships" and
+             String.starts_with?(meta[:query], "SELECT") and meta[:query] =~ "'invited'" do
+          Process.put(handler, :claimed)
+          send(test, {:claimed, claim.()})
+        end
+      end,
+      nil
+    )
+
+    on_exit(fn -> :telemetry.detach(handler) end)
+  end
 
   # A paired client and its certificate, inserted as their stores write
   # them: recording them is fenced by the member's slot and proved by a
