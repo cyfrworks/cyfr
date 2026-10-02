@@ -132,10 +132,24 @@ defmodule Sanctum.Session do
   (`Sanctum.IdentityFreshness.fresh!/2`) before the session's transaction
   opens, whichever door admitted them: the `cyfr` door, a passkey
   registered here or a door linked here. The store binds it under the
-  person's lock to the cached head's current epoch, so a rotation or a
-  recovery either retires the session or refuses it. A directory that
-  cannot be read mints nothing (`{:error, :identity_stale}`). A local
-  person's session records none.
+  person's lock to the cached head's current epoch
+  (`Arca.SessionStorage.create_session/3`), so a rotation or a recovery
+  either retires the session or refuses it (`{:error, :stale_key_epoch}`),
+  whenever it lands after that read. A directory that cannot be read
+  mints nothing (`{:error, :identity_stale}`). A local person's session
+  records none.
+
+  ## The epoch a door verified under
+
+  `key_epoch:` is the `key_epoch` of the head the door verified the
+  person's proof against, nil for a local person, whose proof stands on
+  no head. When it is given, the fresh read must answer the same epoch
+  (`{:error, :stale_key_epoch}` otherwise): a rotation or a recovery that
+  lands between the door's verification and this read moved the head
+  the proof was checked against, and what the new head retired (a
+  passkey a recovery replaced among it) is not judged here, so nothing
+  is minted and the door verifies again. Absent, the session records
+  whatever epoch the fresh read answers.
 
   ## A login receipt
 
@@ -156,11 +170,18 @@ defmodule Sanctum.Session do
 
     with :ok <- provider_permitted(ctx, Keyword.get(opts, :restore)),
          {:ok, epoch} <- identity_epoch(ctx.user_id),
+         :ok <- verified_epoch(Keyword.fetch(opts, :key_epoch), epoch),
          :ok <- receipt_epoch(receipt, epoch),
          {:ok, expectation} <- Sanctum.Issuance.expectation(ctx, opts) do
       insert(ctx, expectation, epoch, receipt)
     end
   end
+
+  # The epoch the door verified the person's proof under, held to the one
+  # the fresh read answers: a head that moved in between mints nothing.
+  defp verified_epoch(:error, _epoch), do: :ok
+  defp verified_epoch({:ok, epoch}, epoch), do: :ok
+  defp verified_epoch({:ok, _another}, _epoch), do: {:error, :stale_key_epoch}
 
   # A remote person's head, read fresh from their directory outside any
   # transaction: its `key_epoch` is what the session records. A local

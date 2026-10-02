@@ -22,16 +22,17 @@ defmodule Sanctum.Passkeys do
   stored, so one ceremony registers at most one passkey. With the
   credential, the ceremony is verified and the first of these applies:
 
-    1. a local person for whom no fresh method has ever existed (the
-       persistent first-method mark on their identity row), signed in
-       through a local door, `restore` included and a CYFR sign-in never,
-       by a session created within `reauth_seconds`, registers it at once:
-       the local first-method exception, announced to their other clients
-       (`:passkey_registered`);
-    2. a person who holds a fresh method here (an active passkey, an
+    1. a person who holds a fresh method here (an active passkey, an
        OpenID Connect door this home re-authenticates, or a verified email
        a code can reach) confirms `passkey_registration`
-       (`Sanctum.Consent.Authz`), consumed with the row it opens;
+       (`Sanctum.Consent.Authz`), consumed with the row it opens: their
+       first passkey here too, however recent their sign-in;
+    2. a local person who holds none, and for whom no fresh method has
+       ever existed (the persistent first-method mark on their identity
+       row), signed in through a local door, `restore` included and a
+       CYFR sign-in never, by a session created within `reauth_seconds`,
+       registers it at once: the local first-method exception, announced
+       to their other clients (`:passkey_registered`);
     3. a local person for whom no method has ever existed, on an older or
        non-local sign-in, is refused `:reauth_required`: signing in again
        reopens the exception;
@@ -76,7 +77,11 @@ defmodule Sanctum.Passkeys do
   no linked door, their own id, as a restore's door entry names it),
   mints a session with provider `passkey`. A remote person's head is read
   fresh first, which retires a passkey a recovery replaced, and their
-  session records the head's `key_epoch` (`Sanctum.Session.create/2`). The
+  session is minted only under that head's `key_epoch`
+  (`Sanctum.Session.create/2`'s `key_epoch:`): a rotation or a recovery
+  landing between the verification and the mint refuses the sign-in
+  `:identity_stale`, a pause the person retries, and the retry verifies
+  against the new head, which refuses a passkey a recovery retired. The
   sign-in page holds the challenge and answers it once.
   """
 
@@ -247,12 +252,15 @@ defmodule Sanctum.Passkeys do
       verified = Map.put(verified, :recovery_epoch, recovery_epoch(head))
       first_never_made? = is_nil(identity.first_method_at)
 
+      # A fresh method held here is asked first: the first-method
+      # exception stands only while none exists, so a session alone never
+      # registers past a method that could confirm it.
       cond do
-        local?(identity) and first_never_made? and first_method_session?(ctx, user_id) ->
-          first_method(ctx, verified, credential)
-
         fresh_method?(ctx) ->
           confirmed(ctx, verified, credential, [])
+
+        local?(identity) and first_never_made? and first_method_session?(ctx, user_id) ->
+          first_method(ctx, verified, credential)
 
         local?(identity) and first_never_made? ->
           {:error, :reauth_required}
@@ -810,10 +818,13 @@ defmodule Sanctum.Passkeys do
   one a recovery replaced is retired by that read and signs no one in.
   Mints a session with provider `passkey` and answers its token and the
   sign-in outcome, as the device flow does; a remote person's session
-  records the head's `key_epoch`.
+  records the `key_epoch` of the head their passkey was verified against,
+  and is minted only while that head is still current.
 
   Refusals: `:assertion_refused`, `:expired`, `{:door, reason}`,
-  `:identity_stale`, `:unavailable`.
+  `:identity_stale` (a remote person's directory could not be read fresh,
+  or their head moved between the verification and the mint: the retry
+  verifies against the new head), `:unavailable`.
   """
   @spec sign_in(sign_in_challenge() | map(), map()) ::
           {:ok, %{session_token: String.t(), outcome: term()}} | {:error, term()}
@@ -829,7 +840,7 @@ defmodule Sanctum.Passkeys do
          {:ok, sign_count} <- verify_assertion(parsed, passkey, challenge),
          :ok <- counted(passkey, sign_count),
          :ok <- door(user) do
-      session(user)
+      session(user, head)
     end
   end
 
@@ -908,7 +919,14 @@ defmodule Sanctum.Passkeys do
     end
   end
 
-  defp session(user) do
+  # The session, minted only under the `key_epoch` of the head the passkey
+  # was verified against (nil for a local person). A head that moved since
+  # is `:stale_key_epoch`, whether `create`'s fresh read found it moved or
+  # the insert's own fence did: the passkey was judged against a head that
+  # is gone, and what the new one retired is not read again here, so the
+  # sign-in pauses as a directory read does and the retry verifies against
+  # the new head.
+  defp session(user, head) do
     ctx =
       Context.build(
         user_id: user.id,
@@ -920,11 +938,12 @@ defmodule Sanctum.Passkeys do
 
     with {:ok, ctx} <-
            Sanctum.Tenancy.resolve_status(%{ctx | namespace: user[:namespace]}, force: true),
-         {:ok, session} <- Sanctum.Session.create(ctx) do
+         {:ok, session} <- Sanctum.Session.create(ctx, key_epoch: head && head.key_epoch) do
       {:ok,
        %{session_token: session.token, outcome: {:proceed, %{unsynced: [], probe: :skipped}}}}
     else
       {:error, :identity_stale} -> {:error, :identity_stale}
+      {:error, :stale_key_epoch} -> {:error, :identity_stale}
       {:error, :unavailable} -> {:error, :unavailable}
       {:error, _refused} -> {:error, :unavailable}
     end

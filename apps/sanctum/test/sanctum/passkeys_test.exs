@@ -10,12 +10,14 @@ defmodule Sanctum.PasskeysTest do
   pending confirmation, and the passkey door.
 
   A first passkey rests on a recent local sign-in only while no fresh
-  method has ever existed: never on a CYFR sign-in, never after the
-  first method was used, whatever was revoked since. Every other
-  registration is confirmed by a fresh method, or waits for the
-  administrator. An assertion proves exactly one record's digest, at this
-  home's origin and RP ID, with user verification, by the record's own
-  person, once.
+  method exists or has ever existed: never on a CYFR sign-in, never after
+  the first method was used, whatever was revoked since, and never past a
+  fresh method the person already holds (a verified email a code can
+  reach, a linked door this home re-authenticates), which confirms it
+  however recent the sign-in. Every other registration is confirmed by a
+  fresh method, or waits for the administrator. An assertion proves
+  exactly one record's digest, at this home's origin and RP ID, with user
+  verification, by the record's own person, once.
 
   A person whose keys are at another home initializes no method from any
   sign-in: their first passkey waits for the administrator, whose
@@ -23,9 +25,11 @@ defmodule Sanctum.PasskeysTest do
   is bound to their recovery epoch, read fresh from their directory: it
   survives an ordinary rotation and a holder-adding recover, signing in
   under the new key epoch, and a recovery that replaces the live key
-  retires it. Once they hold a fresh method here, a passkey here or a
-  verified email a code can reach, they confirm their next passkey
-  themselves, as anyone does.
+  retires it. A rotation or a recovery landing between a passkey's
+  verification and the session it mints signs no one in: the sign-in
+  pauses, and the retry verifies against the new head. Once they hold a
+  fresh method here, a passkey here or a verified email a code can reach,
+  they confirm their next passkey themselves, as anyone does.
   """
 
   use ExUnit.Case, async: false
@@ -54,16 +58,18 @@ defmodule Sanctum.PasskeysTest do
   # A person admitted through a local door, with their own athanor and a
   # group, and the context a new session of theirs establishes there. Their
   # email is unverified unless `verified: true`: a verified one is a fresh
-  # method wherever a code transport is configured.
+  # method wherever a code transport is configured. The door is GitHub
+  # unless `provider:` and `key:` name another.
   defp person!(opts \\ []) do
     n = System.unique_integer([:positive])
-    key = "github|https://github.com|passkeys-#{n}"
+    provider = Keyword.get(opts, :provider, "github")
+    key = Keyword.get(opts, :key, "github|https://github.com|passkeys-#{n}")
 
     {:ok, user} =
       Sanctum.SignIn.admitted(
         %{
           id: key,
-          provider: "github",
+          provider: provider,
           email: "passkeys#{n}@example.com",
           verified: Keyword.get(opts, :verified, false),
           name: "Passkeys #{n}"
@@ -107,6 +113,28 @@ defmodule Sanctum.PasskeysTest do
     {auth, passkey}
   end
 
+  # A first passkey of a person whose verified email a code can reach: that
+  # email is a fresh method, so the registration asks for a confirmation,
+  # which the code mailed to them proves.
+  defp registered_by_code!(ctx, auth \\ authenticator()) do
+    answer = credential(ctx, auth)
+
+    assert {:error, {:confirmation_required, %{id: id, operation: "passkey.register"}}} =
+             Passkeys.register(ctx, %{credential: answer})
+
+    ref = Prima.Confirmation.ref(id)
+    assert {:ok, %{method: "email"}} = Sanctum.Auth.EmailVerification.send_code(ctx, ref)
+    assert_receive {:confirmation_code_mail, mail}
+
+    assert {:ok, %{state: "confirmed"}} =
+             Sanctum.Auth.EmailVerification.verify_code(ctx, ref, TestContext.MailSink.code(mail))
+
+    assert {:ok, %{status: "active", passkey: passkey}} =
+             Passkeys.register(%{ctx | confirmation_id: id}, %{credential: answer})
+
+    {auth, passkey}
+  end
+
   # Run `fun` under `ctx`; when it asks for a confirmation, prove it with
   # `auth` and run it again naming the record.
   defp confirming(ctx, auth, fun) do
@@ -138,6 +166,48 @@ defmodule Sanctum.PasskeysTest do
       from(p in PersonIdentity, where: p.user_id == ^user_id, select: p.first_method_at)
     )
   end
+
+  defp passkeys(user_id), do: Arca.Repo.all(from(p in Passkey, where: p.user_id == ^user_id))
+
+  defp sessions(user_id),
+    do: Arca.Repo.all(from(s in Arca.Schemas.Session, where: s.user_id == ^user_id))
+
+  # A code transport, so a verified email is a fresh method: set here, not
+  # taken from whichever configuration runs the suite, and restored after.
+  defp code_transport! do
+    prior = Application.fetch_env(:sanctum, :confirmation_code_transport)
+    on_exit(fn -> restore_env(:sanctum, :confirmation_code_transport, prior) end)
+    Application.put_env(:sanctum, :confirmation_code_transport, TestContext.MailSink)
+  end
+
+  # This home signs people in through an OpenID Connect issuer, so a door
+  # of that issuer linked to a person is one it re-authenticates
+  # (`Sanctum.Auth.OIDC.reauth_available?/1`). Set here and restored
+  # after; answers the issuer.
+  defp oidc_issuer! do
+    issuer = "https://idp.example.com"
+    prior_issuer = Application.fetch_env(:sanctum, :oidc_issuer)
+    prior_ueberauth = Application.fetch_env(:ueberauth, Ueberauth)
+
+    on_exit(fn ->
+      restore_env(:sanctum, :oidc_issuer, prior_issuer)
+      restore_env(:ueberauth, Ueberauth, prior_ueberauth)
+    end)
+
+    Application.put_env(:sanctum, :oidc_issuer, issuer)
+
+    Application.put_env(:ueberauth, Ueberauth,
+      providers: [
+        oidcc:
+          {Ueberauth.Strategy.Oidcc, issuer: :cyfr_oidc, client_id: "cid", client_secret: "csec"}
+      ]
+    )
+
+    issuer
+  end
+
+  defp restore_env(app, key, {:ok, value}), do: Application.put_env(app, key, value)
+  defp restore_env(app, key, :error), do: Application.delete_env(app, key)
 
   defp age_sessions!(user_id, seconds) do
     at = DateTime.add(DateTime.utc_now(), -seconds, :second)
@@ -206,10 +276,50 @@ defmodule Sanctum.PasskeysTest do
       refute options["user"]["id"] == Base.url_encode64(ctx.user_id, padding: false)
     end
 
+    test "a first passkey is confirmed by a verified email a code can reach, however recent the local sign-in" do
+      code_transport!()
+      %{ctx: ctx, user: user} = person!(verified: true)
+      assert first_method_at(user.id) == nil
+      assert Passkeys.fresh_method?(ctx)
+
+      # The session is seconds old and from a local door: the exception's
+      # ground, which a method that can confirm the registration closes.
+      assert {:error, {:confirmation_required, %{operation: "passkey.register"}}} =
+               Passkeys.register(ctx, %{credential: credential(ctx, authenticator())})
+
+      assert passkeys(user.id) == []
+      assert first_method_at(user.id) == nil
+
+      # The code mailed to the person proves it, and the passkey lands
+      # active, as their first method.
+      assert {_auth, %{state: "active"}} = registered_by_code!(ctx)
+      assert %DateTime{} = first_method_at(user.id)
+    end
+
+    test "a first passkey is confirmed by a linked door this home re-authenticates, however recent the sign-in" do
+      issuer = oidc_issuer!()
+      subject = "passkeys-#{System.unique_integer([:positive])}"
+
+      %{ctx: ctx, user: user} =
+        person!(provider: "oidcc", key: Sanctum.Auth.Identity.key(:oidcc, issuer, subject))
+
+      assert first_method_at(user.id) == nil
+      assert Sanctum.Auth.OIDC.reauth_available?(user.id)
+      refute Sanctum.Auth.EmailVerification.code_available?(user.id)
+
+      assert {:error, {:confirmation_required, %{operation: "passkey.register"}}} =
+               Passkeys.register(ctx, %{credential: credential(ctx, authenticator())})
+
+      assert passkeys(user.id) == []
+      assert first_method_at(user.id) == nil
+    end
+
     test "a local door's recent sign-in registers the first passkey, marks it for good and announces it" do
       %{ctx: ctx, user: user} = person!()
       capture([[:cyfr, :sanctum, :notify]])
       assert first_method_at(user.id) == nil
+      # No fresh method here: the exception is the only ground.
+      refute Passkeys.fresh_method?(ctx)
 
       {_auth, passkey} = registered!(ctx)
 
@@ -612,6 +722,89 @@ defmodule Sanctum.PasskeysTest do
 
       assert {:ok, %{state: "pending"}} =
                Arca.Passkeys.get(Prima.Actor.system(), second.passkey_id)
+    end
+
+    # Run `move` once, in the sign-in's own process, at the door's read of
+    # the person's linked identities: after their passkey was verified
+    # against a fresh head, and before their session is minted. Its answer
+    # is kept under `:moved_in_window`. Answers the handler's id, to
+    # detach once the sign-in answered.
+    defp between_verification_and_mint!(move) do
+      test = self()
+      id = {__MODULE__, :between_verification_and_mint, make_ref()}
+
+      :telemetry.attach(
+        id,
+        [:arca, :repo, :query],
+        fn _event, _measurements, meta, _ ->
+          if self() == test and meta[:source] == "external_identities" and
+               Process.get(:moved_in_window) == nil do
+            Process.put(:moved_in_window, move.())
+          end
+        end,
+        nil
+      )
+
+      on_exit(fn -> :telemetry.detach(id) end)
+      id
+    end
+
+    test "a recovery landing between a passkey's verification and the mint signs no one in, and the retry finds the passkey retired",
+         %{user: user} = context do
+      auth = authenticator()
+      pending = authorized!(context, auth)
+
+      handler =
+        between_verification_and_mint!(fn ->
+          DirectoryServer.recover!(context.dir, context.identity)
+        end)
+
+      assert signed_in(auth) == {:error, :identity_stale}
+      :telemetry.detach(handler)
+      assert %{} = recovered = Process.get(:moved_in_window)
+
+      # The mint's own fresh read took the recovery in: the passkey went
+      # with the recovery epoch, the setup's session with the key epoch,
+      # and no session was minted under either epoch.
+      assert {:ok, %{key_epoch: epoch}} =
+               Arca.DirectoryHeads.get(Prima.Actor.system(), context.identity.identifier)
+
+      assert epoch == DirectoryServer.key_epoch(recovered)
+
+      assert {:ok, %{state: "revoked"}} =
+               Arca.Passkeys.get(Prima.Actor.system(), pending.passkey_id)
+
+      assert sessions(user.id) == []
+
+      # The retry verifies against the new head, which retired the passkey.
+      assert signed_in(auth) == {:error, :assertion_refused}
+      assert sessions(user.id) == []
+    end
+
+    test "an ordinary rotation landing between a passkey's verification and the mint pauses the sign-in, and the retry signs in under the new key epoch",
+         %{user: user} = context do
+      auth = authenticator()
+      pending = authorized!(context, auth)
+
+      handler =
+        between_verification_and_mint!(fn ->
+          DirectoryServer.rotate!(context.dir, context.identity)
+        end)
+
+      assert signed_in(auth) == {:error, :identity_stale}
+      :telemetry.detach(handler)
+      assert %{} = rotated = Process.get(:moved_in_window)
+
+      # Nothing was minted under the epoch the passkey was verified under
+      # nor the one the rotation introduced; the passkey stays.
+      assert sessions(user.id) == []
+
+      assert {:ok, %{state: "active"}} =
+               Arca.Passkeys.get(Prima.Actor.system(), pending.passkey_id)
+
+      assert {:ok, %{session_token: token}} = signed_in(auth)
+      assert session_epoch(token) == DirectoryServer.key_epoch(rotated)
+      assert [%{provider: "passkey"}] = sessions(user.id)
     end
 
     test "an active passkey survives an ordinary rotation and a holder-adding recover, signing in under the new key epoch, and a recovery retires it",
@@ -1101,9 +1294,12 @@ defmodule Sanctum.PasskeysTest do
   # ---------------------------------------------------------------------------
 
   describe "sign-in" do
+    # A person with a verified email, which the door may admit them by: a
+    # fresh method here, so their first passkey is confirmed by its code.
     setup do
+      code_transport!()
       %{ctx: ctx} = fixture = person!(verified: true)
-      {auth, passkey} = registered!(ctx)
+      {auth, passkey} = registered_by_code!(ctx)
       Map.merge(fixture, %{auth: auth, passkey: passkey})
     end
 
@@ -1119,6 +1315,20 @@ defmodule Sanctum.PasskeysTest do
                Passkeys.sign_in(held, Authenticator.assertion(auth, held.challenge))
 
       assert {:ok, %{user_id: user_id, provider: "passkey"}} = Sanctum.Session.get(token)
+      assert user_id == user.id
+    end
+
+    test "a local person's passkey stands on no head: the sign-in binds no key epoch, and the session records none",
+         %{user: user, key: key, auth: auth} do
+      {:ok, _} = Sanctum.Door.Store.allow("user_id", key, "ops")
+      held = Passkeys.sign_in_challenge()
+
+      assert {:ok, %{session_token: token}} =
+               Passkeys.sign_in(held, Authenticator.assertion(auth, held.challenge))
+
+      assert {:ok, %{user_id: user_id, provider: "passkey", identity_key_epoch: nil}} =
+               Arca.SessionStorage.get_session(Sanctum.Session.token_hash(token))
+
       assert user_id == user.id
     end
 
