@@ -368,7 +368,8 @@ defmodule Arca.ConsentStorageTest do
       assert {:error, {:invalid_stored_value, :admitted_origins}} =
                ConsentStorage.head_consent(Prima.Actor.in_athanor(athanor), profile.id)
 
-      assert {:ok, []} = ConsentStorage.active_heads(Prima.Actor.in_athanor(athanor))
+      assert {:ok, [], false} =
+               ConsentStorage.active_heads(Prima.Actor.in_athanor(athanor), limit: 10)
     end
 
     test "a stored list that does not parse refuses the consent", %{athanor: athanor} do
@@ -388,7 +389,7 @@ defmodule Arca.ConsentStorageTest do
     end
   end
 
-  describe "active_heads/1" do
+  describe "active_heads/2" do
     defp granted!(athanor, id, status, refs \\ []) do
       {:ok, _profile} =
         ProfileStorage.put(%{
@@ -422,7 +423,8 @@ defmodule Arca.ConsentStorageTest do
       # A profile with no revision yet roots nothing.
       _headless = profile!(athanor, "prof_heads_e")
 
-      assert {:ok, [a, b]} = ConsentStorage.active_heads(Prima.Actor.in_athanor(athanor))
+      assert {:ok, [a, b], false} =
+               ConsentStorage.active_heads(Prima.Actor.in_athanor(athanor), limit: 10)
 
       assert %{
                profile: %{id: "prof_heads_a", kind: :owner, status: :active},
@@ -446,8 +448,8 @@ defmodule Arca.ConsentStorageTest do
           first.id
         )
 
-      assert {:ok, [%{consent: head}]} =
-               ConsentStorage.active_heads(Prima.Actor.in_athanor(athanor))
+      assert {:ok, [%{consent: head}], false} =
+               ConsentStorage.active_heads(Prima.Actor.in_athanor(athanor), limit: 10)
 
       assert head.id == second.id
       assert head.revision == 2
@@ -472,22 +474,53 @@ defmodule Arca.ConsentStorageTest do
           set: [kind: "sideways"]
         )
 
-      assert {:ok, [%{profile: %{id: "prof_heads_fine"}}]} =
-               ConsentStorage.active_heads(Prima.Actor.in_athanor(athanor))
+      assert {:ok, [%{profile: %{id: "prof_heads_fine"}}], false} =
+               ConsentStorage.active_heads(Prima.Actor.in_athanor(athanor), limit: 10)
     end
 
     test "answers the actor's own athanor, and refuses an actor with none", %{athanor: athanor} do
       _mine = granted!(athanor, "prof_heads_mine", "active")
       theirs = Prima.Actor.in_athanor(Arca.Test.Actor.athanor!("ath_other").id)
 
-      assert {:ok, [%{profile: %{id: "prof_heads_mine"}}]} =
-               ConsentStorage.active_heads(Prima.Actor.in_athanor(athanor))
+      assert {:ok, [%{profile: %{id: "prof_heads_mine"}}], false} =
+               ConsentStorage.active_heads(Prima.Actor.in_athanor(athanor), limit: 10)
 
-      assert {:ok, []} = ConsentStorage.active_heads(theirs)
+      assert {:ok, [], false} = ConsentStorage.active_heads(theirs, limit: 10)
 
       for nobody <- [%Prima.Actor{}, %Prima.Actor{athanor_id: ""}] do
-        assert {:error, :no_athanor} = ConsentStorage.active_heads(nobody)
+        assert {:error, :no_athanor} = ConsentStorage.active_heads(nobody, limit: 10)
       end
+    end
+
+    test "reads at most the limit in profile-id order, and says when more stand past it",
+         %{athanor: athanor} do
+      for id <- ~w(prof_limit_a prof_limit_b prof_limit_c), do: granted!(athanor, id, "active")
+      actor = Prima.Actor.in_athanor(athanor)
+
+      assert {:ok, heads, true} = ConsentStorage.active_heads(actor, limit: 1)
+      assert Enum.map(heads, & &1.profile.id) == ["prof_limit_a"]
+
+      assert {:ok, heads, true} = ConsentStorage.active_heads(actor, limit: 2)
+      assert Enum.map(heads, & &1.profile.id) == ["prof_limit_a", "prof_limit_b"]
+
+      # Exactly the limit is all there is.
+      assert {:ok, heads, false} = ConsentStorage.active_heads(actor, limit: 3)
+      assert Enum.map(heads, & &1.profile.id) == ["prof_limit_a", "prof_limit_b", "prof_limit_c"]
+    end
+
+    test "a row that does not decode still counts toward the limit", %{athanor: athanor} do
+      damaged = granted!(athanor, "prof_limit_damaged_a", "active")
+      _second = granted!(athanor, "prof_limit_damaged_b", "active")
+      _third = granted!(athanor, "prof_limit_damaged_c", "active")
+
+      {1, _} =
+        Arca.Repo.update_all(
+          Ecto.Query.from(c in Arca.Schemas.Consent, where: c.id == ^damaged.id),
+          set: [scope: "sideways"]
+        )
+
+      assert {:ok, [%{profile: %{id: "prof_limit_damaged_b"}}], true} =
+               ConsentStorage.active_heads(Prima.Actor.in_athanor(athanor), limit: 2)
     end
   end
 
