@@ -690,7 +690,9 @@ defmodule Grimoire.AdmissionLatencyTest do
       token: session.token,
       dead_token: dead.token,
       guest: guest,
-      lineage: Cyfr.Test.AttemptFixtures.lineage!(guest),
+      # The chain's root is a console admission, so it carries the origin
+      # Prism's path gives (`interactive`); a root with none is refused.
+      lineage: Cyfr.Test.AttemptFixtures.lineage!(Sanctum.TestContext.via(guest, :prism)),
       authority: authority_granting(["#{NoOp.tool()}.run"])
     }
   end

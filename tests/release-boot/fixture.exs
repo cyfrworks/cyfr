@@ -33,6 +33,15 @@
 #       `server:tool` among them, which `/mcp` does not dispatch. Answers
 #       `ok` and the result, or `error` and the refusal.
 #
+#   vault SESSION_TOKEN NAME FIELD VALUE
+#       An `api_key` entry NAME holding FIELD = VALUE in the athanor the
+#       session is focused on, its row written sealed as `Sanctum.Vault`
+#       writes one (the same payload, AAD, cipher and binding digest).
+#       Entering a credential is a sensitive change a person confirms with
+#       a fresh proof, which these proofs cannot give outside a browser, so
+#       a proof that needs entries but is not about entering them seeds
+#       them here. Answers the entry's id and name.
+#
 # A step that does not answer `{:ok, _}` raises, and the rpc exits non-zero
 # naming it.
 
@@ -131,6 +140,38 @@ fn args ->
         {:ok, result} -> answer.(%{ok: result})
         {:error, reason} -> answer.(%{error: inspect(reason)})
       end
+
+    ["vault", token, name, field, value] ->
+      {:ok, ctx} = Sanctum.Caller.establish({:session, token})
+      id = Prima.UUID7.generate_id("vlt")
+      {:ok, json} = Sanctum.Vault.Payload.encode_material(%{field => value})
+      aad = Sanctum.CipherAAD.vault_entry(Sanctum.Context.athanor!(ctx), id, "")
+      {:ok, sealed} = Sanctum.Cipher.encrypt(json, aad)
+
+      binding = %{
+        provider_hint: "",
+        field_names: Jason.encode!([field]),
+        oauth_endpoints: nil,
+        oauth_scopes: nil
+      }
+
+      {:ok, digest} = Sanctum.VaultReader.binding_digest(binding)
+
+      {:ok, entry} =
+        Arca.VaultStorage.put(
+          Sanctum.Context.actor(ctx),
+          Map.merge(binding, %{
+            id: id,
+            name: name,
+            kind: "api_key",
+            provenance: "user",
+            status: "active",
+            sealed_payload: sealed,
+            binding_digest: digest
+          })
+        )
+
+      answer.(%{id: entry.id, name: entry.name})
 
     ["thread", user_id, text] ->
       ctx = person_ctx.(user_id)

@@ -22,6 +22,8 @@ on:
       - 'seed/aqua/**'
       # TestShippedGuidesAreManaged reads the tarball's ITEMS list.
       - 'scripts/scaffold-tarball.sh'
+      # TestReadmeCLITablesAreTheCommandTree reads the README's CLI tables.
+      - 'README.md'
       - '.github/workflows/codex-ci.yml'
   pull_request:
     paths:
@@ -31,6 +33,7 @@ on:
       - 'tests/fixtures/**'
       - 'seed/aqua/**'
       - 'scripts/scaffold-tarball.sh'
+      - 'README.md'
       - '.github/workflows/codex-ci.yml'
 
 permissions:

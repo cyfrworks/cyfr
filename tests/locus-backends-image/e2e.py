@@ -22,12 +22,17 @@ First driven only by requests signed as CYFR signs them (harness.py):
 Then driven by `cyfr` itself: docker-compose.yml's cyfr service, from the
 app image (CYFR_IMAGE, `cyfr:push` as the workflow builds it), beside the
 same locus-backends service, both with every setting compose gives them.
-A person signed in on the server (tests/release-boot/fixture.exs) stores a
+A person signed in on the server (tests/release-boot/fixture.exs) has a
 canary credential, a random token, in the vault under a name this suite
-owns and defines a stdio server whose probe backend reads it from the
-vault, both over `/mcp` with the person's session, and calls the backend's
-tools as the console calls them (`/mcp` dispatches declared tools only):
+owns, seeded by the release's fixture (`vault`), defines a stdio server
+whose probe backend reads it from the vault over `/mcp` with the person's
+session, and calls the backend's tools as the console calls them (`/mcp`
+dispatches declared tools only):
 
+- entering a credential is a sensitive change: `vault.create` over `/mcp`
+  with the session alone, typing the canary, answers the consent signal
+  `-33505`, `confirmation_required`, with the pending confirmation's id,
+  and enters nothing; the scans below cover what it typed;
 - the probe's environment holds the canary; every answer the person sees
   carries it masked;
 - after that round trip the canary appears in no request-log row
@@ -320,7 +325,23 @@ def cyfr_controller(image):
         person = Person(stack.cyfr_base, signed_in["token"])
         expect(signed_in["athanor_id"], "a person is signed in on cyfr, in an athanor of their own", signed_in)
 
-        person.tool("vault", {"action": "create", "name": entry, "kind": "api_key", "fields": {"api_key": canary}})
+        # Entering a credential needs a fresh confirmation, which a session
+        # alone cannot give: the request is held as a pending confirmation
+        # and answered with the consent signal, carrying its id. It types the
+        # canary itself, so the scans below (the request-log and decision
+        # rows, and both containers' logs) also show that a typed credential
+        # held for confirmation is kept nowhere.
+        status, refused = person.call("vault", {"action": "create", "name": entry, "kind": "api_key",
+                                                "fields": {"api_key": canary}})
+        error = (refused or {}).get("error") or {}
+        data = error.get("data") or {}
+        payload = data.get("payload") or {}
+        expect(error.get("code") == -33505 and data.get("tag") == "confirmation_required"
+               and str(payload.get("id", "")).startswith("cnf_") and payload.get("operation") == "vault.create",
+               "vault.create with a session alone answers -33505 confirmation_required with its id",
+               f"{status} {json.dumps(refused)[:600]}")
+        seeded = stack.fixture("vault", signed_in["token"], entry, "api_key", canary)
+        expect(seeded.get("name") == entry, "the release's fixture seeds the canary's entry", seeded)
         created = person.tool("mcp_servers", {"action": "create", "name": "e2e-probe", "config": {
             "transport": "stdio",
             "console": True,

@@ -53,18 +53,18 @@ rm -f "$OUT/stop-server" "$OUT/server-stopped" "$OUT"/server-measurements-*
 
 field() { printf '%s' "$1" | python3 -c "import json, sys; print(json.load(sys.stdin)['$2'])"; }
 
-# A person's vault, as the console fills it: ten entries, each holding a
-# value no page may show.
+# A person's vault: eleven entries, each holding a value no page may show,
+# seeded by the release's fixture (`vault`). Entering one through the
+# console is a sensitive change confirmed with a fresh proof, and this
+# proof is not about entering them.
 seed_vault() {
   local cell="$1" token="$2" n answer
   for n in $(seq -w 1 10); do
-    answer="$(server_fixture "$cell" console "$token" vault/create \
-      "{\"name\":\"seeded-$n\",\"kind\":\"api_key\",\"fields\":{\"API_KEY\":\"seeded-value-$n-not-shown\"}}")"
-    printf '%s' "$answer" | grep -q '"ok"' || fail "seeded-$n was not created: $answer"
+    answer="$(server_fixture "$cell" vault "$token" "seeded-$n" API_KEY "seeded-value-$n-not-shown")"
+    printf '%s' "$answer" | grep -q '"id"' || fail "seeded-$n was not created: $answer"
   done
-  answer="$(server_fixture "$cell" console "$token" vault/create \
-    '{"name":"seeded-api","kind":"api_key","fields":{"API_KEY":"seeded-api-value-not-shown"}}')"
-  printf '%s' "$answer" | grep -q '"ok"' || fail "seeded-api was not created: $answer"
+  answer="$(server_fixture "$cell" vault "$token" seeded-api API_KEY seeded-api-value-not-shown)"
+  printf '%s' "$answer" | grep -q '"id"' || fail "seeded-api was not created: $answer"
 }
 
 # vault.list and vault.status measured in the server running on cell `$1`
