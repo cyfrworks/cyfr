@@ -15,9 +15,8 @@ defmodule Sanctum.TenancyContinuationTest do
   alias Sanctum.Tenancy
   alias Sanctum.Tenancy.{Athanors, Members, Users}
 
-  setup do
-    :ok = Ecto.Adapters.SQL.Sandbox.checkout(Arca.Repo)
-    Ecto.Adapters.SQL.Sandbox.mode(Arca.Repo, {:shared, self()})
+  setup tags do
+    Arca.Test.Sandbox.setup!(tags)
 
     n = System.unique_integer([:positive])
 

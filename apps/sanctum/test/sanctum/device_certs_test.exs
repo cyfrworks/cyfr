@@ -32,10 +32,9 @@ defmodule Sanctum.DeviceCertsTest do
 
   @source "198.51.100.7"
 
-  setup do
+  setup tags do
     Arca.Cache.init()
-    :ok = Ecto.Adapters.SQL.Sandbox.checkout(Arca.Repo)
-    Ecto.Adapters.SQL.Sandbox.mode(Arca.Repo, {:shared, self()})
+    Arca.Test.Sandbox.setup!(tags)
     Prima.RateLimiter.reset()
 
     public_url = Application.get_env(:sanctum, :public_url)

@@ -12,9 +12,8 @@ defmodule Sanctum.WebhookEntriesTest do
 
   @target "reagent:local.hook-target"
 
-  setup do
-    :ok = Ecto.Adapters.SQL.Sandbox.checkout(Arca.Repo)
-    Ecto.Adapters.SQL.Sandbox.mode(Arca.Repo, {:shared, self()})
+  setup tags do
+    Arca.Test.Sandbox.setup!(tags)
 
     {ctx, other} = Sanctum.TestContext.two_contexts()
     {:ok, ctx: ctx, other: other}

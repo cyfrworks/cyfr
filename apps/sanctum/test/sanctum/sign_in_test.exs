@@ -12,9 +12,8 @@ defmodule Sanctum.SignInTest do
   alias Sanctum.SignIn
   alias Sanctum.Tenancy.{Athanors, Members, Users}
 
-  setup do
-    :ok = Ecto.Adapters.SQL.Sandbox.checkout(Arca.Repo)
-    Ecto.Adapters.SQL.Sandbox.mode(Arca.Repo, {:shared, self()})
+  setup tags do
+    Arca.Test.Sandbox.setup!(tags)
     :ok
   end
 
@@ -864,7 +863,7 @@ defmodule Sanctum.SignInTest do
     setup do
       # These race on real connections: the shared sandbox connection would
       # serialize the very interleavings under test.
-      Ecto.Adapters.SQL.Sandbox.checkin(Arca.Repo)
+      Ecto.Adapters.SQL.Sandbox.mode(Arca.Repo, :manual)
       :ok
     end
 

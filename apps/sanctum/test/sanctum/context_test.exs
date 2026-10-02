@@ -10,8 +10,9 @@ defmodule Sanctum.ContextTest do
   alias Sanctum.Context
   alias Sanctum.Unauthorized
 
-  setup do
-    :ok = Ecto.Adapters.SQL.Sandbox.checkout(Arca.Repo)
+  setup tags do
+    Arca.Test.Sandbox.setup!(tags)
+    :ok
   end
 
   describe "local/0" do

@@ -66,9 +66,8 @@ defmodule Sanctum.TenancyTest do
   end
 
   describe "resolve_status/2 — membership resolution" do
-    setup do
-      :ok = Ecto.Adapters.SQL.Sandbox.checkout(Arca.Repo)
-      Ecto.Adapters.SQL.Sandbox.mode(Arca.Repo, {:shared, self()})
+    setup tags do
+      Arca.Test.Sandbox.setup!(tags)
 
       orig_admins = Application.get_env(:sanctum, :platform_admin_emails)
       orig_override = Application.get_env(:sanctum, :tenancy_resolver_override)
@@ -159,9 +158,8 @@ defmodule Sanctum.TenancyTest do
   end
 
   describe "revalidate/1" do
-    setup do
-      :ok = Ecto.Adapters.SQL.Sandbox.checkout(Arca.Repo)
-      Ecto.Adapters.SQL.Sandbox.mode(Arca.Repo, {:shared, self()})
+    setup tags do
+      Arca.Test.Sandbox.setup!(tags)
       :ok
     end
 
@@ -238,9 +236,8 @@ defmodule Sanctum.TenancyTest do
   end
 
   describe "list_athanors/1" do
-    setup do
-      :ok = Ecto.Adapters.SQL.Sandbox.checkout(Arca.Repo)
-      Ecto.Adapters.SQL.Sandbox.mode(Arca.Repo, {:shared, self()})
+    setup tags do
+      Arca.Test.Sandbox.setup!(tags)
       :ok
     end
 
@@ -271,9 +268,8 @@ defmodule Sanctum.TenancyTest do
   end
 
   describe "channel_active?/2" do
-    setup do
-      :ok = Ecto.Adapters.SQL.Sandbox.checkout(Arca.Repo)
-      Ecto.Adapters.SQL.Sandbox.mode(Arca.Repo, {:shared, self()})
+    setup tags do
+      Arca.Test.Sandbox.setup!(tags)
       :ok
     end
 
@@ -336,9 +332,8 @@ defmodule Sanctum.TenancyTest do
   describe "membership by identifier, and leaving one athanor" do
     alias Sanctum.Test.DirectoryServer
 
-    setup do
-      :ok = Ecto.Adapters.SQL.Sandbox.checkout(Arca.Repo)
-      Ecto.Adapters.SQL.Sandbox.mode(Arca.Repo, {:shared, self()})
+    setup tags do
+      Arca.Test.Sandbox.setup!(tags)
 
       tls = DirectoryServer.tls()
       DirectoryServer.listen!()

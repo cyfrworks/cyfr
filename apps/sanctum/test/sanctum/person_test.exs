@@ -29,9 +29,8 @@ defmodule Sanctum.PersonTest do
   @directory "https://dir.example"
   @athanor "ath_person"
 
-  setup do
-    :ok = Ecto.Adapters.SQL.Sandbox.checkout(Arca.Repo)
-    Ecto.Adapters.SQL.Sandbox.mode(Arca.Repo, {:shared, self()})
+  setup tags do
+    Arca.Test.Sandbox.setup!(tags)
 
     keyring = Application.get_env(:sanctum, :crypto_keyring)
     directory = Application.get_env(:sanctum, :directory_url)

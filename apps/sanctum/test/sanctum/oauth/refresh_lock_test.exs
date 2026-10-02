@@ -24,9 +24,8 @@ defmodule Sanctum.OAuth.RefreshLockTest do
 
   @kind "oauth_refresh"
 
-  setup do
-    :ok = Ecto.Adapters.SQL.Sandbox.checkout(Arca.Repo)
-    Ecto.Adapters.SQL.Sandbox.mode(Arca.Repo, {:shared, self()})
+  setup tags do
+    Arca.Test.Sandbox.setup!(tags)
 
     n = System.unique_integer([:positive])
     athanor_id = "ath_refresh_#{n}"

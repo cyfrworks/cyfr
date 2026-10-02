@@ -8,9 +8,8 @@ defmodule Sanctum.Consent.ProofDBTest do
 
   @digest "sha256:" <> String.duplicate("ab", 32)
 
-  setup do
-    :ok = Ecto.Adapters.SQL.Sandbox.checkout(Arca.Repo)
-    Ecto.Adapters.SQL.Sandbox.mode(Arca.Repo, {:shared, self()})
+  setup tags do
+    Arca.Test.Sandbox.setup!(tags)
     :ok
   end
 

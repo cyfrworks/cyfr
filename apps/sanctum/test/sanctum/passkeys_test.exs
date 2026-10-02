@@ -39,10 +39,9 @@ defmodule Sanctum.PasskeysTest do
   alias Sanctum.Tenancy.Athanors
   alias Sanctum.Test.DirectoryServer
 
-  setup do
+  setup tags do
     Arca.Cache.init()
-    :ok = Ecto.Adapters.SQL.Sandbox.checkout(Arca.Repo)
-    Ecto.Adapters.SQL.Sandbox.mode(Arca.Repo, {:shared, self()})
+    Arca.Test.Sandbox.setup!(tags)
     Prima.RateLimiter.reset()
     on_exit(fn -> Prima.RateLimiter.reset() end)
     :ok

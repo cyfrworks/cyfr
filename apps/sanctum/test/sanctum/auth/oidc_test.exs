@@ -8,9 +8,8 @@ defmodule Sanctum.Auth.OIDCTest do
   alias Sanctum.Context
   alias Sanctum.Session
 
-  setup do
-    :ok = Ecto.Adapters.SQL.Sandbox.checkout(Arca.Repo)
-    Ecto.Adapters.SQL.Sandbox.mode(Arca.Repo, {:shared, self()})
+  setup tags do
+    Arca.Test.Sandbox.setup!(tags)
 
     # Use a temp directory for file-based tests
     test_dir = Path.join(System.tmp_dir!(), "cyfr_oidc_test_#{:rand.uniform(100_000)}")

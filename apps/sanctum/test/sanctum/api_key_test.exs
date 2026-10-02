@@ -14,9 +14,8 @@ defmodule Sanctum.ApiKeyTest do
   @secret_prefix "cyfr_sk_"
   @admin_prefix "cyfr_ak_"
 
-  setup do
-    :ok = Ecto.Adapters.SQL.Sandbox.checkout(Arca.Repo)
-    Ecto.Adapters.SQL.Sandbox.mode(Arca.Repo, {:shared, self()})
+  setup tags do
+    Arca.Test.Sandbox.setup!(tags)
 
     {:ok, ctx: Sanctum.TestContext.issuer!(Sanctum.TestContext.local())}
   end

@@ -7,9 +7,8 @@ defmodule Sanctum.DoorTest do
   alias Sanctum.Door
   alias Sanctum.Door.Store
 
-  setup do
-    :ok = Ecto.Adapters.SQL.Sandbox.checkout(Arca.Repo)
-    Ecto.Adapters.SQL.Sandbox.mode(Arca.Repo, {:shared, self()})
+  setup tags do
+    Arca.Test.Sandbox.setup!(tags)
 
     original = Application.get_env(:sanctum, :platform_admin_emails, [])
     Application.put_env(:sanctum, :platform_admin_emails, ["ops@example.com"])

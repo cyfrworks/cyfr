@@ -12,9 +12,8 @@ defmodule Sanctum.RegistryCredentialsTest do
 
   @registry "registry.credentials.test"
 
-  setup do
-    :ok = Ecto.Adapters.SQL.Sandbox.checkout(Arca.Repo)
-    Ecto.Adapters.SQL.Sandbox.mode(Arca.Repo, {:shared, self()})
+  setup tags do
+    Arca.Test.Sandbox.setup!(tags)
 
     {alice, bob} = Sanctum.TestContext.two_contexts()
     {:ok, alice: alice, bob: bob}
