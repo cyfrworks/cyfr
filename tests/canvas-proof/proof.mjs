@@ -19,9 +19,14 @@
 //                refused as suspended), Tab from its capsule landing on no
 //                control it covers, and live again after;
 //   vault        the vault page lists names; an entry is added through the
-//                shell's credential prompt by keyboard alone; the value is
-//                in no frame's DOM and in no request a frame made (read at
-//                the harness's proxy); the entry is then listed;
+//                shell's credential prompt by keyboard alone, which asks for
+//                a fresh confirmation naming vault.create and the entry;
+//                Chromium confirms it with the passkey its virtual
+//                authenticator made and registered first, and the entry is
+//                then listed; Firefox and WebKit, which offer no virtual
+//                authenticator, dismiss it, and nothing is saved; either
+//                way the value is in no frame's DOM and in no request a
+//                frame made (read at the harness's proxy);
 //   safe mode    by the chord Ctrl+Alt+S, and by a desktop that never sends
 //                ready (canvas-stall, set as the layout's desktop by the
 //                shipped desktop's own layout.edit): every frame gone, the
@@ -48,7 +53,8 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import {
-  BROWSERS, SITE, awaitFrame, chromium, firefox, percentiles, sleep, startProxy, waitFor, webkit,
+  BROWSERS, SITE, awaitFrame, chromium, firefox, percentiles, sleep, startProxy, virtualAuthenticator, waitFor,
+  webkit,
 } from "../browser/lib.mjs";
 
 const TYPES = { chromium, firefox, webkit };
@@ -412,18 +418,57 @@ async function vault(page, name, proxy, record) {
   }
   await page.keyboard.type(secret);
   await page.keyboard.press("Enter");
+
+  // Entering a credential is a sensitive change: the credential prompt
+  // asks, in place, for a fresh confirmation of exactly this one, its own
+  // request, naming the operation and the entry.
+  const panel = '#system-layer-dialog [data-test="confirmation"][data-own="true"]';
+  const askedText = await page.waitForSelector(panel, { timeout: 30_000 })
+    .then((el) => el.innerText()).catch(() => "");
+  const asked = await prompt(page);
+  check(askedText.includes("vault.create") && askedText.includes(entry), name, "vault", "confirmation_asked",
+    "saving asks for a fresh confirmation of its own request, naming vault.create and the entry",
+    { asked, text: askedText.slice(0, 400) });
+
+  // Chromium confirms with the passkey its virtual authenticator holds;
+  // Firefox and WebKit, which offer none, dismiss the request, which
+  // cancels it.
+  const confirming = name === "chromium";
+  if (confirming) {
+    await page.locator(`${panel} [data-test="confirm-passkey"]`).click({ timeout: 30_000 });
+  } else {
+    await page.locator('#system-layer-dialog[open] [data-test="prompt-dismiss"]').click({ timeout: 30_000 });
+  }
   const closed = await waitFor(async () => !(await prompt(page)), { timeoutMs: 20_000, what: "the prompt closed" })
     .then(() => true).catch(() => false);
-  check(closed, name, "vault", "prompt_closed", "the prompt closes once the entry is saved", closed);
+  check(closed, name, "vault", "prompt_closed", confirming
+    ? "the prompt closes once the entry is confirmed and saved"
+    : "the prompt closes once the confirmation is dismissed", closed);
   const restored = await focusRestored(page, before);
   check(!!restored, name, "vault", "prompt_focus_restored", "focus returns where it was before the prompt", { before, restored });
 
-  const after = await waitFor(() => frame.$$eval("#entries-body tr[data-entry]", (els) => els.map((e) => e.dataset.entry))
-    .then((names) => (names.includes(entry) ? names : null)).catch(() => null),
-  { timeoutMs: 20_000, what: "the new entry listed" }).catch(() => []);
-  check(after.includes(entry), name, "vault", "entry_listed", "the entry is listed once saved", after);
-  const told = await frame.$eval("#status", (e) => e.textContent).catch(() => "");
-  check(told.includes(`Saved ${entry}`), name, "vault", "told_saved", "the page is told the entry was saved", told);
+  const listedNow = () => frame.$$eval("#entries-body tr[data-entry]", (els) => els.map((e) => e.dataset.entry));
+  const toldNow = () => frame.$eval("#status", (e) => e.textContent).catch(() => "");
+  let after;
+  if (confirming) {
+    after = await waitFor(() => listedNow().then((names) => (names.includes(entry) ? names : null)).catch(() => null),
+      { timeoutMs: 20_000, what: "the new entry listed" }).catch(() => []);
+    check(after.includes(entry), name, "vault", "entry_listed", "the entry is listed once saved", after);
+    const told = await toldNow();
+    check(told.includes(`Saved ${entry}`), name, "vault", "told_saved", "the page is told the entry was saved", told);
+  } else {
+    // Dismissed, nothing is saved: the page says so, and the vault the
+    // server answers holds no entry of that name.
+    const told = await waitFor(() => toldNow().then((t) => (t.includes(`Nothing was saved for ${entry}`) ? t : null)),
+      { timeoutMs: 20_000, what: "the page told nothing was saved" }).catch(() => toldNow());
+    const status = await call(frame, "action", "vault.status", {});
+    const names = status.ok && Array.isArray(status.value && status.value.entries)
+      ? status.value.entries.map((e) => e.name) : null;
+    after = (await listedNow().catch(() => [])) || [];
+    check(told.includes(`Nothing was saved for ${entry}`) && Array.isArray(names) && !names.includes(entry) &&
+      !after.includes(entry), name, "vault", "nothing_saved", "dismissing the confirmation saves nothing",
+    { told, names, listed: after });
+  }
 
   // The value is in no frame's document and in no request a frame made.
   const doms = [];
@@ -446,7 +491,8 @@ async function vault(page, name, proxy, record) {
     record.measurements.vault_status_endpoint = await measure(frame, "vault.status", {}, [100, 100], 16);
   }
   record.vault = {
-    listed, tabs, prompt: shown, restored, entry_listed: after.includes(entry),
+    listed, tabs, prompt: shown, confirmation: asked, confirmed: confirming, restored,
+    entry_listed: after.includes(entry),
     frame_requests: framed.length, leaked: leaked.length, any_request_carrying_value: anywhere.length,
   };
   await closeFull(page);
@@ -454,6 +500,8 @@ async function vault(page, name, proxy, record) {
 
 async function safeModeByChord(page, name, record) {
   await desktop(page);
+  const left = await prompt(page);
+  check(!left, name, "safe_mode_chord", "starts_clear", "the section starts with no prompt open", left);
   const before = await activeId(page);
   await page.keyboard.press("Control+Alt+KeyS");
   const shown = await shownPrompt(page, "safe_mode").catch(async () => prompt(page));
@@ -591,10 +639,37 @@ async function disconnect(page, name, proxy, record) {
   };
 }
 
+// Chromium alone: the person's first passkey, made by the virtual
+// authenticator on `page` and registered from the settings page through the
+// system layer's ceremony, as the identity proof registers one, within the
+// first-method window of the fixture's sign-in. The vault section's fresh
+// confirmation is given with it, on the same page.
+async function registerPasskey(page, name, base, segment) {
+  const authenticator = await virtualAuthenticator(page);
+  await page.goto(`${base}/a/${encodeURIComponent(segment)}/settings`);
+  await page.waitForSelector(".phx-connected", { timeout: 30_000 });
+  await page.locator('[data-test="passkey-register"]').click({ timeout: 30_000 });
+  const active = await page.waitForSelector('[data-test="passkey"][data-state="active"]', { timeout: 30_000 })
+    .then(() => true).catch(() => false);
+  const held = (await authenticator.credentials()).filter((c) => c.rpId === SITE).length;
+  check(active && held === 1, name, "vault", "passkey",
+    "the person's first passkey is registered, made by Chromium's virtual authenticator", { active, held });
+  return { active, held };
+}
+
 // ---- one browser -------------------------------------------------------------
 
 async function run(name, base, proxy, segment, cookie, measuring) {
-  const browser = await TYPES[name].launch({ proxy: { server: `http://127.0.0.1:${proxy.address().port}` } });
+  const browser = await TYPES[name].launch({
+    proxy: { server: `http://127.0.0.1:${proxy.address().port}` },
+    // A passkey needs a secure context, and this cell answers as cyfr.test
+    // over plain HTTP: Chromium, whose virtual authenticator gives the vault
+    // section's confirmation, treats that one origin as secure. Its full
+    // build honours the switch; its headless shell does not.
+    ...(name === "chromium"
+      ? { channel: "chromium", args: [`--unsafely-treat-insecure-origin-as-secure=${base}`] }
+      : {}),
+  });
   const record = { version: browser.version(), measurements: {}, measuring };
   try {
     console.log(`== ${name} ${browser.version()}`);
@@ -603,6 +678,10 @@ async function run(name, base, proxy, segment, cookie, measuring) {
     const ctx = await context(browser, name, base, cookie, DESK);
     try {
       const page = await ctx.newPage();
+      if (name === "chromium") {
+        record.passkey = await registerPasskey(page, name, base, segment)
+          .catch((error) => { check(false, name, "vault", "passkey", "the passkey section ran", error.message); return null; });
+      }
       const desk = await openShell(page, base, segment);
       if (measuring) {
         record.measurements.card_refresh =
@@ -701,6 +780,9 @@ function table(record, server) {
   line("covered desktop's call", (r) => r.full.refused.code);
   line("Tab from the capsule: landings on covered controls (on the assistant)", (r) => `${r.full.tab_on_covered} of ${r.full.tab_landings} (${r.full.tab_on_assistant})`);
   line("vault: Tab presses to the name field", (r) => r.vault.tabs);
+  line("vault: the fresh confirmation", (r) => (r.vault.confirmed
+    ? `confirmed with a passkey; entry listed ${r.vault.entry_listed}`
+    : `dismissed; entry listed ${r.vault.entry_listed}`));
   line("vault: frame requests carrying the value", (r) => `${r.vault.leaked} of ${r.vault.frame_requests}`);
   line("safe mode by chord: frames during", (r) => r.safe_mode_chord.frames_during);
   line("safe mode by stall: waited ms", (r) => r.safe_mode_stall.waited_ms);

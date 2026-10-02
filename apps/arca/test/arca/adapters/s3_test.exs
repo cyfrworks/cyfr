@@ -454,6 +454,74 @@ defmodule Arca.Adapters.S3Test do
       end)
     end
 
+    test "a 412 on a replace is :missing when no key stands behind it, as a 404 is",
+         %{actor: actor} do
+      parent = self()
+
+      stub = fn head_answer ->
+        Req.Test.stub(:s3, fn conn ->
+          send(parent, {:req, conn.method, conn.request_path, conn.req_headers, read_body(conn)})
+
+          case {conn.method, conn.request_path} do
+            {"PUT", _} ->
+              Plug.Conn.send_resp(conn, 412, "<Error><Code>PreconditionFailed</Code></Error>")
+
+            {"HEAD", "/test-bucket/athanors/ath_test/data/present"} ->
+              Plug.Conn.send_resp(conn, 200, "")
+
+            {"HEAD", _} ->
+              Plug.Conn.send_resp(conn, head_answer, "")
+          end
+        end)
+      end
+
+      # A store that answers a key that never existed with a 412 (MinIO).
+      stub.(404)
+
+      assert {:error, :missing} = S3.put_if_match(actor, ["data", "absent"], "x", ~s("e"))
+      assert_received {:req, "PUT", "/test-bucket/athanors/ath_test/data/absent", _, "x"}
+      assert_received {:req, "HEAD", "/test-bucket/athanors/ath_test/data/absent", _, _}
+
+      # An object there: the precondition is stale, and stays so.
+      assert {:error, :precondition_failed} =
+               S3.put_if_match(actor, ["data", "present"], "x", ~s("e"))
+
+      # A HEAD that cannot answer leaves the store's refusal as it was.
+      stub.(503)
+
+      assert {:error, :precondition_failed} =
+               S3.put_if_match(actor, ["data", "absent"], "x", ~s("e"))
+    end
+
+    test "an append's lost race spends no HEAD telling a stale precondition from a missing key",
+         %{actor: actor} do
+      parent = self()
+      rounds = start_supervised!({Agent, fn -> 0 end})
+
+      Req.Test.stub(:s3, fn conn ->
+        send(parent, {:req, conn.method, conn.request_path, conn.req_headers, read_body(conn)})
+
+        case conn.method do
+          "GET" ->
+            conn
+            |> Plug.Conn.put_resp_header("etag", ~s("v#{Agent.get(rounds, & &1)}"))
+            |> Plug.Conn.send_resp(200, "line\n")
+
+          "PUT" ->
+            if Agent.get_and_update(rounds, &{&1, &1 + 1}) == 0,
+              do:
+                Plug.Conn.send_resp(conn, 412, "<Error><Code>PreconditionFailed</Code></Error>"),
+              else:
+                conn
+                |> Plug.Conn.put_resp_header("etag", ~s("v9"))
+                |> Plug.Conn.send_resp(200, "")
+        end
+      end)
+
+      assert :ok = S3.append(actor, ["data", "log.jsonl"], "mine\n")
+      refute_received {:req, "HEAD", _, _, _}
+    end
+
     test "a precondition no header can carry is never sent: the key is probed", %{actor: actor} do
       for unsendable <- [:not_an_etag, "", "line\r\nx-injected: 1", <<0xFF>>] do
         assert {:error, :precondition_failed} =

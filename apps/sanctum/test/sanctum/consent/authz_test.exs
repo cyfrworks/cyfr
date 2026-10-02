@@ -1174,5 +1174,32 @@ defmodule Sanctum.Consent.AuthzTest do
       refute stored =~ Prima.Digest.sha256(secret)
       assert Jason.decode!(row.preview)["resource"] == "prod-key"
     end
+
+    test "names the athanor as its members know it while the preview holds the name, by its id past that",
+         %{session_ctx: session_ctx, athanor: athanor} do
+      bound = Prima.Confirmation.Preview.max_text()
+
+      # PostgreSQL's column holds 255 characters, well inside the preview's
+      # bound, so only SQLite stores a name the preview cannot hold.
+      names =
+        if Arca.Repo.adapter() == Ecto.Adapters.Postgres,
+          do: [{String.duplicate("n", 255), :name}],
+          else: [{String.duplicate("n", bound), :name}, {String.duplicate("n", bound + 1), :id}]
+
+      for {name, shown} <- names do
+        {:ok, _} = Athanors.update(athanor, %{name: name})
+        key = "k-#{byte_size(name)}"
+
+        id =
+          opened!(session_ctx, %{
+            operation: "vault.create",
+            arguments: %{name: key},
+            resource: key
+          })
+
+        expected = if shown == :name, do: name, else: athanor.id
+        assert Jason.decode!(record(session_ctx, id).preview)["athanor"] == expected
+      end
+    end
   end
 end

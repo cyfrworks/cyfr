@@ -592,6 +592,48 @@ describe("the page's frames while a modal prompt is open", () => {
     assert.equal(live.inert, false)
   })
 
+  test("focus goes back to the frame that had it only once the frame is shown and live again", () => {
+    doc.fullscreenElement = null
+    const [live] = frames
+    let seenAtFocus = null
+    live.focus = () => {
+      seenAtFocus = {hidden: hidden(live), inert: live.inert}
+      doc.activeElement = live
+    }
+    doc.activeElement = live
+
+    const {hook} = layer("system-layer", openPrompt())
+    assert.ok(hidden(live))
+
+    closeLayer(hook)
+    assert.deepEqual(seenAtFocus, {hidden: false, inert: false})
+    assert.equal(doc.activeElement, live)
+  })
+
+  test("a shown prompt closes its dialog with the frames still hidden, then gives them back, then focus", async () => {
+    doc.fullscreenElement = null
+    const [live] = frames
+    const order = []
+    live.focus = () => {
+      order.push({focus: {hidden: hidden(live), inert: live.inert}})
+      doc.activeElement = live
+    }
+    doc.activeElement = live
+
+    const {hook, dialog} = layer("system-layer", openPrompt())
+    await flush()
+    assert.equal(dialog.open, true, "the prompt is shown")
+
+    const close = dialog.close.bind(dialog)
+    dialog.close = () => {
+      order.push({close: {hidden: hidden(live)}})
+      close()
+    }
+
+    closeLayer(hook)
+    assert.deepEqual(order, [{close: {hidden: true}}, {focus: {hidden: false, inert: false}}])
+  })
+
   test("a frame frozen while a prompt was open stays inert once it closes", () => {
     doc.fullscreenElement = null
     const {hook} = layer("system-layer", openPrompt())

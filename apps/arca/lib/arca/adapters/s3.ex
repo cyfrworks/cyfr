@@ -83,7 +83,7 @@ defmodule Arca.Adapters.S3 do
 
   | situation | `put_if_none_match/3` | `put_if_match/4` |
   |---|---|---|
-  | nothing at the path | `{:ok, precondition}`, created | `{:error, :missing}`, nothing written (`404`) |
+  | nothing at the path | `{:ok, precondition}`, created | `{:error, :missing}`, nothing written (`404`, or a `412` behind which a `HEAD` finds no key) |
   | an object there, precondition current | `{:error, :exists}`, untouched (`412`) | `{:ok, precondition}`, replaced |
   | an object there, precondition stale | `{:error, :exists}`, untouched (`412`) | `{:error, :precondition_failed}`, untouched (`412`) |
   | the store cannot make the write conditional | `{:error, :unsupported}` (`501`) | `{:error, :unsupported}` (`501`) |
@@ -274,7 +274,7 @@ defmodule Arca.Adapters.S3 do
     do: put_if_none_match(actor, segments, merged)
 
   defp write_for_append(actor, segments, merged, etag),
-    do: put_if_match(actor, segments, merged, etag)
+    do: if_match(build_key(actor, segments), merged, etag)
 
   # Doubling from the base, with jitter so the losers of one round do not
   # collide again in the next.
@@ -307,6 +307,38 @@ defmodule Arca.Adapters.S3 do
     key = build_key(actor, segments)
 
     if etag_shaped?(precondition) do
+      case replace(key, content, precondition) do
+        {:error, :precondition_failed} -> failed_precondition(key)
+        answer -> answer
+      end
+    else
+      unsendable(key)
+    end
+  end
+
+  # A store may refuse a conditional replace of a key that holds nothing
+  # with a `412` rather than a `404` (MinIO does, for a key that never
+  # existed), and the shared vocabulary names that case `:missing`: a
+  # `HEAD` that finds no key answers it. Nothing was written either way,
+  # and a `HEAD` that cannot answer leaves the refusal as it was.
+  defp failed_precondition(key) do
+    case request(:head, key) do
+      {:ok, %{status: 404}} -> {:error, :missing}
+      _present_or_unanswered -> {:error, :precondition_failed}
+    end
+  end
+
+  # The conditional replace as the store answers it. An append retries any
+  # definite conflict alike, so it writes through this and spends no
+  # `HEAD` on telling them apart.
+  defp if_match(key, content, precondition) do
+    if etag_shaped?(precondition),
+      do: replace(key, content, precondition),
+      else: unsendable(key)
+  end
+
+  defp replace(key, content, precondition),
+    do:
       conditional_put(
         "put_if_match",
         key,
@@ -314,15 +346,15 @@ defmodule Arca.Adapters.S3 do
         {"if-match", precondition},
         :precondition_failed
       )
-    else
-      # Not a value this adapter minted, and not one a header can carry:
-      # it matches no object, so only the key's presence is in question.
-      case request(:head, key) do
-        {:ok, %{status: 200}} -> {:error, :precondition_failed}
-        {:ok, %{status: 404}} -> {:error, :missing}
-        {:ok, %{status: status, body: body}} -> log_and_error("put_if_match", status, body)
-        {:error, reason} -> log_and_error("put_if_match", reason)
-      end
+
+  # Not a value this adapter minted, and not one a header can carry: it
+  # matches no object, so only the key's presence is in question.
+  defp unsendable(key) do
+    case request(:head, key) do
+      {:ok, %{status: 200}} -> {:error, :precondition_failed}
+      {:ok, %{status: 404}} -> {:error, :missing}
+      {:ok, %{status: status, body: body}} -> log_and_error("put_if_match", status, body)
+      {:error, reason} -> log_and_error("put_if_match", reason)
     end
   end
 

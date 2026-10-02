@@ -7,8 +7,10 @@ system layer's prompts, and what stays drawn and what fails closed when the
 LiveView socket or the whole server goes. It starts the `cyfr` release on
 SQLite as the other proofs do, publishes the proof's tinctures
 (`tinctures/`) privately in a signed-in person's athanor, publishes that
-person's layout and fills their vault through the console's own operations
-(`tests/release-boot/fixture.exs`, `console`), and drives Chromium, Firefox
+person's layout and seeds their vault through the release's own fixture
+(`tests/release-boot/fixture.exs`, `vault`: entering a credential is a
+sensitive change confirmed with a fresh proof, which this proof is not
+about), and drives Chromium, Firefox
 and WebKit (`proof.mjs`). The shipped desktop and vault come with the
 release's seed tree.
 
@@ -23,12 +25,28 @@ full. `canvas-stall` is a desktop that never sends `ready`.
 |---|---|
 | postures | a desk viewport (1280x800) and a hand viewport (390x844, touch) of the same person each report their posture, and the desktop draws its strip in that posture's order, with the card drawn from `card.refresh` and the vault as an icon, filling the canvas |
 | full | `canvas-full`, opened from its icon on the desktop, covers the desktop; the desktop's frame is `frozen` and inert, and a call from it is refused as suspended; forty Tabs from the full frame's close control never land on a control the full frame covers (one the page shows the full frame over at its centre), the assistant's panel, which stays reachable by design, counted apart; closing the full frame makes the desktop live and acting again |
-| vault | the vault page lists entry names, offers only Add entry and Refresh, and says entries are changed and removed on the console's vault page; Tab alone reaches its name field; typing a name and Enter opens the shell's credential prompt, which names the entry; typing the value and Enter saves it; the prompt closes, focus returns to the vault's frame, the page is told it was saved and lists the entry; the value is in no frame's document and in no request a frame made (`/_f/`, `/_s/`, `/t/`), read with their bodies at the harness's proxy |
-| safe mode, chord | Ctrl+Alt+S on the shell's page enters safe mode: every frame is gone, the picker is drawn, the prompt (`alertdialog`) takes focus; Enter on its first offer leaves safe mode and the desktop runs again |
+| vault | the vault page lists entry names, offers only Add entry and Refresh, and says entries are changed and removed on the console's vault page; Tab alone reaches its name field; typing a name and Enter opens the shell's credential prompt, which names the entry; typing the value and Enter asks for a fresh confirmation, a prompt naming `vault.create` and the entry. In Chromium the confirmation is given with a passkey (below): the prompt closes, focus returns to the vault's frame, the page is told it was saved and lists the entry. In Firefox and WebKit it is dismissed: the prompt closes, focus returns to the vault's frame, the page is told nothing was saved, and `vault.status` holds no entry of that name. In every browser the value is in no frame's document and in no request a frame made (`/_f/`, `/_s/`, `/t/`), read with their bodies at the harness's proxy |
+| safe mode, chord | the section starts with no prompt open; Ctrl+Alt+S on the shell's page enters safe mode: every frame is gone, the picker is drawn, the prompt (`alertdialog`) takes focus; Enter on its first offer leaves safe mode and the desktop runs again |
 | safe mode, stall | the shipped desktop publishes `canvas-stall` as the layout's desktop through its own `layout.edit`; the shell reads the layout again and opens it; ten seconds after its handshake without `ready` the shell enters safe mode ("Your desktop did not start"), every frame gone; Tab to the default offer and Enter publish the default and the shipped desktop is back |
 | prompts | every prompt shown has a `role`, an accessible name (`aria-labelledby`) and a description (`aria-describedby`), holds focus when shown, and gives focus back when it closes — to the element that had it, or to the body when that element is gone |
 | disconnect | the proxy cuts the LiveView socket (every WebSocket tunnel, and the long-poll fallback): the canvas is marked disconnected, the last layout stays drawn, every frame is inert, a frame's shell verb is dropped, and a frame's data action is refused once the server has ended the view and revoked its credentials; after the socket is restored the desktop acts again, as a new frame with a new credential |
 | server gone | with a tab open in every browser at once, `run.sh` kills the release: each canvas is marked disconnected with the last layout drawn (the same desktop frame, its strip whole), the stream the desktop held open ends, and a new action and a new stream fail closed |
+
+What each browser covers. A passkey ceremony is Chromium's alone: its
+virtual authenticator (`tests/browser/lib.mjs`, `virtualAuthenticator`)
+makes the person's first passkey, registered from the settings page through
+the system layer's ceremony within the first-method window of the fixture's
+sign-in, and asserts it for the vault section's confirmation. A passkey
+needs a secure context, and this cell answers as `cyfr.test` over plain
+HTTP, so Chromium is launched treating that one origin as secure
+(`--unsafely-treat-insecure-origin-as-secure`), in its full build
+(`channel: "chromium"`), which honours that switch where its headless shell
+does not; the server-gone section's tabs still use the headless shell.
+Firefox and WebKit offer no
+virtual authenticator to Playwright: in them the proof shows the
+confirmation asked, that dismissing it saves nothing, and that the next
+section starts with no prompt open. Every other section runs the same in
+all three.
 
 The release is killed rather than stopped: a graceful stop drains every
 LiveView socket while its listener still accepts, and a tab that joins again

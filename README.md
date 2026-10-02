@@ -861,6 +861,8 @@ Commands marked with `[i]` support interactive selection when run without argume
 | `cyfr logout` | End current session |
 | `cyfr whoami` | Show current identity |
 | `cyfr status` | Check system health (includes CLI version) |
+| `cyfr athanor list/get/use/create/rename/settings/provision/archive/unarchive` | Your athanors, your own and your groups: list and show them, point this session at one, create, rename or archive a group, merge settings, retry a provisioning that failed |
+| `cyfr member list/add/remove/leave` | Who is in an athanor: add or remove someone by email, user id or person identifier (`per_…`), or leave a group |
 
 ### Components
 
@@ -918,7 +920,10 @@ Commands marked with `[i]` support interactive selection when run without argume
 
 | Command | Description |
 |---------|-------------|
+| `cyfr admin list/allow/deny/remove/requests/resolve` | The door: who may sign in to this server, by email, IdP subject or person identifier (`per_…`), or `*` for anyone, and the pending requests to approve or drop (platform admins) |
+| `cyfr settings list/set/reset` | The platform settings: limits, windows and the log level, and where each value comes from (platform admins; [configuration-guide.md](configuration-guide.md)) |
 | `cyfr log list/get/correlate` | View and inspect MCP request logs |
+| `cyfr decision list/get/correlate` | View admission decisions, and cross-reference a request's decisions with its logs and executions |
 | `cyfr retention show/set/cleanup` | Manage data retention policies |
 | `cyfr aqua list/get/status/reset/skills` | Read the AQUA soul, roles, guides and scrolls, see which files are shipped, edited or yours, and reset to shipped `[i]` |
 | `file list/read/write/delete` (MCP) | The athanor's files as the Files page shows them — `data/` open, `components/` and `aqua/` shaped, `notes/` and `threads/` read-only |

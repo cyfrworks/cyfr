@@ -484,13 +484,20 @@ export default {
   // A modal prompt hides the page's frames before it shows, and gives them
   // back only once its dialog has closed. On a page that is not fullscreen
   // they are hidden before anything else it does; on one that is, once the
-  // exit has settled and the frames saw it (`exit-fullscreen`).
+  // exit has settled and the frames saw it (`exit-fullscreen`). Focus goes
+  // back only after the frames do: a browser may refuse to focus a frame
+  // that is still hidden and inert, and Firefox does.
   dispatch(event) {
     const {state, effects} = transition(this.layer, event)
     this.layer = state
     const on = covers(state)
     if (on && !globalThis.document.fullscreenElement) this.cover(true)
-    for (const effect of effects) this.perform(effect)
+
+    for (const effect of effects) {
+      if (effect === "restore-focus" && !on) this.cover(false)
+      this.perform(effect)
+    }
+
     if (!on) this.cover(false)
   },
 

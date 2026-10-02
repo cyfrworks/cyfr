@@ -152,7 +152,7 @@ own README holds its steps and its record.
 | identity | `tests/identity-proof/` | the homes `a.test`, `b.test`, `c.test`, `c2.test` and `c3.test`, and the directory `dir.test` | Chromium |
 | join | `tests/join-proof/` | the homes `a.test`, `a2.test` and `h.test`, and the directories `dir.test` and `dir2.test` | Chromium; the sign-in at the hub, the carry and a second browser profile in Firefox and WebKit as well |
 | grant | `tests/grant-proof/` | one home, `home.test` | Chromium |
-| canvas | `tests/canvas-proof/` | one cell, `cyfr.test`, and a PostgreSQL cell when `CANVAS_PROOF_PG_URL` names a database | Chromium, Firefox and WebKit |
+| canvas | `tests/canvas-proof/` | one cell, `cyfr.test`, and a PostgreSQL cell when `CANVAS_PROOF_PG_URL` names a database | Chromium, Firefox and WebKit; the vault entry's passkey confirmation in Chromium's full build alone |
 
 ## The record
 

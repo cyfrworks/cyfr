@@ -557,7 +557,9 @@ defmodule Sanctum.Consent.Authz do
   defp athanor_name(athanor_id) do
     case Sanctum.Tenancy.Athanors.get(athanor_id) do
       {:ok, %{name: name}} when is_binary(name) and name != "" ->
-        if Prima.Identity.Encoding.text?(name, 1024), do: {:ok, name}, else: {:ok, athanor_id}
+        if Prima.Identity.Encoding.text?(name, Prima.Confirmation.Preview.max_text()),
+          do: {:ok, name},
+          else: {:ok, athanor_id}
 
       {:ok, _unnamed} ->
         {:ok, athanor_id}
