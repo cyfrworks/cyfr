@@ -438,6 +438,11 @@ defmodule PrismWeb.LoginLive do
     do:
       {:noreply, assign(socket, :error, "The server could not sign you in just now. Try again.")}
 
+  # A remote person's head moved between the passkey's verification and
+  # the mint: a pause, not a refusal of the passkey, and the retry decides.
+  defp finish_passkey(socket, {:error, :identity_stale}),
+    do: {:noreply, assign(socket, :error, cyfr_refused(:identity_stale))}
+
   defp finish_passkey(socket, {:error, _refused}),
     do: {:noreply, assign(socket, :error, passkey_refused())}
 

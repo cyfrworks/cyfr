@@ -129,7 +129,12 @@ defmodule Cyfr.DeclaredOperationsTest do
       # (`Sanctum.Providers.ProfileGrantsTest`).
       assert call(ctx, "profile", "grants", %{"domain" => "api.example.com"}) ==
                {:ok,
-                %{resource: %{kind: "domain", value: "api.example.com"}, grants: [], count: 0}}
+                %{
+                  resource: %{kind: "domain", value: "api.example.com"},
+                  grants: [],
+                  count: 0,
+                  truncated: false
+                }}
 
       # The profile is read first, so an unknown one is refused by name
       # (`Crucible.UsageTest`).
