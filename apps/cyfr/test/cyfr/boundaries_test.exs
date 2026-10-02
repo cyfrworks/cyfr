@@ -662,39 +662,42 @@ defmodule Cyfr.BoundariesTest do
              )
     end
 
-    test "a pending entry admits its reach and is not stale; a pending row is not read for staleness" do
+    test "no row is pending: each is settled, and a marker excuses none from being reached" do
+      marked =
+        for {roster, rows} <- [
+              surfaces: Boundaries.surfaces(),
+              admission_entries: Boundaries.admission_entries(),
+              route_postures: Map.values(Boundaries.route_postures())
+            ],
+            row <- rows,
+            Map.has_key?(row, :pending) or Map.has_key?(row, :pending_allow),
+            do: {roster, row}
+
+      assert marked == [],
+             """
+             A roster row is marked pending. A row names what the tree reaches
+             now; write it with the change that reaches it.
+
+             #{inspect(marked, pretty: true)}
+             """
+
+      # No register of rows written ahead of their callers survives.
+      for register <- [:pending_sanctum_exports, :pending_public_routes] do
+        refute function_exported?(Boundaries, register, 0), "Boundaries.#{register}/0 is back"
+      end
+
+      # A marker, were one written, admits nothing and skips no stale check.
       row = %{
         from: [],
         into: "Sanctum",
         allow: ~w(Sanctum.Context),
+        pending: true,
         pending_allow: ~w(Sanctum.Directory)
       }
 
       reaching = [{"apps/cyfr/lib/emissary/planted.ex", [{"Sanctum.Directory", 1}]}]
-      assert Boundaries.surface_violations(row, reaching) == []
-      assert Boundaries.stale_surface_entries(row, reaching) == ["Sanctum.Context"]
-
-      # Nothing reaches the pending entry yet, and that is not stale.
+      assert Boundaries.surface_violations(row, reaching) == ["Sanctum.Directory"]
       assert Boundaries.stale_surface_entries(row, []) == ["Sanctum.Context"]
-
-      # A reach the row names neither way is still reported.
-      other = [{"apps/cyfr/lib/emissary/planted.ex", [{"Sanctum.Passkeys", 1}]}]
-      assert Boundaries.surface_violations(row, other) == ["Sanctum.Passkeys"]
-
-      assert Boundaries.stale_surface_entries(Map.put(row, :pending, true), []) == []
-    end
-
-    test "every pending entry is its row's alone, and names a Sanctum module that exists" do
-      for row <- Boundaries.surfaces(),
-          pending = Map.get(row, :pending_allow, []),
-          pending != [] do
-        assert MapSet.disjoint?(MapSet.new(pending), MapSet.new(row.allow)),
-               "#{row.into}: an entry both settled and pending"
-
-        for name <- pending do
-          assert Code.ensure_loaded?(Module.concat([name])), "#{name} is not a module"
-        end
-      end
     end
 
     test "every row says why its roster reads as it does" do
@@ -758,32 +761,6 @@ defmodule Cyfr.BoundariesTest do
 
              #{Enum.join(Boundaries.stale_sanctum_exports(reaches), "\n")}
              """
-    end
-
-    test "a pending function is on a module that exists, apart from the settled roster" do
-      pending = Boundaries.pending_sanctum_exports()
-
-      # The restore ingress was the last pending call, and it is settled.
-      assert pending == %{}
-      assert {:restore, 2} in Map.fetch!(Boundaries.sanctum_exports(), "Sanctum.Recovery")
-
-      for {module, functions} <- pending do
-        assert String.starts_with?(module, "Sanctum.")
-        assert functions == Enum.sort(Enum.uniq(functions)), "#{module}'s list is not sorted"
-        assert Code.ensure_loaded?(Module.concat([module])), "#{module} is not a module"
-
-        for {function, arity} <- functions do
-          refute {function, arity} in Map.get(Boundaries.sanctum_exports(), module, []),
-                 "#{module}.#{function}/#{arity} is both settled and pending"
-        end
-      end
-
-      # The settled restore calls are admitted, and the host makes each.
-      reaches = host_sanctum_reaches()
-      assert Boundaries.sanctum_export_violations([{"Sanctum.Recovery", :restore, 2}]) == []
-
-      for call <- [{"Sanctum.Recovery", :restore, 2}, {"Sanctum.Recovery", :reproof, 2}],
-          do: assert(call in reaches)
     end
 
     test "every rostered function is a public function of a Sanctum module, listed once in order" do
@@ -857,35 +834,13 @@ defmodule Cyfr.BoundariesTest do
         |> Enum.map(& &1.metadata[:auth])
         |> MapSet.new()
 
-      # A pending posture is one no route declares yet.
       unused =
-        for {posture, row} <- Boundaries.route_postures(),
-            not Map.get(row, :pending, false),
+        for {posture, _row} <- Boundaries.route_postures(),
             not MapSet.member?(declared, posture),
             do: posture
 
       assert unused == [],
              "these postures are in the vocabulary and no route declares them: #{inspect(unused)}"
-    end
-
-    test "a pending public route is apart from the settled roster, and admitted once declared" do
-      pending = Boundaries.pending_public_routes()
-
-      assert pending == [{:get, "/pair"}]
-
-      assert MapSet.disjoint?(MapSet.new(pending), MapSet.new(Boundaries.public_routes()))
-
-      declared = %{
-        verb: :get,
-        path: "/pair",
-        metadata: %{auth: :browser_public_login}
-      }
-
-      assert Boundaries.route_violations([declared]) == []
-
-      unrostered = %{declared | path: "/pair/elsewhere"}
-
-      assert [_refused] = Boundaries.route_violations([unrostered])
     end
 
     test "every posture says what admits a caller to it, and why" do
@@ -905,13 +860,7 @@ defmodule Cyfr.BoundariesTest do
         |> Enum.map(&{&1.verb, &1.path})
         |> Enum.sort()
 
-      # A pending route is held to the roster once a route declares it.
-      live = MapSet.new(Boundaries.routes(), &{&1.verb, &1.path})
-
-      declared_pending =
-        Enum.filter(Boundaries.pending_public_routes(), &MapSet.member?(live, &1))
-
-      assert anyone == Enum.sort(Boundaries.public_routes() ++ declared_pending),
+      assert anyone == Enum.sort(Boundaries.public_routes()),
              """
              The routes whose posture admits nothing are #{inspect(anyone)}; the
              roster names #{inspect(Enum.sort(Boundaries.public_routes()))}.
@@ -1811,8 +1760,7 @@ defmodule Cyfr.BoundariesTest do
 
   describe "admission entries" do
     test "every row names a loaded module exporting its site, or a plug" do
-      for %{module: module, site: site, plane: plane} = row <- Boundaries.admission_entries(),
-          not Map.get(row, :pending, false) do
+      for %{module: module, site: site, plane: plane} <- Boundaries.admission_entries() do
         assert Code.ensure_loaded?(module), "#{inspect(module)} does not load"
         assert plane in [:external, :in_chain]
 
@@ -1840,10 +1788,7 @@ defmodule Cyfr.BoundariesTest do
       end
     end
 
-    test "no row is pending, and the device channel's is an interactive entry" do
-      pending = for row <- Boundaries.admission_entries(), Map.get(row, :pending, false), do: row
-      assert pending == []
-
+    test "the device channel's is an interactive entry" do
       assert %{site: :handle_in, plane: :external, origin: :interactive} =
                Enum.find(
                  Boundaries.admission_entries(),

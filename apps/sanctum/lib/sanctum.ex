@@ -169,11 +169,14 @@ defmodule Sanctum do
   @doc """
   Whether `value` is a directory this deployment may pin for enrollment:
   a directory URL (`Prima.Identity.Encoding.directory_url?/1`) served over
-  `https`.
+  `https`, no longer than a confirmation preview's text
+  (`Prima.Confirmation.Preview.max_text/0`, 1,024 bytes), since an
+  enrollment's preview names its directory.
   """
   @spec enrollment_directory?(term()) :: boolean()
   def enrollment_directory?(value) do
-    Prima.Identity.Encoding.directory_url?(value) and String.starts_with?(value, "https://")
+    Prima.Identity.Encoding.directory_url?(value) and String.starts_with?(value, "https://") and
+      byte_size(value) <= Prima.Confirmation.Preview.max_text()
   end
 
   @doc """

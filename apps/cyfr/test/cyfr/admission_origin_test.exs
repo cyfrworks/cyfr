@@ -77,11 +77,8 @@ defmodule Cyfr.AdmissionOriginTest do
   # `Sanctum.TestContext.athanor!/0`'s group slug: a public tincture's address.
   @address "test"
 
-  # The rows this test holds: every built entry that names an origin.
-  @rows for row <- Boundaries.admission_entries(),
-            row.origin != :none,
-            not Map.get(row, :pending, false),
-            do: row
+  # The rows this test holds: every entry that names an origin.
+  @rows for row <- Boundaries.admission_entries(), row.origin != :none, do: row
 
   @drivers %{
     {Grimoire, :call_in_chain} => :gate_in_chain,

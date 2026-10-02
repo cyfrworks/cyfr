@@ -141,8 +141,6 @@ defmodule Sanctum.Recovery do
 
   @seed_bytes 32
   @reproof_ms 5 * 60 * 1000
-  # A preview's longest text (`Prima.Confirmation`).
-  @max_effect_bytes 1024
 
   @typedoc "The directory client's options: `:resolver` and `:cacerts`."
   @type opts :: [resolver: module(), cacerts: [binary()]]
@@ -237,10 +235,10 @@ defmodule Sanctum.Recovery do
   def enrollment_effect(directory) when is_binary(directory) do
     effect = effect_at(directory)
 
-    # A preview's text is bounded (`Prima.Confirmation`); a directory URL
-    # too long to sit in the sentence as well is named by the preview's
-    # `directory` detail alone.
-    if byte_size(effect) <= @max_effect_bytes,
+    # A preview's text is bounded (`Prima.Confirmation.Preview.max_text/0`);
+    # a directory URL too long to sit in the sentence as well is named by
+    # the preview's `directory` detail alone.
+    if byte_size(effect) <= Prima.Confirmation.Preview.max_text(),
       do: effect,
       else: effect_at("named under directory")
   end

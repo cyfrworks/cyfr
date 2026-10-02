@@ -3,11 +3,11 @@
 
 defmodule Cyfr.DeclaredOperationsTest do
   @moduledoc """
-  The operations declared ahead of the work that fills them: each is on
+  The operations the identity, device and grant work declared: each is on
   the operation table with the annotations it is admitted under. Each new
-  argument of an operation that exists is decided, never dropped and never
-  refused as not built, so nothing reads as narrower, bounded or admitted
-  when it is not.
+  argument of an operation that existed before is decided, never dropped,
+  so nothing reads as narrower, bounded or admitted when it is not. That
+  no operation answers as a stub is `Cyfr.NoStubOperationsTest`'s.
   """
 
   use ExUnit.Case, async: false
@@ -76,14 +76,12 @@ defmodule Cyfr.DeclaredOperationsTest do
     end
 
     test "a platform-scoped one refuses an ordinary member before its handler", %{ctx: ctx} do
-      assert {:error, reason} =
+      assert {:error, %Prima.Refusal{class: :forbidden, reason: :platform_admin_required}} =
                call(ctx, "passkey", "recover_admin", %{
                  "user_id" => "usr_1",
                  "passkey_id" => "psk_1",
                  "registration_digest" => @digest
                })
-
-      refute reason == :not_built
     end
 
     test "a recovery seed is a field the redaction vocabulary keeps out of every log" do
@@ -101,15 +99,10 @@ defmodule Cyfr.DeclaredOperationsTest do
   end
 
   describe "a new argument of an operation that exists" do
-    test "a member's identifier is decided, never refused as not built, and stands alone",
-         %{ctx: ctx} do
+    test "a member's identifier is decided, and stands alone", %{ctx: ctx} do
       identifier = "per_" <> String.duplicate("ab", 32)
 
       for action <- ~w(add remove) do
-        refute call(ctx, "member", action, %{"identifier" => identifier}) ==
-                 {:error, :not_built},
-               "member.#{action}"
-
         for other <- [%{"email" => "someone@example.com"}, %{"user_id" => "usr_1"}] do
           assert {:error, {:invalid_argument, "Name one of email, user_id or identifier" <> _}} =
                    call(ctx, "member", action, Map.put(other, "identifier", identifier)),
@@ -118,8 +111,7 @@ defmodule Cyfr.DeclaredOperationsTest do
       end
     end
 
-    test "a grant's origins and narrowing are decided, never refused as not built",
-         %{ctx: ctx} do
+    test "a grant's origins and narrowing are decided", %{ctx: ctx} do
       for extra <- [
             %{"origins" => ["interactive", "programmatic"]},
             %{"subset" => %{"reagent:local.x" => %{"egress" => %{"domains" => []}}}}
@@ -132,7 +124,7 @@ defmodule Cyfr.DeclaredOperationsTest do
       end
     end
 
-    test "the grant and run reads are answered, never refused as not built", %{ctx: ctx} do
+    test "the grant and run reads are answered", %{ctx: ctx} do
       # An athanor that granted nothing reaches nothing
       # (`Sanctum.Providers.ProfileGrantsTest`).
       assert call(ctx, "profile", "grants", %{"domain" => "api.example.com"}) ==
@@ -145,7 +137,7 @@ defmodule Cyfr.DeclaredOperationsTest do
                {:error, {:not_found, "Profile", "prf_1"}}
     end
 
-    test "an approval's bounds are decided, never refused as not built", %{ctx: ctx} do
+    test "an approval's bounds are decided", %{ctx: ctx} do
       for bound <- [
             %{"lifecycle" => "turn"},
             %{"until" => "2026-10-01T00:00:00Z"},

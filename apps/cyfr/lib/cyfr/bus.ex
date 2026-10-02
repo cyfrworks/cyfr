@@ -11,9 +11,7 @@ defmodule Cyfr.Bus do
   struct under `Cyfr.Bus.*`, whose closed `kinds/0` union says what
   happened; a publisher builds it with the struct's constructor and a
   subscriber matches it. Payloads carry plain values and never a schema,
-  a context or a credential. A row marked `pending: true` is published
-  before the modules it names as consumers exist; they arrive with the
-  work that hears it.
+  a context or a credential.
 
   ## Scopes
 

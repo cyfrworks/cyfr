@@ -43,7 +43,7 @@ carry the names other programs own as well.
 | `CYFR_DATA_PATH` | The one runtime storage root: every athanor's tree, the caches and the SQLite database (default `data`; the image sets its own). |
 | `CYFR_DB_POOL_SIZE` | The database connection pool's size (default 20). |
 | `CYFR_DB_SSL` | TLS to the PostgreSQL server (default off). |
-| `CYFR_DIRECTORY_URL` | The identity directory this deployment enrolls its local people at, an `https` URL chosen explicitly: there is no hosted default, and choosing one is a choice about how long an identity lasts. Unset, local work and local pairing still work and enrollment is refused; a malformed value refuses the boot. |
+| `CYFR_DIRECTORY_URL` | The identity directory this deployment enrolls its local people at, an `https` URL chosen explicitly: there is no hosted default, and choosing one is a choice about how long an identity lasts. Unset, local work and local pairing still work and enrollment is refused; a malformed value, or one longer than the 1,024 bytes an enrollment's confirmation preview can name, refuses the boot. |
 | `CYFR_GITHUB_CLIENT_ID` | The GitHub OAuth app's client ID for the device flow; `.env.example` ships a public one, which your own app's replaces. |
 | `CYFR_GOOGLE_CLIENT_ID` | The Google OAuth client ID for the device flow, used with `CYFR_GOOGLE_CLIENT_SECRET`; `.env.example` ships a public one. |
 | `CYFR_GOOGLE_CLIENT_SECRET` | The Google OAuth client secret, set in `.env` alone and never in a tracked file. |

@@ -645,6 +645,12 @@ defmodule Cyfr.PlatformSettingsRosterTest do
 
   defp refusal!, do: Exception.message(assert_raise(RuntimeError, &read_prod_config!/0))
 
+  # An https directory URL exactly `bytes` long.
+  defp directory_url_of(bytes) do
+    origin = "https://directory.example.com/"
+    origin <> String.duplicate("d", bytes - byte_size(origin))
+  end
+
   # The .env files a release sources sit at its RELEASE_ROOT.
   defp with_env_file(lines, fun) do
     dir = Path.join(System.tmp_dir!(), "cyfr-roster-#{System.unique_integer([:positive])}")
@@ -781,6 +787,22 @@ defmodule Cyfr.PlatformSettingsRosterTest do
       )
     end
 
+    test "a directory URL as long as a preview can name is read, and one byte more is refused" do
+      fits = directory_url_of(Prima.Confirmation.Preview.max_text())
+      over = directory_url_of(Prima.Confirmation.Preview.max_text() + 1)
+
+      # Both are directory URLs: the preview's bound alone tells them apart,
+      # at boot here and in `Sanctum.Supervisor`, which asks the same check.
+      assert Prima.Identity.Encoding.directory_url?(fits)
+      assert Prima.Identity.Encoding.directory_url?(over)
+      assert Sanctum.enrollment_directory?(fits)
+      refute Sanctum.enrollment_directory?(over)
+
+      with_env(%{"CYFR_DIRECTORY_URL" => fits}, fn ->
+        assert read_prod_config!()[:sanctum][:directory_url] == fits
+      end)
+    end
+
     test "a malformed directory URL or restore token stops the boot naming the variable, never the value" do
       for bad <- [
             "http://directory.example.com",
@@ -788,11 +810,15 @@ defmodule Cyfr.PlatformSettingsRosterTest do
             "https://user@directory.example.com",
             "https://directory.example.com?next=1",
             "directory.example.com",
-            "https://[::1]"
+            "https://[::1]",
+            # A directory URL, one byte longer than an enrollment's preview
+            # can name.
+            directory_url_of(Prima.Confirmation.Preview.max_text() + 1)
           ] do
         with_env(%{"CYFR_DIRECTORY_URL" => bad}, fn ->
           message = refusal!()
           assert message =~ "[Cyfr] FATAL: CYFR_DIRECTORY_URL must be an https directory URL"
+          assert message =~ "at most 1024 bytes long"
           refute message =~ bad
         end)
       end

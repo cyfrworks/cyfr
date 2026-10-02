@@ -13,6 +13,10 @@ defmodule PrismWeb.ThreadPaneLiveTest do
   alias Arca.ThreadStorage, as: Threads
   alias Sanctum.Tenancy.Athanors
 
+  # A text size under the 12 px a 720×720 glass is held to (WCAG 2.2 AA at
+  # that viewport, as the join proof measures it).
+  @under_12px ~r/text-\[(?:\d|1[01])(?:\.\d+)?px\]/
+
   setup %{conn: conn} do
     test_path = Path.join(System.tmp_dir!(), "pane_#{:rand.uniform(1_000_000)}")
     original_base_path = Application.get_env(:arca, :base_path)
@@ -439,6 +443,112 @@ defmodule PrismWeb.ThreadPaneLiveTest do
     refute html =~ "autofocus"
     refute html =~ ~r/\bagent\b/
     refute html =~ "A.Q.U.A."
+  end
+
+  test "at 720×720 an open thread draws no text under 12 px and no target under 24 px", %{
+    conn: conn,
+    room: room,
+    thread: thread
+  } do
+    pane = room_pane(conn, room, thread)
+    html = render(pane)
+    assert html =~ "hello"
+
+    # Every size the pane draws is `text-xs` or larger (WCAG 2.2 AA at the
+    # 720×720 glass, as the join proof measures it), and its small targets
+    # are held to 24 px (`min-h-6`): the line's author, its say-aloud, the
+    # header's controls and the thread's footer.
+    refute html =~ @under_12px
+    assert has_element?(pane, "span.text-xs", "You")
+    assert has_element?(pane, "button.min-h-6.text-xs", "Say aloud")
+    assert has_element?(pane, "header a.min-h-6.text-xs", "AQUA")
+    assert has_element?(pane, "div.text-xs > span", thread.title || "New thread")
+  end
+
+  test "at 720×720 every state the pane draws holds the same sizes", %{
+    conn: conn,
+    user: user,
+    room: room,
+    in_room: in_room,
+    thread: thread
+  } do
+    # A state no test here reaches — a DM's header, several approvals
+    # pending, a held send, the panel's links and its read-the-room box —
+    # is held by the template itself: no text class under 12 px anywhere,
+    # and each of those small targets at 24 px.
+    source =
+      PrismWeb.ThreadPaneLive.module_info(:compile)[:source] |> to_string() |> File.read!()
+
+    refute source =~ @under_12px
+
+    for click <- ~w(approve_all_pending decline_all_pending retry_send discard_send dismiss_link) do
+      assert source =~ ~r/phx-click="#{click}"[^>]*class="[^"]*min-h-6/,
+             "the #{click} control is under 24 px"
+    end
+
+    assert source =~ ~r/phx-click="toggle_read_room"[^>]*class="h-6 w-6/
+
+    {:ok, _} =
+      Threads.append(Sanctum.Context.actor(in_room), thread.id, %{
+        author: user.user_id,
+        content: "two files",
+        payload: %{
+          "attachments" => [
+            %{"filename" => "notes.md", "stored_name" => "abc_notes.md"},
+            %{"filename" => "kept-elsewhere.txt"}
+          ]
+        }
+      })
+
+    pane = room_pane(conn, room, thread)
+
+    event = fn kind, data ->
+      send(pane.pid, %Cyfr.Bus.ThreadEvent{
+        athanor_id: thread.athanor_id,
+        thread_id: thread.id,
+        kind: kind,
+        data: data
+      })
+    end
+
+    # A turn running for this person with a message queued behind it, its
+    # tools at work, two standing answers and the prompt to send again.
+    event.(:turn_starting, user.user_id)
+    event.(:queued, 2)
+    event.(:tool_activity, [%{tool: "files.read", status: :running, preview: "notes.md"}])
+    event.(:grants, MapSet.new([{"aqua", "files", "read"}, {"aqua", "notes", "write"}]))
+    event.(:restart_prompt, %{text: "two files", user_id: user.user_id})
+
+    # A file on its way up.
+    pane
+    |> file_input("form[phx-submit=submit]", :attachments, [
+      %{name: "draft.txt", content: "x", type: "text/plain"}
+    ])
+    |> render_upload("draft.txt", 40)
+
+    html = render(pane)
+
+    for drawn <- [
+          "is asking",
+          "2 queued",
+          "+2 this chat",
+          "files.read",
+          "send it again",
+          "draft.txt",
+          "kept-elsewhere.txt"
+        ],
+        do: assert(html =~ drawn, "#{drawn} is not drawn")
+
+    refute html =~ @under_12px
+
+    standing = ~s([data-test="standing-answers"])
+    assert has_element?(pane, "#{standing}.text-xs")
+    assert has_element?(pane, ~s(#{standing} button.min-h-6.min-w-6[phx-click="revoke_grant"]))
+    assert has_element?(pane, ~s(button.min-h-6.min-w-6[phx-click="cancel_upload"]))
+    assert has_element?(pane, ~s(button.min-h-6[phx-click="restart_send"]))
+    assert has_element?(pane, ~s(button.min-h-6[phx-click="dismiss_restart"]))
+    assert has_element?(pane, "a.min-h-6.text-xs[download]", "notes.md")
+    assert has_element?(pane, "span.text-xs", "kept-elsewhere.txt")
   end
 
   test "a turn stopped on an unknown outcome shows so until it goes on", %{

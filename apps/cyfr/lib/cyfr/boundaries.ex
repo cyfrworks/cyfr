@@ -56,13 +56,9 @@ defmodule Cyfr.Boundaries do
       an application's `lib` goes through `Arca.Storage` or carries the
       bypass marker that names its group.
 
-  A row a later change will reach is marked pending: a whole row
-  `pending: true`, a surface row's entries in its `pending_allow`, and the
-  pending Sanctum functions, public routes and postures in their own
-  registers beside the settled ones. A pending row admits what it names —
-  a caller without a row still fails — and the stale checks skip it,
-  because nothing reaches it yet; removing every marker is the last
-  change, after which the stale checks prove every row reached.
+  Every row is settled: a row names only what the tree reaches now, and
+  the stale checks hold each one to being reached, so a row written ahead
+  of its caller fails as surely as a caller without a row.
 
   And the registers:
 
@@ -1005,7 +1001,6 @@ defmodule Cyfr.Boundaries do
       ],
       into: "Cyfr.Admission",
       allow: [],
-      pending: true,
       reason:
         "the admission paths are the host's roster (`Cyfr.Admission`, beside " <>
           "`admission_entries/0`): the composition root checks every listener against " <>
@@ -1072,11 +1067,8 @@ defmodule Cyfr.Boundaries do
   has one, narrows it to those namespaces under `into`: every other reach
   into `into` is some other row's business. A row's `except`, when it has
   one, lists globs of files under `from` the row does not read — a file
-  the composition root owns, whose reaches another row decides. A row's
-  `pending_allow`, when it has one, names reaches a later change makes:
-  admitted like `allow`, never reported stale. A row `pending: true` is a
-  whole row no source reaches yet. Every row is one the Boundary compiler
-  cannot hold, and its reason ends saying why.
+  the composition root owns, whose reaches another row decides. Every row
+  is one the Boundary compiler cannot hold, and its reason ends saying why.
   """
   @spec surfaces() :: [map()]
   def surfaces, do: @surfaces
@@ -1109,26 +1101,17 @@ defmodule Cyfr.Boundaries do
         do: reach
   end
 
-  @doc """
-  The namespaces `named` reaches that the row's roster names neither in
-  `allow` nor in `pending_allow`.
-  """
+  @doc "The namespaces `named` reaches that the row's `allow` does not name."
   @spec surface_violations(map(), named()) :: [String.t()]
   def surface_violations(row, named) do
     row
     |> surface_reaches(named)
-    |> MapSet.difference(MapSet.new(row.allow ++ Map.get(row, :pending_allow, [])))
+    |> MapSet.difference(MapSet.new(row.allow))
     |> Enum.sort()
   end
 
-  @doc """
-  The namespaces the row's `allow` names and `named` no longer reaches. A
-  pending row, and a row's `pending_allow`, are not read: nothing reaches
-  them yet.
-  """
+  @doc "The namespaces the row's `allow` names and `named` no longer reaches."
   @spec stale_surface_entries(map(), named()) :: [String.t()]
-  def stale_surface_entries(%{pending: true}, _named), do: []
-
   def stale_surface_entries(row, named) do
     row.allow
     |> MapSet.new()
@@ -1445,26 +1428,13 @@ defmodule Cyfr.Boundaries do
   @spec sanctum_exports() :: %{String.t() => [{atom(), non_neg_integer()}]}
   def sanctum_exports, do: @sanctum_exports
 
-  # The Sanctum functions the host will call once the work that calls them
-  # lands, each on a module that exists. A call to one is admitted; one
-  # nothing calls yet is not stale. None is pending now; the roster is kept
-  # as pairs, so its reader stays a map of any module.
-  @pending_sanctum_exports []
-
-  @doc """
-  The Sanctum functions the host is to call, pending: admitted as
-  `sanctum_exports/0`'s are, and never reported stale.
-  """
-  @spec pending_sanctum_exports() :: %{String.t() => [{atom(), non_neg_integer()}]}
-  def pending_sanctum_exports, do: Map.new(@pending_sanctum_exports)
-
   @typedoc "A remote function as the compiled scan reads it: module name, function, arity."
   @type reach :: {String.t(), atom(), non_neg_integer()}
 
   @doc "The Sanctum functions `reaches` holds that the roster does not, as `Module.function/arity`."
   @spec sanctum_export_violations([reach()]) :: [String.t()]
   def sanctum_export_violations(reaches) do
-    rostered = MapSet.union(rostered_sanctum_exports(), rostered(@pending_sanctum_exports))
+    rostered = rostered_sanctum_exports()
 
     reaches
     |> Enum.filter(fn {module, _function, _arity} -> sanctum_module?(module) end)
@@ -1485,10 +1455,8 @@ defmodule Cyfr.Boundaries do
     |> Enum.sort()
   end
 
-  defp rostered_sanctum_exports, do: rostered(@sanctum_exports)
-
-  defp rostered(roster) do
-    for {module, functions} <- roster,
+  defp rostered_sanctum_exports do
+    for {module, functions} <- @sanctum_exports,
         {function, arity} <- functions,
         into: MapSet.new(),
         do: {module, function, arity}
@@ -1649,13 +1617,8 @@ defmodule Cyfr.Boundaries do
     {:get, "/directory/v1/:identifier/requests/:request_id"},
     {:post, "/directory/v1/genesis"},
     {:get, "/login"},
+    {:get, "/pair"},
     {:get, "/restore"}
-  ]
-
-  # The routes anyone will reach once the work that declares them lands:
-  # the sessionless page a pairing code opens.
-  @pending_public_routes [
-    {:get, "/pair"}
   ]
 
   @doc """
@@ -1673,13 +1636,12 @@ defmodule Cyfr.Boundaries do
   authenticates the step and nothing else; and `:nothing`, a route
   reachable by anyone, whose routes are rostered one by one in
   `public_routes/0`. A posture is route metadata, a term no compiler
-  checks. A posture marked `pending: true` is one no route declares yet.
+  checks.
   """
   @spec route_postures() :: %{
           atom() => %{
             required(:admits) => atom(),
-            required(:why) => String.t(),
-            optional(:pending) => true
+            required(:why) => String.t()
           }
         }
   def route_postures, do: @route_postures
@@ -1697,13 +1659,6 @@ defmodule Cyfr.Boundaries do
   """
   @spec public_routes() :: [{atom(), String.t()}]
   def public_routes, do: @public_routes
-
-  @doc """
-  The routes anyone will reach, pending: rostered as `public_routes/0`'s
-  are once a route declares them, and never reported stale before.
-  """
-  @spec pending_public_routes() :: [{atom(), String.t()}]
-  def pending_public_routes, do: @pending_public_routes
 
   # Every posture, public-roster and `route_info` consumer reads the route
   # table through this one name, so splitting the route providers and
@@ -1741,10 +1696,9 @@ defmodule Cyfr.Boundaries do
           ["#{where}: no declared auth posture (add `metadata: %{auth: …}`)"]
 
         posture when is_map_key(@route_postures, posture) ->
-          if posture in public_postures() and
-               {route.verb, route.path} not in (@public_routes ++ @pending_public_routes),
-             do: ["#{where}: declares the public posture #{inspect(posture)} and is not rostered"],
-             else: []
+          if posture in public_postures() and {route.verb, route.path} not in @public_routes,
+            do: ["#{where}: declares the public posture #{inspect(posture)} and is not rostered"],
+            else: []
 
         other ->
           ["#{where}: auth posture #{inspect(other)} is not in the vocabulary"]
@@ -2177,16 +2131,14 @@ defmodule Cyfr.Boundaries do
   instead of, the gate, and records the decision itself — one
   `%{module, site, plane, origin}` row per entry. Host owns the roster;
   the seam test drives each row to its refusal and finds exactly one
-  decision. A row marked `pending: true` names an entry not built yet,
-  which the seam test does not drive.
+  decision.
   """
   @spec admission_entries() :: [
           %{
             required(:module) => module(),
             required(:site) => atom(),
             required(:plane) => :external | :in_chain,
-            required(:origin) => admission_origin(),
-            optional(:pending) => true
+            required(:origin) => admission_origin()
           }
         ]
   def admission_entries, do: @admission_entries

@@ -140,15 +140,9 @@ defmodule Sanctum.EstablishBoundaryTest do
   end
 
   test "no Host module can reach establish_device/2: Host's export roster refuses it" do
-    # The Host's calls into Sanctum are held to its export roster; the
-    # device branch is on neither the settled nor the pending list.
+    # The Host's calls into Sanctum are held to its export roster, and the
+    # device branch is not on it.
     refute {:establish_device, 2} in Map.get(Cyfr.Boundaries.sanctum_exports(), "Sanctum.Caller")
-
-    refute {:establish_device, 2} in Map.get(
-             Cyfr.Boundaries.pending_sanctum_exports(),
-             "Sanctum.Caller",
-             []
-           )
 
     assert Cyfr.Boundaries.sanctum_export_violations([{"Sanctum.Caller", :establish_device, 2}]) ==
              ["Sanctum.Caller.establish_device/2"]

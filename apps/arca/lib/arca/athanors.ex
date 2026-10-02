@@ -286,6 +286,9 @@ defmodule Arca.Athanors do
   `SELECT DISTINCT` ordered by an expression outside the select list.
   """
   @spec list_for_user(Prima.Actor.t(), String.t()) :: {:ok, [map()]} | refusal()
+  # arca:unscoped-ok a person's athanors are read across tenants by design, under the
+  # platform actor alone: the query is keyed by the person's active memberships, and the
+  # athanor column only joins each membership to its athanor.
   def list_for_user(%Prima.Actor{scope: :platform}, user_id) when is_binary(user_id) do
     Arca.Repo.Errors.with_db_rescue("Arca.Athanors.list_for_user", fn ->
       {:ok,
