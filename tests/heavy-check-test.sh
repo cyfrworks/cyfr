@@ -211,6 +211,9 @@ case "$1" in
     esac
     echo 'Result: 1 passed' ;;
 esac
+case "$PWD" in
+  */island_*) [ "${MIX_OS_CONCURRENCY_LOCK:-}" = 0 ] || echo "$PWD $1" >> "$TRACE/island-with-build-lock" ;;
+esac
 exit 0
 FAKE
   chmod +x "$scratch/bin/mix"
@@ -229,6 +232,7 @@ FAKE
   has_line '^==> static +ok ' "$scratch/gate.out" || fail 'the static leg was not reported passed'
   dead "$(cat "$scratch/trace/stalled")" || fail 'the stalled step survived its deadline'
   [ -z "$(find "$scratch/gate" -maxdepth 1 -name 'island_*')" ] || fail "the stalled island's copy was left behind"
+  [ ! -e "$scratch/trace/island-with-build-lock" ] || fail "an island's Mix ran with its build lock on: $(tr '\n' ' ' < "$scratch/trace/island-with-build-lock")"
 else
   echo 'SKIPPED: the gate deadline test needs timeout(1)'
 fi

@@ -39,6 +39,12 @@ helper="$script_dir/test-partition-env.exs"
 checkout=$(pwd -P)
 if [ -z "${MIX_BUILD_PATH:-}" ] && [ "$ADAPTER" = postgres ]; then export MIX_BUILD_PATH=_build/test_pg; fi
 export CYFR_DATABASE="$ADAPTER" MIX_ENV=test CYFR_TEST_PARTITION_ENV_LIBRARY=0
+# Mix keeps its build lock under TMPDIR, and every Mix process here runs
+# under a partition's own, so the lock excludes no one. It is off because
+# Mix through 1.20.4 can take it into a wait that never ends: the second
+# take in a fresh lock directory, on the port the first one had, reads its
+# own port back as the holder's and waits for itself to let go.
+export MIX_OS_CONCURRENCY_LOCK=0
 # The cores this run may size itself to: the machine's, or the share a
 # caller that runs several at once gives it (scripts/heavy-check.sh -s).
 if [ -n "${CYFR_TEST_CORES:-}" ]; then

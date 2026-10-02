@@ -24,6 +24,7 @@ cat > "$scratch/bin/mix" <<'FAKE'
 #!/usr/bin/env bash
 set -eu
 printf '%s\n' "$1 ${!#}" >> "$TRACE/mix-calls"
+[ "${MIX_OS_CONCURRENCY_LOCK:-}" = 0 ] || printf '%s\n' "$1 ${!#}" >> "$TRACE/mix-calls-with-build-lock"
 case "$1" in
   compile)
     case "${CORRUPT_AFTER_COMPILE:-}" in
@@ -212,4 +213,7 @@ grep -q 'exit 0$' "$scratch/sparse" || fail 'a run with partitions not started d
 # so as it would.
 (cd "$tree" && bash "$runner" -n 2 -- apps/three/test) >"$scratch/empty-app" 2>&1 || fail 'the empty-application run failed'
 [ "$(partitions_with apps/three/test)" = '1 2 ' ] || fail 'a path with no test file was withheld from a partition'
+# Every Mix process of a run has Mix's build lock off.
+[ -s "$TRACE/mix-calls" ] || fail 'no Mix call was traced'
+[ ! -e "$TRACE/mix-calls-with-build-lock" ] || fail "Mix ran with its build lock on: $(sort -u "$TRACE/mix-calls-with-build-lock" | tr '\n' ' ')"
 echo 'partition runner tests passed'
