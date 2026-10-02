@@ -277,6 +277,7 @@ jobs:
         run: |
           bash tests/test-partitioned-test.sh
           elixir tests/test-partition-env-test.exs
+          bash tests/heavy-check-test.sh
       - name: Run tests
         run: scripts/test-partitioned.sh -a "${{ matrix.db }}" -- --warnings-as-errors
 
