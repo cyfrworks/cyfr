@@ -34,11 +34,14 @@ defmodule Arca.IdentityAttempts do
       superseded`. `keys_active` replaces the person's live key and head
       only while their row still reads the head the rotation extended.
     * **restore** — `staged → submitted → accepted → keys_active → minted
-      → completed`, or `submitted → refused | superseded` and `accepted →
-      superseded`. Opening a restore claims the installation for it in the
-      same transaction (`Arca.InstallationClaims`), so the claim and the
-      attempt commit or roll back together, and the attempt's end, whatever
-      its outcome, ends the claim.
+      → completed`, or `submitted → refused | superseded` and `accepted |
+      keys_active | minted → superseded`: a later recovery may replace the
+      keys it introduced at any phase before its completion. Superseded at
+      `minted`, it keeps naming the person it minted, whose row stays.
+      Opening a restore claims the installation for it in the same
+      transaction (`Arca.InstallationClaims`), so the claim and the attempt
+      commit or roll back together, and the attempt's end, whatever its
+      outcome, ends the claim.
 
   A terminal move (`refused`, `superseded`, `completed`) clears the staged
   sealed keys.
@@ -94,8 +97,8 @@ defmodule Arca.IdentityAttempts do
       "staged" => ["submitted"],
       "submitted" => ["accepted", "refused", "superseded"],
       "accepted" => ["keys_active", "superseded"],
-      "keys_active" => ["minted"],
-      "minted" => ["completed"]
+      "keys_active" => ["minted", "superseded"],
+      "minted" => ["completed", "superseded"]
     }
   }
 

@@ -94,15 +94,27 @@ defmodule Sanctum.Recovery do
     4. **keys_active** — the current head read again: a later recovery
        that replaced the keys this attempt introduced ends it
        `superseded`, activating nothing;
-    5. **minted** — the person, their identity row (provenance `local`,
-       enrolled at the accepted head) with the staged keys re-sealed under
-       their own frame, and a door entry naming them, all in the mint's
-       transaction (`Arca.Users.mint/4`'s `also:`), which advances the
-       attempt too, so a crash can never leave a resume refused as a
-       non-empty node;
-    6. **completed** — their own athanor provisioned, and a session issued
-       with the reserved provider `restore` to the holder of the
-       capability, before the attempt ends.
+    5. **minted** — the head read again, as a restore stopped at
+       `keys_active` may have been superseded meanwhile; then the person,
+       their identity row (provenance `local`, enrolled at the accepted
+       head) with the staged keys re-sealed under their own frame, and a
+       door entry naming them, all in the mint's transaction
+       (`Arca.Users.mint/4`'s `also:`), which advances the attempt too, so
+       a crash can never leave a resume refused as a non-empty node. The
+       transaction holds the cached head that read left
+       (`Arca.DirectoryHeads.certifiable!/3`): a later recovery this home
+       cached in between refuses the mint and ends the attempt
+       `superseded`;
+    6. **completed** — the head read once more, their own athanor
+       provisioned, and a session issued with the reserved provider
+       `restore` to the holder of the capability, before the attempt ends.
+       Superseded after the mint, the attempt ends `superseded` with no
+       athanor provisioned and no session, and the person it minted stays;
+       a session issued as a concurrent request superseded it is deleted,
+       never answered.
+
+  A directory that cannot answer a read before the mint or the session
+  leaves the attempt where it stands, answered `:unavailable`.
 
   A retry under the same token finds the attempt through its claim, and
   resumes it only for the kit whose identifier it restores and whose
@@ -419,6 +431,9 @@ defmodule Sanctum.Recovery do
   `attempt_id` again (`person.kit`), under a fresh `recovery_material`
   confirmation each time. Answers `%{attempt_id, identifier, kit}`.
 
+  The seed is opened from the attempt read again once the confirmation
+  answers, so an acknowledgment that committed meanwhile prints nothing.
+
   Refusals: `{:not_found, "kit", attempt_id}` (no such attempt of the
   person's), `:kit_acknowledged` (the seed was erased on acknowledgment),
   `:not_accepted` (the directory has not accepted it), the consent signal
@@ -430,6 +445,8 @@ defmodule Sanctum.Recovery do
          {:ok, attempt} <- own_kit_attempt(ctx, user_id, attempt_id),
          :ok <- deliverable(attempt),
          :ok <- Authz.confirm(ctx, :recovery_material, kit_change(attempt)),
+         {:ok, attempt} <- own_kit_attempt(ctx, user_id, attempt_id),
+         :ok <- deliverable(attempt),
          {:ok, kit} <- kit_lines(attempt) do
       {:ok, %{attempt_id: attempt.id, identifier: attempt.identifier, kit: kit}}
     end
@@ -1203,9 +1220,7 @@ defmodule Sanctum.Recovery do
           with {:ok, attempt} <- advance(attempt, "accepted", "keys_active"),
                do: continue_restore(attempt, opts)
         else
-          with {:ok, _ended} <-
-                 advance(attempt, "accepted", "superseded", %{outcome: "superseded"}),
-               do: {:error, :superseded}
+          supersede(attempt, opts)
         end
 
       {:error, :directory_unavailable} ->
@@ -1216,17 +1231,26 @@ defmodule Sanctum.Recovery do
     end
   end
 
-  # A concurrent request under the same token that minted first leaves the
-  # node holding this attempt's person: read again, it is past this phase.
+  # Activated keys are history too by the time the mint runs: an attempt
+  # stopped here may have been superseded since, so the head is read again
+  # first, and the mint holds the cached head that read left (`minted/3`),
+  # so a later recovery this home caches in between refuses it. A
+  # concurrent request under the same token that minted first leaves the
+  # node holding this attempt's person, and one that completed first has
+  # ended the claim too: read again, the attempt is past this phase.
   defp continue_restore(%{phase: "keys_active"} = attempt, opts) do
-    with {:ok, genesis_hash} <- genesis_hash(attempt) do
+    with {:ok, genesis_hash} <- genesis_hash(attempt),
+         :ok <- still_current(attempt, opts) do
       case mint_restored(attempt, genesis_hash) do
         {:ok, _person} ->
           with {:ok, attempt} <- reread(attempt), do: continue_restore(attempt, opts)
 
-        {:error, :not_empty} ->
+        {:error, :superseded} ->
+          supersede(attempt, opts)
+
+        {:error, refusal} when refusal in [:not_empty, :token_claimed] ->
           case reread(attempt) do
-            {:ok, %{phase: "keys_active"}} -> {:error, :not_empty}
+            {:ok, %{phase: "keys_active"}} -> {:error, refusal}
             {:ok, moved} -> continue_restore(moved, opts)
             {:error, reason} -> {:error, reason}
           end
@@ -1237,14 +1261,22 @@ defmodule Sanctum.Recovery do
     end
   end
 
-  defp continue_restore(%{phase: "minted", user_id: user_id} = attempt, _opts)
+  # The session goes only to keys the head still names, read again before
+  # anything of this phase: superseded after the mint, the attempt ends
+  # with no athanor provisioned and no session, and the person it minted
+  # stays.
+  defp continue_restore(%{phase: "minted", user_id: user_id} = attempt, opts)
        when is_binary(user_id) do
-    with :ok <- provisioned(user_id),
+    with :ok <- still_current(attempt, opts),
+         :ok <- provisioned(user_id),
          {:ok, answer} <- restored_session(attempt) do
       # A concurrent request that completed it first leaves it completed
-      # (`advance/4` reads it back): the session issued here stands.
+      # (`advance/4` reads it back): the session issued here stands. One
+      # that superseded it after this request's read leaves it superseded:
+      # the session issued here never leaves, and its row goes.
       case advance(attempt, "minted", "completed") do
-        {:ok, _completed} -> {:ok, answer}
+        {:ok, %{phase: "completed"}} -> {:ok, answer}
+        {:ok, %{phase: "superseded"}} -> withdrawn(answer)
         {:error, reason} -> {:error, reason}
       end
     end
@@ -1253,6 +1285,46 @@ defmodule Sanctum.Recovery do
   defp continue_restore(%{phase: "completed"}, _opts), do: {:error, :restored}
   defp continue_restore(%{phase: "superseded"}, _opts), do: {:error, :superseded}
   defp continue_restore(%{phase: "refused"}, _opts), do: {:error, :refused}
+
+  # A session issued to keys the attempt no longer stands for: its token is
+  # never answered, and its row is deleted. A delete that fails leaves a row
+  # whose token nobody holds, and is logged.
+  defp withdrawn(%{session_token: token}) do
+    case Sanctum.Session.destroy(token) do
+      :ok ->
+        :ok
+
+      {:error, reason} ->
+        Logger.error(
+          "[Sanctum.Recovery] a superseded restore's session could not be deleted: " <>
+            Prima.LoggerContext.shape(reason)
+        )
+    end
+
+    {:error, :superseded}
+  end
+
+  # The head read fresh, outside any transaction, still names the keys
+  # this attempt introduced: `:ok`, or the attempt ends superseded. A
+  # directory that cannot answer leaves the attempt where it stands, for a
+  # retry under the same token to resume.
+  defp still_current(attempt, opts) do
+    case live_state(attempt.identifier, attempt.genesis, opts) do
+      {:ok, state} -> if introduced?(state, attempt), do: :ok, else: supersede(attempt, opts)
+      {:error, _unanswered} -> {:error, :unavailable}
+    end
+  end
+
+  # The attempt ends superseded from the phase it holds, and its end ends
+  # the installation claim. A concurrent request that moved it first leaves
+  # it at a later phase, which decides again.
+  defp supersede(attempt, opts) do
+    case advance(attempt, attempt.phase, "superseded", %{outcome: "superseded"}) do
+      {:ok, %{phase: "superseded"}} -> {:error, :superseded}
+      {:ok, moved} -> continue_restore(moved, opts)
+      {:error, reason} -> {:error, reason}
+    end
+  end
 
   # The head names the keys this attempt staged, introduced by its own
   # entry: a later recovery replaced them otherwise.
@@ -1281,7 +1353,8 @@ defmodule Sanctum.Recovery do
   # The person, their identity row with the staged keys re-sealed under
   # their own frame, the attempt's `minted` phase and the door entry naming
   # them, in the one transaction the installation guard admits a restore's
-  # mint in.
+  # mint in. A cached head that no longer names the attempt's keys refuses
+  # the mint as `:superseded` (`minted/3`).
   defp mint_restored(attempt, genesis_hash) do
     now = DateTime.utc_now()
     user_id = Prima.UUID7.generate_id(Prima.PersonId.prefix())
@@ -1304,12 +1377,18 @@ defmodule Sanctum.Recovery do
       {:error, :not_empty} -> {:error, :not_empty}
       {:error, :not_claimed} -> {:error, :token_claimed}
       {:error, :restore_reserved} -> {:error, :token_claimed}
+      {:error, :stale_key_epoch} -> {:error, :superseded}
       {:error, :not_owner} -> {:error, :unavailable}
       {:error, :database_error} -> {:error, :unavailable}
       {:error, reason} -> {:error, reason}
     end
   end
 
+  # The cached head is read after the identity row is written, under the
+  # person's lock and then the head row's, the order a head's advance
+  # takes: an advance this home committed since the restore's fresh read
+  # refuses the mint (`:stale_key_epoch`), and one that comes later waits
+  # for the mint to commit, before the `minted` phase reads the head again.
   defp minted(%{id: user_id}, attempt, genesis_hash) do
     with {:ok, keys} <- resealed(attempt, user_id),
          {:ok, _identity} <-
@@ -1324,6 +1403,8 @@ defmodule Sanctum.Recovery do
                directory_url: attempt.directory_url
              })
            ),
+         :ok <-
+           Arca.DirectoryHeads.certifiable!(user_id, attempt.identifier, attempt.entry_hash),
          {:ok, _minted} <-
            Arca.IdentityAttempts.advance(system(), attempt.id, "keys_active", "minted", %{
              user_id: user_id

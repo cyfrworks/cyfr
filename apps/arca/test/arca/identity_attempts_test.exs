@@ -157,6 +157,50 @@ defmodule Arca.IdentityAttemptsTest do
     }
   end
 
+  # The restore `attempt` moved to `keys_active`, as the restore moves it.
+  defp keys_active!(attempt) do
+    for {from, to} <- [
+          {"staged", "submitted"},
+          {"submitted", "accepted"},
+          {"accepted", "keys_active"}
+        ] do
+      {:ok, _} = IdentityAttempts.advance(server(), attempt.id, from, to)
+    end
+
+    :ok
+  end
+
+  # The restore's person, minted under its claim with the attempt's move to
+  # `minted` in the mint's transaction, as the restore mints them.
+  defp restored_person!(restore, attempt) do
+    now = DateTime.utc_now()
+
+    {:ok, person} =
+      Users.mint(
+        server(),
+        %{
+          id: Prima.UUID7.generate_id(Prima.PersonId.prefix()),
+          provider: "restore",
+          first_seen_at: now,
+          last_seen_at: now,
+          created_at: now,
+          updated_at: now
+        },
+        nil,
+        restore: %{request_id: restore.request, token_digest: restore.token},
+        also: fn minted ->
+          case IdentityAttempts.advance(server(), attempt.id, "keys_active", "minted", %{
+                 user_id: minted.id
+               }) do
+            {:ok, _} -> :ok
+            {:error, _} = refusal -> refusal
+          end
+        end
+      )
+
+    person
+  end
+
   defp enrolled!(person) do
     {:ok, attempt} = IdentityAttempts.open(as(person), enrollment(person.id))
     {:ok, _} = IdentityAttempts.advance(as(person), attempt.id, "staged", "submitted")
@@ -917,6 +961,52 @@ defmodule Arca.IdentityAttemptsTest do
       assert is_nil(superseded.staged_live_key_sealed)
       assert is_nil(superseded.staged_operational_key_sealed)
       assert {:ok, %{state: "ended", outcome: "superseded"}} = InstallationClaims.get(server())
+    end
+
+    test "superseded at keys_active, before its mint, it activates nothing and ends its claim",
+         %{restore: restore} do
+      {:ok, attempt} = IdentityAttempts.open(server(), restore_attrs(restore))
+      :ok = keys_active!(attempt)
+
+      assert {:ok, superseded} =
+               IdentityAttempts.advance(server(), attempt.id, "keys_active", "superseded", %{
+                 outcome: "superseded"
+               })
+
+      assert %{phase: "superseded", outcome: "superseded", user_id: nil} = superseded
+      assert is_nil(superseded.staged_live_key_sealed)
+      assert is_nil(superseded.staged_operational_key_sealed)
+      assert {:ok, %{state: "ended", outcome: "superseded"}} = InstallationClaims.get(server())
+      assert Arca.Repo.aggregate(User, :count) == 0
+
+      # Ended, it mints nothing after.
+      assert {:error, :out_of_order} =
+               IdentityAttempts.advance(server(), attempt.id, "superseded", "minted", %{
+                 user_id: "usr_late"
+               })
+    end
+
+    test "superseded at minted, before its session, it ends its claim and its person stays",
+         %{restore: restore} do
+      {:ok, attempt} = IdentityAttempts.open(server(), restore_attrs(restore))
+      :ok = keys_active!(attempt)
+      person = restored_person!(restore, attempt)
+
+      assert {:ok, superseded} =
+               IdentityAttempts.advance(server(), attempt.id, "minted", "superseded", %{
+                 outcome: "superseded"
+               })
+
+      assert %{phase: "superseded", outcome: "superseded", user_id: user_id} = superseded
+      assert user_id == person.id
+      assert is_nil(superseded.staged_live_key_sealed)
+      assert is_nil(superseded.staged_operational_key_sealed)
+      assert {:ok, %{state: "ended", outcome: "superseded"}} = InstallationClaims.get(server())
+      assert {:ok, %{id: ^user_id}} = Users.get(server(), user_id)
+
+      # Ended, it completes nothing after.
+      assert {:error, :out_of_order} =
+               IdentityAttempts.advance(server(), attempt.id, "superseded", "completed")
     end
   end
 
