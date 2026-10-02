@@ -14,7 +14,9 @@ defmodule Sanctum.Providers.Profile do
 
   require Prima.Refusal
 
+  alias Prima.Authority.Blob
   alias Sanctum.Consent.Commit
+  alias Sanctum.Consent.Loader
   alias Sanctum.Consent.Plan
   alias Sanctum.Context
 
@@ -446,29 +448,44 @@ defmodule Sanctum.Providers.Profile do
   # The grant read — which grants reach one resource
   # ---------------------------------------------------------------------------
 
-  # The head revision of every active profile of the caller's athanor, read
-  # as the enforcement point would admit it, so no grant shows wider or
-  # narrower than it runs. A revision is its built blob, narrowing already
-  # applied, and one whose policy fails its digest or does not parse
-  # reaches nothing, as the loader roots nothing on it. Every edge counts:
+  # The head revision of each active profile of the caller's athanor, read
+  # as the loader carries it (`Sanctum.Consent.Loader.admitted_blob/3`), so
+  # no grant shows wider or narrower than it runs: its built blob,
+  # narrowing already applied, with every selection the loader resolves
+  # resolved. A head the loader refuses outright (validity, digest, parse,
+  # canonical storage paths, blob/refs equality, binding-digest conflicts)
+  # reaches nothing. A lender admits a borrower's load only under an origin
+  # the lender's own revision names, so a head is loaded under each origin
+  # its revision admits and reaches a resource when any of those loads
+  # carries it. Every edge counts:
   #
   # - a domain, as egress pins a host (`Prima.Network.domain_allowed?/2`),
   #   on an edge that also allows a method and a scheme;
   # - a path, as the storage door reads a grant
-  #   (`Prima.ComponentPath.path_granted?/2`) through each pattern as the
-  #   door reaches through it (`door_pattern/1`), on an edge that allows
-  #   an action;
-  # - a vault entry, by its id among the revision's vault references, on
-  #   the edges that bind it. A revision whose references and blob
-  #   disagree reaches nothing through the entry: the loader refuses it.
+  #   (`Prima.ComponentPath.path_granted?/2`), on an edge that allows an
+  #   action. A loaded head spells every pattern as the door reaches it, so
+  #   a pattern is matched as written;
+  # - a vault entry, on every edge the load binds to it: the revision's own
+  #   references, and a selection (`via`) resolved to a lender's bound
+  #   entry, which names the label it selected and the lender's profile.
   #
-  # Only an active profile's head counts: the loader roots no other.
+  # Only an active profile's head counts: the loader roots no other. At
+  # most `@grants_heads_cap` heads are read, in profile-id order, and the
+  # answer says when the athanor holds more (`truncated`).
+  @grants_heads_cap 1_000
+
   defp grants_reaching(ctx, args) do
     with {:ok, resource} <- grants_resource(args),
-         {:ok, heads} <- grant_heads(ctx, resource) do
-      grants = Enum.flat_map(heads, &reaching_grant(&1, resource))
+         {:ok, heads, truncated?} <- grant_heads(ctx, resource) do
+      grants = Enum.flat_map(heads, &reaching_grant(ctx, &1, resource))
 
-      {:ok, %{resource: resource_answer(resource), grants: grants, count: length(grants)}}
+      {:ok,
+       %{
+         resource: resource_answer(resource),
+         grants: grants,
+         count: length(grants),
+         truncated: truncated?
+       }}
     end
   end
 
@@ -512,7 +529,7 @@ defmodule Sanctum.Providers.Profile do
   # entry that is not the caller's athanor's is refused as unknown, the
   # same answer whether it exists elsewhere or nowhere.
   defp grant_heads(ctx, {:path, path}) do
-    if Arca.Storage.valid_guest_path?(path), do: active_heads(ctx), else: {:ok, []}
+    if Arca.Storage.valid_guest_path?(path), do: active_heads(ctx), else: {:ok, [], false}
   end
 
   defp grant_heads(ctx, {:entry_id, entry_id}) do
@@ -527,15 +544,15 @@ defmodule Sanctum.Providers.Profile do
   defp grant_heads(ctx, {:domain, _domain}), do: active_heads(ctx)
 
   defp active_heads(ctx) do
-    case Arca.ConsentStorage.active_heads(Context.actor(ctx)) do
-      {:ok, heads} -> {:ok, heads}
+    case Arca.ConsentStorage.active_heads(Context.actor(ctx), limit: @grants_heads_cap) do
+      {:ok, heads, truncated?} -> {:ok, heads, truncated?}
       {:error, :no_athanor} -> {:error, :no_athanor}
       {:error, _unreadable} -> {:error, :unavailable}
     end
   end
 
-  defp reaching_grant(%{profile: profile, consent: consent}, resource) do
-    case reaching_edges(consent, resource) do
+  defp reaching_grant(ctx, %{profile: profile, consent: consent}, resource) do
+    case reaching_edges(ctx, profile, consent, resource) do
       [] ->
         []
 
@@ -555,40 +572,60 @@ defmodule Sanctum.Providers.Profile do
     end
   end
 
-  defp reaching_edges(%{vault_refs: refs} = consent, {:entry_id, entry_id} = resource) do
-    if Enum.any?(refs, &(&1.vault_entry_id == entry_id)),
-      do: blob_edges(consent, resource),
-      else: []
+  # The edges of the first load, among the origins the revision admits,
+  # that carries the resource; none when no such load does.
+  defp reaching_edges(ctx, profile, consent, resource) do
+    Enum.find_value(consent.admitted_origins, [], fn origin ->
+      case Loader.admitted_blob(%{ctx | origin: origin}, profile, consent) do
+        {:ok, blob} ->
+          case loaded_edges(blob, consent, resource) do
+            [] -> nil
+            edges -> edges
+          end
+
+        {:error, _refused} ->
+          nil
+      end
+    end)
   end
 
-  defp reaching_edges(consent, resource), do: blob_edges(consent, resource)
+  defp loaded_edges(blob, consent, resource) do
+    edges =
+      for {node_ref, %Blob.Node{edges: edges}} <- Enum.sort(blob.nodes),
+          {key, edge} <- Enum.sort(edges),
+          %{} = reached <- [edge_reach(edge, resource)],
+          do: Map.merge(%{node: node_ref, edge: key}, reached)
 
-  defp blob_edges(consent, resource) do
-    case verified_blob(consent) do
-      {:ok, blob} ->
-        for {node_ref, %Prima.Authority.Blob.Node{edges: edges}} <- Enum.sort(blob.nodes),
-            {key, edge} <- Enum.sort(edges),
-            %{} = reached <- [edge_reach(edge, resource)],
-            do: Map.merge(%{node: node_ref, edge: key}, reached)
+    if Enum.any?(edges, &match?(%{vault: %{lender: _}}, &1)),
+      do: name_lenders(edges, consent),
+      else: edges
+  end
 
-      :error ->
-        []
+  # A borrowed entry names the label its selection asked for, read from the
+  # revision as granted, since the load replaces the selection with the
+  # lender's bound entry. An edge granted bound is the revision's own
+  # reference, whatever its stored form says of a lender.
+  defp name_lenders(edges, consent) do
+    case Blob.parse(consent.resolved_policy) do
+      {:ok, %Blob{nodes: granted}} -> Enum.map(edges, &name_lender(&1, granted))
+      {:error, _unparsed} -> []
     end
   end
 
-  # The bytes the revision's digest names, parsed fail-closed, as the
-  # loader reads them.
-  defp verified_blob(%{blob_digest: digest, resolved_policy: policy})
-       when is_binary(digest) and is_binary(policy) do
-    with true <- Prima.JCS.hash_binary(policy) == digest,
-         {:ok, blob} <- Prima.Authority.Blob.parse(policy) do
-      {:ok, blob}
-    else
-      _unverified -> :error
+  defp name_lender(
+         %{node: node_ref, edge: key, vault: %{lender: lender} = vault} = reached,
+         granted
+       ) do
+    case granted do
+      %{^node_ref => %Blob.Node{edges: %{^key => %Blob.Edge{vault: %{via: %{label: label}}}}}} ->
+        %{reached | vault: %{vault | lender: %{label: label, profile_id: lender.profile_id}}}
+
+      _granted_bound ->
+        %{reached | vault: Map.delete(vault, :lender)}
     end
   end
 
-  defp verified_blob(_consent), do: :error
+  defp name_lender(reached, _granted), do: reached
 
   defp edge_reach(%{egress: %{} = egress}, {:domain, domain}) do
     grant = %{
@@ -605,42 +642,16 @@ defmodule Sanctum.Providers.Profile do
 
   defp edge_reach(%{storage: %{} = storage}, {:path, path}) do
     grant = %{paths: Map.get(storage, :paths, []), actions: Map.get(storage, :actions, [])}
-    reached = Enum.flat_map(grant.paths, &door_pattern/1)
 
-    if Prima.ComponentPath.path_granted?(path, reached) and grant.actions != [],
+    if Prima.ComponentPath.path_granted?(path, grant.paths) and grant.actions != [],
       do: %{storage: grant}
   end
 
   defp edge_reach(%{vault: %{entry_id: entry_id} = vault}, {:entry_id, entry_id}) do
-    %{
-      vault: %{
-        entry_id: entry_id,
-        binding_digest: vault.binding_digest,
-        projection: vault.projection
-      }
-    }
+    %{vault: Map.take(vault, [:entry_id, :binding_digest, :projection, :lender])}
   end
 
   defp edge_reach(_edge, _resource), do: nil
-
-  # A grant pattern as the door reaches through it, for a read that names
-  # the path trimmed. The door matches the guest's own spelling against the
-  # pattern as written and then reaches the physical path with its empty
-  # segments trimmed, so `data//secrets/` serves `data/secrets/key.txt`
-  # through `data//secrets/key.txt`: the pattern reaches what its trimmed
-  # spelling names (`Prima.ComponentPath.door_path/1`), `*` and a trailing
-  # `/` kept. A pattern under which the door's path check refuses every
-  # spelling (`Prima.PathSafety`: an unsafe segment, or an absolute path)
-  # reaches nothing, and so does one that names no segment, which no read
-  # can name either.
-  defp door_pattern("*"), do: ["*"]
-
-  defp door_pattern(pattern) do
-    case Prima.ComponentPath.door_path(pattern) do
-      nil -> []
-      spelled -> [spelled]
-    end
-  end
 
   defp resource_answer({kind, value}), do: %{kind: Atom.to_string(kind), value: value}
 

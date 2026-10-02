@@ -371,4 +371,65 @@ defmodule Sanctum.Consent.LoaderTest do
                Loader.load_root(ctx, profile, live: live_for(consent.activation))
     end
   end
+
+  describe "admitted_blob/3, the stored head's own checks" do
+    defp head!(ctx, profile) do
+      {:ok, head} = Arca.ConsentStorage.head_consent(Context.actor(ctx), profile.id)
+      head
+    end
+
+    test "answers the blob load_root/3 carries, before the ceiling clamps its limits",
+         %{ctx: ctx} do
+      profile = profile_summary()
+      consent = consent()
+      seed(ctx, profile, consent)
+
+      assert {:ok, %Prima.Authority.Blob{} = blob} =
+               Loader.admitted_blob(ctx, profile, head!(ctx, profile))
+
+      assert {:ok, %Authority{policy: carried}, _stamp} =
+               Loader.load_root(ctx, profile, live: live_for(consent.activation))
+
+      assert carried ==
+               Prima.Authority.Blob.clamp(blob, Sanctum.Policy.Ceiling.platform_ceiling())
+    end
+
+    test "leaves the run's own origin to load_root/3", %{ctx: ctx} do
+      profile = profile_summary()
+      consent = consent()
+      seed(ctx, profile, consent)
+      live = live_for(consent.activation)
+
+      assert {:error, {:consent_required, _}} =
+               Loader.load_root(%{ctx | origin: :schedule}, profile, live: live)
+
+      assert {:ok, %Prima.Authority.Blob{}} =
+               Loader.admitted_blob(%{ctx | origin: :schedule}, profile, head!(ctx, profile))
+    end
+
+    test "refuses each head load_root/3 refuses on the head itself, with its answer",
+         %{ctx: ctx} do
+      profile = profile_summary()
+      honest = consent()
+
+      refused = [
+        consent(%{scope: :pinned, pinned_version: ""}),
+        consent(%{resolved_policy: "{not json"}),
+        %{honest | blob_digest: "sha256:not-these-bytes"},
+        consent(%{
+          vault_refs: [%{vault_entry_id: "vault-source", binding_digest: "sha256:bind-source"}]
+        }),
+        with_paths(["data//secrets/"])
+      ]
+
+      for consent <- refused do
+        seed(ctx, profile, consent)
+
+        assert {:error, refusal} = Loader.admitted_blob(ctx, profile, head!(ctx, profile))
+
+        assert Loader.load_root(ctx, profile, live: live_for(consent.activation)) ==
+                 {:error, refusal}
+      end
+    end
+  end
 end

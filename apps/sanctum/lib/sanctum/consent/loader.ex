@@ -40,6 +40,9 @@ defmodule Sanctum.Consent.Loader do
       installed activation
   11. `Prima.Authority.root/3` — ceiling clamping happens inside
 
+  Checks 4 to 9 are the stored head's own (`admitted_blob/3`), the one
+  rule every read of what a grant reaches applies.
+
   The live side of the integrity evaluation (`live` and `live_shape_digest`)
   is supplied by the caller, because resolving installed components is
   registry work the loader deliberately cannot do — its inputs stay inert
@@ -93,16 +96,38 @@ defmodule Sanctum.Consent.Loader do
     with :ok <- check_profile_status(profile),
          {:ok, consent} <- fetch_head(actor, profile),
          :ok <- check_origin(ctx, profile, consent),
-         :ok <- check_consent_validity(consent),
+         {:ok, blob} <- admitted_blob(ctx, profile, consent),
+         {:ok, running} <- evaluate_activation(ctx, profile, consent, opts),
+         {:ok, authority} <- build_root(profile, consent, blob, running, opts) do
+      {:ok, authority, %{activation_digest: running.digest, activation_graph: running.graph}}
+    end
+  end
+
+  @doc """
+  The blob a stored head grants, as `load_root/3` carries it, or the
+  refusal that stops `load_root/3` on the head itself: checks 4 to 9 of
+  the module's order, in that order, under the context's origin. A read
+  of what a grant reaches (`profile/grants`) asks this, so no grant shows
+  wider or narrower than the loader runs it.
+
+  It reads neither the profile's status nor the run's own origin against
+  the head (checks 1 to 3), and asks nothing of the installed components
+  (check 10): those belong to a run, not to the stored grant. The
+  context's origin still decides each lender's admission (check 8), so the
+  same head can carry a borrowed entry under one origin and refuse under
+  another.
+  """
+  @spec admitted_blob(Context.t(), map(), map()) :: {:ok, Blob.t()} | {:error, load_error()}
+  def admitted_blob(%Context{} = ctx, profile, consent)
+      when is_map(profile) and is_map(consent) do
+    with :ok <- check_consent_validity(consent),
          :ok <- check_blob_digest(consent),
          {:ok, blob} <- parse_blob(consent),
          :ok <- check_canonical_paths(blob, profile, consent),
          :ok <- check_blob_refs_equality(blob, consent),
-         {:ok, blob} <- resolve_selections(ctx, actor, blob),
-         :ok <- check_entry_digest_conflicts(blob),
-         {:ok, running} <- evaluate_activation(ctx, profile, consent, opts),
-         {:ok, authority} <- build_root(profile, consent, blob, running, opts) do
-      {:ok, authority, %{activation_digest: running.digest, activation_graph: running.graph}}
+         {:ok, blob} <- resolve_selections(ctx, Context.actor(ctx), blob),
+         :ok <- check_entry_digest_conflicts(blob) do
+      {:ok, blob}
     end
   end
 

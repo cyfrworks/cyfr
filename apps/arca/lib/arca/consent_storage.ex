@@ -322,42 +322,51 @@ defmodule Arca.ConsentStorage do
 
   def head_referenced_entries(%Prima.Actor{}), do: {:error, :no_athanor}
 
-  @typedoc "An active profile and its head revision, as `active_heads/1` answers them."
+  @typedoc "An active profile and its head revision, as `active_heads/2` answers them."
   @type active_head :: %{
           profile: Prima.Authority.RootSelect.profile_summary(),
           consent: consent()
         }
 
   @doc """
-  Every `active` profile of the actor's athanor with its **head** revision
-  and that revision's vault refs, decoded as `profiles/2` and
-  `head_consent/2` decode them, ordered by profile id: the grants the
-  athanor holds now.
+  The first `limit:` `active` profiles of the actor's athanor, in profile-id
+  order, each with its **head** revision and that revision's vault refs,
+  decoded as `profiles/2` and `head_consent/2` decode them: the grants the
+  athanor holds now, never more than `limit` of them.
+
+  The third element says whether more active heads stand past the limit:
+  the read fetches one row beyond it to know, and answers that row's
+  presence rather than a count it would need another query for.
 
   Two queries: the profiles with their heads, then the refs of those
   heads by consent id. A revision and its refs commit in one transaction
   and never change, so the second query reads exactly the first one's
   revisions whatever advances in between. A profile with no head, or a
   row that does not decode, is dropped, as `profiles/2` drops one: it
-  roots nothing. An actor whose athanor is nil or the empty string is
+  roots nothing, and it still counts toward the limit, which bounds the
+  rows read. An actor whose athanor is nil or the empty string is
   `{:error, :no_athanor}` before any query.
   """
-  @spec active_heads(Prima.Actor.t()) ::
-          {:ok, [active_head()]} | {:error, :no_athanor | term()}
-  def active_heads(%Prima.Actor{athanor_id: athanor_id})
-      when is_binary(athanor_id) and athanor_id != "" do
+  @spec active_heads(Prima.Actor.t(), limit: pos_integer()) ::
+          {:ok, [active_head()], truncated? :: boolean()} | {:error, :no_athanor | term()}
+  def active_heads(actor, opts)
+
+  def active_heads(%Prima.Actor{athanor_id: athanor_id}, limit: limit)
+      when is_binary(athanor_id) and athanor_id != "" and is_integer(limit) and limit > 0 do
     Arca.Repo.Errors.with_db_rescue("Arca.ConsentStorage.active_heads", fn ->
-      heads =
+      rows =
         from(p in Arca.Schemas.Profile,
           join: c in Consent,
           on: c.id == p.head_consent_id and c.athanor_id == p.athanor_id,
           where: p.status == "active",
           order_by: p.id,
+          limit: ^(limit + 1),
           select: {p, c}
         )
         |> Arca.QueryHelpers.where_athanor(athanor_id)
         |> Arca.Repo.all()
 
+      heads = Enum.take(rows, limit)
       refs = refs_by_consent(athanor_id, Enum.map(heads, fn {_profile, c} -> c.id end))
 
       decoded =
@@ -370,12 +379,13 @@ defmodule Arca.ConsentStorage do
           end
         end)
 
-      {:ok, decoded}
+      {:ok, decoded, length(rows) > limit}
     end)
     |> Arca.Data.project()
   end
 
-  def active_heads(%Prima.Actor{}), do: {:error, :no_athanor}
+  def active_heads(%Prima.Actor{}, limit: limit) when is_integer(limit) and limit > 0,
+    do: {:error, :no_athanor}
 
   @typedoc "One active head as the stored-grant check reads it (`active_head_policies/2`)."
   @type head_policy :: %{

@@ -6,13 +6,16 @@ defmodule Sanctum.Providers.ProfileGrantsTest do
   `profile.grants`: the grants of the caller's athanor whose head
   revision reaches one domain, storage path or vault entry, read as each
   enforcement point would admit it, so no grant shows wider or narrower
-  than it runs. Only an active profile's head counts, every edge counts,
-  and a read never reaches past the caller's athanor.
+  than it runs. Only an active profile's head counts, a head the loader
+  refuses outright reaches nothing, every edge counts (a borrowed entry
+  among them), at most a thousand heads are read, and a read never
+  reaches past the caller's athanor.
   """
 
   use ExUnit.Case, async: false
 
   alias Sanctum.Consent.Commit
+  alias Sanctum.Consent.Loader
   alias Sanctum.Consent.Plan
   alias Sanctum.Test.ConsentFixtures
 
@@ -109,6 +112,7 @@ defmodule Sanctum.Providers.ProfileGrantsTest do
           commit_digest: "sha256:commit-#{name}",
           resolved_policy: policy,
           activation: %{ref => "sha256:act"},
+          admitted_origins: Keyword.get(opts, :origins, [:interactive]),
           vault_refs: Keyword.get(opts, :vault_refs, [])
         }
       )
@@ -119,6 +123,50 @@ defmodule Sanctum.Providers.ProfileGrantsTest do
   defp grant!(ctx, name), do: grant!(ctx, name, policy("reagent:local.#{name}", %{}))
 
   defp ids(%{grants: grants}), do: Enum.map(grants, & &1.profile_id)
+
+  # The lender: `@dep`'s own profile, binding `entry` on its ingress.
+  defp lender!(ctx, entry, opts \\ []) do
+    ref = %{vault_entry_id: entry, binding_digest: "sha256:binding"}
+    grant!(ctx, "grants-dep", policy(@dep, vault(entry)), [vault_refs: [ref]] ++ opts)
+  end
+
+  # A borrower: its edge to `@dep` selects `@dep`'s profile through
+  # `selection` (`via`), and grants a domain beside it.
+  defp borrower!(ctx, name, selection, opts \\ []) do
+    edge = Map.put(egress(["borrow.example"]), "vault", selection)
+    grant!(ctx, name, policy("reagent:local.#{name}", %{}, %{"key" => edge}), opts)
+  end
+
+  defp borrowed_edge, do: Prima.Authority.Blob.edge_key(@dep, "key")
+
+  # What `Sanctum.Consent.Loader.load_root/3` carries on the borrower's
+  # edge to `@dep` when its profile runs under `origin`.
+  defp loaded_vault(ctx, name, origin) do
+    ref = "reagent:local.#{name}"
+    activation = %{ref => "sha256:act"}
+    {:ok, digest} = Prima.JCS.hash(activation)
+
+    live =
+      {:ok,
+       %{
+         digest: digest,
+         graph: activation,
+         nodes: %{ref => %{release_digest: "sha256:act", integrity: :ok}}
+       }}
+
+    profile = %{
+      id: "prof_#{name}",
+      kind: :owner,
+      source_ref: ref,
+      label: "default",
+      status: :active
+    }
+
+    {:ok, authority, _stamp} =
+      Loader.load_root(%{ctx | origin: origin}, profile, live: live, live_shape_digest: nil)
+
+    authority.policy.nodes[ref].edges[borrowed_edge()].vault
+  end
 
   describe "a domain" do
     test "is reached as egress pins a host, wildcards included, on every edge", %{ctx: ctx} do
@@ -209,36 +257,17 @@ defmodule Sanctum.Providers.ProfileGrantsTest do
       assert ids(answer) == [everything]
     end
 
-    test "is reached through a pattern spelled with an empty segment, as the door reaches it",
+    test "an exact file reaches the one file it names, and beside a folder is not under it",
          %{ctx: ctx} do
-      # The door serves data/secrets/key.txt through the guest's spelling
-      # data//secrets/key.txt, which this pattern admits as written.
-      id =
-        grant!(ctx, "g-doubled", policy("reagent:local.g-doubled", storage(["data//secrets/"])))
-
-      assert {:ok, %{grants: [%{profile_id: ^id} = grant]}} =
-               grants(ctx, %{"path" => "data/secrets/key.txt"})
-
-      # The grant is shown as it is held.
-      assert [%{storage: %{paths: ["data//secrets/"]}}] = grant.edges
-
-      # The same file named with the doubled spelling, and the bare folder.
-      for path <- ["data//secrets//key.txt", "data/secrets"] do
-        assert {:ok, %{grants: [%{profile_id: ^id}]}} = grants(ctx, %{"path" => path}), path
-      end
-
-      # A doubled exact path reaches the one file it names.
       file =
-        grant!(
-          ctx,
-          "g-doubled-file",
-          policy("reagent:local.g-doubled-file", storage(["data//a.md"]))
-        )
+        grant!(ctx, "g-file-only", policy("reagent:local.g-file-only", storage(["data/a.md"])))
+
+      folder =
+        grant!(ctx, "g-folder", policy("reagent:local.g-folder", storage(["data/secrets/"])))
 
       assert {:ok, %{grants: [%{profile_id: ^file}]}} = grants(ctx, %{"path" => "data/a.md"})
       assert {:ok, %{grants: []}} = grants(ctx, %{"path" => "data/a.md/b"})
-
-      # Beside the folder is not under it.
+      assert {:ok, %{grants: [%{profile_id: ^folder}]}} = grants(ctx, %{"path" => "data/secrets"})
       assert {:ok, %{grants: []}} = grants(ctx, %{"path" => "data/secretsheet.md"})
     end
 
@@ -260,7 +289,7 @@ defmodule Sanctum.Providers.ProfileGrantsTest do
     test "outside every guest scope answers empty, and an unsafe one is refused", %{ctx: ctx} do
       _everything = grant!(ctx, "g-all-2", policy("reagent:local.g-all-2", storage(["*"])))
 
-      assert {:ok, %{resource: %{value: "cache/x"}, grants: [], count: 0}} =
+      assert {:ok, %{resource: %{value: "cache/x"}, grants: [], count: 0, truncated: false}} =
                grants(ctx, %{"path" => "cache/x"})
 
       for path <- ["data/../system/x", "data/%2e%2e/x", "/", "//"] do
@@ -334,6 +363,105 @@ defmodule Sanctum.Providers.ProfileGrantsTest do
       assert grants(ctx, %{"entry_id" => "vlt_nowhere"}) ==
                {:error, {:not_found, "Vault entry", "vlt_nowhere"}}
     end
+
+    test "is reached by a borrower whose selection the loader resolves to its lender's entry",
+         %{ctx: ctx} do
+      entry = "vlt_lent_#{System.unique_integer([:positive])}"
+      lender = lender!(ctx, entry)
+      borrower = borrower!(ctx, "g-borrower", %{"via" => %{"label" => "default"}})
+
+      # The loader carries the lender's entry on the borrower's edge.
+      assert %{entry_id: ^entry, lender: %{profile_id: ^lender}} =
+               loaded_vault(ctx, "g-borrower", :interactive)
+
+      assert {:ok, answer} = grants(ctx, %{"entry_id" => entry})
+      assert ids(answer) == Enum.sort([lender, borrower])
+      by_id = Map.new(answer.grants, &{&1.profile_id, &1})
+
+      # The borrower's row says it borrows, and through which label.
+      assert by_id[borrower].admitted_origins == ["interactive"]
+      assert [%{node: "reagent:local.g-borrower", vault: vault} = edge] = by_id[borrower].edges
+      assert edge.edge == borrowed_edge()
+
+      assert vault == %{
+               entry_id: entry,
+               binding_digest: "sha256:binding",
+               projection: %{fields: ["api_key"], scopes: []},
+               lender: %{label: "default", profile_id: lender}
+             }
+
+      # The lender's own reference borrows from no one.
+      assert [%{edge: "@ingress", vault: own}] = by_id[lender].edges
+      refute Map.has_key?(own, :lender)
+    end
+
+    test "a borrower leaves the read when its lender is revoked", %{ctx: ctx} do
+      entry = "vlt_revoked_#{System.unique_integer([:positive])}"
+      lender = lender!(ctx, entry)
+      borrower = borrower!(ctx, "g-borrower-revoked", %{"via" => %{"label" => "default"}})
+
+      assert {:ok, answer} = grants(ctx, %{"entry_id" => entry})
+      assert ids(answer) == Enum.sort([lender, borrower])
+
+      assert {:ok, %{status: "revoked"}} =
+               Grimoire.call_external("profile", ctx, %{
+                 "action" => "revoke",
+                 "profile_id" => lender
+               })
+
+      assert {:ok, %{grants: [], count: 0}} = grants(ctx, %{"entry_id" => entry})
+
+      # The borrower still runs, and still reaches what it holds itself.
+      assert {:ok, answer} = grants(ctx, %{"domain" => "borrow.example"})
+      assert ids(answer) == [borrower]
+    end
+
+    test "a borrower whose selection resolves to nothing does not reach the entry",
+         %{ctx: ctx} do
+      entry = "vlt_narrowed_#{System.unique_integer([:positive])}"
+      lender = lender!(ctx, entry)
+
+      # A projection asking only for a field the lender does not grant.
+      _narrowed =
+        borrower!(ctx, "g-narrowed", %{
+          "via" => %{"label" => "default"},
+          "projection" => %{"fields" => ["other_field"]}
+        })
+
+      # A pinned binding the lender no longer holds, and a label it is not.
+      _moved =
+        borrower!(ctx, "g-moved", %{
+          "via" => %{"label" => "default", "binding_digest" => "sha256:other"}
+        })
+
+      _unlabelled = borrower!(ctx, "g-unlabelled", %{"via" => %{"label" => "work"}})
+
+      assert {:ok, answer} = grants(ctx, %{"entry_id" => entry})
+      assert ids(answer) == [lender]
+    end
+
+    test "a borrower reaches the entry only under an origin its lender admits", %{ctx: ctx} do
+      entry = "vlt_origins_#{System.unique_integer([:positive])}"
+      lender = lender!(ctx, entry, origins: [:schedule])
+      via = %{"via" => %{"label" => "default"}}
+
+      # Its load under `interactive`, the first origin it admits, is
+      # refused; under `schedule` the key is lent.
+      both = borrower!(ctx, "g-both", via, origins: [:interactive, :schedule])
+      _neither = borrower!(ctx, "g-neither", via, origins: [:interactive, :programmatic])
+
+      assert {:ok, answer} = grants(ctx, %{"entry_id" => entry})
+      assert ids(answer) == Enum.sort([lender, both])
+
+      # The row names the origins its own revision admits.
+      assert %{admitted_origins: ["interactive", "schedule"]} =
+               Enum.find(answer.grants, &(&1.profile_id == both))
+
+      # The lender refuses every load of the other, so it reaches nothing
+      # at all, its own domain included.
+      assert {:ok, answer} = grants(ctx, %{"domain" => "borrow.example"})
+      assert ids(answer) == [both]
+    end
   end
 
   describe "which grants count" do
@@ -376,6 +504,60 @@ defmodule Sanctum.Providers.ProfileGrantsTest do
       _unparsed = grant!(ctx, "g-unparsed", Jason.encode!(%{"canonical" => "jcs-1"}))
 
       assert {:ok, %{grants: [], count: 0}} = grants(ctx, %{"domain" => "e.example"})
+    end
+
+    test "a head the loader refuses outright reaches nothing, through any resource",
+         %{ctx: ctx} do
+      # A storage path spelled other than the door reaches it: the loader
+      # asks for the grant again rather than run it.
+      ref = "reagent:local.g-unusable"
+      edge = Map.merge(egress(["refused.example"]), storage(["data//secrets/"]))
+      unusable = grant!(ctx, "g-unusable", policy(ref, edge))
+      profile = %{id: unusable, kind: :owner, source_ref: ref, label: "default", status: :active}
+
+      assert {:error, {:consent_required, %{profile_id: ^unusable}}} =
+               Loader.load_root(%{ctx | origin: :interactive}, profile)
+
+      # References the blob does not carry, and a pinned revision that names
+      # no version, each over a canonical path: refused by the loader before
+      # any run all the same.
+      canonical = Map.merge(egress(["refused.example"]), storage(["data/secrets/"]))
+      entry = "vlt_refused_#{System.unique_integer([:positive])}"
+
+      _mismatched =
+        grant!(ctx, "g-mismatched", policy("reagent:local.g-mismatched", canonical),
+          vault_refs: [%{vault_entry_id: entry, binding_digest: "sha256:binding"}]
+        )
+
+      invalid = grant!(ctx, "g-invalid", policy("reagent:local.g-invalid", canonical))
+      ConsentFixtures.hand_edit_head!(ctx, invalid, scope: "pinned")
+
+      for args <- [
+            %{"domain" => "refused.example"},
+            %{"path" => "data/secrets/key.txt"},
+            %{"entry_id" => entry}
+          ] do
+        assert {:ok, %{grants: [], count: 0}} = grants(ctx, args), inspect(args)
+      end
+    end
+
+    test "reads at most a thousand heads, and says when the athanor holds more", %{ctx: ctx} do
+      reaching = fn n ->
+        name = "g-cap-" <> String.pad_leading(Integer.to_string(n), 4, "0")
+        grant!(ctx, name, policy("reagent:local.#{name}", egress(["cap.example"])))
+      end
+
+      Enum.each(1..1_000, reaching)
+
+      assert {:ok, %{count: 1_000, truncated: false}} = grants(ctx, %{"domain" => "cap.example"})
+
+      # One more, last in profile-id order, is past the bound.
+      last = reaching.(1_001)
+
+      assert {:ok, %{count: 1_000, truncated: true} = answer} =
+               grants(ctx, %{"domain" => "cap.example"})
+
+      refute last in ids(answer)
     end
 
     test "never another athanor's", %{ctx: ctx, theirs: theirs} do
