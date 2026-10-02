@@ -270,20 +270,31 @@ defmodule Sanctum.TestContext do
 
   A person whose first method was ever used, who holds no fresh method
   and no passkey this helper made, raises: a test that needs that path
-  drives it itself.
+  drives it itself. A person without standing (denied, or no longer a
+  member where the registration is asked) can prove nothing: the context
+  is answered without a confirmation, and the deciding site refuses them
+  as it would, which is what a test of their ejection asserts.
   """
   @spec confirmed(Context.t(), atom(), map()) :: Context.t()
   def confirmed(%Context{} = ctx, action, change) do
     ctx = %{person_ctx!(ctx) | confirmation_id: nil}
-    authenticator = passkey!(ctx.user_id)
 
-    case Sanctum.Consent.Authz.check(ctx, action, change) do
-      {:error, {:confirmation_required, %{id: id}}} ->
-        prove!(ctx, id, authenticator)
-        %{ctx | confirmation_id: id}
+    case passkey(ctx.user_id) do
+      {:ok, authenticator} ->
+        case Sanctum.Consent.Authz.check(ctx, action, change) do
+          {:error, {:confirmation_required, %{id: id}}} ->
+            prove!(ctx, id, authenticator)
+            %{ctx | confirmation_id: id}
 
-      other ->
-        raise "confirmed/3: #{change.operation} asked no confirmation: #{inspect(other)}"
+          other ->
+            raise "confirmed/3: #{change.operation} asked no confirmation: #{inspect(other)}"
+        end
+
+      {:error, {:no_standing, _refusal}} ->
+        ctx
+
+      {:error, other} ->
+        raise "confirmed/3: #{ctx.user_id}'s passkey could not be made: #{inspect(other)}"
     end
   end
 
@@ -497,6 +508,23 @@ defmodule Sanctum.TestContext do
   first-method rule; a test of that rule builds such a person itself.
   """
   def passkey!(user_id) when is_binary(user_id) do
+    case passkey(user_id) do
+      {:ok, authenticator} ->
+        authenticator
+
+      {:error, {:no_standing, refusal}} ->
+        raise "passkey!/1: #{user_id} has no standing to register a passkey: #{inspect(refusal)}"
+
+      {:error, other} ->
+        raise "passkey!/1: #{user_id}'s first passkey was not registered: #{inspect(other)}"
+    end
+  end
+
+  # `passkey!/1` without the raise: `{:error, {:no_standing, refusal}}`
+  # when the person cannot register one here (denied, or without the seat
+  # the registration is asked in), `{:error, other}` for anything else.
+  @standing_refusals [:not_standing, :unauthenticated, :denied, :not_member]
+  defp passkey(user_id) do
     authenticator = Sanctum.TestContext.Authenticator.for_person(user_id)
     credential_id = Base.url_encode64(authenticator.credential_id, padding: false)
 
@@ -506,15 +534,31 @@ defmodule Sanctum.TestContext do
            credential_id
          ) do
       {:ok, %{state: "active", user_id: ^user_id}} ->
-        authenticator
+        {:ok, authenticator}
 
       _none ->
         person = Context.build(user_id: user_id, auth_method: :oidc, authenticated: true)
 
-        if Sanctum.Passkeys.fresh_method?(person) do
-          confirmed_passkey!(user_id, authenticator)
-        else
-          first_passkey!(user_id, authenticator)
+        registered =
+          if Sanctum.Passkeys.fresh_method?(person),
+            do: confirmed_passkey(user_id, authenticator),
+            else: first_passkey(user_id, authenticator)
+
+        case registered do
+          {:ok, _} = ok ->
+            ok
+
+          {:error, refusal} when refusal in @standing_refusals ->
+            {:error, {:no_standing, refusal}}
+
+          {:error, {refusal, _}} when refusal in @standing_refusals ->
+            {:error, {:no_standing, refusal}}
+
+          {:error, _} = error ->
+            error
+
+          other ->
+            {:error, other}
         end
     end
   end
@@ -522,38 +566,34 @@ defmodule Sanctum.TestContext do
   # The local first-method rule, on a session focused nowhere: a passkey is
   # the person's, and the write rechecks the session and the person alone,
   # whatever seat a fixture's person holds or lacks.
-  defp first_passkey!(user_id, authenticator) do
+  defp first_passkey(user_id, authenticator) do
     session = %{session!(user_id) | athanor_id: nil}
-    {:ok, options} = Sanctum.Passkeys.register(session, %{})
-    credential = Sanctum.TestContext.Authenticator.registration(authenticator, options)
 
-    case Sanctum.Passkeys.register(session, %{credential: credential}) do
-      {:ok, %{status: "active"}} ->
-        authenticator
-
-      other ->
-        raise "passkey!/1: #{user_id}'s first passkey was not registered: #{inspect(other)}"
+    with {:ok, options} <- Sanctum.Passkeys.register(session, %{}),
+         credential = Sanctum.TestContext.Authenticator.registration(authenticator, options),
+         {:ok, %{status: "active"}} <-
+           Sanctum.Passkeys.register(session, %{credential: credential}) do
+      {:ok, authenticator}
     end
   end
 
   # The registration a fresh method confirms, asked on a session focused on
   # the person's own athanor (a confirmation is opened in an athanor) and
   # proven with the code mailed to their verified email.
-  defp confirmed_passkey!(user_id, authenticator) do
-    session = session!(user_id, "local", own_athanor!(user_id))
-    {:ok, options} = Sanctum.Passkeys.register(session, %{})
-    credential = Sanctum.TestContext.Authenticator.registration(authenticator, options)
-
-    with {:error, {:confirmation_required, %{id: id}}} <-
+  defp confirmed_passkey(user_id, authenticator) do
+    with {:ok, athanor_id} <- own_athanor(user_id),
+         session = session!(user_id, "local", athanor_id),
+         {:ok, options} <- Sanctum.Passkeys.register(session, %{}),
+         credential = Sanctum.TestContext.Authenticator.registration(authenticator, options),
+         {:error, {:confirmation_required, %{id: id}}} <-
            Sanctum.Passkeys.register(session, %{credential: credential}),
          :ok <- mailed_proof(session, Prima.Confirmation.ref(id)),
          {:ok, %{status: "active"}} <-
            Sanctum.Passkeys.register(%{session | confirmation_id: id}, %{credential: credential}) do
-      authenticator
+      {:ok, authenticator}
     else
-      other ->
-        raise "passkey!/1: #{user_id}'s first passkey was not confirmed and registered: " <>
-                inspect(other)
+      {:ok, %{status: "active"}} -> {:ok, authenticator}
+      other -> other
     end
   end
 
@@ -577,15 +617,36 @@ defmodule Sanctum.TestContext do
 
   # The person's own athanor, minted as admission mints it when they have
   # none.
-  defp own_athanor!(user_id) do
-    case Sanctum.Tenancy.Users.personal_athanor_id(user_id) do
-      {:ok, athanor_id} ->
-        athanor_id
+  # An athanor the person has standing in, where the registration can be
+  # asked: their personal athanor when they hold a seat there (a fixture
+  # may have made the athanor by hand, without one), otherwise any
+  # athanor they sit in, otherwise one provisioned for them as admission
+  # provisions it. A person provisioning refuses (denied, or gone) has
+  # no standing.
+  defp own_athanor(user_id) do
+    with {:ok, rows} <- Sanctum.Tenancy.Members.list_by_user(user_id) do
+      seats = for %{scope: "athanor", athanor_id: id} <- rows, is_binary(id), do: id
 
-      :none ->
-        {:ok, user} = Sanctum.Tenancy.Users.get(user_id)
-        {:ok, athanor} = Sanctum.Provisioning.ensure_personal_athanor(user)
-        athanor.id
+      personal =
+        case Sanctum.Tenancy.Users.personal_athanor_id(user_id) do
+          {:ok, id} -> id
+          :none -> nil
+        end
+
+      cond do
+        personal in seats -> {:ok, personal}
+        seats != [] -> {:ok, hd(seats)}
+        true -> provisioned_athanor(user_id)
+      end
+    end
+  end
+
+  defp provisioned_athanor(user_id) do
+    with {:ok, user} <- Sanctum.Tenancy.Users.get(user_id),
+         {:ok, athanor} <- Sanctum.Provisioning.ensure_personal_athanor(user) do
+      {:ok, athanor.id}
+    else
+      {:error, _refused} -> {:error, :not_standing}
     end
   end
 
