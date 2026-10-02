@@ -17,7 +17,9 @@ defmodule Sanctum.RecoveryTest do
   Restore checks the installation capability first, holds the kit to the
   identity's current recovery set before it claims anything, and walks
   its durable phases: a reply lost after acceptance resumes once, a later
-  recovery supersedes it, a crash after the mint resumes at the mint, and
+  recovery supersedes it at any phase before its session, even one this
+  home caches after the head's last read, a crash after the mint resumes
+  at the mint, and
   the restored person stands at the door and may install their first
   method within the restore session's window, or by a reproof after it.
   """
@@ -221,6 +223,141 @@ defmodule Sanctum.RecoveryTest do
     entry
   end
 
+  # A restore stopped at `keys_active`: the directory accepted its
+  # recovery, the reply was lost, and a resume read the head naming its
+  # keys and stopped before the mint's transaction.
+  defp stopped_at_keys_active!(context, identity) do
+    Directory.next(context.directory.dir, identity.identifier, :drop)
+    {:error, {:retry, "submitted", _}} = Recovery.restore(identity.kit, @token, context.opts)
+    [attempt] = attempts("restore")
+    log = Directory.log(context.directory.dir, identity.identifier)
+
+    {1, _} =
+      Arca.Repo.update_all(from(a in IdentityAttempt, where: a.id == ^attempt.id),
+        set: [
+          phase: "keys_active",
+          entry_hash: Identity.hash(List.last(log)),
+          outcome: "accepted"
+        ]
+      )
+
+    Arca.Repo.get!(IdentityAttempt, attempt.id)
+  end
+
+  # A completed restore taken back to the instant after its mint committed
+  # and before its session was issued: the attempt at `minted`, its claim
+  # pending, and the session it issued gone.
+  defp stopped_at_minted!(restored) do
+    [attempt] = attempts("restore")
+    :ok = Sanctum.Session.destroy(restored.session_token)
+
+    {1, _} =
+      Arca.Repo.update_all(from(a in IdentityAttempt, where: a.id == ^attempt.id),
+        set: [phase: "minted"]
+      )
+
+    {1, _} =
+      Arca.Repo.update_all(
+        from(c in InstallationClaim, where: c.request_id == ^attempt.request_id),
+        set: [state: "pending", outcome: nil, ended_at: nil]
+      )
+
+    :ok
+  end
+
+  # The client options with a resolver that knows no scripted directory's
+  # name: the directory cannot be reached.
+  defp unreachable(opts), do: Keyword.put(opts, :resolver, Sanctum.Test.Resolver)
+
+  defp sessions(user_id),
+    do: Arca.Repo.aggregate(from(s in Arca.Schemas.Session, where: s.user_id == ^user_id), :count)
+
+  # A handler on the repo's statements: the process that put `{test, point}`
+  # under `:restore_hold` is held at the first statement `point` accepts,
+  # until the test releases it.
+  @doc false
+  def hold(event, _measurements, metadata, _config) do
+    with {test, point} <- Process.get(:restore_hold),
+         true <- point.(event, metadata) do
+      Process.delete(:restore_hold)
+      send(test, {:restore_held, self()})
+
+      receive do
+        :release -> :ok
+      end
+    end
+
+    :ok
+  end
+
+  # Once the restore's fresh read has cached the head it verified (inside
+  # the cache's own transaction), at its next read of that cache outside a
+  # transaction: the head it mints under is read, and the mint's
+  # transaction has not begun.
+  defp head_read_point(_event, %{source: "directory_heads"}) do
+    cond do
+      Arca.Repo.in_transaction?() ->
+        Process.put(:head_cached, true)
+        false
+
+      Process.get(:head_cached, false) ->
+        true
+
+      true ->
+        false
+    end
+  end
+
+  defp head_read_point(_event, _metadata), do: false
+
+  # Once the mint's transaction wrote the person, at the restore's next
+  # read of the cached head outside a transaction, the `minted` phase's
+  # fresh read: the person stands, and nothing of that phase has run.
+  defp minted_point(_event, %{source: "users", query: "INSERT" <> _}) do
+    if Arca.Repo.in_transaction?(), do: Process.put(:person_written, true)
+    false
+  end
+
+  defp minted_point(_event, %{source: "directory_heads"}),
+    do: Process.get(:person_written, false) and not Arca.Repo.in_transaction?()
+
+  defp minted_point(_event, _metadata), do: false
+
+  # Once the restore's session is issued (its insert committed), before
+  # the attempt moves to `completed`.
+  defp session_point([:cyfr, :sanctum, :session, :created], _metadata), do: true
+  defp session_point(_event, _metadata), do: false
+
+  # `request`, run by a task held at `point`, while the test runs `during`
+  # before the task goes on. Answers `{request's answer, during's answer}`.
+  defp held_at(point, request, during) do
+    test = self()
+    handler = "recovery-hold-#{System.unique_integer([:positive])}"
+
+    :ok =
+      :telemetry.attach_many(
+        handler,
+        [[:arca, :repo, :query], [:cyfr, :sanctum, :session, :created]],
+        &__MODULE__.hold/4,
+        nil
+      )
+
+    on_exit(fn -> :telemetry.detach(handler) end)
+
+    task =
+      Task.async(fn ->
+        Process.put(:restore_hold, {test, point})
+        request.()
+      end)
+
+    assert_receive {:restore_held, held}, 5_000
+    meanwhile = during.()
+    send(held, :release)
+    answer = Task.await(task, 25_000)
+    :telemetry.detach(handler)
+    {answer, meanwhile}
+  end
+
   defp restored!(context) do
     reserved!()
     identity = elsewhere!(context.directory)
@@ -317,7 +454,8 @@ defmodule Sanctum.RecoveryTest do
       assert row.head_hash == Identity.hash(genesis)
 
       # The proof was consumed with the attempt it opened.
-      assert [%{action: "recovery_material", state: "consumed"}] = confirmations(person.user.id)
+      assert [%{state: "consumed"}] =
+               Enum.filter(confirmations(person.user.id), &(&1.action == "recovery_material"))
     end
 
     test "a directory that refuses the genesis leaves the attempt refused and no identifier",
@@ -577,6 +715,39 @@ defmodule Sanctum.RecoveryTest do
       other = seated!()
       assert {:error, {:not_found, "kit", ^attempt_id}} = Recovery.kit(other.ctx, attempt_id)
       assert {:error, {:not_found, "kit", ^attempt_id}} = Recovery.kit_ack(other.ctx, attempt_id)
+    end
+
+    test "acknowledged while its delivery is inside its confirmation, it prints nothing",
+         context do
+      person = enrolled!(context)
+      attempt_id = person.enrolled.attempt_id
+      user_id = person.user.id
+      test = self()
+      handler = "recovery-kit-ack-#{System.unique_integer([:positive])}"
+
+      # The delivery's confirmation is consumed, on the delivery's own
+      # process, and the delivery has not opened the seed: the person
+      # acknowledges the kit then.
+      :ok =
+        :telemetry.attach(
+          handler,
+          [:cyfr, :sanctum, :confirmation, :consumed],
+          fn
+            _event, _measurements, %{operation: "person.kit", user_id: ^user_id}, _config ->
+              :telemetry.detach(handler)
+              send(test, {:acknowledged, Recovery.kit_ack(person.ctx, attempt_id)})
+
+            _event, _measurements, _metadata, _config ->
+              :ok
+          end,
+          nil
+        )
+
+      on_exit(fn -> :telemetry.detach(handler) end)
+
+      assert {:error, :kit_acknowledged} = confirmed(person, &Recovery.kit(&1, attempt_id))
+      assert_received {:acknowledged, {:ok, %{phase: "completed"}}}
+      assert Arca.Repo.get!(IdentityAttempt, attempt_id).kit_seed_sealed == nil
     end
   end
 
@@ -937,6 +1108,197 @@ defmodule Sanctum.RecoveryTest do
       assert row(user_id).live_public_key == attempt.staged_live_public_key
       assert count(User) == 1
       assert {:ok, %{state: "ended", outcome: "completed"}} = InstallationClaims.get(system())
+    end
+
+    test "killed at keys_active and superseded while stopped, it mints nothing and ends superseded",
+         context do
+      reserved!()
+      identity = elsewhere!(context.directory)
+      Directory.next(context.directory.dir, identity.identifier, :drop)
+
+      assert {:error, {:retry, "submitted", _}} =
+               Recovery.restore(identity.kit, @token, context.opts)
+
+      [attempt] = attempts("restore")
+      log = Directory.log(context.directory.dir, identity.identifier)
+      entry_hash = Identity.hash(List.last(log))
+
+      {1, _} =
+        Arca.Repo.update_all(from(a in IdentityAttempt, where: a.id == ^attempt.id),
+          set: [phase: "keys_active", entry_hash: entry_hash, outcome: "accepted"]
+        )
+
+      # A later recovery elsewhere, while the restore stood stopped.
+      recovered_elsewhere!(context.directory, identity)
+      assert count(User) == 0
+
+      result = Recovery.restore(identity.kit, @token, context.opts)
+
+      assert result == {:error, :superseded},
+             "superseded restore returned #{inspect(result)}; person rows: #{count(User)}"
+
+      assert count(User) == 0
+      assert count(PersonIdentity) == 0
+      assert [%{phase: "superseded"} = ended] = attempts("restore")
+      assert is_nil(ended.staged_live_key_sealed)
+      assert is_nil(ended.staged_operational_key_sealed)
+      assert {:ok, %{state: "ended", outcome: "superseded"}} = InstallationClaims.get(system())
+      assert {:error, :superseded} = Recovery.restore(identity.kit, @token, context.opts)
+    end
+
+    test "a later recovery this home caches between the head's read and the mint refuses the mint",
+         context do
+      reserved!()
+      identity = elsewhere!(context.directory)
+      _stopped = stopped_at_keys_active!(context, identity)
+
+      {answer, _observed} =
+        held_at(
+          &head_read_point/2,
+          fn -> Recovery.restore(identity.kit, @token, context.opts) end,
+          fn ->
+            # The recovery lands at the directory, and this home reads it.
+            recovered_elsewhere!(context.directory, identity)
+            {:ok, _head} = Sanctum.IdentityFreshness.fresh!(identity.identifier, context.opts)
+          end
+        )
+
+      assert answer == {:error, :superseded}
+      assert count(User) == 0
+      assert count(PersonIdentity) == 0
+      assert [%{phase: "superseded"}] = attempts("restore")
+      assert {:ok, %{state: "ended", outcome: "superseded"}} = InstallationClaims.get(system())
+    end
+
+    test "stopped at keys_active, a directory that cannot answer leaves it there, and a retry mints",
+         context do
+      reserved!()
+      identity = elsewhere!(context.directory)
+      stopped = stopped_at_keys_active!(context, identity)
+
+      assert {:error, :unavailable} =
+               Recovery.restore(identity.kit, @token, unreachable(context.opts))
+
+      assert [%{id: same, phase: "keys_active"} = standing] = attempts("restore")
+      assert same == stopped.id
+      assert standing.staged_live_key_sealed == stopped.staged_live_key_sealed
+      assert count(User) == 0
+      assert {:ok, %{state: "pending"}} = InstallationClaims.get(system())
+
+      assert {:ok, %{status: "completed", user_id: user_id, session_token: _}} =
+               Recovery.restore(identity.kit, @token, context.opts)
+
+      assert row(user_id).live_public_key == stopped.staged_live_public_key
+      assert count(User) == 1
+    end
+
+    test "two requests under its token, one held after its head's read while the other completes, converge",
+         context do
+      reserved!()
+      identity = elsewhere!(context.directory)
+      _stopped = stopped_at_keys_active!(context, identity)
+
+      {held, completed} =
+        held_at(
+          &head_read_point/2,
+          fn -> Recovery.restore(identity.kit, @token, context.opts) end,
+          fn -> Recovery.restore(identity.kit, @token, context.opts) end
+        )
+
+      assert {:ok, %{status: "completed", user_id: user_id}} = completed
+
+      # The held request mints nothing more and issues no session.
+      assert held == {:error, :restored}
+      assert count(User) == 1
+      assert sessions(user_id) == 1
+      assert [%{phase: "completed", user_id: ^user_id}] = attempts("restore")
+      assert {:ok, %{state: "ended", outcome: "completed"}} = InstallationClaims.get(system())
+    end
+
+    test "superseded after its mint and before its session, it provisions and issues nothing, and its person stays",
+         context do
+      reserved!()
+      identity = elsewhere!(context.directory)
+      _stopped = stopped_at_keys_active!(context, identity)
+
+      # A later recovery lands at the directory once the person is minted,
+      # before the `minted` phase reads the head.
+      {answer, _published} =
+        held_at(
+          &minted_point/2,
+          fn -> Recovery.restore(identity.kit, @token, context.opts) end,
+          fn -> recovered_elsewhere!(context.directory, identity) end
+        )
+
+      assert answer == {:error, :superseded}
+      assert [%{phase: "superseded", user_id: user_id}] = attempts("restore")
+      assert is_binary(user_id)
+      assert count(User) == 1
+      assert sessions(user_id) == 0
+      assert Sanctum.Tenancy.Users.personal_athanor_id(user_id) == :none
+
+      refute Arca.Repo.exists?(from(m in Arca.Schemas.Membership, where: m.user_id == ^user_id))
+
+      assert {:ok, %{state: "ended", outcome: "superseded"}} = InstallationClaims.get(system())
+
+      # It stays superseded, and no reproof reopens it.
+      assert {:error, :superseded} = Recovery.restore(identity.kit, @token, context.opts)
+      assert {:error, :superseded} = Recovery.restore_challenge(@token)
+    end
+
+    test "superseded by a twin request after its session was issued, that session is deleted and never answered",
+         context do
+      reserved!()
+      identity = elsewhere!(context.directory)
+
+      {:ok, %{user_id: user_id} = restored} =
+        Recovery.restore(identity.kit, @token, context.opts)
+
+      :ok = stopped_at_minted!(restored)
+
+      # The held request read the head naming its keys and issued its
+      # session; then a later recovery lands, and a twin request under the
+      # same token reads it and supersedes the attempt.
+      {held, twin} =
+        held_at(
+          &session_point/2,
+          fn -> Recovery.restore(identity.kit, @token, context.opts) end,
+          fn ->
+            recovered_elsewhere!(context.directory, identity)
+            Recovery.restore(identity.kit, @token, context.opts)
+          end
+        )
+
+      assert twin == {:error, :superseded}
+      assert held == {:error, :superseded}
+      assert sessions(user_id) == 0
+      assert [%{phase: "superseded", user_id: ^user_id}] = attempts("restore")
+      assert {:ok, %{state: "ended", outcome: "superseded"}} = InstallationClaims.get(system())
+    end
+
+    test "stopped at minted, a directory that cannot answer leaves it there, and a retry issues the session",
+         context do
+      reserved!()
+      identity = elsewhere!(context.directory)
+
+      {:ok, %{user_id: user_id} = restored} =
+        Recovery.restore(identity.kit, @token, context.opts)
+
+      :ok = stopped_at_minted!(restored)
+
+      assert {:error, :unavailable} =
+               Recovery.restore(identity.kit, @token, unreachable(context.opts))
+
+      assert [%{phase: "minted"}] = attempts("restore")
+      assert sessions(user_id) == 0
+      assert {:ok, %{state: "pending"}} = InstallationClaims.get(system())
+
+      assert {:ok, %{status: "completed", user_id: ^user_id, session_token: token}} =
+               Recovery.restore(identity.kit, @token, context.opts)
+
+      assert {:ok, %{user_id: ^user_id}} = Sanctum.Session.get(token)
+      assert [%{phase: "completed"}] = attempts("restore")
+      assert count(User) == 1
     end
 
     test "accepted, its reply lost, superseded elsewhere, then resumed: it activates nothing",

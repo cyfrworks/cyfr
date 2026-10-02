@@ -55,7 +55,7 @@ Until the directory accepts your enrollment, only the browser that began it hold
 
 ### Every copy is a key
 
-Anyone holding a copy of a kit can replace your keys, and the directory cannot tell your copy from theirs: each recovery replaces the keys the one before it installed, so whoever recovers last holds the identity. A kit stays one of your identity's kits for good; no kit is ever taken out of the set. Keep kits as you would keep the deed to something.
+Anyone holding a copy of a kit can replace your keys, and the directory cannot tell your copy from theirs: each recovery replaces the keys the one before it installed, so whoever recovers last holds the identity. A recovery may replace the set of kits too: a kit stays valid only until a recovery names a set without it, and whoever recovers last decides the set. Keep kits as you would keep the deed to something.
 
 ### More than one kit
 
@@ -150,7 +150,7 @@ At a home that is not your own, a member who signed in only through the CYFR doo
 | A sign-in door | Your other doors and passkeys | Sign in another way and link a new door. Your last door goes only while you keep another way in. |
 | A passkey | Your doors, your other passkeys | Register another; at another home with no fresh method left, its administrator authorizes it. |
 | Your home, with a kit | Your identity, at the directory | Restore on a fresh installation from the kit, then re-pair devices and re-add homes. |
-| A kit, with your home | Everything | Add another kit with a kit you still hold. The lost kit stays one of your identity's kits: whoever finds it can replace your keys, and no kit is ever taken out of the set. |
+| A kit, with your home | Everything | Add another kit with a kit you still hold. The lost kit stays valid until a recovery names a set without it: until then whoever finds it can replace your keys, and whoever recovers last decides the set. |
 | Every kit, with your home | Your identity and home, with no way to recover them | Nothing can add a kit: a kit is added only by a kit. Keep the home safe; there is no re-enrollment. |
 | The directory, for good | Your home, and local work | Rotation, recovery and other homes' trust end. Other homes invite you again through another door. |
 | Your home, every kit and your online keys at once | Nothing of the identity | Start again as a new person: a new identity, invited again by each home. |
