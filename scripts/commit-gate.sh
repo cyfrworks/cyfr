@@ -24,10 +24,10 @@
 # adapters. Image suites, the S3 suite, the Go checks, the security
 # scanners and the benchmark are not part of this gate: a closing record
 # names each of those with its own result.
-# Without -n the SQLite suite runs in eight partitions on a host of
-# sixteen cores or more (two schedulers each) and in four on a smaller
-# one, and the PostgreSQL suite runs in four: a partition holds twenty
-# connections of the hundred the verification host's server allows.
+# Without -n a suite runs in eight partitions on a host of sixteen cores
+# or more (two schedulers each) and in four on a smaller one. A PostgreSQL
+# partition holds twenty connections, so the server allows twenty times
+# the count and the cluster suite's besides: 400 on the verification host.
 # Every step has a deadline, several times what it takes on a quiet host: a
 # step that reaches it is stopped, recorded as `name=124`, and fails its
 # leg, so a stalled check ends the gate instead of keeping the host.
@@ -48,12 +48,9 @@ while [ "$#" -gt 0 ]; do
   esac
 done
 PG_PATHS=("$@")
-if [ -n "$PARTS" ]; then
-  SQLITE_PARTS=$PARTS; PG_PARTS=$PARTS
-else
-  PG_PARTS=4
+if [ -z "$PARTS" ]; then
   cores=$(sysctl -n hw.ncpu 2>/dev/null || nproc 2>/dev/null || echo 4)
-  if [ "$cores" -ge 16 ]; then SQLITE_PARTS=8; else SQLITE_PARTS=4; fi
+  if [ "$cores" -ge 16 ]; then PARTS=8; else PARTS=4; fi
 fi
 [ "${#PG_PATHS[@]}" -eq 0 ] && PG_PATHS=(apps/arca/test apps/cyfr/test/arca)
 
@@ -120,7 +117,7 @@ leg_static() {
   # The Boundary plants: each writes a forbidden edge into a copy of the tree
   # and force-compiles it, so they run once here and never in the partitions.
   step static boundary_plants env CYFR_DATABASE=sqlite MIX_ENV=test mix test apps/cyfr/test/cyfr/boundaries_test.exs --only boundary_plant || return 1
-  step static sqlite_suite scripts/test-partitioned.sh -n "$SQLITE_PARTS" -a sqlite -- --warnings-as-errors || return 1
+  step static sqlite_suite scripts/test-partitioned.sh -n "$PARTS" -a sqlite -- --warnings-as-errors || return 1
 }
 
 leg_postgres() {
@@ -131,7 +128,7 @@ leg_postgres() {
     # One adapter's suite has the host at a time: the PostgreSQL suite's
     # partitions start once the SQLite suite's have exited.
     await_leg postgres static || return 1
-    step postgres pg_suite scripts/test-partitioned.sh -n "$PG_PARTS" -a postgres -- --warnings-as-errors || return 1
+    step postgres pg_suite scripts/test-partitioned.sh -n "$PARTS" -a postgres -- --warnings-as-errors || return 1
   else
     step postgres pg_tests scripts/test-partitioned.sh -n 1 -a postgres -- --warnings-as-errors "${PG_PATHS[@]}" || return 1
   fi
@@ -157,6 +154,10 @@ PY
 
 # An island is an application compiled and tested from a copy holding only
 # what CI copies for it (the copy lists are test.yml's), deps linked in.
+# Its build directory is the copy's own and one Mix process at a time
+# uses it, so Mix's build lock excludes no one there, and it is off: Mix
+# through 1.20.4 can wait forever on a lock it holds itself, the second
+# time a fresh lock directory is taken.
 island() {
   local name=$1; shift
   local isl log
@@ -174,8 +175,8 @@ island() {
   done
   log="$LOGDIR/islands.$name.log"
   ( cd "$isl/apps/$name" &&
-      bounded "$(deadline_for island_compile)" env CYFR_DATABASE=sqlite mix compile --warnings-as-errors &&
-      bounded "$(deadline_for island_test)" env CYFR_DATABASE=sqlite mix test ) > "$log" 2>&1
+      bounded "$(deadline_for island_compile)" env CYFR_DATABASE=sqlite MIX_OS_CONCURRENCY_LOCK=0 mix compile --warnings-as-errors &&
+      bounded "$(deadline_for island_test)" env CYFR_DATABASE=sqlite MIX_OS_CONCURRENCY_LOCK=0 mix test ) > "$log" 2>&1
   local status=$?
   if [ "$status" -eq 124 ] || [ "$status" -eq 137 ]; then
     echo "==> islands.$name stopped at its deadline" | tee -a "$log" >&2
