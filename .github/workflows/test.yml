@@ -9,7 +9,10 @@ on:
       - 'config/**'
       - 'mix.exs'
       - 'mix.lock'
-      - '.github/workflows/test.yml'
+      # Every workflow: the drift test reads docker.yml and the retired-
+      # settings test scans them all; the image scans read .trivyignore.yaml.
+      - '.github/workflows/*.yml'
+      - '.trivyignore.yaml'
       # Compile-embedded (@external_resource) into compendium/providers/aqua.ex.
       - 'component-guide.md'
       - 'tincture-guide.md'
@@ -49,7 +52,10 @@ on:
       - 'config/**'
       - 'mix.exs'
       - 'mix.lock'
-      - '.github/workflows/test.yml'
+      # Every workflow: the drift test reads docker.yml and the retired-
+      # settings test scans them all; the image scans read .trivyignore.yaml.
+      - '.github/workflows/*.yml'
+      - '.trivyignore.yaml'
       # Compile-embedded (@external_resource) into compendium/providers/aqua.ex.
       - 'component-guide.md'
       - 'tincture-guide.md'
@@ -963,6 +969,10 @@ jobs:
   browser:
     name: Browser harness (frame facts, the SDK, the multi-home smoke, and the tincture, containment, pairing, identity, join, grant and canvas proofs on Chromium, Firefox and WebKit)
     runs-on: ubuntu-latest
+    # One serial job of ten proofs in three browsers after an image build
+    # and a release build: about an hour on p1's sixteen cores, so a
+    # hang is cut here before the runner's six-hour limit.
+    timeout-minutes: 240
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
       - uses: erlef/setup-beam@54075bcc5e249e4758d363f27d099f55d843f124 # v1

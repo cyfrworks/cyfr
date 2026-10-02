@@ -16,8 +16,8 @@ defmodule Cyfr.Cluster.ThreadTest do
   count a recovery against it, and answers the caller that the turn is
   running elsewhere.
 
-  Every loss arm of that in wave 1 was verified against a constructed
-  second member. Here the second member is a node.
+  The single-VM suite verifies every loss arm of that against a
+  constructed second member. Here the second member is a node.
   """
 
   use Cyfr.Cluster.Case, async: false

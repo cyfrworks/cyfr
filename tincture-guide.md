@@ -350,7 +350,7 @@ A game is a tincture like any other; these patterns keep one smooth inside a fra
 - **Audio decoded once.** Decode each sound into an `AudioBuffer` at load and play buffers; declare `audio_autoplay` if sound starts before a gesture.
 - **Refused:** `eval` and `new Function`; imports from a remote URL (bundle every dependency, pinned by the lockfile); secrets of any kind in the frame; persistence outside components (save through a component the tincture declares); an invocation per frame — invoke on an event such as a save or a level's end, never from the render loop.
 
-Declare `pointer_lock`, `fullscreen`, `gamepad` and `audio_autoplay` only as the game uses them; request fullscreen and pointer lock from a click or key press inside the frame.
+Declare `pointer_lock`, `fullscreen`, `gamepad` and `audio_autoplay` only as the game uses them; request fullscreen and pointer lock from a click or key press inside the frame. A frame that holds the pointer when a consent prompt opens may keep it: the prompt stays operable from the keyboard, Escape frees the pointer, and the frame cannot act on the prompt.
 
 ---
 

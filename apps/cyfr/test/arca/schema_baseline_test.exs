@@ -383,8 +383,8 @@ defmodule Arca.SchemaBaselineTest do
       |> Prima.Digest.sha256_hex()
 
     # The baseline is edited in place and records this digest as it builds
-    # the schema, so every edit of it — this slice's columns included —
-    # leaves a database built from the version before carrying a
+    # the schema, so every edit of it leaves a database built from the
+    # version before carrying a
     # fingerprint that is no longer this release's.
     # `Arca.SchemaFingerprintTest` covers the refusal that follows; this
     # covers what makes the refusal fire at all.

@@ -840,7 +840,7 @@ let token = bindings::cyfr::oauth::token::get_access_token("google")
 | `delete` | `path` | `{status, path, deleted}` |
 | `exists` | `path` | `{status, path, exists}` |
 
-All content is base64-encoded. Host enforces: the granted storage paths and actions, path safety (no `..`), scoped to `data/` or `components/`.
+All content is base64-encoded. Host enforces: the granted storage paths and actions, path safety (canonical paths only: no empty, `.` or `..` segment), scoped to `data/` or `components/`.
 
 Error: `{"error": {"type": "...", "message": "..."}}`.
 
@@ -1114,7 +1114,7 @@ All three are frozen at consent time. Nothing auto-applies the manifest's `caps`
 
 ### Storage (`caps.storage`)
 
-- `paths` — directory prefixes end with `/` (e.g. `"data/"`), exact files without, or `"*"`. Paths must start with `data/` or `components/`. Empty = hard deny.
+- `paths` — directory prefixes end with `/` (e.g. `"data/"`), exact files without, or `"*"`. Paths must start with `data/` or `components/` and be canonical: no empty, `.` or `..` segment, and no spelling the storage door would serve under another name; a manifest naming one is refused at publish. Empty = hard deny.
 - `actions` — `read`, `write`, `list`, `delete`, `exists`; each must be asked for.
 
 ### Tools (`caps.tools`)
