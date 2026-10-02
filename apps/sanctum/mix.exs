@@ -74,7 +74,7 @@ defmodule Sanctum.MixProject do
       # Notifications are broadcast on the server the host names.
       {:phoenix_pubsub, "~> 2.1"},
       # WebAuthn: passkey registration and assertion verification. Pinned,
-      # and the only WebAuthn dependency (the plan's §7 seams).
+      # and the only WebAuthn dependency; Ed25519 stays OTP's `:crypto`.
       {:wax_, "== 0.7.0"},
       {:stream_data, "~> 1.1", only: [:test, :dev]}
     ]

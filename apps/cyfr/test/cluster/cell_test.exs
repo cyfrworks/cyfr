@@ -197,8 +197,8 @@ defmodule Cyfr.Cluster.CellTest do
 
     test "without the proposal both members write, which is what the proposal removes" do
       # The broken-ownership variant: a tick that asks for the row
-      # regardless of the roster is what the code did before this slice,
-      # and it is still what `cycle/1` does for a caller that asks
+      # regardless of the roster is what the code did before the roster
+      # existed, and it is still what `cycle/1` does for a caller that asks
       # directly. Two members doing it is safe — the row admits one — but
       # contended, and the fence counts the contention the gate removes.
       Observer.forget_claim("retention", "cell")

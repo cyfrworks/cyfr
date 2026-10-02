@@ -2332,7 +2332,7 @@ defmodule Cyfr.Boundaries do
 
   @opus_named_by_cyfr_tests %{
     "apps/cyfr/test/integration/**" =>
-      "the wiring suite, slice A's precedent: the umbrella runs one VM and these " <>
+      "the wiring suite: the umbrella runs one VM and these " <>
         "cases are integration tests of CYFR against a real worker service.",
     "apps/cyfr/test/support/opus_service.ex" =>
       "starts and stops the in-VM worker service the integration suite runs against.",

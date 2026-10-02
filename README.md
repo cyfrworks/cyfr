@@ -999,11 +999,12 @@ Each part of CYFR has one name, and the name is its directory, its binary or ima
 | restore | bringing a person's identity onto a fresh installation from their recovery kit, under that installation's single-use restore token; it restores no data | — | — | — | — | — | — | — |
 | carry | a sign-in at another home, begun at the person's own home and carried between the two by their browser | — | — | — | — | — | — | — |
 | pending action | the durable record of one carry: its destination, challenge and return address, resumed by an exact retry | — | — | — | — | — | — | — |
+| relying home | a home that is not the person's own, which admits them on the identity their own home vouches for and at which they register passkeys of their own | — | — | — | — | — | — | — |
 | passkey | a credential registered at one home, under that home's host, that signs the person in there and gives their fresh confirmations there | — | — | — | — | — | — | — |
 | device key | the key pair a glass makes and never exports, which its device certificates name | — | — | — | — | — | — | — |
 | device certificate | a short-lived statement, signed with the person's live key at their home, naming a device key, its client, the home and the athanor | — | — | — | — | — | — | — |
 | paired client | a glass paired with a home for one athanor, revocable on its own and renewed only while it stands | — | — | — | — | — | — | — |
-| fresh confirmation | a proof that the person approved one pending confirmation: a passkey, a fresh sign-in, or, where the home has a mail transport configured, an emailed code; each sensitive change needs one | — | — | — | — | — | — | — |
+| fresh confirmation | a proof that the person approved one pending confirmation: a passkey or a fresh sign-in; each sensitive change needs one | — | — | — | — | — | — | — |
 | pending confirmation | one sensitive change waiting for its fresh confirmation, with the preview the home stores and shows on every device of the person's | — | — | — | — | — | — | — |
 | origin | how a run started, `interactive`, `programmatic`, `schedule` or `webhook`, set by the path that admitted it; a grant names the origins it admits | — | — | — | — | — | — | — |
 

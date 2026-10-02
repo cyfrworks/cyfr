@@ -20,7 +20,7 @@ defmodule Cyfr.BoundariesTest do
       shown reported. A catalog nobody can break is a catalog that checks
       nothing.
     * **An empty source scan must fail.** Every roster this replaces
-      learned that the hard way, two of them this slice: a scan pointed at
+      learned that the hard way: a scan pointed at
       a moved tree passes every assertion it makes. So each scan is shown
       to have read code before its rosters are believed.
     * **Two scans, because neither sees everything.** The source scan,
