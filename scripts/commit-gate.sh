@@ -24,6 +24,10 @@
 # adapters. Image suites, the S3 suite, the Go checks, the security
 # scanners and the benchmark are not part of this gate: a closing record
 # names each of those with its own result.
+# Without -n the SQLite suite runs in eight partitions on a host of
+# sixteen cores or more (two schedulers each) and in four on a smaller
+# one, and the PostgreSQL suite runs in four: a partition holds twenty
+# connections of the hundred the verification host's server allows.
 # Every step has a deadline, several times what it takes on a quiet host: a
 # step that reaches it is stopped, recorded as `name=124`, and fails its
 # leg, so a stalled check ends the gate instead of keeping the host.
@@ -31,7 +35,7 @@
 # Stopping the gate (INT, TERM) stops its legs.
 set -uo pipefail
 
-LOGDIR=""; PARTS=4; CLOSE=false
+LOGDIR=""; PARTS=""; CLOSE=false
 usage() { echo "usage: $0 [-l LOGDIR] [-n N] [--close] [-- PostgreSQL test paths]"; }
 while [ "$#" -gt 0 ]; do
   case "$1" in
@@ -44,6 +48,13 @@ while [ "$#" -gt 0 ]; do
   esac
 done
 PG_PATHS=("$@")
+if [ -n "$PARTS" ]; then
+  SQLITE_PARTS=$PARTS; PG_PARTS=$PARTS
+else
+  PG_PARTS=4
+  cores=$(sysctl -n hw.ncpu 2>/dev/null || nproc 2>/dev/null || echo 4)
+  if [ "$cores" -ge 16 ]; then SQLITE_PARTS=8; else SQLITE_PARTS=4; fi
+fi
 [ "${#PG_PATHS[@]}" -eq 0 ] && PG_PATHS=(apps/arca/test apps/cyfr/test/arca)
 
 ROOT=$(cd "$(dirname "$0")/.." && pwd -P) || exit 1
@@ -63,8 +74,8 @@ TIMEOUT_BIN=$(command -v timeout || command -v gtimeout || true)
 deadline_for() {
   if [ -n "${GATE_STEP_DEADLINE:-}" ]; then echo "$GATE_STEP_DEADLINE"; return; fi
   case "$1" in
-    fossils|format|credo|opsgen|confguide) echo 600 ;;
-    compile_*|boundary_plants|island_compile|island_test) echo 1200 ;;
+    fossils|format|credo|opsgen|confguide|island_compile|island_test) echo 600 ;;
+    compile_*|boundary_plants) echo 1200 ;;
     # A first run builds the PLT.
     dialyzer) echo 2400 ;;
     *) echo 1800 ;;
@@ -109,7 +120,7 @@ leg_static() {
   # The Boundary plants: each writes a forbidden edge into a copy of the tree
   # and force-compiles it, so they run once here and never in the partitions.
   step static boundary_plants env CYFR_DATABASE=sqlite MIX_ENV=test mix test apps/cyfr/test/cyfr/boundaries_test.exs --only boundary_plant || return 1
-  step static sqlite_suite scripts/test-partitioned.sh -n "$PARTS" -a sqlite -- --warnings-as-errors || return 1
+  step static sqlite_suite scripts/test-partitioned.sh -n "$SQLITE_PARTS" -a sqlite -- --warnings-as-errors || return 1
 }
 
 leg_postgres() {
@@ -117,10 +128,10 @@ leg_postgres() {
   step postgres compile_pg_test env CYFR_DATABASE=postgres MIX_ENV=test mix compile --warnings-as-errors || return 1
   if $CLOSE; then
     step postgres compile_pg_force env CYFR_DATABASE=postgres MIX_ENV=test mix compile --warnings-as-errors --force || return 1
-    # Four pools are allocated across the adapter jobs: the PostgreSQL
-    # suite's partitions start once the SQLite suite's have exited.
+    # One adapter's suite has the host at a time: the PostgreSQL suite's
+    # partitions start once the SQLite suite's have exited.
     await_leg postgres static || return 1
-    step postgres pg_suite scripts/test-partitioned.sh -n "$PARTS" -a postgres -- --warnings-as-errors || return 1
+    step postgres pg_suite scripts/test-partitioned.sh -n "$PG_PARTS" -a postgres -- --warnings-as-errors || return 1
   else
     step postgres pg_tests scripts/test-partitioned.sh -n 1 -a postgres -- --warnings-as-errors "${PG_PATHS[@]}" || return 1
   fi
@@ -177,12 +188,12 @@ island() {
 leg_islands() {
   local status=0
   # The islands run their own SQLite suites: they start once the static
-  # leg's four partitions have exited, so no two SQLite suites share the
+  # leg's partitions have exited, so no two SQLite suites share the
   # machine's I/O. Run concurrently, the control-plane and athanor tests
   # of the suite and of the arca island answered `:database_error` on the
   # SQLite writer's wait on one gate in three.
   await_leg islands static || return 1
-  # Under --close the PostgreSQL suite's four partitions follow the SQLite
+  # Under --close the PostgreSQL suite's partitions follow the SQLite
   # suite's; the islands' own SQLite writers waited out its I/O too.
   if $CLOSE; then await_leg islands postgres || return 1; fi
   island prima apps/prima tests/fixtures seed/components & local p1=$!
