@@ -7,10 +7,15 @@
 // and while that expectation is fresh; nothing over the fragment bound is
 // handed on; what arrives for the signing home before its person signed in
 // is kept through the sign-in, then taken once; the actions a tab began are
-// remembered with their destination and key_epoch.
+// remembered with their destination and key_epoch. The fragments and
+// returns of `tests/fixtures/carry.json`, which the homes read too, are
+// held to the hook first.
 
 import assert from "node:assert/strict"
+import {readFileSync} from "node:fs"
+import {dirname, resolve} from "node:path"
 import {describe, test} from "node:test"
+import {fileURLToPath} from "node:url"
 
 import Carry, {
   EXPECT_KEY,
@@ -22,6 +27,9 @@ import Carry, {
   resume,
   sourceState
 } from "../../js/hooks/carry.js"
+
+const here = dirname(fileURLToPath(import.meta.url))
+const vectors = JSON.parse(readFileSync(resolve(here, "../../../../../tests/fixtures/carry.json"), "utf8"))
 
 const b64url = (object) => Buffer.from(JSON.stringify(object)).toString("base64url")
 
@@ -87,6 +95,88 @@ function mount(win, role, now = 1_000_000) {
 }
 
 const events = (pushed) => pushed.map(({event}) => event)
+
+// A fragment vector's text: the fragment it names, or a repeat of a char.
+const fragmentOf = (vector) => (vector.repeat ? vector.repeat.char.repeat(vector.repeat.length) : vector.fragment)
+
+describe("carry.json", () => {
+  test("the hook's bound is the homes' fragment bound", () => {
+    assert.equal(MAX_FRAGMENT_BYTES, vectors.max_fragment_bytes)
+  })
+
+  test("a carry fragment over the bound is never handed on; within it, the home decides it, whole", () => {
+    const parse = vectors.fragments.parse
+    assert.ok(parse.some((vector) => vector.error === "carry_too_large"))
+    assert.ok(parse.some((vector) => vector.error !== "carry_too_large"))
+
+    for (const vector of parse) {
+      const fragment = fragmentOf(vector)
+      const storage = memoryStorage()
+      storage.setItem(EXPECT_KEY, JSON.stringify({home: "https://alice.example", at: 1_000_000}))
+      const {pushed} = mount(fakeWindow("/login", "#carry=" + fragment, storage), "login")
+
+      if (vector.error === "carry_too_large") {
+        assert.deepEqual(classify("carry=" + fragment), {kind: "too_large"}, vector.name)
+        assert.deepEqual(pushed, [{event: "cyfr_oversized", payload: {}}], vector.name)
+      } else {
+        // Within the bound the homes refuse it when they parse it: the hook
+        // hands the fragment on exactly, never truncated or repaired.
+        assert.deepEqual(classify("carry=" + fragment), {kind: "carry", value: fragment}, vector.name)
+        assert.deepEqual(
+          pushed,
+          [{event: "cyfr_carry", payload: {fragment, expected_source: "https://alice.example"}}],
+          vector.name
+        )
+      }
+    }
+  })
+
+  test("the valid fragment is handed on as the home wrote it, and reads back as its payload", () => {
+    const {fragment, payload} = vectors.fragments.valid
+    assert.ok(new TextEncoder().encode(fragment).length <= vectors.max_fragment_bytes)
+    assert.deepEqual(classify("carry=" + fragment), {kind: "carry", value: fragment})
+    assert.deepEqual(decodeObject(fragment).payload, payload)
+  })
+
+  test("each return is read as a return of its action and handed to /carry exactly", () => {
+    for (const name of ["admitted", "refused"]) {
+      const {fragment, return: returned} = vectors.returns[name]
+      assert.deepEqual(decodeObject(fragment), returned, name)
+      assert.deepEqual(classify(fragment), {kind: "return", fragment, actionId: returned.action_id}, name)
+
+      const {pushed} = mount(fakeWindow("/carry", "#" + fragment), "source")
+      assert.deepEqual(pushed, [{event: "carry_return", payload: {fragment}}], name)
+    }
+  })
+
+  test("a malformed return: one without its action is nothing here, any other the home refuses", () => {
+    const refusals = vectors.returns.refusals
+    assert.ok(refusals.some(({return: returned}) => !("action_id" in returned)))
+
+    for (const {name, return: returned} of refusals) {
+      const fragment = b64url(returned)
+      const {pushed} = mount(fakeWindow("/carry", "#" + fragment), "source")
+
+      if (typeof returned.action_id !== "string") {
+        // No action to return to: the hook hands nothing on.
+        assert.equal(classify(fragment).kind, "unknown", name)
+        assert.deepEqual(pushed, [], name)
+      } else {
+        // Its fields are the home's to refuse (`Prima.Carry.Return`): the
+        // hook hands it on whole, never a reading of its own.
+        assert.deepEqual(classify(fragment), {kind: "return", fragment, actionId: returned.action_id}, name)
+        assert.deepEqual(pushed, [{event: "carry_return", payload: {fragment}}], name)
+      }
+    }
+  })
+
+  test("a return over the bound is never handed on", () => {
+    const fragment = "A".repeat(vectors.max_fragment_bytes + 1)
+    assert.deepEqual(classify(fragment), {kind: "too_large"})
+    const {pushed} = mount(fakeWindow("/carry", "#" + fragment), "source")
+    assert.deepEqual(pushed, [{event: "carry_oversized", payload: {}}])
+  })
+})
 
 describe("reading a fragment", () => {
   test("each kind is told apart, and the bound is checked before anything is decoded", () => {

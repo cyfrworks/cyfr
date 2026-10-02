@@ -279,6 +279,61 @@ defmodule Cyfr.CrossLanguageDriftTest do
   defp trim_colon(":" <> tag), do: tag
 
   # ==========================================================================
+  # The vector files each side's test reads
+  # ==========================================================================
+
+  test "the confirmation signal's vector binds every producer and the CLI to one wire" do
+    %{"signal" => signal} = fixture!("confirmation.json")
+    value = Jason.decode!(signal["value"])
+    %{"error" => error} = Jason.decode!(signal["mcp"]["body"])
+    tag = value["tag"]
+
+    # The code the vector answers with is the codec's for its tag and the
+    # CLI's reading of it; the HTTP answer is the class's status, and every
+    # wire carries the one value.
+    assert error["code"] == Prima.MCP.Message.error_code(String.to_existing_atom(tag))
+
+    assert read!("apps/codex/internal/mcp/client.go") =~ ~s(#{error["code"]}: "#{tag}"),
+           "client.go does not read the vector's code as #{tag}"
+
+    assert signal["http"]["status"] == CyfrWeb.ApiError.status(String.to_existing_atom(tag))
+    assert error["data"] == value
+    assert Jason.decode!(signal["http"]["body"])["data"] == value
+
+    # Each side's test holds its producer or reader to the vector, not to a
+    # wire of its own.
+    for test_file <- [
+          "apps/prima/test/prima/consent_signal_test.exs",
+          "apps/prima/test/prima/mcp/message_test.exs",
+          "apps/cyfr/test/cyfr_web/controllers/api_error_test.exs",
+          "apps/codex/cmd/consent_error_test.go"
+        ] do
+      source = read!(test_file)
+      assert source =~ "confirmation.json", "#{test_file} does not read the shared vector"
+      assert source =~ ~s("signal"), "#{test_file} does not read the vector's signal"
+    end
+  end
+
+  test "the browser's carry and device key are held to the vectors the homes read" do
+    # Each test file, the vector file it reads, the name it reads it under,
+    # and the sections it holds its module to.
+    for {test_file, vectors, name, sections} <- [
+          {"apps/cyfr/assets/test/carrier/carry.test.mjs", "carry.json", "vectors",
+           ~w(fragments.parse fragments.valid max_fragment_bytes returns)},
+          {"apps/cyfr/assets/test/system_layer/device_key.test.mjs", "device_cert.json", "certs",
+           ~w(challenge_refusals proof_cases refusals proof_protocol purposes)}
+        ] do
+      source = read!(test_file)
+      assert source =~ vectors, "#{test_file} does not read #{vectors}"
+
+      for section <- sections do
+        assert source =~ "#{name}.#{section}",
+               "#{test_file} does not read #{vectors}'s #{section}"
+      end
+    end
+  end
+
+  # ==========================================================================
   # The MAC names: domains, service labels and the auth header
   # ==========================================================================
 

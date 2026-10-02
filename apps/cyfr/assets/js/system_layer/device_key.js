@@ -43,14 +43,22 @@
  *
  * The device key signs only a challenge the glass asked for, naming its
  * own key and client: a `connect` of this home, a `renew` of the home that
- * issued its certificate, a `pair` of this home. A certificate in the
- * fragment is taken only while the person's request to their home stands
- * (made as they name it, five minutes at most) and only when it answers
- * it: that home's, for this device, its client, this home and the
- * athanor. It replaces the stored one only once this home stands it.
+ * issued its certificate, a `pair` of this home, and only one shaped as a
+ * home issues it (`cyfr-device-proof/v1`, one of the three purposes, a
+ * 32-byte nonce), so it signs nothing the home would refuse to read. A
+ * certificate in the fragment is taken only while the person's request to
+ * their home stands (made as they name it, five minutes at most) and only
+ * when it answers it: that home's, for this device, its client, this home
+ * and the athanor. It replaces the stored one only once this home stands
+ * it.
  */
 
 export const PROTOCOL = "cyfr-device/v1"
+// A challenge as a home issues it (`Prima.DeviceCert.Challenge`): its
+// protocol, its purposes and its nonce's length in bytes.
+export const PROOF_PROTOCOL = "cyfr-device-proof/v1"
+export const PURPOSES = ["connect", "renew", "pair"]
+export const NONCE_BYTES = 32
 export const CONFIRMATIONS = "confirmation.changes"
 // How long the glass waits before opening the stream again after an open
 // was refused.
@@ -146,11 +154,23 @@ export function signedBytes(challenge) {
   return new TextEncoder().encode(jcs(fields))
 }
 
+// Unpadded base64url of exactly `size` bytes, spelled the one way the home
+// reads it (`Prima.Identity.Encoding.unb64/2`): no padding, no stray bits.
+function exactB64url(text, size) {
+  try {
+    const bytes = fromB64url(text)
+    return bytes.length === size && b64url(bytes) === text
+  } catch (_error) {
+    return false
+  }
+}
+
 /**
- * Whether `challenge` is the one this device asked for: it names the
- * device's own key and client, the purpose it asked for, and the home it
- * asked: `connect` at the home this page is at, `renew` at the home that
- * issued the certificate it holds, `pair` at this home.
+ * Whether `challenge` is the one this device asked for: shaped as a home
+ * issues one (its protocol, one of its purposes, a nonce of `NONCE_BYTES`),
+ * and naming the device's own key and client, the purpose it asked for,
+ * and the home it asked: `connect` at the home this page is at, `renew` at
+ * the home that issued the certificate it holds, `pair` at this home.
  */
 export function expectedChallenge(challenge, expected) {
   const {purpose, home, deviceKey, clientId} = expected || {}
@@ -158,6 +178,9 @@ export function expectedChallenge(challenge, expected) {
     challenge &&
       typeof challenge === "object" &&
       !Array.isArray(challenge) &&
+      challenge.protocol === PROOF_PROTOCOL &&
+      PURPOSES.includes(challenge.purpose) &&
+      exactB64url(challenge.nonce, NONCE_BYTES) &&
       typeof purpose === "string" &&
       challenge.purpose === purpose &&
       typeof home === "string" &&

@@ -6,7 +6,9 @@ defmodule Prima.ConsentSignalTest do
   The consent signal's shape: five tags, a map payload, a sentence,
   `error.data` and a refusal class for each; `confirmation_required`
   names its confirmation's id or is no signal, and its sentence never
-  names that secret.
+  names that secret. The shared vector's signal
+  (`tests/fixtures/confirmation.json`'s `signal`) is what this module
+  writes, byte for byte.
   """
 
   use ExUnit.Case, async: true
@@ -14,6 +16,19 @@ defmodule Prima.ConsentSignalTest do
   alias Prima.ConsentSignal
 
   require ConsentSignal
+
+  @vectors Path.expand("../../../../tests/fixtures/confirmation.json", __DIR__)
+
+  defp vectors, do: @vectors |> File.read!() |> Jason.decode!()
+
+  # The vector's signal as its producer builds it: atom keys, the expiry a
+  # UTC `DateTime`.
+  defp produced(%{"tag" => tag, "payload" => payload}) do
+    {:ok, expires_at, 0} = DateTime.from_iso8601(payload["expires_at"])
+
+    {String.to_existing_atom(tag),
+     %{id: payload["id"], operation: payload["operation"], expires_at: expires_at}}
+  end
 
   @classes %{
     setup_required: :setup_required,
@@ -168,5 +183,39 @@ defmodule Prima.ConsentSignalTest do
                "expires_at" => "2026-09-29T12:05:00Z"
              }
            } = data |> Jason.encode!() |> Jason.decode!()
+  end
+
+  describe "the shared vector's signal" do
+    test "is what the producer's signal writes as error.data and says, byte for byte" do
+      %{"value" => value, "message" => message} = vectors()["signal"]
+      read = Jason.decode!(value)
+      signal = produced(read)
+
+      assert ConsentSignal.signal?(signal)
+      assert signal |> ConsentSignal.data() |> Jason.encode!() == value
+      assert ConsentSignal.message(signal) == message
+      assert Prima.Refusal.classify(signal).message == message
+
+      # Read back from JSON, string keys and the expiry a string, it writes
+      # the same bytes.
+      read_back = {:confirmation_required, read["payload"]}
+      assert ConsentSignal.signal?(read_back)
+      assert read_back |> ConsentSignal.data() |> Jason.encode!() == value
+    end
+
+    test "answers the vector's record: its secret, the record's operation and expiry" do
+      v = vectors()
+      {:confirmation_required, payload} = v["signal"]["value"] |> Jason.decode!() |> produced()
+
+      assert payload.id == v["ref"]["id"]
+      assert Prima.Confirmation.ref(payload.id) == v["record"]["id"]
+      assert payload.operation == v["record"]["operation"]
+
+      # As the store holds it: milliseconds read back at microsecond precision.
+      assert payload.expires_at ==
+               DateTime.from_unix!(v["record"]["expires_at"] * 1000, :microsecond)
+
+      refute v["signal"]["message"] =~ payload.id
+    end
   end
 end
