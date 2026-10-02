@@ -10,8 +10,10 @@ defmodule Sanctum.DeviceCertsTest do
   certificate is held to the person's current live key, its expiry
   strictly on this home's clock, its not-before within the clock
   tolerance, and the paired client and its person's seat, read anew each
-  time. Pairing completions, renewals and failed connect proofs share
-  per-source and per-installation bounds that every member counts.
+  time. An attempt that proves the key a client's row stores counts
+  against that client's own budget; any other counts against its address
+  and the installation, so a flood naming a client never spends the
+  client's. Every member counts every bound.
 
   Every certificate here comes from the real ceremony
   (`Sanctum.Pairing.begin/2` under a session, `complete/3` from a glass
@@ -24,7 +26,7 @@ defmodule Sanctum.DeviceCertsTest do
 
   import Ecto.Query, only: [from: 2]
 
-  alias Arca.Schemas.{PersonIdentity, RequestRateWindow}
+  alias Arca.Schemas.{PairedClient, PersonIdentity, RequestRateWindow}
   alias Prima.DeviceCert
   alias Prima.DeviceCert.{Challenge, Proof}
   alias Sanctum.{Context, DeviceCerts, Pairing, Person}
@@ -158,6 +160,55 @@ defmodule Sanctum.DeviceCertsTest do
       Proof.sign(challenge, device.private),
       challenge
     )
+  end
+
+  # The renewal exchange's proof, by the device's key, from `source`.
+  defp renew(device, source) do
+    challenge = challenge(device, :renew)
+
+    DeviceCerts.verify_connect(
+      connection(device, source),
+      Proof.sign(challenge, device.private),
+      challenge
+    )
+  end
+
+  # What anyone who has seen `device`'s certificate, which is not secret,
+  # can make: one naming its client, athanor and person, for a device key
+  # of the sender's own, signed by a key that is not the person's. A proof
+  # by that key verifies; only the client's row tells it is not the
+  # client's.
+  defp forged(device) do
+    {device_key, private} = :crypto.generate_key(:eddsa, :ed25519)
+    {_live, live_private} = :crypto.generate_key(:eddsa, :ed25519)
+
+    certificate =
+      %{device.certificate | device_key: device_key}
+      |> Map.put(:sig, nil)
+      |> DeviceCert.sign(live_private)
+
+    %{device | certificate: certificate, device_key: device_key, private: private}
+  end
+
+  # A forged certificate naming the client and its athanor, but a person
+  # this home does not hold.
+  defp stranger(device) do
+    stranger = forged(device)
+    {_live, live_private} = :crypto.generate_key(:eddsa, :ed25519)
+
+    certificate =
+      %{stranger.certificate | subject: %{kind: :local, user_id: Prima.UUID7.generate_id("usr")}}
+      |> Map.put(:sig, nil)
+      |> DeviceCert.sign(live_private)
+
+    %{stranger | certificate: certificate}
+  end
+
+  # `n` requests counted in the cell's `bucket` for `key`, as members
+  # before this one counted them.
+  defp spend!(bucket, key, n, cap \\ 20) do
+    for _ <- 1..n,
+        do: :ok = Arca.RequestRateWindows.claim(Prima.Actor.system(), bucket, key, cap, 60_000)
   end
 
   # The person's live key replaced as a rotation activates one: a new pair,
@@ -324,14 +375,15 @@ defmodule Sanctum.DeviceCertsTest do
              ) == {:error, :proof_refused}
     end
 
-    test "failed connects count in their own bounds, verified ones not at all", %{
-      session_ctx: session_ctx
-    } do
+    test "a failed proof no client's key made counts against the address, a verified connect against nothing",
+         %{session_ctx: session_ctx} do
       device = pair!(session_ctx, "192.0.2.10")
 
-      # Verified connects are no guesses: the source spends nothing.
+      # Verified connects are no guesses: neither the address nor the
+      # client spends anything.
       for _ <- 1..25, do: assert({:ok, _ctx} = connect(device, "192.0.2.20"))
       assert window(:device_connect_source, "192.0.2.20") == nil
+      assert window(:device_connect_client, device.client_id) == nil
 
       {_other, other_private} = :crypto.generate_key(:eddsa, :ed25519)
 
@@ -348,39 +400,93 @@ defmodule Sanctum.DeviceCertsTest do
       for _ <- 1..20, do: assert(failed.() == {:error, :proof_refused})
       assert %{count: 20} = window(:device_connect_source, "192.0.2.30")
 
-      # The next failure finds the bound spent, and says so.
+      # The next is refused for the address before any signature, and
+      # says when to retry.
       assert {:error, {:rate_limited, retry_after_ms}} = failed.()
-      assert retry_after_ms > 0 and retry_after_ms <= 60_000
+      assert retry_after_ms in 1..60_000
+
+      # None of it proved the client, so none of it is the client's.
+      assert window(:device_connect_client, device.client_id) == nil
 
       # Bad connects spend nothing a completion or a renewal is held to.
       assert window(:device_verification_source, "192.0.2.30") == nil
-      assert DeviceCerts.claim_verification("192.0.2.30") == :ok
+      assert DeviceCerts.verification_room("192.0.2.30") == :ok
     end
 
-    test "the connect bounds hold for the installation across sources and two members", %{
-      session_ctx: session_ctx
-    } do
+    test "a flood naming a real client, from 200 addresses across two members, leaves its reconnect and renewal admitted",
+         %{session_ctx: session_ctx} do
       device = pair!(session_ctx)
-      {_other, other_private} = :crypto.generate_key(:eddsa, :ed25519)
 
+      # Each names the client, its athanor and its person with a key of
+      # the sender's own, so its proof verifies and only the client's row
+      # can tell it is not the client's.
       for n <- 1..200 do
         # Half the sources reach one member, half another.
         if n == 101, do: Prima.RateLimiter.reset()
-        challenge = challenge(device, :connect)
-
-        assert {:error, :proof_refused} =
-                 DeviceCerts.verify_connect(
-                   connection(device, "10.4.#{div(n, 250)}.#{rem(n, 250)}"),
-                   Proof.sign(challenge, other_private),
-                   challenge
-                 )
+        source = "10.4.#{div(n, 250)}.#{rem(n, 250)}"
+        # Each answered the word its certificate always got.
+        assert connect(forged(device), source) == {:error, :bad_signature}
+        assert renew(forged(device), source) == {:error, :proof_refused}
       end
 
+      # The installation's ceiling holds for what no client proved: the
+      # next from a fresh address is refused, on either member.
+      assert {:error, {:rate_limited, _}} = connect(forged(device), "10.5.0.1")
       Prima.RateLimiter.reset()
-      assert {:error, {:rate_limited, _}} = DeviceCerts.claim_connect_failure("10.5.0.1")
+      assert {:error, {:rate_limited, _}} = connect(forged(device), "10.5.0.2")
+      assert {:error, {:rate_limited, _}} = renew(forged(device), "10.5.0.2")
+      assert %{count: 200} = window(:device_connect_installation, "installation")
+      assert %{count: 200} = window(:device_verification_installation, "installation")
 
-      # Renewals and completions keep their own budget.
-      assert DeviceCerts.claim_verification("10.5.0.1") == :ok
+      # Named 400 times, the client spent nothing of its own.
+      assert window(:device_connect_client, device.client_id) == nil
+      assert window(:device_verification_client, device.client_id) == nil
+
+      # And proving itself from its own address, it reconnects and renews.
+      assert {:ok, %Context{client_id: client_id}} = connect(device, "10.6.0.1")
+      assert client_id == device.client_id
+      assert {:ok, %Context{client_id: ^client_id}} = renew(device, "10.6.0.1")
+      assert %{count: 1} = window(:device_verification_client, device.client_id)
+      assert window(:device_connect_client, device.client_id) == nil
+    end
+
+    test "a client past its own budget of failures is refused with its retry bound, before its certificate is checked",
+         %{session_ctx: session_ctx, user: user} do
+      device = pair!(session_ctx)
+      keys = Arca.Repo.get_by!(PersonIdentity, user_id: user.id)
+      rotate_live_key!(user.id)
+
+      # The device proves its key, but its certificate is chained to a
+      # rotated key: its own failures, from addresses that spend nothing.
+      for n <- 1..20 do
+        assert {:error, :bad_signature} = connect(device, "192.0.2.#{100 + n}")
+      end
+
+      assert %{count: 20} = window(:device_connect_client, device.client_id)
+      assert window(:device_connect_source, "192.0.2.101") == nil
+
+      # Its certificate stands again; its own budget is spent, on this
+      # member and in the cell.
+      {1, _} =
+        Arca.Repo.update_all(from(p in PersonIdentity, where: p.user_id == ^user.id),
+          set: [live_public_key: keys.live_public_key, live_key_sealed: keys.live_key_sealed]
+        )
+
+      watch_sources!()
+      assert {:error, {:device_rate_limited, retry_after_ms}} = connect(device, "192.0.2.150")
+      assert retry_after_ms in 1..60_000
+
+      # Refused before its certificate: the person's key was never read.
+      refute "person_identities" in sources()
+
+      Prima.RateLimiter.reset()
+      assert {:error, {:device_rate_limited, retry_after_ms}} = connect(device, "192.0.2.151")
+      assert retry_after_ms in 1..60_000
+      assert %{count: 20} = window(:device_connect_client, device.client_id)
+
+      # Another client of the same person has its own.
+      other = pair!(session_ctx)
+      assert {:ok, _ctx} = connect(other, "192.0.2.152")
     end
   end
 
@@ -389,12 +495,12 @@ defmodule Sanctum.DeviceCertsTest do
   # ---------------------------------------------------------------------------
 
   describe "the connect pre-check" do
-    test "a spent connect bound refuses the next connect before any signature is checked", %{
+    test "a spent address bound refuses the next connect before any signature is checked", %{
       session_ctx: session_ctx
     } do
       device = pair!(session_ctx)
       source = "192.0.2.50"
-      for _ <- 1..20, do: :ok = DeviceCerts.claim_connect_failure(source)
+      spend!(:device_connect_source, source, 20)
 
       # This member's own count forgotten, as another member's would be:
       # the cell's is what refuses.
@@ -452,19 +558,110 @@ defmodule Sanctum.DeviceCertsTest do
       assert window(:device_connect_source, source) == nil
     end
 
-    test "connect_budget/1 reads and never counts" do
-      source = "192.0.2.70"
-      for _ <- 1..5, do: assert(DeviceCerts.connect_budget(source) == :ok)
-      assert window(:device_connect_source, source) == nil
+    test "a connect no client's row stands behind is counted before its certificate is checked: past the installation's bound no key is read",
+         %{session_ctx: session_ctx} do
+      device = pair!(session_ctx)
+      spend!(:device_connect_installation, "installation", 200, 200)
+      watch_sources!()
 
-      for _ <- 1..19, do: :ok = DeviceCerts.claim_connect_failure(source)
-      assert DeviceCerts.connect_budget(source) == :ok
-      assert %{count: 19} = window(:device_connect_source, source)
+      assert {:error, {:rate_limited, retry_after_ms}} = connect(forged(device), "192.0.2.65")
+      assert retry_after_ms in 1..60_000
 
-      :ok = DeviceCerts.claim_connect_failure(source)
-      assert {:error, {:rate_limited, _}} = DeviceCerts.connect_budget(source)
-      assert {:error, {:rate_limited, _}} = DeviceCerts.connect_budget(source)
-      assert %{count: 20} = window(:device_connect_source, source)
+      # The address's window, the client's row, and the counts; never the
+      # person's key, nor anything the certificate's subject would lead to.
+      assert Enum.sort(sources()) == ["paired_clients", "request_rate_windows"]
+
+      # The client proving itself is not held to that bound.
+      assert {:ok, _ctx} = connect(device, "192.0.2.66")
+    end
+
+    test "a connect no client's row stands behind answers the word every connect always got",
+         %{session_ctx: session_ctx, user: user, athanor: athanor} do
+      device = pair!(session_ctx)
+
+      # Signed by the person's own key for the client, but for a device
+      # key the client's row does not store.
+      {other_key, other_private} = :crypto.generate_key(:eddsa, :ed25519)
+
+      {:ok, misnamed} =
+        Person.issue_device_cert(user.id, other_key, device.client_id, %{
+          subject: :local,
+          audience: Person.home(),
+          athanor: athanor.id
+        })
+
+      misnamed = %{device | certificate: misnamed, device_key: other_key, private: other_private}
+      assert connect(misnamed, "192.0.2.70") == {:error, :client_mismatch}
+
+      # Not signed by the person's key: the certificate's own word.
+      assert connect(forged(device), "192.0.2.71") == {:error, :bad_signature}
+
+      # Naming a person this home does not hold.
+      assert connect(stranger(device), "192.0.2.72") == {:error, :unknown_subject}
+
+      # Each was no one's: the address and the installation counted it,
+      # and the client's own budget not at all.
+      assert %{count: 1} = window(:device_connect_source, "192.0.2.70")
+      assert %{count: 3} = window(:device_connect_installation, "installation")
+      assert window(:device_connect_client, device.client_id) == nil
+
+      # A verified certificate whose client is gone, after a restore for
+      # instance, is told its standing ended, so the glass pairs again.
+      {1, _} =
+        Arca.Repo.delete_all(from(c in PairedClient, where: c.id == ^device.client_id))
+
+      assert connect(device, "192.0.2.73") == {:error, :not_standing}
+
+      # And one revoked, signed for another key: revoked, as ever.
+      other = pair!(session_ctx)
+      {:ok, _row} = revoke!(session_ctx, other.client_id)
+
+      {:ok, renamed} =
+        Person.issue_device_cert(user.id, other_key, other.client_id, %{
+          subject: :local,
+          audience: Person.home(),
+          athanor: athanor.id
+        })
+
+      renamed = %{other | certificate: renamed, device_key: other_key, private: other_private}
+      assert connect(renamed, "192.0.2.74") == {:error, :revoked}
+      assert window(:device_connect_client, other.client_id) == nil
+    end
+
+    test "a revocation committed while the certificate is checked is seen by the connect",
+         %{session_ctx: session_ctx} do
+      device = pair!(session_ctx)
+      parent = self()
+      client_id = device.client_id
+      handler = "device-certs-revoke-#{System.unique_integer([:positive])}"
+
+      # The client's row is revoked the moment the person's key is read,
+      # after the row was read to attribute the connect.
+      :ok =
+        :telemetry.attach(
+          handler,
+          [:arca, :repo, :query],
+          fn _event, _measurements, meta, _config ->
+            if self() == parent and meta[:source] == "person_identities" and
+                 Process.get(:revoke_armed) do
+              Process.delete(:revoke_armed)
+
+              {1, _} =
+                Arca.Repo.update_all(from(c in PairedClient, where: c.id == ^client_id),
+                  set: [standing: "revoked"]
+                )
+
+              send(parent, :revoked_meanwhile)
+            end
+          end,
+          nil
+        )
+
+      on_exit(fn -> :telemetry.detach(handler) end)
+      Process.put(:revoke_armed, true)
+      result = connect(device, "192.0.2.75")
+      assert_received :revoked_meanwhile
+      assert result == {:error, :revoked}
     end
   end
 
@@ -532,28 +729,32 @@ defmodule Sanctum.DeviceCertsTest do
              ) == {:error, :revoked}
     end
 
-    test "a renewal is counted before it is verified", %{session_ctx: session_ctx} do
+    test "a renewal counts against its client's own budget, never the address's, and past it is refused with its retry bound",
+         %{session_ctx: session_ctx, user: user} do
       device = pair!(session_ctx, "192.0.2.40")
 
-      for _ <- 1..20 do
-        challenge = challenge(device, :renew)
+      for _ <- 1..20, do: assert({:ok, _ctx} = renew(device, "192.0.2.41"))
+      assert %{count: 20} = window(:device_verification_client, device.client_id)
+      assert window(:device_verification_source, "192.0.2.41") == nil
 
-        assert {:ok, _ctx} =
-                 DeviceCerts.verify_connect(
-                   connection(device, "192.0.2.41"),
-                   Proof.sign(challenge, device.private),
-                   challenge
-                 )
-      end
+      # From any address, on this member and in the cell.
+      assert {:error, {:device_rate_limited, retry_after_ms}} = renew(device, "192.0.2.42")
+      assert retry_after_ms in 1..60_000
+      Prima.RateLimiter.reset()
+      assert {:error, {:device_rate_limited, retry_after_ms}} = renew(device, "192.0.2.43")
+      assert retry_after_ms in 1..60_000
+      assert %{count: 20} = window(:device_verification_client, device.client_id)
 
-      challenge = challenge(device, :renew)
+      # Counted before anything past the client's row is read: the
+      # person's key and standing were not.
+      watch_sources!()
+      assert {:error, {:device_rate_limited, _}} = renew(device, "192.0.2.44")
+      refute Enum.any?(sources(), &(&1 in ["person_identities", "users", "athanors"]))
 
-      assert {:error, {:rate_limited, _}} =
-               DeviceCerts.verify_connect(
-                 connection(device, "192.0.2.41"),
-                 Proof.sign(challenge, device.private),
-                 challenge
-               )
+      # Another of the person's clients renews on its own budget.
+      other = pair!(session_ctx)
+      assert {:ok, %Context{user_id: user_id}} = renew(other, "192.0.2.45")
+      assert user_id == user.id
     end
   end
 
@@ -1029,61 +1230,141 @@ defmodule Sanctum.DeviceCertsTest do
   # The verification bounds
   # ---------------------------------------------------------------------------
 
-  describe "claim_connect_failure/1" do
-    test "20 a minute from one source, in the connect buckets alone" do
-      for _ <- 1..20, do: assert(DeviceCerts.claim_connect_failure("203.0.113.9") == :ok)
-      assert {:error, {:rate_limited, _}} = DeviceCerts.claim_connect_failure("203.0.113.9")
-      assert %{count: 20} = window(:device_connect_source, "203.0.113.9")
-      assert window(:device_verification_source, "203.0.113.9") == nil
-      assert DeviceCerts.claim_verification("203.0.113.9") == :ok
-    end
-  end
-
-  describe "claim_verification/1" do
+  describe "refuse_unattributed/2" do
     test "20 a minute from one source, and another source is not charged for it" do
-      for _ <- 1..20, do: assert(DeviceCerts.claim_verification("203.0.113.1") == :ok)
+      for _ <- 1..20 do
+        assert DeviceCerts.refuse_unattributed("203.0.113.1", :invalid_invitation) ==
+                 {:error, :invalid_invitation}
+      end
 
       assert {:error, {:rate_limited, retry_after_ms}} =
-               DeviceCerts.claim_verification("203.0.113.1")
+               DeviceCerts.refuse_unattributed("203.0.113.1", :invalid_invitation)
 
-      assert retry_after_ms > 0 and retry_after_ms <= 60_000
-      assert DeviceCerts.claim_verification("203.0.113.2") == :ok
+      assert retry_after_ms in 1..60_000
+
+      assert DeviceCerts.refuse_unattributed("203.0.113.2", :invalid_invitation) ==
+               {:error, :invalid_invitation}
+
+      # In the completion and renewal buckets alone.
+      assert window(:device_connect_source, "203.0.113.1") == nil
     end
 
     test "the cell's count holds for a member whose own count is fresh" do
-      for _ <- 1..20, do: :ok = DeviceCerts.claim_verification("203.0.113.3")
+      for _ <- 1..20,
+          do: {:error, :refused} = DeviceCerts.refuse_unattributed("203.0.113.3", :refused)
 
       # Another member: its node count starts empty, the cell's does not.
       Prima.RateLimiter.reset()
-      assert {:error, {:rate_limited, _}} = DeviceCerts.claim_verification("203.0.113.3")
+
+      assert {:error, {:rate_limited, _}} =
+               DeviceCerts.refuse_unattributed("203.0.113.3", :refused)
     end
 
     test "a flood past the node's bound reaches no database write" do
-      for _ <- 1..20, do: :ok = DeviceCerts.claim_verification("203.0.113.4")
+      for _ <- 1..20,
+          do: {:error, :refused} = DeviceCerts.refuse_unattributed("203.0.113.4", :refused)
+
       assert %{count: 20} = window(:device_verification_source, "203.0.113.4")
+      watch_sources!()
 
       for _ <- 1..50 do
-        assert {:error, {:rate_limited, _}} = DeviceCerts.claim_verification("203.0.113.4")
+        assert {:error, {:rate_limited, _}} =
+                 DeviceCerts.refuse_unattributed("203.0.113.4", :refused)
       end
 
+      assert sources() == []
       assert %{count: 20} = window(:device_verification_source, "203.0.113.4")
     end
 
-    test "the installation's bound holds across many sources and two members" do
+    test "the installation's bound holds across many sources and two members: the 201st is refused" do
       for n <- 1..200 do
         # Half the sources reach one member, half another.
         if n == 101, do: Prima.RateLimiter.reset()
-        assert DeviceCerts.claim_verification("10.1.#{div(n, 250)}.#{rem(n, 250)}") == :ok
+        source = "10.1.#{div(n, 250)}.#{rem(n, 250)}"
+        assert DeviceCerts.refuse_unattributed(source, :refused) == {:error, :refused}
       end
 
+      assert {:error, {:rate_limited, retry_after_ms}} =
+               DeviceCerts.refuse_unattributed("10.9.9.8", :refused)
+
+      assert retry_after_ms in 1..60_000
       Prima.RateLimiter.reset()
-      assert {:error, {:rate_limited, _}} = DeviceCerts.claim_verification("10.9.9.9")
+
+      assert {:error, {:rate_limited, _}} =
+               DeviceCerts.refuse_unattributed("10.9.9.9", :refused)
+
+      assert %{count: 200} = window(:device_verification_installation, "installation")
+    end
+
+    test "past this member's installation count, a flood from fresh addresses writes nothing" do
+      for n <- 1..200 do
+        source = "10.2.#{div(n, 250)}.#{rem(n, 250)}"
+        assert DeviceCerts.refuse_unattributed(source, :refused) == {:error, :refused}
+      end
+
+      watch_sources!()
+
+      for n <- 1..20 do
+        assert {:error, {:rate_limited, _}} =
+                 DeviceCerts.refuse_unattributed("10.3.0.#{n}", :refused)
+      end
+
+      assert sources() == []
     end
 
     test "a source the ingress did not know is charged to one shared bucket" do
-      for _ <- 1..20, do: :ok = DeviceCerts.claim_verification(nil)
-      assert {:error, {:rate_limited, _}} = DeviceCerts.claim_verification(nil)
+      for _ <- 1..20, do: {:error, :refused} = DeviceCerts.refuse_unattributed(nil, :refused)
+      assert {:error, {:rate_limited, _}} = DeviceCerts.refuse_unattributed(nil, :refused)
       assert window(:device_verification_source, "unknown")
+      assert {:error, {:rate_limited, _}} = DeviceCerts.verification_room(nil)
+    end
+  end
+
+  describe "claim_attributed/1" do
+    test "20 a minute per name, never the address's or the installation's, and a spent name refuses with its retry" do
+      for _ <- 1..20, do: assert(DeviceCerts.claim_attributed({:person, "usr_one"}) == :ok)
+      assert %{count: 20} = window(:device_verification_person, "usr_one")
+
+      assert {:error, {:rate_limited, retry_after_ms}} =
+               DeviceCerts.claim_attributed({:person, "usr_one"})
+
+      assert retry_after_ms in 1..60_000
+
+      # Another member reads the cell's count.
+      Prima.RateLimiter.reset()
+      assert {:error, {:rate_limited, _}} = DeviceCerts.claim_attributed({:person, "usr_one"})
+
+      # Another name, and a client of the same spelling, have their own.
+      assert DeviceCerts.claim_attributed({:person, "usr_two"}) == :ok
+      assert DeviceCerts.claim_attributed({:client, "usr_one"}) == :ok
+
+      assert window(:device_verification_installation, "installation") == nil
+      assert window(:device_verification_source, "unknown") == nil
+    end
+  end
+
+  describe "verification_room/2" do
+    test "reads and never counts; on this node alone it reads no database" do
+      source = "192.0.2.70"
+      for _ <- 1..5, do: assert(DeviceCerts.verification_room(source) == :ok)
+      assert window(:device_verification_source, source) == nil
+
+      for _ <- 1..19, do: {:error, :refused} = DeviceCerts.refuse_unattributed(source, :refused)
+      assert DeviceCerts.verification_room(source) == :ok
+      assert %{count: 19} = window(:device_verification_source, source)
+
+      {:error, :refused} = DeviceCerts.refuse_unattributed(source, :refused)
+      assert {:error, {:rate_limited, _}} = DeviceCerts.verification_room(source)
+      assert {:error, {:rate_limited, _}} = DeviceCerts.verification_room(source, :node)
+      assert %{count: 20} = window(:device_verification_source, source)
+
+      # Another member: this node's own read has room and asks no database;
+      # the cell's read refuses.
+      Prima.RateLimiter.reset()
+      watch_sources!()
+      assert DeviceCerts.verification_room(source, :node) == :ok
+      assert sources() == []
+      assert {:error, {:rate_limited, _}} = DeviceCerts.verification_room(source)
     end
   end
 
@@ -1181,6 +1462,46 @@ defmodule Sanctum.DeviceCertsTest do
 
       # Only the directory was asked, never `https://a.example`.
       refute Enum.any?(Sanctum.Test.DirectoryServer.requests(), &(&1.target =~ "a.example"))
+    end
+
+    test "a forged certificate naming their client and identifier: past the installation's bound no head or directory is read, under it the word it always got",
+         %{device: device, identity: identity} do
+      # The cached head past its bound: checking the certificate's subject
+      # would read the directory again.
+      {1, _} =
+        Arca.Repo.update_all(
+          from(h in Arca.Schemas.DirectoryHead, where: h.identifier == ^identity.identifier),
+          set: [verified_at: DateTime.add(DateTime.utc_now(), -400, :second)]
+        )
+
+      _before = Sanctum.Test.DirectoryServer.requests()
+
+      # Under the bound it is checked as every connect always was, and
+      # refused for what its certificate is.
+      assert connect(forged(device), "192.0.2.89") == {:error, :bad_signature}
+      _refreshed = Sanctum.Test.DirectoryServer.requests()
+
+      # Past it, a certificate this home cannot tie to the client's key
+      # leads nowhere near the person's head.
+      {1, _} =
+        Arca.Repo.update_all(
+          from(h in Arca.Schemas.DirectoryHead, where: h.identifier == ^identity.identifier),
+          set: [verified_at: DateTime.add(DateTime.utc_now(), -400, :second)]
+        )
+
+      spend!(:device_connect_installation, "installation", 199, 200)
+      watch_sources!()
+
+      assert {:error, {:rate_limited, _}} = connect(forged(device), "192.0.2.90")
+
+      assert Enum.sort(sources()) == ["paired_clients", "request_rate_windows"]
+      assert Sanctum.Test.DirectoryServer.requests() == []
+      assert window(:device_connect_client, device.client_id) == nil
+
+      # The device itself, proving its key, is checked as ever: its head is
+      # read again past the bound.
+      assert {:ok, _ctx} = connect(device, "192.0.2.91")
+      assert Sanctum.Test.DirectoryServer.requests() != []
     end
 
     test "the context is established only where the certificate, the identity row read for it and the client name one person",

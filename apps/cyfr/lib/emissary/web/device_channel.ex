@@ -95,11 +95,16 @@ defmodule Emissary.Web.DeviceChannel do
   ordinary intent naming `pairing.renew` is answered with the refusal of
   its handler, which takes only the renewal exchange's context.
 
-  A connect proof goes to the verifier, whose first step reads the
-  connect bounds without counting, this node's and then the cell's, before
-  any signature is checked (`Sanctum.DeviceCerts`); only a failed proof
-  counts against them, and a renewal counts against the bounds pairing
-  completions are held to. A spent bound closes with `1013`.
+  A proof goes to the verifier (`Sanctum.DeviceCerts`), whose first step
+  reads the address's bound without counting, this node's and then the
+  cell's, before any signature is checked. A proof made by the key the
+  named client's row stores is that client's, and counts only against
+  the client's own budget: a connect only when it fails, a renewal every
+  time. Any other proof is no one's, and counts against the address and
+  the installation; connects and renewals count in separate bounds, so
+  bad connects cannot starve renewals. So a flood of proofs naming a
+  client never spends that client's budget. A spent bound closes with
+  `1013`.
 
   ## Keeping the connection
 
@@ -139,8 +144,9 @@ defmodule Emissary.Web.DeviceChannel do
       confirmed fresh with their directory (reason `unavailable` for
       both: the work pauses, the pairing stands), or a verification bound
       is spent (reason `rate_limited; retry_after_s=N`, the seconds until
-      the bound opens again). The glass retries later, as it does after
-      any close it does not read.
+      the bound opens again; the recorded sentence says whether it was
+      the address's and the installation's or this device's own). The
+      glass retries later, as it does after any close it does not read.
 
   A renewal the gate refused was recorded by the gate; the close records
   nothing more.
@@ -867,8 +873,9 @@ defmodule Emissary.Web.DeviceChannel do
 
   # The close reason is the refusal's class; a spent bound adds when to
   # try again, in whole seconds.
-  defp close_reason(%Prima.Refusal{reason: {:rate_limited, retry_after_ms}} = refusal),
-    do: "#{refusal.class}; retry_after_s=#{retry_after_s(retry_after_ms)}"
+  defp close_reason(%Prima.Refusal{reason: {spent, retry_after_ms}} = refusal)
+       when spent in [:rate_limited, :device_rate_limited],
+       do: "#{refusal.class}; retry_after_s=#{retry_after_s(retry_after_ms)}"
 
   defp close_reason(%Prima.Refusal{class: class}), do: Atom.to_string(class)
 
@@ -915,7 +922,10 @@ defmodule Emissary.Web.DeviceChannel do
   # A remote person's identity that could not be confirmed fresh is a
   # pause, as a store that could not answer is: never a sign-out.
   defp class(reason) when reason in [:unavailable, :identity_stale], do: :unavailable
-  defp class({:rate_limited, _retry_after_ms}), do: :rate_limited
+
+  defp class({spent, _retry_after_ms}) when spent in [:rate_limited, :device_rate_limited],
+    do: :rate_limited
+
   defp class(_reason), do: :unauthenticated
 
   defp sentence(:oversize_frame), do: "The frame is larger than any device protocol message"
@@ -957,7 +967,12 @@ defmodule Emissary.Web.DeviceChannel do
   defp sentence(:unavailable), do: "This home could not check the device now; retry shortly"
 
   defp sentence({:rate_limited, retry_after_ms}),
-    do: "Too many device verifications from here; retry in #{retry_after_s(retry_after_ms)} s"
+    do:
+      "Too many device verifications from this address or across this home; " <>
+        "retry in #{retry_after_s(retry_after_ms)} s"
+
+  defp sentence({:device_rate_limited, retry_after_ms}),
+    do: "This device has made too many verifications; retry in #{retry_after_s(retry_after_ms)} s"
 
   defp sentence(_reason), do: "The device's certificate could not be renewed"
 

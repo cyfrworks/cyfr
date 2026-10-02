@@ -39,18 +39,28 @@ defmodule Sanctum.RemoteCertification do
   answer either:
 
     * without a `proof`, the `renew` challenge (`Prima.DeviceCert.Challenge`)
-      for this home, the record's athanor, client and device key. Its
-      nonce is 16 random bytes and the first 16 bytes of an HMAC-SHA256,
-      under a key derived from the keyring
+      for this home and the athanor, client and device key the
+      certificate names. Its nonce is 16 random bytes and the first 16
+      bytes of an HMAC-SHA256, under a key derived from the keyring
       (`Sanctum.Consent.Authz.derived_key("remote-renewal")`), over those
-      bytes, the record, its binding, its `key_epoch` and the challenge's
-      expiry: only this home makes one, and one names exactly one record
-      under one `key_epoch`.
+      bytes, the binding the certificate claims (the person's identifier,
+      its `key_epoch`, the other home, the athanor, the client and the
+      device key) and the challenge's expiry: only this home makes one,
+      and one names exactly that binding. This call reads nothing, so it
+      costs anyone who asks no database work; whether a certification
+      stands is answered to the proof.
     * with the `proof` over it, the proof is held to the challenge rebuilt
-      from its own random half, within the window this home issues in, and
-      its nonce is used once, durably, by every member, for the
-      challenge's life and the configured clock tolerance
-      (`clock_skew_seconds`, `Arca.RequestRateWindows`). Then the replacement is signed, its
+      from its own random half and the certificate's binding, within the
+      window this home issues in, and its signature checked, before
+      anything is read. Then the certification is read and held to that
+      binding: the same device key and athanor, for the person this home
+      holds local keys for under the identifier, active, and under the
+      `key_epoch` the certificate claims, so a challenge issued before the
+      record moved renews nothing. Then the person and their head must
+      stand as above, the head being that `key_epoch`, and the nonce is used once,
+      durably, by every member, for the challenge's life and the
+      configured clock tolerance (`clock_skew_seconds`,
+      `Arca.RequestRateWindows`). Then the replacement is signed, its
       `key_epoch` must be the record's, and the record's expiry moves
       (`Arca.DeviceCertifications.renew/3`), which reads every condition
       again under the person's lock. Only then is the certificate
@@ -61,10 +71,28 @@ defmodule Sanctum.RemoteCertification do
   confirmation. The other home records nothing for a renewal: it checks
   each certificate against the person's head (`Sanctum.DeviceCerts`).
 
-  Every call, with or without a proof, counts against the verification
-  bounds before anything is read (`Sanctum.DeviceCerts.claim_verification/1`).
+  ## Bounds
+
+  Both calls first read the source address's verification window without
+  counting (`Sanctum.DeviceCerts`, its module doc): the challenge call
+  this node's alone, which reads no database; the proof call this node's
+  and the cell's. A proof call whose proof verifies under the device key
+  of a certification that stands (active, under the `key_epoch` the
+  certificate claims and the person's head, the person active) is that
+  person's, counted against their own 20 a minute before the work it asks
+  for, and never against the address or the installation. Any other
+  proof call is no one's, a withdrawn or ended certification's own key
+  included: it is counted against the address (20 a minute) and the
+  installation (200 a minute) and refused. So neither a flood naming a
+  person's identifier and client nor a dead device's key can spend what
+  the person's standing devices renew under. The challenge call counts
+  nothing.
 
   ## Refusals
+
+  The challenge call refuses only a certificate this home did not issue
+  for an identity, and a spent bound; every refusal below that needs the
+  record is the proof call's.
 
     * `:not_found` — no standing certification here for what the
       certificate locates: another issuer, a person this home holds no
@@ -76,11 +104,13 @@ defmodule Sanctum.RemoteCertification do
     * `:revoked` — the record was withdrawn.
     * `:not_standing` — the person is denied.
     * `:proof_refused` — the proof does not answer a challenge this home
-      issued for the record under its device key, or arrived outside its
-      window; `:replayed`, its nonce already used.
+      issued for the certificate's binding under its device key, or
+      arrived outside its window; `:replayed`, its nonce already used.
     * `:stale_key_epoch` — a certification whose person's head moved
       while it was confirmed.
-    * `{:rate_limited, retry_after_ms}`, `:unavailable`.
+    * `{:rate_limited, retry_after_ms}` — the address's, the
+      installation's or the person's verification bound is spent.
+    * `:unavailable`.
   """
 
   alias Prima.DeviceCert
@@ -239,23 +269,58 @@ defmodule Sanctum.RemoteCertification do
   carries `certificate`, the JSON of a certificate this home issued, which
   only locates the record, and `proof`, absent on the first call.
 
-  Answers `%{challenge: map}` without a proof, and `%{certificate: map}`,
-  the replacement's JSON, with the proof over it.
+  Answers `%{challenge: map}` without a proof, reading nothing, and
+  `%{certificate: map}`, the replacement's JSON, with the proof over it.
   """
   @spec renew(Context.t(), map()) ::
           {:ok, %{challenge: map()} | %{certificate: map()}} | {:error, term()}
   def renew(%Context{} = ctx, args) when is_map(args) do
     now = now_ms()
+    source = ctx.client_ip
 
-    with :ok <- DeviceCerts.claim_verification(ctx.client_ip),
-         {:ok, locator} <- locator(Map.get(args, "certificate")),
+    case Map.get(args, "proof") do
+      nil ->
+        with :ok <- DeviceCerts.verification_room(source, :node),
+             {:ok, locator} <- locator(Map.get(args, "certificate")) do
+          challenged(locator, now)
+        end
+
+      proof ->
+        with :ok <- DeviceCerts.verification_room(source) do
+          case attributed(Map.get(args, "certificate"), proof, now) do
+            {:ok, user_id, record, proof} -> renewed(user_id, record, proof)
+            {:unattributed, refused} -> DeviceCerts.refuse_unattributed(source, refused)
+            {:error, :unavailable} = unanswered -> unanswered
+          end
+        end
+    end
+  end
+
+  # A proof call is the person's once its proof, over a challenge this home
+  # made for the binding the certificate claims, verifies under that
+  # binding's device key, and the certification the certificate locates
+  # holds that key and athanor. Everything before the reads is the
+  # signature's, so a proof this home never asked for reads nothing.
+  #
+  # Only a certification that stands makes it so: active, for the binding
+  # and the `key_epoch` the challenge covered, of a person who stands under
+  # that `key_epoch` now. A withdrawn or ended certification's key is a
+  # dead device's, and its calls are no one's, so it cannot spend what the
+  # person's other devices renew under.
+  defp attributed(certificate, proof, now) do
+    with {:ok, locator} <- locator(certificate),
+         {:ok, proof} <- read_proof(proof),
+         {:ok, expected} <- expected(proof.challenge, locator, now),
+         :ok <- verified(Proof.verify(proof, expected, now)),
          {:ok, user_id} <- local_person(locator.subject.identifier),
          {:ok, record} <- certification(user_id, locator),
+         :ok <- standing_record(record),
+         :ok <- claimed_epoch(record, locator),
          :ok <- current(user_id, record) do
-      case Map.get(args, "proof") do
-        nil -> challenged(record, now)
-        proof -> renewed(record, proof, now)
-      end
+      {:ok, user_id, record, proof}
+    else
+      {:error, :unavailable} -> {:error, :unavailable}
+      {:error, refused} -> {:unattributed, refused}
     end
   end
 
@@ -291,8 +356,9 @@ defmodule Sanctum.RemoteCertification do
     end
   end
 
-  # The record the certificate locates, standing, for the same device key
-  # and athanor.
+  # The record the certificate locates, holding its device key and
+  # athanor, at any state; whether it stands is asked next. A record
+  # holding another binding refuses as its state says.
   defp certification(user_id, %DeviceCert{} = certificate) do
     case Arca.DeviceCertifications.get(
            Prima.Actor.system(),
@@ -300,14 +366,18 @@ defmodule Sanctum.RemoteCertification do
            certificate.audience,
            certificate.client_id
          ) do
-      {:ok, %{state: "active"} = record} ->
-        if record.device_public_key == certificate.device_key and
-             record.audience_athanor == certificate.athanor,
-           do: {:ok, record},
-           else: {:error, :binding_changed}
+      {:ok, record} ->
+        cond do
+          record.device_public_key == certificate.device_key and
+              record.audience_athanor == certificate.athanor ->
+            {:ok, record}
 
-      {:ok, _withdrawn} ->
-        {:error, :revoked}
+          record.state == "active" ->
+            {:error, :binding_changed}
+
+          true ->
+            {:error, :revoked}
+        end
 
       {:error, :not_found} ->
         {:error, :not_found}
@@ -315,6 +385,16 @@ defmodule Sanctum.RemoteCertification do
       {:error, _unanswered} ->
         {:error, :unavailable}
     end
+  end
+
+  defp standing_record(%{state: "active"}), do: :ok
+  defp standing_record(_withdrawn), do: {:error, :revoked}
+
+  # The record under the `key_epoch` the certificate claims, which the
+  # challenge's HMAC covered: a challenge issued before the record moved
+  # to another `key_epoch` renews nothing.
+  defp claimed_epoch(record, %DeviceCert{subject: %{key_epoch: claimed}}) do
+    if record.key_epoch == claimed, do: :ok, else: {:error, :certification_ended}
   end
 
   # The person active, local and enrolled, their head the record's
@@ -340,28 +420,34 @@ defmodule Sanctum.RemoteCertification do
     end
   end
 
-  defp challenged(record, now) do
+  # The challenge for the binding the certificate claims, from what it
+  # carries alone: nothing is read.
+  defp challenged(%DeviceCert{} = locator, now) do
     expires_at = now + Challenge.lifetime_ms()
     random = :crypto.strong_rand_bytes(@random_bytes)
 
     case Challenge.new(
            purpose: :renew,
            home: Person.home(),
-           athanor: record.audience_athanor,
-           client_id: record.client_id,
-           device_key: record.device_public_key,
-           nonce: nonce(random, record, expires_at),
+           athanor: locator.athanor,
+           client_id: locator.client_id,
+           device_key: locator.device_key,
+           nonce: nonce(random, locator, expires_at),
            now: now
          ) do
-      {:ok, challenge} -> {:ok, %{challenge: Challenge.encode(challenge)}}
-      {:error, _malformed} -> {:error, :unavailable}
+      {:ok, challenge} ->
+        {:ok, %{challenge: Challenge.encode(challenge)}}
+
+      {:error, _malformed} ->
+        {:error, {:invalid_argument, "The certificate is not a device certificate a home signs"}}
     end
   end
 
-  defp renewed(record, proof, now) do
-    with {:ok, proof} <- read_proof(proof),
-         {:ok, expected} <- expected(proof.challenge, record, now),
-         :ok <- verified(Proof.verify(proof, expected, now)),
+  # The person's own budget first, then the proof used once, then the
+  # replacement, whose record's update reads every condition again under
+  # the person's lock.
+  defp renewed(user_id, record, proof) do
+    with :ok <- DeviceCerts.claim_attributed({:person, user_id}),
          {:ok, skew_ms} <- skew_ms(),
          :ok <- consumed(proof, skew_ms),
          {:ok, certificate} <- reissued(record),
@@ -370,12 +456,13 @@ defmodule Sanctum.RemoteCertification do
     end
   end
 
-  # The challenge this home would have issued for the record, from the
-  # presented one's random half and expiry, inside the window it issues
-  # in: a challenge expiring later was not issued here.
+  # The challenge this home would have issued for the binding the
+  # certificate claims, from the presented one's random half and expiry,
+  # inside the window it issues in: a challenge expiring later was not
+  # issued here.
   defp expected(
          %Challenge{nonce: <<random::binary-size(@random_bytes), _mac::binary>>} = presented,
-         record,
+         %DeviceCert{} = locator,
          now
        ) do
     if presented.expires_at <= now + Challenge.lifetime_ms() do
@@ -384,29 +471,32 @@ defmodule Sanctum.RemoteCertification do
          presented
          | purpose: :renew,
            home: Person.home(),
-           athanor: record.audience_athanor,
-           client_id: record.client_id,
-           device_key: record.device_public_key,
-           nonce: nonce(random, record, presented.expires_at)
+           athanor: locator.athanor,
+           client_id: locator.client_id,
+           device_key: locator.device_key,
+           nonce: nonce(random, locator, presented.expires_at)
        }}
     else
       {:error, :proof_refused}
     end
   end
 
-  defp expected(_presented, _record, _now), do: {:error, :proof_refused}
+  defp expected(_presented, _locator, _now), do: {:error, :proof_refused}
 
-  defp nonce(random, record, expires_at) do
+  # The binding the certificate claims, which the proof call holds the
+  # record to: the person's identifier and `key_epoch`, the other home,
+  # the athanor, the client and the device key.
+  defp nonce(random, %DeviceCert{subject: %{kind: :identity} = subject} = locator, expires_at) do
     binding =
       Encoding.jcs!(%{
         "protocol" => @nonce_protocol,
         "home" => Person.home(),
-        "certification" => record.id,
-        "audience" => record.audience_home,
-        "athanor" => record.audience_athanor,
-        "client_id" => record.client_id,
-        "device_key" => Encoding.b64(record.device_public_key),
-        "key_epoch" => record.key_epoch,
+        "identifier" => subject.identifier,
+        "key_epoch" => subject.key_epoch,
+        "audience" => locator.audience,
+        "athanor" => locator.athanor,
+        "client_id" => locator.client_id,
+        "device_key" => Encoding.b64(locator.device_key),
         "random" => Encoding.b64(random),
         "expires_at" => expires_at
       })

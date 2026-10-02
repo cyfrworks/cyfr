@@ -346,6 +346,19 @@ defmodule Emissary.Web.DeviceChannelTest do
       )
     end
 
+    test "a glass whose client is gone, after a restore for instance, is told its standing ended",
+         %{session_ctx: session_ctx} do
+      device = pair!(session_ctx)
+
+      {1, _} =
+        Arca.Repo.delete_all(
+          from(c in Arca.Schemas.PairedClient, where: c.id == ^device.client_id)
+        )
+
+      {state, challenge} = connected(device)
+      assert_refused(send_frame(state, proof_message(challenge, device)), 4403, "forbidden")
+    end
+
     test "a revoked client cannot renew", %{session_ctx: session_ctx} do
       device = pair!(session_ctx)
 
@@ -778,7 +791,8 @@ defmodule Emissary.Web.DeviceChannelTest do
                  send_frame(state, proof_message(challenge, glass))
 
         assert String.to_integer(seconds) in 1..60
-        assert_one_decision(closed, "rate_limited", :none)
+        decision = assert_one_decision(closed, "rate_limited", :none)
+        assert decision.reason =~ "from this address or across this home"
         assert_closed(closed)
       end
 
@@ -795,6 +809,37 @@ defmodule Emissary.Web.DeviceChannelTest do
                  invitation.invitation_secret,
                  %{device_key: device_key}
                )
+    end
+
+    test "a device past its own budget closes 1013, and the sentence says it was this device's",
+         %{session_ctx: session_ctx} do
+      device = pair!(session_ctx)
+
+      # Its own failures, as other members counted them: the address it
+      # connects from has spent nothing.
+      for _ <- 1..20 do
+        :ok =
+          Arca.RequestRateWindows.claim(
+            Prima.Actor.system(),
+            :device_connect_client,
+            device.client_id,
+            20,
+            60_000
+          )
+      end
+
+      {state, challenge} = connected(device)
+
+      assert {:stop, :normal, {1013, "rate_limited; retry_after_s=" <> seconds}, closed} =
+               send_frame(state, proof_message(challenge, device))
+
+      assert String.to_integer(seconds) in 1..60
+      decision = assert_one_decision(closed, "rate_limited", :none)
+      assert decision.reason =~ "This device has made too many verifications"
+      assert_closed(closed)
+
+      # Another device, from the same address, connects.
+      proven(pair!(session_ctx))
     end
   end
 

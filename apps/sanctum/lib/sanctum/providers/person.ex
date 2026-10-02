@@ -564,6 +564,12 @@ defmodule Sanctum.Providers.Person do
   defp renewal_refusal(reason) when reason in [:proof_refused, :replayed],
     do: refused(:unauthenticated, reason, "The device's proof of its key was refused.")
 
+  # The verification bounds answer their retry in milliseconds; the
+  # refusal reads whole seconds, rounded up, as the pairing provider's
+  # does.
+  defp renewal_refusal({:rate_limited, retry_after_ms}) when is_integer(retry_after_ms),
+    do: {:rate_limited, div(retry_after_ms + 999, 1_000)}
+
   defp renewal_refusal(reason), do: refusal(reason)
 
   defp refused(class, reason, message),

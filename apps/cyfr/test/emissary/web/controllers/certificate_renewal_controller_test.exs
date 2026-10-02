@@ -160,8 +160,11 @@ defmodule Emissary.Web.CertificateRenewalControllerTest do
   end
 
   test "each refusal is the refusal shape at its class's status",
-       %{conn: conn, person: person, certificate: certificate} do
-    unknown = renew(conn, %{"certificate" => %{certificate | "client_id" => "pcl_nobody"}})
+       %{conn: conn, person: person, certificate: certificate, private: private} do
+    # The challenge reads nothing: a certification this home does not hold
+    # is answered to the proof.
+    nobody = %{certificate | "client_id" => "pcl_nobody"}
+    unknown = renew(conn, %{"certificate" => nobody, "proof" => proved(nobody, private)})
     assert %{"code" => "not_found", "message" => message} = json_response(unknown, 404)
     assert message =~ "certify it again"
 
@@ -173,8 +176,19 @@ defmodule Emissary.Web.CertificateRenewalControllerTest do
         set: [head_hash: Prima.Digest.sha256("rotated")]
       )
 
-    ended = renew(build_conn(), %{"certificate" => certificate})
+    ended =
+      renew(build_conn(), %{"certificate" => certificate, "proof" => proved(certificate, private)})
+
     assert %{"code" => "conflict", "message" => message} = json_response(ended, 409)
     assert message =~ "keys changed"
+  end
+
+  # The challenge the first call answers for `certificate`, signed by
+  # `private`: the proof the second call carries.
+  defp proved(certificate, private) do
+    first = renew(build_conn(), %{"certificate" => certificate})
+    assert %{"challenge" => challenge} = json_response(first, 200)
+    {:ok, held} = Challenge.decode(challenge)
+    Proof.encode(Proof.sign(held, private))
   end
 end
