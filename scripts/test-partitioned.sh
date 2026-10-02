@@ -39,7 +39,15 @@ helper="$script_dir/test-partition-env.exs"
 checkout=$(pwd -P)
 if [ -z "${MIX_BUILD_PATH:-}" ] && [ "$ADAPTER" = postgres ]; then export MIX_BUILD_PATH=_build/test_pg; fi
 export CYFR_DATABASE="$ADAPTER" MIX_ENV=test CYFR_TEST_PARTITION_ENV_LIBRARY=0
-cores=$(sysctl -n hw.ncpu 2>/dev/null || nproc 2>/dev/null || echo 4)
+# The cores this run may size itself to: the machine's, or the share a
+# caller that runs several at once gives it (scripts/heavy-check.sh -s).
+if [ -n "${CYFR_TEST_CORES:-}" ]; then
+  case "$CYFR_TEST_CORES" in *[!0-9]*|0*) echo 'CYFR_TEST_CORES must be a positive decimal integer' >&2; exit 64 ;; esac
+  [ "${#CYFR_TEST_CORES}" -le 4 ] || { echo 'CYFR_TEST_CORES is at most 9999' >&2; exit 64; }
+  cores=$CYFR_TEST_CORES
+else
+  cores=$(sysctl -n hw.ncpu 2>/dev/null || nproc 2>/dev/null || echo 4)
+fi
 per=$(( cores / PARTITIONS )); [ "$per" -lt 2 ] && per=2
 # Dirty I/O schedulers are threads that block inside the SQLite driver while
 # a writer waits out a busy quantum; scaling them down with the partition

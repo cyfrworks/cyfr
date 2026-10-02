@@ -95,6 +95,13 @@ refuses -n 2 -a postgres apps/cyfr/test/cluster
 refuses -n 2 -a postgres test/cluster
 refuses -n 1 -a sqlite -- --include cluster
 CYFR_DATABASE_URL=bad refuses -n 1 -a postgres
+CYFR_TEST_CORES=0 refuses -n 1
+CYFR_TEST_CORES=many refuses -n 1
+
+# A caller's share of the cores sizes the partitions in place of the machine's.
+CYFR_TEST_CORES=6 bash "$runner" -n 2 >"$scratch/share" 2>&1 || fail 'a run on a share of the cores failed'
+grep -q '^==> compiling once (sqlite, 2 partitions, 3 schedulers each)$' "$scratch/share" || fail 'a share of the cores did not size the partitions'
+rm -f "$TRACE"/cyfr-t.*-p*
 
 # /bin/bash is Bash 3.2 on macOS; this specifically exercises empty "$@".
 /bin/bash "$runner" -n 2 >"$scratch/success" 2>&1
