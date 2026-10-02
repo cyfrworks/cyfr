@@ -39,6 +39,10 @@ permissions:
 
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+  # Mix through 1.20 can wait forever on its own build lock the second
+  # time a fresh lock directory is taken, and a runner starts every one
+  # fresh. One Mix process at a time builds here, so the lock is off.
+  MIX_OS_CONCURRENCY_LOCK: 0
 
 jobs:
   elixir-audit:

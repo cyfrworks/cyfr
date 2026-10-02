@@ -12,6 +12,10 @@ RUN apt-get update && apt-get install -y \
     && rm -rf /var/lib/apt/lists/*
 
 ENV MIX_ENV=prod
+# Mix through 1.20 can wait forever on its own build lock the second time a
+# fresh lock directory is taken, and every build step starts one fresh. One
+# Mix process at a time builds here, so the lock is off.
+ENV MIX_OS_CONCURRENCY_LOCK=0
 
 WORKDIR /app
 
