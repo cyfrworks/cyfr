@@ -732,9 +732,14 @@ defmodule Prima.SlotsTest do
       assert {:error, :key_unreaped} = Slots.acquire(server, "ath_decay", :root)
 
       wait_until(fn -> match?({:ok, _}, Slots.acquire(server, "ath_decay", :root)) end)
-      # The sweep drops the decayed entries from the status too.
-      assert {:ok, _} = Slots.sweep(server)
-      assert Slots.status(server).unreaped == %{}
+
+      # The sweep drops the decayed entries from the status too. Each note
+      # decays from its own moment, so the key is admitted again once the
+      # first has gone, and the second goes after it.
+      wait_until(fn ->
+        {:ok, _} = Slots.sweep(server)
+        Slots.status(server).unreaped == %{}
+      end)
     end
 
     test "forgiving a key clears its penalty at once" do

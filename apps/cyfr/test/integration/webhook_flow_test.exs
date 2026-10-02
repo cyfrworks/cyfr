@@ -143,15 +143,30 @@ defmodule CyfrWeb.WebhookFlowIntegrationTest do
     # must be accepted.
     {:ok, hook_row} = Arca.WebhookStorage.get_by_slug(slug)
 
-    retry_after_failure =
-      build_conn()
-      |> put_req_header("content-type", "application/json")
-      |> put_req_header("x-cyfr-signature", sig)
-      |> put_req_header("x-cyfr-delivery", delivery_id)
-      |> post("/hooks/" <> slug, body)
+    # The claim is settled after the stop event; until it is, the delivery
+    # is still in flight and a retry reads as a duplicate, which runs
+    # nothing.
+    test = self()
 
-    assert json_response(retry_after_failure, 200)["status"] == "accepted"
-    await_invoke_stop(json_response(retry_after_failure, 200)["request_id"])
+    Prima.Test.Wait.wait_until(
+      fn ->
+        retry =
+          build_conn()
+          |> put_req_header("content-type", "application/json")
+          |> put_req_header("x-cyfr-signature", sig)
+          |> put_req_header("x-cyfr-delivery", delivery_id)
+          |> post("/hooks/" <> slug, body)
+          |> json_response(200)
+
+        if retry["status"] == "accepted", do: send(test, {:retry_accepted, retry["request_id"]})
+        retry["status"] == "accepted"
+      end,
+      2_000,
+      "the failed delivery's retry to be accepted"
+    )
+
+    assert_receive {:retry_accepted, retry_request_id}
+    await_invoke_stop(retry_request_id)
 
     # And a delivery whose claim is live — staked here rather than raced
     # for — is still deduped over the real HTTP path. `claimed` means "in

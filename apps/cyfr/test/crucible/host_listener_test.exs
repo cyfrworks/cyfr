@@ -610,8 +610,21 @@ defmodule Crucible.HostListenerTest do
           rem(byte_size(body), 65_536)
         )
 
-      assert {413, %{"error" => "lost"}} =
-               post(url, path, [header], Stream.concat(chunks, [rest]))
+      # The listener answers and closes with the rest unread, so a client
+      # still sending may find the connection closed before it reads the
+      # answer. Either way nothing of the call is taken.
+      streamed =
+        try do
+          post(url, path, [header], Stream.concat(chunks, [rest]))
+        rescue
+          error in Req.TransportError -> {:closed, error.reason}
+        end
+
+      case streamed do
+        {413, %{"error" => "lost"}} -> :ok
+        {:closed, reason} when reason in [:closed, :econnreset, :epipe] -> :ok
+        other -> flunk("the streamed body was not refused: #{inspect(other)}")
+      end
 
       assert live_events() == []
       assert Process.alive?(fixture.pid)

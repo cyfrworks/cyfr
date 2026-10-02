@@ -556,6 +556,8 @@ defmodule Opus.WorkerServiceTest do
       assert :ok = WorkerService.kill(next_id)
       grace = Opus.Settings.pool!().release_grace_ms
       assert %{state: :tainted} = pooled(id)
+      # The keeper is asked after the kill has answered.
+      wait_until(fn -> ScriptedKeeper.releases(context.keeper) != [] end)
       assert [{^id, ^grace}] = ScriptedKeeper.releases(context.keeper)
       assert [%{args: %{"attempts" => [reported]}}] = reports(context, grace + 5_000)
       assert reported == next.attempt
