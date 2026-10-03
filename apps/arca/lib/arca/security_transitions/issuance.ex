@@ -118,7 +118,7 @@ defmodule Arca.SecurityTransitions.Issuance do
   """
   @spec held(keyword(), (-> {:ok, term()} | {:error, term()})) ::
           {:ok, term()} | {:error, term()}
-  # arca:db-raise-ok a transaction step: every caller (`Arca.WebhookStorage`, `Arca.VaultStorage`) rescues around it.
+  # arca:db-raise-ok a transaction step: every caller (`Arca.WebhookStorage`, `Arca.VaultStorage`, `Arca.ProviderCredentialStorage`) rescues around it.
   def held(opts, write) when is_list(opts) and is_function(write, 0) do
     case {Keyword.get(opts, :lock), Keyword.get(opts, :verify)} do
       {nil, nil} ->

@@ -72,7 +72,10 @@ defmodule Sanctum.Consent.Authz do
       and the record is consumed: it must be confirmed, unexpired and
       unvoided, name exactly this person, athanor, operation, argument
       digest and preview, and have been opened by this context's own
-      credential;
+      credential. Consumed inside the caller's transaction (`consume/2`),
+      a paired device is held there through the caller's write, so a
+      revocation of it that commits after its standing was read refuses
+      the change;
     * when the record named is this change's, opened by this credential,
       and still pending, the repeat came before the proof: it waits on
       that record, answered the consent signal again with the same `id`
@@ -254,9 +257,20 @@ defmodule Sanctum.Consent.Authz do
   no longer answers, after `check/3` said it did, is `{:error, {:conflict,
   _}}`, and the caller's transaction rolls back. The caller announces the
   consumption once its transaction committed (`consumed/1`).
+
+  A paired device's context is held there through the caller's write:
+  its person, athanor, seat, paired client and certificates are locked in
+  the caller's transaction, in the standing order, before the record is,
+  and the device must still stand on them as an issuance's must
+  (`Sanctum.Issuance.device_held/1`). A revocation that committed after
+  the device's standing was read refuses the change with one of the
+  issuance's standing refusals (`Sanctum.Issuance.standing_refusals/0`),
+  and one that starts later waits for the caller's commit.
   """
   @spec consume(Context.t(), {Sanctum.Pairing.action(), change()}) ::
-          :ok | {:error, refusal() | {:confirmation_required, map()}}
+          :ok
+          | {:error,
+             refusal() | Sanctum.Issuance.standing_refusal() | {:confirmation_required, map()}}
   def consume(%Context{} = ctx, {action, change}), do: decide(ctx, action, change, :consume)
 
   def consume(%Context{}, _change), do: {:error, :invalid_request}
@@ -581,14 +595,7 @@ defmodule Sanctum.Consent.Authz do
     with :ok <- standing(ctx) do
       case mode do
         :consume ->
-          with :ok <- PendingConfirmations.check(actor, id, expected),
-               {:ok, _row} <- PendingConfirmations.consume(actor, id, expected) do
-            :ok
-          else
-            {:error, _stale} ->
-              {:error,
-               {:conflict, "The confirmation for this change no longer stands; ask again"}}
-          end
+          with :ok <- device_held(ctx), do: consume_named(actor, id, expected)
 
         :check ->
           case PendingConfirmations.check(actor, id, expected) do
@@ -606,6 +613,34 @@ defmodule Sanctum.Consent.Authz do
               reask(ctx, asked, id, reason)
           end
       end
+    end
+  end
+
+  # A paired device is held through the caller's write, in the caller's
+  # transaction (`Sanctum.Issuance.device_held/1`): the person, the
+  # athanor, the seat, the paired client and its certificates locked in
+  # the standing order, before the record is, and the device's standing
+  # asked over them. So a revocation that committed after the standing
+  # read above refuses the change, with one of the issuance's standing
+  # refusals and the caller's transaction rolled back, and one that starts
+  # later waits for the change to commit. Any other context takes no hold
+  # here: a session's or a key's standing read above locks its rows in the
+  # caller's transaction (`standing/1`).
+  defp device_held(ctx) do
+    case Sanctum.Issuance.device_held(ctx) do
+      :ok -> :ok
+      {:error, :database_error} -> {:error, :unavailable}
+      {:error, reason} -> {:error, reason}
+    end
+  end
+
+  defp consume_named(actor, id, expected) do
+    with :ok <- PendingConfirmations.check(actor, id, expected),
+         {:ok, _row} <- PendingConfirmations.consume(actor, id, expected) do
+      :ok
+    else
+      {:error, _stale} ->
+        {:error, {:conflict, "The confirmation for this change no longer stands; ask again"}}
     end
   end
 
@@ -914,12 +949,16 @@ defmodule Sanctum.Consent.Authz do
 
   @doc false
   # The caller's standing, read again as a grant or a sensitive change is
-  # decided: whatever credential admitted it must still stand, under the
-  # standing lock order (`Sanctum.Caller.revalidate_session/1`), a paired
-  # device's client and its person's seat among them. A context no stored
-  # credential backs keeps its establishment contract. Inside a caller's
-  # transaction the rows are locked in it, so a write that asks here
-  # commits only while they stand (`Sanctum.Passkeys`).
+  # decided: whatever credential admitted it must still stand
+  # (`Sanctum.Caller.revalidate_session/1`), a paired device's client and
+  # its person's seat among them. A context no stored credential backs
+  # keeps its establishment contract. A session's and a key's rows are
+  # locked in the standing order, inside a caller's transaction in it, so
+  # a write that asks here commits only while they stand
+  # (`Sanctum.Passkeys`). A paired device's client and seat are read, not
+  # locked: a sensitive change's consumption holds the device in the
+  # caller's transaction (`consume/2`), and a credential write holds it as
+  # an issuance does (`Sanctum.Issuance.device_hold/1`).
   @spec standing(Context.t()) ::
           :ok
           | {:error, :not_authenticated | :not_standing | :identity_stale | :unavailable}

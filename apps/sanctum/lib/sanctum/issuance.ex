@@ -57,6 +57,10 @@ defmodule Sanctum.Issuance do
   # whose client or certificate no longer stands (`:not_standing`).
   @standing_refusals [:missing_generation, :stale_generation, :unauthenticated, :not_standing]
 
+  @typedoc "One of the standing refusals (`standing_refusals/0`)."
+  @type standing_refusal ::
+          :missing_generation | :stale_generation | :unauthenticated | :not_standing
+
   @doc false
   # The standing refusals, for a surface that answers them
   # (`standing_refusal/1`) rather than reporting a failure.
@@ -221,19 +225,46 @@ defmodule Sanctum.Issuance do
 
   @doc false
   # The issuance a credential write that is not itself an issuance's (a
-  # webhook secret, a vault entry) runs under, as the options its Arca
-  # write takes (`Arca.SecurityTransitions.Issuance.held/2`): from a
-  # paired device's context, its expectation's `lock:` and `verify:`, so
-  # the write's own transaction holds the device's client, certificate and
-  # standing as an issuance does and refuses as one refuses; from any other
-  # context, none, and the write runs as it does.
-  @spec device_hold(Context.t()) :: {:ok, keyword()} | {:error, atom()}
+  # webhook secret, a vault entry, an OAuth provider's client credentials)
+  # runs under, as the options its Arca write takes
+  # (`Arca.SecurityTransitions.Issuance.held/2`): from a paired device's
+  # context, its expectation's `lock:` and `verify:`, so the write's own
+  # transaction holds the device's client, certificate and standing as an
+  # issuance does and refuses as one refuses; from any other context,
+  # none, and the write runs as it does. A sensitive change consumed in its
+  # write's transaction takes the same hold there (`device_held/1`).
+  @spec device_hold(Context.t()) :: {:ok, keyword()} | {:error, standing_refusal()}
   def device_hold(%Context{auth_method: :device} = ctx) do
     with {:ok, expectation} <- expectation(ctx, []),
          do: {:ok, lock: lock(expectation), verify: verify(expectation)}
   end
 
   def device_hold(%Context{}), do: {:ok, []}
+
+  @doc false
+  # The same hold taken in a transaction the caller already holds open,
+  # where a sensitive change is consumed (`Sanctum.Consent.Authz.consume/2`):
+  # from a paired device's context, its rows locked there in the standing
+  # order (`Arca.CredentialBindings.check/3`) and its policy asked over
+  # them, so the caller's write commits only while the device stands, a
+  # revocation that committed after the device's standing was read refuses
+  # it, and one that starts later waits for the commit. `:ok` from any
+  # other context. A refusal rolls the caller's transaction back; a store
+  # that could not answer is `{:error, :database_error}`.
+  @spec device_held(Context.t()) :: :ok | {:error, standing_refusal() | :database_error}
+  def device_held(%Context{auth_method: :device} = ctx) do
+    with {:ok, expectation} <- expectation(ctx, []) do
+      # The policy answers `:ok` or a refusal, never a value.
+      case Arca.CredentialBindings.check(Prima.Actor.system(), lock(expectation),
+             verify: verify(expectation)
+           ) do
+        :ok -> :ok
+        {:error, _reason} = refusal -> refusal
+      end
+    end
+  end
+
+  def device_held(%Context{}), do: :ok
 
   @doc false
   @spec lock(expectation()) :: Arca.SecurityTransitions.Issuance.targets()

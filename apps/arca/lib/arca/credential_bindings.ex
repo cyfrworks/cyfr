@@ -16,25 +16,36 @@ defmodule Arca.CredentialBindings do
   lock was won, and hands the caller's policy plain maps of what it found
   (nil where there is no row). Nothing is written.
 
+  A paired device is held to its rows the same way while a sensitive
+  change it asked for is written: its binding names its paired client and
+  the expiry of the certificate it stands under, and the check locks the
+  client and then that client's certificates expiring then, after the
+  membership, and reads the person's identity row and cached head under
+  the person's lock (`Arca.SecurityTransitions.Issuance`).
+
   A denial, an archive or a revocation that commits first is what the
   check reads; one that starts while the check holds the rows waits for
-  it. The identity domain is the one caller: it owns the policy, and a
-  surface is handed only the narrowed context or a refusal.
+  it. Run inside a caller's transaction, the check takes its locks in
+  that transaction, so they hold until the caller commits, and its
+  refusal rolls the caller's transaction back. The identity domain is
+  the one caller: it owns the policy, and a surface is handed only the
+  narrowed context or a refusal.
   """
 
   alias Arca.SecurityTransitions.Issuance
 
   @typedoc """
-  The rows a derived credential names: the person, the athanor it works
-  in, the membership its focus rests on (nil for a key, whose focus is
-  itself) and the source credential, `{:session, token_hash}` or
-  `{:api_key, id}`.
+  The rows a credential names: the person, the athanor it works in, the
+  membership its focus rests on (nil for a key, whose focus is itself)
+  and the source credential, `{:session, token_hash}`, `{:api_key, id}`
+  or a paired device's `{:device, client_id, expires_at}`.
   """
   @type binding :: %{
           required(:user_id) => String.t(),
           required(:athanor_id) => String.t(),
           required(:membership_id) => String.t() | nil,
-          required(:source) => {:session, binary()} | {:api_key, String.t()}
+          required(:source) =>
+            {:session, binary()} | {:api_key, String.t()} | {:device, String.t(), DateTime.t()}
         }
 
   @doc """

@@ -144,6 +144,7 @@ defmodule Sanctum.Recovery do
   """
 
   require Logger
+  require Sanctum.Issuance
 
   alias Prima.Identity
   alias Prima.Identity.{Encoding, RecoverRequest, State}
@@ -1659,6 +1660,13 @@ defmodule Sanctum.Recovery do
 
   defp open_refusal(_ctx, _user_id, _kind, reason)
        when reason in [:not_standing, :identity_stale, :not_authenticated],
+       do: {:error, reason}
+
+  # A paired device that no longer stands where the attempt is written
+  # (`Sanctum.Consent.Authz.consume/2`) is refused as an issuance refuses
+  # it, never as a store that could not answer.
+  defp open_refusal(_ctx, _user_id, _kind, reason)
+       when Sanctum.Issuance.standing_refusal?(reason),
        do: {:error, reason}
 
   defp open_refusal(_ctx, _user_id, _kind, _reason), do: {:error, :unavailable}

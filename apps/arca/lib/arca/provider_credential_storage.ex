@@ -41,29 +41,44 @@ defmodule Arca.ProviderCredentialStorage do
 
   def get(%Prima.Actor{}, _provider), do: {:error, :no_athanor}
 
-  @spec put(map()) :: :ok | {:error, :database_error}
-  def put(attrs) do
+  @doc """
+  Store (or replace) the row of `attrs.provider` in `attrs.athanor_id`.
+
+  `opts` may name the issuance the credentials are written under (`lock:`
+  and `verify:`, `Arca.SecurityTransitions.Issuance.held/2`): the row is
+  then written in that transaction, once the caller's standing rows are
+  locked and its policy agrees, and a refusal writes nothing.
+  """
+  @spec put(map(), keyword()) :: :ok | {:error, term()}
+  def put(attrs, opts \\ []) when is_map(attrs) and is_list(opts) do
     Arca.Repo.Errors.with_db_rescue("ProviderCredentialStorage.put", fn ->
-      now = DateTime.utc_now() |> DateTime.truncate(:microsecond)
-
-      row = %{
-        id: Prima.UUID7.generate_id("opc"),
-        athanor_id: Map.fetch!(attrs, :athanor_id),
-        provider: Map.fetch!(attrs, :provider),
-        payload_ciphertext: Map.fetch!(attrs, :payload_ciphertext),
-        created_by: attrs[:created_by],
-        inserted_at: now,
-        updated_at: now
-      }
-
-      Arca.Repo.insert_all(OauthProviderCredential, [row],
-        on_conflict: {:replace, [:payload_ciphertext, :created_by, :updated_at]},
-        conflict_target: [:athanor_id, :provider]
-      )
-
-      :ok
+      case Arca.SecurityTransitions.Issuance.held(opts, fn -> upsert(attrs) end) do
+        {:ok, :written} -> :ok
+        {:error, _reason} = refusal -> refusal
+      end
     end)
     |> Arca.Data.project()
+  end
+
+  defp upsert(attrs) do
+    now = DateTime.utc_now() |> DateTime.truncate(:microsecond)
+
+    row = %{
+      id: Prima.UUID7.generate_id("opc"),
+      athanor_id: Map.fetch!(attrs, :athanor_id),
+      provider: Map.fetch!(attrs, :provider),
+      payload_ciphertext: Map.fetch!(attrs, :payload_ciphertext),
+      created_by: attrs[:created_by],
+      inserted_at: now,
+      updated_at: now
+    }
+
+    Arca.Repo.insert_all(OauthProviderCredential, [row],
+      on_conflict: {:replace, [:payload_ciphertext, :created_by, :updated_at]},
+      conflict_target: [:athanor_id, :provider]
+    )
+
+    {:ok, :written}
   end
 
   @spec delete(Prima.Actor.t(), String.t()) ::
