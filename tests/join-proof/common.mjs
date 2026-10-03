@@ -8,11 +8,11 @@
 // Each step is one row per browser of the record; the proof fails when a
 // row does not hold, and stops at the first row a later one rests on.
 //
-// Chromium runs every step, and the glass's steps once more at a 720×720
-// touch viewport. Firefox and WebKit offer no virtual authenticator, so
-// they run the sign-in at H, the carry between the homes and a second
-// browser profile; each fresh confirmation those need is given on a glass
-// paired at A in Chromium.
+// Chromium runs every step, and the glass's steps once more at the
+// handheld's 720×720 touch viewport (../browser/handheld.mjs). Firefox and
+// WebKit offer no virtual authenticator, so they run the sign-in at H, the
+// carry between the homes and a second browser profile; each fresh
+// confirmation those need is given on a glass paired at A in Chromium.
 //
 // The homes' part of a step — a fixture's answer, a cell stopped, the
 // directory broken on purpose — is run.sh's, asked for through OUT_DIR
@@ -438,39 +438,6 @@ export async function signInAtHub(page, { home = A, cookie = null, glass = null 
   const landed = await admitted(page);
   return { kept, code, confirmed, landed };
 }
-
-// ---------------------------------------------------------------------------
-// The 720×720 checks (WCAG 2.2 AA): every control at least 24×24 CSS px,
-// visible text at least 12 px, nothing overflowing sideways.
-// ---------------------------------------------------------------------------
-
-export const measure = (page, scope) => page.evaluate((selector) => {
-  const root = selector ? document.querySelector(selector) : document.body;
-  if (!root) return { missing: selector };
-  const visible = (el) => {
-    const style = getComputedStyle(el);
-    const box = el.getBoundingClientRect();
-    return style.visibility !== "hidden" && style.display !== "none" && box.width > 0 && box.height > 0;
-  };
-  const small = [];
-  for (const el of root.querySelectorAll("button, a[href], input:not([type=hidden]), select, textarea, [role=button]")) {
-    if (!visible(el)) continue;
-    const box = el.getBoundingClientRect();
-    if (box.width < 24 || box.height < 24) small.push({ tag: el.tagName, test: el.getAttribute("data-test"), text: (el.innerText || el.value || "").slice(0, 40), w: Math.round(box.width), h: Math.round(box.height) });
-  }
-  const tiny = [];
-  const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
-  for (let node = walker.nextNode(); node; node = walker.nextNode()) {
-    if (!node.textContent.trim() || !node.parentElement || !visible(node.parentElement)) continue;
-    const size = parseFloat(getComputedStyle(node.parentElement).fontSize);
-    if (size < 12) tiny.push({ text: node.textContent.trim().slice(0, 40), px: size });
-  }
-  return {
-    controls_under_24: small, text_under_12: tiny,
-    overflow: document.documentElement.scrollWidth > window.innerWidth + 1,
-    width: window.innerWidth,
-  };
-}, scope);
 
 // ---------------------------------------------------------------------------
 // The steps

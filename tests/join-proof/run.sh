@@ -59,19 +59,22 @@ stop_proof_container() {
 # cookies and the kits, so it goes even when a stop fails; the asks and
 # answers that held one go from PROOF_OUT too. `server_stop` ends in
 # `fail`, an `exit`, when a listener outlives its stop, so it runs in a
-# subshell: the exit ends that subshell, never this trap.
+# subshell: the exit ends that subshell, never this trap, and the stop's
+# failure still fails the run.
 cleanup() {
+  local code=$?
   [ -n "$PROOF_PID" ] && kill "$PROOF_PID" 2>/dev/null || true
   stop_proof_container
   identity_front_stop
   jobs -p | xargs -r kill 2>/dev/null || true
-  ( server_stop ) || :
+  ( server_stop ) || [ "$code" -ne 0 ] || code=1
   rm -f "$OUT"/ask-* "$OUT"/answer-* "$OUT"/answered-* 2>/dev/null || true
   if [ "${RELEASE_BOOT_KEEP:-}" = 1 ]; then
     echo "kept $WORK"
   else
     rm -rf "$WORK"
   fi
+  exit "$code"
 }
 trap cleanup EXIT
 

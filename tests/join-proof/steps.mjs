@@ -9,10 +9,11 @@
 import { readFileSync } from "node:fs";
 import { request as httpRequest } from "node:http";
 import { connect as tlsConnect } from "node:tls";
+import { HANDHELD, measure, unmet } from "../browser/handheld.mjs";
 import {
   A, A2, H, SETTINGS, addSession, admitted, assertions, ask, authenticatorWith, begin, captureAssertions, closePrompt,
   confirmFromHere, confirmHere, connected, continueAtHub, counted, credentialsFor, crossSiteHeld, deviceLog, flashed,
-  freshContext, glassState, instrumentDevice, layer, measure, nameHome, open, passkeySignIn, ready, record, row,
+  freshContext, glassState, instrumentDevice, layer, nameHome, open, passkeySignIn, ready, record, row,
   secrets, signIn, signInAtHome, signInAtHub, sleep, storageOf, storedDevice, waitFor,
 } from "./common.mjs";
 
@@ -690,6 +691,10 @@ async function retired(chromium, state) {
   // The person signs in at H naming their new home, A2.
   const fresh = await signIn(chromium, "chromium", state.proxy, { home: A2, identifier, passkeysFrom: state.a2.page, step: "a2_sign_in" });
   state.newHub = fresh;
+  // The H passkey and the pairing its session left waiting are what the
+  // recovery retires. Each must be recorded: the check of an empty list's
+  // states holds of nothing.
+  const waiting = confirmations.filter((c) => c.operation === "pairing.begin");
   record.retired = {
     retired_within_s: measuredFromRestore, bound_s: SETTINGS.fresh,
     passkeys: person.passkeys.map((p) => p.state), confirmations: confirmations.map((c) => `${c.operation}:${c.state}`),
@@ -697,8 +702,8 @@ async function retired(chromium, state) {
     a2_sign_in: fresh.held,
   };
   return row("retired", "chromium",
-    retiredMs !== null && person.passkeys.every((p) => p.state === "revoked") &&
-      confirmations.filter((c) => c.operation === "pairing.begin").every((c) => c.state !== "pending") &&
+    retiredMs !== null && person.passkeys.length > 0 && person.passkeys.every((p) => p.state === "revoked") &&
+      waiting.length > 0 && waiting.every((c) => c.state !== "pending") &&
       !oldPasskeyIn && !replayedIn && after.receipts === before.receipts && fresh.held,
     "after the recovery H retires every old-epoch session, the H passkey's included, within its bound; the old passkey and confirmation are retired, an old assertion replays nothing, and the person signs in naming A2",
     record.retired);
@@ -725,8 +730,7 @@ async function adminAgain(chromium, state) {
 async function viewport(chromium, state) {
   const page = state.newHub.page;
   const paired = await pairPhone(chromium, {
-    page, base: A2, credentialsFrom: state.a2.page,
-    viewport: { viewport: { width: 720, height: 720 }, isMobile: true, hasTouch: true }, step: "viewport",
+    page, base: A2, credentialsFrom: state.a2.page, viewport: HANDHELD, step: "viewport",
   });
   const { phone } = paired;
   const measured = { ...paired.measured };
@@ -757,12 +761,13 @@ async function viewport(chromium, state) {
   await phone.waitForSelector('[data-test="glass-status"][data-state="revoked"]', { timeout: 60_000 });
   measured.revoked = await measure(phone, "#glass");
 
-  // The glass's and the prompts' screens are what the check holds; the
-  // other home's console page is measured and recorded as a finding.
+  // The glass's and the prompts' screens are what the check holds, the
+  // glass's own prompt for the revocation among them; the other home's
+  // console page is measured and recorded as a finding.
   const { other_home: otherHome, ...held } = measured;
-  const failures = Object.entries(held).filter(([, m]) => m && (m.overflow || m.controls_under_24?.length || m.text_under_12?.length));
-  record.viewport = { measured: held, failures: failures.map(([where]) => where), finding_other_home_console: otherHome };
-  return row("viewport", "chromium", paired.stored.device && failures.length === 0,
+  const failures = unmet(held);
+  record.viewport = { measured: held, glass_prompt_shown: shown, failures, finding_other_home_console: otherHome };
+  return row("viewport", "chromium", paired.stored.device && shown && failures.length === 0,
     "at 720×720: pairing, reconnecting, switching homes, revocation and a consent read and confirmed in the system layer, every control 24×24 CSS px or more, text 12 px or more, nothing overflowing",
     record.viewport);
 }
@@ -776,8 +781,13 @@ async function directoryDown(state) {
   const usableWithin = !(await signedOut(page, settingsAt(H, "pair")));
   await sleep((SETTINGS.fresh + 5) * 1000);
   const past = await ask({ op: "h_fresh", identifier });
+
+  // Past the bound the browser's protected work pauses: the page is not
+  // served, and the sign-in page it lands on says why.
   await page.goto(settingsAt(H, "pair"));
-  await sleep(2_000);
+  await page.waitForURL((url) => url.pathname === "/login", { timeout: 30_000 }).catch(() => null);
+  await page.waitForFunction(() => /could not be confirmed fresh/.test(document.body.innerText), null, { timeout: 30_000 })
+    .catch(() => null);
   const pastPage = await page.locator("body").innerText().catch(() => "");
   const pastPath = new URL(page.url()).pathname;
   await ask({ op: "directory_fault", directory: "dir.test", mode: "none" });
@@ -785,14 +795,16 @@ async function directoryDown(state) {
   // The directory back, the same session works again: a pause, not a
   // sign-out.
   const resumedMs = await within(async () => !(await signedOut(page, settingsAt(H, "pair"))), 30_000);
-  const said = pastPage.split("\n").find((line) => /identity|directory|try again/i.test(line)) || null;
+  const said = pastPage.split("\n").find((line) => /could not be confirmed fresh/.test(line)) || null;
   record.directory_down = {
     within: answered.key_epoch ? "fresh" : answered, usable_within: usableWithin, past: past.refused || past,
     past_page: pastPath, said, waited_s: seconds(Date.now() - downAt),
     resumed_after_s: resumedMs === null ? null : seconds(resumedMs),
   };
-  return row("directory_down", "chromium", !!answered.key_epoch && usableWithin && past.refused === "identity_stale",
-    "with A's directory down, H keeps the person's work within its bound and pauses protected work past it",
+  return row("directory_down", "chromium",
+    !!answered.key_epoch && usableWithin && past.refused === "identity_stale" &&
+      pastPath === "/login" && said !== null && resumedMs !== null,
+    "with A's directory down, H keeps the person's work within its bound, pauses the browser's protected work past it, saying why, and resumes it once the directory answers",
     record.directory_down);
 }
 

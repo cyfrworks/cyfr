@@ -5,8 +5,10 @@
 // against `cyfr` releases behind the harness's HTTPS front (README.md):
 // homes A, B, C, C2 and C3 and a directory, each a cell on its own `.test`
 // name. Chromium alone, since a passkey is made and used by its virtual
-// authenticator. Each step is one row of the record; the proof fails when
-// a row does not hold, and stops at the first row a later one rests on.
+// authenticator; the glass's steps run once more at the proposed
+// handheld's 720×720 touch viewport (../browser/handheld.mjs). Each step is
+// one row of the record; the proof fails when a row does not hold, and
+// stops at the first row a later one rests on.
 //
 // The homes' part of a step — a cell stopped, copied, killed or started
 // again, the directory's front broken on purpose, a restore posted at a
@@ -18,6 +20,7 @@
 
 import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
+import { HANDHELD, measure, unmet } from "../browser/handheld.mjs";
 import { launchBrowser, readHomes, signedIn, sleep, startProxy, virtualAuthenticator, waitFor } from "../browser/lib.mjs";
 
 const [homesFile, segmentA, cookieA, outDir] = process.argv.slice(2);
@@ -154,6 +157,9 @@ const connectWith = (page, certificate) => page.evaluate(async (cert) => {
 
 const deviceLog = (page) => page.evaluate(() => window.__device.log.slice());
 
+const glassStateOf = (page) =>
+  page.locator('[data-test="glass-status"]').getAttribute("data-state", { timeout: 2_000 }).catch(() => null);
+
 // ---------------------------------------------------------------------------
 // Prism's side
 // ---------------------------------------------------------------------------
@@ -235,7 +241,9 @@ async function firstPasskey(page, authenticator, base, segment, step) {
   return row(step, held >= 1 && registered === 1, "the first passkey is registered from the settings page through the system layer's ceremony", record[step]);
 }
 
-async function pairLocally(desk, phone) {
+// A glass paired at A from the desktop's Devices: the pairing confirmed on
+// the desktop, its link opened on `glass`. Answers the device it holds.
+async function pairAtA(desk, glass) {
   await open(desk, shellOf(A, segmentA));
   await desk.locator("#shell-devices").click();
   await desk.waitForSelector(`${layer} [data-test="pairing"]`, { timeout: 30_000 });
@@ -244,9 +252,13 @@ async function pairLocally(desk, phone) {
   await desk.waitForSelector(`${layer} [data-test="pairing-link"]`, { timeout: 30_000 });
   const link = await desk.locator(`${layer} [data-test="pairing-link"]`).inputValue();
   await closePrompt(desk);
-  await phone.goto(link);
-  await phone.waitForSelector('[data-test="glass-status"][data-state="ready"]', { timeout: 60_000 });
-  const device = await storedDevice(phone);
+  await glass.goto(link);
+  await glass.waitForSelector('[data-test="glass-status"][data-state="ready"]', { timeout: 60_000 });
+  return storedDevice(glass);
+}
+
+async function pairLocally(desk, phone) {
+  const device = await pairAtA(desk, phone);
   const identity = await ask({ op: "a_head" });
   record.pair = { enrolled_before: identity.enrollment, subject: device && device.certificate.subject };
   return [row("pair", identity.enrollment === "none" && device && device.certificate.subject.kind === "local",
@@ -374,6 +386,54 @@ async function restoredHome(page, proxy, base, cell, token, kit, step) {
   return held;
 }
 
+// ---------------------------------------------------------------------------
+// The glass's steps once more on the proposed handheld (HANDHELD)
+// ---------------------------------------------------------------------------
+
+// A second glass, the handheld, follows the phone through the glass's
+// steps: paired locally at A before any enrollment, reconnected at A after
+// the rotation under a renewed certificate, and opened at C, a home that
+// holds no device of it. Each of those screens meets the handheld's
+// checks, which the `viewport` row holds.
+async function handheldPairs(browser, desk) {
+  const context = await browser.newContext(HANDHELD);
+  await context.addInitScript(instrumentDevice);
+  const page = await context.newPage();
+  const device = await pairAtA(desk, page);
+  const hand = { context, page, device, measured: {}, facts: {} };
+  hand.measured.paired = await measure(page, "#glass");
+  hand.facts.paired_subject = device && device.certificate.subject.kind;
+  return hand;
+}
+
+// `before` is the handheld's device as it stood just before the rotation.
+async function handheldReconnects(hand, before) {
+  await hand.page.goto(`${A}/pair`);
+  await hand.page.waitForSelector('[data-test="glass-status"][data-state="ready"]', { timeout: 60_000 });
+  const renewed = await waitFor(async () => {
+    const held = await storedDevice(hand.page);
+    return held && before && JSON.stringify(held.certificate) !== JSON.stringify(before.certificate) ? held : null;
+  }, { timeoutMs: 60_000, what: "the handheld's renewed certificate" }).catch(() => null);
+  await hand.page.waitForSelector('[data-test="glass-status"][data-state="ready"]', { timeout: 60_000 });
+  hand.measured.reconnected = await measure(hand.page, "#glass");
+  hand.facts.renewed_after_rotation = !!renewed;
+}
+
+async function handheldElsewhere(hand) {
+  await hand.page.goto(`${C}/pair`);
+  hand.facts.at_c = await hand.page.waitForSelector('[data-test="glass-status"][data-state="unpaired"]', { timeout: 60_000 })
+    .then(() => "unpaired").catch(() => glassStateOf(hand.page));
+  hand.measured.other_home = await measure(hand.page, "#glass");
+  await hand.context.close();
+  const failures = unmet(hand.measured);
+  record.viewport = { viewport: HANDHELD.viewport, ...hand.facts, measured: hand.measured, failures };
+  return row("viewport",
+    hand.facts.paired_subject === "local" && hand.facts.renewed_after_rotation && hand.facts.at_c === "unpaired" &&
+      failures.length === 0,
+    "at 720×720: a glass paired locally, reconnected under a renewed certificate after the rotation, and opened at a home that holds no device of it, every control 24×24 CSS px or more, text 12 px or more, nothing overflowing",
+    record.viewport);
+}
+
 async function main(browser, proxy) {
   const deskContext = await signedIn(browser, A, cookieA);
   const desk = await deskContext.newPage();
@@ -385,11 +445,14 @@ async function main(browser, proxy) {
   if (!(await firstPasskey(desk, deskAuthenticator, A, segmentA, "passkey"))) return;
   const [paired, device] = await pairLocally(desk, phone);
   if (!paired) return;
+  const hand = await handheldPairs(browser, desk);
   const [enrolled, kit1] = await enroll(desk, proxy);
   if (!enrolled) return;
   const [added, kit2] = await secondKit(desk, proxy, kit1);
   if (!added) return;
+  const handBefore = await storedDevice(hand.page);
   if (!(await rotate(desk, phone, device))) return;
+  await handheldReconnects(hand, handBefore);
   if (!(await cache())) return;
 
   // A thief takes a copy of A as it stands.
@@ -485,6 +548,7 @@ async function main(browser, proxy) {
   record.pair_again = { people: people.people };
   if (!row("pair_again", people.people.length === 1 && people.people[0].paired_clients === 0,
     "a restore without the old paired client's row: the glass pairs again", record.pair_again)) return;
+  if (!(await handheldElsewhere(hand))) return;
 
   // A gone: recovery still completes, and a recovery accepted, its reply
   // lost and superseded elsewhere, activates nothing.
@@ -556,7 +620,7 @@ try {
 
 const STEPS = [
   "passkey", "pair", "enroll", "second_kit", "rotate", "cache", "reserved", "claims", "phases", "replay", "thief",
-  "restore", "b_observes", "window", "first_passkey", "door", "pair_again", "without_a", "without_a_reach",
+  "restore", "b_observes", "window", "first_passkey", "door", "pair_again", "viewport", "without_a", "without_a_reach",
   "superseded", "b_observes_again", "directory_down",
 ];
 const outcome = (step) => {

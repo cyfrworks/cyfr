@@ -76,8 +76,8 @@ kit line or a confirmation's secret is deleted once read.
 | `restore` | the person restores on A2 from the second kit's three lines and A2's installation token, and registers their first passkey there |
 | `retired` | H retires every session bound to the old keys, the H passkey's session included, within its bound of reading the recovery; the old H passkey is revoked and signs nobody in; the confirmation waiting at H is voided; an assertion of the old home replayed at H admits nobody; the person signs in at H naming A2 |
 | `admin_again` | their next passkey at H waits again for a new authorization by H's operator |
-| `viewport` | at 720×720 in Chromium: a phone pairs at H under A2's certificate, reconnects, goes to A2 and back, and is revoked; the glass's screens, the certify panel and the consent prompt read and confirmed in A2's system layer have every control 24×24 CSS px or more, text 12 px or more and nothing overflowing (WCAG 2.2 AA); a console page of A2 visited on the way is measured and recorded, not held |
-| `directory_down` | with `dir.test` down, H keeps the person's work within its bound, pauses protected work past it (`identity_stale`), and the same session works again once the directory answers |
+| `viewport` | at the proposed handheld's 720×720 touch viewport in Chromium (`tests/browser/handheld.mjs`): a phone pairs at H under A2's certificate, reconnects, goes to A2 and back, and is revoked, the revocation's request shown on its glass first; the glass's screens, that request among them, the certify panel and the consent prompt read and confirmed in A2's system layer have every control 24×24 CSS px or more, text 12 px or more and nothing overflowing (WCAG 2.2 AA); a console page of A2 visited on the way is measured and recorded, not held |
+| `directory_down` | with `dir.test` down, H keeps the person's work within its bound and pauses protected work past it (`identity_stale`): the person's page at H lands on the sign-in page, which says why; the same session's page works again once the directory answers |
 | `cross_site` | every request one home received from another home's page, in every browser and step, carried `sec-fetch-site: cross-site` |
 
 An externally operated directory is not provided: both directories here
@@ -85,7 +85,7 @@ are disposable writers the run starts, which prove no hosted service.
 
 ## Record
 
-Recorded on 2026-10-02 on `p1` by `run.sh`, against the SQLite `cyfr`
+Recorded on 2026-10-03 on `p1` by `run.sh`, against the SQLite `cyfr`
 release 0.5.8 built from this tree, in the harness's Playwright image
 (`v1.63.0-noble`, pinned by digest in `tests/browser/harness.sh`):
 
@@ -128,20 +128,21 @@ What the run measured:
 - H read the person six times at `dir.test` and never at `dir2.test`.
 - The phone's two renewals at A answered 200, each after its CORS
   preflight, `cross-site`, with origin `https://h.test` and no cookie.
-- H retired the old-key sessions 18.2 s after the rotation and 20.1 s
+- H retired the old-key sessions 18.2 s after the rotation and 20 s
   after the restore completed, against its 20 s freshness bound; each is
   observed by loading a page, so it includes up to one page load past the
   moment of retirement, and the steps allow the bound plus 30 s and 40 s.
+  What the recovery retired was there to retire: the H passkey, then
+  `revoked`, and the pairing its session left waiting, then `voided`.
 - With `dir.test` down, H kept the person's work within its bound and,
-  asked again 42.2 s after the directory went down, paused protected work
-  (`identity_stale`; the page showed the sign-in page's "Your identity
-  could not be confirmed fresh with its directory just now; try again
-  shortly."); the same session worked again 14.1 s after the directory
-  answered.
-- Cross-home requests, every one `cross-site`: 97 from Chromium, 16 from
+  asked again 42.1 s after the directory went down, paused protected work
+  (`identity_stale`): the person's page at H landed on `/login`, which
+  said "Your identity could not be confirmed fresh with its directory
+  just now; try again shortly."; the same session's page worked again
+  16.2 s after the directory answered.
+- Cross-home requests, every one `cross-site`: 101 from Chromium, 16 from
   Firefox, 16 from WebKit.
-- At 720×720 the glass's screens, the certify panel and the consent
-  prompt had no control under 24×24 CSS px, no text under 12 px and no
-  overflow. A2's chat page, measured on the way and not held, had a
-  "Connect a model" link 20 px high and "Chats", "AQUA" and "New thread"
-  in 11 px text.
+- At 720×720 the glass's screens, the revocation's request on the glass
+  among them, the certify panel and the consent prompt had no control
+  under 24×24 CSS px, no text under 12 px and no overflow. A2's page
+  visited on the way, measured and not held, had none either.

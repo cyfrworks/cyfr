@@ -47,16 +47,21 @@ stop_proof_container() {
 }
 
 # The scratch directory holds the run's authority key, so it goes even
-# when a stop fails.
+# when a stop fails. `server_stop` ends in `fail`, an `exit`, when a
+# listener outlives its stop, and an exit inside this trap would end it
+# before the removal, so the stop runs in a subshell, whose exit ends only
+# that subshell; the stop's failure still fails the run.
 cleanup() {
+  local code=$?
   [ -n "$PROOF_PID" ] && kill "$PROOF_PID" 2>/dev/null || true
   stop_proof_container
-  server_stop || :
+  ( server_stop ) || [ "$code" -ne 0 ] || code=1
   if [ "${RELEASE_BOOT_KEEP:-}" = 1 ]; then
     echo "kept $WORK"
   else
     rm -rf "$WORK"
   fi
+  exit "$code"
 }
 trap cleanup EXIT
 
