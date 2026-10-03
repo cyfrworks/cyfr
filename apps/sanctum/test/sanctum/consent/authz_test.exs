@@ -287,6 +287,136 @@ defmodule Sanctum.Consent.AuthzTest do
     end
   end
 
+  # ============================================================================
+  # A sensitive change consumed in its write's transaction
+  # ============================================================================
+
+  # A caller's write that consumes `change`'s confirmation in its own
+  # transaction, rolled back with the consumption's refusal.
+  defp consumed_in_a_write(ctx, change) do
+    Arca.Repo.transaction(fn ->
+      case Authz.consume(ctx, {:credential_entry, change}) do
+        :ok -> :consumed
+        {:error, reason} -> Arca.Repo.rollback(reason)
+      end
+    end)
+  end
+
+  # What `fun` answers, and the statements this process ran meanwhile as
+  # `{source, query}`, in order: this module runs asynchronously, and a
+  # handler hears every test's.
+  defp with_statements(fun) do
+    test = self()
+    id = {__MODULE__, make_ref()}
+
+    :telemetry.attach(
+      id,
+      [:arca, :repo, :query],
+      fn _, _, meta, _ ->
+        if self() == test, do: send(test, {:statement, meta[:source], meta[:query]})
+      end,
+      nil
+    )
+
+    try do
+      answer = fun.()
+      {answer, ran()}
+    after
+      :telemetry.detach(id)
+    end
+  end
+
+  defp ran do
+    receive do
+      {:statement, source, query} -> [{source, query} | ran()]
+    after
+      0 -> []
+    end
+  end
+
+  # The first run of `sources` among `statements`, back to back.
+  defp run_of(statements, sources) do
+    statements
+    |> Enum.chunk_every(length(sources), 1, :discard)
+    |> Enum.find(fn chunk -> Enum.map(chunk, &elem(&1, 0)) == sources end)
+  end
+
+  # A handler on the repo's statements: the process that put
+  # `{test, actor, client_id}` under `:revoke_in_place` revokes that client
+  # right after its first read of a paired client inside a transaction,
+  # and tells the test what the revocation answered.
+  @doc false
+  def revoke_in_place(_event, _measurements, %{source: "paired_clients"}, _config) do
+    with {test, actor, client_id} <- Process.get(:revoke_in_place),
+         true <- Arca.Repo.in_transaction?() do
+      Process.delete(:revoke_in_place)
+      send(test, {:revoked_in_place, Arca.PairedClients.revoke(actor, client_id)})
+    end
+
+    :ok
+  end
+
+  def revoke_in_place(_event, _measurements, _metadata, _config), do: :ok
+
+  describe "a paired device's change consumed in its write's transaction" do
+    setup [:checkout, :standing_session, :paired_device]
+
+    test "holds the device there: the person, the athanor, the seat, the client and its certificates locked before the record",
+         %{device_ctx: device_ctx} do
+      confirmed = Sanctum.TestContext.confirmed(device_ctx, :credential_entry, change())
+
+      {answer, statements} = with_statements(fn -> consumed_in_a_write(confirmed, change()) end)
+
+      assert answer == {:ok, :consumed}
+      assert record(device_ctx, confirmed.confirmation_id).state == "consumed"
+
+      {before_record, [{"pending_confirmations", _} | _]} =
+        Enum.split_while(statements, &(elem(&1, 0) != "pending_confirmations"))
+
+      held =
+        run_of(before_record, ~w(users athanors memberships paired_clients device_certificates))
+
+      assert held, "no hold of the device before its record: #{inspect(statements)}"
+
+      if Arca.Repo.adapter() == Ecto.Adapters.Postgres do
+        for {source, query} <- held, do: assert(query =~ "FOR UPDATE", "#{source}: #{query}")
+      end
+    end
+
+    test "a revocation landing after its standing was read refuses it: the record stays confirmed",
+         %{device_ctx: device_ctx, session_ctx: session_ctx} do
+      confirmed = Sanctum.TestContext.confirmed(device_ctx, :credential_entry, change())
+      handler = {__MODULE__, make_ref()}
+      :ok = :telemetry.attach(handler, [:arca, :repo, :query], &__MODULE__.revoke_in_place/4, nil)
+      on_exit(fn -> :telemetry.detach(handler) end)
+      Process.put(:revoke_in_place, {self(), Context.actor(session_ctx), device_ctx.client_id})
+
+      answer = consumed_in_a_write(confirmed, change())
+      :telemetry.detach(handler)
+
+      # The revocation lands inside the write's own transaction, after the
+      # device's standing was read there: the one point a sandboxed test's
+      # single connection can place it. The refusal rolls it back with the
+      # rest.
+      assert_received {:revoked_in_place, {:ok, %{standing: "revoked"}}}
+      assert answer == {:error, :not_standing}
+      assert record(device_ctx, confirmed.confirmation_id).state == "confirmed"
+    end
+
+    test "a session's takes no device hold, and goes ahead as before",
+         %{session_ctx: session_ctx} do
+      confirmed = Sanctum.TestContext.confirmed(session_ctx, :credential_entry, change())
+
+      {answer, statements} = with_statements(fn -> consumed_in_a_write(confirmed, change()) end)
+
+      assert answer == {:ok, :consumed}
+      assert record(session_ctx, confirmed.confirmation_id).state == "consumed"
+      sources = Enum.map(statements, &elem(&1, 0))
+      refute "paired_clients" in sources
+      refute "device_certificates" in sources
+    end
+  end
+
   describe "a paired client is the device channel's alone" do
     test "a guest-plane context carrying a client id is refused before anything else" do
       for method <- [:device, :oidc] do
@@ -1205,5 +1335,391 @@ defmodule Sanctum.Consent.AuthzTest do
         assert Jason.decode!(record(session_ctx, id).preview)["athanor"] == expected
       end
     end
+  end
+end
+
+defmodule Sanctum.Consent.AuthzRaceTest do
+  @moduledoc """
+  A paired device's sensitive change and the device's revocation, racing
+  on two real connections outside the sandbox. The change is consumed in
+  its write's transaction (`Sanctum.Consent.Authz.consume/2`), which holds
+  the device there: a revocation that holds the client first makes the
+  change wait for the client and then refuses it, and nothing is written;
+  a revocation that starts once the change holds the client waits for the
+  change to commit, which was made while the device stood. Neither order
+  deadlocks. Each side is held by a handler on its own statement events,
+  and the other is seen waiting on the client's lock in PostgreSQL's own
+  activity view.
+  """
+
+  use ExUnit.Case, async: false
+
+  import Ecto.Query, only: [from: 2, where: 2]
+
+  alias Arca.Schemas.{
+    Athanor,
+    DeviceCertificate,
+    ExternalIdentity,
+    Membership,
+    OauthProviderCredential,
+    PairedClient,
+    PendingConfirmation,
+    User
+  }
+
+  alias Ecto.Adapters.SQL.Sandbox
+  alias Prima.DeviceCert
+  alias Sanctum.{DeviceCerts, Person}
+  alias Sanctum.Consent.Authz
+
+  if Arca.Repo.adapter() != Ecto.Adapters.Postgres do
+    @moduletag skip:
+                 "SQLite has one writer: a transaction holds the write lock from its start, " <>
+                   "so the change and the revocation never interleave there"
+  end
+
+  @change %{operation: "oauth.set_client", arguments: %{provider: "raced"}, resource: "raced"}
+
+  defp unboxed(fun), do: Sandbox.unboxed_run(Arca.Repo, fun)
+
+  setup do
+    Arca.Cache.init()
+    n = System.unique_integer([:positive])
+    now = DateTime.utc_now()
+    user_id = Prima.UUID7.generate_id(Prima.PersonId.prefix())
+    athanor_id = Prima.UUID7.generate_id("ath")
+    client_id = Prima.UUID7.generate_id("pcl")
+    {device_key, _private} = :crypto.generate_key(:eddsa, :ed25519)
+
+    on_exit(fn ->
+      unboxed(fn ->
+        Arca.Repo.delete_all(where(PendingConfirmation, athanor_id: ^athanor_id))
+        Arca.Repo.delete_all(where(OauthProviderCredential, athanor_id: ^athanor_id))
+        Arca.Repo.delete_all(where(DeviceCertificate, athanor_id: ^athanor_id))
+        Arca.Repo.delete_all(where(PairedClient, athanor_id: ^athanor_id))
+        Arca.Repo.delete_all(where(Membership, athanor_id: ^athanor_id))
+        Arca.Repo.delete_all(where(Membership, user_id: ^user_id))
+        Arca.Repo.delete_all(where(ExternalIdentity, user_id: ^user_id))
+        Arca.Repo.delete_all(where(User, id: ^user_id))
+        Arca.Repo.delete_all(where(Athanor, id: ^athanor_id))
+      end)
+    end)
+
+    certificate = certificate!(user_id, athanor_id, client_id, device_key)
+
+    ctx =
+      unboxed(fn ->
+        person!(user_id, athanor_id, n, now)
+        paired!(user_id, athanor_id, client_id, device_key, certificate, now)
+
+        # What `Sanctum.DeviceCerts` hands establish once a request under
+        # the certificate verified: the rows it read for it.
+        {:ok, client} = DeviceCerts.paired_client(athanor_id, user_id, client_id)
+        {:ok, standing} = DeviceCerts.standing(user_id, athanor_id)
+
+        {:ok, ctx} =
+          Sanctum.Caller.establish_device(
+            %{
+              certificate: certificate,
+              client: client,
+              user: standing.user,
+              athanor: standing.athanor,
+              seat: standing.seat,
+              platform_admin: standing.platform_admin
+            },
+            []
+          )
+
+        confirmed!(ctx)
+      end)
+
+    {:ok, ctx: ctx, client_id: client_id, athanor_id: athanor_id}
+  end
+
+  defp person!(user_id, athanor_id, n, now) do
+    {:ok, _} =
+      Arca.Users.mint(
+        Prima.Actor.system(),
+        %{
+          id: user_id,
+          provider: "github",
+          email: "consume-race#{n}@example.com",
+          email_verified: true,
+          first_seen_at: now,
+          last_seen_at: now,
+          created_at: now,
+          updated_at: now
+        },
+        %{
+          key: "github|https://github.com|consume-race#{n}",
+          provider: "github",
+          issuer: "https://github.com",
+          subject: "consume-race#{n}",
+          first_seen_at: now,
+          last_seen_at: now
+        }
+      )
+
+    {:ok, _} =
+      Arca.Athanors.insert(Prima.Actor.system(), %{
+        id: athanor_id,
+        kind: "group",
+        name: "Consume race #{n}",
+        slug: "consume-race-#{n}",
+        created_by: user_id
+      })
+
+    {:ok, _} =
+      Arca.Members.seat(Prima.Actor.in_athanor(athanor_id), %{user_id: user_id, added_by: "x"})
+  end
+
+  # The certificate the device stands under. Establishing a context checks
+  # that the rows agree with it, not its signature: the verifier did that.
+  defp certificate!(user_id, athanor_id, client_id, device_key) do
+    now = System.os_time(:millisecond)
+    {_public, signer} = :crypto.generate_key(:eddsa, :ed25519)
+
+    {:ok, certificate} =
+      DeviceCert.new(
+        device_key: device_key,
+        client_id: client_id,
+        subject: %{kind: :local, user_id: user_id},
+        issuer: Person.home(),
+        audience: Person.home(),
+        athanor: athanor_id,
+        not_before: now,
+        expires_at: now + 3_600_000
+      )
+
+    DeviceCert.sign(certificate, signer)
+  end
+
+  # The client and its certificate, as a pairing records them.
+  defp paired!(user_id, athanor_id, client_id, device_key, certificate, now) do
+    {1, _} =
+      Arca.Repo.insert_all(PairedClient, [
+        %{
+          id: client_id,
+          athanor_id: athanor_id,
+          user_id: user_id,
+          source_kind: "device_cert",
+          source_id: client_id,
+          device_public_key: device_key,
+          standing: "active",
+          inserted_at: now,
+          updated_at: now
+        }
+      ])
+
+    bytes = Prima.Identity.Encoding.jcs!(DeviceCert.encode(certificate))
+
+    {1, _} =
+      Arca.Repo.insert_all(DeviceCertificate, [
+        %{
+          id: Prima.UUID7.generate_id("dct"),
+          athanor_id: athanor_id,
+          paired_client_id: client_id,
+          user_id: user_id,
+          subject_kind: "local",
+          device_public_key: device_key,
+          issuing_home: certificate.issuer,
+          audience_home: certificate.audience,
+          not_before: usec(DateTime.from_unix!(certificate.not_before, :millisecond)),
+          expires_at: usec(DateTime.from_unix!(certificate.expires_at, :millisecond)),
+          certificate: bytes,
+          digest: Prima.Digest.sha256(bytes),
+          state: "active",
+          inserted_at: now,
+          updated_at: now
+        }
+      ])
+  end
+
+  defp usec(%DateTime{microsecond: {us, _precision}} = at), do: %{at | microsecond: {us, 6}}
+
+  # The device's context naming a record of its change, opened under it
+  # and proven: the person confirmed it with a code mailed to them.
+  defp confirmed!(ctx) do
+    {:error, {:confirmation_required, %{id: id}}} = Authz.check(ctx, :credential_entry, @change)
+
+    {:ok, %{state: "confirmed"}} =
+      Arca.PendingConfirmations.confirm(
+        Prima.Actor.in_athanor(ctx.athanor_id),
+        Prima.Confirmation.ref(id),
+        %{proof: "email_code"}
+      )
+
+    %{ctx | confirmation_id: id}
+  end
+
+  # The change: a write that takes the person first, as every site's write
+  # does, consumes the device's confirmation in its own transaction and
+  # stores the provider's client credentials there.
+  defp change!(ctx) do
+    Arca.Repo.transaction(fn ->
+      _person = Arca.DirectoryHeads.lock_person!(ctx.user_id)
+
+      with :ok <- Authz.consume(ctx, {:credential_entry, @change}),
+           :ok <-
+             Arca.ProviderCredentialStorage.put(%{
+               athanor_id: ctx.athanor_id,
+               provider: "raced",
+               payload_ciphertext: "sealed",
+               created_by: ctx.user_id
+             }) do
+        :written
+      else
+        {:error, reason} -> Arca.Repo.rollback(reason)
+      end
+    end)
+  end
+
+  defp written?(athanor_id) do
+    unboxed(fn ->
+      Arca.Repo.exists?(from(c in OauthProviderCredential, where: c.athanor_id == ^athanor_id))
+    end)
+  end
+
+  defp record_state(ctx) do
+    unboxed(fn ->
+      {:ok, %{state: state}} =
+        Arca.PendingConfirmations.get(
+          Prima.Actor.in_athanor(ctx.athanor_id),
+          Prima.Confirmation.ref(ctx.confirmation_id)
+        )
+
+      state
+    end)
+  end
+
+  # A handler on every repo statement: the process that put `{test, point}`
+  # under `:race_hold` is held at its first statement `point` names, until
+  # the test releases it.
+  @doc false
+  def hold(_event, _measurements, metadata, _config) do
+    with {test, point} <- Process.get(:race_hold),
+         true <- point.(metadata) do
+      Process.delete(:race_hold)
+      send(test, {:race_held, self()})
+
+      receive do
+        :release -> :ok
+      end
+    end
+
+    :ok
+  end
+
+  defp hold_statements! do
+    handler = "consume-race-hold-#{System.unique_integer([:positive])}"
+    :ok = :telemetry.attach(handler, [:arca, :repo, :query], &__MODULE__.hold/4, nil)
+    on_exit(fn -> :telemetry.detach(handler) end)
+  end
+
+  # The revocation, once it holds the client's row.
+  defp client_locked(%{source: "paired_clients", query: query}), do: query =~ "FOR UPDATE"
+  defp client_locked(_metadata), do: false
+
+  # The change, once it reaches its record inside its transaction: past
+  # the device's hold.
+  defp at_the_record(%{source: "pending_confirmations"}), do: Arca.Repo.in_transaction?()
+  defp at_the_record(_metadata), do: false
+
+  defp backend, do: hd(hd(Arca.Repo.query!("SELECT pg_backend_pid()").rows))
+
+  # `backend` is blocked on a lock in a statement naming every one of
+  # `fragments`.
+  defp await_wait!(backend, fragments, tries \\ 250) do
+    [[type, query]] =
+      unboxed(fn ->
+        Arca.Repo.query!(
+          "SELECT wait_event_type, query FROM pg_stat_activity WHERE pid = $1",
+          [backend]
+        ).rows
+      end)
+
+    cond do
+      type == "Lock" and Enum.all?(fragments, &String.contains?(query, &1)) ->
+        :ok
+
+      tries == 0 ->
+        flunk("backend #{backend} is not waiting at #{inspect(fragments)}: #{type} #{query}")
+
+      true ->
+        Process.sleep(20)
+        await_wait!(backend, fragments, tries - 1)
+    end
+  end
+
+  test "a revocation holding the client first refuses the change, which waited for it: nothing is written",
+       %{ctx: ctx, client_id: client_id, athanor_id: athanor_id} do
+    test = self()
+    hold_statements!()
+
+    revoker =
+      Task.async(fn ->
+        Process.put(:race_hold, {test, &client_locked/1})
+
+        unboxed(fn ->
+          Arca.PairedClients.revoke(Prima.Actor.in_athanor(athanor_id), client_id)
+        end)
+      end)
+
+    assert_receive {:race_held, revoking}, 5_000
+
+    changer =
+      Task.async(fn ->
+        unboxed(fn ->
+          send(test, {:changer, backend()})
+          change!(ctx)
+        end)
+      end)
+
+    assert_receive {:changer, changing}, 5_000
+
+    # The change read the device standing, then waits on the client the
+    # revocation holds.
+    await_wait!(changing, [~s("paired_clients"), "FOR UPDATE"])
+
+    send(revoking, :release)
+    assert {:ok, %{standing: "revoked"}} = Task.await(revoker, 25_000)
+    assert {:error, :not_standing} = Task.await(changer, 25_000)
+
+    refute written?(athanor_id)
+    assert record_state(ctx) == "confirmed"
+  end
+
+  test "a revocation starting once the change holds the client waits for its commit: no deadlock",
+       %{ctx: ctx, client_id: client_id, athanor_id: athanor_id} do
+    test = self()
+    hold_statements!()
+
+    changer =
+      Task.async(fn ->
+        Process.put(:race_hold, {test, &at_the_record/1})
+        unboxed(fn -> change!(ctx) end)
+      end)
+
+    assert_receive {:race_held, changing}, 5_000
+
+    revoker =
+      Task.async(fn ->
+        unboxed(fn ->
+          send(test, {:revoker, backend()})
+          Arca.PairedClients.revoke(Prima.Actor.in_athanor(athanor_id), client_id)
+        end)
+      end)
+
+    assert_receive {:revoker, revoking}, 5_000
+    await_wait!(revoking, [~s("paired_clients"), "FOR UPDATE"])
+
+    send(changing, :release)
+    assert {:ok, :written} = Task.await(changer, 25_000)
+    assert {:ok, %{standing: "revoked"}} = Task.await(revoker, 25_000)
+
+    # The change was made while the device stood; the revocation takes
+    # back nothing it wrote.
+    assert written?(athanor_id)
+    assert record_state(ctx) == "consumed"
   end
 end

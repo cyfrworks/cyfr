@@ -29,6 +29,13 @@ defmodule Sanctum.ProviderCredentials do
   Store (or replace) a provider's client credentials for the caller's
   athanor: a sensitive change (`credential_entry`), decided here.
 
+  The confirmation is consumed at once, and the write follows in its own
+  transaction. From a paired device, that transaction holds the device's
+  client and certificate (`Sanctum.Issuance.device_hold/1`), so a
+  revocation that commits after the confirmation writes nothing and
+  answers one of the standing refusals (`{:error, :not_standing}` for a
+  revoked client).
+
   `client_secret` may be nil — public OAuth clients have no secret.
   """
   @spec put(Context.t(), String.t(), String.t(), String.t() | nil) :: :ok | {:error, term()}
@@ -36,6 +43,7 @@ defmodule Sanctum.ProviderCredentials do
     with {:ok, :interactive} <- Sanctum.Consent.Authz.authorize_interactive(ctx),
          :ok <- validate_provider(provider),
          :ok <- validate_client_id(client_id),
+         {:ok, hold} <- Sanctum.Issuance.device_hold(ctx),
          :ok <-
            Sanctum.Consent.Authz.confirm(ctx, :credential_entry, %{
              operation: "oauth.set_client",
@@ -48,12 +56,15 @@ defmodule Sanctum.ProviderCredentials do
       {:ok, ciphertext} =
         Sanctum.Cipher.encrypt(payload, CipherAAD.provider_credential(athanor_id, provider))
 
-      Arca.ProviderCredentialStorage.put(%{
-        athanor_id: athanor_id,
-        provider: provider,
-        payload_ciphertext: ciphertext,
-        created_by: ctx.user_id
-      })
+      Arca.ProviderCredentialStorage.put(
+        %{
+          athanor_id: athanor_id,
+          provider: provider,
+          payload_ciphertext: ciphertext,
+          created_by: ctx.user_id
+        },
+        hold
+      )
     end
   end
 

@@ -23,6 +23,15 @@ defmodule Sanctum.ProviderCredentialsTest do
     )
   end
 
+  # The sources of the statements this process ran, as the handler told it.
+  defp ran do
+    receive do
+      {:statement, source} -> [source | ran()]
+    after
+      0 -> []
+    end
+  end
+
   describe "put/4 + fetch_for_oauth/4" do
     test "round-trips client credentials through the sealed store", %{ctx: ctx} do
       assert :ok =
@@ -52,6 +61,40 @@ defmodule Sanctum.ProviderCredentialsTest do
                Sanctum.TestContext.put_provider_credentials(ctx, "google", "new-id", "new-secret")
 
       assert {:ok, %{"client_id" => "new-id", "client_secret" => "new-secret"}} =
+               ProviderCredentials.fetch_for_oauth(ctx.athanor_id, "google")
+    end
+
+    test "a context that is no paired device's takes no device hold, and stores as before",
+         %{ctx: ctx} do
+      confirmed =
+        Sanctum.TestContext.confirmed_change(
+          ctx,
+          "oauth.set_client",
+          %{provider: "google", client_id: "session-id", client_secret: "session-secret"},
+          "google"
+        )
+
+      test = self()
+      handler = {__MODULE__, make_ref()}
+
+      :ok =
+        :telemetry.attach(
+          handler,
+          [:arca, :repo, :query],
+          fn _, _, meta, _ -> if self() == test, do: send(test, {:statement, meta[:source]}) end,
+          nil
+        )
+
+      on_exit(fn -> :telemetry.detach(handler) end)
+      answer = ProviderCredentials.put(confirmed, "google", "session-id", "session-secret")
+      :telemetry.detach(handler)
+
+      assert answer == :ok
+      sources = ran()
+      refute "paired_clients" in sources
+      refute "device_certificates" in sources
+
+      assert {:ok, %{"client_id" => "session-id"}} =
                ProviderCredentials.fetch_for_oauth(ctx.athanor_id, "google")
     end
 
