@@ -7,7 +7,7 @@
 # and vault and the proof's tinctures (tinctures/), with a signed-in
 # person's layout placing them, driven in every browser of the harness's
 # matrix (proof.mjs). The proof asks for the release to be gone under its
-# open tabs (`stop-server` in the output directory), and this script kills it
+# open tabs (`stop-server` in the output directory), and this script stops it
 # and answers `server-stopped`.
 #
 # The vault page's operations are also measured inside the server
@@ -37,14 +37,21 @@ CALLS=200
 CONCURRENCY=16
 PROOF_PID=""
 
+# The scratch directory holds the cell's keys and its database, so it goes
+# even when a stop fails. `server_stop` ends in `fail`, an `exit`,
+# when a listener outlives its stop, and an exit inside this trap would end
+# it before the removal, so the stop runs in a subshell, whose exit ends
+# only that subshell; the stop's failure still fails the run.
 cleanup() {
+  local code=$?
   [ -n "$PROOF_PID" ] && kill "$PROOF_PID" 2>/dev/null || true
-  server_stop
+  ( server_stop ) || [ "$code" -ne 0 ] || code=1
   if [ "${RELEASE_BOOT_KEEP:-}" = 1 ]; then
     echo "kept $WORK"
   else
     rm -rf "$WORK"
   fi
+  exit "$code"
 }
 trap cleanup EXIT
 
@@ -165,23 +172,16 @@ playwright_run canvas-proof proof.mjs "http://127.0.0.1:$PORT" "$segment" "$cook
 PROOF_PID=$!
 
 # The proof's last section asks for the release to be gone under its open
-# tabs; nothing else stops it before the proof ends. The release is killed:
-# a graceful stop drains every socket while the listener still accepts, so
-# a tab may join again during the drain and be drawn anew by a server that
-# is about to go, which is not the case this section proves.
-server_kill() {
-  pkill -9 -f "sname $NODE( |\$)" 2>/dev/null || true
-  for _ in $(seq 1 30); do
-    curl -fsS -m 1 -o /dev/null "http://127.0.0.1:$PORT/api/health" 2>/dev/null || return 0
-    sleep 1
-  done
-  fail "the release on 127.0.0.1:$PORT outlived its kill"
-}
-
+# tabs; nothing else stops it before the proof ends. It is stopped by its
+# own stop, as an operator stops it: the release closes its listener and
+# refuses every LiveView connect before it drains the sockets it holds, so
+# a tab told to reconnect meets a closed port and is drawn anew by no
+# server about to go. `server-stopped` is answered once the release has
+# exited and its listener is gone.
 while kill -0 "$PROOF_PID" 2>/dev/null; do
   if [ -f "$OUT/stop-server" ] && [ ! -f "$OUT/server-stopped" ]; then
-    step "killing the release under the proof's open tabs"
-    server_kill
+    step "stopping the release under the proof's open tabs"
+    server_stop "$CELL"
     touch "$OUT/server-stopped"
   fi
   sleep 1

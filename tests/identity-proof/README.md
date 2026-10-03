@@ -60,7 +60,9 @@ is removed when it ends, whether it succeeds or fails.
 
 The person's passkeys are made and used by Chromium's virtual WebAuthn
 authenticator over CDP (`virtualAuthenticator`); Firefox and WebKit offer
-Playwright none, so the proof runs in Chromium alone.
+Playwright none, so the proof runs in Chromium alone. The glass's steps run
+once more on a second glass at the proposed handheld's 720×720 touch
+viewport (`tests/browser/handheld.mjs`).
 
 ## Steps
 
@@ -88,6 +90,7 @@ the proof stops at the first row a later one rests on.
 | `first_passkey` | the restored person's first passkey at C |
 | `door` | a GitHub door linked at C under a fresh confirmation with that passkey, its link ticket minted as a completed sign-in with the door leaves one (no identity provider is reachable) |
 | `pair_again` | C holds no paired client of the person; the glass opening C's page holds no device there |
+| `viewport` | the glass's steps once more at 720×720: a second glass paired locally at A beside the first, before any enrollment, under a local subject; reconnected at A after the rotation under a renewed certificate; and opened at C, which holds no device of it; each of those screens has every control 24×24 CSS px or more, text 12 px or more and nothing overflowing (WCAG 2.2 AA) |
 | `without_a` | with A and its copy stopped, the person restores on C3 from the second kit |
 | `without_a_reach` | that restore reached the directory alone: every request at the front is a directory path, and A answers nothing |
 | `superseded` | C2's recovery from the first kit, accepted with its head left unread, is replaced by C3's; C2 resumed ends `superseded`, its staged keys gone, no person minted |
@@ -102,7 +105,7 @@ service.
 
 ## Record
 
-Recorded on 2026-10-02 on `p1` by `run.sh`, Chromium 153.0.8010.12, B's
+Recorded on 2026-10-03 on `p1` by `run.sh`, Chromium 153.0.8010.12, B's
 bound 20 seconds and C's first-method window 20 seconds: every step held.
 
 | Step | What the record shows |
@@ -116,8 +119,9 @@ bound 20 seconds and C's first-method window 20 seconds: every step held.
 | `replay` | the same entry hash as the one C recorded on resuming |
 | `thief` | both of the thief's rotations refused `stale_head`: launched with the restore's post, the recovery reached the directory first in this run. A rotation that lands first is replaced by the recovery all the same: `Sanctum.DirectoryTest`'s "a rotation landing between a recovery's read and its write re-bases it on the new head" |
 | `restore`, `without_a` | completed in one post each, the form emptied; with A and its copy stopped, every request at the front a directory path |
-| `b_observes`, `b_observes_again` | 14 s after the head moved; 21 s after B last verified, against a bound of 20 and one two-second poll |
+| `b_observes`, `b_observes_again` | 16 s after the head moved; 21 s after B last verified, against a bound of 20 and one two-second poll |
 | `window` | past the window, the passkey refused with its sentence; the reproof completed |
 | `door`, `pair_again` | one door linked; the restored person holds no paired client at C, and the glass is unpaired there |
+| `viewport` | at 720×720 the second glass paired under a local subject, stood again at A under a renewed certificate after the rotation, and was unpaired at C; its three screens had no control under 24×24 CSS px, no text under 12 px and no overflow |
 | `superseded` | `409 superseded`, its staged keys gone, no person on C2 |
 | `directory_down` | the verified head served within the bound; `identity_stale` past it |

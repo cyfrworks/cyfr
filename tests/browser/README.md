@@ -105,11 +105,20 @@ helpers:
 | `roundTripFragment(page, proxy, from, to)` | the fragment fixture: 16 KiB carried from one home to another and back by top-level navigations the pages make themselves, as a carry travels; intact or not, and whether any request carried it |
 | `framedRequest(page, proxy, parent, target, path)` | a page of one home framing a path of another, as the front saw the request |
 | `crossedCookies(seen, scripted)` | every request to one host that carried a cookie another host set |
-| `virtualAuthenticator(page)` | Chromium's virtual WebAuthn authenticator: resident keys, user verification, presence simulated; Firefox and WebKit offer none to Playwright, so a passkey ceremony is Chromium's |
+| `virtualAuthenticator(page)` | Chromium's virtual WebAuthn authenticator: resident keys, user verification, presence simulated; `add` gives it a credential another one listed, as a synced passkey reaches another device; Firefox and WebKit offer none to Playwright, so a passkey ceremony is Chromium's |
 
 The front answers the harness's own pages under `/__harness/` on every
 home, and no cell serves them: `page`, an empty document under no policy,
 and `fragment`, the relay of the fragment fixture.
+
+**The handheld.** Every proof that drives a glass runs its glass's steps
+once more in Chromium at a proposed 720×720 CSS-pixel touch viewport,
+standing in for the square handheld until a board is chosen.
+`handheld.mjs` holds it for them: `HANDHELD`, the context's options;
+`measure(page, scope)`, each visible control under 24×24 CSS px, each
+visible text under 12 px and any sideways overflow within a screen; and
+`unmet(measured)`, the screens that break those checks (WCAG 2.2 AA),
+a screen whose scope the page did not hold among them.
 
 ## The multi-home smoke
 

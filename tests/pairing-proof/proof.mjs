@@ -17,7 +17,8 @@
 //                the code leaves the address, and the device channel stands
 //   confirm      the desktop asks for a credential entry; the glass shows
 //                the home's preview and the asker before the proof, confirms
-//                it with the passkey, and the desktop completes it
+//                it with the passkey and says so, and the desktop completes
+//                it
 //   fresh        a second entry: a replayed assertion and the desktop's
 //                session repeating alone change nothing; the glass's fresh
 //                assertion confirms it and the desktop completes it
@@ -34,6 +35,11 @@
 //                the glass: the home ends its stream, revokes it and closes
 //                the channel; the glass forgets its key and certificate, and
 //                its last certificate opens nothing
+//   viewport     the glass's steps once more at the proposed handheld's
+//                720×720 touch viewport (../browser/handheld.mjs): a
+//                pairing's consent in the Prism's system layer, the glass,
+//                a confirmation on it, its reconnection and its revocation,
+//                each screen meeting the handheld's checks
 //
 // The home's part of a step — the passkey's registration through the
 // console's adapter, and the names of the person's vault entries — is
@@ -44,6 +50,7 @@
 
 import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
+import { HANDHELD, measure as measureScreen, unmet } from "../browser/handheld.mjs";
 import {
   launchBrowser, percentiles, readHomes, signedIn, sleep, startProxy, virtualAuthenticator, waitFor,
 } from "../browser/lib.mjs";
@@ -96,10 +103,16 @@ async function ask(request, timeoutMs = 90_000) {
 // (`window.__device.sleep()`), the glass sends nothing and hears nothing:
 // what it sends is dropped, and what reaches it waits until it wakes
 // (`wake()`), as a device's suspended page does.
+//
+// Every outcome the glass draws under a prompt is recorded as it is drawn
+// (`window.__device.outcomes`): a confirmed record leaves the pending list
+// at the glass's next read, taking its prompt and outcome with it, often
+// within the frame that drew them, so the outcome is read as the page
+// draws it rather than waited for.
 function instrumentDevice() {
   const Native = window.WebSocket;
   const device = {
-    log: [], sockets: 0, socket: null, asleep: false, held: [],
+    log: [], sockets: 0, socket: null, asleep: false, held: [], outcomes: [],
     sleep() { this.asleep = true; this.log.push({ at: performance.now(), event: "sleep" }); },
     wake() {
       this.asleep = false;
@@ -111,6 +124,21 @@ function instrumentDevice() {
     send(map) { if (this.socket) Native.prototype.send.call(this.socket, JSON.stringify(map)); },
   };
   window.__device = device;
+  const outcome = '[data-test="glass-outcome"]';
+  new MutationObserver((mutations) => {
+    for (const mutation of mutations) {
+      for (const node of mutation.addedNodes) {
+        if (node.nodeType !== Node.ELEMENT_NODE) continue;
+        for (const drawn of node.matches(outcome) ? [node] : node.querySelectorAll(outcome)) {
+          const prompt = drawn.closest('[data-test="glass-prompt"]');
+          device.outcomes.push({
+            at: performance.now(), ref: prompt && prompt.getAttribute("data-ref"), ok: drawn.getAttribute("data-ok"),
+            text: drawn.textContent,
+          });
+        }
+      }
+    }
+  }).observe(document, { childList: true, subtree: true });
   const describe = (data) => {
     try {
       const map = JSON.parse(data);
@@ -297,6 +325,13 @@ async function glassPrompt(phone, skip = []) {
 
 const glassButton = (phone, ref, test) => phone.locator(`[data-test="glass-prompt"][data-ref="${ref}"] [data-test="${test}"]`);
 
+// The first outcome the glass drew under its prompt for `ref`, as
+// `instrumentDevice` recorded it, or null when it drew none.
+const glassOutcome = (phone, ref) => waitFor(
+  () => phone.evaluate((shown) => window.__device.outcomes.find((o) => o.ref === shown) || null, ref),
+  { timeoutMs: 30_000, stepMs: 100, what: `the glass's outcome for ${ref}` },
+).then(({ ok, text }) => ({ ok, text })).catch(() => null);
+
 const vaultNames = async () => (await ask({ op: "vault_names" })).names || [];
 
 // ---------------------------------------------------------------------------
@@ -388,16 +423,16 @@ async function confirmEntry(desk, phone) {
   await askForEntry(desk, name, "sk-pairing-1-not-shown");
   const shown = await glassPrompt(phone);
   await glassButton(phone, shown.ref, "glass-passkey").click();
-  await phone.waitForSelector(`[data-test="glass-prompt"][data-ref="${shown.ref}"] [data-test="glass-outcome"][data-ok="true"]`, { timeout: 30_000 })
-    .catch(() => null);
+  const outcome = await glassOutcome(phone, shown.ref);
   const completed = await waitFor(async () => (await vaultNames()).includes(name), { timeoutMs: 30_000, stepMs: 1_000, what: name }).catch(() => false);
   record.confirm = {
     ref: shown.ref, preview: shown.preview, asker: shown.asker,
-    secret_shown: shown.text.includes("sk-pairing-1"), completed,
+    secret_shown: shown.text.includes("sk-pairing-1"), outcome, completed,
   };
   return [row("confirm", /vault\.create/.test(shown.preview) && shown.preview.includes(name) &&
-    /a browser signed in/.test(shown.asker) && !record.confirm.secret_shown && completed,
-    "the glass shows the home's preview and the asker before the proof, confirms with the passkey, and the desktop completes the entry",
+    /a browser signed in/.test(shown.asker) && !record.confirm.secret_shown && outcome !== null && outcome.ok === "true" &&
+    completed,
+    "the glass shows the home's preview and the asker before the proof, confirms with the passkey and says so, and the desktop completes the entry",
     record.confirm), shown.ref];
 }
 
@@ -532,6 +567,84 @@ async function revoke(desk, phone) {
     record.revoke);
 }
 
+// The glass's steps once more on the proposed handheld (HANDHELD): the
+// phone signed in again in a context of its own, its authenticator holding
+// the person's passkey carried from the phone's. Its Prism reads and
+// confirms a pairing in the system layer; it becomes the glass, confirms a
+// credential entry, reconnects and is revoked there, and each of those
+// screens meets the handheld's checks. The Prism page around the prompt is
+// measured and recorded, not held.
+async function handheld(browser, desk, phoneAuthenticator) {
+  const context = await browser.newContext(HANDHELD);
+  await context.addCookies([{
+    name: "_cyfr_key", value: phoneCookie, url: base, httpOnly: true, secure: true, sameSite: "Lax",
+  }]);
+  await context.addInitScript(instrumentDevice);
+  const hand = await context.newPage();
+  const authenticator = await virtualAuthenticator(hand);
+  for (const credential of await phoneAuthenticator.credentials()) await authenticator.add(credential);
+  const measured = {};
+
+  // A pairing, its consent read and confirmed in the Prism's system layer.
+  await hand.goto(shell);
+  await connected(hand);
+  await openDevices(desk);
+  await desk.locator(`${layer} [data-test="pairing-begin"]`).click();
+  const prompt = `${layer} [data-test="confirmation"][data-own="false"]`;
+  await hand.waitForSelector(`${prompt} [data-test="confirm-passkey"]`, { timeout: 30_000 });
+  const consent = (await hand.locator(`${prompt} [data-test="confirmation-preview"]`).first().textContent()).trim();
+  measured.consent_prompt = await measureScreen(hand, layer);
+  const prismPage = await measureScreen(hand);
+  await hand.locator(`${prompt} [data-test="confirm-passkey"]`).click();
+  await desk.waitForSelector(`${layer} [data-test="pairing-link"]`, { timeout: 30_000 });
+  const link = await desk.locator(`${layer} [data-test="pairing-link"]`).inputValue();
+
+  // The glass.
+  await hand.goto(link);
+  await hand.waitForSelector('[data-test="glass-status"][data-state="ready"]', { timeout: 60_000 });
+  measured.glass_ready = await measureScreen(hand, "#glass");
+  const held = await storedDevice(hand);
+
+  // A credential entry read and confirmed on the glass.
+  const name = "pairing-entry-handheld";
+  await askForEntry(desk, name, "sk-pairing-handheld-not-shown");
+  const shown = await glassPrompt(hand);
+  measured.glass_prompt = await measureScreen(hand, "#glass");
+  await glassButton(hand, shown.ref, "glass-passkey").click();
+  const outcome = await glassOutcome(hand, shown.ref);
+  const completed = await waitFor(async () => (await vaultNames()).includes(name), { timeoutMs: 30_000, stepMs: 1_000, what: name }).catch(() => false);
+
+  // Reconnecting: the glass's page opened again connects under the device
+  // it holds.
+  await hand.goto(`${base}/pair`);
+  await hand.waitForSelector('[data-test="glass-status"][data-state="ready"]', { timeout: 60_000 });
+  measured.reconnected = await measureScreen(hand, "#glass");
+
+  // Revocation, confirmed on the glass.
+  await openDevices(desk);
+  const client = `${layer} [data-test="pairing-client"][data-client="${held.clientId}"]`;
+  await desk.waitForSelector(client, { timeout: 30_000 });
+  await desk.locator(`${client} [data-test="pairing-revoke"]`).click();
+  const revoking = await glassPrompt(hand);
+  measured.revoke_prompt = await measureScreen(hand, "#glass");
+  await glassButton(hand, revoking.ref, "glass-passkey").click();
+  await hand.waitForSelector('[data-test="glass-status"][data-state="revoked"]', { timeout: 60_000 });
+  measured.revoked = await measureScreen(hand, "#glass");
+  await context.close();
+
+  const failures = unmet(measured);
+  record.viewport = {
+    viewport: HANDHELD.viewport, consent, entry: { preview: shown.preview, outcome, completed },
+    revoke_preview: revoking.preview, measured, failures, finding_prism_page: prismPage,
+  };
+  return row("viewport",
+    /pairing\.begin/.test(consent) && link.startsWith(`${base}/pair#code=`) && !!held &&
+      /vault\.create/.test(shown.preview) && shown.preview.includes(name) && outcome !== null && outcome.ok === "true" &&
+      completed && /pairing\.revoke/.test(revoking.preview) && failures.length === 0,
+    "at 720×720: a pairing's consent read and confirmed in the Prism's system layer, the glass, a credential entry confirmed on it, its reconnection and its revocation, every control 24×24 CSS px or more, text 12 px or more, nothing overflowing",
+    record.viewport);
+}
+
 // ---------------------------------------------------------------------------
 
 let proxy;
@@ -566,6 +679,7 @@ try {
         await measure(phone);
         await sleepBeyondExpiry(desk, phone);
         await revoke(desk, phone);
+        await handheld(browser, desk, authenticator);
       }
     }
   }
@@ -588,7 +702,7 @@ try {
   proxy.close();
 }
 
-const STEPS = ["passkey", "pair", "glass", "confirm", "fresh", "intent", "sleep", "revoke"];
+const STEPS = ["passkey", "pair", "glass", "confirm", "fresh", "intent", "sleep", "revoke", "viewport"];
 const outcome = (step) => {
   const found = rows.find((r) => r.step === step);
   return found ? (found.held ? "held" : "FAILED") : "not reached";

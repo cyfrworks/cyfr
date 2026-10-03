@@ -462,8 +462,10 @@ export function launchBrowser(name, proxy, options = {}) {
 // Chromium's virtual WebAuthn authenticator for `page`: a platform
 // authenticator that holds resident keys and verifies its user, present at
 // every ceremony, as a passkey needs. `credentials()` lists what it holds;
-// `remove()` takes it away. Chromium's alone: neither Firefox nor WebKit
-// offers one to Playwright.
+// `add(credential)` gives it a credential another authenticator listed, as
+// a synced passkey reaches another device of the person's, its count
+// carried along so no home sees it fall; `remove()` takes it away.
+// Chromium's alone: neither Firefox nor WebKit offers one to Playwright.
 export async function virtualAuthenticator(page, options = {}) {
   const name = page.context().browser()?.browserType().name();
   if (name !== "chromium") throw new Error(`the virtual WebAuthn authenticator is Chromium's, not ${name}'s`);
@@ -478,6 +480,7 @@ export async function virtualAuthenticator(page, options = {}) {
   return {
     id: authenticatorId,
     credentials: async () => (await cdp.send("WebAuthn.getCredentials", { authenticatorId })).credentials,
+    add: (credential) => cdp.send("WebAuthn.addCredential", { authenticatorId, credential }),
     remove: async () => {
       await cdp.send("WebAuthn.removeVirtualAuthenticator", { authenticatorId });
       await cdp.detach();
