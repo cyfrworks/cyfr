@@ -137,6 +137,42 @@ defmodule Sanctum.ProviderVaultProfileTest do
     assert Prima.ConsentSignal.signal?({:consent_conflict, payload})
   end
 
+  test "list answers the athanor's default per provider beside its entries, never material",
+       %{ctx: ctx} do
+    create = fn name ->
+      {:ok, %{entry: entry}} =
+        Sanctum.TestContext.confirming(
+          ctx,
+          &Sanctum.Provider.handle("vault", &1, %{
+            "action" => "create",
+            "name" => name,
+            "kind" => "api_key",
+            "provider_hint" => "openai.com",
+            "fields" => %{"OPENAI_API_KEY" => "sk-material-#{name}"},
+            "destination" => %{"hosts" => ["api.openai.com"]}
+          })
+        )
+
+      entry
+    end
+
+    first = create.("first-key")
+    second = create.("second-key")
+
+    assert {:ok, %{entries: entries, defaults: defaults} = answer} =
+             Sanctum.Provider.handle("vault", ctx, %{"action" => "list"})
+
+    assert Enum.map([first, second], & &1.id) -- Enum.map(entries, & &1.id) == []
+    assert defaults == %{"openai.com" => %{vault_entry_id: first.id}}
+
+    # On the wire the defaults are an object keyed by provider hint, and
+    # name an entry by id alone: no material, and no field.
+    wire = Jason.encode!(answer)
+    assert Jason.decode!(wire)["defaults"] == %{"openai.com" => %{"vault_entry_id" => first.id}}
+    refute wire =~ "sk-material"
+    refute Jason.encode!(defaults) =~ "OPENAI_API_KEY"
+  end
+
   test "the tincture session surface is named in the refusal", %{ctx: ctx} do
     session_ctx = %{ctx | auth_method: :session}
 

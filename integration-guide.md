@@ -951,7 +951,7 @@ A vault entry holds credential material — sealed at rest, never returned by an
 
 | Action | Key args | What it does |
 |--------|----------|--------------|
-| `list` | — | Enumerate entries (names + status, never material) |
+| `list` | — | Enumerate entries (names, status, destination and disclosure, never material) and the athanor's default per provider |
 | `status` | — | Each living entry's name, kind, status, created and updated times and whether a consent binds it — never material or a field; on both planes, under no consent class, so a tincture that declares it and an in-chain call may read it |
 | `create` | `name`, `kind` (`api_key` \| `oauth` \| `bundle`), `fields`, `destination` (+ `disclose`) | Mint an entry with sealed material, bound to where it may go |
 | `rename` | `id`, `name` | Relabel an entry — a label is unique among the athanor's living entries |

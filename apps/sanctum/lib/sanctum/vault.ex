@@ -3,8 +3,8 @@
 
 defmodule Sanctum.Vault do
   @moduledoc """
-  The operator's credential verbs: list, status, create, rename, rotate,
-  rebind, revoke, delete.
+  The operator's credential verbs: list, defaults, status, create, rename,
+  rotate, rebind, revoke, delete.
 
   Two mutations are deliberately different classes:
 
@@ -93,6 +93,27 @@ defmodule Sanctum.Vault do
   def list(%Context{} = ctx) do
     with {:ok, rows} <- Arca.VaultStorage.list(Context.actor(ctx)) do
       {:ok, Enum.map(rows, &view/1)}
+    end
+  end
+
+  @typedoc """
+  The caller's athanor's default entry per provider, keyed by provider
+  hint: one of its own entries or an instance entry, named by id alone.
+  """
+  @type defaults_view :: %{
+          String.t() => %{vault_entry_id: String.t()} | %{instance_entry_id: String.t()}
+        }
+
+  @doc """
+  The caller's athanor's default entry per provider, as stored
+  (`Arca.VaultDefaults`; `t:defaults_view/0`). A read, as `list/1` is,
+  whose gate is its caller's (`vault/list`): an id per provider, never
+  material or a field.
+  """
+  @spec defaults(Context.t()) :: {:ok, defaults_view()} | {:error, term()}
+  def defaults(%Context{} = ctx) do
+    with {:ok, rows} <- Arca.VaultDefaults.list(Context.actor(ctx)) do
+      {:ok, Map.new(rows, &default_view/1)}
     end
   end
 
@@ -429,6 +450,13 @@ defmodule Sanctum.Vault do
       last_used_at: entry.last_used_at
     }
   end
+
+  # A stored default names exactly one of the two entries.
+  defp default_view(%{provider_hint: hint, vault_entry_id: id}) when is_binary(id),
+    do: {hint, %{vault_entry_id: id}}
+
+  defp default_view(%{provider_hint: hint, instance_entry_id: id}) when is_binary(id),
+    do: {hint, %{instance_entry_id: id}}
 
   defp required_name(%{name: name}) when is_binary(name) and name != "", do: {:ok, name}
   defp required_name(_), do: {:error, :name_required}

@@ -329,6 +329,76 @@ defmodule Sanctum.VaultTest do
     end
   end
 
+  describe "defaults" do
+    test "the first entry of a provider is its default, and a second is not", %{ctx: ctx} do
+      first = create!(ctx, %{provider_hint: "openai.com"})
+      _second = create!(ctx, %{provider_hint: "openai.com"})
+      other = create!(ctx, %{provider_hint: "anthropic.com"})
+
+      # An entry naming no provider is no provider's default.
+      _unnamed = create!(ctx)
+
+      assert {:ok, defaults} = Vault.defaults(ctx)
+
+      assert defaults == %{
+               "anthropic.com" => %{vault_entry_id: other.id},
+               "openai.com" => %{vault_entry_id: first.id}
+             }
+    end
+
+    test "a tombstoned default is gone, and no other entry takes its place", %{ctx: ctx} do
+      first = create!(ctx, %{provider_hint: "openai.com"})
+      _second = create!(ctx, %{provider_hint: "openai.com"})
+      kept = create!(ctx, %{provider_hint: "anthropic.com"})
+
+      assert :ok = Vault.delete(ctx, first.id)
+
+      assert {:ok, %{"anthropic.com" => %{vault_entry_id: kept.id}}} == Vault.defaults(ctx)
+    end
+
+    test "another athanor's default is not answered", %{ctx: ctx} do
+      theirs = Prima.Actor.in_athanor("ath_other")
+
+      for hint <- ["openai.com", "anthropic.com"] do
+        {:ok, _entry} =
+          Arca.VaultStorage.put(theirs, %{
+            name: "theirs-#{hint}",
+            kind: "api_key",
+            provider_hint: hint,
+            sealed_payload: "sealed",
+            destination: @destination_text
+          })
+      end
+
+      assert {:ok, %{}} == Vault.defaults(ctx)
+
+      mine = create!(ctx, %{provider_hint: "openai.com"})
+
+      assert {:ok, %{"openai.com" => %{vault_entry_id: mine.id}}} == Vault.defaults(ctx)
+      assert {:ok, [_, _]} = Arca.VaultDefaults.list(theirs)
+    end
+
+    test "a default naming an instance entry is answered as one", %{ctx: ctx} do
+      {:ok, instance} =
+        Arca.InstanceEntries.put(Arca.Test.Actor.platform(), %{
+          name: "instance-#{System.unique_integer([:positive])}",
+          kind: "api_key",
+          provider_hint: "openai.com",
+          destination:
+            ~s({"hosts":["api.openai.com"],"methods":["POST"],"paths":["/v1/"],"scheme":"https"}),
+          sealed_payload: "sealed",
+          binding_digest: "sha256:instance",
+          audience: "everyone",
+          created_by: "usr_admin"
+        })
+
+      {:ok, _default} =
+        Arca.VaultDefaults.set(actor(ctx), "openai.com", %{instance_entry_id: instance.id})
+
+      assert {:ok, %{"openai.com" => %{instance_entry_id: instance.id}}} == Vault.defaults(ctx)
+    end
+  end
+
   describe "rotate changes material without requiring re-consent" do
     test "replaces material under CAS; the binding digest does not move", %{ctx: ctx} do
       view = create!(ctx, %{fields: %{"key" => "old-material"}})

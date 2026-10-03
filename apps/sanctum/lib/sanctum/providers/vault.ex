@@ -5,7 +5,9 @@ defmodule Sanctum.Providers.Vault do
   @moduledoc """
   Vault tool handlers for the Sanctum MCP provider — thin argument
   mapping over `Sanctum.Vault`, which owns every rule. External plane
-  only: guests have no enumeration API and no vault verbs. `status`
+  only: guests have no enumeration API and no vault verbs. `list`
+  answers the living entries beside the athanor's default per provider,
+  an object keyed by provider hint naming one entry by id. `status`
   answers each living entry's name, kind, status, created and updated
   times and whether a consent binds it, under no consent class, and never
   a value or a field.
@@ -256,12 +258,15 @@ defmodule Sanctum.Providers.Vault do
 
   def handle(%Context{} = ctx, %{"action" => "list"}) do
     # Enumeration is operator data: the same surfaces that can walk the
-    # consent flow may see connection names, nothing else. The registry
-    # gate already applies consent: :staging from the annotation — this
-    # arm is deliberate defense in depth for direct callers of the handler.
+    # consent flow may see each living entry's metadata (`entry_view`,
+    # never material) and the athanor's default per provider. The registry gate already applies consent:
+    # :staging from the annotation — this arm is deliberate defense in
+    # depth for direct callers of the handler. The entries and their
+    # defaults answer together or not at all.
     with :ok <- Sanctum.Consent.Authz.authorize_staging(ctx),
-         {:ok, entries} <- Vault.list(ctx) do
-      {:ok, %{entries: entries}}
+         {:ok, entries} <- Vault.list(ctx),
+         {:ok, defaults} <- Vault.defaults(ctx) do
+      {:ok, %{entries: entries, defaults: defaults}}
     else
       {:error, reason} -> {:error, fmt(reason)}
     end
