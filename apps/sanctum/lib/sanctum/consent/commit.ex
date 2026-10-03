@@ -929,7 +929,8 @@ defmodule Sanctum.Consent.Commit do
            :ok <- check_token_grant(declared_need, scopes, need),
            {:ok, entry} <- fetch_active_entry(ctx, Map.get(raw, :entry_id)),
            {:ok, digest} <- VaultReader.binding_digest(entry),
-           {:ok, fields, scopes} <- named_projection(declared_need, fields, scopes, entry, need) do
+           {:ok, fields, scopes} <- named_projection(declared_need, fields, scopes, entry, need),
+           :ok <- check_scope_projection(entry, scopes) do
         binding = %{
           need: need,
           entry_id: entry.id,
@@ -1020,6 +1021,31 @@ defmodule Sanctum.Consent.Commit do
 
   defp named_projection(_declared_need, fields, scopes, _entry, _need),
     do: {:ok, fields, scopes}
+
+  # An OAuth projection is held to what its entry can dispense, here and
+  # not first at a run: scopes the entry lacks are refused as the reader
+  # refuses them, and fewer than it holds only where its provider
+  # attenuates a refresh (`Sanctum.Vault.OAuth.attenuates_scope?/1`), since
+  # otherwise the person would be shown a narrowing no token honours.
+  defp check_scope_projection(%{kind: "oauth"} = entry, [_ | _] = scopes) do
+    held = entry.oauth_scopes |> stored_list() |> Enum.uniq()
+    projected = scopes |> Enum.uniq() |> Enum.sort()
+
+    case projected -- held do
+      [] when projected == held ->
+        :ok
+
+      [] ->
+        if Sanctum.Vault.OAuth.attenuates_scope?(entry.provider_hint),
+          do: :ok,
+          else: {:error, :scope_not_attenuable}
+
+      missing ->
+        {:error, {:scope_projection_unsatisfiable, missing}}
+    end
+  end
+
+  defp check_scope_projection(_entry, _scopes), do: :ok
 
   defp stored_list(json) when is_binary(json) and json != "" do
     case Prima.Json.decode(json) do

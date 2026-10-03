@@ -305,10 +305,7 @@ defmodule Sanctum.Consent.FlowTest do
       {:ok, preview} = Commit.preview(ctx, decisions)
 
       {:ok, _} =
-        Vault.rebind(ctx, %{
-          id: entry.id,
-          oauth_endpoints: %{"token_url" => "https://elsewhere.example/token"}
-        })
+        Vault.rebind(ctx, %{id: entry.id, field_names: ["anon_key", "region", "url"]})
 
       assert {:error, {:consent_conflict, %{cause: :digest_changed}}} =
                Commit.commit(ctx, %{
@@ -411,7 +408,7 @@ defmodule Sanctum.Consent.FlowTest do
 
       # Rebinding the entry blocks the profile.
       {:ok, %{affected: [^profile_id]}} =
-        Vault.rebind(ctx, %{id: entry.id, oauth_scopes: ["new.scope"]})
+        Vault.rebind(ctx, %{id: entry.id, field_names: ["anon_key", "region", "url"]})
 
       {:ok, blocked} = Arca.ProfileStorage.get(Sanctum.Context.actor(ctx), profile_id)
       assert blocked.status == "needs_consent"

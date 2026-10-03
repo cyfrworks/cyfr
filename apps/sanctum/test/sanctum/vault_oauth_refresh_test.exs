@@ -121,7 +121,7 @@ defmodule Sanctum.VaultOAuthRefreshTest do
       reseal_valid(ctx, entry, "tok-already-fresh")
 
       assert {:ok, "tok-already-fresh"} =
-               Sanctum.Vault.OAuth.dispense(actor(ctx), entry, @expired, "google")
+               Sanctum.Vault.OAuth.dispense(actor(ctx), entry, @expired, "google", @scopes)
 
       assert :counters.get(counter, 1) == 0
     end

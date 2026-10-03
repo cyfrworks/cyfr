@@ -141,7 +141,7 @@ defmodule Compendium.ConsentSetupPlanTest do
       })
 
     grant!(ctx, "reagent:local.plan-rebound", [%{need: "@ingress", entry_id: entry.id}])
-    {:ok, _} = Vault.rebind(ctx, %{id: entry.id, oauth_scopes: ["new.scope"]})
+    {:ok, _} = Vault.rebind(ctx, %{id: entry.id, field_names: ["k", "region"]})
 
     {:ok, plan} = Compendium.Component.setup_plan(ctx, "reagent:local.plan-rebound")
 

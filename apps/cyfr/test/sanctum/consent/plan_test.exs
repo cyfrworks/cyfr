@@ -274,6 +274,117 @@ defmodule Sanctum.Consent.PlanTest do
     end
   end
 
+  # A provider no shipped preset is, shown to attenuate a refresh
+  # (`:sanctum, :scripted_oauth_provider`); its token endpoint answers
+  # nothing, since a plan asks it nothing.
+  defmodule AttenuatingProvider do
+    @moduledoc false
+
+    def preset("attenuating-idp"),
+      do: %{
+        endpoints: %{
+          "authorize_url" => "https://idp.attenuating.test/authorize",
+          "token_url" => "https://idp.attenuating.test/token"
+        },
+        attenuates_scope: true
+      }
+
+    def preset(_hint), do: nil
+
+    def post(_url, _headers, _body), do: {:error, "a plan asks the provider nothing"}
+  end
+
+  describe "OAuth candidates and the needs they meet" do
+    @mail_ref "reagent:local.plan-mail"
+
+    setup %{ctx: ctx} do
+      publish!(ctx, "plan-mail", "1.0.0", %{
+        "needs" => %{
+          "mail" => %{
+            "type" => "oauth:google",
+            "reason" => "to read your mail",
+            "required" => true,
+            "scopes" => ["gmail.readonly"]
+          }
+        }
+      })
+
+      :ok
+    end
+
+    defp oauth_entry!(ctx, scopes, hint \\ "google") do
+      {:ok, view} =
+        Sanctum.TestContext.create_vault(ctx, %{
+          name: "mail-#{System.unique_integer([:positive])}",
+          kind: "oauth",
+          provider_hint: hint,
+          oauth: %{"access_token" => "t"},
+          oauth_scopes: scopes
+        })
+
+      view
+    end
+
+    defp mail_warnings(plan), do: Enum.filter(plan.warnings, &(&1 =~ "need 'mail'"))
+
+    test "an OAuth candidate says whether it can be narrowed, and no other kind does",
+         %{ctx: ctx} do
+      oauth = oauth_entry!(ctx, ["gmail.readonly"])
+
+      {:ok, key} =
+        Sanctum.TestContext.create_vault(ctx, %{
+          name: "key-#{System.unique_integer([:positive])}",
+          kind: "api_key",
+          fields: %{"KEY" => "k"}
+        })
+
+      {:ok, plan} = Plan.plan(ctx, %{ref: @mail_ref})
+
+      assert %{narrowable: false} = Enum.find(plan.candidates, &(&1.id == oauth.id))
+      refute Map.has_key?(Enum.find(plan.candidates, &(&1.id == key.id)), :narrowable)
+    end
+
+    test "a need is met by an OAuth candidate holding exactly its scopes", %{ctx: ctx} do
+      oauth_entry!(ctx, ["gmail.readonly"])
+      {:ok, plan} = Plan.plan(ctx, %{ref: @mail_ref})
+
+      assert mail_warnings(plan) == []
+    end
+
+    test "a need is not met by a wider candidate that cannot be narrowed, nor by one " <>
+           "lacking its scopes",
+         %{ctx: ctx} do
+      {:ok, none} = Plan.plan(ctx, %{ref: @mail_ref})
+      assert [_warning] = mail_warnings(none)
+
+      wider = oauth_entry!(ctx, ["gmail.readonly", "gmail.send"])
+      oauth_entry!(ctx, ["gmail.send"])
+      {:ok, plan} = Plan.plan(ctx, %{ref: @mail_ref})
+
+      assert %{narrowable: false} = Enum.find(plan.candidates, &(&1.id == wider.id))
+      assert [warning] = mail_warnings(plan)
+      assert warning =~ "gmail.readonly"
+    end
+
+    test "a need is met by a wider candidate whose provider attenuates a refresh", %{ctx: ctx} do
+      prior = Application.fetch_env(:sanctum, :scripted_oauth_provider)
+      Application.put_env(:sanctum, :scripted_oauth_provider, AttenuatingProvider)
+
+      on_exit(fn ->
+        case prior do
+          {:ok, value} -> Application.put_env(:sanctum, :scripted_oauth_provider, value)
+          :error -> Application.delete_env(:sanctum, :scripted_oauth_provider)
+        end
+      end)
+
+      wider = oauth_entry!(ctx, ["gmail.readonly", "gmail.send"], "attenuating-idp")
+      {:ok, plan} = Plan.plan(ctx, %{ref: @mail_ref})
+
+      assert %{narrowable: true} = Enum.find(plan.candidates, &(&1.id == wider.id))
+      assert mail_warnings(plan) == []
+    end
+  end
+
   describe "a closure that cannot be resolved" do
     test "is unresolved, naming what is missing, with no rows and no selection", %{ctx: ctx} do
       publish!(ctx, "plan-orphan", "1.0.0", %{

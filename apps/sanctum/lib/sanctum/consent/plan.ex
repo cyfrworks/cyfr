@@ -37,6 +37,12 @@ defmodule Sanctum.Consent.Plan do
   the live ask (`Sanctum.Consent.ShapeDiff`). With no head, `head_origins` is nil
   and `shape_diff` empty.
 
+  `candidates` are the athanor's active entries. An OAuth candidate answers
+  `narrowable`, whether a token for fewer of its scopes can be dispensed,
+  which is so only where its provider attenuates a refresh
+  (`Sanctum.Vault.OAuth.attenuates_scope?/1`); a need asking for fewer
+  scopes than a candidate that is not narrowable holds is not met by it.
+
   A closure that cannot be resolved is `unresolved`: `%{reason, missing}`,
   the reason's tag (`"unresolvable_dependency"`, `"missing_release_digest"`
   or the resolution's own) and the name-level ref of what is missing,
@@ -55,6 +61,7 @@ defmodule Sanctum.Consent.Plan do
   alias Sanctum.Consent.ShapeDerivation
   alias Sanctum.Consent.ShapeDigest
   alias Sanctum.Context
+  alias Sanctum.Vault.OAuth
 
   require Logger
 
@@ -225,21 +232,53 @@ defmodule Sanctum.Consent.Plan do
     end
   end
 
-  # A required need with no active candidate of its kind is satisfiable
-  # only after the operator creates a vault entry — say so up front.
+  # A required need no active candidate can satisfy is satisfiable only
+  # after the operator creates a vault entry — say so up front. A key or
+  # bundle need is satisfied by a candidate of its kind; an OAuth need only
+  # by an OAuth candidate whose scopes contain the need's and either equal
+  # them or can be narrowed to them (`narrowable`), since a token for fewer
+  # scopes than an entry holds is dispensed only where its provider
+  # attenuates a refresh.
   defp need_warnings(needs, candidates) do
-    kinds = candidates |> Enum.map(& &1.kind) |> MapSet.new()
-
-    for %{required: true, kind: kind, need: name} <- needs,
+    for %{required: true, kind: kind, need: name} = need <- needs,
         kind in ~w(api_key oauth bundle),
-        not MapSet.member?(kinds, kind) do
-      "need '#{name}' wants a #{kind} vault entry and none exists yet — create one first"
+        not Enum.any?(candidates, &satisfies?(&1, need)) do
+      need_warning(name, need)
     end
   end
 
+  defp satisfies?(%{kind: "oauth"} = candidate, %{kind: "oauth"} = need) do
+    held = scope_set(candidate.oauth_scopes)
+    wanted = scope_set(Map.get(need, :scopes))
+
+    wanted -- held == [] and (wanted == held or candidate.narrowable)
+  end
+
+  defp satisfies?(%{kind: kind}, %{kind: kind}), do: true
+  defp satisfies?(_candidate, _need), do: false
+
+  defp scope_set(scopes) when is_list(scopes), do: scopes |> Enum.uniq() |> Enum.sort()
+  defp scope_set(_scopes), do: []
+
+  defp need_warning(name, %{kind: "oauth"} = need) do
+    "need '#{name}' wants an oauth vault entry granting " <>
+      "#{Enum.join(scope_set(Map.get(need, :scopes)), ", ")}, and none can yet — create one first"
+  end
+
+  defp need_warning(name, %{kind: kind}),
+    do: "need '#{name}' wants a #{kind} vault entry and none exists yet — create one first"
+
+  # The athanor's active entries, each OAuth one saying whether a token for
+  # fewer of its scopes can be dispensed (`narrowable`): only where its
+  # provider attenuates a refresh. Other kinds carry no such key.
   defp candidates(ctx) do
     with {:ok, entries} <- Sanctum.Vault.list(ctx) do
-      {:ok, Enum.filter(entries, &(&1.status == "active"))}
+      {:ok,
+       for %{status: "active"} = entry <- entries do
+         if entry.kind == "oauth",
+           do: Map.put(entry, :narrowable, OAuth.attenuates_scope?(entry.provider_hint)),
+           else: entry
+       end}
     end
   end
 

@@ -360,12 +360,17 @@ defmodule Cyfr.Test.AttemptFixtures do
   def vault_authority!(ctx, attrs, authority \\ Authority.zero()) do
     # The edge names what a consent would: the entry's fields, and for an
     # OAuth entry its scopes (a fixture scope when the attrs name none).
-    # `:projection` in `attrs` replaces it whole.
+    # `:projection` in `attrs` replaces it whole. An OAuth entry names the
+    # provider it dispenses for: `google`, as the fixtures' dispenses ask,
+    # whose preset holds its endpoints, when the attrs name none.
     {explicit, attrs} = Map.pop(attrs, :projection, :derived)
 
     attrs =
       if Map.get(attrs, :kind) == "oauth",
-        do: Map.put_new(attrs, :oauth_scopes, ["fixture.scope"]),
+        do:
+          attrs
+          |> Map.put_new(:oauth_scopes, ["fixture.scope"])
+          |> Map.put_new(:provider_hint, "google"),
         else: attrs
 
     projection =

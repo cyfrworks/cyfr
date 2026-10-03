@@ -539,6 +539,115 @@ defmodule Sanctum.Consent.CommitTest do
     end
   end
 
+  describe "an OAuth binding's scopes" do
+    @mail_needs %{
+      "needs" => %{
+        "mail" => %{
+          "type" => "oauth:google",
+          "reason" => "to read your mail",
+          "required" => true,
+          "scopes" => ["gmail.readonly"]
+        }
+      },
+      "caps" => @caps
+    }
+
+    defp oauth_entry!(ctx, scopes) do
+      {:ok, view} =
+        Sanctum.TestContext.create_vault(ctx, %{
+          name: "mail-#{System.unique_integer([:positive])}",
+          kind: "oauth",
+          provider_hint: "google",
+          oauth: %{"access_token" => "t"},
+          oauth_scopes: scopes
+        })
+
+      view
+    end
+
+    test "a consent narrowing scopes on a candidate that cannot be narrowed is refused at commit",
+         %{ctx: ctx} do
+      ref = "reagent:local.commit-narrow"
+      publish!(ctx, "commit-narrow", "1.0.0", @mail_needs)
+      entry = oauth_entry!(ctx, ["gmail.readonly", "gmail.send"])
+
+      # The need's own scopes, and the same narrowing named outright, are
+      # fewer than the entry holds, and Google's preset does not attenuate
+      # a refresh: no preview offers it.
+      narrowed = [
+        %{ref: ref, bindings: [%{need: "mail", entry_id: entry.id}]},
+        %{ref: ref, bindings: [%{need: "mail", entry_id: entry.id, scopes: ["gmail.readonly"]}]}
+      ]
+
+      for decisions <- narrowed do
+        assert {:error, :scope_not_attenuable} = Commit.preview(ctx, decisions)
+      end
+
+      # The entry's scopes whole are what may be granted; a commit that
+      # presents that proof for the narrowed decisions is refused, and no
+      # revision is written.
+      whole = %{
+        ref: ref,
+        bindings: [%{need: "mail", entry_id: entry.id, scopes: ["gmail.send", "gmail.readonly"]}]
+      }
+
+      {:ok, plan} = Plan.plan(ctx, %{ref: ref})
+      {:ok, preview} = Commit.preview(ctx, whole)
+
+      for decisions <- narrowed do
+        assert {:error, :scope_not_attenuable} =
+                 Commit.commit(ctx, %{
+                   decisions: decisions,
+                   plan_token: plan.plan_token,
+                   proof: preview.proof,
+                   commit_digest: preview.commit_digest,
+                   expected_consent_revision: plan.expected_consent_revision
+                 })
+      end
+
+      assert {:ok, []} = Arca.ConsentStorage.profiles(Sanctum.Context.actor(ctx), ref)
+
+      # A granted profile is held to the same rule when a binding is granted
+      # to it later.
+      assert {:ok, %{profile_id: profile_id, revision: 1}} =
+               Commit.commit(ctx, %{
+                 decisions: whole,
+                 plan_token: plan.plan_token,
+                 proof: preview.proof,
+                 commit_digest: preview.commit_digest,
+                 expected_consent_revision: plan.expected_consent_revision
+               })
+
+      assert {:error, :scope_not_attenuable} =
+               Commit.grant(ctx, %{
+                 profile_id: profile_id,
+                 bindings: [%{need: "mail", entry_id: entry.id}],
+                 expected_consent_revision: 1
+               })
+
+      assert head!(ctx, profile_id).revision == 1
+    end
+
+    test "a projection naming a scope the entry lacks is refused as the reader refuses it",
+         %{ctx: ctx} do
+      ref = "reagent:local.commit-lacks"
+      publish!(ctx, "commit-lacks", "1.0.0", @mail_needs)
+      entry = oauth_entry!(ctx, ["gmail.send"])
+
+      assert {:error, {:scope_projection_unsatisfiable, ["gmail.readonly"]}} =
+               Commit.preview(ctx, %{ref: ref, bindings: [%{need: "mail", entry_id: entry.id}]})
+    end
+
+    test "a projection naming exactly the entry's scopes is granted", %{ctx: ctx} do
+      ref = "reagent:local.commit-exact"
+      publish!(ctx, "commit-exact", "1.0.0", @mail_needs)
+      entry = oauth_entry!(ctx, ["gmail.readonly"])
+
+      assert {:ok, %{revision: 1}} =
+               walk!(ctx, ref, %{bindings: [%{need: "mail", entry_id: entry.id}]})
+    end
+  end
+
   describe "a public profile's staging" do
     test "answers what it would grant as rows, with the origins it would admit", %{ctx: ctx} do
       publish!(ctx, "commit-publish")

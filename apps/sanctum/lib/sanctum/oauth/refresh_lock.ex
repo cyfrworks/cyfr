@@ -34,12 +34,15 @@ defmodule Sanctum.OAuth.RefreshLock do
   The claim stops N members refreshing at once. It cannot make a refresh
   that overran its 30 s lease harmless, because the provider call has
   already happened by then. The property — **an old refresh cannot
-  replace a newer binding** — is enforced by the write, not by the lock:
+  replace a newer bundle** — is enforced by the write, not by the lock:
   `Sanctum.Vault.OAuth` seals its result and writes it through
   `Arca.VaultStorage.rotate_payload/4`, a compare-and-set on the
   `payload_rev` the refresher read inside the lock. A refresh whose write
-  lands after a newer binding finds a revision it did not read, loses, and
-  is reconciled against what actually stands.
+  lands after a newer bundle (a rotate, a re-authorization) finds a
+  revision it did not read, loses, and is reconciled against what actually
+  stands. A binding change that writes no payload does not move that
+  revision; `Sanctum.Vault.OAuth` checks the binding itself, at each
+  re-read and again after the write, before a token is answered.
 
   That is also why a leader does not re-check its claim before writing
   back: by then the provider has rotated the refresh token this refresh

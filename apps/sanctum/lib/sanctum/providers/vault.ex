@@ -271,13 +271,19 @@ defmodule Sanctum.Providers.Vault do
   end
 
   # Start a browser OAuth grant for a vault entry: `id` re-authorizes an
-  # existing oauth entry; `name` + `provider_hint` (+ optional
-  # `oauth_scopes` / `oauth_endpoints`) mints a new one on completion.
+  # existing oauth entry (+ optional `oauth_scopes`, the scopes it is
+  # re-granted for); `name` + `provider_hint` (+ optional `oauth_scopes` /
+  # `oauth_endpoints`) mints a new one on completion. Endpoints named
+  # beside an `id` go to the grant, which refuses them: an entry's
+  # endpoints are fixed, and dropping them would answer a request other
+  # than the one made.
   def handle(%Context{} = ctx, %{"action" => "authorize"} = args) do
     params =
       case args do
         %{"id" => id} when is_binary(id) ->
           %{entry_id: id}
+          |> Prima.MapUtil.put_present(:endpoints, args["oauth_endpoints"])
+          |> Prima.MapUtil.put_present(:scopes, args["oauth_scopes"])
 
         %{"name" => name, "provider_hint" => provider} ->
           %{
@@ -408,6 +414,45 @@ defmodule Sanctum.Providers.Vault do
 
   defp fmt({:entry_unavailable, status}),
     do: "entry_unavailable: the entry is #{status}"
+
+  # An OAuth entry's endpoints, fixed when it is created
+  # (`Sanctum.Vault.OAuth`): refusals of the request's own shape, each in
+  # its own sentence, never an unavailable vault.
+  defp fmt(:endpoints_immutable),
+    do:
+      "endpoints_immutable: an OAuth entry's endpoints are fixed when it is created; " <>
+        "create a new entry for other endpoints"
+
+  defp fmt(:endpoints_preset_conflict),
+    do:
+      "endpoints_preset_conflict: this provider's endpoints are preset; " <>
+        "leave oauth_endpoints out"
+
+  defp fmt(:endpoints_required),
+    do:
+      "endpoints_required: this provider has no preset; " <>
+        "oauth_endpoints must name an authorize_url and a token_url"
+
+  defp fmt(:endpoints_must_use_https),
+    do: "endpoints_must_use_https: an authorize_url and a token_url must both use https://"
+
+  defp fmt({:reserved_extra_param, name}) when is_binary(name),
+    do:
+      "reserved_extra_param: extra_params may not set #{inspect(name)}, " <>
+        "which the authorization flow sets itself"
+
+  defp fmt(:scopes_need_reauthorization),
+    do:
+      "scopes_need_reauthorization: an OAuth entry's scopes are the ones its token was " <>
+        "granted for; re-authorize the entry (authorize with its id and the new oauth_scopes)"
+
+  defp fmt(:provider_required),
+    do: "provider_required: an OAuth entry names its provider in provider_hint"
+
+  defp fmt(:scopes_required),
+    do:
+      "scopes_required: a re-authorization names at least one scope, " <>
+        "or leaves oauth_scopes out to keep the entry's"
 
   # A reason this tool has no sentence for is not rendered here: a typed
   # refusal travels as data and each surface says it in its own words

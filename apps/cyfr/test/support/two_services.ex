@@ -495,12 +495,20 @@ defmodule Cyfr.Test.TwoServices do
   @doc "`arm!/2` for the catalyst `ref`, whose need is the step stub's."
   @spec arm!(Sanctum.Context.t(), String.t(), key: String.t(), token: String.t()) :: [String.t()]
   def arm!(ctx, ref, key: key, token: token) do
+    # The entry names the provider its token is dispensed for (`stub`,
+    # `dispense/4`), which has no preset, so it names its endpoints, ones
+    # nothing answers: the token it holds never expires.
     params = %{
       name: "#{ref} key",
       kind: "oauth",
+      provider_hint: "stub",
       fields: %{@key_field => key},
       oauth: %{"access_token" => token},
-      oauth_scopes: @stub_scopes
+      oauth_scopes: @stub_scopes,
+      oauth_endpoints: %{
+        "authorize_url" => "https://idp.step-stub.example/authorize",
+        "token_url" => "https://idp.step-stub.example/token"
+      }
     }
 
     # Entering the key is a sensitive change, confirmed as its person

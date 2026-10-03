@@ -1736,6 +1736,11 @@ defmodule Cyfr.Boundaries do
     # scripted directory through paths that pass no options; a caller's
     # options win, and a release never sets it, so it uses the system's.
     directory_client: :seam,
+    # An OAuth provider shown to attenuate a refresh (`Sanctum.Vault.OAuth`):
+    # a suite sets it to script a preset for a hint no shipped preset holds,
+    # and that preset's token endpoint, never replacing a shipped one; a
+    # release never sets it, so only the shipped presets are read.
+    scripted_oauth_provider: :seam,
     # Compiled in by `config/test.exs` alone; with the runtime switch off it
     # lets the sandboxed suite boot omit `Cyfr.Bootstrap`
     # (`Cyfr.Application.bootstrap_skipped?/2`).

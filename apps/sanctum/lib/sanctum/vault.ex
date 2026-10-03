@@ -11,11 +11,14 @@ defmodule Sanctum.Vault do
     * **rotate** replaces the sealed *material* under a `payload_rev`
       compare-and-swap. Binding fields are untouched, so the derived
       binding digest is unchanged and no consent is disturbed.
-    * **rebind** changes what the credential *talks to* (endpoints,
-      scopes, field schema). The derived binding digest moves, every
-      profile whose head consent references the entry flips to
-      `needs_consent`, and nothing runs against the new binding until a
-      human re-consents.
+    * **rebind** changes what the credential *talks to* (its field
+      schema). The derived binding digest moves, every profile whose head
+      consent references the entry flips to `needs_consent`, and nothing
+      runs against the new binding until a human re-consents. An OAuth
+      entry's endpoints are not among them, being fixed when the entry is
+      created, nor its scopes, which are the scopes its token was granted
+      for and change only by re-authorization
+      (`Sanctum.Vault.OAuthGrant`).
 
   Every mutation requires the interactive consent class (`:oidc`
   surface, external plane) — no permission wildcard and no scoped key
@@ -129,7 +132,7 @@ defmodule Sanctum.Vault do
   # ---------------------------------------------------------------------------
 
   @doc """
-  Create an entry holding v2 material. `params`:
+  Create an entry holding material (`Sanctum.Vault.Payload`). `params`:
 
     * `:name` (required) — athanor-unique label among living entries
     * `:kind` (required) — `"api_key" | "oauth" | "bundle"`
@@ -137,6 +140,13 @@ defmodule Sanctum.Vault do
     * `:oauth` — token bundle map (see `Sanctum.Vault.Payload`)
     * `:provider_hint` — immutable; defaults `""`
     * `:oauth_endpoints` / `:oauth_scopes` — binding fields
+
+  An `oauth` entry names its provider (`:provider_required`), and its
+  endpoints are fixed here and never change: a provider hint with a preset
+  (`Sanctum.Vault.OAuth.preset/1`) takes the preset's, and naming
+  endpoints beside it is refused `:endpoints_preset_conflict`; a provider
+  with no preset needs them named (`:endpoints_required`), held to
+  `Sanctum.Vault.OAuth.validate_endpoints/1`.
   """
   @spec create(Context.t(), map()) :: {:ok, entry_view()} | {:error, term()}
   def create(%Context{} = ctx, params) when is_map(params) do
@@ -145,6 +155,7 @@ defmodule Sanctum.Vault do
     with {:ok, :interactive} <- Authz.authorize_interactive(ctx),
          {:ok, name} <- required_name(params),
          {:ok, kind} <- required_kind(params),
+         {:ok, endpoints} <- create_endpoints(kind, params),
          {:ok, hold} <- Sanctum.Issuance.device_hold(ctx),
          :ok <-
            Authz.confirm(ctx, :credential_entry, %{
@@ -161,7 +172,7 @@ defmodule Sanctum.Vault do
       binding = %{
         provider_hint: hint,
         field_names: Jason.encode!(Enum.sort(Map.keys(fields))),
-        oauth_endpoints: encode_optional_map(Map.get(params, :oauth_endpoints)),
+        oauth_endpoints: encode_optional_map(endpoints),
         oauth_scopes: encode_optional_list(Map.get(params, :oauth_scopes))
       }
 
@@ -272,8 +283,14 @@ defmodule Sanctum.Vault do
   # ---------------------------------------------------------------------------
 
   @doc """
-  Change the binding fields (`:field_names`, `:oauth_endpoints`,
-  `:oauth_scopes`). `provider_hint` cannot change — it lives in the AAD.
+  Change the binding field `:field_names`, the material's field schema.
+  `provider_hint` cannot change — it lives in the AAD — and neither can
+  an entry's OAuth endpoints or scopes, each refused before the entry is
+  read: a params map naming `:oauth_endpoints` is refused
+  `:endpoints_immutable`, since a new endpoint is a new entry, and one
+  naming `:oauth_scopes` `:scopes_need_reauthorization`, since an entry's
+  scopes are the ones its token was granted for and change only with a
+  newly granted token (`Sanctum.Vault.OAuthGrant`).
 
   Returns the new derived binding digest and the profiles now blocked at
   `needs_consent`.
@@ -282,12 +299,10 @@ defmodule Sanctum.Vault do
           {:ok, %{binding_digest: String.t(), affected: [String.t()]}} | {:error, term()}
   def rebind(%Context{} = ctx, %{id: id} = params) do
     with {:ok, :interactive} <- Authz.authorize_interactive(ctx),
+         :ok <- endpoints_unnamed(params),
+         :ok <- scopes_unnamed(params),
          {:ok, entry} <- get_living(ctx, id) do
-      changes =
-        %{}
-        |> put_change(:field_names, params, &encode_optional_list/1)
-        |> put_change(:oauth_endpoints, params, &encode_optional_map/1)
-        |> put_change(:oauth_scopes, params, &encode_optional_list/1)
+      changes = put_change(%{}, :field_names, params, &encode_optional_list/1)
 
       if changes == %{} do
         {:error, :no_binding_changes}
@@ -397,6 +412,50 @@ defmodule Sanctum.Vault do
   defp required_kind(%{kind: kind}) when kind in @kinds, do: {:ok, kind}
   defp required_kind(_), do: {:error, {:invalid_kind, @kinds}}
 
+  # The endpoints an entry is created with. An `oauth` entry's come from its
+  # provider's preset or are named for a provider with none, never both and
+  # never neither; an empty map names none. Other kinds store what they are
+  # given, as they always have.
+  defp create_endpoints("oauth", params) do
+    hint = Map.get(params, :provider_hint, "")
+    given = Map.get(params, :oauth_endpoints)
+    named? = not (is_nil(given) or given == %{})
+
+    # An OAuth entry names the provider it dispenses for: the dispense
+    # serves that provider alone, so an entry naming none could serve none.
+    if hint in [nil, ""] do
+      {:error, :provider_required}
+    else
+      case Sanctum.Vault.OAuth.preset(hint) do
+        %{endpoints: _} when named? -> {:error, :endpoints_preset_conflict}
+        %{endpoints: endpoints} -> {:ok, endpoints}
+        nil when named? -> Sanctum.Vault.OAuth.validate_endpoints(given)
+        nil -> {:error, :endpoints_required}
+      end
+    end
+  end
+
+  defp create_endpoints(_kind, params), do: {:ok, Map.get(params, :oauth_endpoints)}
+
+  # An entry's OAuth endpoints are fixed when it is created: a rebind naming
+  # them is refused whatever it names, before anything of the entry is read.
+  defp endpoints_unnamed(params) do
+    if Map.has_key?(params, :oauth_endpoints),
+      do: {:error, :endpoints_immutable},
+      else: :ok
+  end
+
+  # An entry's scopes are the ones its token was granted for. Moving the
+  # column alone would make the old token stand for a grant it was never
+  # issued under (fewer scopes, and it would be served as their whole
+  # grant), so they move only with a token granted for them, by
+  # re-authorization; a rebind naming them is refused before any read.
+  defp scopes_unnamed(params) do
+    if Map.has_key?(params, :oauth_scopes),
+      do: {:error, :scopes_need_reauthorization},
+      else: :ok
+  end
+
   defp check_name_free(ctx, name) do
     case Arca.VaultStorage.get_by_name(Context.actor(ctx), name) do
       {:error, :not_found} -> :ok
@@ -466,15 +525,16 @@ defmodule Sanctum.Vault do
     end
   end
 
-  # What the rotated payload's oauth block becomes. A supplied bundle wins;
-  # otherwise the current bundle is kept — rotating the secret fields must
-  # not silently revoke a live grant.
-  defp rotation_oauth(%{"v" => 2} = current, nil), do: {:ok, current["oauth"]}
-  defp rotation_oauth(%{"v" => 2}, oauth) when is_map(oauth), do: {:ok, oauth}
+  # What the rotated payload's oauth block becomes. A supplied bundle wins,
+  # and with it go the tokens the old one held for narrower scope sets;
+  # otherwise the current bundle is kept whole — rotating the secret fields
+  # must not silently revoke a live grant.
+  defp rotation_oauth(%{"v" => 3} = current, nil), do: {:ok, current["oauth"]}
+  defp rotation_oauth(%{"v" => 3}, oauth) when is_map(oauth), do: {:ok, oauth}
 
   # Total, like every validator here: a non-map :oauth is a typed refusal,
   # not a FunctionClauseError out of a public API.
-  defp rotation_oauth(%{"v" => 2}, _oauth),
+  defp rotation_oauth(%{"v" => 3}, _oauth),
     do: {:error, "oauth must be an object when supplied"}
 
   defp put_change(changes, key, params, encoder) do

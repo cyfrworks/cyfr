@@ -103,7 +103,7 @@ defmodule Opus.OAuthHandlerTest do
     # shape of the failure, not its contents.
     {fun, %{entry: entry}} = token_fn(vault: oauth())
     aad = Sanctum.CipherAAD.vault_entry(ctx.athanor_id, entry.id, entry.provider_hint)
-    {:ok, sealed} = Sanctum.Cipher.encrypt(~s({"v":2,"fields":{},"cyfr_live_leak":1}), aad)
+    {:ok, sealed} = Sanctum.Cipher.encrypt(~s({"v":3,"fields":{},"cyfr_live_leak":1}), aad)
     :ok = set_entry!(entry, sealed_payload: sealed)
 
     assert {:error, message} = fun.("google")

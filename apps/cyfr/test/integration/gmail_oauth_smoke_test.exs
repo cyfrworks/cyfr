@@ -76,7 +76,8 @@ defmodule Cyfr.GmailOAuthSmokeTest do
     {:ok, ctx: ctx}
   end
 
-  defp mint_entry!(ctx, oauth, endpoints) do
+  # The provider's preset holds the endpoints the entry is created with.
+  defp mint_entry!(ctx, oauth) do
     {:ok, view} =
       Sanctum.TestContext.create_vault(ctx, %{
         name: "my-gmail",
@@ -84,22 +85,57 @@ defmodule Cyfr.GmailOAuthSmokeTest do
         provider_hint: @provider,
         fields: %{},
         oauth: oauth,
-        oauth_endpoints: endpoints,
         oauth_scopes: ["https://www.googleapis.com/auth/gmail.readonly"]
       })
 
     view
   end
 
-  defp grant!(ctx, entry_id, scopes \\ []) do
-    ref = "catalyst:local.gmail"
-    {:ok, plan} = Plan.plan(ctx, %{ref: ref})
+  # A row whose token URL no create would store, written as the store holds
+  # one: the refresh's own scheme rule is what stands in front of it.
+  defp stored_entry!(ctx, oauth, endpoints) do
+    id = Prima.UUID7.generate_id("vlt")
+    aad = CipherAAD.vault_entry(ctx.athanor_id, id, @provider)
+    {:ok, json} = Sanctum.Vault.Payload.encode_material(%{}, oauth)
+    {:ok, sealed} = Sanctum.Cipher.encrypt(json, aad)
 
+    binding = %{
+      provider_hint: @provider,
+      field_names: "[]",
+      oauth_endpoints: Jason.encode!(endpoints),
+      oauth_scopes: Jason.encode!(["https://www.googleapis.com/auth/gmail.readonly"])
+    }
+
+    {:ok, digest} = VaultReader.binding_digest(binding)
+
+    {:ok, entry} =
+      Arca.VaultStorage.put(
+        Sanctum.Context.actor(ctx),
+        Map.merge(binding, %{
+          id: id,
+          name: "my-gmail",
+          kind: "oauth",
+          status: "active",
+          sealed_payload: sealed,
+          binding_digest: digest
+        })
+      )
+
+    entry
+  end
+
+  defp decisions(entry_id, scopes) do
     binding =
       %{need: @provider, entry_id: entry_id}
       |> then(fn b -> if scopes == [], do: b, else: Map.put(b, :scopes, scopes) end)
 
-    decisions = %{ref: ref, bindings: [binding]}
+    %{ref: "catalyst:local.gmail", bindings: [binding]}
+  end
+
+  defp grant!(ctx, entry_id, scopes \\ []) do
+    ref = "catalyst:local.gmail"
+    {:ok, plan} = Plan.plan(ctx, %{ref: ref})
+    decisions = decisions(entry_id, scopes)
     {:ok, preview} = Commit.preview(ctx, decisions)
 
     {:ok, committed} =
@@ -127,8 +163,7 @@ defmodule Cyfr.GmailOAuthSmokeTest do
     entry =
       mint_entry!(
         ctx,
-        %{"access_token" => "ya29.live", "refresh_token" => "1//rt", "token_type" => "Bearer"},
-        %{"token_url" => "https://oauth2.googleapis.com/token", "auth_style" => "params"}
+        %{"access_token" => "ya29.live", "refresh_token" => "1//rt", "token_type" => "Bearer"}
       )
 
     committed = grant!(ctx, entry.id)
@@ -228,14 +263,17 @@ defmodule Cyfr.GmailOAuthSmokeTest do
       Sanctum.TestContext.put_provider_credentials(ctx, @provider, "client-id", "client-secret")
 
     entry =
-      mint_entry!(
+      stored_entry!(
         ctx,
         %{
           "access_token" => "ya29.stale",
           "refresh_token" => "1//rt",
           "expires_at" => "2020-01-01T00:00:00Z"
         },
-        %{"token_url" => "http://127.0.0.1:#{bypass.port}/token"}
+        %{
+          "authorize_url" => "https://accounts.google.com/o/oauth2/v2/auth",
+          "token_url" => "http://127.0.0.1:#{bypass.port}/token"
+        }
       )
 
     committed = grant!(ctx, entry.id)
@@ -249,31 +287,23 @@ defmodule Cyfr.GmailOAuthSmokeTest do
     refute_receive :provider_called, 200
   end
 
-  test "a scope projection narrower than the grant is refused, not over-served",
+  test "a scope projection outside the grant is refused at consent, not over-served",
        %{ctx: ctx} do
-    entry =
-      mint_entry!(
-        ctx,
-        %{"access_token" => "ya29.live"},
-        %{"token_url" => "https://oauth2.googleapis.com/token"}
-      )
+    entry = mint_entry!(ctx, %{"access_token" => "ya29.live"})
 
-    committed = grant!(ctx, entry.id, ["https://www.googleapis.com/auth/gmail.send"])
-    resource = edge_resource!(ctx, committed.profile_id)
-
+    # The consent never names a projection its entry cannot dispense, so
+    # no edge reaches the reader asking for it.
     assert {:error, {:scope_projection_unsatisfiable, missing}} =
-             VaultReader.oauth_token(ctx, resource, @provider)
+             Commit.preview(
+               ctx,
+               decisions(entry.id, ["https://www.googleapis.com/auth/gmail.send"])
+             )
 
     assert "https://www.googleapis.com/auth/gmail.send" in missing
   end
 
   test "material never appears in what the operator surfaces return", %{ctx: ctx} do
-    entry =
-      mint_entry!(
-        ctx,
-        %{"access_token" => "ya29.super-secret"},
-        %{"token_url" => "https://oauth2.googleapis.com/token"}
-      )
+    entry = mint_entry!(ctx, %{"access_token" => "ya29.super-secret"})
 
     {:ok, listed} = Vault.list(ctx)
     rendered = inspect(listed)

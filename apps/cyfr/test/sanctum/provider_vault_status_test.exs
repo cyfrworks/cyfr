@@ -36,9 +36,13 @@ defmodule Sanctum.ProviderVaultStatusTest do
           {"bundle", %{fields: %{@field => @secret, "OTHER" => @secret <> "-2"}}},
           {"oauth",
            %{
+             provider_hint: "example-idp",
              oauth: %{"access_token" => @secret, "refresh_token" => @secret <> "-r"},
              oauth_scopes: ["scope-#{@secret}"],
-             oauth_endpoints: %{"token_url" => "https://idp.example/#{@secret}"}
+             oauth_endpoints: %{
+               "authorize_url" => "https://idp.example/authorize",
+               "token_url" => "https://idp.example/#{@secret}"
+             }
            }}
         ] do
       name = "#{kind}-#{System.unique_integer([:positive])}"

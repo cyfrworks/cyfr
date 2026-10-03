@@ -161,7 +161,7 @@ defmodule Sanctum.Vault.NoPlaintextLeakTest do
     # and never the material inside it.
     id = Prima.UUID7.generate_id("vlt")
     aad = Sanctum.CipherAAD.vault_entry(ctx.athanor_id, id, "")
-    {:ok, sealed} = Sanctum.Cipher.encrypt(~s({"v":2,"fields":{},"extra":"#{value}"}), aad)
+    {:ok, sealed} = Sanctum.Cipher.encrypt(~s({"v":3,"fields":{},"extra":"#{value}"}), aad)
 
     log =
       capture_log(fn ->

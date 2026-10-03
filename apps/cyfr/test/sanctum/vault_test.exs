@@ -30,6 +30,33 @@ defmodule Sanctum.VaultTest do
 
   defp actor(ctx), do: Sanctum.Context.actor(ctx)
 
+  # An OAuth entry of a provider with a preset, holding no fields.
+  defp oauth_params(over) do
+    Map.merge(
+      %{
+        name: "oauth-#{System.unique_integer([:positive])}",
+        kind: "oauth",
+        provider_hint: "google",
+        fields: %{},
+        oauth_scopes: ["gmail.readonly"]
+      },
+      over
+    )
+  end
+
+  defp row!(ctx, id) do
+    {:ok, row} = Arca.VaultStorage.get(actor(ctx), id)
+    row
+  end
+
+  defp payload!(ctx, id) do
+    row = row!(ctx, id)
+    aad = Sanctum.CipherAAD.vault_entry(ctx.athanor_id, id, row.provider_hint)
+    {:ok, plaintext} = Sanctum.Cipher.decrypt(row.sealed_payload, aad)
+    {:ok, payload} = Sanctum.Vault.Payload.decode(plaintext)
+    payload
+  end
+
   # A credential entered, or rotated, as a person enters it: under the
   # confirmation they proved (`Sanctum.TestContext.confirmed/3`), for
   # exactly the change the vault decides, the entry named as it names it.
@@ -292,10 +319,7 @@ defmodule Sanctum.VaultTest do
       profile = mint_profile_with_ref(ctx, view.id, old_resource.binding_digest)
 
       assert {:ok, %{binding_digest: new_digest, affected: affected}} =
-               Vault.rebind(ctx, %{
-                 id: view.id,
-                 oauth_endpoints: %{"token_url" => "https://other.example/token"}
-               })
+               Vault.rebind(ctx, %{id: view.id, field_names: ["anon_key", "service_key", "url"]})
 
       assert new_digest != old_resource.binding_digest
       assert affected == [profile.id]
@@ -307,7 +331,8 @@ defmodule Sanctum.VaultTest do
       assert reloaded.status == "needs_consent"
     end
 
-    test "a binding moves only from the digest it was read at, and a rebind keeps what landed first",
+    test "a binding moves only from the digest it was read at, and a rebind derives its digest " <>
+           "from what landed",
          %{ctx: ctx} do
       view = create!(ctx)
       {:ok, entry} = Arca.VaultStorage.get(actor(ctx), view.id)
@@ -318,20 +343,19 @@ defmodule Sanctum.VaultTest do
                  actor(ctx),
                  view.id,
                  "sha256:stale",
-                 %{oauth_scopes: ~s(["x"])},
+                 %{field_names: ~s(["x"])},
                  Vault.blocked_profile_status()
                )
 
-      assert {:ok, _} = Vault.rebind(ctx, %{id: view.id, oauth_scopes: ["a"]})
+      assert {:ok, %{binding_digest: first}} =
+               Vault.rebind(ctx, %{id: view.id, field_names: ["anon_key", "region", "url"]})
 
       assert {:ok, %{binding_digest: digest}} =
-               Vault.rebind(ctx, %{
-                 id: view.id,
-                 oauth_endpoints: %{"token_url" => "https://other.example/token"}
-               })
+               Vault.rebind(ctx, %{id: view.id, field_names: ["anon_key", "service_key", "url"]})
 
       {:ok, row} = Arca.VaultStorage.get(actor(ctx), view.id)
-      assert row.oauth_scopes == ~s(["a"])
+      assert digest != first
+      assert row.field_names == ~s(["anon_key","service_key","url"])
       assert row.binding_digest == digest
       assert {:ok, ^digest} = VaultReader.binding_digest(row)
     end
@@ -340,6 +364,277 @@ defmodule Sanctum.VaultTest do
       view = create!(ctx)
 
       assert {:error, :no_binding_changes} = Vault.rebind(ctx, %{id: view.id})
+    end
+
+    test "rebind refuses changed OAuth endpoints before unsealing", %{ctx: ctx} do
+      view = create!(ctx, oauth_params(%{oauth: %{"access_token" => "tok-live"}}))
+      before = row!(ctx, view.id)
+      profile = mint_profile_with_ref(ctx, view.id, before.binding_digest)
+
+      elsewhere = %{
+        "authorize_url" => "https://accounts.google.com/o/oauth2/v2/auth",
+        "token_url" => "https://elsewhere.example/token"
+      }
+
+      # Whatever else it names, a rebind naming endpoints changes nothing:
+      # the endpoints a refresh token is sent to are fixed with the entry.
+      for params <- [
+            %{id: view.id, oauth_endpoints: elsewhere},
+            %{id: view.id, oauth_endpoints: elsewhere, oauth_scopes: ["gmail.send"]},
+            %{id: view.id, oauth_endpoints: nil}
+          ] do
+        assert {:error, :endpoints_immutable} = Vault.rebind(ctx, params)
+      end
+
+      after_row = row!(ctx, view.id)
+      assert after_row.binding_digest == before.binding_digest
+      assert {:ok, before.binding_digest} == VaultReader.binding_digest(after_row)
+      assert after_row.oauth_endpoints == before.oauth_endpoints
+      assert after_row.oauth_scopes == before.oauth_scopes
+      assert after_row.payload_rev == before.payload_rev
+      assert after_row.last_used_at == before.last_used_at
+
+      {:ok, unblocked} = Arca.ProfileStorage.get(actor(ctx), profile.id)
+      assert unblocked.status == "active"
+
+      # Refused before the entry is read: an id that names nothing answers
+      # the same refusal, not that nothing is there.
+      assert {:error, :endpoints_immutable} =
+               Vault.rebind(ctx, %{id: "vlt_nonexistent", oauth_endpoints: elsewhere})
+    end
+
+    test "an OAuth entry's scopes change only by re-authorization", %{ctx: ctx} do
+      # The entry's token was granted for both scopes. Narrowing the column
+      # alone would make one scope the whole grant, and the projection of
+      # that one scope would then be served the token granted for both.
+      view =
+        create!(
+          ctx,
+          oauth_params(%{
+            oauth: %{"access_token" => "tok-wide", "refresh_token" => "rt"},
+            oauth_scopes: ["gmail.readonly", "gmail.send"]
+          })
+        )
+
+      before = row!(ctx, view.id)
+
+      assert {:error, :scopes_need_reauthorization} =
+               Vault.rebind(ctx, %{id: view.id, oauth_scopes: ["gmail.readonly"]})
+
+      after_row = row!(ctx, view.id)
+      assert after_row.oauth_scopes == before.oauth_scopes
+      assert after_row.binding_digest == before.binding_digest
+
+      # So a consent naming the one scope is still a narrower projection of
+      # an entry its provider cannot narrow, and never the broad token.
+      narrower = %{
+        entry_id: view.id,
+        binding_digest: after_row.binding_digest,
+        projection: %{fields: [], scopes: ["gmail.readonly"]}
+      }
+
+      assert {:error, :scope_not_attenuable} = VaultReader.oauth_token(ctx, narrower, "google")
+
+      # Refused before the entry is read, and whatever else the rebind names.
+      assert {:error, :scopes_need_reauthorization} =
+               Vault.rebind(ctx, %{id: "vlt_nonexistent", oauth_scopes: ["gmail.readonly"]})
+
+      assert {:error, :scopes_need_reauthorization} =
+               Vault.rebind(ctx, %{id: view.id, oauth_scopes: nil, field_names: ["note"]})
+
+      assert row!(ctx, view.id).field_names == before.field_names
+
+      # The field schema still rebinds.
+      assert {:ok, %{binding_digest: moved}} =
+               Vault.rebind(ctx, %{id: view.id, field_names: ["note"]})
+
+      assert moved != before.binding_digest
+    end
+  end
+
+  describe "an OAuth entry's endpoints are fixed when it is created" do
+    test "a provider with a preset takes the preset's endpoints, and its token dispenses",
+         %{ctx: ctx} do
+      view = create!(ctx, oauth_params(%{oauth: %{"access_token" => "tok-live"}}))
+      %{endpoints: preset} = Sanctum.Vault.OAuth.preset("google")
+
+      assert Jason.decode!(row!(ctx, view.id).oauth_endpoints) == preset
+      refute Sanctum.Vault.OAuth.attenuates_scope?("google")
+
+      {:ok, entry} = Arca.VaultStorage.get(actor(ctx), view.id)
+      {:ok, digest} = VaultReader.binding_digest(entry)
+
+      resource = %{
+        entry_id: view.id,
+        binding_digest: digest,
+        projection: %{fields: [], scopes: ["gmail.readonly"]}
+      }
+
+      assert {:ok, "tok-live"} = VaultReader.oauth_token(ctx, resource, "google")
+    end
+
+    test "a provider with a preset and endpoints of its own, or one with neither, is refused",
+         %{ctx: ctx} do
+      given = %{
+        "authorize_url" => "https://accounts.google.com/o/oauth2/v2/auth",
+        "token_url" => "https://attacker.example/token"
+      }
+
+      assert {:error, :endpoints_preset_conflict} =
+               create(ctx, oauth_params(%{name: "conflict", oauth_endpoints: given}))
+
+      assert {:error, :endpoints_required} =
+               create(ctx, oauth_params(%{name: "neither", provider_hint: "acme"}))
+
+      {:ok, listed} = Vault.list(ctx)
+      refute Enum.any?(listed, &(&1.name in ["conflict", "neither"]))
+    end
+
+    test "an OAuth entry names its provider, whatever endpoints it names", %{ctx: ctx} do
+      acme = %{
+        "authorize_url" => "https://acme.example/authorize",
+        "token_url" => "https://acme.example/token"
+      }
+
+      for params <- [
+            oauth_params(%{name: "no-hint", provider_hint: "", oauth_endpoints: acme}),
+            oauth_params(%{name: "no-hint", oauth_endpoints: acme}) |> Map.delete(:provider_hint),
+            oauth_params(%{name: "no-hint", provider_hint: ""})
+          ] do
+        assert {:error, :provider_required} = create(ctx, params)
+      end
+
+      {:ok, listed} = Vault.list(ctx)
+      refute Enum.any?(listed, &(&1.name == "no-hint"))
+    end
+
+    test "a provider without a preset names endpoints held to the endpoint rule", %{ctx: ctx} do
+      acme = %{
+        "authorize_url" => "https://acme.example/authorize",
+        "token_url" => "https://acme.example/token",
+        "auth_style" => "header",
+        "extra_params" => %{"audience" => "acme-api"},
+        "provider" => "acme"
+      }
+
+      view = create!(ctx, oauth_params(%{provider_hint: "acme", oauth_endpoints: acme}))
+
+      # Stored as the endpoint keys alone.
+      assert Jason.decode!(row!(ctx, view.id).oauth_endpoints) == Map.delete(acme, "provider")
+
+      plaintext = %{acme | "token_url" => "http://acme.example/token"}
+      steering = put_in(acme, ["extra_params", "state"], "attacker-chosen")
+      partial = Map.delete(acme, "authorize_url")
+
+      for {endpoints, refusal} <- [
+            {plaintext, :endpoints_must_use_https},
+            {steering, {:reserved_extra_param, "state"}},
+            {partial, :endpoints_required}
+          ] do
+        assert {:error, ^refusal} =
+                 create(
+                   ctx,
+                   oauth_params(%{
+                     name: "acme-bad",
+                     provider_hint: "acme",
+                     oauth_endpoints: endpoints
+                   })
+                 )
+      end
+    end
+
+    test "other kinds store what they are given, as before", %{ctx: ctx} do
+      view = create!(ctx, %{oauth_endpoints: %{"token_url" => "https://other.example/token"}})
+
+      assert row!(ctx, view.id).oauth_endpoints == ~s({"token_url":"https://other.example/token"})
+    end
+
+    test "the refusals are said in their own words, never as an unavailable vault",
+         %{ctx: ctx} do
+      for {args, code} <- [
+            {%{"provider_hint" => "google", "oauth_endpoints" => %{"token_url" => "https://x"}},
+             "endpoints_preset_conflict"},
+            {%{"provider_hint" => "acme"}, "endpoints_required"},
+            {%{
+               "provider_hint" => "acme",
+               "oauth_endpoints" => %{
+                 "authorize_url" => "http://acme.example/a",
+                 "token_url" => "http://acme.example/t"
+               }
+             }, "endpoints_must_use_https"},
+            {%{
+               "provider_hint" => "acme",
+               "oauth_endpoints" => %{
+                 "authorize_url" => "https://acme.example/a",
+                 "token_url" => "https://acme.example/t",
+                 "extra_params" => %{"scope" => "everything"}
+               }
+             }, "reserved_extra_param"},
+            {%{
+               "oauth_endpoints" => %{
+                 "authorize_url" => "https://acme.example/a",
+                 "token_url" => "https://acme.example/t"
+               }
+             }, "provider_required"}
+          ] do
+        # Refused for its own shape before any confirmation is asked.
+        call =
+          Map.merge(%{"action" => "create", "name" => "wire-#{code}", "kind" => "oauth"}, args)
+
+        answer = Sanctum.Providers.Vault.handle(ctx, call)
+
+        assert {:error, message} = answer
+        assert is_binary(message) and String.starts_with?(message, code <> ": "), inspect(answer)
+      end
+
+      view = create!(ctx, oauth_params(%{oauth: %{"access_token" => "t"}}))
+
+      assert {:error, "endpoints_immutable: " <> _} =
+               Sanctum.Providers.Vault.handle(ctx, %{
+                 "action" => "rebind",
+                 "id" => view.id,
+                 "oauth_endpoints" => %{"token_url" => "https://elsewhere.example/token"}
+               })
+
+      assert {:error, "scopes_need_reauthorization: " <> _} =
+               Sanctum.Providers.Vault.handle(ctx, %{
+                 "action" => "rebind",
+                 "id" => view.id,
+                 "oauth_scopes" => ["gmail.send"]
+               })
+    end
+  end
+
+  describe "an OAuth bundle's tokens for narrower scope sets" do
+    @held %{"gmail.readonly" => %{"access_token" => "tok-narrow", "expires_at" => nil}}
+
+    test "a rotate without a bundle keeps them; one with a bundle replaces them", %{ctx: ctx} do
+      view =
+        create!(
+          ctx,
+          oauth_params(%{
+            fields: %{"note" => "n"},
+            oauth: %{"access_token" => "tok-wide", "refresh_token" => "rt", "tokens" => @held}
+          })
+        )
+
+      assert {:ok, 1} =
+               rotate(ctx, %{id: view.id, fields: %{"note" => "n2"}, expected_payload_rev: 0})
+
+      assert %{"fields" => %{"note" => "n2"}, "oauth" => %{"tokens" => @held}} =
+               payload!(ctx, view.id)
+
+      assert {:ok, 2} =
+               rotate(ctx, %{
+                 id: view.id,
+                 fields: %{"note" => "n2"},
+                 oauth: %{"access_token" => "tok-regranted", "refresh_token" => "rt-2"},
+                 expected_payload_rev: 1
+               })
+
+      assert %{"oauth" => oauth} = payload!(ctx, view.id)
+      assert oauth["access_token"] == "tok-regranted"
+      refute Map.has_key?(oauth, "tokens")
     end
   end
 
