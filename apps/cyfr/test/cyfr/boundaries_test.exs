@@ -35,7 +35,7 @@ defmodule Cyfr.BoundariesTest do
   use ExUnit.Case, async: true
 
   alias Cyfr.Boundaries
-  alias Prima.Test.{CodeLines, SourceTree}
+  alias Prima.Test.{Beams, CodeLines, SourceTree}
 
   defp root, do: Path.expand("../../../..", __DIR__)
 
@@ -134,10 +134,8 @@ defmodule Cyfr.BoundariesTest do
   defp compiled_reaches(app) do
     for path <- beams(app),
         caller = module_name(path),
-        production?(path),
-        {:ok, {_mod, [imports: imports]}} <-
-          [:beam_lib.chunks(String.to_charlist(path), [:imports])],
-        {callee, function, arity} <- imports,
+        Beams.production?(path),
+        {callee, function, arity} <- Beams.imports(String.to_charlist(path)),
         callee = inspect(callee),
         callee != caller,
         uniq: true,
@@ -145,79 +143,22 @@ defmodule Cyfr.BoundariesTest do
   end
 
   # Every Sanctum function a beam (a path or a compiled binary) calls or
-  # captures. A call is in the import table; an external capture
-  # (`&Sanctum.Egress.pinned_request/5`) emits no import and is a fun in
-  # the literal table instead, so both are read.
+  # captures, read by `Prima.Test.Beams`.
   defp sanctum_reaches(beam) do
-    for {module, function, arity} <- beam_imports(beam) ++ beam_captures(beam),
+    for {module, function, arity} <- Beams.reaches(beam),
         name = inspect(module),
         name == "Sanctum" or String.starts_with?(name, "Sanctum."),
         uniq: true,
         do: {name, function, arity}
   end
 
-  defp beam_imports(beam) do
-    {:ok, {_mod, [imports: imports]}} = :beam_lib.chunks(beam, [:imports])
-    imports
-  end
-
-  # The literal table is `<<size::32, data>>`, `data` zlib-compressed unless
-  # `size` is 0, and holds a count and then each term length-prefixed.
-  defp beam_captures(beam) do
-    case :beam_lib.chunks(beam, [~c"LitT"]) do
-      {:ok, {_mod, [{~c"LitT", <<size::32, data::binary>>}]}} ->
-        <<count::32, terms::binary>> = if size == 0, do: data, else: :zlib.uncompress(data)
-        terms |> literal_terms(count) |> Enum.flat_map(&external_funs/1)
-
-      _ ->
-        []
-    end
-  end
-
-  defp literal_terms(_binary, 0), do: []
-
-  defp literal_terms(<<size::32, term::binary-size(size), rest::binary>>, count),
-    do: [:erlang.binary_to_term(term) | literal_terms(rest, count - 1)]
-
-  defp external_funs(fun) when is_function(fun) do
-    info = Function.info(fun)
-
-    if info[:type] == :external,
-      do: [{info[:module], info[:name], info[:arity]}],
-      else: []
-  end
-
-  defp external_funs(list) when is_list(list), do: improper_flat_map(list)
-  defp external_funs(tuple) when is_tuple(tuple), do: external_funs(Tuple.to_list(tuple))
-
-  defp external_funs(map) when is_map(map),
-    do: map |> Map.to_list() |> external_funs()
-
-  defp external_funs(_term), do: []
-
-  defp improper_flat_map([head | tail]), do: external_funs(head) ++ improper_flat_map(tail)
-  defp improper_flat_map([]), do: []
-  defp improper_flat_map(tail), do: external_funs(tail)
-
   # The host application's production beams, as the Sanctum roster reads them.
   defp host_sanctum_reaches do
     for path <- beams(:cyfr),
-        production?(path),
+        Beams.production?(path),
         reach <- sanctum_reaches(String.to_charlist(path)),
         uniq: true,
         do: reach
-  end
-
-  # The test build compiles `test/support` into the same ebin. A support
-  # module is not the app, and its reaches are the suite's.
-  defp production?(path) do
-    case :beam_lib.chunks(String.to_charlist(path), [:compile_info]) do
-      {:ok, {_mod, [compile_info: info]}} ->
-        info |> Keyword.get(:source, ~c"") |> to_string() |> String.contains?("/lib/")
-
-      _ ->
-        false
-    end
   end
 
   # ---------------------------------------------------------------------------
@@ -2495,6 +2436,24 @@ defmodule Cyfr.BoundariesTest.CompilerPlants do
       [
         "forbidden reference to Emissary.External.Server.State",
         "references from Grimoire to Emissary are not allowed"
+      ]
+    )
+  end
+
+  test "the assistant naming the tool surface", %{copy: copy} do
+    assert_refused(
+      copy,
+      "cyfr",
+      "aqua/boundary_plant.ex",
+      """
+      defmodule Aqua.BoundaryPlant do
+        alias Emissary.MCP.Progress
+        def plant, do: Progress
+      end
+      """,
+      [
+        "forbidden reference to Emissary.MCP.Progress",
+        "references from Aqua to Emissary are not allowed"
       ]
     )
   end
