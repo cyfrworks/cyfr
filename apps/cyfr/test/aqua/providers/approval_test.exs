@@ -1,0 +1,249 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 CYFR Works Inc.
+
+defmodule Aqua.Providers.ApprovalTest do
+  @moduledoc """
+  A card decided on the wire goes through the same door as the console's
+  buttons, and only a person's own session may open it: a standing
+  credential and a running agent are refused at the registry.
+  """
+
+  use ExUnit.Case, async: false
+
+  alias Aqua.Tape
+  alias Arca.ThreadStorage, as: Threads
+  alias Grimoire.Visibility
+  alias Sanctum.Context
+
+  setup tags do
+    Cyfr.Test.Sandbox.setup!(tags)
+    Sanctum.TestContext.athanor!()
+    ctx = Sanctum.TestContext.local(:prism)
+    {:ok, thread} = Threads.create(Sanctum.Context.actor(ctx))
+    {:ok, ctx: ctx, thread: thread}
+  end
+
+  defp card!(ctx, thread) do
+    {:ok, %{turn: turn}} =
+      Tape.accept(ctx, thread.id, %{
+        message: %{author: ctx.user_id, content: "@aqua go"},
+        turn: %{agent: "aqua", requested_by: ctx.user_id}
+      })
+
+    {:ok, %{execution: execution, attempt: attempt}} =
+      Arca.Execution.admit(
+        %{
+          id: "exec_aprtool_#{System.unique_integer([:positive])}",
+          reference: "agent:local.aqua",
+          user_id: ctx.user_id,
+          athanor_id: ctx.athanor_id,
+          component_type: "agent",
+          kind: "turn",
+          turn_id: turn.id,
+          origin: :interactive
+        },
+        reservation: %{budget_id: "bgt_#{System.unique_integer([:positive])}", cap: 4},
+        grant: Cyfr.Test.AttemptFixtures.grant(ctx.athanor_id),
+        verify: &Sanctum.ExecutionStanding.verify/1
+      )
+
+    {:ok, turn} =
+      Tape.start_turn(ctx, turn, %{
+        root_execution_id: execution.id,
+        attempt: attempt.attempt,
+        profile_id: "prof_x",
+        consent_id: "consent_x",
+        recovery_limit: Aqua.Runner.RecoveryPolicy.max_attempts()
+      })
+
+    {:ok, model_step} = Tape.record_model_intent(ctx, turn, %{})
+    proposal = %{"tool" => "files", "action" => "delete", "args" => %{"path" => "data/x"}}
+
+    {:ok, %{calls: [%{step: step}]}} =
+      Tape.record_response(ctx, turn, model_step, %{
+        text: nil,
+        tool_calls: [
+          %{
+            tool_call_id: "c1",
+            name: "files.delete",
+            tool: "files",
+            action: "delete",
+            arguments: proposal["args"],
+            kind: "destructive"
+          }
+        ]
+      })
+
+    intent = %{
+      "kind" => "request_approval",
+      "title" => "files.delete",
+      "action_kind" => "destructive",
+      "tool_call_id" => "c1",
+      "proposal" => proposal
+    }
+
+    {:ok, %{approval: approval}} =
+      Tape.open_approval(ctx, turn, step, %{
+        proposal_digest: Aqua.Loop.Policy.proposal_digest(proposal),
+        card: %{content: "files.delete?", payload: %{"intent" => intent}}
+      })
+
+    %{turn: turn, step: step, approval: approval}
+  end
+
+  test "a standing credential and a running agent are refused; a session sees the tool", %{
+    ctx: ctx
+  } do
+    star = %{ctx | auth_method: :api_key, api_key_type: :admin, permissions: MapSet.new([:*])}
+
+    assert {:error,
+            %Prima.Refusal{
+              stage: :admission,
+              reason: {:consent_class_required, {:surface_not_permitted, :api_key}}
+            }} =
+             Grimoire.call_external("approval", star, %{
+               "action" => "resolve",
+               "approval" => "apr_x",
+               "decision" => "approve"
+             })
+
+    refute Enum.any?(
+             Visibility.filter_for_context(Grimoire.list_tools(), star),
+             &(&1["name"] == "approval")
+           )
+
+    assert Enum.any?(
+             Visibility.filter_for_context(Grimoire.list_tools(), ctx),
+             &(&1["name"] == "approval")
+           )
+
+    guest = Context.enter_guest(ctx)
+
+    assert {:error, %Prima.Refusal{stage: :admission, reason: {:guest_plane_call, "approval"}}} =
+             Grimoire.call_external("approval", guest, %{"action" => "list"})
+  end
+
+  test "a card is listed, declined once through the door, and answered again as a replay", %{
+    ctx: ctx,
+    thread: thread
+  } do
+    %{approval: approval, step: step} = card!(ctx, thread)
+
+    assert {:ok, %{count: 1, approvals: [%{id: aid, status: "pending"}]}} =
+             Grimoire.call_external("approval", ctx, %{
+               "action" => "list",
+               "thread" => thread.id
+             })
+
+    assert aid == approval.id
+
+    assert {:ok, %{decision: "declined", resolution_kind: "denied", replayed: false}} =
+             Grimoire.call_external("approval", ctx, %{
+               "action" => "resolve",
+               "approval" => approval.id,
+               "decision" => "decline",
+               "scope" => "never",
+               "reason" => "no"
+             })
+
+    assert {:ok, %{dispatch_state: "closed", outcome: "denied"}} = Tape.step(ctx, step.id)
+
+    assert {:ok, %{count: 0}} =
+             Grimoire.call_external("approval", ctx, %{
+               "action" => "list",
+               "thread" => thread.id
+             })
+
+    assert {:ok, %{decision: "declined", replayed: true}} =
+             Grimoire.call_external("approval", ctx, %{
+               "action" => "resolve",
+               "approval" => approval.id,
+               "decision" => "approve"
+             })
+  end
+
+  test "a standing answer's bounds travel with the decision, and one it may not carry is refused",
+       %{ctx: ctx, thread: thread} do
+    %{approval: approval} = card!(ctx, thread)
+
+    resolve = fn extra ->
+      Grimoire.call_external(
+        "approval",
+        ctx,
+        Map.merge(%{"action" => "resolve", "approval" => approval.id}, extra)
+      )
+    end
+
+    # Each bound reaches the decision, which refuses it on a deny or on
+    # "once" rather than dropping it.
+    for {extra, reason} <- [
+          {%{"decision" => "decline", "scope" => "never", "lifecycle" => "turn"}, :bounded_deny},
+          {%{"decision" => "decline", "scope" => "never", "until" => "2999-01-01T00:00:00Z"},
+           :bounded_deny},
+          {%{
+             "decision" => "decline",
+             "scope" => "never",
+             "constraint" => %{"kind" => "storage_path", "patterns" => ["data/notes/"]}
+           }, :bounded_deny},
+          {%{"decision" => "decline", "until" => "2999-01-01T00:00:00+02:00"},
+           :bounds_without_standing}
+        ] do
+      assert {:error, {:invalid_argument, message}} = resolve.(extra)
+      assert message == Aqua.ToolGrants.refusal_message({:scope_not_permitted, reason})
+    end
+
+    assert {:error, {:invalid_argument, message}} =
+             resolve.(%{"decision" => "approve", "scope" => "thread", "lifecycle" => "turn"})
+
+    assert message == Aqua.ToolGrants.refusal_message({:scope_not_permitted, "destructive"})
+
+    for until <- ["tomorrow", "2026-10-01T00:00:00", "2026-13-01T00:00:00Z"] do
+      assert {:error, {:invalid_argument, message}} =
+               resolve.(%{"decision" => "decline", "until" => until})
+
+      assert message =~ "ISO 8601"
+    end
+
+    assert {:error, %Prima.Refusal{stage: :admission, reason: {:invalid_argument, _}}} =
+             resolve.(%{"decision" => "approve", "scope" => "thread", "lifecycle" => "forever"})
+
+    assert {:ok, %{status: "pending"}} = Tape.approval(ctx, approval.id)
+  end
+
+  test "a wrong scope, a missing card and a bad decision are typed refusals", %{
+    ctx: ctx,
+    thread: thread
+  } do
+    %{approval: approval} = card!(ctx, thread)
+
+    assert {:error, {:invalid_argument, msg}} =
+             Grimoire.call_external("approval", ctx, %{
+               "action" => "resolve",
+               "approval" => approval.id,
+               "decision" => "approve",
+               "scope" => "never"
+             })
+
+    assert msg =~ "approve takes scope"
+
+    assert {:error, %Prima.Refusal{stage: :admission, reason: {:invalid_argument, _}}} =
+             Grimoire.call_external("approval", ctx, %{
+               "action" => "resolve",
+               "approval" => approval.id,
+               "decision" => "maybe"
+             })
+
+    assert {:error, {:not_found, "approval", "apr_nothing"}} =
+             Grimoire.call_external("approval", ctx, %{
+               "action" => "resolve",
+               "approval" => "apr_nothing",
+               "decision" => "decline"
+             })
+
+    assert {:error, {:not_found, "thread", "thread_nothing"}} =
+             Grimoire.call_external("approval", ctx, %{
+               "action" => "list",
+               "thread" => "thread_nothing"
+             })
+  end
+end

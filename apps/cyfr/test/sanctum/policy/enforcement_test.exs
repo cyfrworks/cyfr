@@ -6,9 +6,8 @@ defmodule Sanctum.Policy.EnforcementTest do
 
   alias Sanctum.Policy.Enforcement
 
-  setup do
-    :ok = Ecto.Adapters.SQL.Sandbox.checkout(Arca.Repo)
-    Ecto.Adapters.SQL.Sandbox.mode(Arca.Repo, {:shared, self()})
+  setup tags do
+    Cyfr.Test.Sandbox.setup!(tags)
     {:ok, ctx: Sanctum.TestContext.local()}
   end
 
@@ -96,12 +95,13 @@ defmodule Sanctum.Policy.EnforcementTest do
       import Ecto.Query
 
       Arca.Repo.update_all(
-        from(l in Arca.PolicyLog, where: l.id == ^row.id),
+        from(l in Arca.Schemas.PolicyLog, where: l.id == ^row.id),
         set: [timestamp: old_ts]
       )
 
-      assert {:ok, 1} = Cyfr.Retention.cleanup(ctx, "policy_log_days", dry_run: true)
-      assert {:ok, 1} = Cyfr.Retention.cleanup(ctx, "policy_log_days")
+      actor = Sanctum.Context.actor(ctx)
+      assert {:ok, 1} = Arca.Retention.cleanup(actor, "policy_log_days", dry_run: true)
+      assert {:ok, 1} = Arca.Retention.cleanup(actor, "policy_log_days")
       assert rows_for(ctx, "catalyst:local.old") == []
     end
   end

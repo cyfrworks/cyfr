@@ -33,7 +33,9 @@ defmodule Cyfr.KeyringFingerprint do
   @doc "The fingerprint of a keyring's primary key."
   @spec compute(keyring()) :: String.t()
   def compute(%{primary: label, keys: keys}) when is_binary(label) and is_map(keys) do
-    Cyfr.Digest.sha256_hex("cyfr-keyring-fingerprint|" <> label <> "|" <> Map.fetch!(keys, label))
+    Prima.Digest.sha256_hex(
+      "cyfr-keyring-fingerprint|" <> label <> "|" <> Map.fetch!(keys, label)
+    )
   end
 
   @doc """
@@ -116,8 +118,14 @@ defmodule Cyfr.KeyringFingerprint do
   defp mismatch_refusal(fingerprint, previous, accept) do
     accept_note =
       case accept do
-        nil -> ""
-        other -> " #{@accept_var} is set to #{inspect(other)}, which names neither."
+        nil ->
+          ""
+
+        value when is_binary(value) ->
+          " #{@accept_var} is set to \"#{value}\", which names neither."
+
+        _value ->
+          " #{@accept_var} is set to a value that names neither."
       end
 
     "[Cyfr] FATAL: the crypto keyring is not the one this database was sealed with — " <>
@@ -151,7 +159,9 @@ defmodule Cyfr.KeyringFingerprint do
   end
 
   defp store_refusal(reason) do
-    "[Cyfr] FATAL: the keyring fingerprint could not be read or recorded (#{inspect(reason)}); " <>
+    Logger.error("[Cyfr] the keyring fingerprint store answered: #{inspect(reason)}")
+
+    "[Cyfr] FATAL: the keyring fingerprint could not be read or recorded; " <>
       "refusing to boot rather than seal rows under an unverified key."
   end
 end

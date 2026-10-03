@@ -31,7 +31,7 @@ defmodule Opus.AuthorityExecutionCharacterizationTest do
     # The production source, not the Memory fixture: bootstrap writes real
     # rows and the loader reads them back.
 
-    ctx = Sanctum.TestContext.local()
+    ctx = Sanctum.TestContext.local(:api)
     :ok = Probe.publish_probe!(ctx)
     {:ok, %{minted: minted}} = Bootstrap.run(ctx)
     assert @probe_node in minted
@@ -49,29 +49,29 @@ defmodule Opus.AuthorityExecutionCharacterizationTest do
     {:ok, ctx: ctx}
   end
 
-  test "a pinned profile id from another estate is not found, not rooted", %{ctx: ctx} do
+  test "a pinned profile id from another athanor is not found, not rooted", %{ctx: ctx} do
     {:ok, %{profile_id: profile_id}} =
-      Cyfr.Execution.authority_for(ctx, :default, @probe_node)
+      Crucible.authority_for(ctx, :default, @probe_node)
 
     # The one place an agent-authored string selects an authority is the
     # approved `execution.run`/`run_stream` arm, which forwards
     # args["profile"] verbatim. The containment is that candidates load
-    # for the CALLER's focused estate — so a profile id minted elsewhere
+    # for the CALLER's focused athanor — so a profile id minted elsewhere
     # answers not-found instead of rooting a foreign authority.
     elsewhere = %{ctx | athanor_id: "ath_b"}
 
     assert {:error, {:not_found, ^profile_id}} =
-             Cyfr.Execution.authority_for(elsewhere, {:id, profile_id}, @probe_node)
+             Crucible.authority_for(elsewhere, {:id, profile_id}, @probe_node)
 
     # At home the same id resolves: the refusal above is scoping, not the
     # id's form.
     assert {:ok, %{profile_id: ^profile_id}} =
-             Cyfr.Execution.authority_for(ctx, {:id, profile_id}, @probe_node)
+             Crucible.authority_for(ctx, {:id, profile_id}, @probe_node)
   end
 
   test "a self-invoking chain keeps the consented authority at every level", %{ctx: ctx} do
     {:ok, run_result} =
-      Cyfr.Execution.run_root(ctx, :default, Probe.probe_ref(), %{
+      Crucible.run_root(ctx, :default, Probe.probe_ref(), %{
         "op" => "chain",
         "depth" => 2,
         "leaf" => nil
@@ -83,7 +83,7 @@ defmodule Opus.AuthorityExecutionCharacterizationTest do
 
     run =
       Arca.Repo.all(
-        from(e in Arca.Execution, where: e.root_execution_id == ^root_id, select: e.id)
+        from(e in Arca.Schemas.Execution, where: e.root_execution_id == ^root_id, select: e.id)
       )
 
     # Root plus two self-invoked descendants, all bound to the same node
@@ -102,13 +102,13 @@ defmodule Opus.AuthorityExecutionCharacterizationTest do
 
     # Every descendant row carries the root's activation digest; only the
     # root row carries the graph.
-    root_row = Arca.Repo.get(Arca.Execution, run_result.metadata.execution_id)
+    root_row = Arca.Repo.get(Arca.Schemas.Execution, run_result.metadata.execution_id)
     assert root_row.activation_digest
     assert root_row.activation_graph
 
     children =
       Arca.Repo.all(
-        from(e in Arca.Execution,
+        from(e in Arca.Schemas.Execution,
           where: e.parent_execution_id == ^run_result.metadata.execution_id
         )
       )
@@ -123,7 +123,7 @@ defmodule Opus.AuthorityExecutionCharacterizationTest do
 
   test "guest emits are attributed: origin and emitting node in the envelope", %{ctx: ctx} do
     {:ok, run_result} =
-      Cyfr.Execution.run_root(ctx, :default, Probe.probe_ref(), %{
+      Crucible.run_root(ctx, :default, Probe.probe_ref(), %{
         "op" => "emit",
         "events" => [%{"note" => "one"}]
       })
@@ -131,7 +131,7 @@ defmodule Opus.AuthorityExecutionCharacterizationTest do
     assert run_result.status == :completed
 
     events =
-      Cyfr.Execution.Events.since(run_result.metadata.execution_id, {0, 0}, ctx.athanor_id)
+      Crucible.Events.since(run_result.metadata.execution_id, {0, 0}, ctx.athanor_id)
 
     emit = Enum.find(events, &(&1.type == "emit"))
 
@@ -150,7 +150,7 @@ defmodule Opus.AuthorityExecutionCharacterizationTest do
     # expanded the manifest allowlist), the action is in-chain-annotated,
     # and the caller identity holds the permission — all three legs.
     {:ok, run_result} =
-      Cyfr.Execution.run_root(ctx, :default, Probe.probe_ref(), %{
+      Crucible.run_root(ctx, :default, Probe.probe_ref(), %{
         "op" => "call",
         "request" => %{
           "tool" => "component",
@@ -171,7 +171,7 @@ defmodule Opus.AuthorityExecutionCharacterizationTest do
     # its verdict reaches the guest as an encoded error naming the
     # authority denial.
     {:ok, run_result} =
-      Cyfr.Execution.run_root(ctx, :default, Probe.probe_ref(), %{
+      Crucible.run_root(ctx, :default, Probe.probe_ref(), %{
         "op" => "call",
         "request" => %{"tool" => "webhook", "action" => "list", "args" => %{}}
       })

@@ -3,26 +3,28 @@
 
 defmodule Cyfr.Test.ScriptedWorkerListener do
   @moduledoc """
-  A worker service's listener for the test suite: the `Cyfr.WorkerWire`
+  A worker service's listener for the test suite: the `Prima.WorkerWire`
   worker routes, served by Bandit on a loopback port of the system's
-  choosing, in front of any `Cyfr.WorkerAPI` module. It is what
+  choosing, in front of any `Prima.WorkerAPI` module. It is what
   `Cyfr.Test.ScriptedWorker` is reached through, and what a test's own
-  worker module is served by, so `Cyfr.Execution.Dispatch` reaches either
+  worker module is served by, so `Crucible.Dispatch` reaches either
   exactly as it reaches Opus.
 
-  `start_link/1` takes `worker:` (the `Cyfr.WorkerAPI` module it serves)
+  `start_link/1` takes `worker:` (the `Prima.WorkerAPI` module it serves)
   and `service:` (that worker service's configured id, whose dispatch key
-  CYFR derives for it: `Cyfr.Execution.Keys.worker_key/1`); `url/1` is the
-  base URL a `t:Cyfr.WorkerAPI.endpoint/0` names.
+  CYFR derives for it: `Crucible.Keys.opus_key/1`); `url/1` is the
+  base URL a `t:Prima.WorkerAPI.endpoint/0` names.
 
   A request is answered as Opus's listener answers it: the `x-cyfr-auth`
   header is verified with the service's dispatch key before the body is
-  read (`Cyfr.WorkerAuth.verify_request_header/3`, `401` with the
-  refusal), the body is read up to `Cyfr.HostAPI.max_body_bytes/0` (`413`
+  read (`Prima.WorkerAuth.verify_request_header/3`, `401` with the
+  refusal), the body is read up to `Prima.HostAPI.max_body_bytes/0` (`413`
   past it) and checked against the hash the header named (`400`
-  `bad_mac`), and a body whose `op` is not the route's callback, or whose
-  `args` are not the callback's, is `400` `malformed`. What the module
-  answers crosses as `Cyfr.WorkerWire.ok/1` or `error/2` with status
+  `bad_mac`), a body without the wire's version, or at another, is `400`
+  `unknown_version` before its `op` is read, and a body whose `op` is not
+  the route's callback, or whose `args` are not the callback's, is `400`
+  `malformed`. What the module
+  answers crosses as `Prima.WorkerWire.ok/1` or `error/2` with status
   `200`; a route that is no worker route is `404`.
   """
 
@@ -30,8 +32,8 @@ defmodule Cyfr.Test.ScriptedWorkerListener do
 
   import Plug.Conn
 
-  alias Cyfr.{HostAPI, WorkerAPI, WorkerAuth, WorkerWire}
-  alias Cyfr.Execution.Keys
+  alias Prima.{HostAPI, WorkerAPI, WorkerAuth, WorkerWire}
+  alias Crucible.Keys
 
   @doc "A child spec for `start_link/1`, one listener per `worker:`."
   def child_spec(opts) do
@@ -65,7 +67,7 @@ defmodule Cyfr.Test.ScriptedWorkerListener do
     "http://127.0.0.1:#{port}"
   end
 
-  @doc "The endpoint entry (`t:Cyfr.WorkerAPI.endpoint/0`) for the listener `pid` serving `service`."
+  @doc "The endpoint entry (`t:Prima.WorkerAPI.endpoint/0`) for the listener `pid` serving `service`."
   @spec endpoint(pid(), String.t(), [String.t()] | nil) :: WorkerAPI.endpoint()
   def endpoint(pid, service, components \\ nil) when is_pid(pid) and is_binary(service),
     do: %{id: service, url: url(pid), components: components}
@@ -125,11 +127,9 @@ defmodule Cyfr.Test.ScriptedWorkerListener do
   end
 
   defp decode(body) do
-    with {:ok, decoded} <- Jason.decode(body),
-         {:ok, callback, args} <- WorkerWire.read_request_body(WorkerAPI, decoded) do
-      {:ok, callback, args}
-    else
-      _ -> {:error, :malformed}
+    case Jason.decode(body) do
+      {:ok, decoded} -> WorkerWire.read_request_body(WorkerAPI, decoded)
+      {:error, _not_json} -> {:error, :malformed}
     end
   end
 
@@ -163,7 +163,7 @@ defmodule Cyfr.Test.ScriptedWorkerListener do
   defp run(_worker, _callback, _args), do: :malformed
 
   defp dispatch_key(service) do
-    {:ok, worker_key} = Keys.worker_key(service)
+    {:ok, worker_key} = Keys.opus_key(service)
     WorkerAuth.dispatch_key(worker_key)
   end
 end

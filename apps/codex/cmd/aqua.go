@@ -16,7 +16,7 @@ import (
 
 func init() {
 	aquaResetCmd.Flags().Bool("all", false,
-		"Also delete the roles and scrolls the estate made, so exactly the shipped set remains")
+		"Also delete the roles and scrolls the athanor made, so exactly the shipped set remains")
 
 	rootCmd.AddCommand(aquaCmd)
 	aquaCmd.AddCommand(aquaListCmd)
@@ -30,9 +30,9 @@ func init() {
 
 var aquaCmd = &cobra.Command{
 	Use:     "aqua",
-	Short:   "The estate's AQUA — its soul, roles and scrolls",
+	Short:   "The athanor's AQUA — its soul, roles and scrolls",
 	GroupID: "admin",
-	Long: `The estate has one assistant, AQUA. This command manages what it is made of:
+	Long: `The athanor has one assistant, AQUA. This command manages what it is made of:
 
   the soul      aqua.md — who AQUA is (name "aqua"); edited, never created or deleted
   the roles     the roles AQUA clones into, one file each
@@ -41,14 +41,14 @@ var aquaCmd = &cobra.Command{
 
 "list" shows all of it; "get" reads the soul, a role or a guide; "skills" reads
 the scrolls; "status" says which files are shipped, edited or yours; "reset"
-reverts edited copies of shipped files (and, with --all, deletes what the estate
+reverts edited copies of shipped files (and, with --all, deletes what the athanor
 made so only the shipped set remains).`,
 }
 
 var aquaListCmd = &cobra.Command{
 	Use:   "list",
 	Short: "List the soul, roles, guides and scrolls",
-	Long:  "List everything the estate's AQUA is made of: the soul, its roles and the guides, then the scrolls it has learned.",
+	Long:  "List everything the athanor's AQUA is made of: the soul, its roles and the guides, then the scrolls it has learned.",
 	Example: `  cyfr aqua list
   cyfr aqua list --json`,
 	Args: cobra.NoArgs,
@@ -108,11 +108,11 @@ var aquaGetCmd = &cobra.Command{
 var aquaStatusCmd = &cobra.Command{
 	Use:   "status",
 	Short: "Which files are shipped, edited or yours",
-	Long: `Show every file in the estate's aqua tree and where it comes from:
+	Long: `Show every file in the athanor's aqua tree and where it comes from:
 
   bundled   as shipped with the server
-  edited    a shipped file the estate changed — "reset" reverts it
-  yours     a role or scroll the estate made — "reset --all" deletes it`,
+  edited    a shipped file the athanor changed — "reset" reverts it
+  yours     a role or scroll the athanor made — "reset --all" deletes it`,
 	Example: `  cyfr aqua status
   cyfr aqua status --json`,
 	Args: cobra.NoArgs,
@@ -133,20 +133,20 @@ var aquaStatusCmd = &cobra.Command{
 var aquaResetCmd = &cobra.Command{
 	Use:   "reset",
 	Short: "Revert edited copies of shipped files",
-	Long: "Revert every shipped file the estate edited — the soul, shipped roles and shipped scrolls — to as shipped. " +
-		"Roles and scrolls the estate made are kept unless --all, which deletes them too so exactly the shipped set remains.",
+	Long: "Revert every shipped file the athanor edited — the soul, shipped roles and shipped scrolls — to as shipped. " +
+		"Roles and scrolls the athanor made are kept unless --all, which deletes them too so exactly the shipped set remains.",
 	Example: `  cyfr aqua reset
   cyfr aqua reset --all`,
 	Args: cobra.NoArgs,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		all, _ := cmd.Flags().GetBool("all")
 
-		// Deleting what the estate made is the irreversible half: it asks
+		// Deleting what the athanor made is the irreversible half: it asks
 		// when there is someone to ask. A plain reset only reverts to
 		// shipped and runs straight through.
 		if all && prompt.IsInteractive(flagNoInteractive) {
 			confirmed, err := prompt.Confirm(
-				"Revert every edited file AND delete the roles and scrolls the estate made? This cannot be undone.")
+				"Revert every edited file AND delete the roles and scrolls the athanor made? This cannot be undone.")
 			if err != nil {
 				if prompt.IsAborted(err) {
 					return prompt.ErrAborted
@@ -179,7 +179,7 @@ var aquaResetCmd = &cobra.Command{
 var aquaSkillsCmd = &cobra.Command{
 	Use:   "skills",
 	Short: "The scrolls AQUA has learned",
-	Long: "Read the scrolls — the procedures the estate's AQUA has learned, one aqua/skills/<name>/SKILL.md each. " +
+	Long: "Read the scrolls — the procedures the athanor's AQUA has learned, one aqua/skills/<name>/SKILL.md each. " +
 		"Run bare (or with list) for the index, get for one scroll's body.",
 	Example: `  cyfr aqua skills
   cyfr aqua skills get release-notes`,

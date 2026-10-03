@@ -2,9 +2,20 @@
 # Copyright 2026 CYFR Works Inc.
 
 defmodule PrismWeb.ApiKeysLive do
+  @moduledoc """
+  The athanor's API keys: list, create, rotate, revoke, through the `key`
+  tool. A minted key is shown once, in its reveal card, until dismissed.
+
+  Creating and rotating a key are sensitive changes: the page asks for a
+  fresh confirmation through its system layer (`PrismWeb.SystemLayer.call/5`),
+  which shows the request as this page's own, and the page repeats the
+  change once its record is confirmed, wherever the person proved it.
+  """
+
   use PrismWeb, :live_view
 
   alias Phoenix.LiveView.JS
+  alias PrismWeb.SystemLayer
   require Logger
 
   # `type` arrives from form params — match it against the three key types
@@ -24,8 +35,8 @@ defmodule PrismWeb.ApiKeysLive do
     # Subscribe once, at mount — handle_params re-fires on every patch,
     # and PubSub's :duplicate registry would deliver every message twice.
     if connected?(socket) do
-      ctx = socket.assigns[:context]
-      Phoenix.PubSub.subscribe(Emissary.PubSub, Cyfr.Bus.api_keys(ctx))
+      actor = Sanctum.Context.actor(socket.assigns[:context])
+      Cyfr.Bus.subscribe(actor, Cyfr.Bus.api_keys(actor))
     end
 
     socket =
@@ -118,27 +129,7 @@ defmodule PrismWeb.ApiKeysLive do
         socket.assigns.checked_scopes
       end
 
-    case call_tool(socket, "key/create", %{"name" => name, "type" => type, "scope" => scope}) do
-      {:ok, key} ->
-        keys =
-          case fetch_list(socket, "key/list", :keys) do
-            {:ok, list} ->
-              list
-
-            {:error, message} ->
-              Logger.warning("[ApiKeysLive] key/list failed: #{message}")
-              socket.assigns.keys
-          end
-
-        {:noreply,
-         socket
-         |> assign(:keys, keys)
-         |> assign(:new_key, key)
-         |> put_flash(:info, "API key created. Copy it now — it won't be shown again.")}
-
-      {:error, reason} ->
-        {:noreply, put_flash(socket, :error, "Failed to create: #{error_message(reason)}")}
-    end
+    create(socket, %{"name" => name, "type" => type, "scope" => scope})
   end
 
   def handle_event("revoke", %{"id" => id}, socket) do
@@ -159,15 +150,50 @@ defmodule PrismWeb.ApiKeysLive do
     end
   end
 
-  def handle_event("rotate", %{"id" => id}, socket) do
-    case call_tool(socket, "key/rotate", %{"name" => id}) do
-      {:ok, key} ->
+  def handle_event("rotate", %{"id" => id}, socket), do: rotate(socket, id)
+
+  # Minting and rotating a key each need a fresh confirmation: asked for
+  # through the system layer, and repeated from `handle_info/2` once
+  # confirmed.
+  defp create(socket, args) do
+    case SystemLayer.call(socket, :key_create, "key/create", args) do
+      {:ok, key, socket} ->
+        keys =
+          case fetch_list(socket, "key/list", :keys) do
+            {:ok, list} ->
+              list
+
+            {:error, message} ->
+              Logger.warning("[ApiKeysLive] key/list failed: #{message}")
+              socket.assigns.keys
+          end
+
+        {:noreply,
+         socket
+         |> assign(:keys, keys)
+         |> assign(:new_key, key)
+         |> put_flash(:info, "API key created. Copy it now — it won't be shown again.")}
+
+      {:asked, socket} ->
+        {:noreply, socket}
+
+      {:error, reason, socket} ->
+        {:noreply, put_flash(socket, :error, "Failed to create: #{error_message(reason)}")}
+    end
+  end
+
+  defp rotate(socket, name) do
+    case SystemLayer.call(socket, {:key_rotate, name}, "key/rotate", %{"name" => name}) do
+      {:ok, key, socket} ->
         {:noreply,
          socket
          |> assign(:new_key, key)
          |> put_flash(:info, "API key rotated. Copy the new key now.")}
 
-      {:error, reason} ->
+      {:asked, socket} ->
+        {:noreply, socket}
+
+      {:error, reason, socket} ->
         {:noreply, put_flash(socket, :error, "Failed to rotate: #{error_message(reason)}")}
     end
   end
@@ -185,12 +211,21 @@ defmodule PrismWeb.ApiKeysLive do
     {:noreply, socket |> fetch_keys() |> assign(:loading, false)}
   end
 
-  def handle_info(:api_keys_changed, socket) do
+  def handle_info(%Cyfr.Bus.ApiKeys{}, socket) do
     {:noreply, fetch_keys(socket)}
   end
 
+  # A change this page asked for was confirmed: made again, once.
+  def handle_info({:system_layer, _id, _outcome} = report, socket) do
+    case SystemLayer.reported(socket, report) do
+      {:repeat, :key_create, _tool, args, socket} -> create(socket, args)
+      {:repeat, {:key_rotate, name}, _tool, _args, socket} -> rotate(socket, name)
+      {:ok, socket} -> {:noreply, socket}
+    end
+  end
+
   def handle_info(msg, socket) do
-    Cyfr.UnexpectedMessage.log(__MODULE__, msg, :debug)
+    Prima.LoggerContext.unexpected(__MODULE__, msg, :debug)
     {:noreply, socket}
   end
 
@@ -332,6 +367,8 @@ defmodule PrismWeb.ApiKeysLive do
           </:col>
         </.table>
       </.card>
+
+      <.live_component module={SystemLayer} id={SystemLayer.layer_id()} context={@context} />
     </div>
     """
   end

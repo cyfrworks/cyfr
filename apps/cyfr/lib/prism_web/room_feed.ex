@@ -16,56 +16,62 @@ defmodule PrismWeb.RoomFeed do
   One direction only: the room is read into the person's own thread. The
   feed carries a name and two ids, never a line of the tape — the excerpt
   is read at send time, under the person's own membership
-  (`Aqua.RoomExcerpt`).
+  (`Aqua.room_excerpt/2`).
   """
 
-  @typedoc "`athanor_id`, `thread_id`, and for display `title` and `estate`."
+  @typedoc "`athanor_id`, `thread_id`, and for display `title` and `athanor`."
   @type room :: %{optional(String.t()) => String.t() | nil}
 
-  @doc "The topic a page announces on — its own, so two tabs never cross."
+  @doc """
+  The topic a page announces on — its own, so two tabs never cross
+  (`Cyfr.Bus.room_feed/1`, page-local).
+  """
   @spec topic(String.t()) :: String.t()
-  def topic(host_id) when is_binary(host_id), do: "room_feed:" <> host_id
+  def topic(host_id) when is_binary(host_id), do: Cyfr.Bus.room_feed(host_id)
 
+  @doc "Listen on a page's feed; each announcement arrives as `%Cyfr.Bus.RoomInView{}`."
   @spec subscribe(String.t()) :: :ok | {:error, term()}
-  def subscribe(topic) when is_binary(topic) do
-    Phoenix.PubSub.subscribe(Emissary.PubSub, topic)
-  end
+  def subscribe(topic) when is_binary(topic), do: Cyfr.Bus.subscribe_page(topic)
 
   @doc "Tell the listeners what the page shows now; `nil` when no thread is open."
-  @spec announce(String.t(), room() | nil) :: :ok | {:error, term()}
-  def announce(topic, room) when is_binary(topic) do
-    Phoenix.PubSub.broadcast(Emissary.PubSub, topic, {:room_in_view, room})
-  end
+  @spec announce(String.t(), room() | nil) :: :ok
+  def announce(topic, room) when is_binary(topic),
+    do: Cyfr.Bus.broadcast_page(topic, Cyfr.Bus.RoomInView.new(room))
 
   @doc "A room as the page names it, for the session and the feed."
   @spec room(map(), map(), String.t() | nil) :: room()
-  def room(%{id: athanor_id}, %{id: thread_id, title: title}, estate) do
+  def room(%{id: athanor_id}, %{id: thread_id, title: title}, athanor) do
     %{
       "athanor_id" => athanor_id,
       "thread_id" => thread_id,
       "title" => title,
-      "estate" => estate
+      "athanor" => athanor
     }
   end
 
-  @doc "How a room is named to the person: the estate, then the thread."
+  @doc "How a room is named to the person: the athanor, then the thread."
   @spec label(room() | nil) :: String.t()
   def label(%{} = room) do
-    [room["estate"], room["title"]]
+    [room["athanor"], room["title"]]
     |> Enum.reject(&(&1 in [nil, ""]))
     |> Enum.join(" · ")
   end
 
   def label(_), do: ""
 
-  @doc "The room as `Aqua.RoomExcerpt.read/2` takes it."
-  @spec excerpt_room(map()) :: Aqua.RoomExcerpt.room()
+  @doc "The room as `Aqua.room_excerpt/2` takes it."
+  @spec excerpt_room(map()) :: %{
+          required(:athanor_id) => String.t(),
+          required(:thread_id) => String.t(),
+          optional(:title) => String.t() | nil,
+          optional(:athanor) => String.t() | nil
+        }
   def excerpt_room(%{"athanor_id" => athanor_id, "thread_id" => thread_id} = room) do
     %{
       athanor_id: athanor_id,
       thread_id: thread_id,
       title: room["title"],
-      estate: room["estate"]
+      athanor: room["athanor"]
     }
   end
 end

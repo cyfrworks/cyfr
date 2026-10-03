@@ -9,7 +9,7 @@ defmodule Sanctum.Consent.ComponentsTest do
   for itself. It asks through `Sanctum.Consent.Components`, which the
   component domain answers (`Compendium.ConsentFacts`).
 
-  An estate whose facts cannot be read is not an estate that holds
+  An athanor whose facts cannot be read is not an athanor that holds
   nothing: a walk that mistook the two would skip every source as
   unvouched and report a clean, empty mint, and a shape derived from no
   manifest at all would grant nothing and read as a component that asks
@@ -25,10 +25,9 @@ defmodule Sanctum.Consent.ComponentsTest do
 
   @wasm File.read!(Path.join(__DIR__, "../../support/test_wasm/math.wasm"))
 
-  setup do
+  setup tags do
     Arca.Cache.init()
-    :ok = Ecto.Adapters.SQL.Sandbox.checkout(Arca.Repo)
-    Ecto.Adapters.SQL.Sandbox.mode(Arca.Repo, {:shared, self()})
+    Cyfr.Test.Sandbox.setup!(tags)
 
     test_path = Path.join(System.tmp_dir!(), "consent_components_#{:rand.uniform(1_000_000)}")
     original_base_path = Application.get_env(:arca, :base_path)
@@ -46,16 +45,16 @@ defmodule Sanctum.Consent.ComponentsTest do
     {:ok, ctx: Sanctum.TestContext.local()}
   end
 
-  # The port with no implementation written: what a deployment whose
-  # boot did not wire it looks like from inside the auth domain.
+  # The port with no implementation installed: what a deployment whose
+  # boot did not install it looks like from inside the auth domain.
   defp without_facts(fun) do
-    previous = Application.get_env(:sanctum, :consent_components)
-    Application.delete_env(:sanctum, :consent_components)
+    previous = Components.impl!()
+    Components.reset()
 
     try do
       fun.()
     after
-      if previous, do: Application.put_env(:sanctum, :consent_components, previous)
+      Components.install!(previous)
     end
   end
 
@@ -76,7 +75,7 @@ defmodule Sanctum.Consent.ComponentsTest do
   end
 
   test "the one implementation is the component domain's, and it answers the port" do
-    assert Components.impl() == Compendium.ConsentFacts
+    assert Components.impl!() == Compendium.ConsentFacts
 
     behaviours =
       Compendium.ConsentFacts.__info__(:attributes)
@@ -84,6 +83,25 @@ defmodule Sanctum.Consent.ComponentsTest do
       |> List.flatten()
 
     assert Sanctum.Consent.Components in behaviours
+  end
+
+  test "the accessor raises when nothing is installed; the calls answer their word instead" do
+    without_facts(fn ->
+      error = assert_raise Components.NotInstalledError, fn -> Components.impl!() end
+      assert error.message =~ "Sanctum.Consent.Components.install!/1"
+    end)
+  end
+
+  test "an install that does not answer every callback is refused, and changes nothing" do
+    assert_raise ArgumentError, ~r/does not implement Sanctum.Consent.Components/, fn ->
+      Components.install!(Sanctum.Grimoire)
+    end
+
+    assert_raise ArgumentError, ~r/does not implement/, fn ->
+      Components.install!(Sanctum.Consent.ComponentsTest.NoSuchModule)
+    end
+
+    assert Components.impl!() == Compendium.ConsentFacts
   end
 
   test "every call refuses in its own word when no implementation is written", %{ctx: ctx} do
@@ -106,7 +124,7 @@ defmodule Sanctum.Consent.ComponentsTest do
   test "unreadable facts, an absent component and a denial are three different words", %{ctx: ctx} do
     ship!(ctx, "facts-present", "reagent")
 
-    # The estate holds no component by that name: `:not_found`.
+    # The athanor holds no component by that name: `:not_found`.
     assert {:error, :not_found} = Components.get_latest(ctx, "facts-absent", "local", "reagent")
 
     # It holds this one, at this version, and not at another.
@@ -117,7 +135,7 @@ defmodule Sanctum.Consent.ComponentsTest do
 
     # The facts cannot be read at all: a third word, and not either of
     # those. A consent decision that took this for `:not_found` would
-    # report an estate that holds nothing.
+    # report an athanor that holds nothing.
     without_facts(fn ->
       assert {:error, :component_facts_unavailable} =
                Components.get_latest(ctx, "facts-present", "local", "reagent")
@@ -154,7 +172,7 @@ defmodule Sanctum.Consent.ComponentsTest do
     end)
 
     # And with the facts back, the same walk mints — so the refusal above
-    # was the port's and not an empty estate.
+    # was the port's and not an empty athanor.
     assert {:ok, %{minted: minted}} = Bootstrap.run(ctx)
     assert "reagent:local.facts-mint" in minted
   end

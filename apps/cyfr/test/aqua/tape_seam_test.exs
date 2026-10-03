@@ -15,19 +15,19 @@ defmodule Aqua.TapeSeamTest do
   @root Path.expand("../../../..", __DIR__)
 
   @storage ~r/\bArca\.(\w+Storage|Execution|ExecutionAttempts|ExecutionEvents|ExecutionPayloads|BudgetReservations|AgentRevisions|Repo)\b/
-  @catalog ~r/\bCyfr\.Ops\b/
-  @root_run ~r/\bCyfr\.Execution\.run_root\b/
+  @catalog ~r/(?<![\w.])Grimoire\./
+  @root_run ~r/\bCrucible\.run_root\b/
   @machine ~r/\bFile\.|\bSystem\.cmd\b|\bReq\./
 
   defp files(globs) do
     globs
-    |> Enum.flat_map(&Cyfr.Test.SourceTree.files!(Path.join(@root, &1)))
+    |> Enum.flat_map(&Prima.Test.SourceTree.files!(Path.join(@root, &1)))
     |> Enum.sort()
   end
 
   defp offenders(globs, pattern) do
     for path <- files(globs),
-        {line, n} <- path |> Cyfr.Test.SourceTree.read() |> Cyfr.Test.CodeLines.code_lines(),
+        {line, n} <- path |> Prima.Test.SourceTree.read() |> Prima.Test.CodeLines.code_lines(),
         line =~ pattern,
         do: "#{Path.relative_to(path, @root)}:#{n}: #{String.trim(line)}"
   end

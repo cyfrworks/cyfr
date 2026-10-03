@@ -12,8 +12,11 @@ defmodule Sanctum.Consent.CommitDigestTest do
     blob_digest: "sha256:blob",
     label: "default",
     kind: :owner,
-    invoke_mode: :open_inert
+    invoke_mode: :open_inert,
+    origins: [:interactive]
   }
+
+  @node "reagent:local.weather"
 
   @binding %{
     need: "source",
@@ -51,7 +54,10 @@ defmodule Sanctum.Consent.CommitDigestTest do
         # revision 0 for either — so without this a proof minted for one
         # label was spendable on the other.
         %{label: "staging"},
-        %{override: true}
+        %{override: true},
+        # What the grant admits, and how the ask was narrowed.
+        %{origins: [:interactive, :programmatic]},
+        %{subset: %{@node => %{"egress" => %{"domains" => ["api.weather.example"]}}}}
       ]
 
       for variant <- variants do
@@ -183,6 +189,127 @@ defmodule Sanctum.Consent.CommitDigestTest do
     end
   end
 
+  describe "origins" do
+    test "are required: a digest that binds no origins cannot be computed" do
+      assert {:error, {:invalid_commit, :origins, "is required"}} =
+               CommitDigest.compute(Map.delete(@base, :origins))
+    end
+
+    test "an empty list, an unknown origin, a spelling and a duplicate are refused" do
+      for origins <- [[], [:cli], ["interactive"], [:interactive, :interactive], :interactive] do
+        assert {:error, {:invalid_commit, :origins, _why}} =
+                 CommitDigest.compute(%{@base | origins: origins}),
+               "#{inspect(origins)} was accepted"
+      end
+    end
+
+    test "are a set: order does not change the digest, and they bind as wire spellings" do
+      assert digest!(%{@base | origins: [:webhook, :interactive]}) ==
+               digest!(%{@base | origins: [:interactive, :webhook]})
+
+      {:ok, canonical} = CommitDigest.normalize(%{@base | origins: [:schedule, :interactive]})
+      assert canonical["origins"] == ["interactive", "schedule"]
+    end
+
+    test "each origin changes the digest" do
+      digests =
+        for origin <- Prima.Origin.values(),
+            do: digest!(%{@base | origins: [origin]})
+
+      assert length(Enum.uniq(digests)) == length(Prima.Origin.values())
+    end
+  end
+
+  describe "subset" do
+    @narrowing %{
+      @node => %{
+        "egress" => %{"domains" => ["b.example", "a.example", "a.example"]},
+        "storage" => %{"paths" => ["data/notes/"]},
+        "tools" => ["file.read"],
+        "limits" => %{"timeout" => "30s", "rate_limit" => %{"requests" => 10}}
+      }
+    }
+
+    test "normalizes to sorted, deduplicated sets and drops records that name nothing" do
+      {:ok, canonical} =
+        CommitDigest.normalize(
+          Map.put(
+            @base,
+            :subset,
+            Map.merge(@narrowing, %{"reagent:local.other" => %{"egress" => %{}}})
+          )
+        )
+
+      assert canonical["subset"] == %{
+               @node => %{
+                 "egress" => %{"domains" => ["a.example", "b.example"]},
+                 "storage" => %{"paths" => ["data/notes/"]},
+                 "tools" => ["file.read"],
+                 "limits" => %{"timeout" => "30s", "rate_limit" => %{"requests" => 10}}
+               }
+             }
+
+      assert digest!(Map.put(@base, :subset, %{@node => %{"egress" => %{}}})) == digest!(@base)
+    end
+
+    test "a field left out and a field named empty are different decisions" do
+      left_out = %{@node => %{"egress" => %{"methods" => ["GET"]}}}
+      empty = %{@node => %{"egress" => %{"methods" => ["GET"], "domains" => []}}}
+
+      assert digest!(Map.put(@base, :subset, left_out)) !=
+               digest!(Map.put(@base, :subset, empty))
+    end
+
+    test "set order does not change the digest; a value does" do
+      one = %{@node => %{"storage" => %{"actions" => ["read", "list"]}}}
+      other = %{@node => %{"storage" => %{"actions" => ["list", "read"]}}}
+      narrower = %{@node => %{"storage" => %{"actions" => ["read"]}}}
+
+      assert digest!(Map.put(@base, :subset, one)) == digest!(Map.put(@base, :subset, other))
+      assert digest!(Map.put(@base, :subset, one)) != digest!(Map.put(@base, :subset, narrower))
+    end
+
+    test "a kind its enforcement point cannot narrow is refused, never bound as narrowed" do
+      for kind <- ~w(credential tool_servers frame streams cards system_actions) do
+        assert {:error, {:invalid_commit, :subset, why}} =
+                 CommitDigest.compute(Map.put(@base, :subset, %{@node => %{kind => %{}}}))
+
+        assert why =~ "#{kind} cannot be narrowed"
+      end
+
+      assert {:error, {:invalid_commit, :subset, why}} =
+               CommitDigest.compute(Map.put(@base, :subset, %{@node => %{"ports" => []}}))
+
+      assert why =~ "not one of egress, storage, tools, limits"
+    end
+
+    test "malformed narrowings are refused" do
+      for {subset, fragment} <- [
+            {%{"reagent:local.x:1.0.0" => %{}}, "name-level"},
+            {%{"not a ref" => %{}}, "name-level"},
+            {%{@node => []}, "record"},
+            {%{@node => %{"egress" => %{"ports" => ["443"]}}}, "egress narrows only"},
+            {%{@node => %{"egress" => %{"domains" => "a.example"}}}, "egress.domains"},
+            {%{@node => %{"storage" => %{"paths" => [""]}}}, "storage.paths"},
+            {%{@node => %{"tools" => ["file.*"]}}, "tool.action"},
+            {%{@node => %{"limits" => %{"timeout" => "5mm"}}}, "exact duration"},
+            {%{@node => %{"limits" => %{"max_memory_bytes" => -1}}}, "non-negative"},
+            {%{@node => %{"limits" => %{"rate_limit" => %{"burst" => 1}}}},
+             "requests and window"},
+            {%{@node => %{"limits" => %{"ports" => 1}}}, "is not a limit"}
+          ] do
+        assert {:error, {:invalid_commit, _key, why}} =
+                 CommitDigest.compute(Map.put(@base, :subset, subset)),
+               "#{inspect(subset)} was accepted"
+
+        assert why =~ fragment, "#{inspect(subset)}: #{why}"
+      end
+
+      assert {:error, {:invalid_commit, :subset, _}} =
+               CommitDigest.compute(Map.put(@base, :subset, ["not", "a", "map"]))
+    end
+  end
+
   describe "normalize/1" do
     test "embeds the shape digest as a string rather than re-expanding it" do
       {:ok, canonical} = CommitDigest.normalize(Map.put(@base, :bindings, [@binding]))
@@ -190,6 +317,8 @@ defmodule Sanctum.Consent.CommitDigestTest do
       assert canonical["shape_digest"] == "sha256:shape"
       assert [%{"need" => "source", "fields" => ["anon_key", "url"]}] = canonical["bindings"]
       assert canonical["override"] == false
+      assert canonical["origins"] == ["interactive"]
+      assert canonical["subset"] == %{}
     end
   end
 end

@@ -93,7 +93,7 @@ defmodule Sanctum.NetworkTest do
       assert {:error, msg} =
                Network.validate_redirect_url("https://nonexistent.test/path", @resolver)
 
-      assert msg == "DNS resolution failed for nonexistent.test: :nxdomain"
+      assert msg == "DNS resolution failed for nonexistent.test: non-existing domain"
     end
   end
 

@@ -20,16 +20,16 @@ defmodule Opus.OAuthHandlerTest do
 
   @token "tok-live"
 
-  setup do
-    :ok = Ecto.Adapters.SQL.Sandbox.checkout(Arca.Repo)
-    Ecto.Adapters.SQL.Sandbox.mode(Arca.Repo, {:shared, self()})
-    {:ok, ctx: Sanctum.TestContext.local()}
+  setup tags do
+    Cyfr.Test.Sandbox.setup!(tags)
+    {:ok, ctx: Sanctum.TestContext.local(:api)}
   end
 
   # The import of a guest whose attempt is attached with `opts`
   # (`Cyfr.Test.AttemptFixtures.attached!/1`), and that attempt.
   defp token_fn(opts) do
-    attempt = AttemptFixtures.attached!(opts)
+    attempt =
+      AttemptFixtures.attached!(Keyword.put_new(opts, :ctx, Sanctum.TestContext.local(:api)))
 
     client =
       Opus.HostClient.new(attempt.keys, attempt.runner, attempt.boot, %{

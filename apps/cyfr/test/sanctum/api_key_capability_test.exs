@@ -11,10 +11,9 @@ defmodule Sanctum.ApiKeyCapabilityTest do
   @wasm File.read!(Path.join(__DIR__, "../support/test_wasm/math.wasm"))
   @digest "sha256:" <> String.duplicate("ab", 32)
 
-  setup do
+  setup tags do
     Arca.Cache.init()
-    :ok = Ecto.Adapters.SQL.Sandbox.checkout(Arca.Repo)
-    Ecto.Adapters.SQL.Sandbox.mode(Arca.Repo, {:shared, self()})
+    Cyfr.Test.Sandbox.setup!(tags)
 
     test_path = Path.join(System.tmp_dir!(), "key_capability_#{:rand.uniform(1_000_000)}")
     original_base_path = Application.get_env(:arca, :base_path)
@@ -28,7 +27,7 @@ defmodule Sanctum.ApiKeyCapabilityTest do
         else: Application.delete_env(:arca, :base_path)
     end)
 
-    {:ok, ctx: Sanctum.TestContext.local()}
+    {:ok, ctx: Sanctum.TestContext.issuer!(Sanctum.TestContext.local())}
   end
 
   defp future, do: DateTime.add(DateTime.utc_now(), 3600, :second)
@@ -37,14 +36,19 @@ defmodule Sanctum.ApiKeyCapabilityTest do
     test "requires the interactive class", %{ctx: ctx} do
       key_ctx = %{ctx | auth_method: :api_key}
 
-      assert {:error, {:surface_not_permitted, :api_key}} =
+      # A key minting a key is asked for its creator's confirmation first, and
+      # mints nothing without it.
+      assert {:error, {:confirmation_required, _}} =
                ApiKey.create(key_ctx, %{
                  name: "cap-key-denied",
                  consent_capability: %{commit_digest: @digest, expires_at: future()}
                })
 
+      assert {:error, :not_found} =
+               Arca.ApiKeyStorage.get_key(Sanctum.Context.actor(ctx), "cap-key-denied")
+
       assert {:ok, _} =
-               ApiKey.create(ctx, %{
+               Sanctum.TestContext.create_key(ctx, %{
                  name: "cap-key-ok",
                  consent_capability: %{commit_digest: @digest, expires_at: future()}
                })
@@ -52,7 +56,7 @@ defmodule Sanctum.ApiKeyCapabilityTest do
 
     test "refuses malformed digests and past expiries", %{ctx: ctx} do
       assert {:error, :invalid_consent_capability} =
-               ApiKey.create(ctx, %{
+               Sanctum.TestContext.create_key(ctx, %{
                  name: "cap-bad-digest",
                  consent_capability: %{commit_digest: "not-a-digest", expires_at: future()}
                })
@@ -60,14 +64,14 @@ defmodule Sanctum.ApiKeyCapabilityTest do
       past = DateTime.add(DateTime.utc_now(), -60, :second)
 
       assert {:error, :capability_already_expired} =
-               ApiKey.create(ctx, %{
+               Sanctum.TestContext.create_key(ctx, %{
                  name: "cap-expired",
                  consent_capability: %{commit_digest: @digest, expires_at: past}
                })
     end
 
     test "an ordinary key stores no capability and reads back nil", %{ctx: ctx} do
-      {:ok, _} = ApiKey.create(ctx, %{name: "plain-key"})
+      {:ok, _} = Sanctum.TestContext.create_key(ctx, %{name: "plain-key"})
       {:ok, row} = Arca.ApiKeyStorage.get_key(Sanctum.Context.actor(ctx), "plain-key")
 
       assert row.capability == nil
@@ -78,7 +82,7 @@ defmodule Sanctum.ApiKeyCapabilityTest do
       expires = future()
 
       {:ok, _} =
-        ApiKey.create(ctx, %{
+        Sanctum.TestContext.create_key(ctx, %{
           name: "cap-roundtrip",
           consent_capability: %{commit_digest: @digest, expires_at: expires}
         })
@@ -96,12 +100,13 @@ defmodule Sanctum.ApiKeyCapabilityTest do
       # it must not hand a fresh secret to a row that already bears one:
       # that is the interactive gate above, paid once and spent twice.
       {:ok, _} =
-        ApiKey.create(ctx, %{
+        Sanctum.TestContext.create_key(ctx, %{
           name: "cap-rotate",
           consent_capability: %{commit_digest: @digest, expires_at: future()}
         })
 
-      assert {:error, :capability_key_immutable} = ApiKey.rotate(ctx, "cap-rotate")
+      assert {:error, :capability_key_immutable} =
+               Sanctum.TestContext.rotate_key(ctx, "cap-rotate")
 
       # The refusal leaves the key exactly as it was — a refused rotation is
       # not a silent revocation.
@@ -111,9 +116,9 @@ defmodule Sanctum.ApiKeyCapabilityTest do
     end
 
     test "an ordinary key still rotates", %{ctx: ctx} do
-      {:ok, %{api_key: original}} = ApiKey.create(ctx, %{name: "plain-rotate"})
+      {:ok, %{api_key: original}} = Sanctum.TestContext.create_key(ctx, %{name: "plain-rotate"})
 
-      assert {:ok, %{api_key: rotated}} = ApiKey.rotate(ctx, "plain-rotate")
+      assert {:ok, %{api_key: rotated}} = Sanctum.TestContext.rotate_key(ctx, "plain-rotate")
       assert rotated != original
     end
   end
@@ -140,16 +145,16 @@ defmodule Sanctum.ApiKeyCapabilityTest do
       {:ok, preview} = Commit.preview(key_ctx, decisions)
 
       # The interactive operator mints the capability for THIS digest.
-      {:ok, _} =
-        ApiKey.create(ctx, %{
+      {:ok, %{api_key: raw}} =
+        Sanctum.TestContext.create_key(ctx, %{
           name: "cap-walk-key",
           consent_capability: %{commit_digest: preview.commit_digest, expires_at: future()}
         })
 
-      {:ok, row} =
-        Arca.ApiKeyStorage.get_key(Sanctum.Context.actor(ctx), "cap-walk-key")
-
-      {:ok, capability} = ApiKey.consent_capability(ctx, row.id)
+      # The commit rereads the key that authenticated it, so it runs under
+      # the context the key itself establishes.
+      {:ok, key_ctx} = Sanctum.Caller.establish({:api_key, raw})
+      {:ok, capability} = ApiKey.consent_capability(key_ctx, key_ctx.api_key_id)
 
       assert {:ok, committed} =
                Commit.commit(

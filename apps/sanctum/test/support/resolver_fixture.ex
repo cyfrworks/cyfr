@@ -10,7 +10,7 @@ defmodule Sanctum.Test.Resolver do
   answers that day.
 
   The names, each with the class of address the code under test decides
-  on (`Cyfr.Cidr`):
+  on (`Prima.Cidr`):
 
     * `public.test` — an A answer, `203.0.113.10`, public
     * `private.test` — an A answer, `10.0.0.5`, private
@@ -27,9 +27,9 @@ defmodule Sanctum.Test.Resolver do
   test sees only the address it ends at.
 
   Injected through the `:resolver` option of `Sanctum.Network.pin/2` and
-  `Opus.Egress.pin/2`, or `config :opus, :resolver` for the guest-facing
-  entry points, which take no options. `Opus.Test.Resolver` is this
-  table for Opus's own suite, which runs without CYFR.
+  of `Crucible.Host.Egress.pin/3`, which pins a guest's outbound target
+  through it. The engine resolves no name, so Opus's suite has no
+  resolver: its scripted host answers pins from a table.
   """
 
   @table %{

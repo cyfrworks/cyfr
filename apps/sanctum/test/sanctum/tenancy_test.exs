@@ -66,9 +66,8 @@ defmodule Sanctum.TenancyTest do
   end
 
   describe "resolve_status/2 — membership resolution" do
-    setup do
-      :ok = Ecto.Adapters.SQL.Sandbox.checkout(Arca.Repo)
-      Ecto.Adapters.SQL.Sandbox.mode(Arca.Repo, {:shared, self()})
+    setup tags do
+      Arca.Test.Sandbox.setup!(tags)
 
       orig_admins = Application.get_env(:sanctum, :platform_admin_emails)
       orig_override = Application.get_env(:sanctum, :tenancy_resolver_override)
@@ -111,7 +110,7 @@ defmodule Sanctum.TenancyTest do
     end
 
     test "a platform admin with no athanor membership has no athanor to work in" do
-      # No estate is shared server-wide, so the operator bit alone seats
+      # No athanor is shared server-wide, so the operator bit alone seats
       # nobody. What guarantees an operator an athanor is the one minted for
       # them at admission, past the server caps.
       uid = "u-plat-only-#{System.unique_integer([:positive])}"
@@ -159,9 +158,8 @@ defmodule Sanctum.TenancyTest do
   end
 
   describe "revalidate/1" do
-    setup do
-      :ok = Ecto.Adapters.SQL.Sandbox.checkout(Arca.Repo)
-      Ecto.Adapters.SQL.Sandbox.mode(Arca.Repo, {:shared, self()})
+    setup tags do
+      Arca.Test.Sandbox.setup!(tags)
       :ok
     end
 
@@ -195,8 +193,8 @@ defmodule Sanctum.TenancyTest do
 
       assert {:ok, %{platform_admin: true}} = Tenancy.revalidate(ctx)
 
-      [m] = rows!(Members.list_by_user(uid))
-      {:ok, _} = Members.remove(m)
+      [_grant] = rows!(Members.list_by_user(uid))
+      :ok = Members.revoke_platform(uid)
 
       # No memberships → no capability, no athanor; the tenant gate then
       # rejects tenant-scoped routes.
@@ -238,9 +236,8 @@ defmodule Sanctum.TenancyTest do
   end
 
   describe "list_athanors/1" do
-    setup do
-      :ok = Ecto.Adapters.SQL.Sandbox.checkout(Arca.Repo)
-      Ecto.Adapters.SQL.Sandbox.mode(Arca.Repo, {:shared, self()})
+    setup tags do
+      Arca.Test.Sandbox.setup!(tags)
       :ok
     end
 
@@ -271,9 +268,8 @@ defmodule Sanctum.TenancyTest do
   end
 
   describe "channel_active?/2" do
-    setup do
-      :ok = Ecto.Adapters.SQL.Sandbox.checkout(Arca.Repo)
-      Ecto.Adapters.SQL.Sandbox.mode(Arca.Repo, {:shared, self()})
+    setup tags do
+      Arca.Test.Sandbox.setup!(tags)
       :ok
     end
 
@@ -330,6 +326,179 @@ defmodule Sanctum.TenancyTest do
       refute Tenancy.channel_active?(nil, "u")
       refute Tenancy.channel_active?("", "u")
       refute Tenancy.channel_active?("ath_ghost", "u")
+    end
+  end
+
+  describe "membership by identifier, and leaving one athanor" do
+    alias Sanctum.Test.DirectoryServer
+
+    setup tags do
+      Arca.Test.Sandbox.setup!(tags)
+
+      tls = DirectoryServer.tls()
+      DirectoryServer.listen!()
+      DirectoryServer.seam!(tls)
+      directory = DirectoryServer.start!(tls)
+      identity = DirectoryServer.identity!(directory.dir, directory.url)
+
+      {:ok, directory: directory, identity: identity}
+    end
+
+    test "an invite names an identifier with no directory read; the cyfr sign-in claims it; a removal retires the person here; recovered, they sign in to nothing",
+         %{directory: directory, identity: identity} do
+      group = group!("join")
+      {:ok, peer} = Sanctum.Tenancy.Users.upsert_from_provider(github("peer"))
+      {:ok, :added} = Members.add(group, [user_id: peer.id], "system")
+
+      # Invited before they ever signed in here: held as invited, queued for
+      # the operator, and nothing asked of their directory, which only their
+      # own sign-in can locate.
+      assert {:ok, :invited} = Members.add(group, [identifier: identity.identifier], "system")
+      assert DirectoryServer.requests() == []
+      refute_received {:resolved, _}
+
+      assert Enum.any?(
+               Sanctum.Door.Store.requests(),
+               &(&1.kind == "identifier" and &1.value == identity.identifier)
+             )
+
+      # The operator admits the identifier, and the person signs in through
+      # the cyfr door: their head read fresh, then the door's admission.
+      {:ok, _} = Sanctum.Door.Store.allow("identifier", identity.identifier, "ops")
+      key = Sanctum.Auth.Identity.cyfr_key(directory.url, identity.identifier)
+      user = cyfr_sign_in!(identity, key)
+      assert Members.member?(user.id, group.id)
+
+      session = session!(user.id, group.id)
+
+      assert :ok = Members.remove_member(group, user_id: user.id)
+
+      # The seat, their head here and every session of theirs are gone
+      # together; their person row, identity row and door entry stand.
+      refute Members.member?(user.id, group.id)
+
+      assert {:error, :not_found} =
+               Arca.DirectoryHeads.get(Prima.Actor.system(), identity.identifier)
+
+      assert {:error, _} = Arca.SessionStorage.get_session(session.hash)
+      assert {:ok, %{status: "active"}} = Sanctum.Tenancy.Users.get(user.id)
+
+      assert {:ok, %{provenance: "remote", identifier: identifier}} =
+               Arca.PersonIdentities.get(Prima.Actor.system(), user.id)
+
+      assert identifier == identity.identifier
+      assert {:ok, :allowed} = Sanctum.Door.admit(key, nil, :unknown)
+      assert Members.member?(peer.id, group.id)
+
+      # Recovered at their own home: their identity is current, and the
+      # cyfr door admits them again as the same person — to nothing here.
+      identity = DirectoryServer.recover!(directory.dir, identity)
+      assert %{id: same} = cyfr_sign_in!(identity, key)
+      assert same == user.id
+      refute Members.member?(user.id, group.id)
+
+      # Their new session stands, and opens nothing: they hold no athanor
+      # here, and the one they were removed from refuses them.
+      again = session!(user.id, nil)
+      assert {:ok, _} = Arca.SessionStorage.get_session(again.hash)
+
+      assert {:error, :no_athanor} =
+               Sanctum.Caller.establish(again.token, focus: group.id, task_supervisor: nil)
+
+      ctx =
+        Context.build(
+          user_id: user.id,
+          provider: "cyfr",
+          permissions: [:*],
+          auth_method: :oidc,
+          authenticated: true
+        )
+
+      assert {:error, :not_member} = Context.focus(ctx, group.id)
+    end
+
+    test "a person in two athanors leaving one keeps the other seat, their identity and their head",
+         %{identity: identity} do
+      stay = group!("stay")
+      leave = group!("leave")
+      {:ok, user} = Sanctum.Tenancy.Users.upsert_from_provider(github("two"))
+      :ok = DirectoryServer.remote_person!(user.id, identity)
+      {:ok, :added} = Members.add(stay, [user_id: user.id], "system")
+      {:ok, :added} = Members.add(leave, [user_id: user.id], "system")
+
+      bound = session!(user.id, leave.id)
+      kept = session!(user.id, stay.id)
+
+      assert :ok = Members.remove_member(leave, user_id: user.id)
+
+      refute Members.member?(user.id, leave.id)
+      assert Members.member?(user.id, stay.id)
+      assert {:error, _} = Arca.SessionStorage.get_session(bound.hash)
+      assert {:ok, _} = Arca.SessionStorage.get_session(kept.hash)
+      assert {:ok, _} = Arca.DirectoryHeads.get(Prima.Actor.system(), identity.identifier)
+
+      assert {:ok, %{provenance: "remote", identifier: identifier}} =
+               Arca.PersonIdentities.get(Prima.Actor.system(), user.id)
+
+      assert identifier == identity.identifier
+
+      # The session that stands still establishes in the athanor they kept.
+      assert {:ok, %{athanor_id: athanor_id}} =
+               Sanctum.Caller.establish(kept.token, focus: stay.id, task_supervisor: nil)
+
+      assert athanor_id == stay.id
+    end
+
+    defp github(name) do
+      n = System.unique_integer([:positive])
+
+      %{
+        id: "github|https://github.com|#{name}-#{n}",
+        provider: "github",
+        email: "#{name}-#{n}@example.com",
+        verified: true
+      }
+    end
+
+    # What the cyfr door does once it verified the person's assertion: the
+    # head read fresh from the directory their genesis names, then the
+    # admitted sign-in.
+    defp cyfr_sign_in!(identity, key) do
+      _head = DirectoryServer.cached!(identity)
+
+      {:ok, user} =
+        Sanctum.SignIn.admitted(
+          %{
+            id: key,
+            provider: "cyfr",
+            email: nil,
+            verified: :unknown,
+            name: nil,
+            remote: %{identifier: identity.identifier, directory_url: identity.url}
+          },
+          :allowed
+        )
+
+      user
+    end
+
+    # A session of the person, bound to `athanor_id` (or to none), as the
+    # sign-in mints one: a remote person's carries their fresh head's epoch.
+    defp session!(user_id, athanor_id) do
+      {:ok, session} =
+        Sanctum.TestContext.create_session(
+          Context.build(
+            user_id: user_id,
+            athanor_id: athanor_id,
+            provider: "cyfr",
+            permissions: [:*],
+            scope: :athanor,
+            auth_method: :oidc,
+            authenticated: true
+          )
+        )
+
+      %{token: session.token, hash: Sanctum.Session.token_hash(session.token)}
     end
   end
 

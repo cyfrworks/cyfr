@@ -5,15 +5,15 @@ defmodule Compendium.Semver do
   @moduledoc """
   The component domain's spelling of the one version ordering.
 
-  The comparator itself is `Cyfr.Semver`, where the identity domain reads
-  it too (`Cyfr.ComponentRow.latest_of/1` orders rows with it): registered
+  The comparator itself is `Prima.Semver`, where the identity domain reads
+  it too (`Prima.ComponentRow.latest_of/1` orders rows with it): registered
   versions are validated semver, so unparsable input reaches ordering only
   from remote tag lists and seed directory names, and the order is total
   anyway. Never raises. Supersession (`strictly_newer?/2`) is deliberately
   more conservative: true only when BOTH sides parse.
   """
 
-  @type comparison :: Cyfr.Semver.comparison()
+  @type comparison :: Prima.Semver.comparison()
 
   @doc """
   Parse a version string — a thin `Version.parse/1`.
@@ -28,7 +28,7 @@ defmodule Compendium.Semver do
 
   """
   @spec parse(String.t()) :: {:ok, Version.t()} | :error
-  defdelegate parse(version), to: Cyfr.Semver
+  defdelegate parse(version), to: Prima.Semver
 
   @doc """
   Whether the string is valid semver.
@@ -43,7 +43,7 @@ defmodule Compendium.Semver do
 
   """
   @spec semver?(term()) :: boolean()
-  defdelegate semver?(version), to: Cyfr.Semver
+  defdelegate semver?(version), to: Prima.Semver
 
   @doc """
   The total order.
@@ -64,7 +64,7 @@ defmodule Compendium.Semver do
 
   """
   @spec compare(String.t(), String.t()) :: comparison()
-  defdelegate compare(a, b), to: Cyfr.Semver
+  defdelegate compare(a, b), to: Prima.Semver
 
   @doc """
   Nil-aware strict greater-than: `nil` never beats anything, anything
@@ -80,14 +80,14 @@ defmodule Compendium.Semver do
 
   """
   @spec gt?(String.t() | nil, String.t() | nil) :: boolean()
-  defdelegate gt?(a, b), to: Cyfr.Semver
+  defdelegate gt?(a, b), to: Prima.Semver
 
   @doc """
   Sort version strings newest-first under the total order — parsable
   versions semver-descending, unparsable ones last, by string.
   """
   @spec sort_desc([String.t()]) :: [String.t()]
-  defdelegate sort_desc(versions), to: Cyfr.Semver
+  defdelegate sort_desc(versions), to: Prima.Semver
 
   @doc """
   Sort elements by a version projected from each, newest first — the one
@@ -95,7 +95,7 @@ defmodule Compendium.Semver do
   bare-strings form), so no view re-derives the comparator inline.
   """
   @spec sort_desc_by([elem], (elem -> String.t())) :: [elem] when elem: term()
-  defdelegate sort_desc_by(items, key_fun), to: Cyfr.Semver
+  defdelegate sort_desc_by(items, key_fun), to: Prima.Semver
 
   @doc """
   The supersession predicate: `newer` strictly supersedes `version` only
@@ -112,5 +112,5 @@ defmodule Compendium.Semver do
 
   """
   @spec strictly_newer?(String.t(), String.t()) :: boolean()
-  defdelegate strictly_newer?(newer, version), to: Cyfr.Semver
+  defdelegate strictly_newer?(newer, version), to: Prima.Semver
 end

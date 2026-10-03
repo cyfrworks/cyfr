@@ -4,9 +4,9 @@ defmodule Sanctum.Authority.StepTest do
   use ExUnit.Case, async: true
   use ExUnitProperties
 
-  alias Cyfr.Authority
-  alias Cyfr.Authority.Transition
-  alias Cyfr.Test.AuthorityFixtures, as: Fixtures
+  alias Prima.Authority
+  alias Prima.Authority.Transition
+  alias Prima.Test.AuthorityFixtures, as: Fixtures
   alias Sanctum.Test.AuthorityGen, as: Gen
 
   # `Sanctum.Authority.step/3` is the transition relation with the root

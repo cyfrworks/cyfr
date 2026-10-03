@@ -17,7 +17,7 @@ defmodule Compendium.DependencyResolver do
   @doc """
   Extract static dependencies from a manifest map.
 
-  The block's grammar is `Cyfr.Manifest.Dependencies`, which the consent
+  The block's grammar is `Prima.Manifest.Dependencies`, which the consent
   blob reads too — a dependency a row records and an edge a consent
   carries are one parse. `component_id` names the component the entries
   are read for; it does not change the parse.
@@ -26,7 +26,7 @@ defmodule Compendium.DependencyResolver do
   """
   @spec extract_from_manifest(map() | nil, String.t()) :: {:ok, [map()]} | {:error, term()}
   def extract_from_manifest(manifest, component_id) when is_binary(component_id),
-    do: Cyfr.Manifest.Dependencies.from_manifest(manifest)
+    do: Prima.Manifest.Dependencies.from_manifest(manifest)
 
   @doc """
   Resolve the full dependency tree for a component.
@@ -191,7 +191,7 @@ defmodule Compendium.DependencyResolver do
 
     case result do
       {:ok, component} ->
-        manifest = Cyfr.Manifest.decode(component.manifest)
+        manifest = Prima.Manifest.decode(component.manifest)
         {:ok, component.id, manifest}
 
       {:error, _} = err ->

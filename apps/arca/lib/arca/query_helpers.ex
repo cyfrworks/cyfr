@@ -36,6 +36,14 @@ defmodule Arca.QueryHelpers do
   `where_athanor/2`, `no_athanor!/1` — a bug upstream, never a value).
   Retention primitives answer `{:ok, count} | {:error, term}` — never a
   raw Ecto tuple.
+
+  ## Row locks
+
+  A transition is a conditional write whose row count is its evidence.
+  Only the multi-row transitions that must read several rows and change
+  them under one view lock them, inside `Arca.Repo.locking_transaction/2`
+  and through `for_update/1`, so the adapter difference is spelled in
+  exactly those two places.
   """
 
   import Ecto.Query
@@ -46,13 +54,13 @@ defmodule Arca.QueryHelpers do
   ONE definition so record readers (executions, MCP logs, policy logs)
   cannot drift in how they spell the bypass.
 
-  `scope` is not a wire member of `Cyfr.Actor`, so nothing a worker
+  `scope` is not a wire member of `Prima.Actor`, so nothing a worker
   returns can claim it.
   """
-  @spec where_tenant_unless_platform(Ecto.Queryable.t(), Cyfr.Actor.t()) :: Ecto.Query.t()
-  def where_tenant_unless_platform(query, %Cyfr.Actor{scope: :platform}), do: query
+  @spec where_tenant_unless_platform(Ecto.Queryable.t(), Prima.Actor.t()) :: Ecto.Query.t()
+  def where_tenant_unless_platform(query, %Prima.Actor{scope: :platform}), do: query
 
-  def where_tenant_unless_platform(query, %Cyfr.Actor{} = actor),
+  def where_tenant_unless_platform(query, %Prima.Actor{} = actor),
     do: where_tenant(query, actor)
 
   @doc """
@@ -71,7 +79,7 @@ defmodule Arca.QueryHelpers do
   def where_athanor(_query, athanor_id) do
     raise ArgumentError,
           "Arca.QueryHelpers.where_athanor/2: a resolved athanor_id is required, " <>
-            "got #{inspect(athanor_id)}"
+            "got #{Prima.LoggerContext.shape(athanor_id)}"
   end
 
   @doc """
@@ -83,13 +91,13 @@ defmodule Arca.QueryHelpers do
   `where_tenant_unless_platform/2`; a platform task working inside one
   athanor carries that athanor on its actor.
   """
-  @spec where_tenant(Ecto.Queryable.t(), Cyfr.Actor.t()) :: Ecto.Query.t()
-  def where_tenant(query, %Cyfr.Actor{athanor_id: athanor_id} = actor) do
+  @spec where_tenant(Ecto.Queryable.t(), Prima.Actor.t()) :: Ecto.Query.t()
+  def where_tenant(query, %Prima.Actor{athanor_id: athanor_id} = actor) do
     if athanor_id in [nil, ""] do
       raise ArgumentError,
             "Arca.QueryHelpers.where_tenant/2: a resolved athanor_id is required " <>
-              "(user_id=#{inspect(actor.user_id)} scope=#{inspect(actor.scope)} " <>
-              "system=#{inspect(actor.system)})"
+              "(user_id=#{Prima.LoggerContext.shape(actor.user_id)} scope=#{Prima.LoggerContext.shape(actor.scope)} " <>
+              "system=#{Prima.LoggerContext.shape(actor.system)})"
     end
 
     from(q in query, where: q.athanor_id == ^athanor_id)
@@ -99,14 +107,14 @@ defmodule Arca.QueryHelpers do
   Stamps the actor's athanor into write attributes. Raises for an
   unresolved actor, using the same backstop as `where_tenant/2`.
   """
-  @spec stamp_tenant!(Cyfr.Actor.t(), map()) :: map()
-  def stamp_tenant!(%Cyfr.Actor{athanor_id: athanor_id} = actor, attrs)
+  @spec stamp_tenant!(Prima.Actor.t(), map()) :: map()
+  def stamp_tenant!(%Prima.Actor{athanor_id: athanor_id} = actor, attrs)
       when is_map(attrs) do
     if athanor_id in [nil, ""] do
       raise ArgumentError,
             "Arca.QueryHelpers.stamp_tenant!/2: a resolved athanor_id is required " <>
-              "(user_id=#{inspect(actor.user_id)} scope=#{inspect(actor.scope)} " <>
-              "system=#{inspect(actor.system)})"
+              "(user_id=#{Prima.LoggerContext.shape(actor.user_id)} scope=#{Prima.LoggerContext.shape(actor.scope)} " <>
+              "system=#{Prima.LoggerContext.shape(actor.system)})"
     end
 
     Map.put(attrs, :athanor_id, athanor_id)
@@ -141,5 +149,44 @@ defmodule Arca.QueryHelpers do
   @spec where_before(Ecto.Queryable.t(), atom(), DateTime.t()) :: Ecto.Query.t()
   def where_before(query, field, %DateTime{} = cutoff) when is_atom(field) do
     from(r in query, where: field(r, ^field) < ^cutoff)
+  end
+
+  @doc """
+  Hold the rows `query` reads until the enclosing
+  `Arca.Repo.locking_transaction/2` ends.
+
+  PostgreSQL gets `FOR UPDATE`: a second reader of the same row waits on
+  it and then reads the committed version. SQLite gets the query back
+  unchanged — its adapter raises on a lock clause, and the immediate
+  transaction around this read already holds the database's one write
+  lock. Outside a locking transaction it locks nothing on either.
+  """
+  @spec for_update(Ecto.Queryable.t()) :: Ecto.Queryable.t()
+  def for_update(query) do
+    case Arca.Repo.adapter() do
+      Ecto.Adapters.Postgres -> lock(query, "FOR UPDATE")
+      _sqlite -> query
+    end
+  end
+
+  @doc """
+  Hold the rows `query` reads against a writer until the enclosing
+  transaction ends, without holding them against another reader.
+
+  PostgreSQL gets `FOR SHARE`: any number of readers hold the row at once,
+  and a `for_update/1` or an `UPDATE` of it waits for all of them — and
+  each later reader waits for that writer and reads its commit. SQLite
+  gets the query back unchanged: its adapter raises on a lock clause, and
+  the transaction around the read decides — an immediate one
+  (`Arca.Repo.locking_transaction/2`) holds the database's one write
+  lock, and `Arca.Repo.read_transaction/1`'s reads a snapshot and waits
+  for no one.
+  """
+  @spec for_share(Ecto.Queryable.t()) :: Ecto.Queryable.t()
+  def for_share(query) do
+    case Arca.Repo.adapter() do
+      Ecto.Adapters.Postgres -> lock(query, "FOR SHARE")
+      _sqlite -> query
+    end
   end
 end

@@ -4,8 +4,8 @@
 defmodule Aqua.Runner.Admission do
   @moduledoc """
   What a send is held to before anything is written, in order: the text
-  and its size, the sender's standing (the estate open, the sender a
-  member), and the addressing — a one-person estate addresses its agent
+  and its size, the sender's standing (the athanor open, the sender a
+  member), and the addressing — a one-person athanor addresses its agent
   with every message; any other needs a mention, every time, and an
   unaddressed line is people talking. Only the name is decided here; the
   agent resolves inside the turn.
@@ -44,7 +44,7 @@ defmodule Aqua.Runner.Admission do
     end
   end
 
-  @doc "The estate is open and the caller is seated in it."
+  @doc "The athanor is open and the caller is seated in it."
   @spec standing(Context.t(), String.t()) ::
           :ok | {:error, :archived | :not_member | :unavailable}
   def standing(%Context{user_id: user_id} = ctx, athanor_id) do
@@ -82,7 +82,7 @@ defmodule Aqua.Runner.Admission do
   end
 
   # `@name` in the text wins, then an explicit pick, then the agent of the
-  # previous turn, then the estate's first (the roster lists the soul
+  # previous turn, then the athanor's first (the roster lists the soul
   # first).
   defp pick(roster, mentioned, explicit, last) do
     cond do

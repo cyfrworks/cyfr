@@ -15,7 +15,7 @@
 //   (navigate, copy) as `{pane, intents}`. LiveView dispatches a pushed
 //   event to every hook on the page, so each pane acts only on a payload
 //   whose `pane` names its own DOM id and ignores the rest.
-// - `aqua:held_send` is the send the server holds while the estate is being
+// - `aqua:held_send` is the send the server holds while the athanor is being
 //   prepared, as `{pane, envelope}` — `envelope` null once it went or was
 //   dropped. It is kept in sessionStorage under this pane's id, and offered
 //   back as `restore_draft` when the pane mounts, so a reload mid-wait

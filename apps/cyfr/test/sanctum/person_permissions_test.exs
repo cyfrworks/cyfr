@@ -7,8 +7,7 @@ defmodule Sanctum.PersonPermissionsTest do
   # and no production builder spells the wildcard.
   use ExUnit.Case, async: true
 
-  alias Cyfr.Ops.Annotations
-  alias Cyfr.Ops.Catalog
+  alias Grimoire.Annotations
   alias Sanctum.Context
 
   defp root, do: Path.expand("../../../..", __DIR__)
@@ -18,9 +17,9 @@ defmodule Sanctum.PersonPermissionsTest do
     refute :* in person
 
     declared =
-      for pair <- Catalog.tool_actions(),
+      for pair <- Sanctum.Grimoire.tool_actions(),
           [tool, action] = String.split(pair, ".", parts: 2),
-          {:ok, {_module, meta}} <- [Catalog.lookup(tool)],
+          {:ok, {_module, meta}} <- [Grimoire.lookup(tool)],
           permission = Annotations.permission(meta, action),
           not is_nil(permission),
           uniq: true,
@@ -42,8 +41,8 @@ defmodule Sanctum.PersonPermissionsTest do
 
   test "no production builder spells the wildcard" do
     offenders =
-      for path <- Cyfr.Test.SourceTree.files!(Path.join(root(), "apps/*/lib/**/*.ex")),
-          {line, n} <- path |> File.read!() |> Cyfr.Test.CodeLines.code_lines(),
+      for path <- Prima.Test.SourceTree.files!(Path.join(root(), "apps/*/lib/**/*.ex")),
+          {line, n} <- path |> File.read!() |> Prima.Test.CodeLines.code_lines(),
           String.contains?(line, "[:*]"),
           do: "#{Path.relative_to(path, root())}:#{n}: #{String.trim(line)}"
 

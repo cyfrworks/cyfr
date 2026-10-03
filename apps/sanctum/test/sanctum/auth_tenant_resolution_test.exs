@@ -16,11 +16,10 @@ defmodule Sanctum.AuthTenantResolutionTest do
   alias Sanctum.Tenancy
   alias Sanctum.Tenancy.Members
 
-  setup do
+  setup tags do
     # Isolate from other tests' committed membership rows: resolve_status reads
     # the memberships table.
-    :ok = Ecto.Adapters.SQL.Sandbox.checkout(Arca.Repo)
-    Ecto.Adapters.SQL.Sandbox.mode(Arca.Repo, {:shared, self()})
+    Arca.Test.Sandbox.setup!(tags)
 
     original_override = Application.get_env(:sanctum, :tenancy_resolver_override)
     original_admins = Application.get_env(:sanctum, :platform_admin_emails)

@@ -3,14 +3,16 @@
 
 defmodule Locus.Config do
   @moduledoc """
-  The builder's settings: read from the `locus` release's environment by
+  A Locus node's settings: read from the `locus` release's environment by
   `config/locus_runtime.exs` (`from_env/1`), which writes them as the
-  `:locus` application environment and nothing else, and read back by the
-  builder through the accessors below, each with its default.
+  `:locus` application environment and nothing else, and read back
+  through the accessors below, each with its default. The builds service
+  reads the `LOCUS_BUILDS_*` rows, the backends service (`Locus.Backends`)
+  the `LOCUS_BACKENDS_*` rows.
 
   | Variable | Setting | Accepted | Default |
   |---|---|---|---|
-  | `LOCUS_BUILDS_KEY` | `:request_key` | 64 hexadecimal digits, the builds service key; required | none: the boot refuses |
+  | `LOCUS_BUILDS_KEY` | `:request_key` | 64 hexadecimal digits, the builds service key | none: the node serves no builds |
   | `LOCUS_BUILDS_BIND` | `:bind` | an IPv4 or IPv6 address | `0.0.0.0` |
   | `LOCUS_BUILDS_PORT` | `:port` | 1..65535 | 4100 |
   | `LOCUS_BUILDS_TIMEOUT_MS` | `:timeout_ms` | 1000..600000 | 270000 |
@@ -20,31 +22,52 @@ defmodule Locus.Config do
   | `LOCUS_BUILDS_CARGO_SEED` | `:cargo_seed` | a directory | none |
   | `LOCUS_BUILDS_LOG_LEVEL` | `:log_level` | a Logger level | `info` |
   | `LOCUS_BUILDS_LOG_FORMAT` | `:log_format` | `text` or `json` | `text` |
+  | `LOCUS_BACKENDS_KEY` | `:backends_key` | 64 hexadecimal digits, the backends service key | none: the node serves no backends |
+  | `LOCUS_BACKENDS_BIND` | `:backends_bind` | an IPv4 or IPv6 address | `0.0.0.0` |
+  | `LOCUS_BACKENDS_PORT` | `:backends_port` | 1..65535 | 4101 |
+  | `LOCUS_BACKENDS_MAX_IN_FLIGHT` | `:backends_max_in_flight` | 1..1024 | #{Prima.LocusBackends.max_in_flight()} |
+  | `LOCUS_BACKENDS_INIT_TIMEOUT_MS` | `:backends_init_timeout_ms` | 1000..600000 | 15000 |
+  | `LOCUS_BACKENDS_RPC_TIMEOUT_MS` | `:backends_rpc_timeout_ms` | 1000..600000 | 30000 |
+  | `LOCUS_BACKENDS_MEMORY_BYTES` | `:backends_memory_bytes` | 16777216..1099511627776 (16 MiB to 1 TiB) | 536870912 (512 MiB) |
 
-  `:request_key` is the key requests are verified with
-  (`Cyfr.BuilderProtocol.request_key/1`), derived once here; the
-  configured key itself is kept nowhere. A set variable that does not
-  parse, or a missing key, refuses the boot with a message naming the
-  variable. So does the control plane's configuration in the builder's
-  environment (`refused_environment/1`): the database URL, the keyring,
-  the worker root and the bridge key are CYFR's, and a builder that can
-  see them was given more than a builder holds.
+  A node serves the builds service when it holds a builds key and the
+  backends service when it holds a backends key (`Locus.Application`);
+  the release must hold at least one. `:request_key` is the key build
+  requests are verified with (`Prima.BuilderProtocol.request_key/1`),
+  derived once here; the configured builds key itself is kept nowhere.
+  `:backends_key` is the backends service key itself, decoded: every
+  owner's key is derived from it per request
+  (`Prima.LocusBackends.owner_key/2`). A set variable that does not parse,
+  or neither key, refuses the boot with a message naming the variable. So
+  does the control plane's configuration in the node's environment
+  (`refused_environment/1`): the database URL, the keyring, the worker
+  root and the control plane's copy of the backends key are CYFR's, and a
+  node that can see them was given more than it holds. And so does any
+  `LOCUS_*` name the table does not list (`unknown_names/1`): this module
+  declares the prefix, because the release carries no host module to
+  declare it.
 
-  `:memory_bytes` is the bound every build's spawn asks cyfr-spawn for
-  (`Locus.Spawner`): the memory of the build's processes, what it writes
-  to its home and the kernel memory charged to it, together. Its range is
-  the keeper's own for a spawn's `memory_bytes`, so a value accepted here
-  is one the keeper accepts. There is no value that means "no bound".
+  `:memory_bytes` is the bound every build's spawn asks cyfr-keeper for
+  (`Locus.Keeper`), and `:backends_memory_bytes` the bound each backend's
+  process is spawned under: the memory of the processes, what they write
+  to their home and the kernel memory charged to them, together. Their
+  range is the keeper's own for a spawn's `memory_bytes`, so a value
+  accepted here is one the keeper accepts. There is no value that means
+  "no bound". `:backends_max_in_flight` is the calls that may await one
+  backend at a time, and the two timeouts bound a backend's handshake and
+  each call to it.
+
+  A node's logging is one setting whichever service it serves:
   `:log_level` and `:log_format` become the logger's when a node that
-  serves builds starts (`Locus.Application`).
+  serves either starts (`Locus.Application`).
 
   Where the environment was never read — a development node, the test
-  suite — every accessor answers its default and `request_key/0` is nil,
-  so no build request verifies and the node serves none
+  suite — every accessor answers its default and both keys are nil, so no
+  request verifies and the node serves neither service
   (`Locus.Application`).
   """
 
-  alias Cyfr.EnvValue
+  alias Prima.EnvValue
 
   # 30 s under the build tool's five-minute limit on a synchronous compile,
   # so a build that exhausts its budget ends here as timed out.
@@ -62,18 +85,33 @@ defmodule Locus.Config do
     memory_bytes: 1_073_741_824,
     cargo_seed: nil,
     log_level: :info,
-    log_format: :text
+    log_format: :text,
+    backends_bind: {0, 0, 0, 0},
+    backends_port: 4101,
+    backends_max_in_flight: Prima.LocusBackends.max_in_flight(),
+    backends_init_timeout_ms: 15_000,
+    backends_rpc_timeout_ms: 30_000,
+    backends_memory_bytes: 536_870_912
   ]
 
-  # cyfr-spawn's range for a spawn's `memory_bytes` (`apps/spawn`'s
+  # cyfr-keeper's range for a spawn's `memory_bytes` (`apps/keeper`'s
   # protocol, MinMemoryBytes to MaxMemoryBytes).
   @memory_range 16_777_216..1_099_511_627_776
 
-  @control_plane_only ~w(CYFR_DATABASE_URL CYFR_CRYPTO_KEYRING CYFR_WORKER_KEY CYFR_MCP_BRIDGE_KEY)
+  @control_plane_only ~w(CYFR_DATABASE_URL CYFR_CRYPTO_KEYRING CYFR_OPUS_KEY
+                         CYFR_LOCUS_BACKENDS_KEY)
+
+  # Every `LOCUS_*` name a node reads: the table above.
+  @variables ~w(LOCUS_BUILDS_KEY LOCUS_BUILDS_BIND LOCUS_BUILDS_PORT LOCUS_BUILDS_TIMEOUT_MS
+                LOCUS_BUILDS_MAX_CONCURRENT LOCUS_BUILDS_MAX_CONCURRENT_PER_TENANT
+                LOCUS_BUILDS_MEMORY_BYTES LOCUS_BUILDS_CARGO_SEED LOCUS_BUILDS_LOG_LEVEL
+                LOCUS_BUILDS_LOG_FORMAT LOCUS_BACKENDS_KEY LOCUS_BACKENDS_BIND
+                LOCUS_BACKENDS_PORT LOCUS_BACKENDS_MAX_IN_FLIGHT LOCUS_BACKENDS_INIT_TIMEOUT_MS
+                LOCUS_BACKENDS_RPC_TIMEOUT_MS LOCUS_BACKENDS_MEMORY_BYTES)
 
   @typedoc "The `:locus` application environment `from_env/1` writes."
   @type settings :: [
-          request_key: binary(),
+          request_key: binary() | nil,
           bind: :inet.ip_address(),
           port: :inet.port_number(),
           timeout_ms: pos_integer(),
@@ -82,18 +120,48 @@ defmodule Locus.Config do
           memory_bytes: pos_integer(),
           cargo_seed: String.t() | nil,
           log_level: Logger.level(),
-          log_format: :text | :json
+          log_format: :text | :json,
+          backends_key: binary() | nil,
+          backends_bind: :inet.ip_address(),
+          backends_port: :inet.port_number(),
+          backends_max_in_flight: pos_integer(),
+          backends_init_timeout_ms: pos_integer(),
+          backends_rpc_timeout_ms: pos_integer(),
+          backends_memory_bytes: pos_integer()
         ]
 
   @doc """
   The `:locus` settings the environment `getenv` spells, every one present
   with its default where unset, or the first refusal as a message naming
-  the variable.
+  the variable. `names` is every name that environment assigns, the
+  process environment's by default: a `LOCUS_*` one this node does not
+  declare refuses too.
   """
-  @spec from_env(EnvValue.getenv()) :: {:ok, settings()} | {:error, String.t()}
-  def from_env(getenv) when is_function(getenv, 1) do
+  @spec from_env(EnvValue.getenv(), [String.t()]) :: {:ok, settings()} | {:error, String.t()}
+  def from_env(getenv, names \\ Map.keys(System.get_env()))
+      when is_function(getenv, 1) and is_list(names) do
     with [] <- refused_environment(getenv),
-         {:ok, key} <- key(getenv),
+         :ok <- no_unknown(names),
+         {:ok, builds} <- builds(getenv),
+         {:ok, backends} <- backends(getenv),
+         :ok <- some_key(builds, backends),
+         {:ok, log_level} <- log_level(getenv),
+         {:ok, log_format} <- log_format(getenv) do
+      {:ok, builds ++ [log_level: log_level, log_format: log_format] ++ backends}
+    else
+      {:error, message} ->
+        {:error, message}
+
+      refused when is_list(refused) ->
+        {:error,
+         "the locus release must not see #{Enum.join(refused, ", ")}: the database, " <>
+           "the keyring, the worker root and the control plane's backends key " <>
+           "are CYFR's"}
+    end
+  end
+
+  defp builds(getenv) do
+    with {:ok, key} <- EnvValue.hex_key(getenv, "LOCUS_BUILDS_KEY"),
          {:ok, bind} <- EnvValue.bind(getenv, "LOCUS_BUILDS_BIND"),
          {:ok, port} <- EnvValue.port(getenv, "LOCUS_BUILDS_PORT"),
          {:ok, timeout_ms} <-
@@ -109,53 +177,92 @@ defmodule Locus.Config do
            ),
          {:ok, memory_bytes} <-
            EnvValue.bytes(getenv, "LOCUS_BUILDS_MEMORY_BYTES", @memory_range),
-         {:ok, cargo_seed} <- EnvValue.text(getenv, "LOCUS_BUILDS_CARGO_SEED"),
-         {:ok, log_level} <- log_level(getenv),
-         {:ok, log_format} <- log_format(getenv) do
+         {:ok, cargo_seed} <- EnvValue.text(getenv, "LOCUS_BUILDS_CARGO_SEED") do
       {:ok,
        [
-         request_key: Cyfr.BuilderProtocol.request_key(key),
+         request_key: key && Prima.BuilderProtocol.request_key(key),
          bind: bind || @defaults[:bind],
          port: port || @defaults[:port],
          timeout_ms: timeout_ms || @defaults[:timeout_ms],
          max_concurrent: max || @defaults[:max_concurrent],
          max_concurrent_per_tenant: per_tenant || @defaults[:max_concurrent_per_tenant],
          memory_bytes: memory_bytes || @defaults[:memory_bytes],
-         cargo_seed: cargo_seed,
-         log_level: log_level,
-         log_format: log_format
+         cargo_seed: cargo_seed
        ]}
-    else
-      {:error, message} ->
-        {:error, message}
+    end
+  end
 
-      refused when is_list(refused) ->
+  defp backends(getenv) do
+    with {:ok, key} <- EnvValue.hex_key(getenv, "LOCUS_BACKENDS_KEY"),
+         {:ok, bind} <- EnvValue.bind(getenv, "LOCUS_BACKENDS_BIND"),
+         {:ok, port} <- EnvValue.port(getenv, "LOCUS_BACKENDS_PORT"),
+         {:ok, max_in_flight} <-
+           EnvValue.whole_number(getenv, "LOCUS_BACKENDS_MAX_IN_FLIGHT", 1..1024, "calls"),
+         {:ok, init_timeout_ms} <-
+           EnvValue.milliseconds(getenv, "LOCUS_BACKENDS_INIT_TIMEOUT_MS", 1_000..600_000),
+         {:ok, rpc_timeout_ms} <-
+           EnvValue.milliseconds(getenv, "LOCUS_BACKENDS_RPC_TIMEOUT_MS", 1_000..600_000),
+         {:ok, memory_bytes} <-
+           EnvValue.bytes(getenv, "LOCUS_BACKENDS_MEMORY_BYTES", @memory_range) do
+      {:ok,
+       [
+         backends_key: key,
+         backends_bind: bind || @defaults[:backends_bind],
+         backends_port: port || @defaults[:backends_port],
+         backends_max_in_flight: max_in_flight || @defaults[:backends_max_in_flight],
+         backends_init_timeout_ms: init_timeout_ms || @defaults[:backends_init_timeout_ms],
+         backends_rpc_timeout_ms: rpc_timeout_ms || @defaults[:backends_rpc_timeout_ms],
+         backends_memory_bytes: memory_bytes || @defaults[:backends_memory_bytes]
+       ]}
+    end
+  end
+
+  # A release that holds neither key would serve nothing.
+  defp some_key(builds, backends) do
+    if builds[:request_key] == nil and backends[:backends_key] == nil do
+      {:error,
+       "LOCUS_BUILDS_KEY and LOCUS_BACKENDS_KEY are both unset; a node serves builds with " <>
+         "the one and backends with the other (64 hexadecimal digits each, the same key as " <>
+         "CYFR_LOCUS_BUILDS_KEY or CYFR_LOCUS_BACKENDS_KEY on the server)."}
+    else
+      :ok
+    end
+  end
+
+  @doc "Every `LOCUS_*` name a node reads."
+  @spec variables() :: [String.t()]
+  def variables, do: @variables
+
+  @doc "The `LOCUS_*` names in `names` that a node does not read, sorted."
+  @spec unknown_names([String.t()]) :: [String.t()]
+  def unknown_names(names) when is_list(names) do
+    names
+    |> Enum.filter(&(String.starts_with?(&1, "LOCUS_") and &1 not in @variables))
+    |> Enum.uniq()
+    |> Enum.sort()
+  end
+
+  defp no_unknown(names) do
+    case unknown_names(names) do
+      [] ->
+        :ok
+
+      unknown ->
         {:error,
-         "the locus release must not see #{Enum.join(refused, ", ")}: the database, " <>
-           "the keyring, the worker root and the bridge key are CYFR's"}
+         "#{Enum.join(unknown, ", ")} #{if match?([_], unknown), do: "is", else: "are"} not " <>
+           "a variable the locus release reads: remove it, or use the name " <>
+           ".env.locus.example gives"}
     end
   end
 
   @doc """
   The names in the environment that only the control plane may hold: the
-  database URL, the keyring, the worker root and the bridge key. Empty for
-  an environment a builder may run in.
+  database URL, the keyring, the worker root and the control plane's copy
+  of the backends key. Empty for an environment a Locus node may run in.
   """
   @spec refused_environment(EnvValue.getenv()) :: [String.t()]
   def refused_environment(getenv) when is_function(getenv, 1),
     do: Enum.filter(@control_plane_only, &(getenv.(&1) != nil))
-
-  defp key(getenv) do
-    case EnvValue.hex_key(getenv, "LOCUS_BUILDS_KEY") do
-      {:ok, nil} ->
-        {:error,
-         "LOCUS_BUILDS_KEY is not set; the builder verifies every build request with it " <>
-           "(64 hexadecimal digits, the same key as CYFR_LOCUS_BUILDS_KEY on the server)."}
-
-      other ->
-        other
-    end
-  end
 
   defp log_level(getenv) do
     case EnvValue.text(getenv, "LOCUS_BUILDS_LOG_LEVEL") do
@@ -216,7 +323,7 @@ defmodule Locus.Config do
   @spec max_concurrent_per_tenant() :: pos_integer()
   def max_concurrent_per_tenant, do: get(:max_concurrent_per_tenant)
 
-  @doc "The memory bound every build's spawn asks cyfr-spawn for, in bytes."
+  @doc "The memory bound every build's spawn asks cyfr-keeper for, in bytes."
   @spec memory_bytes() :: pos_integer()
   def memory_bytes, do: get(:memory_bytes)
 
@@ -224,22 +331,50 @@ defmodule Locus.Config do
   @spec cargo_seed() :: String.t() | nil
   def cargo_seed, do: get(:cargo_seed)
 
-  @doc "The level the builder logs at."
+  @doc "The level the node logs at, whichever service it serves."
   @spec log_level() :: Logger.level()
   def log_level, do: get(:log_level)
 
-  @doc "How the builder's log lines are written: plain text, or JSON (`Cyfr.JsonFormatter`)."
+  @doc "How the node's log lines are written: plain text, or JSON (`Prima.JsonFormatter`)."
   @spec log_format() :: :text | :json
   def log_format, do: get(:log_format)
 
-  @doc "The `:logger` formatter `log_format/0` names: `Cyfr.JsonFormatter` for JSON, none for text."
+  @doc "The `:logger` formatter `log_format/0` names: `Prima.JsonFormatter` for JSON, none for text."
   @spec log_formatter() :: {module(), atom()} | nil
   def log_formatter do
     case log_format() do
-      :json -> {Cyfr.JsonFormatter, :format}
+      :json -> {Prima.JsonFormatter, :format}
       :text -> nil
     end
   end
+
+  @doc "The backends service key, decoded, or nil where none was configured."
+  @spec backends_key() :: binary() | nil
+  def backends_key, do: Application.get_env(:locus, :backends_key)
+
+  @doc "The address the backends service listens on."
+  @spec backends_bind() :: :inet.ip_address()
+  def backends_bind, do: get(:backends_bind)
+
+  @doc "The port the backends service listens on."
+  @spec backends_port() :: :inet.port_number()
+  def backends_port, do: get(:backends_port)
+
+  @doc "The calls that may await one backend at a time."
+  @spec backends_max_in_flight() :: pos_integer()
+  def backends_max_in_flight, do: get(:backends_max_in_flight)
+
+  @doc "The bound on each step of a backend's handshake, in milliseconds."
+  @spec backends_init_timeout_ms() :: pos_integer()
+  def backends_init_timeout_ms, do: get(:backends_init_timeout_ms)
+
+  @doc "The bound on one call to a backend, in milliseconds."
+  @spec backends_rpc_timeout_ms() :: pos_integer()
+  def backends_rpc_timeout_ms, do: get(:backends_rpc_timeout_ms)
+
+  @doc "The memory bound each backend's process is spawned under, in bytes."
+  @spec backends_memory_bytes() :: pos_integer()
+  def backends_memory_bytes, do: get(:backends_memory_bytes)
 
   defp get(key), do: Application.get_env(:locus, key, Keyword.fetch!(@defaults, key))
 end

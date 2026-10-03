@@ -19,6 +19,8 @@ defmodule Arca.SchemaFingerprint do
   and by the test suite before it touches the database.
   """
 
+  require Logger
+
   @key "schema_fingerprint"
   @migrations_dir Path.expand("../../priv/repo/migrations", __DIR__)
   # arca:bypass-ok=C — compile-time read of the tracked migration sources.
@@ -29,7 +31,7 @@ defmodule Arca.SchemaFingerprint do
   # arca:bypass-ok=C — compile-time read of the tracked migration sources.
   @fingerprint @migrations
                |> Enum.map_join(fn path -> Path.basename(path) <> "\n" <> File.read!(path) end)
-               |> Cyfr.Digest.sha256_hex()
+               |> Prima.Digest.sha256_hex()
 
   @doc "The `server_meta` key the fingerprint is recorded under."
   @spec key() :: String.t()
@@ -49,10 +51,18 @@ defmodule Arca.SchemaFingerprint do
   @spec verify() :: :ok | {:error, String.t()}
   def verify do
     case Arca.ServerMetaStorage.get(@key) do
-      {:ok, @fingerprint} -> :ok
-      {:ok, recorded} -> {:error, refusal("was built from a different schema (#{recorded})")}
-      {:error, :not_found} -> {:error, refusal("records no schema fingerprint")}
-      {:error, reason} -> {:error, refusal("could not be read (#{inspect(reason)})")}
+      {:ok, @fingerprint} ->
+        :ok
+
+      {:ok, recorded} ->
+        {:error, refusal("was built from a different schema (#{recorded})")}
+
+      {:error, :not_found} ->
+        {:error, refusal("records no schema fingerprint")}
+
+      {:error, reason} ->
+        Logger.error("[Arca.SchemaFingerprint] the fingerprint read failed: #{inspect(reason)}")
+        {:error, refusal("could not be read")}
     end
   end
 

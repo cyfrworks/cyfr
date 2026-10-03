@@ -17,7 +17,10 @@ defmodule Arca.UsageTest do
 
   use ExUnit.Case, async: false
 
-  setup do
+  # The usage walk reaches the storage cap, which the settings accessor
+  # reads from the store since B2, so the tests need a sandbox owner.
+  setup tags do
+    Arca.Test.Sandbox.setup!(tags)
     base = Path.join(System.tmp_dir!(), "usage_#{System.unique_integer([:positive])}")
 
     prev_base = Application.fetch_env!(:arca, :base_path)
@@ -112,7 +115,7 @@ defmodule Arca.UsageTest do
 
   test "an actor with no athanor names no tree, and that is a refusal, not zero",
        %{actor: actor} do
-    # `{:ok, 0}` here would read an unresolved tenant as an empty estate,
+    # `{:ok, 0}` here would read an unresolved tenant as an empty athanor,
     # and the byte cap above would admit the write it was asked about.
     assert {:error, :no_athanor} = Arca.Usage.athanor_bytes(%{actor | athanor_id: nil})
     assert {:error, :no_athanor} = Arca.Usage.athanor_bytes(%{actor | athanor_id: ""})

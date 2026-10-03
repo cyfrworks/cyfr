@@ -10,7 +10,7 @@ import Config
 config :opus,
   service_id: "wrk_local",
   # A development key. CYFR derives a service's key from its worker root
-  # (`mix cyfr.worker.key <service_id>`); a deployment configures that one.
+  # (`mix cyfr.opus.key <service_id>`); a deployment configures that one.
   service_key: "0000000000000000000000000000000000000000000000000000000000000000",
   host_url: "http://127.0.0.1:4300",
   bind: "127.0.0.1",

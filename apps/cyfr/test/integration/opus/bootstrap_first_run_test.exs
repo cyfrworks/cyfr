@@ -23,10 +23,9 @@ defmodule Opus.BootstrapFirstRunTest do
 
   @seed_root Path.expand("../../../../../seed", __DIR__)
 
-  setup do
+  setup tags do
     Arca.Cache.init()
-    :ok = Ecto.Adapters.SQL.Sandbox.checkout(Arca.Repo)
-    Ecto.Adapters.SQL.Sandbox.mode(Arca.Repo, {:shared, self()})
+    Cyfr.Test.Sandbox.setup!(tags)
 
     test_path = Path.join(System.tmp_dir!(), "first_run_#{:rand.uniform(1_000_000)}")
     original_base_path = Application.get_env(:arca, :base_path)
@@ -48,7 +47,7 @@ defmodule Opus.BootstrapFirstRunTest do
         else: Application.delete_env(:arca, :seed_path)
     end)
 
-    {:ok, ctx: Sanctum.TestContext.local()}
+    {:ok, ctx: Sanctum.TestContext.local(:prism)}
   end
 
   # Copy a tracked bundle version in and register it, the way a fill does.
@@ -124,7 +123,7 @@ defmodule Opus.BootstrapFirstRunTest do
     assert http_auth.resources.egress.domains == ["*"]
     # The one component allowed plaintext says so explicitly.
     assert Enum.sort(http_auth.resources.egress.schemes) == ["http", "https"]
-    assert Cyfr.Authority.limits(http_auth).rate_limit == %{requests: 60, window: "1m"}
+    assert Prima.Authority.limits(http_auth).rate_limit == %{requests: 60, window: "1m"}
   end
 
   test "a needs-declaring catalyst is not ready until its vault entry binds", %{ctx: ctx} do
@@ -168,7 +167,7 @@ defmodule Opus.BootstrapFirstRunTest do
 
     # The operator creates a vault entry and binds it through the walk.
     {:ok, entry} =
-      Sanctum.Vault.create(ctx, %{
+      Sanctum.TestContext.create_vault(ctx, %{
         name: "My Anthropic",
         kind: "api_key",
         fields: %{"ANTHROPIC_API_KEY" => "sk-first-run"}

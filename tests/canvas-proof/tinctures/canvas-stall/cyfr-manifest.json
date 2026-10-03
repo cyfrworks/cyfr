@@ -1,0 +1,11 @@
+{
+  "name": "canvas-stall",
+  "type": "tincture",
+  "version": "1.0.0",
+  "publisher": "local",
+  "description": "Canvas stall",
+  "tincture": {
+    "entry": "index.html",
+    "frame": {"placement": "desktop"}
+  }
+}

@@ -6,63 +6,36 @@ defmodule Aqua.Kinds do
   What an operation is to the assistant: its kind, whether it may ever
   run without a card, the verbs a tool has, and whether a chat can run
   it at all — read from the catalog's annotations and the virtual-tool
-  catalog, one rule for the AQUA page, the `aqua` tool's door and the
-  runtime ceiling alike.
+  catalog, one rule for the AQUA page and the runtime ceiling alike. The
+  classification is the gate's (`Grimoire.tool_kind/2`,
+  `Grimoire.tool_actions/1`), which the `aqua` tool's door in the
+  component domain (`Compendium.AquaAgent.validate_tool_policy/2`) reads
+  too.
   """
 
-  # Resolve the kind of a tool.action.
-  #
-
-  # 1. AQUA virtual-tool catalog (`files`/`storage`/`http`/`request_setup`).
-
-  # 2. External upstream MCP tools are namespaced `server:tool` and have no
-
-  #    enumerable action verbs — short-circuit to `:external` regardless of
-
-  #    the action arg.
-
-  # 3. Internal cyfr tools must declare `kind` per action in
-
-  #    `annotations.actions[verb].kind`. No `_default` fallback — a missing
-
-  #    annotation returns `nil` so the gap is visible (and caught by the
-
-  #    `audit_action_kinds/0` startup check).
-
+  @doc """
+  The kind of `tool.action` — the gate's one classification
+  (`Grimoire.tool_kind/2`): a virtual hand's kind, `:external` for a
+  `server:tool`, else the catalogued tool's declared kind, nil when
+  unknown.
+  """
   @spec kind_for(String.t(), String.t()) :: atom() | nil
-
-  def kind_for(tool, action) when is_binary(tool) and is_binary(action) do
-    cond do
-      kind = Aqua.Hands.kind_for(tool, action) ->
-        kind
-
-      String.contains?(tool, ":") ->
-        :external
-
-      true ->
-        lookup_internal_kind(tool, action)
-    end
-  end
-
-  def kind_for(_, _), do: nil
-
-  defp lookup_internal_kind(tool, action), do: Aqua.Ops.action_kind(tool, action)
-
-  @auto_kinds [:read, :write, :execute]
+  defdelegate kind_for(tool, action), to: Grimoire, as: :tool_kind
 
   @doc """
   Whether `tool.action` may ever run without a card: only a read, write or
   execute kind. Destructive and external actions always ask, and an
   action whose kind is unknown is refused too — "not known" and "not yet
   loaded" read the same here, and only the second could otherwise run
-  something destructive with no card. The one rule the AQUA page, the
-  `aqua` tool's door and the runtime ceiling (`Aqua.ToolGrants.effective/2`)
-  all read.
+  something destructive with no card. The one rule the AQUA page and the
+  runtime ceiling (`Aqua.ToolGrants.effective/2`) read; the kinds it admits
+  are `Grimoire.VirtualTools.auto_permitted_kinds/0`.
   """
 
   @spec auto_permitted?(String.t(), String.t()) :: boolean()
 
-  def auto_permitted?(tool, action), do: kind_for(tool, action) in @auto_kinds
+  def auto_permitted?(tool, action),
+    do: Grimoire.VirtualTools.auto_permitted_kind?(kind_for(tool, action))
 
   @doc """
   The action verbs a catalogued tool has — the virtual catalog's for a
@@ -71,21 +44,14 @@ defmodule Aqua.Kinds do
   """
 
   @spec actions_of(String.t()) :: [String.t()]
-
-  def actions_of(tool) when is_binary(tool) do
-    if Aqua.Hands.hand?(tool),
-      do: Aqua.Hands.actions_of(tool),
-      else: Aqua.Ops.actions_of(tool)
-  end
-
-  def actions_of(_tool), do: []
+  defdelegate actions_of(tool), to: Grimoire, as: :tool_actions
 
   @doc "Whether the virtual catalog or the registry holds a tool of this name."
 
   @spec catalogued?(String.t()) :: boolean()
 
   def catalogued?(tool) when is_binary(tool),
-    do: Aqua.Hands.hand?(tool) or actions_of(tool) != []
+    do: Grimoire.VirtualTools.tool?(tool) or actions_of(tool) != []
 
   def catalogued?(_tool), do: false
 
@@ -101,7 +67,7 @@ defmodule Aqua.Kinds do
 
   def standing_for(tool, action) when is_binary(tool) and is_binary(action) do
     cond do
-      Aqua.Hands.hand?(tool) -> nil
+      Grimoire.VirtualTools.tool?(tool) -> nil
       String.contains?(tool, ":") -> nil
       true -> Aqua.Ops.action_standing(tool, action)
     end
@@ -125,7 +91,7 @@ defmodule Aqua.Kinds do
 
   defp auto_only?(key) do
     case String.split(key, ".", parts: 2) do
-      [tool, action] -> Aqua.Hands.auto_only?(tool, action)
+      [tool, action] -> Grimoire.VirtualTools.auto_only?(tool, action)
       _ -> false
     end
   end
@@ -141,8 +107,8 @@ defmodule Aqua.Kinds do
   @doc "Whether a chat would refuse `tool.action` outright."
   @spec refused?(String.t(), String.t()) :: boolean()
   def refused?(tool, action) do
-    if Aqua.Hands.hand?(tool) do
-      is_nil(Aqua.Hands.kind_for(tool, action))
+    if Grimoire.VirtualTools.tool?(tool) do
+      is_nil(Grimoire.VirtualTools.kind_for(tool, action))
     else
       Aqua.Ops.in_chain_refused?(tool, action)
     end

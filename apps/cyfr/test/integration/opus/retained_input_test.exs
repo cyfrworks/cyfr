@@ -3,7 +3,7 @@
 
 defmodule Opus.RetainedInputTest do
   @moduledoc """
-  A child run's `retained_input` rides the real path — `Cyfr.Execution`,
+  A child run's `retained_input` rides the real path — `Crucible`,
   admission, the worker service's runner, the record — to the payload
   store: the catalyst receives the input as sent, the store keeps the
   retained form, and the row's hash describes what was sent.
@@ -16,10 +16,9 @@ defmodule Opus.RetainedInputTest do
   @seed_root Path.expand("../../../../../seed", __DIR__)
   @soul "agent:local.aqua"
 
-  setup do
+  setup tags do
     Arca.Cache.init()
-    :ok = Ecto.Adapters.SQL.Sandbox.checkout(Arca.Repo)
-    Ecto.Adapters.SQL.Sandbox.mode(Arca.Repo, {:shared, self()})
+    Cyfr.Test.Sandbox.setup!(tags)
 
     test_path = Path.join(System.tmp_dir!(), "retained_#{System.unique_integer([:positive])}")
     keys = [:base_path, :seed_path]
@@ -37,7 +36,7 @@ defmodule Opus.RetainedInputTest do
       end
     end)
 
-    ctx = Sanctum.TestContext.local()
+    ctx = Sanctum.TestContext.local(:prism)
     :ok = Sanctum.TestContext.shipped!(ctx.athanor_id)
     {:ok, %{errors: 0}} = Compendium.AutoIndexer.scan(ctx: ctx)
     {:ok, _} = Compendium.AgentIndex.sync(ctx)
@@ -50,7 +49,7 @@ defmodule Opus.RetainedInputTest do
   # run needs one bound, even for a keyless `describe`.
   defp bind_claude!(ctx) do
     {:ok, entry} =
-      Sanctum.Vault.create(ctx, %{
+      Sanctum.TestContext.create_vault(ctx, %{
         name: "claude key",
         kind: "api_key",
         fields: %{"ANTHROPIC_API_KEY" => "sk-test-claude"}
@@ -79,17 +78,17 @@ defmodule Opus.RetainedInputTest do
 
   test "the store keeps the retained form of a child run's input", %{ctx: ctx} do
     :ok = bind_claude!(ctx)
-    {:ok, authority} = Cyfr.Execution.authority_for(ctx, :default, @soul)
-    id = Cyfr.UUID7.execution_id()
+    {:ok, authority} = Crucible.authority_for(ctx, :default, @soul)
+    id = Prima.UUID7.execution_id()
 
     sent = %{"operation" => "describe", "params" => %{"marker" => "SENT-ONLY"}}
     kept = %{"operation" => "describe", "params" => %{}}
 
     assert {:ok, _} =
-             Cyfr.Execution.run_child(authority, "catalyst:local.claude", nil, sent,
+             Crucible.run_child(authority, "catalyst:local.claude", nil, sent,
                ctx: Sanctum.Context.enter_guest(ctx),
                execution_id: id,
-               parent_execution_id: "exec_parent_#{System.unique_integer([:positive])}",
+               parent_execution_id: Cyfr.Test.AttemptFixtures.lineage!(ctx).parent_execution_id,
                root_execution_id: "exec_root_#{System.unique_integer([:positive])}",
                retained_input: kept
              )
@@ -100,7 +99,7 @@ defmodule Opus.RetainedInputTest do
     refute bytes =~ "SENT-ONLY"
     assert Jason.decode!(bytes) == kept
 
-    row = Arca.Repo.get!(Arca.Execution, id)
+    row = Arca.Repo.get!(Arca.Schemas.Execution, id)
     assert row.input_hash == Arca.Execution.hash_input(sent)
   end
 end

@@ -2,14 +2,38 @@
 # Copyright 2026 CYFR Works Inc.
 
 defmodule Arca.McpServerStorageTest do
+  # Takes a member slot through `Arca.ControlPlane`, which writes the
+  # process-wide standing; each case saves and restores it.
   use ExUnit.Case, async: false
 
-  alias Arca.McpServerStorage
+  import Ecto.Query, only: [from: 2]
 
-  setup do
-    :ok = Ecto.Adapters.SQL.Sandbox.checkout(Arca.Repo)
-    Ecto.Adapters.SQL.Sandbox.mode(Arca.Repo, {:shared, self()})
-    {:ok, actor: Arca.Test.Actor.local()}
+  alias Arca.ControlPlane
+  alias Arca.McpServerStorage
+  alias Arca.Schemas.CellLease
+
+  @standing [
+    {Arca.ControlPlane, :standing},
+    {Arca.ControlPlane, :generation},
+    {Arca.ControlPlane, :slot}
+  ]
+
+  setup tags do
+    Arca.Test.Sandbox.setup!(tags)
+    saved = Map.new(@standing, &{&1, :persistent_term.get(&1, :absent)})
+
+    on_exit(fn ->
+      for {key, value} <- saved do
+        if value == :absent,
+          do: :persistent_term.erase(key),
+          else: :persistent_term.put(key, value)
+      end
+    end)
+
+    # The epoch's raise is published under this member's slot.
+    node = "node-mcp-#{System.unique_integer([:positive])}"
+    {:ok, slot} = ControlPlane.take(node, node <> "#boot_a", 60_000)
+    {:ok, actor: Arca.Test.Actor.local(), slot: slot}
   end
 
   describe "insert/2" do
@@ -145,16 +169,81 @@ defmodule Arca.McpServerStorageTest do
   describe "epochs" do
     test "a row is inserted at epoch 1 and every write raises it in the same statement",
          %{actor: actor} do
-      assert {:ok, %{id: id, epoch: 1}} =
+      assert {:ok, %{id: id, epoch: 1, revision: 0}} =
                McpServerStorage.insert(actor, %{
                  name: "epochal",
                  url: "https://x.com/mcp"
                })
 
-      assert {:ok, %{epoch: 2}} = McpServerStorage.update(actor, "epochal", %{enabled: false})
+      assert {:ok, %{epoch: 2, revision: 1}} =
+               McpServerStorage.update(actor, "epochal", %{enabled: false})
 
-      assert {:ok, %{epoch: 3}} = McpServerStorage.bump_epoch(actor, id)
-      assert {:ok, %{epoch: 3}} = McpServerStorage.get_by_id(actor, id)
+      assert {:ok, %{epoch: 3, revision: 2}} = McpServerStorage.bump_epoch(actor, id)
+      assert {:ok, %{epoch: 3, revision: 2}} = McpServerStorage.get_by_id(actor, id)
+      assert {:ok, %{epoch: 4, revision: 3}} = McpServerStorage.bump_epoch(actor, id, 3)
+    end
+
+    test "a raise under a slot taken over after the member read it publishes nothing",
+         %{actor: actor, slot: slot} do
+      {:ok, %{id: id}} = McpServerStorage.insert(actor, %{name: "held", url: "https://x.com/mcp"})
+
+      # The member still believes it holds the slot; the row says otherwise.
+      {1, _} =
+        Arca.Repo.update_all(from(l in CellLease, where: l.node == ^slot.node),
+          set: [owner: slot.node <> "#boot_b", generation: slot.generation + 1, fence: 9]
+        )
+
+      assert ControlPlane.held?()
+      assert {:error, :not_owner} = McpServerStorage.bump_epoch(actor, id)
+      assert {:error, :not_owner} = McpServerStorage.bump_epoch(actor, id, 1)
+      assert {:ok, %{epoch: 1, revision: 0}} = McpServerStorage.get_by_id(actor, id)
+    end
+
+    test "a raise under a slot that ran out with no successor publishes nothing",
+         %{actor: actor, slot: slot} do
+      {:ok, %{id: id}} =
+        McpServerStorage.insert(actor, %{name: "lapsed", url: "https://x.com/mcp"})
+
+      past = DateTime.add(Arca.ServerMetaStorage.now!(), -1_000, :millisecond)
+
+      {1, _} =
+        Arca.Repo.update_all(from(l in CellLease, where: l.node == ^slot.node),
+          set: [lease_until: past]
+        )
+
+      assert {:error, :not_owner} = McpServerStorage.bump_epoch(actor, id)
+      assert {:ok, %{epoch: 1}} = McpServerStorage.get_by_id(actor, id)
+    end
+
+    test "a member that holds no slot where a claimant runs raises nothing", %{actor: actor} do
+      {:ok, %{id: id}} =
+        McpServerStorage.insert(actor, %{name: "slotless", url: "https://x.com/mcp"})
+
+      previous = Application.get_env(:arca, :control_plane_claim_enabled)
+
+      on_exit(fn ->
+        if is_nil(previous),
+          do: Application.delete_env(:arca, :control_plane_claim_enabled),
+          else: Application.put_env(:arca, :control_plane_claim_enabled, previous)
+      end)
+
+      Application.put_env(:arca, :control_plane_claim_enabled, true)
+      ControlPlane.forget()
+      ControlPlane.forget_generation()
+      ControlPlane.record(:unclaimed)
+
+      assert {:error, :not_owner} = McpServerStorage.bump_epoch(actor, id)
+      assert {:ok, %{epoch: 1}} = McpServerStorage.get_by_id(actor, id)
+    end
+
+    test "another athanor's row is not found, and is not raised", %{actor: actor} do
+      theirs = Arca.Test.Actor.local(athanor_id: "ath_mcp_theirs", user_id: "user_theirs")
+
+      {:ok, %{id: id}} =
+        McpServerStorage.insert(theirs, %{name: "theirs", url: "https://x.com/mcp"})
+
+      assert {:error, :not_found} = McpServerStorage.bump_epoch(actor, id)
+      assert {:ok, %{epoch: 1}} = McpServerStorage.get_by_id(theirs, id)
     end
 
     test "a write naming the epoch it read is refused once the row has moved on",
@@ -310,6 +399,102 @@ defmodule Arca.McpServerStorageTest do
 
       {:ok, row} = McpServerStorage.get(actor, "roundtrip")
       assert McpServerStorage.config(row) == config
+    end
+  end
+end
+
+defmodule Arca.McpServerStorageRaceTest do
+  @moduledoc """
+  Two raises of one server's epoch at once — a reconcile of a vault
+  rotation and another write to the row — on connections of their own
+  outside the sandbox: the one that read the older revision waits on the
+  row, then is refused `:stale`, and the row holds the winner's raise
+  alone.
+
+  PostgreSQL only: SQLite's one write lock serializes the two whole, so
+  there is no wait inside one to observe.
+  """
+
+  use ExUnit.Case, async: false
+
+  import Ecto.Query, only: [from: 2]
+
+  alias Arca.McpServerStorage
+  alias Arca.Schemas.{CellLease, McpServer}
+  alias Ecto.Adapters.SQL.Sandbox
+
+  @moduletag :postgres
+
+  @standing [
+    {Arca.ControlPlane, :standing},
+    {Arca.ControlPlane, :generation},
+    {Arca.ControlPlane, :slot}
+  ]
+
+  defp unboxed(fun), do: Sandbox.unboxed_run(Arca.Repo, fun)
+
+  setup do
+    athanor = "ath_mcp_race_#{System.unique_integer([:positive])}"
+    node = "node-mcp-race-#{System.unique_integer([:positive])}"
+    saved = Map.new(@standing, &{&1, :persistent_term.get(&1, :absent)})
+
+    on_exit(fn ->
+      for {key, value} <- saved do
+        if value == :absent,
+          do: :persistent_term.erase(key),
+          else: :persistent_term.put(key, value)
+      end
+
+      unboxed(fn ->
+        Arca.Repo.delete_all(from(l in CellLease, where: l.node == ^node))
+        Arca.Repo.delete_all(from(s in McpServer, where: s.athanor_id == ^athanor))
+      end)
+    end)
+
+    {:ok, actor: Arca.Test.Actor.local(athanor_id: athanor, user_id: "user_race"), node: node}
+  end
+
+  test "a raise that read the older revision waits, then is refused, and the winner's raise stands",
+       %{actor: actor, node: node} do
+    if Arca.Repo.adapter() != Ecto.Adapters.SQLite3 do
+      {:ok, _slot} = unboxed(fn -> Arca.ControlPlane.take(node, node <> "#boot_a", 60_000) end)
+
+      {:ok, %{id: id}} =
+        unboxed(fn ->
+          McpServerStorage.insert(actor, %{name: "raced", url: "https://x.com/mcp"})
+        end)
+
+      test = self()
+
+      # The winner raises inside a transaction held open, so the row stays
+      # locked at its new revision until it commits.
+      winner =
+        Task.async(fn ->
+          unboxed(fn ->
+            Arca.Repo.transaction(fn ->
+              raised = McpServerStorage.bump_epoch(actor, id)
+              send(test, {:holding, raised})
+
+              receive do
+                :commit -> raised
+              end
+            end)
+          end)
+        end)
+
+      assert_receive {:holding, {:ok, %{epoch: 2, revision: 1}}}, 5_000
+
+      # The loser reads the committed row — revision 0 — and waits on the
+      # winner's lock at its publishing statement.
+      loser = Task.async(fn -> unboxed(fn -> McpServerStorage.bump_epoch(actor, id) end) end)
+      refute Task.yield(loser, 300), "the loser published past the winner's lock"
+
+      send(winner.pid, :commit)
+      assert {:ok, {:ok, %{epoch: 2}}} = Task.await(winner, 25_000)
+      assert {:error, :stale} = Task.await(loser, 25_000)
+
+      assert {:ok, %{epoch: 2, revision: 1}} =
+               unboxed(fn -> McpServerStorage.get_by_id(actor, id) end)
     end
   end
 end

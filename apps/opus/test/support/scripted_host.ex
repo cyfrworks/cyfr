@@ -4,10 +4,10 @@
 defmodule Opus.Test.ScriptedHost do
   @moduledoc """
   CYFR's host API as a test scripts it, served on a loopback port: the
-  routes `Cyfr.WorkerWire` names, each request verified as CYFR verifies
-  it (`Cyfr.WorkerAuth.verify_host_call/5` for a runner's call, whose
+  routes `Prima.WorkerWire` names, each request verified as CYFR verifies
+  it (`Prima.WorkerAuth.verify_host_call/5` for a runner's call, whose
   sealed body is then opened and whose answer is sealed back;
-  `Cyfr.WorkerAuth.verify_report/4` for a worker service's plain report)
+  `Prima.WorkerAuth.verify_report/4` for a worker service's plain report)
   under a root of the test's choosing, and answered from the test's script.
 
   `start!/1` serves one host for the calling test and answers where it is.
@@ -20,15 +20,18 @@ defmodule Opus.Test.ScriptedHost do
   every request the host saw, verified or refused, oldest first.
 
   An answer is `{:ok, value}`, `{:error, name}`, a guest error, a
-  `setup_required` or `failed` refusal as `Opus.HostClient` reads them, or
-  `:drop`, which answers nothing readable — a lost answer.
+  `setup_required` or `failed` refusal as `Opus.HostClient` reads them,
+  `{:answer, json}`, those exact bytes sealed as the answer, or `:drop`,
+  which answers nothing readable — a lost answer. `pins/3` answers
+  `egress_pin` from a table of addresses the test sets, as CYFR pins a
+  guest's URL; with no table, every pin is refused `resolution`.
 
   The default root is the one `test_helper.exs` derives the running worker
   service's key from, so a host started with it verifies that service's
   reports; a host started with another root is a stranger to it.
   """
 
-  alias Cyfr.{Assignment, WorkerAuth, WorkerWire}
+  alias Prima.{Assignment, PinnedTarget, WorkerAuth, WorkerWire}
 
   @root :crypto.hash(:sha256, "opus-test-root")
   @service "wrk_local"
@@ -64,7 +67,7 @@ defmodule Opus.Test.ScriptedHost do
     generation = Keyword.get(opts, :generation, @generation)
 
     member =
-      Keyword.get_lazy(opts, :member, fn -> "host@test#" <> Cyfr.UUID7.generate_id("boot") end)
+      Keyword.get_lazy(opts, :member, fn -> "host@test#" <> Prima.UUID7.generate_id("boot") end)
 
     service = Keyword.get(opts, :service, @service)
     unique = System.unique_integer([:positive])
@@ -141,6 +144,50 @@ defmodule Opus.Test.ScriptedHost do
     Agent.update(agent, &put_in(&1, [:script, op], answers))
   end
 
+  @doc """
+  Answer `egress_pin` from `table`: a URL's host, lowercase and an IPv6
+  literal without its brackets, to the address this host pins it at (IP
+  text), or to the refusal it answers (an atom of
+  `Prima.PinnedTarget.refusals/0`). A host the table does not name is
+  refused `resolution`. Each pin names the URL's own scheme, port and
+  host, a fresh id, and an `expires_at` `:expires_in` ms (default 30 000,
+  negative for a pin already past it) after it is answered.
+  """
+  @spec pins(t(), %{String.t() => String.t() | atom()}, keyword()) :: :ok
+  def pins(host, table, opts \\ []) when is_map(table) do
+    expires_in = Keyword.get(opts, :expires_in, 30_000)
+    script(host, "egress_pin", fn args, _caller -> pin(table, args, expires_in) end)
+  end
+
+  @doc false
+  # The answer `pins/3`'s table gives for an `egress_pin` request's args.
+  def pin(table, %{"url" => url}, expires_in) do
+    uri = URI.parse(url)
+
+    case Map.get(table, String.downcase(uri.host)) do
+      nil ->
+        {:error, :resolution}
+
+      refusal when is_atom(refusal) ->
+        {:error, refusal}
+
+      ip when is_binary(ip) ->
+        {:ok, address} = :inet.parse_strict_address(String.to_charlist(ip))
+
+        pin = %PinnedTarget{
+          id: "pin_" <> Integer.to_string(System.unique_integer([:positive])),
+          ip: ip,
+          family: if(tuple_size(address) == 4, do: 4, else: 6),
+          scheme: uri.scheme,
+          port: uri.port,
+          host: if(String.contains?(uri.host, ":"), do: "[#{uri.host}]", else: uri.host),
+          expires_at: System.system_time(:millisecond) + expires_in
+        }
+
+        {:ok, PinnedTarget.to_wire(pin)}
+    end
+  end
+
   @doc "Every request the host saw, oldest first: `%{op, args, caller, header, body}` (the body opened) or `{:refused, op, reason}`."
   @spec requests(t()) :: [map() | {:refused, String.t(), atom()}]
   def requests(%{agent: agent}), do: agent |> Agent.get(& &1.requests) |> Enum.reverse()
@@ -151,13 +198,13 @@ defmodule Opus.Test.ScriptedHost do
 
   @doc """
   An attempt on this host, as CYFR mints one: its fields, its keys
-  (`Cyfr.WorkerAuth.attempt_keys/2`), a signed assignment (`:assignment`),
+  (`Prima.WorkerAuth.attempt_keys/2`), a signed assignment (`:assignment`),
   the keys sealed for the worker service (`:sealed_keys`), the input JSON
   the assignment's digest binds (`:input`) and the `:client` a runner of
   it holds. Options: `:boot` (default `"boot_test"`), `:runner` (default a
   fresh id), `:service` (default the host's), `:component_type` (default
   `:catalyst`), `:component_ref`, `:digest`, `:input` (default
-  `%{"fixture" => true}`), `:authority` (default `Cyfr.Authority.zero/0`),
+  `%{"fixture" => true}`), `:authority` (default `Prima.Authority.zero/0`),
   `:timeout_ms` (default 60 s), `:intercepted` (default `[]`),
   `:athanor_id` (default `"ath_test"`).
   """
@@ -166,7 +213,7 @@ defmodule Opus.Test.ScriptedHost do
     now = System.system_time(:millisecond)
     service = Keyword.get(opts, :service, host.service)
     boot = Keyword.get(opts, :boot, "boot_test")
-    runner = Keyword.get(opts, :runner, Cyfr.UUID7.generate_id("runner"))
+    runner = Keyword.get(opts, :runner, Prima.UUID7.generate_id("runner"))
     component_type = Keyword.get(opts, :component_type, :catalyst)
 
     component_ref =
@@ -174,16 +221,16 @@ defmodule Opus.Test.ScriptedHost do
         "#{component_type}:local.fixture-#{System.unique_integer([:positive])}:0.1.0"
       end)
 
-    digest = Keyword.get_lazy(opts, :digest, fn -> Cyfr.Digest.sha256(component_ref) end)
+    digest = Keyword.get_lazy(opts, :digest, fn -> Prima.Digest.sha256(component_ref) end)
     input = Keyword.get(opts, :input, %{"fixture" => true})
     input_json = Jason.encode!(input)
     timeout_ms = Keyword.get(opts, :timeout_ms, 60_000)
-    execution_id = Cyfr.UUID7.execution_id()
+    execution_id = Prima.UUID7.execution_id()
 
     attempt = %{
       athanor_id: Keyword.get(opts, :athanor_id, "ath_test"),
       execution_id: execution_id,
-      attempt: Cyfr.UUID7.generate_id("att"),
+      attempt: Prima.UUID7.generate_id("att"),
       fence: 1,
       generation: host.generation,
       service: service
@@ -202,8 +249,8 @@ defmodule Opus.Test.ScriptedHost do
       fence: 1,
       root_execution_id: execution_id,
       athanor_id: attempt.athanor_id,
-      actor: %Cyfr.Actor{},
-      authority: Cyfr.Authority.to_wire(Keyword.get(opts, :authority, Cyfr.Authority.zero())),
+      actor: %Prima.Actor{},
+      authority: Prima.Authority.to_wire(Keyword.get(opts, :authority, Prima.Authority.zero())),
       component: %{
         ref: component_ref,
         type: Atom.to_string(component_type),
@@ -211,7 +258,7 @@ defmodule Opus.Test.ScriptedHost do
         declared_needs: [],
         activation_digest: nil
       },
-      input_digest: Cyfr.Digest.sha256(input_json),
+      input_digest: Prima.Digest.sha256(input_json),
       timeout_ms: timeout_ms,
       deadline: now + timeout_ms,
       lease_until: now + 60_000,
@@ -268,6 +315,7 @@ defmodule Opus.Test.ScriptedHost do
   def default("release_child", _args, _caller), do: {:ok, true}
   def default("runner_exited", _args, _caller), do: {:ok, true}
   def default("fetch_artifact", _args, _caller), do: {:error, :not_found}
+  def default("egress_pin", _args, _caller), do: {:error, :resolution}
 
   def default(_op, _args, _caller),
     do:
@@ -386,6 +434,9 @@ defmodule Opus.Test.ScriptedHost do
         :drop ->
           send_resp(conn, 500, "")
 
+        {:answer, bytes} when is_binary(bytes) ->
+          send_json(conn, 200, bytes, seal)
+
         {:raw, status, body} ->
           send_resp(conn, status, body)
 
@@ -394,9 +445,10 @@ defmodule Opus.Test.ScriptedHost do
       end
     end
 
-    defp json(conn, status, answer, seal) do
-      encoded = Jason.encode!(answer)
+    defp json(conn, status, answer, seal),
+      do: send_json(conn, status, Jason.encode!(answer), seal)
 
+    defp send_json(conn, status, encoded, seal) do
       body =
         case seal do
           {key, caller} ->

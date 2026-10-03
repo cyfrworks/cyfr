@@ -12,7 +12,7 @@ defmodule Cyfr.Test.TwoServices do
   `async: false`: the routing, the Opus service, the scripted service and
   the suite's wire are each one.
 
-  - The estate: `lay_seed!/2` lays a seed whose catalyst is the step stub
+  - The athanor: `lay_seed!/2` lays a seed whose catalyst is the step stub
     (`stub/0`), a `model/chat@1` catalyst Opus runs for real, under the
     limits its manifest asks for; `arm!/2` binds the key it needs.
     `scripted/0` names a reagent only the scripted service runs.
@@ -38,8 +38,9 @@ defmodule Cyfr.Test.TwoServices do
 
   import ExUnit.Callbacks, only: [on_exit: 1]
 
-  alias Cyfr.Authority
-  alias Cyfr.Test.{AttemptFixtures, AuthorityFixtures, ScriptedWorker}
+  alias Prima.Authority
+  alias Cyfr.Test.{AttemptFixtures, ScriptedWorker}
+  alias Prima.Test.AuthorityFixtures
   alias Sanctum.Consent.{Commit, Plan}
 
   @stub_wasm Path.expand("test_wasm/step_stub/step_stub.wasm", __DIR__)
@@ -47,6 +48,7 @@ defmodule Cyfr.Test.TwoServices do
   @scripted "reagent:local.two-workers"
   @version "0.1.0"
   @key_field "STUB_API_KEY"
+  @stub_scopes ["stub.chat"]
 
   @stub_limits %{
     "timeout" => "1m",
@@ -59,6 +61,13 @@ defmodule Cyfr.Test.TwoServices do
   @doc "The step stub's name-level reference: the catalyst `lay_seed!/2` lays."
   @spec stub() :: String.t()
   def stub, do: @stub
+
+  @doc """
+  The scopes the step stub's OAuth need declares and `arm!/3` authorizes
+  its entry for; a catalyst armed through `arm!/4` declares the same.
+  """
+  @spec stub_scopes() :: [String.t()]
+  def stub_scopes, do: @stub_scopes
 
   @doc "The version the step stub is laid at."
   @spec version() :: String.t()
@@ -103,8 +112,8 @@ defmodule Cyfr.Test.TwoServices do
 
     import Plug.Conn
 
-    alias Cyfr.Execution.Keys
-    alias Cyfr.{WorkerAuth, WorkerWire}
+    alias Crucible.Keys
+    alias Prima.{WorkerAuth, WorkerWire}
 
     @max_hold_ms 60_000
 
@@ -421,7 +430,7 @@ defmodule Cyfr.Test.TwoServices do
   end
 
   # ---------------------------------------------------------------------------
-  # The estate
+  # The athanor
   # ---------------------------------------------------------------------------
 
   @doc """
@@ -442,13 +451,14 @@ defmodule Cyfr.Test.TwoServices do
       "version" => @version,
       "publisher" => "local",
       "description" => "A model/chat@1 catalyst the two-service matrix runs",
-      "contracts" => [Cyfr.Models.chat_contract()],
+      "contracts" => [Prima.Model.chat_contract()],
       "needs" => %{
         "api_key" => %{
-          "type" => "api_key:step-stub",
-          "reason" => "to read a key as a model catalyst does",
+          "type" => "oauth:step-stub",
+          "reason" => "to read a key and a token as a model catalyst does",
           "required" => true,
-          "fields" => [@key_field]
+          "fields" => [@key_field],
+          "scopes" => @stub_scopes
         }
       },
       "caps" => %{"limits" => Map.merge(@stub_limits, Keyword.get(opts, :limits, %{}))}
@@ -471,10 +481,12 @@ defmodule Cyfr.Test.TwoServices do
   end
 
   @doc """
-  Bind `key` as the stub's vault field, in an entry whose OAuth bundle
-  holds `token`, and dispense `token` to every run of the stub once its
-  runner has attached, before the attach is answered and its guest runs,
-  as a guest's `cyfr:oauth` call dispenses one (`dispense_after_attach!/3`).
+  Bind `key` as the stub's vault field, in an OAuth entry whose bundle
+  holds `token` under the stub's scopes — the attach reads the key and the
+  token is dispensed under the scopes — and dispense `token` to every run
+  of the stub once its runner has attached, before the attach is answered
+  and its guest runs, as a guest's `cyfr:oauth` call dispenses one
+  (`dispense_after_attach!/3`).
   Answers both, the credentials to look for.
   """
   @spec arm!(Sanctum.Context.t(), key: String.t(), token: String.t()) :: [String.t()]
@@ -483,13 +495,24 @@ defmodule Cyfr.Test.TwoServices do
   @doc "`arm!/2` for the catalyst `ref`, whose need is the step stub's."
   @spec arm!(Sanctum.Context.t(), String.t(), key: String.t(), token: String.t()) :: [String.t()]
   def arm!(ctx, ref, key: key, token: token) do
-    {:ok, entry} =
-      Sanctum.Vault.create(ctx, %{
-        name: "#{ref} key",
-        kind: "api_key",
-        fields: %{@key_field => key},
-        oauth: %{"access_token" => token}
+    params = %{
+      name: "#{ref} key",
+      kind: "oauth",
+      fields: %{@key_field => key},
+      oauth: %{"access_token" => token},
+      oauth_scopes: @stub_scopes
+    }
+
+    # Entering the key is a sensitive change, confirmed as its person
+    # confirms it (`Sanctum.TestContext.confirmed/3`).
+    entering =
+      Sanctum.TestContext.confirmed(ctx, :credential_entry, %{
+        operation: "vault.create",
+        arguments: params,
+        resource: params.name
       })
+
+    {:ok, entry} = Sanctum.Vault.create(entering, params)
 
     {:ok, plan} = Plan.plan(ctx, %{ref: ref})
     decisions = %{ref: ref, bindings: [%{need: "api_key", entry_id: entry.id}]}
@@ -525,7 +548,7 @@ defmodule Cyfr.Test.TwoServices do
         dispense(ctx, ref, id, token)
 
       %{callback: :admit_child, answer: %{"ok" => %{"assignment" => assignment}}} ->
-        {:ok, %{execution_id: id}} = Cyfr.Assignment.read(assignment)
+        {:ok, %{execution_id: id}} = Prima.Assignment.read(assignment)
         dispense(ctx, ref, id, token)
 
       _call ->
@@ -534,7 +557,7 @@ defmodule Cyfr.Test.TwoServices do
   end
 
   defp dispense(ctx, ref, id, token) do
-    case Arca.Repo.get(Arca.Execution, id) do
+    case Arca.Repo.get(Arca.Schemas.Execution, id) do
       %{reference: reference} ->
         if String.starts_with?(reference, ref <> ":") do
           attempt = AttemptFixtures.current!(ctx.athanor_id, id)
@@ -556,21 +579,21 @@ defmodule Cyfr.Test.TwoServices do
 
   @doc """
   Send the runs of `refs`, which the scripted service scripts, to
-  `:scripted` or to `:opus` from now on: `config :cyfr, :workers` with the
+  `:scripted` or to `:opus` from now on: `config :cyfr, :opus_workers` with the
   scripted service's entry for them ahead of the rest, or without it. A run
   is routed when it is dispatched, so one already dispatched stays where it
-  is. The caller restores `:workers` when its test ends.
+  is. The caller restores `:opus_workers` when its test ends.
   """
   @spec route!(:scripted | :opus, [String.t()] | String.t()) :: :ok
   def route!(:scripted, refs) do
-    configured = Application.get_env(:cyfr, :workers)
-    Application.put_env(:cyfr, :workers, ScriptedWorker.workers(refs, configured))
+    configured = Application.get_env(:cyfr, :opus_workers)
+    Application.put_env(:cyfr, :opus_workers, ScriptedWorker.workers(refs, configured))
   end
 
   def route!(:opus, _refs) do
-    configured = Application.get_env(:cyfr, :workers, [])
+    configured = Application.get_env(:cyfr, :opus_workers, [])
     scripted = ScriptedWorker.service()
-    Application.put_env(:cyfr, :workers, Enum.reject(configured, &(&1[:id] == scripted)))
+    Application.put_env(:cyfr, :opus_workers, Enum.reject(configured, &(&1[:id] == scripted)))
   end
 
   # ---------------------------------------------------------------------------
@@ -583,12 +606,14 @@ defmodule Cyfr.Test.TwoServices do
   @doc """
   Admit a synthetic root under `authority`: a running row with the
   invocation reservation the authority's budget names, as a root's
-  admission mints it, and no guest. `opts[:cap]` is the reservation's cap
+  admission mints it, and no guest. The root records `ctx`'s origin, the
+  admission path the case models. `opts[:cap]` is the reservation's cap
   (default the budget's).
   """
   @spec root!(Sanctum.Context.t(), Authority.t(), keyword()) :: root()
   def root!(ctx, %Authority{budget: budget}, opts \\ []) do
     root_id = "exec_two_services_root_#{System.unique_integer([:positive])}"
+    {:ok, grant} = Sanctum.ExecutionStanding.capture(ctx)
 
     {:ok, %{attempt: attempt}} =
       Arca.Execution.admit(
@@ -597,9 +622,12 @@ defmodule Cyfr.Test.TwoServices do
           reference: "#{AuthorityFixtures.formula_ref()}:1.0.0",
           user_id: ctx.user_id,
           athanor_id: ctx.athanor_id,
-          component_type: "formula"
+          component_type: "formula",
+          origin: ctx.origin
         },
-        reservation: %{budget_id: budget.id, cap: Keyword.get(opts, :cap, budget.cap)}
+        reservation: %{budget_id: budget.id, cap: Keyword.get(opts, :cap, budget.cap)},
+        grant: grant,
+        verify: &Sanctum.ExecutionStanding.verify/1
       )
 
     %{id: root_id, attempt: attempt.attempt}
@@ -616,7 +644,7 @@ defmodule Cyfr.Test.TwoServices do
   @spec spawn_child!(Sanctum.Context.t(), Authority.t(), root(), String.t(), map(), keyword()) ::
           {{:ok, map()} | {:error, term()}, String.t()}
   def spawn_child!(ctx, %Authority{} = authority, root, reference, input, opts \\ []) do
-    child_id = Keyword.get_lazy(opts, :execution_id, &Cyfr.UUID7.execution_id/0)
+    child_id = Keyword.get_lazy(opts, :execution_id, &Prima.UUID7.execution_id/0)
 
     charge = %{
       id: "call:t:1:c#{System.unique_integer([:positive])}:g0",
@@ -626,7 +654,7 @@ defmodule Cyfr.Test.TwoServices do
     }
 
     result =
-      Cyfr.Execution.run_child(authority, reference, nil, input,
+      Crucible.run_child(authority, reference, nil, input,
         ctx: ctx,
         execution_id: child_id,
         parent_execution_id: root.id,
@@ -713,12 +741,12 @@ defmodule Cyfr.Test.TwoServices do
   @spec plan!(atom(), [atom()]) :: :ok
   def plan!(callback, actions) do
     wire = watch!()
-    Wire.plan(wire, Cyfr.WorkerWire.host_route(callback), actions)
+    Wire.plan(wire, Prima.WorkerWire.host_route(callback), actions)
   end
 
   @doc "What the suite's wire did with each call of `callback`, in order."
   @spec seen(atom()) :: [atom()]
-  def seen(callback), do: Wire.seen(wire(), Cyfr.WorkerWire.host_route(callback))
+  def seen(callback), do: Wire.seen(wire(), Prima.WorkerWire.host_route(callback))
 
   @doc """
   Hold each host call of `callback` that `which` accepts — an execution
@@ -751,7 +779,7 @@ defmodule Cyfr.Test.TwoServices do
         true
 
       fun when is_function(fun, 2) ->
-        fun.(Arca.Repo.get(Arca.Execution, id), call)
+        fun.(Arca.Repo.get(Arca.Schemas.Execution, id), call)
 
       _other ->
         false
@@ -778,7 +806,7 @@ defmodule Cyfr.Test.TwoServices do
         authority_of(token)
 
       %{callback: :admit_child, answer: %{"ok" => %{"assignment" => token}}} ->
-        case Cyfr.Assignment.read(token) do
+        case Prima.Assignment.read(token) do
           {:ok, %{execution_id: ^execution_id}} -> authority_of(token)
           _ -> nil
         end
@@ -789,7 +817,7 @@ defmodule Cyfr.Test.TwoServices do
   end
 
   defp authority_of(token) do
-    {:ok, assignment} = Cyfr.Assignment.read(token)
+    {:ok, assignment} = Prima.Assignment.read(token)
     {:ok, authority} = Authority.from_wire(assignment.authority)
     authority
   end

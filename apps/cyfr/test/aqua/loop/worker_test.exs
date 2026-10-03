@@ -6,7 +6,7 @@ defmodule Aqua.Loop.WorkerTest do
 
   use ExUnit.Case, async: false
 
-  import Cyfr.Test.Wait
+  import Prima.Test.Wait
 
   alias Aqua.Loop.Worker
 

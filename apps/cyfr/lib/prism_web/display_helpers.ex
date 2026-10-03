@@ -37,13 +37,14 @@ defmodule PrismWeb.DisplayHelpers do
 
   def principal_label(author) when is_binary(author) do
     cond do
-      author == Cyfr.Author.system() -> "System"
-      author == Cyfr.Author.agent() -> "AQUA"
+      author == Prima.Author.system() -> "System"
+      author == Prima.Author.agent() -> "AQUA"
       true -> PrismWeb.People.label(author, nil)
     end
   end
 
-  def principal_label(other), do: inspect(other)
+  # Not a principal this console names: a label, never a term's spelling.
+  def principal_label(_other), do: "Unknown"
 
   @doc """
   Truncate a value for a table cell: at most `max` characters plus an

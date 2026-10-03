@@ -8,7 +8,7 @@ defmodule Aqua.AgentConfig do
   The soul's and the roles' definitions, as a turn reads them.
 
   Reads are in-process: `roster/1` and `agent/2` read the athanor's
-  `aqua/` tree through `Compendium.AquaAgent` — the same files the `aqua`
+  `aqua/` tree through the `Compendium` facade — the same files the `aqua`
   tool serves, without the tool's round trip — and answer string-keyed
   maps in the tool's own projection, so a consumer reads one key spelling
   whether a definition came from here or over the wire. Every write, and
@@ -19,8 +19,6 @@ defmodule Aqua.AgentConfig do
   definitions from those results with `role_definitions/4`.
   """
 
-  alias Compendium.AquaAgent
-  alias Compendium.AquaPath
   alias Sanctum.Context
 
   # The authored tool_policy is edited on the AQUA page. Chat approvals are
@@ -29,10 +27,10 @@ defmodule Aqua.AgentConfig do
   # What a storage fault reads as on the tape: the adapter's term is for
   # the log, the person gets the one sentence every storage-backed answer
   # gives.
-  @unavailable {:unavailable, "The estate's AQUA tree"}
+  @unavailable {:unavailable, "The athanor's AQUA tree"}
 
   @doc """
-  The estate's agents, read once: the soul first, then the roles by name,
+  The athanor's agents, read once: the soul first, then the roles by name,
   disabled ones dropped — each as the string-keyed map the `aqua` tool's
   `list` with `detail` answers (`"name"`, `"title"`, `"description"`,
   `"type"`, `"content"`, `"tool_policy"`, `"catalyst_ref"`, `"model"`).
@@ -41,10 +39,10 @@ defmodule Aqua.AgentConfig do
   `{:error, {:unavailable, _}}`, never an empty roster a turn would
   quietly run without a crew. A single file that fails to parse is skipped
   and logged — one broken role must not take the soul down
-  (`Compendium.AquaAgent.list/1`).
+  (`Compendium.agents/1`).
 
-  The read is also where an estate gets its bundle on first need
-  (`Sanctum.Provisioning.start_provisioning/1`): a group estate is minted
+  The read is also where an athanor gets its bundle on first need
+  (`Sanctum.Provisioning.start_provisioning/1`): a group athanor is minted
   as a bare row and filled the first time something reads it, and a turn
   roots an authority in that bundle right after this read. The `aqua`
   tool hooks its own reads the same way for callers outside the harness.
@@ -53,7 +51,7 @@ defmodule Aqua.AgentConfig do
   def roster(%Context{} = ctx) do
     Sanctum.Provisioning.start_provisioning(ctx)
 
-    case AquaAgent.list(ctx) do
+    case Compendium.agents(ctx) do
       {:ok, agents, errors} ->
         Enum.each(errors, fn {name, reason} ->
           Logger.warning(
@@ -78,10 +76,10 @@ defmodule Aqua.AgentConfig do
   """
   @spec agent(Context.t(), String.t()) :: {:ok, map()} | {:error, term()}
   def agent(%Context{} = ctx, name) when is_binary(name) do
-    if AquaPath.valid_name?(name) do
+    if Compendium.valid_agent_name?(name) do
       Sanctum.Provisioning.start_provisioning(ctx)
 
-      with {:ok, agent} <- AquaAgent.get(ctx, name), do: {:ok, project(agent)}
+      with {:ok, agent} <- Compendium.agent(ctx, name), do: {:ok, project(agent)}
     else
       {:error, :not_found}
     end
@@ -94,7 +92,7 @@ defmodule Aqua.AgentConfig do
       "name" => agent.name,
       "title" => agent.title,
       "description" => agent.description,
-      "type" => AquaAgent.type_of(agent),
+      "type" => Compendium.agent_type_of(agent),
       "content" => agent.prompt,
       "tool_policy" => agent.tool_policy,
       "catalyst_ref" => agent.catalyst_ref,
@@ -106,13 +104,13 @@ defmodule Aqua.AgentConfig do
   @doc """
   The role definitions a turn hands the formula — every role in `roster`
   (the tree the running agent lives in, read once by the caller), flat: a
-  role has no roles of its own, and a soul spawns every role its estate
-  keeps. An estate's soul reads its own tree and a person's agent theirs,
-  so an estate's soul can never clone into a role that lives in someone's
+  role has no roles of its own, and a soul spawns every role its athanor
+  keeps. An athanor's soul reads its own tree and a person's agent theirs,
+  so an athanor's soul can never clone into a role that lives in someone's
   private tree.
 
-  `listing` is the WORKING estate's catalyst listing
-  (`catalyst_listing/1`): components belong to the estate the turn runs
+  `listing` is the WORKING athanor's catalyst listing
+  (`catalyst_listing/1`): components belong to the athanor the turn runs
   in, not to the agent's owner, so a role's own catalyst resolves against
   it and falls back to the parent's when it does not.
 
@@ -126,7 +124,7 @@ defmodule Aqua.AgentConfig do
   @spec role_definitions([map()], [map()], String.t() | nil, String.t() | nil, map()) :: [map()]
   def role_definitions(roster, listing, fallback_catalyst, fallback_model, role_grants \\ %{})
       when is_list(roster) and is_list(listing) and is_map(role_grants) do
-    role_type = AquaAgent.role_type()
+    role_type = Compendium.agent_role_type()
 
     for %{"type" => ^role_type, "name" => name} = role <- roster do
       {catalyst_ref, model} =
@@ -182,66 +180,6 @@ defmodule Aqua.AgentConfig do
   end
 
   @doc """
-  For each agent's catalyst: the installed release it resolves to and
-  whether its consent is complete — `%{catalyst_ref => {:ready | :needs_key
-  | :missing, resolved_ref}}`.
-
-  A model with no key is the one thing that keeps a fresh athanor's AQUA
-  silent, so both the AQUA page and the chat's own empty state ask here.
-  """
-  @spec model_status(Context.t() | nil, [map()]) :: %{String.t() => {atom(), String.t()}}
-  def model_status(nil, _agents), do: %{}
-
-  def model_status(%Context{} = ctx, agents) when is_list(agents) do
-    listing =
-      case catalyst_listing(ctx) do
-        {:ok, components} -> components
-        _ -> []
-      end
-
-    soul_type = AquaAgent.soul_type()
-
-    agents
-    |> Enum.filter(&(&1["type"] == soul_type))
-    |> Enum.map(& &1["catalyst_ref"])
-    |> Enum.filter(&(is_binary(&1) and &1 != ""))
-    |> Enum.uniq()
-    |> Map.new(fn ref -> {ref, catalyst_status(ctx, listing, ref)} end)
-  end
-
-  # A model is ready when its own profile binds a key AND the assistant's
-  # consent selects that profile on its edge to the catalyst — the key
-  # the assistant actually runs it with, resolved as a turn would resolve
-  # it. A bound key the assistant's edge does not select is still a key
-  # to connect.
-  defp catalyst_status(ctx, listing, ref) do
-    with {:ok, resolved} <- find_matching_catalyst(listing, ref),
-         {:ok, plan} <-
-           Aqua.Ops.call_tool("component", ctx, %{
-             "action" => "setup_plan",
-             "reference" => resolved
-           }) do
-      if (plan[:ready] || plan["ready"]) == true and lent_to_assistant?(ctx, ref),
-        do: {:ready, resolved},
-        else: {:needs_key, resolved}
-    else
-      _ -> {:missing, ref}
-    end
-  end
-
-  defp lent_to_assistant?(ctx, catalyst_ref) do
-    soul = Compendium.AgentSource.soul_ref()
-
-    with {:ok, authority} <- Cyfr.Execution.authority_for(ctx, :default, soul),
-         {:ok, edge} <-
-           Cyfr.Authority.Blob.lookup_edge(authority.policy, soul, catalyst_ref, "") do
-      Cyfr.Authority.Blob.bound_vault?(edge.vault)
-    else
-      _ -> false
-    end
-  end
-
-  @doc """
   The installed release a versionless catalyst ref resolves to in
   `listing` — the newest by semver precedence, never lexicographic max
   ("10.0.0" outranks "9.0.0").
@@ -288,7 +226,7 @@ defmodule Aqua.AgentConfig do
       components
       |> Enum.filter(fn c -> String.starts_with?(c["component_ref"] || "", prefix) end)
       # Semver precedence, not lexicographic max — "10.0.0" outranks "9.0.0".
-      |> Compendium.Semver.sort_desc_by(fn c -> c["version"] || "0" end)
+      |> Prima.Semver.sort_desc_by(fn c -> c["version"] || "0" end)
       |> List.first()
 
     case match do
@@ -336,7 +274,7 @@ defmodule Aqua.AgentConfig do
   @doc """
   The AUTHORED prompt of one agent, read from the tree `ctx` is focused
   on. What a turn is finally told — the runtime section, the approval
-  prelude, whose estate it is working in — is `Aqua.Prompt.compose/2`'s,
+  prelude, whose athanor it is working in — is `Aqua.Prompt.compose/2`'s,
   so exactly one place decides what the model is claimed to be able to
   do; a turn that already holds the roster hands the composer the prompt
   and never comes here.

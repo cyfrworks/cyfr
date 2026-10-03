@@ -1,0 +1,46 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 CYFR Works Inc.
+
+defmodule CyfrWeb.ErrorRenderer do
+  @moduledoc """
+  How an ingress plug says no.
+
+  `Plugs.Authenticate`, `Plugs.FrameRequest`, `Plugs.MCPOrigin` and
+  `Plugs.MCPRateLimit` decide *whether* to reject a request; the pipeline
+  they are mounted in decides what the rejection looks like on the wire. The
+  MCP endpoint answers in JSON-RPC (`Emissary.Web.MCPError`); an ordinary
+  HTTP route answers in plain JSON (`CyfrWeb.ApiError`).
+
+  Splitting it this way is what stops the two from drifting apart: one
+  implementation of "is this caller who they say they are", two renderings. The
+  alternative — a second copy of the credential logic for routes that do not
+  speak JSON-RPC — is how an endpoint ends up answering a bad token with a
+  JSON-RPC envelope carrying a null id, which is what `/api/executions/:id/events`
+  did while it shared the MCP pipeline.
+
+  `code` is the refusal: a reason term or a `%Prima.Refusal{}`. Each renderer
+  maps it to whatever its wire format calls an error code — its class for
+  `ApiError`, its JSON-RPC code for `MCPError`, which also takes a code name
+  from `Prima.MCP.Message`'s tables as itself.
+
+  The full rejection vocabulary, for every surface:
+
+    * **`Emissary.Web.MCPError`** — `/mcp` and anything else speaking
+      JSON-RPC. Every deliberate rejection is a JSON-RPC error object.
+    * **`CyfrWeb.ApiError`** — every *deliberate* rejection on an
+      ordinary HTTP route: `{"code": class, "message": sentence}`, one
+      shape whether the refusal came from a plug or a controller.
+    * **`CyfrWeb.ErrorJSON`** — *unhandled* errors only: an exception
+      nobody rescued, a route nobody defined. Phoenix renders it; no code
+      in this repo calls it. A deliberate rejection rendered through
+      ErrorJSON is a bug — it means a refusal is masquerading as a crash.
+  """
+
+  @doc "Render an error body and set the status."
+  @callback send(Plug.Conn.t(), non_neg_integer(), term(), String.t() | nil) ::
+              Plug.Conn.t()
+
+  @doc "Render an error and halt the pipeline."
+  @callback halt(Plug.Conn.t(), non_neg_integer(), term(), String.t() | nil) ::
+              Plug.Conn.t()
+end

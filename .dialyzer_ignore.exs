@@ -8,47 +8,44 @@
 [
   {"lib/arca/adapters/s3.ex", :call_without_opaque},
   {"lib/arca/consent_storage.ex", :call_without_opaque},
+  # prepare_transaction/2 receives `fun | Ecto.Multi.t()`; the Multi clause is
+  # the non-fun fall-through and Dialyzer cannot narrow the union past the
+  # guard, so the append of the opaque Multi reads as a non-opaque call.
+  {"lib/arca/repo.ex", :call_without_opaque},
   {"lib/arca/repo/errors.ex", :pattern_match},
   {"lib/arca/usage.ex", :pattern_match},
   {"lib/compendium/component.ex", :guard_fail},
   {"lib/compendium/dependency_resolver.ex", :call_without_opaque},
-  {"lib/compendium/mcp/component_tool.ex", :guard_fail},
-  {"lib/compendium/mcp/component_tool.ex", :pattern_match_cov},
-  {"lib/compendium/oci/client.ex", :pattern_match_cov},
+  {"lib/compendium/providers/component.ex", :guard_fail},
+  {"lib/compendium/providers/component.ex", :pattern_match_cov},
   {"lib/compendium/provenance.ex", :extra_range},
   {"lib/compendium/registry/client.ex", :pattern_match_cov},
   {"lib/compendium/registry/credential_store.ex", :pattern_match_cov},
-  {"lib/cyfr/execution/events/sequence.ex", :missing_range},
-  {"lib/cyfr/json_formatter.ex", :unknown_type},
+  {"lib/crucible/events/sequence.ex", :missing_range},
+  {"lib/prima/json_formatter.ex", :unknown_type},
   {"lib/cyfr/retention_scheduler.ex", :pattern_match},
-  {"lib/emissary/mcp/tools/records_provider.ex", :guard_fail},
-  {"lib/emissary/mcp/tools/records_provider.ex", :pattern_match},
-  {"lib/emissary/mcp/tools/system_provider.ex", :pattern_match_cov},
-  {"lib/emissary_web/controllers/auth_controller.ex", :pattern_match_cov},
-  {"lib/emissary_web/plugs/verify_webhook_signature.ex", :pattern_match},
-  {"lib/emissary_web/plugs/verify_webhook_signature.ex", :pattern_match_cov},
-  {"lib/emissary_web/plugs/webhook_rate_limit.ex", :pattern_match},
-  {"lib/emissary_web/sse.ex", :missing_range},
+  {"lib/cyfr_web/plugs/verify_webhook_signature.ex", :pattern_match},
+  {"lib/cyfr_web/plugs/verify_webhook_signature.ex", :pattern_match_cov},
+  {"lib/cyfr_web/sse.ex", :missing_range},
   # The step bench's harness, `Cyfr.Test.StepBench`, is test support: it is
   # compiled only under MIX_ENV=test, the one environment the task runs in.
   {"lib/mix/tasks/cyfr.bench.step.ex", :unknown_function},
   {"lib/opus/component_cache.ex", :unknown_type},
   {"lib/opus/formula_handler.ex", :missing_range},
-  {"lib/opus/http_handler.ex", :pattern_match},
-  {"lib/opus/http_handler.ex", :pattern_match_cov},
   {"lib/opus/runtime.ex", :call},
   {"lib/opus/runtime.ex", :extra_range},
   {"lib/opus/runtime.ex", :pattern_match},
+  {"lib/prism_web/controllers/auth_controller.ex", :pattern_match_cov},
   {"lib/prism_web/controllers/legal_accept_controller.ex", :pattern_match_cov},
-  {"lib/prism_web/minimal_page.ex", :extra_range},
+  {"lib/cyfr_web/minimal_page.ex", :extra_range},
   {"lib/sanctum/auth/device_flow.ex", :pattern_match},
-  {"lib/cyfr/cidr.ex", :pattern_match_cov},
+  {"lib/prima/cidr.ex", :pattern_match_cov},
   {"lib/sanctum/consent/shape_diff.ex", :guard_fail},
-  {"lib/cyfr/jcs.ex", :no_return},
-  {"lib/sanctum/mcp/key_tool.ex", :guard_fail},
-  {"lib/sanctum/mcp/session_tool.ex", :guard_fail},
-  {"lib/sanctum/mcp/webhook_tool.ex", :pattern_match},
-  {"lib/sanctum/mcp/webhook_tool.ex", :pattern_match_cov},
+  {"lib/prima/jcs.ex", :no_return},
+  {"lib/sanctum/providers/key.ex", :guard_fail},
+  {"lib/sanctum/providers/session.ex", :guard_fail},
+  {"lib/sanctum/providers/webhook.ex", :pattern_match},
+  {"lib/sanctum/providers/webhook.ex", :pattern_match_cov},
   {"lib/sanctum/session.ex", :extra_range},
   {"lib/sanctum/sign_in.ex", :missing_range},
   # Three opaque-term warnings dialyxir cannot classify: its own formatter
@@ -59,10 +56,5 @@
   # noise from the loose `%__MODULE__{}` schema types, not a defect.
   ~r{lib/arca/adapters/s3\.ex:\d+:\d+:.*opaque},
   ~r{lib/compendium/dependency_resolver\.ex:\d+:\d+:.*opaque},
-  ~r{lib/emissary_web/controllers/mcp_controller\.ex:\d+:\d+:.*opaque},
-  # `Sanctum.Provisioning.held/3` answers whatever the closure it holds the
-  # claim for answers, and the seed sync's closure answers `:ok`. Dialyzer
-  # types a private function once, over every caller, so it reads that `:ok`
-  # into the two entry points whose closures cannot answer it. Matched by
-  # function, so any other missing range in the file still reports.
+  ~r{lib/emissary/web/controllers/mcp_controller\.ex:\d+:\d+:.*opaque}
 ]

@@ -9,7 +9,7 @@ defmodule PrismWeb.FileController do
 
   The session cookie names the person; the URL's athanor is focused the
   way a LiveView mount focuses it (so a non-member gets nothing); the
-  path is resolved by `Cyfr.Files.locate/1`, so only a shown folder can
+  path is resolved by `Arca.Files.locate/2`, so only a shown folder can
   be named and the server's own storage has no address. What comes back
   is a download with a content type from a short allowlist (anything
   else is `application/octet-stream`), `nosniff`, and no caching.
@@ -24,11 +24,11 @@ defmodule PrismWeb.FileController do
   @inline_types ~w(image/png image/jpeg image/gif image/webp application/pdf text/plain text/csv text/markdown application/json)
 
   def show(conn, %{"athanor" => route, "path" => segments}) when is_list(segments) do
-    token = get_session(conn, PrismWeb.SignInResponse.session_key())
+    token = get_session(conn, CyfrWeb.SignInResponse.session_key())
 
     with {:ok, athanor} <- Athanors.by_route_slug(route),
          {:ok, ctx} <- authenticate(token, athanor.id),
-         {:ok, physical} <- located(Enum.join(segments, "/")) do
+         {:ok, physical} <- located(ctx, Enum.join(segments, "/")) do
       name = List.last(segments)
 
       conn
@@ -49,14 +49,14 @@ defmodule PrismWeb.FileController do
   # A session refusal is rendered by its disposition; a path the tree does
   # not show is simply not found, whatever the reason.
   defp authenticate(token, athanor_id) do
-    case PrismWeb.AuthHelpers.authenticate_session(token, athanor_id) do
+    case CyfrWeb.ContextGuard.authenticate(token, athanor_id) do
       {:ok, ctx} -> {:ok, ctx}
       {:error, refusal} -> PrismWeb.AuthHelpers.disposition(refusal)
     end
   end
 
-  defp located(path) do
-    case Cyfr.Files.locate(path) do
+  defp located(ctx, path) do
+    case Arca.Files.locate(Sanctum.Context.actor(ctx), path) do
       {:ok, physical, _tier} -> {:ok, physical}
       {:error, _} -> :not_found
     end
@@ -71,11 +71,11 @@ defmodule PrismWeb.FileController do
 
   defp serve_type(name) do
     type = MIME.from_path(name)
-    if type in @inline_types, do: type, else: Cyfr.MediaType.binary()
+    if type in @inline_types, do: type, else: Prima.MediaType.binary()
   end
 
   defp disposition(name) do
-    safe = name |> Aqua.Attachments.strip_controls() |> String.replace(~r/["\\]/, "")
+    safe = name |> Aqua.strip_attachment_name() |> String.replace(~r/["\\]/, "")
 
     if safe == name do
       ~s(attachment; filename="#{safe}")

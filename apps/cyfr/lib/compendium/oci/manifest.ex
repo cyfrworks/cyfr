@@ -22,8 +22,8 @@ defmodule Compendium.OCI.Manifest do
   @readme_media_type "application/vnd.cyfr.readme.v1+markdown"
   @source_media_type "application/vnd.cyfr.source.v1.tar+gzip"
 
-  # Derive OCI media types from Cyfr.ComponentRef.valid_types/0.
-  @type_media_types Map.new(Cyfr.ComponentRef.valid_types(), fn
+  # Derive OCI media types from Prima.ComponentRef.valid_types/0.
+  @type_media_types Map.new(Prima.ComponentRef.valid_types(), fn
                       "tincture" -> {"tincture", "application/vnd.cyfr.tincture.v1.tar+gzip"}
                       type -> {type, "application/vnd.cyfr.#{type}.v1+wasm"}
                     end)
@@ -131,7 +131,7 @@ defmodule Compendium.OCI.Manifest do
 
       case Jason.encode(manifest) do
         {:ok, manifest_json} -> {:ok, manifest_json, config_digest, wasm_digest}
-        {:error, reason} -> {:error, "Failed to encode manifest: #{inspect(reason)}"}
+        {:error, reason} -> {:error, "Failed to encode manifest: #{Exception.message(reason)}"}
       end
     end
   end
@@ -175,7 +175,7 @@ defmodule Compendium.OCI.Manifest do
         {:error, "Manifest missing schemaVersion"}
 
       {:error, reason} ->
-        {:error, "Invalid manifest JSON: #{inspect(reason)}"}
+        {:error, "Invalid manifest JSON: #{Exception.message(reason)}"}
     end
   end
 
@@ -283,15 +283,15 @@ defmodule Compendium.OCI.Manifest do
     }
 
     base
-    |> Cyfr.MapUtil.put_present(
+    |> Prima.MapUtil.put_present(
       "org.opencontainers.image.description",
       metadata[:description] || metadata["description"]
     )
-    |> Cyfr.MapUtil.put_present(
+    |> Prima.MapUtil.put_present(
       "org.opencontainers.image.licenses",
       metadata[:license] || metadata["license"]
     )
-    |> Cyfr.MapUtil.put_present(
+    |> Prima.MapUtil.put_present(
       "dev.cyfr.component.category",
       metadata[:category] || metadata["category"]
     )
@@ -302,7 +302,7 @@ defmodule Compendium.OCI.Manifest do
   defp encode_config_json(m) when is_map(m) do
     case Jason.encode(m) do
       {:ok, json} -> {:ok, json}
-      {:error, reason} -> {:error, "Failed to encode config: #{inspect(reason)}"}
+      {:error, reason} -> {:error, "Failed to encode config: #{Exception.message(reason)}"}
     end
   end
 end

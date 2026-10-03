@@ -6,18 +6,40 @@ defmodule Arca.ComponentStorage do
   Storage operations for component registry metadata.
 
   Provides CRUD operations for the `components` table via the
-  `Arca.Schemas.Component` schema. Reads return `%Arca.Schemas.Component{}`
-  structs; the `Compendium` layer normalizes them into its own document
-  representation (which it also builds from remote-registry responses).
+  `Arca.Schemas.Component` schema. Reads return each row as a plain map
+  (`Arca.Data`); the `Compendium` layer normalizes them into its own
+  document representation (which it also builds from remote-registry
+  responses).
 
-  All public functions take a `%Cyfr.Actor{}` as the first argument
+  All public functions take a `%Prima.Actor{}` as the first argument
   to enforce tenant isolation via `where_tenant/3`.
+
+  The rows are the `components` root's projection: what the tree derives
+  is written by `replace_projection/3`, against a snapshot of that root,
+  and acknowledged in the same transaction. `put_component/2`,
+  `insert_component/2` and `delete_component/5` are the direct writes of
+  the ingresses whose rows the tree cannot derive (a publish, a pull) and
+  of an explicit removal.
   """
 
   import Ecto.Query
   import Arca.QueryHelpers, only: [where_tenant: 2]
 
   alias Arca.Schemas.Component
+  alias Arca.StorageProjectionChanges
+
+  @typedoc """
+  Which rows a projection removes: every row of one publisher, name and
+  version, narrowed to one `component_type` and to one `source` when
+  either is given.
+  """
+  @type removal :: %{
+          required(:publisher) => String.t(),
+          required(:name) => String.t(),
+          required(:version) => String.t(),
+          optional(:component_type) => String.t() | nil,
+          optional(:source) => String.t() | nil
+        }
 
   @doc """
   Get a component by name and version, with optional publisher and component_type filters.
@@ -27,7 +49,7 @@ defmodule Arca.ComponentStorage do
   def get_component(actor, name, version, publisher \\ nil, component_type \\ nil)
 
   def get_component(
-        %Cyfr.Actor{athanor_id: athanor_id} = actor,
+        %Prima.Actor{athanor_id: athanor_id} = actor,
         name,
         version,
         publisher,
@@ -60,7 +82,7 @@ defmodule Arca.ComponentStorage do
     end)
   end
 
-  def get_component(%Cyfr.Actor{}, _name, _version, _publisher, _component_type),
+  def get_component(%Prima.Actor{}, _name, _version, _publisher, _component_type),
     do: {:error, :no_athanor}
 
   @doc """
@@ -69,7 +91,7 @@ defmodule Arca.ComponentStorage do
   Returns `{:ok, row}` or `{:error, :not_found}`.
   This is a direct index lookup, avoiding O(n) scan of all components.
   """
-  def get_by_digest(%Cyfr.Actor{athanor_id: athanor_id} = actor, digest)
+  def get_by_digest(%Prima.Actor{athanor_id: athanor_id} = actor, digest)
       when is_binary(athanor_id) and athanor_id != "" and is_binary(digest) do
     query =
       from(c in Component, where: c.digest == ^digest, limit: 1)
@@ -83,7 +105,7 @@ defmodule Arca.ComponentStorage do
     end)
   end
 
-  def get_by_digest(%Cyfr.Actor{}, _digest), do: {:error, :no_athanor}
+  def get_by_digest(%Prima.Actor{}, _digest), do: {:error, :no_athanor}
 
   @doc """
   Save or update a component.
@@ -93,14 +115,14 @@ defmodule Arca.ComponentStorage do
   (`Compendium.Registry`), not the storage layer's. Ensures tenant fields from
   the context.
   """
-  def put_component(%Cyfr.Actor{athanor_id: athanor_id} = actor, attrs)
+  def put_component(%Prima.Actor{athanor_id: athanor_id} = actor, attrs)
       when is_binary(athanor_id) and athanor_id != "" and is_map(attrs) do
     attrs = attrs |> validate_source!() |> then(&ensure_tenant_fields(actor, &1))
 
     rescuing_db("put_component", fn -> do_put_component(attrs) end)
   end
 
-  def put_component(%Cyfr.Actor{}, _attrs), do: {:error, :no_athanor}
+  def put_component(%Prima.Actor{}, _attrs), do: {:error, :no_athanor}
 
   # arca:unscoped-ok the attrs arrive with the athanor set by the caller-facing entry (ensure_tenant_fields).
   defp do_put_component(attrs) do
@@ -136,6 +158,89 @@ defmodule Arca.ComponentStorage do
   end
 
   @doc """
+  Replace the rows the `components` root's projection derives, against
+  `token`, that root's snapshot (`Arca.StorageProjectionChanges.snapshot/3`):
+  in one transaction the rows each `delete:` removal names go, each
+  `put:` row is written (an upsert on its identity, as `put_component/2`),
+  and every unit the token names that is ready is acknowledged — the
+  root's epoch too, when all of them are. Removals are made before puts.
+
+  The transaction holds the root's row and the token's unit rows first
+  (`Arca.StorageProjectionChanges.replace/4`): a change the token did not
+  see — a unit created after the snapshot included — writes nothing and
+  answers `{:error, :generation_conflict}`, so the rows and their
+  acknowledgment commit together or not at all. A token of another
+  athanor is `{:error, :cross_tenant}`. Answers the rows written and the
+  rows removed, as they stood.
+  """
+  @spec replace_projection(
+          Prima.Actor.t(),
+          StorageProjectionChanges.token(),
+          %{put: [map()], delete: [removal()]}
+        ) ::
+          {:ok, %{put: [map()], deleted: [map()]}}
+          | {:error,
+             :no_athanor
+             | :cross_tenant
+             | :invalid_token
+             | :generation_conflict
+             | :database_error}
+  def replace_projection(
+        %Prima.Actor{athanor_id: athanor_id} = actor,
+        token,
+        %{put: puts, delete: removals}
+      )
+      when is_binary(athanor_id) and athanor_id != "" and is_map(token) and is_list(puts) and
+             is_list(removals) do
+    puts =
+      Enum.map(
+        puts,
+        &(&1 |> validate_source!() |> then(fn row -> ensure_tenant_fields(actor, row) end))
+      )
+
+    rescuing_db("replace_projection", fn ->
+      StorageProjectionChanges.replace(actor, "components", token, fn ->
+        deleted = Enum.flat_map(removals, &remove_matching!(actor, &1))
+        Enum.each(puts, &do_put_component/1)
+        %{put: puts, deleted: deleted}
+      end)
+    end)
+  end
+
+  def replace_projection(%Prima.Actor{}, _token, _rows), do: {:error, :no_athanor}
+
+  # The rows as they stood, then gone.
+  defp remove_matching!(actor, %{publisher: publisher, name: name, version: version} = removal) do
+    query =
+      from(c in Component,
+        where: c.publisher == ^publisher and c.name == ^name and c.version == ^version
+      )
+      |> where_tenant(actor)
+
+    query =
+      case Map.get(removal, :component_type) do
+        nil -> query
+        type -> from(c in query, where: c.component_type == ^type)
+      end
+
+    query =
+      case Map.get(removal, :source) do
+        nil -> query
+        source -> from(c in query, where: c.source == ^source)
+      end
+
+    case Arca.Repo.all(query) do
+      [] ->
+        []
+
+      rows ->
+        ids = Enum.map(rows, & &1.id)
+        Arca.Repo.delete_all(from(c in Component, where: c.id in ^ids) |> where_tenant(actor))
+        rows
+    end
+  end
+
+  @doc """
   Insert a new component, failing if it already exists.
 
   Uses `ON CONFLICT DO NOTHING` to atomically detect duplicates.
@@ -143,7 +248,7 @@ defmodule Arca.ComponentStorage do
   athanor/publisher/name/version/type combination already exists.
   """
   # arca:unscoped-ok ensure_tenant_fields/2 stamps the context's athanor onto the row before the write.
-  def insert_component(%Cyfr.Actor{athanor_id: athanor_id} = actor, attrs)
+  def insert_component(%Prima.Actor{athanor_id: athanor_id} = actor, attrs)
       when is_binary(athanor_id) and athanor_id != "" and is_map(attrs) do
     attrs = attrs |> validate_source!() |> then(&ensure_tenant_fields(actor, &1))
 
@@ -156,9 +261,9 @@ defmodule Arca.ComponentStorage do
     end)
   end
 
-  def insert_component(%Cyfr.Actor{}, _attrs), do: {:error, :no_athanor}
+  def insert_component(%Prima.Actor{}, _attrs), do: {:error, :no_athanor}
 
-  # The closed source roster (`Cyfr.ComponentSource.values/0`), enforced
+  # The closed source roster (`Prima.ComponentSource.values/0`), enforced
   # where rows are WRITTEN — an unrostered value would silently skew
   # provenance derivation and the signature verifier's fail-closed
   # branch. A raise, not a tuple: every legitimate ingress already
@@ -166,10 +271,10 @@ defmodule Arca.ComponentStorage do
   defp validate_source!(attrs) do
     source = Map.get(attrs, :source) || Map.get(attrs, "source")
 
-    unless source in Cyfr.ComponentSource.values() do
+    unless source in Prima.ComponentSource.values() do
       raise ArgumentError,
-            "unknown component source #{inspect(source)}; " <>
-              "the roster is #{inspect(Cyfr.ComponentSource.values())}"
+            "unknown component source #{Prima.LoggerContext.shape(source)}; " <>
+              "the roster is #{inspect(Prima.ComponentSource.values())}"
     end
 
     attrs
@@ -181,7 +286,7 @@ defmodule Arca.ComponentStorage do
   def delete_component(actor, name, version, publisher \\ nil, component_type \\ nil)
 
   def delete_component(
-        %Cyfr.Actor{athanor_id: athanor_id} = actor,
+        %Prima.Actor{athanor_id: athanor_id} = actor,
         name,
         version,
         publisher,
@@ -207,14 +312,14 @@ defmodule Arca.ComponentStorage do
     end)
   end
 
-  def delete_component(%Cyfr.Actor{}, _name, _version, _publisher, _component_type),
+  def delete_component(%Prima.Actor{}, _name, _version, _publisher, _component_type),
     do: {:error, :no_athanor}
 
   @doc """
   Check if any versions of a component exist for the given name, publisher, and tenant.
   Used during component removal to determine if name-level grants/policies should be cleaned up.
   """
-  def has_remaining_versions?(%Cyfr.Actor{athanor_id: athanor_id} = actor, name, publisher)
+  def has_remaining_versions?(%Prima.Actor{athanor_id: athanor_id} = actor, name, publisher)
       when is_binary(athanor_id) and athanor_id != "" and is_binary(name) and is_binary(publisher) do
     query =
       from(c in Component,
@@ -231,7 +336,7 @@ defmodule Arca.ComponentStorage do
     end)
   end
 
-  def has_remaining_versions?(%Cyfr.Actor{}, _name, _publisher),
+  def has_remaining_versions?(%Prima.Actor{}, _name, _publisher),
     do: Arca.QueryHelpers.no_athanor!("Arca.ComponentStorage.has_remaining_versions?/3")
 
   @doc """
@@ -249,7 +354,7 @@ defmodule Arca.ComponentStorage do
   """
   def list_components(actor, opts \\ [])
 
-  def list_components(%Cyfr.Actor{athanor_id: athanor_id} = actor, opts)
+  def list_components(%Prima.Actor{athanor_id: athanor_id} = actor, opts)
       when is_binary(athanor_id) and athanor_id != "" do
     limit = Keyword.get(opts, :limit, 100)
 
@@ -331,7 +436,7 @@ defmodule Arca.ComponentStorage do
     rescuing_db("list_components", fn -> {:ok, Arca.Repo.all(query)} end)
   end
 
-  def list_components(%Cyfr.Actor{}, _opts), do: {:error, :no_athanor}
+  def list_components(%Prima.Actor{}, _opts), do: {:error, :no_athanor}
 
   @doc """
   Check if a component exists by name and version, with optional publisher and component_type filters.
@@ -339,7 +444,7 @@ defmodule Arca.ComponentStorage do
   def exists?(actor, name, version, publisher \\ nil, component_type \\ nil)
 
   def exists?(
-        %Cyfr.Actor{athanor_id: athanor_id} = actor,
+        %Prima.Actor{athanor_id: athanor_id} = actor,
         name,
         version,
         publisher,
@@ -352,19 +457,23 @@ defmodule Arca.ComponentStorage do
     end
   end
 
-  def exists?(%Cyfr.Actor{}, _name, _version, _publisher, _component_type),
+  def exists?(%Prima.Actor{}, _name, _version, _publisher, _component_type),
     do: Arca.QueryHelpers.no_athanor!("Arca.ComponentStorage.exists?/5")
 
   # The row's athanor is the context's; a caller cannot write into another.
   # One spelling for the whole storage layer: Arca.QueryHelpers.stamp_tenant!/2.
-  defp ensure_tenant_fields(%Cyfr.Actor{} = actor, attrs),
+  defp ensure_tenant_fields(%Prima.Actor{} = actor, attrs),
     do: Arca.QueryHelpers.stamp_tenant!(actor, attrs)
 
   # One rescue for the module's typed-refusal contract: DB errors log with
   # the operation's name and answer `{:error, :database_error}`
   # (`has_remaining_versions?/3` uses the default-returning variant — its
   # fallback is `true`, not an error tuple).
+  # Every entry point answers through here, so a row leaves as the plain
+  # map `Arca.Data` projects.
   defp rescuing_db(op, fun) do
-    Arca.Repo.Errors.with_db_rescue("ComponentStorage.#{op}", fun)
+    "ComponentStorage.#{op}"
+    |> Arca.Repo.Errors.with_db_rescue(fun)
+    |> Arca.Data.project()
   end
 end

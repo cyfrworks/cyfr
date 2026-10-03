@@ -9,7 +9,7 @@ defmodule Emissary.AuthChainIntegrationTest do
   Verifies that permission-gated MCP tools correctly enforce authorization
   through the unified Context.authorize/2 path.
   """
-  use EmissaryWeb.ConnCase, async: false
+  use Emissary.Web.ConnCase, async: false
 
   setup do
     test_dir =
@@ -31,7 +31,7 @@ defmodule Emissary.AuthChainIntegrationTest do
 
     # Create an app key with only execute scope (no storage_read)
     {:ok, limited_key} =
-      Sanctum.ApiKey.create(ctx, %{
+      Sanctum.TestContext.create_key(ctx, %{
         name: "test-limited-key",
         type: :application,
         scope: ["execute"]
@@ -39,7 +39,7 @@ defmodule Emissary.AuthChainIntegrationTest do
 
     # Create an app key with execute + storage_read
     {:ok, reader_key} =
-      Sanctum.ApiKey.create(ctx, %{
+      Sanctum.TestContext.create_key(ctx, %{
         name: "test-reader-key",
         type: :application,
         scope: ["execute", "storage_read"]

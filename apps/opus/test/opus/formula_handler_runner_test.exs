@@ -22,9 +22,9 @@ defmodule Opus.FormulaHandlerRunnerTest do
 
   import Opus.Test.Wait
 
-  alias Cyfr.WorkerAuth
+  alias Prima.WorkerAuth
   alias Opus.FormulaHandler
-  alias Opus.Test.ScriptedHost
+  alias Opus.Test.{ScriptedHost, ScriptedKeeper}
 
   @moduletag :capture_log
 
@@ -64,14 +64,19 @@ defmodule Opus.FormulaHandlerRunnerTest do
       runner_id: @runner,
       service_id: ScriptedHost.service(),
       boot: @boot,
-      host_url: host.url,
       control_fd: fd,
+      relay: {:fd, 4},
       watchdog_grace_ms: 500
     }
+
+    # The runner's relay, whose service end the test binds to the root it
+    # assigns, as the worker service does.
+    %{endpoint: endpoint, relay: relay} = ScriptedKeeper.relay!(@runner)
 
     start_supervised!(
       {Opus.Runner,
        settings: settings,
+       relay: endpoint,
        supervisor: supervisor,
        name: Opus.Runner,
        halt: fn reason -> send(test, {:halted, reason}) end,
@@ -80,14 +85,17 @@ defmodule Opus.FormulaHandlerRunnerTest do
 
     # The runner's root, held at its artifact fetch: a runner starts a
     # child only while it runs a subtree.
-    Opus.Cache.invalidate({:compiled_component, Cyfr.Digest.sha256(@echo)})
+    Opus.Cache.invalidate({:compiled_component, Prima.Digest.sha256(@echo)})
     hold_artifacts!(host)
-    root = attempt!(host, component_type: :reagent, digest: Cyfr.Digest.sha256(@echo))
+    root = attempt!(host, component_type: :reagent, digest: Prima.Digest.sha256(@echo))
+
+    :ok =
+      Opus.Relay.bind(relay, %{assignment: root.assignment, keys: root.keys, host_url: host.url})
 
     :ok =
       :socket.send(
         service,
-        Cyfr.RunnerControl.encode(%{
+        Prima.RunnerControl.encode(%{
           type: :assign,
           assignment: root.assignment,
           input: root.input,
@@ -141,7 +149,7 @@ defmodule Opus.FormulaHandlerRunnerTest do
         attempt!(host,
           component_type: :reagent,
           component_ref: @child_ref,
-          digest: Cyfr.Digest.sha256(@echo),
+          digest: Prima.Digest.sha256(@echo),
           input: input
         )
 
@@ -160,7 +168,7 @@ defmodule Opus.FormulaHandlerRunnerTest do
 
   defp imports(formula) do
     FormulaHandler.build_formula_imports(formula.client,
-      limits: Cyfr.Limits.defaults(:formula),
+      limits: Prima.Limits.defaults(:formula),
       intercepted: ["execution.run", "execution.run_stream"]
     )
   end
@@ -221,7 +229,7 @@ defmodule Opus.FormulaHandlerRunnerTest do
 
       answer =
         FormulaHandler.execute(run_request(%{"a" => 2}), formula.client,
-          limits: Cyfr.Limits.defaults(:formula),
+          limits: Prima.Limits.defaults(:formula),
           intercepted: ["execution.run"]
         )
 
@@ -248,7 +256,7 @@ defmodule Opus.FormulaHandlerRunnerTest do
 
       answer =
         FormulaHandler.execute(run_request(%{}), formula.client,
-          limits: Cyfr.Limits.defaults(:formula),
+          limits: Prima.Limits.defaults(:formula),
           intercepted: ["execution.run"]
         )
 
@@ -271,7 +279,7 @@ defmodule Opus.FormulaHandlerRunnerTest do
         })
 
       answer =
-        FormulaHandler.execute(request, formula.client, limits: Cyfr.Limits.defaults(:formula))
+        FormulaHandler.execute(request, formula.client, limits: Prima.Limits.defaults(:formula))
 
       assert %{"status" => "completed", "output" => %{"results" => []}} = Jason.decode!(answer)
 
@@ -301,7 +309,7 @@ defmodule Opus.FormulaHandlerRunnerTest do
       request = Jason.encode!(%{"tool" => "component", "action" => "search", "args" => %{}})
 
       answer =
-        FormulaHandler.execute(request, formula.client, limits: Cyfr.Limits.defaults(:formula))
+        FormulaHandler.execute(request, formula.client, limits: Prima.Limits.defaults(:formula))
 
       assert %{"error" => %{"type" => "tool_denied"}} = Jason.decode!(answer)
 
@@ -364,7 +372,7 @@ defmodule Opus.FormulaHandlerRunnerTest do
 
       answer =
         FormulaHandler.execute(request, formula.client,
-          limits: Cyfr.Limits.defaults(:formula),
+          limits: Prima.Limits.defaults(:formula),
           intercepted: ["execution.run_stream"]
         )
 

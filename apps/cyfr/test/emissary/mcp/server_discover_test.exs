@@ -7,9 +7,9 @@ defmodule Emissary.MCP.ServerDiscoverTest do
   speaks. It has to answer before authentication and without establishing
   anything, or it cannot do that job.
   """
-  use EmissaryWeb.ConnCase, async: false
+  use Emissary.Web.ConnCase, async: false
 
-  alias Emissary.MCP.Protocol
+  alias Prima.MCP.Protocol
 
   defp discover(conn, id \\ 1) do
     conn

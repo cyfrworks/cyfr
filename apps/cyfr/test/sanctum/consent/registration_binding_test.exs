@@ -10,10 +10,9 @@ defmodule Sanctum.Consent.RegistrationBindingTest do
 
   @target "reagent:local.bind-target"
 
-  setup do
+  setup tags do
     Arca.Cache.init()
-    :ok = Ecto.Adapters.SQL.Sandbox.checkout(Arca.Repo)
-    Ecto.Adapters.SQL.Sandbox.mode(Arca.Repo, {:shared, self()})
+    Cyfr.Test.Sandbox.setup!(tags)
 
     ctx = %Context{
       user_id: "bind_user",
@@ -41,7 +40,7 @@ defmodule Sanctum.Consent.RegistrationBindingTest do
         invoke_mode: :open_inert,
         shape_digest: "sha256:shape-bind",
         commit_digest: "sha256:commit-bind",
-        blob_digest: Cyfr.JCS.hash_binary("{}"),
+        blob_digest: Prima.JCS.hash_binary("{}"),
         resolved_policy: "{}",
         activation: %{@target => "sha256:act"},
         vault_refs: []
@@ -150,7 +149,7 @@ defmodule Sanctum.Consent.RegistrationBindingTest do
       assert message =~ "profile binding refused"
 
       assert {:ok, created} =
-               Sanctum.Webhook.create(ctx, %{
+               Sanctum.TestContext.create_webhook(ctx, %{
                  name: "bound-hook",
                  replay_protection: "none",
                  target_ref: "#{@target}:1.0.0",
@@ -176,7 +175,7 @@ defmodule Sanctum.Consent.RegistrationBindingTest do
 
     test "webhook update cannot re-point to a profile without the class", %{ctx: ctx} do
       {:ok, _} =
-        Sanctum.Webhook.create(ctx, %{
+        Sanctum.TestContext.create_webhook(ctx, %{
           name: "plain-hook",
           replay_protection: "none",
           target_ref: "#{@target}:1.0.0",
@@ -196,8 +195,10 @@ defmodule Sanctum.Consent.RegistrationBindingTest do
     test "schedule create with a profile binding requires the consent class", %{ctx: ctx} do
       key_ctx = %{ctx | auth_method: :api_key}
 
-      assert {:error, message} =
-               Cyfr.Schedules.Provider.handle("schedule", key_ctx, %{
+      # The class refuses the key: the schedule tool answers the class's
+      # own refusal.
+      assert {:error, {:consent_class_required, _refusal}} =
+               Crucible.Schedules.Provider.handle("schedule", key_ctx, %{
                  "action" => "create",
                  "name" => "bound-sched",
                  "cron_expression" => "0 * * * *",
@@ -205,10 +206,8 @@ defmodule Sanctum.Consent.RegistrationBindingTest do
                  "profile_id" => "prof-bind"
                })
 
-      assert message =~ "profile binding refused"
-
       assert {:ok, created} =
-               Cyfr.Schedules.Provider.handle("schedule", ctx, %{
+               Crucible.Schedules.Provider.handle("schedule", ctx, %{
                  "action" => "create",
                  "name" => "bound-sched",
                  "cron_expression" => "0 * * * *",

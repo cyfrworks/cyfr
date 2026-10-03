@@ -83,7 +83,7 @@ defmodule Arca.Adapters.S3 do
 
   | situation | `put_if_none_match/3` | `put_if_match/4` |
   |---|---|---|
-  | nothing at the path | `{:ok, precondition}`, created | `{:error, :missing}`, nothing written (`404`) |
+  | nothing at the path | `{:ok, precondition}`, created | `{:error, :missing}`, nothing written (`404`, or a `412` behind which a `HEAD` finds no key) |
   | an object there, precondition current | `{:error, :exists}`, untouched (`412`) | `{:ok, precondition}`, replaced |
   | an object there, precondition stale | `{:error, :exists}`, untouched (`412`) | `{:error, :precondition_failed}`, untouched (`412`) |
   | the store cannot make the write conditional | `{:error, :unsupported}` (`501`) | `{:error, :unsupported}` (`501`) |
@@ -106,6 +106,14 @@ defmodule Arca.Adapters.S3 do
   MinIO, Cloudflare R2). `list_prefix/2` is the ListObjectsV2 prefix
   listing: every key under `prefix/` as full segments, `[prefix]` for a
   prefix that is one object, `[]` for nothing.
+
+  ## Staged content
+
+  `Arca.Storage.stage/3` writes an attempt's bytes once, at a key of their
+  own under `staging/`, and they never move: what publishes them is a
+  database reference (`Arca.FencedPublication`), as on a filesystem. The
+  staging sweep dates bytes no row names by `last_modified/2`, the
+  object's `Last-Modified`.
 
   ## Tree replacement
 
@@ -159,7 +167,7 @@ defmodule Arca.Adapters.S3 do
   @append_backoff_base_ms 20
 
   @impl true
-  def get(%Cyfr.Actor{} = actor, segments) do
+  def get(%Prima.Actor{} = actor, segments) do
     case request(:get, build_key(actor, segments)) do
       {:ok, %{status: 200, body: body}} -> {:ok, body}
       {:ok, %{status: 404}} -> {:error, :not_found}
@@ -169,7 +177,7 @@ defmodule Arca.Adapters.S3 do
   end
 
   @impl true
-  def put(%Cyfr.Actor{} = actor, segments, content) do
+  def put(%Prima.Actor{} = actor, segments, content) do
     Arca.Storage.refuse_seed_write!(segments)
 
     case request(:put, build_key(actor, segments), content) do
@@ -179,7 +187,7 @@ defmodule Arca.Adapters.S3 do
   end
 
   @impl true
-  def append(%Cyfr.Actor{} = actor, segments, content) do
+  def append(%Prima.Actor{} = actor, segments, content) do
     Arca.Storage.refuse_seed_write!(segments)
     append_attempt(actor, segments, IO.iodata_to_binary(content), 1)
   end
@@ -212,7 +220,7 @@ defmodule Arca.Adapters.S3 do
   end
 
   defp check_append_ceiling(existing, content) do
-    if byte_size(existing) + byte_size(content) > Cyfr.Limits.default_max_response_size(),
+    if byte_size(existing) + byte_size(content) > Prima.Limits.default_max_response_size(),
       do: {:error, :object_too_large},
       else: :ok
   end
@@ -233,7 +241,7 @@ defmodule Arca.Adapters.S3 do
   and the proof of what was read are one round trip.
   """
   @impl true
-  def get_for_update(%Cyfr.Actor{} = actor, segments),
+  def get_for_update(%Prima.Actor{} = actor, segments),
     do: versioned_read("get_for_update", actor, segments)
 
   # An object read without an ETag cannot be written back conditionally,
@@ -266,7 +274,7 @@ defmodule Arca.Adapters.S3 do
     do: put_if_none_match(actor, segments, merged)
 
   defp write_for_append(actor, segments, merged, etag),
-    do: put_if_match(actor, segments, merged, etag)
+    do: if_match(build_key(actor, segments), merged, etag)
 
   # Doubling from the base, with jitter so the losers of one round do not
   # collide again in the next.
@@ -281,7 +289,7 @@ defmodule Arca.Adapters.S3 do
   states the result vocabulary.
   """
   @impl true
-  def put_if_none_match(%Cyfr.Actor{} = actor, segments, content) do
+  def put_if_none_match(%Prima.Actor{} = actor, segments, content) do
     Arca.Storage.refuse_seed_write!(segments)
     key = build_key(actor, segments)
 
@@ -294,11 +302,43 @@ defmodule Arca.Adapters.S3 do
   result vocabulary.
   """
   @impl true
-  def put_if_match(%Cyfr.Actor{} = actor, segments, content, precondition) do
+  def put_if_match(%Prima.Actor{} = actor, segments, content, precondition) do
     Arca.Storage.refuse_seed_write!(segments)
     key = build_key(actor, segments)
 
     if etag_shaped?(precondition) do
+      case replace(key, content, precondition) do
+        {:error, :precondition_failed} -> failed_precondition(key)
+        answer -> answer
+      end
+    else
+      unsendable(key)
+    end
+  end
+
+  # A store may refuse a conditional replace of a key that holds nothing
+  # with a `412` rather than a `404` (MinIO does, for a key that never
+  # existed), and the shared vocabulary names that case `:missing`: a
+  # `HEAD` that finds no key answers it. Nothing was written either way,
+  # and a `HEAD` that cannot answer leaves the refusal as it was.
+  defp failed_precondition(key) do
+    case request(:head, key) do
+      {:ok, %{status: 404}} -> {:error, :missing}
+      _present_or_unanswered -> {:error, :precondition_failed}
+    end
+  end
+
+  # The conditional replace as the store answers it. An append retries any
+  # definite conflict alike, so it writes through this and spends no
+  # `HEAD` on telling them apart.
+  defp if_match(key, content, precondition) do
+    if etag_shaped?(precondition),
+      do: replace(key, content, precondition),
+      else: unsendable(key)
+  end
+
+  defp replace(key, content, precondition),
+    do:
       conditional_put(
         "put_if_match",
         key,
@@ -306,15 +346,15 @@ defmodule Arca.Adapters.S3 do
         {"if-match", precondition},
         :precondition_failed
       )
-    else
-      # Not a value this adapter minted, and not one a header can carry:
-      # it matches no object, so only the key's presence is in question.
-      case request(:head, key) do
-        {:ok, %{status: 200}} -> {:error, :precondition_failed}
-        {:ok, %{status: 404}} -> {:error, :missing}
-        {:ok, %{status: status, body: body}} -> log_and_error("put_if_match", status, body)
-        {:error, reason} -> log_and_error("put_if_match", reason)
-      end
+
+  # Not a value this adapter minted, and not one a header can carry: it
+  # matches no object, so only the key's presence is in question.
+  defp unsendable(key) do
+    case request(:head, key) do
+      {:ok, %{status: 200}} -> {:error, :precondition_failed}
+      {:ok, %{status: 404}} -> {:error, :missing}
+      {:ok, %{status: status, body: body}} -> log_and_error("put_if_match", status, body)
+      {:error, reason} -> log_and_error("put_if_match", reason)
     end
   end
 
@@ -400,14 +440,61 @@ defmodule Arca.Adapters.S3 do
   `prefix/`, `[prefix]` for a prefix that is one object, `[]` for nothing.
   """
   @impl true
-  def list_prefix(%Cyfr.Actor{} = actor, prefix) do
+  def list_prefix(%Prima.Actor{} = actor, prefix) do
     with {:ok, []} <- list_recursive(actor, prefix) do
       if exists?(actor, prefix), do: {:ok, [prefix]}, else: {:ok, []}
     end
   end
 
+  @doc """
+  The object's `Last-Modified` (`c:Arca.Storage.last_modified/2`): the
+  store's own clock, read with a `HEAD`. A header the store sent in no
+  HTTP-date form answers `{:error, :unreadable_last_modified}`, so a
+  caller dating bytes by it keeps them.
+  """
   @impl true
-  def delete(%Cyfr.Actor{} = actor, segments) do
+  def last_modified(%Prima.Actor{} = actor, segments) do
+    case request(:head, build_key(actor, segments)) do
+      {:ok, %{status: 200} = response} ->
+        with [value | _] <- Req.Response.get_header(response, "last-modified"),
+             {:ok, at} <- http_date(value) do
+          {:ok, at}
+        else
+          _ -> {:error, :unreadable_last_modified}
+        end
+
+      {:ok, %{status: 404}} ->
+        {:error, :not_found}
+
+      {:ok, %{status: status, body: body}} ->
+        log_and_error("last_modified", status, body)
+
+      {:error, reason} ->
+        log_and_error("last_modified", reason)
+    end
+  end
+
+  @months ~w(Jan Feb Mar Apr May Jun Jul Aug Sep Oct Nov Dec)
+
+  # An IMF-fixdate (RFC 9110 §5.6.7), the form S3 sends:
+  # `Wed, 21 Oct 2015 07:28:00 GMT`.
+  defp http_date(value) do
+    with [_, day, month, year, time] <-
+           Regex.run(
+             ~r/^[A-Z][a-z]{2}, (\d{2}) ([A-Z][a-z]{2}) (\d{4}) (\d{2}:\d{2}:\d{2}) GMT$/,
+             value
+           ),
+         index when is_integer(index) <- Enum.find_index(@months, &(&1 == month)),
+         {:ok, date} <- Date.new(String.to_integer(year), index + 1, String.to_integer(day)),
+         {:ok, time} <- Time.from_iso8601(time) do
+      DateTime.new(date, time, "Etc/UTC")
+    else
+      _ -> :error
+    end
+  end
+
+  @impl true
+  def delete(%Prima.Actor{} = actor, segments) do
     Arca.Storage.refuse_seed_write!(segments)
     key = build_key(actor, segments)
 
@@ -439,14 +526,14 @@ defmodule Arca.Adapters.S3 do
   # An object store has no directories: a prefix exists when a key sits
   # under it, and nothing needs creating for that.
   @impl true
-  def ensure_dir(%Cyfr.Actor{} = _actor, segments) do
+  def ensure_dir(%Prima.Actor{} = _actor, segments) do
     Arca.Storage.refuse_seed_write!(segments)
     Arca.Storage.validate_path!(segments)
     :ok
   end
 
   @impl true
-  def list_typed(%Cyfr.Actor{} = actor, segments) do
+  def list_typed(%Prima.Actor{} = actor, segments) do
     prefix = build_key(actor, segments)
 
     case list_keys(prefix) do
@@ -466,7 +553,7 @@ defmodule Arca.Adapters.S3 do
   end
 
   @impl true
-  def exists?(%Cyfr.Actor{} = actor, segments) do
+  def exists?(%Prima.Actor{} = actor, segments) do
     case request(:head, build_key(actor, segments)) do
       {:ok, %{status: 200}} -> true
       _ -> false
@@ -474,7 +561,7 @@ defmodule Arca.Adapters.S3 do
   end
 
   @impl true
-  def delete_tree(%Cyfr.Actor{} = actor, segments) do
+  def delete_tree(%Prima.Actor{} = actor, segments) do
     Arca.Storage.refuse_seed_write!(segments)
     prefix = build_key(actor, segments)
 
@@ -535,7 +622,7 @@ defmodule Arca.Adapters.S3 do
   end
 
   @impl true
-  def list_recursive(%Cyfr.Actor{} = actor, segments) do
+  def list_recursive(%Prima.Actor{} = actor, segments) do
     prefix_key = build_key(actor, segments)
     prefix_with_slash = prefix_key <> "/"
 
@@ -564,7 +651,7 @@ defmodule Arca.Adapters.S3 do
   end
 
   @impl true
-  def usage(%Cyfr.Actor{} = actor, segments) do
+  def usage(%Prima.Actor{} = actor, segments) do
     prefix_key = build_key(actor, segments)
     prefix_with_slash = prefix_key <> "/"
 
@@ -587,7 +674,7 @@ defmodule Arca.Adapters.S3 do
   end
 
   @impl true
-  def serve_to_conn(conn, %Cyfr.Actor{} = actor, segments, opts) do
+  def serve_to_conn(conn, %Prima.Actor{} = actor, segments, opts) do
     status = Keyword.get(opts, :status, 200)
 
     # Buffer-and-send: simple and correct, fits manifests + tincture HTML
@@ -607,7 +694,7 @@ defmodule Arca.Adapters.S3 do
   # The adapter's one validation chokepoint: every callback reaches it
   # before any request (append and serve via get), so `validate_path!/1`
   # runs exactly once per operation.
-  defp build_key(%Cyfr.Actor{} = actor, segments) do
+  defp build_key(%Prima.Actor{} = actor, segments) do
     Arca.Storage.validate_path!(segments)
     base = Arca.Storage.physical_segments(actor, segments)
 
@@ -661,6 +748,9 @@ defmodule Arca.Adapters.S3 do
       body: body,
       decode_body: false,
       retry: false,
+      # A redirect would carry the signed request to a host the operator
+      # did not configure; the answer is the endpoint's own or nothing.
+      redirect: false,
       receive_timeout: config(:receive_timeout_ms) || 60_000
     )
   end

@@ -40,6 +40,7 @@ defmodule Aqua.Loop.Stream do
   """
 
   alias Aqua.Tape
+  alias Cyfr.Bus.ExecutionEvent
   alias Sanctum.Context
 
   @subscribe_timeout_ms 5_000
@@ -77,12 +78,12 @@ defmodule Aqua.Loop.Stream do
   @doc "Announce the fence `turn`'s streamed answers are kept under."
   @spec announce_fence(Context.t(), Tape.turn()) :: :ok
   def announce_fence(%Context{} = ctx, turn),
-    do: Tape.announce(ctx, turn.thread_id, {:turn_fence, turn.id, turn.fence})
+    do: Tape.announce(ctx, turn.thread_id, :turn_fence, %{turn_id: turn.id, fence: turn.fence})
 
   @doc "Announce that the step `attrs` names lands no text row: what it streamed is withdrawn."
   @spec abandon(Context.t(), attrs()) :: :ok
   def abandon(%Context{} = ctx, attrs),
-    do: Tape.announce(ctx, attrs.thread_id, {:delta_abandoned, marker(attrs)})
+    do: Tape.announce(ctx, attrs.thread_id, :delta_abandoned, marker(attrs))
 
   @doc "Start forwarding the text `execution_id` streams, subscribed before it answers."
   @spec open(Context.t(), String.t(), attrs()) :: pid() | nil
@@ -94,7 +95,7 @@ defmodule Aqua.Loop.Stream do
       spawn_monitor(fn ->
         owner_monitor = Process.monitor(owner)
 
-        case Cyfr.Execution.subscribe_events(execution_id, ctx) do
+        case Crucible.subscribe_events(execution_id, ctx) do
           :ok ->
             send(owner, {ref, :subscribed})
             forward(ctx, attrs, owner_monitor, {-1, -1})
@@ -197,7 +198,7 @@ defmodule Aqua.Loop.Stream do
   def add(%__MODULE__{} = kept, _stale), do: kept
 
   @doc "What is kept once `row` landed: a step's text row replaces the answer that streamed for it."
-  @spec landed(t(), Arca.Schemas.Message.t()) :: t()
+  @spec landed(t(), Aqua.Tape.row()) :: t()
   def landed(%__MODULE__{} = kept, %{kind: "text"} = row) do
     case Tape.payload(row)["step_id"] do
       step_id when is_binary(step_id) -> settle(kept, step_id)
@@ -244,11 +245,11 @@ defmodule Aqua.Loop.Stream do
 
   defp forward(ctx, attrs, owner_monitor, last) do
     receive do
-      {:execution_event, %{type: "emit", durable: durable, delta: n, data: data}}
+      %ExecutionEvent{type: "emit", durable: durable, delta: n, data: data}
       when {durable, n} > last ->
         case data do
           %{"type" => "text.delta", "text" => text} when is_binary(text) and text != "" ->
-            Tape.announce(ctx, attrs.thread_id, {:delta, delta(attrs, {durable, n}, text)})
+            Tape.announce(ctx, attrs.thread_id, :delta, delta(attrs, {durable, n}, text))
 
           _ ->
             :ok
@@ -256,7 +257,7 @@ defmodule Aqua.Loop.Stream do
 
         forward(ctx, attrs, owner_monitor, {durable, n})
 
-      {:execution_event, _event} ->
+      %ExecutionEvent{} ->
         forward(ctx, attrs, owner_monitor, last)
 
       {:close, from, ref} ->

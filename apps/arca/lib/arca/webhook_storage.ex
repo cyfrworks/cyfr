@@ -24,7 +24,7 @@ defmodule Arca.WebhookStorage do
   require Logger
   require Arca.Repo.Errors
   import Ecto.Query
-  # Every function that names an athanor takes the `Cyfr.Actor` first and
+  # Every function that names an athanor takes the `Prima.Actor` first and
   # matches it in the head, refusing an actor whose athanor is nil or the
   # empty string with `{:error, :no_athanor}` before any query.
   # `get_by_slug/1` is the ingress lookup by the slug a caller presented
@@ -40,20 +40,40 @@ defmodule Arca.WebhookStorage do
   Required attrs: `name`, `slug`, `target_ref`, `secret_encrypted`,
   `signature_header`, `athanor_id`. Optional: `input_template`,
   `description`, `rate_limit`, `created_by`.
+
+  `opts` may name the issuance the secret is written under (`lock:` and
+  `verify:`, `Arca.SecurityTransitions.Issuance.held/2`): the row is then
+  inserted in that transaction, once the caller's standing rows are
+  locked and its policy agrees, and a refusal writes nothing.
   """
-  @spec create_webhook(map()) :: :ok | {:error, term()}
-  def create_webhook(attrs) do
+  @spec create_webhook(map(), keyword()) :: :ok | {:error, term()}
+  def create_webhook(attrs, opts \\ []) when is_list(opts) do
+    case Arca.SecurityTransitions.Issuance.held(opts, fn -> insert_webhook(attrs) end) do
+      {:ok, :inserted} -> :ok
+      {:error, _reason} = refusal -> refusal
+    end
+  rescue
+    e in Arca.Repo.Errors.db_errors() ->
+      if Arca.Repo.Errors.unique_constraint_violation?(e) do
+        {:error, :already_exists}
+      else
+        Logger.error("[WebhookStorage] Database error in create_webhook: #{Exception.message(e)}")
+        {:error, :database_error}
+      end
+  end
+
+  defp insert_webhook(attrs) do
     now = DateTime.utc_now() |> DateTime.truncate(:microsecond)
 
     row = %{
       # "whk", not "wh": webhook SLUGS are minted as "wh_<random>"
       # (Sanctum.Webhook), and the row id must never read as one.
-      id: Cyfr.UUID7.generate_id("whk"),
+      id: Prima.UUID7.generate_id("whk"),
       name: attrs.name,
       slug: attrs.slug,
       target_ref: attrs.target_ref,
       secret_encrypted: attrs.secret_encrypted,
-      signature_header: attrs[:signature_header] || Cyfr.Webhook.default_signature_header(),
+      signature_header: attrs[:signature_header] || Prima.Webhook.default_signature_header(),
       timestamp_header: attrs[:timestamp_header],
       idempotency_key_header: attrs[:idempotency_key_header],
       input_template: attrs[:input_template] || "{}",
@@ -69,15 +89,7 @@ defmodule Arca.WebhookStorage do
     }
 
     Arca.Repo.insert_all(Webhook, [row])
-    :ok
-  rescue
-    e in Arca.Repo.Errors.db_errors() ->
-      if Arca.Repo.Errors.unique_constraint_violation?(e) do
-        {:error, :already_exists}
-      else
-        Logger.error("[WebhookStorage] Database error in create_webhook: #{Exception.message(e)}")
-        {:error, :database_error}
-      end
+    {:ok, :inserted}
   end
 
   @doc """
@@ -91,7 +103,7 @@ defmodule Arca.WebhookStorage do
   > (`secret_encrypted`). Callers MUST NOT log or serialize the whole row;
   > decrypt only what is needed for signature verification.
   """
-  @spec get_by_slug(String.t()) :: {:ok, Webhook.t()} | {:error, :not_found}
+  @spec get_by_slug(String.t()) :: {:ok, map()} | {:error, :not_found | :database_error}
   # arca:unscoped-ok the slug IS the public address a sender posts to; the
   # athanor is read off the row and every later step is scoped by it.
   def get_by_slug(slug) when is_binary(slug) do
@@ -103,14 +115,15 @@ defmodule Arca.WebhookStorage do
         row -> {:ok, row}
       end
     end)
+    |> Arca.Data.project()
   end
 
   @doc """
   Look up a webhook by name within an athanor. Excludes disabled rows.
   """
-  @spec get_by_name(Cyfr.Actor.t(), String.t()) ::
-          {:ok, Webhook.t()} | {:error, :no_athanor | :not_found | :database_error}
-  def get_by_name(%Cyfr.Actor{athanor_id: athanor_id}, name)
+  @spec get_by_name(Prima.Actor.t(), String.t()) ::
+          {:ok, map()} | {:error, :no_athanor | :not_found | :database_error}
+  def get_by_name(%Prima.Actor{athanor_id: athanor_id}, name)
       when is_binary(athanor_id) and athanor_id != "" do
     Arca.Repo.Errors.with_db_rescue("WebhookStorage.get_by_name", fn ->
       query =
@@ -122,9 +135,10 @@ defmodule Arca.WebhookStorage do
         row -> {:ok, row}
       end
     end)
+    |> Arca.Data.project()
   end
 
-  def get_by_name(%Cyfr.Actor{}, _name), do: {:error, :no_athanor}
+  def get_by_name(%Prima.Actor{}, _name), do: {:error, :no_athanor}
 
   @doc """
   List an athanor's enabled webhooks, ordered by inserted_at.
@@ -133,8 +147,8 @@ defmodule Arca.WebhookStorage do
   deliberately not loaded here (the only caller redacts them anyway; the verify
   path uses `get_by_slug`/`get_by_name`, which do load the secret).
   """
-  @spec list_webhooks(Cyfr.Actor.t()) :: {:ok, [Webhook.t()]} | {:error, term()}
-  def list_webhooks(%Cyfr.Actor{athanor_id: athanor_id})
+  @spec list_webhooks(Prima.Actor.t()) :: {:ok, [map()]} | {:error, term()}
+  def list_webhooks(%Prima.Actor{athanor_id: athanor_id})
       when is_binary(athanor_id) and athanor_id != "" do
     Arca.Repo.Errors.with_db_rescue("WebhookStorage.list_webhooks", fn ->
       query =
@@ -162,17 +176,18 @@ defmodule Arca.WebhookStorage do
 
       {:ok, Arca.Repo.all(query)}
     end)
+    |> Arca.Data.project()
   end
 
-  def list_webhooks(%Cyfr.Actor{}), do: {:error, :no_athanor}
+  def list_webhooks(%Prima.Actor{}), do: {:error, :no_athanor}
 
   @doc """
   Update mutable fields on an existing webhook (target_ref, signature_header,
   input_template, description, rate_limit). Does NOT change the secret or slug.
   """
-  @spec update_webhook(Cyfr.Actor.t(), String.t(), map()) ::
+  @spec update_webhook(Prima.Actor.t(), String.t(), map()) ::
           :ok | {:error, :no_athanor | :not_found | :database_error}
-  def update_webhook(%Cyfr.Actor{athanor_id: athanor_id}, name, fields)
+  def update_webhook(%Prima.Actor{athanor_id: athanor_id}, name, fields)
       when is_binary(athanor_id) and athanor_id != "" and is_map(fields) do
     Arca.Repo.Errors.with_db_rescue("WebhookStorage.update_webhook", fn ->
       now = DateTime.utc_now() |> DateTime.truncate(:microsecond)
@@ -204,16 +219,17 @@ defmodule Arca.WebhookStorage do
         end
       end
     end)
+    |> Arca.Data.project()
   end
 
-  def update_webhook(%Cyfr.Actor{}, _name, _fields), do: {:error, :no_athanor}
+  def update_webhook(%Prima.Actor{}, _name, _fields), do: {:error, :no_athanor}
 
   @doc """
   Soft-disable a webhook. Returns `{:error, :not_found}` if no enabled row matches.
   """
-  @spec set_disabled(Cyfr.Actor.t(), String.t()) ::
+  @spec set_disabled(Prima.Actor.t(), String.t()) ::
           :ok | {:error, :no_athanor | :not_found | :database_error}
-  def set_disabled(%Cyfr.Actor{athanor_id: athanor_id}, name)
+  def set_disabled(%Prima.Actor{athanor_id: athanor_id}, name)
       when is_binary(athanor_id) and athanor_id != "" do
     Arca.Repo.Errors.with_db_rescue("WebhookStorage.set_disabled", fn ->
       now = DateTime.utc_now() |> DateTime.truncate(:microsecond)
@@ -227,9 +243,42 @@ defmodule Arca.WebhookStorage do
         {_, _} -> :ok
       end
     end)
+    |> Arca.Data.project()
   end
 
-  def set_disabled(%Cyfr.Actor{}, _name), do: {:error, :no_athanor}
+  def set_disabled(%Prima.Actor{}, _name), do: {:error, :no_athanor}
+
+  @doc """
+  Soft-disable the enabled webhooks among `ids` in the actor's athanor, in
+  one transaction: every one of them is disabled, or — when the store
+  fails — none is. Answers the ids it disabled; an id already disabled, or
+  not the athanor's, is skipped.
+  """
+  @spec disable_all(Prima.Actor.t(), [String.t()]) ::
+          {:ok, [String.t()]} | {:error, :no_athanor | :database_error}
+  def disable_all(%Prima.Actor{athanor_id: athanor_id}, ids)
+      when is_binary(athanor_id) and athanor_id != "" and is_list(ids) do
+    Arca.Repo.Errors.with_db_rescue("WebhookStorage.disable_all", fn ->
+      Arca.Repo.transaction(fn ->
+        now = DateTime.utc_now() |> DateTime.truncate(:microsecond)
+
+        enabled =
+          from(w in Webhook, where: w.id in ^ids and w.enabled == ^true, order_by: w.id)
+          |> where_athanor(athanor_id)
+
+        disabled = Arca.Repo.all(from(w in enabled, select: w.id))
+
+        from(w in Webhook, where: w.id in ^disabled)
+        |> where_athanor(athanor_id)
+        |> Arca.Repo.update_all(set: [enabled: false, updated_at: now])
+
+        disabled
+      end)
+    end)
+    |> Arca.Data.project()
+  end
+
+  def disable_all(%Prima.Actor{}, _ids), do: {:error, :no_athanor}
 
   @doc """
   Replace the encrypted secret for an existing webhook.
@@ -241,51 +290,70 @@ defmodule Arca.WebhookStorage do
   Compare-and-swap on the secret being replaced: a concurrent rotation
   answers `{:error, :conflict}` rather than overwriting the grace secret
   the other one just installed.
+
+  `opts` may name the issuance the new secret is written under, as at
+  `create_webhook/2`.
   """
-  @spec rotate_secret(Cyfr.Actor.t(), String.t(), binary(), DateTime.t()) ::
-          :ok | {:error, :no_athanor | :not_found | :conflict | :database_error}
+  @spec rotate_secret(Prima.Actor.t(), String.t(), binary(), DateTime.t(), keyword()) ::
+          :ok | {:error, term()}
+  def rotate_secret(actor, name, new_secret_encrypted, previous_expires_at, opts \\ [])
+
   def rotate_secret(
-        %Cyfr.Actor{athanor_id: athanor_id},
+        %Prima.Actor{athanor_id: athanor_id},
         name,
         new_secret_encrypted,
-        previous_expires_at
+        previous_expires_at,
+        opts
       )
-      when is_binary(athanor_id) and athanor_id != "" do
+      when is_binary(athanor_id) and athanor_id != "" and is_list(opts) do
     Arca.Repo.Errors.with_db_rescue("WebhookStorage.rotate_secret", fn ->
-      now = DateTime.utc_now() |> DateTime.truncate(:microsecond)
+      rotate = fn ->
+        rotate_row(athanor_id, name, new_secret_encrypted, previous_expires_at)
+      end
 
-      query =
-        from(w in Webhook, where: w.name == ^name and w.enabled == ^true)
-        |> where_athanor(athanor_id)
-
-      # Capture the outgoing secret so it stays valid through the grace window.
-      case Arca.Repo.one(from(w in query, select: w.secret_encrypted, limit: 1)) do
-        nil ->
-          {:error, :not_found}
-
-        current_secret ->
-          # Compare against the secret read by this call. A concurrent rotation
-          # returns :conflict without overwriting the other rotation's grace secret.
-          result =
-            from(w in query, where: w.secret_encrypted == ^current_secret)
-            |> Arca.Repo.update_all(
-              set: [
-                secret_encrypted: new_secret_encrypted,
-                previous_secret_encrypted: current_secret,
-                previous_secret_expires_at: DateTime.truncate(previous_expires_at, :microsecond),
-                rotated_at: now,
-                updated_at: now
-              ]
-            )
-
-          case result do
-            {0, _} -> {:error, :conflict}
-            {_, _} -> :ok
-          end
+      case Arca.SecurityTransitions.Issuance.held(opts, rotate) do
+        {:ok, :rotated} -> :ok
+        {:error, _reason} = refusal -> refusal
       end
     end)
+    |> Arca.Data.project()
   end
 
-  def rotate_secret(%Cyfr.Actor{}, _name, _new_secret_encrypted, _previous_expires_at),
-    do: {:error, :no_athanor}
+  def rotate_secret(%Prima.Actor{}, _name, _new_secret_encrypted, _previous_expires_at, opts)
+      when is_list(opts),
+      do: {:error, :no_athanor}
+
+  defp rotate_row(athanor_id, name, new_secret_encrypted, previous_expires_at) do
+    now = DateTime.utc_now() |> DateTime.truncate(:microsecond)
+
+    query =
+      from(w in Webhook, where: w.name == ^name and w.enabled == ^true)
+      |> where_athanor(athanor_id)
+
+    # Capture the outgoing secret so it stays valid through the grace window.
+    case Arca.Repo.one(from(w in query, select: w.secret_encrypted, limit: 1)) do
+      nil ->
+        {:error, :not_found}
+
+      current_secret ->
+        # Compare against the secret read by this call. A concurrent rotation
+        # returns :conflict without overwriting the other rotation's grace secret.
+        result =
+          from(w in query, where: w.secret_encrypted == ^current_secret)
+          |> Arca.Repo.update_all(
+            set: [
+              secret_encrypted: new_secret_encrypted,
+              previous_secret_encrypted: current_secret,
+              previous_secret_expires_at: DateTime.truncate(previous_expires_at, :microsecond),
+              rotated_at: now,
+              updated_at: now
+            ]
+          )
+
+        case result do
+          {0, _} -> {:error, :conflict}
+          {_, _} -> {:ok, :rotated}
+        end
+    end
+  end
 end

@@ -12,10 +12,12 @@ import (
 	"slices"
 	"strings"
 	"testing"
+
+	"github.com/cyfr/codex/internal/scaffold"
 )
 
 func TestRenderEnvFile(t *testing.T) {
-	tmpl := "CYFR_SECRET_KEY_BASE=\nCYFR_MCP_BRIDGE_KEY=\nCYFR_HOST=localhost\nCYFR_BEHIND_PROXY=false\nCADDY_ACME_EMAIL=\n# CYFR_PLATFORM_ADMIN_EMAILS=alice@example.com\nCYFR_PORT=4000\n"
+	tmpl := "CYFR_SECRET_KEY_BASE=\nCYFR_LOCUS_BACKENDS_KEY=\nCYFR_HOST=localhost\nCYFR_BEHIND_PROXY=false\nCADDY_ACME_EMAIL=\n# CYFR_PLATFORM_ADMIN_EMAILS=alice@example.com\nCYFR_PORT=4000\n"
 
 	// TLS mode: real hostname + allowed user + ACME email. tls=true flips
 	// CYFR_BEHIND_PROXY.
@@ -35,7 +37,7 @@ func TestRenderEnvFile(t *testing.T) {
 		t.Errorf("CYFR_PLATFORM_ADMIN_EMAILS should be uncommented:\n%s", got)
 	}
 	// The keys are ensureStackKeys', not the prompts'.
-	if !strings.Contains(got, "CYFR_SECRET_KEY_BASE=\nCYFR_MCP_BRIDGE_KEY=\n") {
+	if !strings.Contains(got, "CYFR_SECRET_KEY_BASE=\nCYFR_LOCUS_BACKENDS_KEY=\n") {
 		t.Errorf("renderEnvFile touched a key:\n%s", got)
 	}
 
@@ -57,7 +59,7 @@ func TestRenderEnvFile(t *testing.T) {
 }
 
 // A generated key is 32 random bytes as 64 lowercase hexadecimal digits,
-// the form cyfr, the bridge, the worker and the builder all accept, and
+// the form cyfr, the worker and both Locus services all accept, and
 // never repeats.
 func TestGenerateHexKey(t *testing.T) {
 	first, err := generateHexKey()
@@ -77,7 +79,7 @@ func TestGenerateHexKey(t *testing.T) {
 }
 
 // workerAuthVectors is the part of tests/fixtures/worker_auth.json, the
-// vector file of Cyfr.WorkerAuth, that the CLI's derivation consumes.
+// vector file of Prima.WorkerAuth, that the CLI's derivation consumes.
 type workerAuthVectors struct {
 	RootHex  string `json:"root_hex"`
 	Service  string `json:"service"`
@@ -90,9 +92,9 @@ type workerAuthVectors struct {
 	} `json:"keys"`
 }
 
-// The service key init writes is Cyfr.WorkerAuth.worker_key/2's: the value
+// The service key init writes is Prima.WorkerAuth.worker_key/2's: the value
 // the vector file records for its root and service, and the root is read
-// as the platform reads CYFR_WORKER_KEY.
+// as the platform reads CYFR_OPUS_KEY.
 func TestWorkerKeyReproducesTheVectorFile(t *testing.T) {
 	raw, err := os.ReadFile(filepath.Join("..", "..", "..", "tests", "fixtures", "worker_auth.json"))
 	if err != nil {
@@ -126,17 +128,63 @@ func TestWorkerKeyReproducesTheVectorFile(t *testing.T) {
 	}
 }
 
+// readShippedTemplate reads the .env.example `cyfr init` downloads.
+func readShippedTemplate(t *testing.T) string {
+	t.Helper()
+	raw, err := os.ReadFile(filepath.Join("..", "..", "..", ".env.example"))
+	if err != nil {
+		t.Fatalf("read shipped .env.example: %v", err)
+	}
+	return string(raw)
+}
+
+// Each line renderEnvFile rewrites is in the shipped template exactly once,
+// in the comment state it matches: the three assignments uncommented, the
+// operators' line commented and nowhere assigned. And each key
+// ensureStackKeys writes is assigned there once, empty, or with the value
+// init completes (the builds URL), so init writes every one on its own line.
+func TestShippedTemplateCarriesInitsAnchors(t *testing.T) {
+	lines := strings.Split(readShippedTemplate(t), "\n")
+	count := func(prefix string) int {
+		n := 0
+		for _, line := range lines {
+			if strings.HasPrefix(line, prefix) {
+				n++
+			}
+		}
+		return n
+	}
+	for _, anchor := range []string{hostAnchor, behindProxyAnchor, acmeEmailAnchor, adminEmailsAnchor} {
+		if n := count(anchor); n != 1 {
+			t.Errorf("the shipped template has %d lines beginning %q, want 1", n, anchor)
+		}
+	}
+	if n := count(strings.TrimPrefix(adminEmailsAnchor, "# ")); n != 0 {
+		t.Errorf("the shipped template assigns CYFR_PLATFORM_ADMIN_EMAILS on %d lines; init uncomments its anchor", n)
+	}
+
+	f := parseEnvFile(readShippedTemplate(t))
+	for _, key := range []string{secretKeyBaseVar, backendsKeyVar, workerRootVar, serviceKeyVar, buildsKeyVar, corsOriginsVar} {
+		if v, assigned := f.value(key); !assigned || v != "" || len(f.assignments(key)) != 1 {
+			t.Errorf("the shipped template does not assign %s empty on one line (%q, assigned: %v)", key, v, assigned)
+		}
+	}
+	if v, _ := f.value(buildsURLVar); v != defaultBuildsURL || len(f.assignments(buildsURLVar)) != 1 {
+		t.Errorf("the shipped template's %s is %q, want %s on one line", buildsURLVar, v, defaultBuildsURL)
+	}
+	if _, assigned := f.value(serviceIDVar); assigned {
+		t.Errorf("the shipped template assigns %s; compose's default names the opus service", serviceIDVar)
+	}
+}
+
 // Every key ensureStackKeys adds to the shipped .env.example lands on the
 // line the template documents it on, so nothing is appended below the
 // template's last section, and the result is the pair-consistent .env the
 // stack boots from.
 func TestRenderEnvFileShippedTemplate(t *testing.T) {
-	raw, err := os.ReadFile(filepath.Join("..", "..", "..", ".env.example"))
-	if err != nil {
-		t.Fatalf("read shipped .env.example: %v", err)
-	}
+	raw := readShippedTemplate(t)
 
-	rendered := renderEnvFile(string(raw), "example.com", "me@example.com", "ops@example.com", true)
+	rendered := renderEnvFile(raw, "example.com", "me@example.com", "ops@example.com", true)
 	for _, want := range []string{
 		"\nCYFR_HOST=example.com\n",
 		"\nCYFR_BEHIND_PROXY=true\n",
@@ -146,6 +194,9 @@ func TestRenderEnvFileShippedTemplate(t *testing.T) {
 		if !strings.Contains(rendered, want) {
 			t.Errorf("shipped template: renderEnvFile did not produce %q", strings.TrimSpace(want))
 		}
+	}
+	if strings.Contains(rendered, adminEmailsAnchor) {
+		t.Errorf("shipped template: the operators' anchor is still commented after init set it")
 	}
 
 	got, changes, err := ensureStackKeys(rendered)
@@ -159,7 +210,8 @@ func TestRenderEnvFileShippedTemplate(t *testing.T) {
 	for _, c := range changes {
 		added = append(added, c.key)
 	}
-	if want := []string{secretKeyBaseVar, bridgeKeyVar, workerRootVar, serviceKeyVar, buildsURLVar, buildsKeyVar}; !slices.Equal(added, want) {
+	// The template carries the builds URL; init mints the key beside it.
+	if want := []string{secretKeyBaseVar, backendsKeyVar, workerRootVar, serviceKeyVar, buildsKeyVar}; !slices.Equal(added, want) {
 		t.Errorf("added %v, want %v", added, want)
 	}
 	assertStackPairs(t, got, defaultServiceID)
@@ -182,6 +234,39 @@ func TestRenderEnvFileShippedTemplate(t *testing.T) {
 	}
 }
 
+// `cyfr init --no-interactive` takes every default: the template's host and
+// direct mode, the operators' line left commented and the ACME address
+// empty, and the same keys minted, builds on, so `cyfr up` starts
+// locus-builds and no Caddy.
+func TestRenderEnvFileShippedTemplateNoInteractive(t *testing.T) {
+	raw := readShippedTemplate(t)
+	rendered := renderEnvFile(raw, "localhost", "", "", false)
+	for _, want := range []string{
+		"\nCYFR_HOST=localhost\n",
+		"\nCYFR_BEHIND_PROXY=false\n",
+		"\nCADDY_ACME_EMAIL=\n",
+		"\n" + adminEmailsAnchor + "\n",
+	} {
+		if !strings.Contains(rendered, want) {
+			t.Errorf("shipped template, no answers: renderEnvFile did not produce %q", strings.TrimSpace(want))
+		}
+	}
+
+	got, _, err := ensureStackKeys(rendered)
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertStackPairs(t, got, defaultServiceID)
+
+	env := filepath.Join(t.TempDir(), ".env")
+	if err := os.WriteFile(env, []byte(got), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if profiles := composeProfiles(env); !slices.Equal(profiles, []string{buildsProfile}) {
+		t.Errorf("a direct project fresh from init runs profiles %v, want only %s", profiles, buildsProfile)
+	}
+}
+
 // assertStackPairs checks what init promises of a .env: every key well
 // formed, the service key the one the root derives for serviceID, and the
 // builds URL and key set together.
@@ -189,7 +274,7 @@ func assertStackPairs(t *testing.T, text, serviceID string) {
 	t.Helper()
 	f := parseEnvFile(text)
 	hexKey := regexp.MustCompile(`^[0-9A-Fa-f]{64}$`)
-	for _, key := range []string{bridgeKeyVar, workerRootVar, serviceKeyVar, buildsKeyVar} {
+	for _, key := range []string{backendsKeyVar, workerRootVar, serviceKeyVar, buildsKeyVar} {
 		if v, _ := f.value(key); !hexKey.MatchString(v) {
 			t.Errorf("%s is %q, not 64 hexadecimal digits", key, v)
 		}
@@ -227,7 +312,7 @@ func TestEnsureStackKeysOverAnExistingEnv(t *testing.T) {
 	opusKey := hex.EncodeToString(workerKey(rootBytes, "wrk_opus"))
 	otherKey := hex.EncodeToString(workerKey(rootBytes, "wrk_other"))
 	const buildsKey = "b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1"
-	const base = "CYFR_SECRET_KEY_BASE=kept-secret-key-base-kept-secret-key-base-kept-secret-key-base-kept\nCYFR_MCP_BRIDGE_KEY=" + buildsKey + "\n"
+	const base = "CYFR_SECRET_KEY_BASE=kept-secret-key-base-kept-secret-key-base-kept-secret-key-base-kept\nCYFR_LOCUS_BACKENDS_KEY=" + buildsKey + "\n"
 
 	cases := []struct {
 		name    string
@@ -239,62 +324,62 @@ func TestEnsureStackKeysOverAnExistingEnv(t *testing.T) {
 	}{
 		{
 			name:    "no root and no service key: both are minted, builds turned on",
-			body:    base + "CYFR_WORKER_KEY=\nOPUS_SERVICE_KEY=\n",
+			body:    base + "CYFR_OPUS_KEY=\nOPUS_SERVICE_KEY=\n",
 			added:   []string{workerRootVar, serviceKeyVar, corsOriginsVar, buildsURLVar, buildsKeyVar},
 			service: "wrk_opus",
 		},
 		{
 			name:    "a root and no service key: the key is derived from that root",
-			body:    base + "CYFR_WORKER_KEY=" + root + "\n# OPUS_SERVICE_KEY=\n",
+			body:    base + "CYFR_OPUS_KEY=" + root + "\n# OPUS_SERVICE_KEY=\n",
 			added:   []string{serviceKeyVar, corsOriginsVar, buildsURLVar, buildsKeyVar},
 			kept:    map[string]string{workerRootVar: root},
 			service: "wrk_opus",
 		},
 		{
 			name:    "a root spelled in capitals derives the same key",
-			body:    base + "CYFR_WORKER_KEY=\"" + strings.ToUpper(root) + "\"\n",
+			body:    base + "CYFR_OPUS_KEY=\"" + strings.ToUpper(root) + "\"\n",
 			added:   []string{serviceKeyVar, corsOriginsVar, buildsURLVar, buildsKeyVar},
 			kept:    map[string]string{workerRootVar: strings.ToUpper(root)},
 			service: "wrk_opus",
 		},
 		{
 			name:    "a service id .env names is the one the key derives for",
-			body:    base + "CYFR_WORKER_KEY=" + root + "\nOPUS_SERVICE_ID=wrk_other\n",
+			body:    base + "CYFR_OPUS_KEY=" + root + "\nOPUS_SERVICE_ID=wrk_other\n",
 			added:   []string{serviceKeyVar, corsOriginsVar, buildsURLVar, buildsKeyVar},
 			kept:    map[string]string{serviceKeyVar: otherKey},
 			service: "wrk_other",
 		},
 		{
 			name:    "a consistent pair is kept as it is",
-			body:    base + "CYFR_WORKER_KEY=" + root + "\nOPUS_SERVICE_KEY=" + opusKey + "\n",
+			body:    base + "CYFR_OPUS_KEY=" + root + "\nOPUS_SERVICE_KEY=" + opusKey + "\n",
 			added:   []string{corsOriginsVar, buildsURLVar, buildsKeyVar},
 			kept:    map[string]string{workerRootVar: root, serviceKeyVar: opusKey},
 			service: "wrk_opus",
 		},
 		{
 			name:    "a service key without a root is refused",
-			body:    base + "CYFR_WORKER_KEY=\nOPUS_SERVICE_KEY=" + opusKey + "\n",
-			refusal: "OPUS_SERVICE_KEY is set in .env but CYFR_WORKER_KEY, the root it is derived from, is not",
+			body:    base + "CYFR_OPUS_KEY=\nOPUS_SERVICE_KEY=" + opusKey + "\n",
+			refusal: "OPUS_SERVICE_KEY is set in .env but CYFR_OPUS_KEY, the root it is derived from, is not",
 		},
 		{
 			name:    "a service key another root derives is refused",
-			body:    base + "CYFR_WORKER_KEY=" + strings.Repeat("ab", 32) + "\nOPUS_SERVICE_KEY=" + opusKey + "\n",
-			refusal: "OPUS_SERVICE_KEY in .env is not the key CYFR_WORKER_KEY derives for OPUS_SERVICE_ID wrk_opus",
+			body:    base + "CYFR_OPUS_KEY=" + strings.Repeat("ab", 32) + "\nOPUS_SERVICE_KEY=" + opusKey + "\n",
+			refusal: "OPUS_SERVICE_KEY in .env is not the key CYFR_OPUS_KEY derives for OPUS_SERVICE_ID wrk_opus",
 		},
 		{
 			name:    "a service key derived for another service id is refused",
-			body:    base + "CYFR_WORKER_KEY=" + root + "\nOPUS_SERVICE_ID=wrk_other\nOPUS_SERVICE_KEY=" + opusKey + "\n",
+			body:    base + "CYFR_OPUS_KEY=" + root + "\nOPUS_SERVICE_ID=wrk_other\nOPUS_SERVICE_KEY=" + opusKey + "\n",
 			refusal: "for OPUS_SERVICE_ID wrk_other",
 		},
 		{
 			name:    "a malformed service key is refused",
-			body:    base + "CYFR_WORKER_KEY=" + root + "\nOPUS_SERVICE_KEY=abc\n",
-			refusal: "is not the key CYFR_WORKER_KEY derives",
+			body:    base + "CYFR_OPUS_KEY=" + root + "\nOPUS_SERVICE_KEY=abc\n",
+			refusal: "is not the key CYFR_OPUS_KEY derives",
 		},
 		{
 			name:    "a malformed root is refused",
-			body:    base + "CYFR_WORKER_KEY=" + root[:63] + "\n",
-			refusal: "CYFR_WORKER_KEY in .env is not 64 hexadecimal digits",
+			body:    base + "CYFR_OPUS_KEY=" + root[:63] + "\n",
+			refusal: "CYFR_OPUS_KEY in .env is not 64 hexadecimal digits",
 		},
 		{
 			name:    "a malformed service id is refused",
@@ -303,38 +388,38 @@ func TestEnsureStackKeysOverAnExistingEnv(t *testing.T) {
 		},
 		{
 			name:    "a root assigned twice is refused",
-			body:    base + "CYFR_WORKER_KEY=\nCYFR_WORKER_KEY=" + root + "\n",
-			refusal: "CYFR_WORKER_KEY is assigned on 2 lines of .env",
+			body:    base + "CYFR_OPUS_KEY=\nCYFR_OPUS_KEY=" + root + "\n",
+			refusal: "CYFR_OPUS_KEY is assigned on 2 lines of .env",
 		},
 		{
 			name:    "a builds key without a URL gets the URL",
-			body:    base + "CYFR_WORKER_KEY=" + root + "\nOPUS_SERVICE_KEY=" + opusKey + "\nCYFR_LOCUS_BUILDS_KEY=" + buildsKey + "\n",
+			body:    base + "CYFR_OPUS_KEY=" + root + "\nOPUS_SERVICE_KEY=" + opusKey + "\nCYFR_LOCUS_BUILDS_KEY=" + buildsKey + "\n",
 			added:   []string{corsOriginsVar, buildsURLVar},
 			kept:    map[string]string{buildsKeyVar: buildsKey},
 			service: "wrk_opus",
 		},
 		{
 			name:    "a builds URL without a key gets a minted key",
-			body:    base + "CYFR_WORKER_KEY=" + root + "\nOPUS_SERVICE_KEY=" + opusKey + "\nCYFR_LOCUS_BUILDS_URL=http://locus-builds:4100\nCYFR_LOCUS_BUILDS_KEY=\n",
+			body:    base + "CYFR_OPUS_KEY=" + root + "\nOPUS_SERVICE_KEY=" + opusKey + "\nCYFR_LOCUS_BUILDS_URL=http://locus-builds:4100\nCYFR_LOCUS_BUILDS_KEY=\n",
 			added:   []string{corsOriginsVar, buildsKeyVar},
 			service: "wrk_opus",
 		},
 		{
 			name:  "a builds URL set empty with no key is builds turned off, and left so",
-			body:  base + "CYFR_WORKER_KEY=" + root + "\nOPUS_SERVICE_KEY=" + opusKey + "\nCYFR_LOCUS_BUILDS_URL=\nCYFR_LOCUS_BUILDS_KEY=\n",
+			body:  base + "CYFR_OPUS_KEY=" + root + "\nOPUS_SERVICE_KEY=" + opusKey + "\nCYFR_LOCUS_BUILDS_URL=\nCYFR_LOCUS_BUILDS_KEY=\n",
 			added: []string{corsOriginsVar},
 			kept:  map[string]string{buildsURLVar: "", buildsKeyVar: ""},
 		},
 		{
 			name:  "an allowlist .env assigns is kept, empty or not",
-			body:  base + "CYFR_WORKER_KEY=" + root + "\nOPUS_SERVICE_KEY=" + opusKey + "\nCYFR_LOCUS_BUILDS_URL=\nCYFR_LOCUS_BUILDS_KEY=\nCYFR_CORS_ALLOWED_ORIGINS=https://app.example.com\n",
+			body:  base + "CYFR_OPUS_KEY=" + root + "\nOPUS_SERVICE_KEY=" + opusKey + "\nCYFR_LOCUS_BUILDS_URL=\nCYFR_LOCUS_BUILDS_KEY=\nCYFR_CORS_ALLOWED_ORIGINS=https://app.example.com\n",
 			added: nil,
 			kept:  map[string]string{corsOriginsVar: "https://app.example.com"},
 		},
 		{
 			name:    "no line for any key: each is appended",
 			body:    "CYFR_HOST=localhost",
-			added:   []string{secretKeyBaseVar, bridgeKeyVar, workerRootVar, serviceKeyVar, corsOriginsVar, buildsURLVar, buildsKeyVar},
+			added:   []string{secretKeyBaseVar, backendsKeyVar, workerRootVar, serviceKeyVar, corsOriginsVar, buildsURLVar, buildsKeyVar},
 			kept:    map[string]string{"CYFR_HOST": "localhost"},
 			service: "wrk_opus",
 		},
@@ -393,7 +478,7 @@ func TestEnsureEnvFileKeys(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, ".env")
 
-	refused := "# mine\nCYFR_WORKER_KEY=\nOPUS_SERVICE_KEY=" + strings.Repeat("ab", 32) + "\n"
+	refused := "# mine\nCYFR_OPUS_KEY=\nOPUS_SERVICE_KEY=" + strings.Repeat("ab", 32) + "\n"
 	if err := os.WriteFile(path, []byte(refused), 0640); err != nil {
 		t.Fatal(err)
 	}
@@ -404,8 +489,13 @@ func TestEnsureEnvFileKeys(t *testing.T) {
 		t.Errorf("a refused .env was written:\n%s", got)
 	}
 
-	partial := "# mine\nCYFR_HOST=cyfr.example.com\nCYFR_WORKER_KEY=\n"
+	partial := "# mine\nCYFR_HOST=cyfr.example.com\nCYFR_OPUS_KEY=\n"
 	if err := os.WriteFile(path, []byte(partial), 0640); err != nil {
+		t.Fatal(err)
+	}
+	// WriteFile's mode passes through the process umask (077 under
+	// scripts/heavy-check.sh); the mode init must keep is set outright.
+	if err := os.Chmod(path, 0640); err != nil {
 		t.Fatal(err)
 	}
 	changes, err := ensureEnvFileKeys(path)
@@ -413,7 +503,7 @@ func TestEnsureEnvFileKeys(t *testing.T) {
 		t.Fatalf("changes %v, %v", changes, err)
 	}
 	got, _ := os.ReadFile(path)
-	if !strings.HasPrefix(string(got), "# mine\nCYFR_HOST=cyfr.example.com\nCYFR_WORKER_KEY=") {
+	if !strings.HasPrefix(string(got), "# mine\nCYFR_HOST=cyfr.example.com\nCYFR_OPUS_KEY=") {
 		t.Errorf("the file's own lines moved:\n%s", got)
 	}
 	assertStackPairs(t, string(got), defaultServiceID)
@@ -446,10 +536,11 @@ func TestImagesFromCompose(t *testing.T) {
   locus-builds:
     image: ghcr.io/cyfrworks/cyfr-locus:latest
     profiles: ["locus-builds"]
-  mcp-bridge:
+  locus-backends:
+    image: ghcr.io/cyfrworks/cyfr-locus:latest
+  source-built:
     build:
       context: .
-      dockerfile: Dockerfile.node
 `
 	if err := os.WriteFile(path, []byte(body), 0644); err != nil {
 		t.Fatal(err)
@@ -458,10 +549,10 @@ func TestImagesFromCompose(t *testing.T) {
 		profiles []string
 		want     []string
 	}{
-		{nil, []string{"ghcr.io/cyfrworks/cyfr:latest"}},
+		{nil, []string{"ghcr.io/cyfrworks/cyfr:latest", "ghcr.io/cyfrworks/cyfr-locus:latest"}},
 		{[]string{"locus-builds"}, []string{"ghcr.io/cyfrworks/cyfr:latest", "ghcr.io/cyfrworks/cyfr-locus:latest"}},
 		{[]string{"tls", "locus-builds"}, []string{"ghcr.io/cyfrworks/cyfr:latest", "caddy:2-alpine", "ghcr.io/cyfrworks/cyfr-locus:latest"}},
-		{[]string{"other"}, []string{"ghcr.io/cyfrworks/cyfr:latest"}},
+		{[]string{"other"}, []string{"ghcr.io/cyfrworks/cyfr:latest", "ghcr.io/cyfrworks/cyfr-locus:latest"}},
 	} {
 		got := imagesFromCompose(path, tc.profiles)
 		if strings.Join(got, ",") != strings.Join(tc.want, ",") {
@@ -488,6 +579,11 @@ func TestComposeProfilesFollowTheProjectEnv(t *testing.T) {
 		{"# CYFR_LOCUS_BUILDS_URL=http://locus-builds:4100\n", nil},
 		{"CYFR_LOCUS_BUILDS_URL=\n", nil},
 		{"CYFR_LOCUS_BUILDS_URL=https://builds.example.com\n", nil},
+		// A remote builder starts no local container, whatever its name
+		// begins or ends with: the profile keys on the compose service's
+		// own host.
+		{"CYFR_LOCUS_BUILDS_URL=https://locus-builds.example.com:4100\n", nil},
+		{"CYFR_LOCUS_BUILDS_URL=http://builds.example.com/locus-builds\n", nil},
 		// The retired variable and host start nothing: a project still
 		// carrying them builds nothing until it names the builds service.
 		{"CYFR_" + "BUILDER_URL=http://builder:4100\n", nil},
@@ -510,24 +606,30 @@ func TestComposeProfilesFollowTheProjectEnv(t *testing.T) {
 	}
 }
 
-// The shipped compose file and .env.example: a project that points builds at
-// the locus-builds service pulls and starts the cyfr-locus image, and the
-// value .env.example offers is the one that does.
-func TestShippedComposePullsTheBuilderWhenBuildsUseIt(t *testing.T) {
+// The shipped compose file and .env.example: the cyfr-locus image is pulled
+// for locus-backends, which always starts; a project that points builds at
+// the locus-builds service selects its profile with the value .env.example
+// offers, and the one image is pulled once for both services.
+func TestShippedComposePullsTheLocusImageOnce(t *testing.T) {
 	const image = "ghcr.io/cyfrworks/cyfr-locus:latest"
 	compose := filepath.Join("..", "..", "..", "docker-compose.yml")
-	if got := imagesFromCompose(compose, nil); slices.Contains(got, image) {
-		t.Errorf("the builds image is pulled without its profile: %v", got)
+	count := func(images []string) int {
+		n := 0
+		for _, img := range images {
+			if img == image {
+				n++
+			}
+		}
+		return n
+	}
+	if got := imagesFromCompose(compose, nil); count(got) != 1 {
+		t.Errorf("without the builds profile the Locus image is not pulled once for locus-backends: %v", got)
 	}
 
-	raw, err := os.ReadFile(filepath.Join("..", "..", "..", ".env.example"))
-	if err != nil {
-		t.Fatalf("read shipped .env.example: %v", err)
-	}
 	var offered string
-	for _, line := range strings.Split(string(raw), "\n") {
-		if strings.HasPrefix(line, "# CYFR_LOCUS_BUILDS_URL=") {
-			offered = strings.TrimPrefix(line, "# ")
+	for _, line := range strings.Split(readShippedTemplate(t), "\n") {
+		if strings.HasPrefix(line, buildsURLVar+"=") {
+			offered = line
 		}
 	}
 	if offered == "" {
@@ -538,8 +640,12 @@ func TestShippedComposePullsTheBuilderWhenBuildsUseIt(t *testing.T) {
 	if err := os.WriteFile(env, []byte(offered+"\n"), 0644); err != nil {
 		t.Fatal(err)
 	}
-	if got := imagesFromCompose(compose, composeProfiles(env)); !slices.Contains(got, image) {
-		t.Errorf("a project using the builds service (%s) does not pull its image: %v", offered, got)
+	profiles := composeProfiles(env)
+	if !slices.Contains(profiles, buildsProfile) {
+		t.Errorf("a project using the builds service (%s) does not select its profile: %v", offered, profiles)
+	}
+	if got := imagesFromCompose(compose, profiles); count(got) != 1 {
+		t.Errorf("a project using the builds service (%s) does not pull the Locus image once: %v", offered, got)
 	}
 }
 
@@ -571,6 +677,27 @@ func TestEnvFlagTrue(t *testing.T) {
 
 	if envFlagTrue(filepath.Join(dir, "no-such-file"), "ANYTHING") {
 		t.Error("envFlagTrue should be false for a missing file")
+	}
+}
+
+// `cyfr init --force` lays the tarball's deploy files down again, the
+// keeper's seccomp profile among them as `cyfr update` refreshes it, so a
+// forced init never keeps a profile older than the image it pulls; a dev
+// build, whose tarball is a no-op, removes none.
+func TestForceRefetchesTheSeccompProfile(t *testing.T) {
+	got := forceRefetched(true)
+	for _, want := range []string{"docker-compose.yml", "Caddyfile", scaffold.SeccompProfile} {
+		if !slices.Contains(got, want) {
+			t.Errorf("init --force re-fetches %v, which lacks %s", got, want)
+		}
+	}
+	for _, kept := range []string{".env", ".env.example", "cyfr.yaml"} {
+		if slices.Contains(got, kept) {
+			t.Errorf("init --force re-fetches %s, which it must keep", kept)
+		}
+	}
+	if dev := forceRefetched(false); len(dev) != 0 {
+		t.Errorf("a dev build's init --force removes %v, which its no-op tarball cannot replace", dev)
 	}
 }
 

@@ -22,10 +22,9 @@ defmodule Sanctum.Consent.BootstrapSelectionTest do
   @aqua "agent:local.aqua"
   @claude "catalyst:local.claude"
 
-  setup do
+  setup tags do
     Arca.Cache.init()
-    :ok = Ecto.Adapters.SQL.Sandbox.checkout(Arca.Repo)
-    Ecto.Adapters.SQL.Sandbox.mode(Arca.Repo, {:shared, self()})
+    Cyfr.Test.Sandbox.setup!(tags)
 
     test_dir =
       Path.join(System.tmp_dir!(), "cyfr_selection_#{System.unique_integer([:positive])}")
@@ -69,8 +68,8 @@ defmodule Sanctum.Consent.BootstrapSelectionTest do
   end
 
   defp edge!(policy, from, to) do
-    {:ok, blob} = Cyfr.Authority.Blob.parse(policy)
-    {:ok, edge} = Cyfr.Authority.Blob.lookup_edge(blob, from, to, "")
+    {:ok, blob} = Prima.Authority.Blob.parse(policy)
+    {:ok, edge} = Prima.Authority.Blob.lookup_edge(blob, from, to, "")
     edge
   end
 
@@ -156,8 +155,8 @@ defmodule Sanctum.Consent.BootstrapSelectionTest do
     {_, list_first, _} = head!(ctx, "formula:local.list-models")
     old_digest = first.activation |> Jason.decode!() |> Map.fetch!(@claude)
 
-    # A release retires the claude version this estate holds and ships a
-    # new one. Until the estate takes the new version, its copy of the old
+    # A release retires the claude version this athanor holds and ships a
+    # new one. Until the athanor takes the new version, its copy of the old
     # one is no longer a shipped path — but it is unchanged and the head
     # names it, so the selection stays and nothing is re-minted.
     seed_dir = Application.get_env(:arca, :seed_path)
@@ -179,7 +178,7 @@ defmodule Sanctum.Consent.BootstrapSelectionTest do
     assert kept.revision == first.revision
     assert %{via: %{label: "default"}} = edge!(kept.resolved_policy, @aqua, @claude).vault
 
-    # The estate takes the new release: the assistant's closure moves, and
+    # The athanor takes the new release: the assistant's closure moves, and
     # every node of it is the seed's own or unchanged since the head.
     {:ok, _copied} = Arca.Overlay.materialize_shipped(Sanctum.Context.actor(ctx), "components")
     {:ok, %{errors: 0}} = Compendium.AutoIndexer.scan(ctx: ctx)
@@ -254,15 +253,21 @@ defmodule Sanctum.Consent.BootstrapSelectionTest do
     File.write!(Path.join(dest, "cyfr-manifest.json"), Jason.encode!(manifest))
   end
 
+  # The newest shipped version: a release may ship a new version beside the
+  # one it keeps.
   defp shipped_version(plural, name) do
-    [dir] = Path.wildcard(Path.join([@bundle, plural, "local", name, "*"]))
-    Path.basename(dir)
+    [@bundle, plural, "local", name, "*"]
+    |> Path.join()
+    |> Path.wildcard()
+    |> Enum.map(&Path.basename/1)
+    |> Compendium.Semver.sort_desc()
+    |> hd()
   end
 
   defp copy_bundle!(dest) do
     @bundle
     |> Path.join("**")
-    |> Cyfr.Test.SourceTree.files!(match_dot: false)
+    |> Prima.Test.SourceTree.files!(match_dot: false)
     |> Enum.reject(&(String.contains?(&1, "/target/") or File.dir?(&1)))
     |> Enum.each(fn src ->
       target = Path.join(dest, Path.relative_to(src, @bundle))

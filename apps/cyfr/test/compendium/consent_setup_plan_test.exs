@@ -4,16 +4,17 @@
 defmodule Compendium.ConsentSetupPlanTest do
   use ExUnit.Case, async: false
 
+  require Ecto.Query
+
   alias Sanctum.Consent.Commit
   alias Sanctum.Consent.Plan
   alias Sanctum.Vault
 
   @wasm File.read!(Path.join(__DIR__, "../support/test_wasm/math.wasm"))
 
-  setup do
+  setup tags do
     Arca.Cache.init()
-    :ok = Ecto.Adapters.SQL.Sandbox.checkout(Arca.Repo)
-    Ecto.Adapters.SQL.Sandbox.mode(Arca.Repo, {:shared, self()})
+    Cyfr.Test.Sandbox.setup!(tags)
 
     test_path = Path.join(System.tmp_dir!(), "consent_setup_#{:rand.uniform(1_000_000)}")
     original_base_path = Application.get_env(:arca, :base_path)
@@ -58,6 +59,45 @@ defmodule Compendium.ConsentSetupPlanTest do
     committed
   end
 
+  @tag :capture_log
+  test "a consent store that cannot answer is not ready, never 'no profile'", %{ctx: ctx} do
+    publish!(ctx, "plan-outage")
+    Arca.Repo.query!("ALTER TABLE profiles RENAME TO profiles_unavailable")
+
+    {:ok, plan} = Compendium.Component.setup_plan(ctx, "reagent:local.plan-outage")
+
+    assert %{profile_status: :unavailable, ready: false} = plan.consent
+    assert plan.ready == false
+  end
+
+  test "an owner profile that cannot be decoded is reported, not skipped", %{ctx: ctx} do
+    publish!(ctx, "plan-damaged")
+
+    {:ok, entry} =
+      Sanctum.TestContext.create_vault(ctx, %{
+        name: "plan-damaged-conn",
+        kind: "api_key",
+        fields: %{"k" => "v"}
+      })
+
+    grant!(ctx, "reagent:local.plan-damaged", [%{need: "@ingress", entry_id: entry.id}])
+
+    {:ok, [%{id: profile_id}]} =
+      Sanctum.Consent.profiles(ctx, "reagent:local.plan-damaged")
+
+    Arca.Repo.update_all(
+      Ecto.Query.from(p in Arca.Schemas.Profile,
+        where: p.athanor_id == ^ctx.athanor_id and p.id == ^profile_id
+      ),
+      set: [kind: "sideways"]
+    )
+
+    {:ok, plan} = Compendium.Component.setup_plan(ctx, "reagent:local.plan-damaged")
+
+    assert %{profile_id: ^profile_id, profile_status: :corrupt, ready: false} = plan.consent
+    assert plan.ready == false
+  end
+
   test "a component with no profile and no needs is ready", %{ctx: ctx} do
     publish!(ctx, "plan-no-profile")
 
@@ -72,7 +112,11 @@ defmodule Compendium.ConsentSetupPlanTest do
     publish!(ctx, "plan-granted")
 
     {:ok, entry} =
-      Vault.create(ctx, %{name: "plan-conn", kind: "api_key", fields: %{"k" => "v"}})
+      Sanctum.TestContext.create_vault(ctx, %{
+        name: "plan-conn",
+        kind: "api_key",
+        fields: %{"k" => "v"}
+      })
 
     grant!(ctx, "reagent:local.plan-granted", [%{need: "@ingress", entry_id: entry.id}])
 
@@ -90,7 +134,11 @@ defmodule Compendium.ConsentSetupPlanTest do
     publish!(ctx, "plan-rebound")
 
     {:ok, entry} =
-      Vault.create(ctx, %{name: "rebound-conn", kind: "api_key", fields: %{"k" => "v"}})
+      Sanctum.TestContext.create_vault(ctx, %{
+        name: "rebound-conn",
+        kind: "api_key",
+        fields: %{"k" => "v"}
+      })
 
     grant!(ctx, "reagent:local.plan-rebound", [%{need: "@ingress", entry_id: entry.id}])
     {:ok, _} = Vault.rebind(ctx, %{id: entry.id, oauth_scopes: ["new.scope"]})
@@ -106,7 +154,11 @@ defmodule Compendium.ConsentSetupPlanTest do
     publish!(ctx, "plan-revoked")
 
     {:ok, entry} =
-      Vault.create(ctx, %{name: "revoked-conn", kind: "api_key", fields: %{"k" => "v"}})
+      Sanctum.TestContext.create_vault(ctx, %{
+        name: "revoked-conn",
+        kind: "api_key",
+        fields: %{"k" => "v"}
+      })
 
     grant!(ctx, "reagent:local.plan-revoked", [%{need: "@ingress", entry_id: entry.id}])
     {:ok, _} = Vault.revoke(ctx, entry.id)

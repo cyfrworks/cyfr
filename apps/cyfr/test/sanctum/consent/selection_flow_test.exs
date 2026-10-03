@@ -12,13 +12,12 @@ defmodule Sanctum.Consent.SelectionFlowTest do
 
   use ExUnit.Case, async: false
 
-  alias Cyfr.Authority.Blob
-  alias Cyfr.Authority.Transition
+  alias Prima.Authority.Blob
+  alias Prima.Authority.Transition
   alias Sanctum.Consent.Commit
   alias Sanctum.Consent.Plan
-  alias Sanctum.MCP.ProfileTool
-  alias Cyfr.Test.AuthorityFixtures, as: Fixtures
-  alias Sanctum.Vault
+  alias Sanctum.Providers.Profile
+  alias Prima.Test.AuthorityFixtures, as: Fixtures
 
   @wasm File.read!(Path.join(__DIR__, "../../support/test_wasm/math.wasm"))
   @dep "reagent:local.sel-dep"
@@ -26,10 +25,9 @@ defmodule Sanctum.Consent.SelectionFlowTest do
   @role_b "reagent:local.sel-role-b"
   @root "reagent:local.sel-root"
 
-  setup do
+  setup tags do
     Arca.Cache.init()
-    :ok = Ecto.Adapters.SQL.Sandbox.checkout(Arca.Repo)
-    Ecto.Adapters.SQL.Sandbox.mode(Arca.Repo, {:shared, self()})
+    Cyfr.Test.Sandbox.setup!(tags)
 
     test_path = Path.join(System.tmp_dir!(), "consent_selection_#{:rand.uniform(1_000_000)}")
     original_base_path = Application.get_env(:arca, :base_path)
@@ -43,7 +41,7 @@ defmodule Sanctum.Consent.SelectionFlowTest do
         else: Application.delete_env(:arca, :base_path)
     end)
 
-    ctx = Sanctum.TestContext.local()
+    ctx = Sanctum.TestContext.local(:prism)
 
     # The dependency declares one credential need; each source depends on it.
     publish!(ctx, "sel-dep", %{
@@ -81,7 +79,9 @@ defmodule Sanctum.Consent.SelectionFlowTest do
   end
 
   defp entry!(ctx, name, fields) do
-    {:ok, view} = Vault.create(ctx, %{name: name, kind: "api_key", fields: fields})
+    {:ok, view} =
+      Sanctum.TestContext.create_vault(ctx, %{name: name, kind: "api_key", fields: fields})
+
     view
   end
 
@@ -120,7 +120,7 @@ defmodule Sanctum.Consent.SelectionFlowTest do
   end
 
   defp edge_vault(ctx, source_ref) do
-    {:ok, authority} = Cyfr.Execution.authority_for(ctx, :default, source_ref)
+    {:ok, authority} = Crucible.authority_for(ctx, :default, source_ref)
     {:ok, edge} = Blob.lookup_edge(authority.policy, source_ref, @dep, "")
     edge.vault
   end
@@ -163,10 +163,22 @@ defmodule Sanctum.Consent.SelectionFlowTest do
         selections: [%{dep: @dep, label: "default"}]
       })
 
-    assert Enum.any?(
-             preview.summary,
-             &(&1 =~ "runs with home key, the key bound on its 'default' profile")
-           )
+    # The lent key is a typed row on the source, on the edge into the
+    # dependency, naming the entry, its fields and the lending label.
+    assert [
+             %{
+               "kind" => "credential",
+               "node" => "reagent:local.sel-source",
+               "narrowed" => false,
+               "values" => %{
+                 "name" => "home key",
+                 "edge" => @dep,
+                 "label" => "default",
+                 "fields" => ["KEY", "ORG"],
+                 "scopes" => []
+               }
+             }
+           ] = Enum.filter(preview.rows, &(&1["kind"] == "credential"))
 
     {{:ok, _}, _} =
       walk!(ctx, "reagent:local.sel-source-two", %{
@@ -247,6 +259,13 @@ defmodule Sanctum.Consent.SelectionFlowTest do
                selections: [%{dep: @dep, label: "work", fields: ["ORG"]}]
              })
 
+    # An explicit empty list names nothing: refused, never "every field".
+    assert {:error, {:invalid_argument, _message}} =
+             Commit.preview(ctx, %{
+               ref: ref,
+               selections: [%{dep: @dep, label: "work", fields: []}]
+             })
+
     # A revoked lender is not offered and not accepted.
     :ok = Arca.ProfileStorage.set_status(Sanctum.Context.actor(ctx), lenders.work, "revoked")
     {:ok, plan} = Plan.plan(ctx, %{ref: ref})
@@ -285,7 +304,7 @@ defmodule Sanctum.Consent.SelectionFlowTest do
   test "the profile tool decodes selections on the wire", %{ctx: ctx} do
     _lenders = lenders!(ctx)
     ref = "reagent:local.sel-source"
-    {:ok, plan} = ProfileTool.handle(ctx, %{"action" => "plan", "ref" => ref})
+    {:ok, plan} = Profile.handle(ctx, %{"action" => "plan", "ref" => ref})
 
     decisions = %{
       "ref" => ref,
@@ -293,10 +312,10 @@ defmodule Sanctum.Consent.SelectionFlowTest do
     }
 
     {:ok, preview} =
-      ProfileTool.handle(ctx, %{"action" => "preview", "decisions" => decisions})
+      Profile.handle(ctx, %{"action" => "preview", "decisions" => decisions})
 
     {:ok, %{status: "committed"}} =
-      ProfileTool.handle(ctx, %{
+      Profile.handle(ctx, %{
         "action" => "commit",
         "decisions" => decisions,
         "plan_token" => plan.plan_token,
@@ -308,7 +327,7 @@ defmodule Sanctum.Consent.SelectionFlowTest do
     assert %{projection: %{fields: ["KEY"]}} = edge_vault(ctx, ref)
 
     {:ok, with_from} =
-      ProfileTool.handle(ctx, %{
+      Profile.handle(ctx, %{
         "action" => "preview",
         "decisions" => %{
           "ref" => ref,
@@ -319,7 +338,7 @@ defmodule Sanctum.Consent.SelectionFlowTest do
     assert is_binary(with_from.commit_digest)
 
     assert {:error, msg} =
-             ProfileTool.handle(ctx, %{
+             Profile.handle(ctx, %{
                "action" => "preview",
                "decisions" => %{
                  "ref" => ref,
@@ -370,7 +389,7 @@ defmodule Sanctum.Consent.SelectionFlowTest do
     assert %{entry_id: ^home_id} = root_edge_vault(ctx, @role_a)
     assert %{entry_id: ^work_id} = root_edge_vault(ctx, @role_b)
 
-    {:ok, authority} = Cyfr.Execution.authority_for(ctx, :default, @root)
+    {:ok, authority} = Crucible.authority_for(ctx, :default, @root)
 
     {:child, via_a} =
       authority
@@ -415,6 +434,72 @@ defmodule Sanctum.Consent.SelectionFlowTest do
              root_edge_vault(ctx, @role_b)
   end
 
+  test "one entry lent on two edges of one node is two rows, one per edge", %{ctx: ctx} do
+    lenders = lenders!(ctx)
+    dep_two = "reagent:local.sel-dep-two"
+
+    publish!(ctx, "sel-dep-two", %{
+      "needs" => %{
+        "api_key" => %{
+          "type" => "api_key:example.com",
+          "reason" => "to call the example API too",
+          "required" => true,
+          "fields" => ["KEY", "ORG"]
+        }
+      }
+    })
+
+    {{:ok, _}, _} =
+      walk!(ctx, dep_two, %{bindings: [%{need: "api_key", entry_id: lenders.home_entry.id}]})
+
+    publish!(ctx, "sel-source-both", %{
+      "dependencies" => %{"static" => [%{"ref" => @dep}, %{"ref" => dep_two}]}
+    })
+
+    # The same key, lent by one node into two dependencies under two
+    # projections: each edge is its own row, neither hidden nor refused.
+    {{:ok, _}, preview} =
+      walk!(ctx, "reagent:local.sel-source-both", %{
+        selections: [
+          %{dep: @dep, label: "default", fields: ["KEY"]},
+          %{dep: dep_two, label: "default"}
+        ]
+      })
+
+    credentials =
+      for %{"kind" => "credential", "node" => "reagent:local.sel-source-both"} = row <-
+            preview.rows,
+          do: row["values"]
+
+    assert [
+             %{"name" => "home key", "edge" => @dep, "fields" => ["KEY"]},
+             %{"name" => "home key", "edge" => ^dep_two, "fields" => ["KEY", "ORG"]}
+           ] = Enum.sort_by(credentials, & &1["edge"])
+  end
+
+  test "a bound credential riding a dependency edge is the row of that edge", %{ctx: ctx} do
+    # A closure with a cycle: the source depends on a component that
+    # depends on the source back, so the edge into the source from it
+    # carries the source's own bound key.
+    source = "reagent:local.sel-cycle-source"
+    back = "reagent:local.sel-cycle-back"
+    publish!(ctx, "sel-cycle-source", %{"dependencies" => %{"static" => [%{"ref" => back}]}})
+    publish!(ctx, "sel-cycle-back", %{"dependencies" => %{"static" => [%{"ref" => source}]}})
+    key = entry!(ctx, "cycle key", %{"KEY" => "k-cycle"})
+
+    {:ok, preview} =
+      Commit.preview(ctx, %{ref: source, bindings: [%{need: "@ingress", entry_id: key.id}]})
+
+    credentials =
+      for %{"kind" => "credential", "values" => values} = row <- preview.rows,
+          do: {row["node"], values["edge"], values["name"]}
+
+    assert Enum.sort(credentials) == [
+             {back, source, "cycle key"},
+             {source, "@ingress", "cycle key"}
+           ]
+  end
+
   defp tree!(ctx) do
     publish!(ctx, "sel-role-a", %{"dependencies" => %{"static" => [%{"ref" => @dep}]}})
     publish!(ctx, "sel-role-b", %{"dependencies" => %{"static" => [%{"ref" => @dep}]}})
@@ -425,7 +510,7 @@ defmodule Sanctum.Consent.SelectionFlowTest do
   end
 
   defp root_edge_vault(ctx, from) do
-    {:ok, authority} = Cyfr.Execution.authority_for(ctx, :default, @root)
+    {:ok, authority} = Crucible.authority_for(ctx, :default, @root)
     {:ok, edge} = Blob.lookup_edge(authority.policy, from, @dep, "")
     edge.vault
   end

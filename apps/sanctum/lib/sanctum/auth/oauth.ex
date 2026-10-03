@@ -20,9 +20,20 @@ defmodule Sanctum.Auth.OAuth do
 
   Whether a proven identity may sign in to this server is the door's
   decision (`Sanctum.Door`), taken before any session is minted.
+
+  A plain OAuth sign-in proves who someone is and never that they are
+  present now (`proves_freshness?/0`): the provider may answer it from its
+  own session, and a device-flow grant can be approved on another device
+  at any time. So it never confirms a sensitive change; a pending
+  confirmation is proven by a passkey, a forced-fresh OpenID Connect
+  re-authentication or an emailed code (`Sanctum.Consent.Authz`).
   """
 
   @behaviour Sanctum.Auth
+
+  @doc "A plain OAuth sign-in proves no freshness, so it never counts as a fresh proof."
+  @spec proves_freshness?() :: false
+  def proves_freshness?, do: false
 
   @impl true
   @doc """
@@ -34,7 +45,7 @@ defmodule Sanctum.Auth.OAuth do
   @doc """
   This provider issues no bearer credential of its own: a session token or
   an API key on a request is established by the one recipe
-  (`Sanctum.Caller.establish/2`) in `EmissaryWeb.Plugs.Authenticate`
+  (`Sanctum.Caller.establish/2`) in `CyfrWeb.Plugs.Authenticate`
   before the provider is asked. Always `nil`.
   """
   def current_user(_conn), do: nil

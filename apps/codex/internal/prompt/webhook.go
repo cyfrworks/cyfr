@@ -120,7 +120,7 @@ func validateInputTemplateJSON(s string) error {
 
 // FetchWebhooks calls webhook list and returns options for selection.
 func FetchWebhooks(ctx context.Context, client *mcp.Client) ([]Option, error) {
-	result, err := client.CallTool(ctx, "webhook", ops.WebhookListArgs{})
+	result, err := client.CallTool(ctx, ops.Webhook, ops.WebhookListArgs{})
 	if err != nil {
 		return nil, err
 	}

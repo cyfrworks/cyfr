@@ -26,7 +26,7 @@ defmodule Cyfr.RuntimeConfig do
 
   @type getenv :: (String.t() -> String.t() | nil)
 
-  # The worker vocabulary `CYFR_WORKERS` and the host API listener take
+  # The worker vocabulary `CYFR_OPUS_WORKERS` and the host API listener take
   # their defaults from: a local Opus service, reached and reaching back
   # over loopback.
   @default_workers "wrk_local=http://127.0.0.1:4200"
@@ -68,7 +68,7 @@ defmodule Cyfr.RuntimeConfig do
         end
 
       other ->
-        {:error, ~s(Unknown CYFR_AUTH_PROVIDER=#{inspect(other)}; expected "oauth" or "oidc".)}
+        {:error, ~s(Unknown CYFR_AUTH_PROVIDER="#{other}"; expected "oauth" or "oidc".)}
     end
   end
 
@@ -103,7 +103,7 @@ defmodule Cyfr.RuntimeConfig do
   the application's DB setup cannot disagree about what was built.
   """
   @spec repo_adapter() :: module()
-  defdelegate repo_adapter(), to: Arca.Repo, as: :adapter
+  defdelegate repo_adapter(), to: Arca
 
   @doc """
   The configured auth provider module, or `nil` when the deployment runs
@@ -115,14 +115,14 @@ defmodule Cyfr.RuntimeConfig do
   defdelegate auth_provider(), to: Sanctum.Auth, as: :provider
 
   @doc """
-  Browser cross-origin allowlist. Unset means the wildcard default — the
-  single source of that default, read by both the CORS plug (enforcement)
-  and the boot guard (which refuses a wildcard once an auth provider is
-  configured). The two must never disagree about what "unset" means.
+  Browser cross-origin allowlist: `config/config.exs` configures the empty
+  one, which admits no cross-origin browser caller, and
+  `CYFR_CORS_ALLOWED_ORIGINS` replaces it. Read by both the CORS plug
+  (enforcement) and the boot guard (which refuses a wildcard once an auth
+  provider is configured), so the two never disagree about what it holds.
   """
   @spec cors_allowed_origins() :: [String.t()]
-  def cors_allowed_origins,
-    do: Application.get_env(:cyfr, :cors_allowed_origins, ["*"])
+  def cors_allowed_origins, do: Application.fetch_env!(:cyfr, :cors_allowed_origins)
 
   @doc """
   Whether cookies carry the `Secure` attribute.
@@ -138,7 +138,7 @@ defmodule Cyfr.RuntimeConfig do
   @doc """
   Whether this node is headless (`CYFR_HEADLESS`): the API, MCP and public
   tinctures are served and every browser route answers 404 — a Codex-only
-  node. Read at request time by `EmissaryWeb.Plugs.Headless`.
+  node. Read at request time by `CyfrWeb.Plugs.Headless`.
   """
   @spec headless?() :: boolean()
   def headless?, do: Application.get_env(:cyfr, :headless, false) == true
@@ -206,7 +206,7 @@ defmodule Cyfr.RuntimeConfig do
   @doc """
   Whether unsigned OCI components are refused. Read at both ends of a
   component's life — `Compendium.OCI.Client` refuses the pull, and
-  `Cyfr.Execution.Admission` refuses to run a row that carries no verified
+  `Crucible.Admission` refuses to run a row that carries no verified
   signature (a component pulled before the knob was set).
   """
   @spec require_signed_pulls?() :: boolean()
@@ -263,13 +263,6 @@ defmodule Cyfr.RuntimeConfig do
     Application.get_env(:cyfr, :mcp_allowed_origins, @mcp_default_origins) ++
       Application.get_env(:cyfr, :mcp_extra_origins, [])
   end
-
-  @doc """
-  SQLite busy timeout, used both as the Repo connection option and in the
-  boot-time PRAGMA — one constant so the two mechanisms stay in step.
-  """
-  @spec sqlite_busy_timeout_ms() :: pos_integer()
-  defdelegate sqlite_busy_timeout_ms(), to: Arca.Repo, as: :busy_timeout_ms
 
   @doc """
   Returns the default per-window tincture invocation budget. HTTP uses
@@ -347,7 +340,7 @@ defmodule Cyfr.RuntimeConfig do
       "" -> {:ok, :local}
       "local" -> {:ok, :local}
       "s3" -> s3_config(getenv)
-      other -> {:error, ~s(Unknown CYFR_STORAGE=#{inspect(other)}; expected "local" or "s3".)}
+      other -> {:error, ~s(Unknown CYFR_STORAGE="#{other}"; expected "local" or "s3".)}
     end
   end
 
@@ -380,7 +373,7 @@ defmodule Cyfr.RuntimeConfig do
          # Use the configured receive timeout for object-store requests.
          {:ok, receive_timeout_ms} <-
            positive_int(getenv.("CYFR_S3_RECEIVE_TIMEOUT_MS"), "CYFR_S3_RECEIVE_TIMEOUT_MS"),
-         {:ok, path_style} <- Cyfr.EnvValue.switch(getenv, "CYFR_S3_PATH_STYLE", false) do
+         {:ok, path_style} <- Prima.EnvValue.switch(getenv, "CYFR_S3_PATH_STYLE", false) do
       opts =
         [
           bucket: resolved.bucket,
@@ -419,26 +412,26 @@ defmodule Cyfr.RuntimeConfig do
 
       url ->
         with {:ok, pool_size} <- parse_pool_size(getenv.("CYFR_DB_POOL_SIZE")),
-             {:ok, ssl} <- Cyfr.EnvValue.switch(getenv, "CYFR_DB_SSL", false) do
+             {:ok, ssl} <- Prima.EnvValue.switch(getenv, "CYFR_DB_SSL", false) do
           {:ok, [url: url, pool_size: pool_size, ssl: ssl]}
         end
     end
   end
 
   @doc """
-  Resolve the worker services runs are dispatched to from `CYFR_WORKERS`:
+  Resolve the worker services runs are dispatched to from `CYFR_OPUS_WORKERS`:
   comma-separated `<service_id>=<url>` entries, default
   `wrk_local=http://127.0.0.1:4200`. A service id is `wrk_` followed by 1
   to 64 letters, digits, `_` or `-`, the id its key derives over
-  (`Cyfr.WorkerAuth.worker_key/2`), and a URL is the base URL of its
-  listener (`Cyfr.WorkerWire.base_url/1`). Answers the
-  `t:Cyfr.WorkerAPI.endpoint/0` entries in order, each running any
+  (`Prima.WorkerAuth.worker_key/2`), and a URL is the base URL of its
+  listener (`Prima.WorkerWire.base_url/1`). Answers the
+  `t:Prima.WorkerAPI.endpoint/0` entries in order, each running any
   component; a malformed entry or a repeated id is an error naming it.
   """
-  @spec resolve_workers(getenv) :: {:ok, [Cyfr.WorkerAPI.endpoint()]} | {:error, String.t()}
+  @spec resolve_workers(getenv) :: {:ok, [Prima.WorkerAPI.endpoint()]} | {:error, String.t()}
   def resolve_workers(getenv) when is_function(getenv, 1) do
     entries =
-      (blank_to_nil(getenv.("CYFR_WORKERS")) || @default_workers)
+      (blank_to_nil(getenv.("CYFR_OPUS_WORKERS")) || @default_workers)
       |> String.split(",")
       |> Enum.map(&String.trim/1)
       |> Enum.reject(&(&1 == ""))
@@ -447,13 +440,13 @@ defmodule Cyfr.RuntimeConfig do
       case worker_entry(entry) do
         {:ok, %{id: id} = endpoint} ->
           if Enum.any?(acc, &(&1.id == id)),
-            do: {:halt, {:error, "CYFR_WORKERS names the service #{inspect(id)} twice."}},
+            do: {:halt, {:error, "CYFR_OPUS_WORKERS names the service #{inspect(id)} twice."}},
             else: {:cont, {:ok, acc ++ [endpoint]}}
 
         :error ->
           {:halt,
            {:error,
-            "CYFR_WORKERS entry #{inspect(entry)} is not <service_id>=<url>: a service id " <>
+            "CYFR_OPUS_WORKERS entry #{inspect(entry)} is not <service_id>=<url>: a service id " <>
               "is `wrk_` followed by 1 to 64 letters, digits, `_` or `-`, and a URL is " <>
               "http or https with a host and no path."}}
       end
@@ -464,7 +457,7 @@ defmodule Cyfr.RuntimeConfig do
     with [id, url] <- String.split(entry, "=", parts: 2),
          id = String.trim(id),
          true <- Regex.match?(@service_id, id),
-         {:ok, base} <- Cyfr.WorkerWire.base_url(String.trim(url)) do
+         {:ok, base} <- Prima.WorkerWire.base_url(String.trim(url)) do
       {:ok, %{id: id, url: base, components: nil}}
     else
       _ -> :error
@@ -566,7 +559,7 @@ defmodule Cyfr.RuntimeConfig do
   end
 
   @doc """
-  Resolve where CYFR's host API listener binds (`Cyfr.Execution.HostListener`)
+  Resolve where CYFR's host API listener binds (`Crucible.HostListener`)
   and the address this member is reached at: `CYFR_HOST_API_BIND`, an IPv4
   or IPv6 address (default `127.0.0.1`), `CYFR_HOST_API_PORT`, a port from
   1 to 65535 (default 4300), and `CYFR_HOST_API_URL`, the base URL a
@@ -596,7 +589,7 @@ defmodule Cyfr.RuntimeConfig do
   defp host_api_url(nil), do: {:ok, nil}
 
   defp host_api_url(text) do
-    case Cyfr.WorkerWire.base_url(text) do
+    case Prima.WorkerWire.base_url(text) do
       {:ok, url} ->
         {:ok, url}
 
@@ -630,28 +623,6 @@ defmodule Cyfr.RuntimeConfig do
   end
 
   @doc """
-  Resolve the worker watch's bounds (`Cyfr.Execution.WorkerWatch`):
-  `CYFR_WORKER_WATCH_POLL_MS`, the interval between its status polls of
-  each worker service, a whole number of milliseconds from 1000 to 60000
-  (default 5000), and `CYFR_WORKER_WATCH_MISSES`, the misses in a row
-  after which the boot last heard from has its running attempts lapsed,
-  from 1 to 100 (default 3). Answers the keyword `config :cyfr,
-  :worker_watch` takes with only the set bounds, so the code's defaults
-  stand for the rest; a set value outside its range, or not a whole
-  number, is an error naming it.
-  """
-  @spec resolve_worker_watch(getenv) :: {:ok, keyword()} | {:error, String.t()}
-  def resolve_worker_watch(getenv) when is_function(getenv, 1) do
-    with {:ok, poll_ms} <-
-           Cyfr.EnvValue.milliseconds(getenv, "CYFR_WORKER_WATCH_POLL_MS", 1_000..60_000),
-         {:ok, misses} <-
-           Cyfr.EnvValue.whole_number(getenv, "CYFR_WORKER_WATCH_MISSES", 1..100, "misses") do
-      {:ok,
-       Enum.reject([poll_ms: poll_ms, misses: misses], fn {_key, value} -> is_nil(value) end)}
-    end
-  end
-
-  @doc """
   Resolve the Locus builds service this server sends its builds to
   (`Compendium.Builds.Client`): `CYFR_LOCUS_BUILDS_URL`, the base URL of
   its listener (http or https with a host and no path), and
@@ -666,8 +637,8 @@ defmodule Cyfr.RuntimeConfig do
   @spec resolve_locus_builds(getenv) ::
           {:ok, %{url: String.t(), key: <<_::256>>} | nil} | {:error, String.t()}
   def resolve_locus_builds(getenv) when is_function(getenv, 1) do
-    with {:ok, url} <- Cyfr.EnvValue.url(getenv, "CYFR_LOCUS_BUILDS_URL"),
-         {:ok, key} <- Cyfr.EnvValue.hex_key(getenv, "CYFR_LOCUS_BUILDS_KEY") do
+    with {:ok, url} <- Prima.EnvValue.url(getenv, "CYFR_LOCUS_BUILDS_URL"),
+         {:ok, key} <- Prima.EnvValue.hex_key(getenv, "CYFR_LOCUS_BUILDS_KEY") do
       case {url, key} do
         {nil, nil} ->
           {:ok, nil}

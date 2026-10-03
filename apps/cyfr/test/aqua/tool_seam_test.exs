@@ -7,13 +7,16 @@ defmodule Aqua.ToolSeamTest do
   surface — the same contract `PrismWeb.ToolSeamTest` pins for the
   console.
 
-  Checks that assistant-domain MCP dependencies use Aqua.Ops.
+  Checks that assistant-domain MCP dependencies use Aqua.Ops. The
+  assistant owns its providers (`Aqua.Providers.*`), which the operation
+  table calls into; they live under `lib/aqua` like the rest of the
+  domain, so the scan holds them too, and nothing there but the seam
+  names `Emissary.MCP.`.
 
-  Outside its scope, deliberately: `Emissary.PubSub` used as a process
-  NAME (the application's one supervised PubSub, the posture
-  `Cyfr.Boundaries` rosters for sanctum), and `Aqua.Intents`'
-  read of the console route table, rostered in
-  `Cyfr.Boundaries`.
+  Outside its scope, deliberately: `Aqua.Intents`' read of the console
+  route table, rostered in `Cyfr.Boundaries`. The assistant's live
+  events go through the host's bus (`Cyfr.Bus`), which is not the tool
+  surface.
   """
 
   use ExUnit.Case, async: true
@@ -24,10 +27,10 @@ defmodule Aqua.ToolSeamTest do
 
   test "the assistant reaches the tool surface only through its seam" do
     offenders =
-      for path <- Cyfr.Test.SourceTree.files!(Path.join(root(), "apps/cyfr/lib/aqua/**/*.ex")),
+      for path <- Prima.Test.SourceTree.files!(Path.join(root(), "apps/cyfr/lib/aqua/**/*.ex")),
           rel = Path.relative_to(path, root()),
           rel != @seam,
-          {line, n} <- path |> Cyfr.Test.SourceTree.read() |> Cyfr.Test.CodeLines.code_lines(),
+          {line, n} <- path |> Prima.Test.SourceTree.read() |> Prima.Test.CodeLines.code_lines(),
           String.contains?(line, "Emissary.MCP."),
           do: "#{rel}:#{n}: #{String.trim(line)}"
 

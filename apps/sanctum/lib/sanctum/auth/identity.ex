@@ -8,7 +8,7 @@ defmodule Sanctum.Auth.Identity do
   An identity's key is `"<provider>|<iss>|<subject>"` — deterministic for a
   given IdP identity, so the same human via the same IdP presents the same
   key on every deployment. It is what the door judges before any row
-  exists and what an `Arca.Schemas.ExternalIdentity` row is keyed by; the
+  exists and what the stored identity row is keyed by (`Arca.Users`); the
   person it names has an id of this server's (`Sanctum.Tenancy.Users`).
   The two built-in direct providers and their issuers are the `@builtin`
   table below; it is the only place either is written.
@@ -18,6 +18,17 @@ defmodule Sanctum.Auth.Identity do
   host an issuer string really names (`issuer_host/1`), and whether a
   configured OIDC issuer is one a direct strategy already owns
   (`reserved_issuer?/1`).
+
+  ## The `cyfr` door
+
+  A person another home holds the keys of signs in through the `cyfr`
+  door (`Sanctum.Auth.CyfrDoor`), whose identity is
+  `cyfr|<directory>|<identifier>` (`cyfr_key/2`). It stands beside the
+  built-in table, never in it: its issuer is not one URL per provider but,
+  per person, the directory URL their verified genesis names, which never
+  changes for that identifier, and never this deployment's own
+  enrollment directory. Its subject is the person identifier
+  (`cyfr_identifier/1`), by which the door judges it.
   """
 
   @builtin %{
@@ -27,6 +38,12 @@ defmodule Sanctum.Auth.Identity do
 
   # Derived, not typed again: the hosts a generic-OIDC deployment may not use.
   @builtin_hosts @builtin |> Map.values() |> Enum.map(&URI.parse(&1).host) |> Enum.sort()
+
+  # The session providers no identity provider may name. `restore` is the
+  # installation-authorized restore's own (`Sanctum.Recovery`): a session it
+  # issues may initialize a restored person's first fresh method, so no
+  # external identity claim can arrive under that name.
+  @reserved_providers ~w(restore)
 
   @doc """
   Build the identity key `"<provider>|<iss>|<subject>"`.
@@ -38,6 +55,11 @@ defmodule Sanctum.Auth.Identity do
   def key(provider, iss, sub) when is_atom(provider),
     do: key(Atom.to_string(provider), iss, sub)
 
+  def key(provider, _iss, _sub) when provider in @reserved_providers do
+    raise ArgumentError,
+          "the provider #{provider} is reserved for a session no identity provider issues"
+  end
+
   def key(provider, iss, sub)
       when is_binary(provider) and is_binary(iss) and is_binary(sub) and
              provider != "" and iss != "" and sub != "" do
@@ -47,10 +69,18 @@ defmodule Sanctum.Auth.Identity do
   # Reject empty components. An empty iss/sub produced a degenerate key like
   # "github||" that can collide across people and normalize unexpectedly — an
   # identity must have all three parts.
+  #
+  # The message names which part is wrong and never its value: a subject or
+  # an issuer is a person's identity.
   def key(provider, iss, sub) do
+    wrong =
+      for {part, value} <- [provider: provider, iss: iss, sub: sub],
+          not (is_binary(value) and value != ""),
+          do: part
+
     raise ArgumentError,
-          "invalid identity components: " <>
-            "provider=#{inspect(provider)} iss=#{inspect(iss)} sub=#{inspect(sub)}"
+          "invalid identity components: #{Enum.join(wrong, ", ")} " <>
+            "must be non-empty strings"
   end
 
   @doc """
@@ -74,6 +104,9 @@ defmodule Sanctum.Auth.Identity do
           | {:error, :not_an_identity}
   def parse(key) when is_binary(key) do
     case String.split(key, "|", parts: 3) do
+      [provider, _iss, _sub] when provider in @reserved_providers ->
+        {:error, :not_an_identity}
+
       [provider, iss, sub] when provider != "" and iss != "" and sub != "" ->
         {:ok, %{provider: provider, issuer: iss, subject: sub}}
 
@@ -87,6 +120,42 @@ defmodule Sanctum.Auth.Identity do
   @doc "Whether `value` has the shape of an identity key."
   @spec key?(term()) :: boolean()
   def key?(value), do: match?({:ok, _}, parse(value))
+
+  @doc """
+  The identity key of a person the `cyfr` door admits: `cyfr`, the
+  directory URL their verified genesis names as the issuer, and their
+  identifier as the subject (the module doc): for the directory
+  `https://dir.example`, `"cyfr|https://dir.example|per_…"`. A malformed
+  directory URL or identifier raises, as `key/3` does for an empty part.
+  """
+  @spec cyfr_key(String.t(), String.t()) :: String.t()
+  def cyfr_key(directory_url, identifier)
+      when is_binary(directory_url) and is_binary(identifier) do
+    unless Prima.Identity.Encoding.directory_url?(directory_url) and
+             Prima.Identity.Encoding.identifier?(identifier) do
+      raise ArgumentError, "a cyfr identity names a directory URL and a person identifier"
+    end
+
+    key("cyfr", directory_url, identifier)
+  end
+
+  @doc """
+  The person identifier a `cyfr` identity key names, or `:error` for a key
+  of any other door.
+  """
+  @spec cyfr_identifier(term()) :: {:ok, String.t()} | :error
+  def cyfr_identifier(key) do
+    case parse(key) do
+      {:ok, %{provider: "cyfr", issuer: directory, subject: identifier}} ->
+        if Prima.Identity.Encoding.identifier?(identifier) and
+             Prima.Identity.Encoding.directory_url?(directory),
+           do: {:ok, identifier},
+           else: :error
+
+      _other ->
+        :error
+    end
+  end
 
   @doc """
   Canonical `iss` (RFC 7519 issuer) for a built-in provider.
@@ -112,12 +181,13 @@ defmodule Sanctum.Auth.Identity do
     # provider is ever added without a canonical issuer registered here.
     case Map.fetch(@builtin, provider) do
       {:ok, iss} -> iss
-      :error -> raise ArgumentError, "no canonical issuer registered for provider #{provider}"
+      :error -> raise ArgumentError, "no canonical issuer registered for the provider"
     end
   end
 
   def issuer(other) do
-    raise ArgumentError, "no canonical issuer registered for provider #{inspect(other)}"
+    raise ArgumentError,
+          "no canonical issuer registered for a provider of #{Prima.LoggerContext.shape(other)}"
   end
 
   @doc """
@@ -158,6 +228,23 @@ defmodule Sanctum.Auth.Identity do
   """
   @spec reserved_issuer?(term()) :: boolean()
   def reserved_issuer?(iss), do: issuer_host(iss) in @builtin_hosts
+
+  @doc """
+  Whether `provider` is a session provider no identity provider may name:
+  `restore`, which only the installation-authorized restore issues
+  (`Sanctum.Recovery`). No identity key is built or read under it.
+
+      iex> Sanctum.Auth.Identity.reserved_provider?("restore")
+      true
+
+      iex> Sanctum.Auth.Identity.reserved_provider?("github")
+      false
+  """
+  @spec reserved_provider?(term()) :: boolean()
+  def reserved_provider?(provider) when is_atom(provider) and not is_nil(provider),
+    do: reserved_provider?(Atom.to_string(provider))
+
+  def reserved_provider?(provider), do: provider in @reserved_providers
 
   @doc "The built-in providers, by name."
   @spec builtin_providers() :: [String.t()]

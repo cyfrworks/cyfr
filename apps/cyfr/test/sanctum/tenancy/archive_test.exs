@@ -12,7 +12,7 @@ defmodule Sanctum.Tenancy.ArchiveTest do
 
   The credentials and the memos are authorization properties and go
   synchronously. The running work is the execution domain's: the archive
-  announces and `Cyfr.Execution.ArchiveWatch` reacts, so the cases that
+  announces and `Crucible.ArchiveWatch` reacts, so the cases that
   assert a cancel start that watch and wait for it. It is off by default
   under test (its queries would outlive the sandbox connection its test
   owns), which is why they turn it on here rather than relying on the
@@ -20,7 +20,7 @@ defmodule Sanctum.Tenancy.ArchiveTest do
   """
   use ExUnit.Case, async: false
 
-  import Cyfr.Test.Wait
+  import Prima.Test.Wait
 
   alias Cyfr.Test.ScriptedWorker
   alias Sanctum.Context
@@ -29,19 +29,25 @@ defmodule Sanctum.Tenancy.ArchiveTest do
   @reference "reagent:local.archive-hang:1.0.0"
   @math_wasm_path Path.expand("../../support/test_wasm/math.wasm", __DIR__)
 
-  setup do
+  # How long the execution domain may take to dispatch a run, or to react
+  # to an archive, on a loaded host: a dispatch through the scripted worker
+  # service took ten seconds on two CPUs shared with other work. Every wait
+  # below ends on the event itself; this only bounds a wait that never
+  # ends.
+  @reaction_ms 30_000
+
+  setup tags do
     Arca.Cache.init()
-    :ok = Ecto.Adapters.SQL.Sandbox.checkout(Arca.Repo)
-    Ecto.Adapters.SQL.Sandbox.mode(Arca.Repo, {:shared, self()})
+    Cyfr.Test.Sandbox.setup!(tags)
 
     test_path = Path.join(System.tmp_dir!(), "archive_#{System.unique_integer([:positive])}")
-    keys = [cyfr: :workers, arca: :base_path]
+    keys = [cyfr: :opus_workers, arca: :base_path]
     prev = Map.new(keys, fn {app, key} -> {{app, key}, Application.get_env(app, key)} end)
 
     Application.put_env(
       :cyfr,
-      :workers,
-      ScriptedWorker.workers(@reference, prev[{:cyfr, :workers}])
+      :opus_workers,
+      ScriptedWorker.workers(@reference, prev[{:cyfr, :opus_workers}])
     )
 
     Application.put_env(:arca, :base_path, test_path)
@@ -77,7 +83,7 @@ defmodule Sanctum.Tenancy.ArchiveTest do
   end
 
   # The execution domain's reaction to an archive, started for the cases
-  # that assert a cancel. Under `{:shared, self()}` it reads on this
+  # that assert a cancel. Under the shared sandbox it reads on this
   # test's connection, and `start_supervised!` stops it before the test
   # gives that connection back.
   defp watch_archives! do
@@ -90,7 +96,7 @@ defmodule Sanctum.Tenancy.ArchiveTest do
         else: Application.put_env(:cyfr, :execution_archive_watch_enabled, previous)
     end)
 
-    start_supervised!(Cyfr.Execution.ArchiveWatch)
+    start_supervised!(Crucible.ArchiveWatch)
     :ok
   end
 
@@ -106,9 +112,11 @@ defmodule Sanctum.Tenancy.ArchiveTest do
   end
 
   # A run admitted in the athanor and dispatched to the scripted worker
-  # service, whose runner attached and hangs. Answers its execution id.
+  # service, whose runner attached and hangs. Answers its execution id and
+  # the process waiting on it.
   defp running!(athanor_id, user_id) do
-    ctx = member_ctx(athanor_id, user_id)
+    # A member's run over the API.
+    ctx = athanor_id |> member_ctx(user_id) |> Sanctum.TestContext.via(:api)
 
     {:ok, _} =
       Compendium.Registry.publish_bytes(ctx, File.read!(@math_wasm_path), %{
@@ -117,22 +125,48 @@ defmodule Sanctum.Tenancy.ArchiveTest do
         type: "reagent"
       })
 
-    id = Cyfr.UUID7.execution_id()
+    id = Prima.UUID7.execution_id()
 
-    Task.start(fn ->
-      Cyfr.Execution.Dispatch.run(ctx, @reference, %{},
-        authority: Cyfr.Authority.zero(),
-        execution_id: id
-      )
-    end)
+    {:ok, waiter} =
+      Task.start(fn ->
+        Crucible.Dispatch.run(ctx, @reference, %{},
+          authority: Prima.Authority.zero(),
+          execution_id: id
+        )
+      end)
 
-    wait_until(fn -> Enum.any?(ScriptedWorker.calls(), &(&1.execution_id == id)) end, 5_000)
-    id
+    wait_until(
+      fn -> Enum.any?(ScriptedWorker.calls(), &(&1.execution_id == id)) end,
+      @reaction_ms,
+      "the run's start at the scripted worker service"
+    )
+
+    {id, waiter}
+  end
+
+  # What the cancels set going lands while this test still owns its
+  # connection: every killed runner's exit has been reported and answered,
+  # and every run's waiter has returned.
+  defp settled!(waiters) do
+    wait_until(
+      fn -> match?({:ok, %{runners: %{busy: 0, tainted: 0}}}, ScriptedWorker.status()) end,
+      @reaction_ms,
+      "the killed runners' exits"
+    )
+
+    :ok = ScriptedWorker.await_reports()
+
+    for waiter <- waiters do
+      ref = Process.monitor(waiter)
+      assert_receive {:DOWN, ^ref, :process, ^waiter, _reason}, @reaction_ms
+    end
+
+    :ok
   end
 
   defp cancelled?(id) do
     id in ScriptedWorker.kills() and
-      match?(%{status: "cancelled"}, Arca.Repo.get(Arca.Execution, id))
+      match?(%{status: "cancelled"}, Arca.Repo.get(Arca.Schemas.Execution, id))
   end
 
   defp person(n) do
@@ -150,7 +184,9 @@ defmodule Sanctum.Tenancy.ArchiveTest do
   defp key_in(athanor_id, user_id) do
     ctx = member_ctx(athanor_id, user_id)
 
-    {:ok, %{api_key: key}} = Sanctum.ApiKey.create(ctx, %{name: "k-#{System.unique_integer()}"})
+    {:ok, %{api_key: key}} =
+      Sanctum.TestContext.create_key(ctx, %{name: "k-#{System.unique_integer()}"})
+
     key
   end
 
@@ -160,16 +196,21 @@ defmodule Sanctum.Tenancy.ArchiveTest do
     owner = person(n)
     {:ok, group} = Athanors.create_group(owner.id, "Arch #{n}")
     key = key_in(group.id, owner.id)
-    running = running!(group.id, owner.id)
-    Phoenix.PubSub.subscribe(Emissary.PubSub, Sanctum.Notify.topic(group.id))
+    {running, waiter} = running!(group.id, owner.id)
+
+    Cyfr.Bus.subscribe(
+      Prima.Actor.in_athanor(group.id),
+      Cyfr.Bus.notify(Prima.Actor.in_athanor(group.id))
+    )
 
     assert {:ok, %{status: "archived"}} = Athanors.archive(group)
 
     assert {:error, :revoked} = Sanctum.ApiKey.validate(key, [])
-    assert_receive {:cancelled, ^running, "system"}, 5_000
-    assert :ok = wait_until(fn -> cancelled?(running) end, 5_000)
+    assert_receive {:cancelled, ^running, "system"}, @reaction_ms
+    assert :ok = wait_until(fn -> cancelled?(running) end, @reaction_ms)
     athanor_id = group.id
-    assert_receive {:notify, ^athanor_id, :athanor_changed, _}
+    assert_receive %Cyfr.Bus.Notify{athanor_id: ^athanor_id, kind: :athanor_changed}
+    :ok = settled!([waiter])
   end
 
   test "archive drops every member's established-context memo, so a cached caller is refused next call" do
@@ -178,15 +219,15 @@ defmodule Sanctum.Tenancy.ArchiveTest do
     # AUTHORIZATION decision, not of a display: the status gates that
     # refuse an archived athanor run on the NEXT establish, which is
     # exactly what a memo hit skips.
-    original = Application.get_env(:sanctum, :establish_cache_ms)
-    Application.put_env(:sanctum, :establish_cache_ms, 60_000)
+    original = Application.get_env(:sanctum, :caller_memo_ttl_ms)
+    Application.put_env(:sanctum, :caller_memo_ttl_ms, 60_000)
 
     on_exit(fn ->
       Arca.Cache.delete_match({:established, :_, :_, :_})
 
       if original,
-        do: Application.put_env(:sanctum, :establish_cache_ms, original),
-        else: Application.delete_env(:sanctum, :establish_cache_ms)
+        do: Application.put_env(:sanctum, :caller_memo_ttl_ms, original),
+        else: Application.delete_env(:sanctum, :caller_memo_ttl_ms)
     end)
 
     n = System.unique_integer([:positive])
@@ -194,7 +235,7 @@ defmodule Sanctum.Tenancy.ArchiveTest do
     {:ok, group} = Athanors.create_group(owner.id, "Memo #{n}")
 
     {:ok, session} =
-      Sanctum.Session.create(%{
+      Sanctum.TestContext.create_session(%{
         member_ctx(group.id, owner.id)
         | provider: "github",
           email: owner.email
@@ -202,11 +243,15 @@ defmodule Sanctum.Tenancy.ArchiveTest do
 
     assert {:ok, %Context{athanor_id: cached}} = Sanctum.Caller.establish(session.token)
     assert cached == group.id
-    refute Arca.Cache.match({:established, :_, :_, :_}) == []
+
+    # The member's memos, by their session: the cache is the node's, and
+    # a caller established elsewhere on it is not this member's.
+    memos = Arca.Cache.Keys.match_established(Sanctum.Session.token_hash(session.token))
+    refute Arca.Cache.match(memos) == []
 
     assert {:ok, %{status: "archived"}} = Athanors.archive(group)
 
-    assert Arca.Cache.match({:established, :_, :_, :_}) == [],
+    assert Arca.Cache.match(memos) == [],
            "the archive left a member's caller memoized inside the athanor it just shut"
 
     refute match?({:ok, %Context{athanor_id: ^cached}}, Sanctum.Caller.establish(session.token))
@@ -219,14 +264,15 @@ defmodule Sanctum.Tenancy.ArchiveTest do
     owner = person(n)
     {:ok, group} = Athanors.create_group(owner.id, "Leave #{n}")
     key = key_in(group.id, owner.id)
-    running = running!(group.id, owner.id)
+    {running, waiter} = running!(group.id, owner.id)
 
     :ok = Members.remove_member(group, user_id: owner.id)
 
     assert {:ok, %{status: "archived"}} = Athanors.get(group.id)
     assert {:error, :revoked} = Sanctum.ApiKey.validate(key, [])
-    assert_receive {:cancelled, ^running, "system"}, 5_000
-    assert :ok = wait_until(fn -> cancelled?(running) end, 5_000)
+    assert_receive {:cancelled, ^running, "system"}, @reaction_ms
+    assert :ok = wait_until(fn -> cancelled?(running) end, @reaction_ms)
+    :ok = settled!([waiter])
   end
 
   test "denying a person archives their own athanor and the groups they were the last member of, closing both" do
@@ -251,8 +297,8 @@ defmodule Sanctum.Tenancy.ArchiveTest do
     {:ok, :added} = Members.add(shared, [user_id: u.id], other.id)
     personal_key = key_in(personal.id, u.id)
     alone_key = key_in(alone.id, u.id)
-    personal_run = running!(personal.id, u.id)
-    alone_run = running!(alone.id, u.id)
+    {personal_run, personal_waiter} = running!(personal.id, u.id)
+    {alone_run, alone_waiter} = running!(alone.id, u.id)
 
     assert {:ok, %{status: "denied"}} = Users.deny(u)
 
@@ -262,9 +308,11 @@ defmodule Sanctum.Tenancy.ArchiveTest do
     assert {:error, :revoked} = Sanctum.ApiKey.validate(personal_key, [])
     assert {:error, :revoked} = Sanctum.ApiKey.validate(alone_key, [])
 
-    assert_receive {:cancelled, ^personal_run, "system"}, 5_000
-    assert_receive {:cancelled, ^alone_run, "system"}
-    assert :ok = wait_until(fn -> cancelled?(personal_run) end, 5_000)
-    assert :ok = wait_until(fn -> cancelled?(alone_run) end, 5_000)
+    # The two cancels are the watch's, each in its own time.
+    assert_receive {:cancelled, ^personal_run, "system"}, @reaction_ms
+    assert_receive {:cancelled, ^alone_run, "system"}, @reaction_ms
+    assert :ok = wait_until(fn -> cancelled?(personal_run) end, @reaction_ms)
+    assert :ok = wait_until(fn -> cancelled?(alone_run) end, @reaction_ms)
+    :ok = settled!([personal_waiter, alone_waiter])
   end
 end

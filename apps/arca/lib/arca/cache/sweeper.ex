@@ -6,7 +6,7 @@ defmodule Arca.Cache.Sweeper do
   Periodic sweeper that removes expired entries from the Arca.Cache ETS table.
 
   Sweeps expired cache entries every 60 seconds.
-  `Cyfr.RateLimiter` owns its separate table and sweeper.
+  `Prima.RateLimiter` owns its separate table and sweeper.
   """
 
   use GenServer
@@ -56,7 +56,7 @@ defmodule Arca.Cache.Sweeper do
 
   @impl true
   def handle_info(msg, state) do
-    Cyfr.UnexpectedMessage.log(__MODULE__, msg)
+    Prima.LoggerContext.unexpected(__MODULE__, msg)
     {:noreply, state}
   end
 
@@ -66,7 +66,7 @@ defmodule Arca.Cache.Sweeper do
 
   Both run here, off the `Arca.Cache.put/3` hot path — a request never pays for
   an O(n) eviction scan. With attacker-cardinality counters moved to
-  `Cyfr.RateLimiter`, the cap is a defense-in-depth bound, not a load-bearing
+  `Prima.RateLimiter`, the cap is a defense-in-depth bound, not a load-bearing
   eviction path.
   """
   @spec sweep() :: non_neg_integer()
@@ -98,18 +98,14 @@ defmodule Arca.Cache.Sweeper do
       0
   end
 
-  # Protect authentication state, scan locks, and MCP catalogs from
-  # capacity eviction. Removing these entries can interrupt login flows,
-  # admit duplicate scans, or empty tools/list until the next refresh.
+  # Protect authentication state and scan locks from capacity eviction.
+  # Removing these entries can interrupt login flows or admit duplicate
+  # scans.
   @protected_key_heads [
     :vault_oauth_pending,
     :login_device_ticket,
     :established,
-    :tincture_scan_running,
-    :mcp_tool,
-    :mcp_tool_list,
-    :mcp_resource,
-    :mcp_resource_template
+    :tincture_scan_running
   ]
 
   # After expired rows are gone, if the table is still over the cap, drop the

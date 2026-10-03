@@ -6,9 +6,8 @@ defmodule Compendium.DependencyResolverTest do
 
   alias Compendium.DependencyResolver
 
-  setup do
-    :ok = Ecto.Adapters.SQL.Sandbox.checkout(Arca.Repo)
-    Ecto.Adapters.SQL.Sandbox.mode(Arca.Repo, {:shared, self()})
+  setup tags do
+    Cyfr.Test.Sandbox.setup!(tags)
 
     test_dir = Path.join(System.tmp_dir!(), "cyfr_dep_test_#{:rand.uniform(100_000)}")
     File.mkdir_p!(test_dir)

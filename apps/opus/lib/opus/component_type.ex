@@ -93,7 +93,7 @@ defmodule Opus.ComponentType do
   # Both the string and atom parse paths derive from the canonical type
   # list, so a new executable type added there is accepted here without a
   # second edit.
-  @valid_type_strings Cyfr.ComponentRef.executable_types()
+  @valid_type_strings Prima.ComponentRef.executable_types()
   @valid_types Enum.map(@valid_type_strings, &String.to_atom/1)
 
   @doc """
@@ -151,7 +151,7 @@ defmodule Opus.ComponentType do
   # Nor does it get the host's stdout/stderr. Inheriting them handed every
   # guest — reagents included, whose whole definition is compute with no I/O —
   # an unbounded write straight into the operator's console and log
-  # aggregation: no `Cyfr.SecretMasker`, no emit rate limit, no emit size cap,
+  # aggregation: no `Prima.SecretMasker`, no emit rate limit, no emit size cap,
   # and a trivial way to fill a disk. `wasmex`'s WASI options are inherit-or-
   # nothing (there is no capture pipe to point somewhere safe), so this is
   # `false`. A component that wants to say something says it through `emit`,

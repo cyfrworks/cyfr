@@ -21,7 +21,7 @@ defmodule Sanctum.Consent.Bootstrap do
   same operator-vouched mint as the first. A node
   is vouched for when the seed ships it at the seed's own digest, or when
   the head already names it at that digest: a release that retires the
-  version an estate holds does not turn that unchanged copy into a
+  version an athanor holds does not turn that unchanged copy into a
   person's own. An edited shipped copy is not the seed: its digest is
   not the seed's, and it is not re-minted. A member-authored source
   has no machine profile. A closure a person widened or a head a person
@@ -30,6 +30,11 @@ defmodule Sanctum.Consent.Bootstrap do
   Idempotent: a source ref that already has an owner profile is skipped
   (revised only as above). Machine-minted revisions record
   `granted_via: "bootstrap"`.
+
+  A machine-minted revision admits the `interactive` and `programmatic`
+  origins: the seed is the operator's own first-party install, run from
+  its screens and from its command line and agents alike. A schedule or a
+  webhook is admitted only by a person's grant naming it.
 
   ## Why provisioning is the only caller
 
@@ -40,7 +45,7 @@ defmodule Sanctum.Consent.Bootstrap do
   immutable, and its caps are auditable once at build time rather than per
   athanor.
 
-  The estate's agents (`agent:local.<name>`, read through the
+  The athanor's agents (`agent:local.<name>`, read through the
   component-facts port) are sources here too, minted after the components
   they run on. A source is minted only while it is vouched for — the
   seed's own bytes, or a head that already names it unchanged. A
@@ -58,9 +63,9 @@ defmodule Sanctum.Consent.Bootstrap do
   alias Sanctum.Consent.Components
   alias Sanctum.Consent.ShapeDigest
   alias Sanctum.Context
-  alias Cyfr.AgentRef
-  alias Cyfr.ComponentRow
-  alias Cyfr.JCS
+  alias Prima.AgentRef
+  alias Prima.ComponentRow
+  alias Prima.JCS
 
   @type result :: %{
           minted: [String.t()],
@@ -75,6 +80,9 @@ defmodule Sanctum.Consent.Bootstrap do
   # The profile a shipped source's selection names on a shipped dependency.
   @selected_label "default"
 
+  # The origins a machine-minted revision admits.
+  @seeded_origins [:interactive, :programmatic]
+
   @doc """
   Bootstrap every executable local component in the caller's athanor.
 
@@ -84,13 +92,13 @@ defmodule Sanctum.Consent.Bootstrap do
 
   `claim` is the provisioning claim the walk runs under
   (`Arca.ProvisioningClaims`): the walk starts, and each source is minted
-  or revised, only while the estate's claim still reads that owner and
+  or revised, only while the athanor's claim still reads that owner and
   fence with no outcome. A walk whose claim a later attempt took answers
   `{:error, :claim_lost}` — what it minted before the loss stands, since
-  it held the estate then, and nothing is minted after. With no claim
-  (`nil`) the walk is unfenced: an estate nothing else is filling.
+  it held the athanor then, and nothing is minted after. With no claim
+  (`nil`) the walk is unfenced: an athanor nothing else is filling.
 
-  Answers `{:error, {:component_facts, reason}}` when the estate's
+  Answers `{:error, {:component_facts, reason}}` when the athanor's
   component facts cannot be read (`Sanctum.Consent.Components`). That is
   not "nothing is vouched for": a walk that cannot see what the seed ships
   would skip every source as unvouched and report a clean, empty mint, so
@@ -100,7 +108,7 @@ defmodule Sanctum.Consent.Bootstrap do
   # shaped like one: `holding/2` matches it structurally, which a struct
   # satisfies, but the spec has to name what actually arrives or every
   # caller that passes a real claim reads as a call that cannot succeed.
-  @spec run(Context.t(), Arca.Schemas.ProvisioningClaim.t() | nil) ::
+  @spec run(Context.t(), Sanctum.Provisioning.claim() | nil) ::
           {:ok, result()} | {:error, :claim_lost | {:component_facts, term()}}
   def run(%Context{} = ctx, claim \\ nil) do
     with :ok <- holding(ctx, claim),
@@ -111,7 +119,7 @@ defmodule Sanctum.Consent.Bootstrap do
     end
   end
 
-  # Whether the estate's claim is still the one this walk runs under.
+  # Whether the athanor's claim is still the one this walk runs under.
   defp holding(_ctx, nil), do: :ok
 
   defp holding(%Context{} = ctx, %{owner: owner, fence: fence}) do
@@ -127,7 +135,7 @@ defmodule Sanctum.Consent.Bootstrap do
          # The releases the seed itself ships, at the seed's own digest —
          # never the athanor's copy; an edited shipped unit is absent from
          # the map. With the facts unreadable the walk refuses rather than
-         # reading an unreadable estate as one the operator vouched
+         # reading an unreadable athanor as one the operator vouched
          # nothing for, which would skip every source and report a clean,
          # empty mint.
          {:ok, shipped} <- Components.shipped_nodes(ctx, components) do
@@ -165,7 +173,7 @@ defmodule Sanctum.Consent.Bootstrap do
      }}
   end
 
-  # An estate whose agent files cannot be listed bootstraps no agent and
+  # An athanor whose agent files cannot be listed bootstraps no agent and
   # goes on: the components are a separate roster and a transient tree
   # read must not hold them up. Facts that are not configured at all are
   # a different thing and refuse the walk — see `run/2`.
@@ -194,10 +202,10 @@ defmodule Sanctum.Consent.Bootstrap do
     # Every valid type is profile-bearing: tinctures are not executable,
     # but a profile is what makes one invocable at all — the route selects
     # it. Owner profiles mint here; public ones only via profile.publish.
-    types = Cyfr.ComponentRef.valid_types()
+    types = Prima.ComponentRef.valid_types()
 
     case Arca.ComponentStorage.list_components(Sanctum.Context.actor(ctx),
-           publisher: Cyfr.ComponentPath.default_publisher(),
+           publisher: Prima.ComponentPath.default_publisher(),
            limit: :none
          ) do
       {:ok, rows} ->
@@ -290,7 +298,7 @@ defmodule Sanctum.Consent.Bootstrap do
         {:ok, %{"nodes" => nodes}} when is_map(nodes) ->
           for {from, node} <- nodes,
               {key, %{"vault" => %{"via" => _}}} <- node["edges"] || %{},
-              {:ok, dep} <- [Cyfr.Authority.Blob.edge_target(key)],
+              {:ok, dep} <- [Prima.Authority.Blob.edge_target(key)],
               into: MapSet.new(),
               do: {from, dep}
 
@@ -337,7 +345,7 @@ defmodule Sanctum.Consent.Bootstrap do
   defp release_digest(row), do: Map.get(row, :release_digest) || Map.get(row, "release_digest")
 
   defp credential_needs?(manifest) do
-    case Cyfr.Manifest.Needs.from_manifest(manifest) do
+    case Prima.Manifest.Needs.from_manifest(manifest) do
       needs when is_list(needs) -> Enum.any?(needs, &(&1.kind in ~w(api_key oauth bundle)))
       _ -> false
     end
@@ -370,6 +378,7 @@ defmodule Sanctum.Consent.Bootstrap do
                blob_digest: digests.blob_digest,
                resolved_policy: blob_json,
                activation: activation_json,
+               admitted_origins: @seeded_origins,
                granted_by: granted_by(ctx),
                granted_via: "bootstrap"
              },
@@ -431,7 +440,8 @@ defmodule Sanctum.Consent.Bootstrap do
              # so the digest describes the profile it actually creates.
              label: "default",
              kind: :owner,
-             invoke_mode: :open_inert
+             invoke_mode: :open_inert,
+             origins: @seeded_origins
            }) do
       {:ok,
        %{
@@ -449,7 +459,7 @@ defmodule Sanctum.Consent.Bootstrap do
   defp granted_by(_), do: "system:bootstrap"
 
   defp insert(ctx, source_ref, blob_json, digests, activation_json, vault_refs) do
-    profile_id = Cyfr.UUID7.generate_id("prof")
+    profile_id = Prima.UUID7.generate_id("prof")
 
     # Profile and first revision commit together — a failed consent leg
     # must not leave an orphan profile with a NULL head.
@@ -474,6 +484,7 @@ defmodule Sanctum.Consent.Bootstrap do
                blob_digest: digests.blob_digest,
                resolved_policy: blob_json,
                activation: activation_json,
+               admitted_origins: @seeded_origins,
                granted_by: granted_by(ctx),
                granted_via: "bootstrap"
              },

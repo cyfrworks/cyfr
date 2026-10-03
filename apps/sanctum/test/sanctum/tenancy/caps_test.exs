@@ -14,33 +14,34 @@ defmodule Sanctum.Tenancy.CapsTest do
   @moduledoc """
   The public-door caps: off unless set, and when set, enforced where each
   applies — athanors per server, groups per person, members per group,
-  mints per hour, bytes per athanor.
+  mints per hour, bytes per athanor. Each is a platform setting, set here
+  as an operator's write leaves it and read on the next check, and a cap
+  the store cannot answer refuses.
   """
   use ExUnit.Case, async: false
 
+  alias Sanctum.Test.Settings
   alias Sanctum.Tenancy.{Athanors, Caps, Members}
 
-  setup do
-    :ok = Ecto.Adapters.SQL.Sandbox.checkout(Arca.Repo)
-    Ecto.Adapters.SQL.Sandbox.mode(Arca.Repo, {:shared, self()})
-
-    prev = Application.get_env(:sanctum, :caps)
-
-    on_exit(fn ->
-      if prev,
-        do: Application.put_env(:sanctum, :caps, prev),
-        else: Application.delete_env(:sanctum, :caps)
-    end)
-
+  setup tags do
+    Arca.Test.Sandbox.setup!(tags)
     :ok
   end
 
+  # Every cap named in `caps` stored at its value; the rest stand.
+  defp put_caps(caps),
+    do: Enum.each(caps, fn {key, value} -> Settings.put(Atom.to_string(key), value) end)
+
+  # Every cap back to its default: off, but for the group, pair and
+  # thread caps that ship on.
+  defp reset_caps, do: Enum.each(Prima.Caps.keys(), &Settings.reset(Atom.to_string(&1)))
+
   test "check_counted/2 counts only while the cap is on, and refuses an uncountable current" do
     # Cap off: the count is never even asked for.
-    Application.delete_env(:sanctum, :caps)
+    reset_caps()
     assert :ok = Caps.check_counted(:max_athanors, fn -> raise "must not be called" end)
 
-    Application.put_env(:sanctum, :caps, max_athanors: 3)
+    put_caps(max_athanors: 3)
     assert :ok = Caps.check_counted(:max_athanors, fn -> {:ok, 2} end)
 
     assert {:error, {:limit_reached, :max_athanors, 3}} =
@@ -60,7 +61,7 @@ defmodule Sanctum.Tenancy.CapsTest do
   test "the write gate checks every tenant create by default; :exempt is the stated exception" do
     ctx = Sanctum.TestContext.local()
     Arca.Usage.invalidate(Sanctum.Context.actor(ctx))
-    Application.put_env(:sanctum, :caps, athanor_storage_bytes: 1)
+    put_caps(athanor_storage_bytes: 1)
 
     # Default posture: a writer that states nothing is capped.
     assert {:error, {:limit_reached, :athanor_storage_bytes, 1}} =
@@ -81,19 +82,48 @@ defmodule Sanctum.Tenancy.CapsTest do
   end
 
   test "an unset cap is off; a set cap is a ceiling" do
-    Application.delete_env(:sanctum, :caps)
-    assert Caps.get(:max_athanors) == nil
+    reset_caps()
+    assert Caps.get(:max_athanors) == {:ok, nil}
     assert :ok = Caps.check(:max_athanors, 1_000_000)
 
-    Application.put_env(:sanctum, :caps, max_athanors: 3, max_groups_per_person: 0)
+    # The group cap ships on; zero turns it off, never "nothing allowed".
+    assert Caps.get(:max_groups_per_person) == {:ok, 50}
+
+    put_caps(max_athanors: 3, max_groups_per_person: 0)
     assert :ok = Caps.check(:max_athanors, 2)
     assert {:error, {:limit_reached, :max_athanors, 3}} = Caps.check(:max_athanors, 3)
-    # zero and negatives read as off, never as "nothing allowed"
-    assert Caps.get(:max_groups_per_person) == nil
+    assert Caps.get(:max_groups_per_person) == {:ok, nil}
+  end
+
+  test "a cap the store cannot answer refuses, never reads as off" do
+    put_caps(max_athanors: 3)
+    Settings.expire("max_athanors")
+    Settings.expire("athanor_storage_bytes")
+    Settings.break_store!()
+
+    log =
+      ExUnit.CaptureLog.capture_log(fn ->
+        assert Caps.get(:max_athanors) == {:error, :unavailable}
+
+        assert {:error, {:cap_unverifiable, :max_athanors}} =
+                 Caps.check_counted(:max_athanors, fn -> raise "must not be counted" end)
+
+        assert {:error, {:cap_unverifiable, :max_athanors}} = Caps.check(:max_athanors, 0)
+
+        assert {:error, :storage_unverifiable} =
+                 Caps.check_storage(Sanctum.Context.actor(Sanctum.TestContext.local()), 1)
+      end)
+
+    assert log =~ "the max_athanors cap could not be read"
+
+    # The refusal is the unavailable class: the caller retries, and it is
+    # not a limit the account reached.
+    assert %Prima.Refusal{class: :unavailable} =
+             Prima.Refusal.classify({:cap_unverifiable, :max_athanors})
   end
 
   test "max_athanors stops Athanors.create; max_groups_per_person stops create_group" do
-    Application.put_env(:sanctum, :caps, max_athanors: active_count())
+    put_caps(max_athanors: active_count())
 
     assert {:error, {:limit_reached, :max_athanors, _}} =
              Athanors.create(%{
@@ -105,20 +135,21 @@ defmodule Sanctum.Tenancy.CapsTest do
 
     # An archived athanor frees its place: the cap counts active furnaces.
     uid0 = "github|https://github.com|freed-#{System.unique_integer([:positive])}"
-    Application.delete_env(:sanctum, :caps)
+    reset_caps()
     {:ok, doomed} = Athanors.create_group(uid0, "Doomed")
     {:ok, _} = Athanors.archive(doomed)
-    Application.put_env(:sanctum, :caps, max_athanors: active_count() + 1)
+    put_caps(max_athanors: active_count() + 1)
     assert {:ok, _} = Athanors.create_group(uid0, "Fits")
 
     # ...and taking the place back has to ask for it, or archive-then-reopen
     # would be the way past the cap.
-    Application.put_env(:sanctum, :caps, max_athanors: active_count())
+    put_caps(max_athanors: active_count())
     assert {:error, {:limit_reached, :max_athanors, _}} = Athanors.unarchive(doomed)
-    Application.put_env(:sanctum, :caps, max_athanors: active_count() + 1)
+    put_caps(max_athanors: active_count() + 1)
     assert {:ok, %{status: "active"}} = Athanors.unarchive(doomed)
 
-    Application.put_env(:sanctum, :caps, max_groups_per_person: 1)
+    reset_caps()
+    put_caps(max_groups_per_person: 1)
     uid = "github|https://github.com|capped-#{System.unique_integer([:positive])}"
     assert {:ok, _} = Athanors.create_group(uid, "First")
 
@@ -127,7 +158,7 @@ defmodule Sanctum.Tenancy.CapsTest do
   end
 
   test "mint_per_hour bounds personal athanors minted per hour" do
-    Application.put_env(:sanctum, :caps, mint_per_hour: 0)
+    put_caps(mint_per_hour: 0)
     n = System.unique_integer([:positive])
 
     {:ok, user} =
@@ -142,7 +173,7 @@ defmodule Sanctum.Tenancy.CapsTest do
     # a cap of 0 reads as off (nil), so the mint goes through
     assert {:ok, _} = Sanctum.Provisioning.ensure_personal_athanor(user)
 
-    Application.put_env(:sanctum, :caps, mint_per_hour: 1)
+    put_caps(mint_per_hour: 1)
     n2 = n + 1
 
     {:ok, user2} =
@@ -160,7 +191,7 @@ defmodule Sanctum.Tenancy.CapsTest do
 
     # Groups people create do not draw on the mint budget: the cap measures
     # person athanors, so a member's `athanor.create` cannot starve sign-ins.
-    Application.put_env(:sanctum, :caps, mint_per_hour: 2)
+    put_caps(mint_per_hour: 2)
     {:ok, _} = Athanors.create_group(user.id, "Not a mint")
     assert {:ok, _} = Sanctum.Provisioning.ensure_personal_athanor(user2)
   end
@@ -178,26 +209,26 @@ defmodule Sanctum.Tenancy.CapsTest do
         authenticated: true
       )
 
-    Application.put_env(:sanctum, :caps, athanor_storage_bytes: 100)
+    put_caps(athanor_storage_bytes: 100)
     assert :ok = Caps.check_storage(Sanctum.Context.actor(ctx), 50)
 
     assert {:error, {:limit_reached, :athanor_storage_bytes, 100}} =
              Caps.check_storage(Sanctum.Context.actor(ctx), 1_000)
 
-    Application.delete_env(:sanctum, :caps)
+    reset_caps()
     assert :ok = Caps.check_storage(Sanctum.Context.actor(ctx), 1_000_000_000)
   end
 
   test "athanor_storage_bytes counts the component tree on every write, not only a publish" do
     ctx = Sanctum.TestContext.local()
 
-    Application.put_env(:sanctum, :caps, athanor_storage_bytes: 1_000_000_000)
+    put_caps(athanor_storage_bytes: 1_000_000_000)
     assert :ok = Caps.check_storage(Sanctum.Context.actor(ctx), 10)
 
     # A cap below what this athanor's components already hold refuses the
     # next write of any kind — a chat attachment and a guest storage write
     # come through the same function a publish does.
-    Application.put_env(:sanctum, :caps, athanor_storage_bytes: 1)
+    put_caps(athanor_storage_bytes: 1)
 
     assert {:error, {:limit_reached, :athanor_storage_bytes, 1}} =
              Caps.check_storage(Sanctum.Context.actor(ctx), 10)
@@ -215,7 +246,7 @@ defmodule Sanctum.Tenancy.CapsTest do
 
     ctx = Sanctum.TestContext.local()
     Arca.Usage.invalidate(Sanctum.Context.actor(ctx))
-    Application.put_env(:sanctum, :caps, athanor_storage_bytes: 100)
+    put_caps(athanor_storage_bytes: 100)
 
     # A walk that cannot answer must refuse the write — treating the tree
     # as empty would let writes march past the ceiling.
@@ -229,7 +260,7 @@ defmodule Sanctum.Tenancy.CapsTest do
 
     # With no cap configured, no walk runs — the broken adapter is never
     # even asked.
-    Application.delete_env(:sanctum, :caps)
+    reset_caps()
     assert :ok = Caps.check_storage(Sanctum.Context.actor(ctx), 50)
   end
 
@@ -238,7 +269,7 @@ defmodule Sanctum.Tenancy.CapsTest do
     key = Arca.Cache.Keys.athanor_usage(Sanctum.Context.actor(ctx))
 
     Arca.Cache.invalidate(key)
-    Application.put_env(:sanctum, :caps, athanor_storage_bytes: 1_000_000_000)
+    put_caps(athanor_storage_bytes: 1_000_000_000)
 
     # The first check walks the tree and remembers what it found.
     assert :ok = Caps.check_storage(Sanctum.Context.actor(ctx), 1)
@@ -262,13 +293,13 @@ defmodule Sanctum.Tenancy.CapsTest do
     # and leaves the total alone.
     assert :ok = Caps.check_storage(Sanctum.Context.actor(ctx), 1)
     assert {:ok, rewalked} = Arca.Cache.get(key)
-    sys = %{Cyfr.Actor.system() | user_id: "_s", athanor_id: ctx.athanor_id, scope: :athanor}
+    sys = %{Prima.Actor.system() | user_id: "_s", athanor_id: ctx.athanor_id, scope: :athanor}
     :ok = Arca.put(sys, ["cache", "cap-probe.txt"], "bytes")
     assert Arca.Cache.get(key) == {:ok, rewalked}
   end
 
   test "max_members_per_group counts seats — active and invited" do
-    Application.put_env(:sanctum, :caps, max_members_per_group: 2)
+    put_caps(max_members_per_group: 2)
     uid = "github|https://github.com|seat-#{System.unique_integer([:positive])}"
     {:ok, group} = Athanors.create_group(uid, "Seats")
     # creator holds one seat; one invitation fills the second

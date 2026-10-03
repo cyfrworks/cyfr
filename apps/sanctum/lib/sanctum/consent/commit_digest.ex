@@ -22,7 +22,7 @@ defmodule Sanctum.Consent.CommitDigest do
 
   ## Policy blob
 
-  `blob_digest` hashes the resolved policy bytes enforced by `Cyfr.Authority`.
+  `blob_digest` hashes the resolved policy bytes enforced by `Prima.Authority`.
 
   Requires `blob_digest` and rejects keys outside the declared input set.
 
@@ -34,10 +34,27 @@ defmodule Sanctum.Consent.CommitDigest do
 
   `scope` needs no entry: `ShapeDigest` carries it, and `shape_digest` is
   the first field here.
+
+  ## Origins and narrowing
+
+  `origins`, required, is the set of `Prima.Origin` values the revision
+  admits; it is part of what the operator approves, so a grant that admits
+  `programmatic` never shares a digest with one that does not.
+
+  `subset` is the narrowing the operator chose, per consent-graph node and
+  resource kind (`Sanctum.Consent.Normalize.subset/3`). The blob digest
+  already covers what the narrowing leaves granted; the subset binds the
+  choice itself, so a proof minted for one narrowing cannot commit another
+  that happens to build the same blob. Its sets are sorted and deduplicated
+  and its empty records dropped; a field left out and a field named empty
+  stay distinct.
+
+  Explanatory text never enters the digest: a need's reason is prose, so
+  rewording it invalidates no consent.
   """
 
   alias Sanctum.Consent.Normalize
-  alias Cyfr.JCS
+  alias Prima.JCS
 
   @type binding :: %{
           required(:need) => String.t(),
@@ -61,16 +78,28 @@ defmodule Sanctum.Consent.CommitDigest do
           optional(:fields) => [String.t()]
         }
 
+  @typedoc """
+  A narrowing: per consent-graph node, a record naming only the kinds and
+  fields it narrows, in the wire's string-keyed form.
+  """
+  @type subset :: %{
+          optional(String.t()) => %{
+            optional(String.t()) => %{optional(String.t()) => term()} | [String.t()]
+          }
+        }
+
   @type commit :: %{
           required(:shape_digest) => String.t(),
           required(:blob_digest) => String.t(),
           required(:label) => String.t(),
           required(:kind) => :owner | :public,
           required(:invoke_mode) => :open_inert | :edge_only,
+          required(:origins) => [Prima.Origin.t(), ...],
           optional(:bindings) => [binding()],
           optional(:selections) => [selection()],
           optional(:tool_servers) => [tool_server_grant()],
-          optional(:override) => boolean()
+          optional(:override) => boolean(),
+          optional(:subset) => subset()
         }
 
   @type error :: {:invalid_commit, atom(), String.t()} | {:invalid_digest_input, JCS.error()}
@@ -85,7 +114,8 @@ defmodule Sanctum.Consent.CommitDigest do
       ...>   blob_digest: "sha256:def",
       ...>   label: "default",
       ...>   kind: :owner,
-      ...>   invoke_mode: :open_inert
+      ...>   invoke_mode: :open_inert,
+      ...>   origins: [:interactive]
       ...> })
       iex> String.starts_with?(digest, "sha256:")
       true
@@ -100,8 +130,8 @@ defmodule Sanctum.Consent.CommitDigest do
     end
   end
 
-  def compute(other),
-    do: {:error, {:invalid_commit, :input, "expected a map, got: #{inspect(other)}"}}
+  def compute(_other),
+    do: {:error, {:invalid_commit, :input, "expected a map"}}
 
   @doc """
   The canonical map the commit digest is taken over.
@@ -113,7 +143,8 @@ defmodule Sanctum.Consent.CommitDigest do
     with :ok <-
            Normalize.only_keys(
              commit,
-             ~w(shape_digest blob_digest label kind invoke_mode bindings selections tool_servers override)a,
+             ~w(shape_digest blob_digest label kind invoke_mode origins bindings selections
+                tool_servers override subset)a,
              tag
            ),
          {:ok, shape_digest} <- Normalize.required_string(commit, :shape_digest, tag),
@@ -123,10 +154,12 @@ defmodule Sanctum.Consent.CommitDigest do
          {:ok, invoke_mode} <-
            Normalize.enum(commit, :invoke_mode, [:open_inert, :edge_only], tag),
          :ok <- check_public_is_contained(kind, invoke_mode),
+         {:ok, origins} <- Normalize.origins(commit, :origins, tag),
          {:ok, bindings} <- bindings(commit),
          {:ok, selections} <- selections(commit),
          {:ok, tool_servers} <- tool_servers(commit),
-         {:ok, override} <- override(commit) do
+         {:ok, override} <- override(commit),
+         {:ok, subset} <- Normalize.subset(commit, :subset, tag) do
       {:ok,
        %{
          "shape_digest" => shape_digest,
@@ -134,10 +167,12 @@ defmodule Sanctum.Consent.CommitDigest do
          "label" => label,
          "kind" => Atom.to_string(kind),
          "invoke_mode" => Atom.to_string(invoke_mode),
+         "origins" => origins,
          "bindings" => bindings,
          "selections" => selections,
          "tool_servers" => tool_servers,
-         "override" => override
+         "override" => override,
+         "subset" => subset
        }}
     end
   end
@@ -168,8 +203,8 @@ defmodule Sanctum.Consent.CommitDigest do
           error -> error
         end
 
-      other ->
-        {:error, {tag, :bindings, "must be a list, got: #{inspect(other)}"}}
+      _other ->
+        {:error, {tag, :bindings, "must be a list"}}
     end
   end
 
@@ -193,8 +228,8 @@ defmodule Sanctum.Consent.CommitDigest do
     end
   end
 
-  defp normalize_binding(other) do
-    {:error, {:invalid_commit, :bindings, "each binding must be a map, got: #{inspect(other)}"}}
+  defp normalize_binding(_other) do
+    {:error, {:invalid_commit, :bindings, "each binding must be a map"}}
   end
 
   # One edge, one selected profile: the digest covers which labelled
@@ -217,8 +252,8 @@ defmodule Sanctum.Consent.CommitDigest do
           error -> error
         end
 
-      other ->
-        {:error, {tag, :selections, "must be a list, got: #{inspect(other)}"}}
+      _other ->
+        {:error, {tag, :selections, "must be a list"}}
     end
   end
 
@@ -242,9 +277,8 @@ defmodule Sanctum.Consent.CommitDigest do
     end
   end
 
-  defp normalize_selection(other) do
-    {:error,
-     {:invalid_commit, :selections, "each selection must be a map, got: #{inspect(other)}"}}
+  defp normalize_selection(_other) do
+    {:error, {:invalid_commit, :selections, "each selection must be a map"}}
   end
 
   defp ensure_one_selection_per_edge(selections) do
@@ -291,8 +325,8 @@ defmodule Sanctum.Consent.CommitDigest do
           error -> error
         end
 
-      other ->
-        {:error, {tag, :tool_servers, "must be a list, got: #{inspect(other)}"}}
+      _other ->
+        {:error, {tag, :tool_servers, "must be a list"}}
     end
   end
 
@@ -307,8 +341,8 @@ defmodule Sanctum.Consent.CommitDigest do
     end
   end
 
-  defp normalize_tool_server(other) do
-    {:error, {:invalid_commit, :tool_servers, "each grant must be a map, got: #{inspect(other)}"}}
+  defp normalize_tool_server(_other) do
+    {:error, {:invalid_commit, :tool_servers, "each grant must be a map"}}
   end
 
   defp ensure_one_grant_per_server(grants) do
@@ -325,7 +359,7 @@ defmodule Sanctum.Consent.CommitDigest do
   defp override(commit) do
     case Map.get(commit, :override, false) do
       value when is_boolean(value) -> {:ok, value}
-      other -> {:error, {:invalid_commit, :override, "must be a boolean, got: #{inspect(other)}"}}
+      _other -> {:error, {:invalid_commit, :override, "must be a boolean"}}
     end
   end
 end

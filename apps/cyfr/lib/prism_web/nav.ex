@@ -12,8 +12,8 @@ defmodule PrismWeb.Nav do
   DOM id a surface renders is `<prefix>-<key>` with underscores as hyphens.
 
   Two scopes. An `:athanor` page lives under `/a/<athanor>` — the
-  workbench, focused on one estate. A `:global` page has no estate in its
-  address — the chat, which spans every estate the person belongs to.
+  workbench, focused on one athanor. A `:global` page has no athanor in its
+  address — the chat, which spans every athanor the person belongs to.
   Which is which is `global_pages/0`, the one list: an item's `scope` is
   derived from it, never written by hand, and `href/2` is the one place a
   path becomes a link, so no surface has to know. `page?/1` is where a
@@ -35,8 +35,8 @@ defmodule PrismWeb.Nav do
   @both ~w(lite dev)
   @dev ~w(dev)
 
-  # The pages with no estate in their address. Every other page lives
-  # under `/a/<athanor>`; a global page spans every estate the person
+  # The pages with no athanor in their address. Every other page lives
+  # under `/a/<athanor>`; a global page spans every athanor the person
   # belongs to — the chat is one.
   @global_pages ~w(/chat)
 
@@ -239,7 +239,7 @@ defmodule PrismWeb.Nav do
       else: PrismWeb.Focus.path(athanor_route, path)
   end
 
-  @doc "The paths of the pages that have no estate in their address."
+  @doc "The paths of the pages that have no athanor in their address."
   @spec global_pages() :: [String.t()]
   def global_pages, do: @global_pages
 
@@ -262,7 +262,7 @@ defmodule PrismWeb.Nav do
   def page?(href) when is_binary(href) do
     path = href |> String.split("?", parts: 2) |> hd()
 
-    case Phoenix.Router.route_info(EmissaryWeb.Router, "GET", path, "") do
+    case Phoenix.Router.route_info(CyfrWeb.Router, "GET", path, "") do
       %{phoenix_live_view: live} when is_tuple(live) -> not redirect_stub?(elem(live, 0))
       %{} -> true
       :error -> false

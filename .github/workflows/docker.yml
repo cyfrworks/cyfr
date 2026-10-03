@@ -19,9 +19,9 @@ jobs:
     if: github.repository == 'cyfrworks/cyfr'
     uses: ./.github/workflows/test.yml
 
-  # The app image, the worker image every deploy pulls and the builder
-  # image a `locus-builds`-profile deploy pulls: a project `cyfr init`
-  # writes carries no sources to build them from.
+  # The app image, the Opus image and the Locus image, which serves both
+  # the builds and the backends service: every deploy pulls all three, and
+  # a project `cyfr init` writes carries no sources to build them from.
   build:
     needs: verify
     if: github.repository == 'cyfrworks/cyfr'
@@ -75,8 +75,8 @@ jobs:
 
       # Every image is scanned before it is pushed: a fixable HIGH or
       # CRITICAL finding fails the release. The findings .trivyignore.yaml
-      # lists are npm's bundled dependencies, which the builder runs for
-      # tincture builds as the bridge runs them for its backends.
+      # lists are npm's bundled dependencies, which the Locus image runs for
+      # tincture builds and for the stdio backends it serves.
       - name: Scan the image
         uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
         with:

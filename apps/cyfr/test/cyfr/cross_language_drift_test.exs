@@ -4,7 +4,7 @@
 defmodule Cyfr.CrossLanguageDriftTest do
   @moduledoc """
   Mechanical drift guards for logic implemented more than once across
-  languages. The suites (mix / go test / node) run in mutually exclusive
+  languages. The suites (mix / go test) run in mutually exclusive
   path-filtered CI workflows, so nothing else can notice when a port and
   its original stop agreeing. Companion to
   `Emissary.MCP.ClientProtocolDriftTest`, which pins the protocol revision.
@@ -19,8 +19,10 @@ defmodule Cyfr.CrossLanguageDriftTest do
 
   defp read!(rel), do: File.read!(Path.join(@root, rel))
 
-  test "the Go ref grammar matches Cyfr.ComponentRef" do
-    elixir = read!("apps/cyfr_contracts/lib/cyfr/component_ref.ex")
+  defp fixture!(name), do: "tests/fixtures/#{name}" |> read!() |> Jason.decode!()
+
+  test "the Go ref grammar matches Prima.ComponentRef" do
+    elixir = read!("apps/prima/lib/prima/component_ref.ex")
     go = read!("apps/codex/internal/ref/ref.go")
 
     # Grammar bodies match across languages. Whole-input anchors are
@@ -40,7 +42,7 @@ defmodule Cyfr.CrossLanguageDriftTest do
     end
 
     # And the Elixir side anchors them the strict way, everywhere — the
-    # property the bodies above cannot show. `Cyfr.ComponentRefTest`
+    # property the bodies above cannot show. `Prima.ComponentRefTest`
     # covers the behaviour ("alice\n" is refused); this is the spelling.
     refute elixir =~ ~r/~r\/\^/,
            "component_ref.ex anchors a grammar with `^`; PCRE's `$` also " <>
@@ -67,11 +69,11 @@ defmodule Cyfr.CrossLanguageDriftTest do
 
       # validate/1 is the strict verdict (parse is shape-only); parse/1
       # supplies the fields the fixture pins on valid cases.
-      case Cyfr.ComponentRef.validate(ref) do
+      case Prima.ComponentRef.validate(ref) do
         :ok ->
           assert case_["valid"], "#{ref} validated but the fixture says invalid"
 
-          {:ok, parsed} = Cyfr.ComponentRef.parse(ref)
+          {:ok, parsed} = Prima.ComponentRef.parse(ref)
           assert parsed.type == case_["type"], "#{ref}: type #{parsed.type}"
           assert parsed.namespace == case_["namespace"], "#{ref}: ns #{parsed.namespace}"
           assert parsed.name == case_["name"], "#{ref}: name #{parsed.name}"
@@ -103,8 +105,31 @@ defmodule Cyfr.CrossLanguageDriftTest do
     end
   end
 
-  test "the Go ref constants match Cyfr.ComponentRef's" do
-    elixir = read!("apps/cyfr_contracts/lib/cyfr/component_ref.ex")
+  test "the component path grammar is the ref grammar the Go side reads, through one parser" do
+    # A version directory's segments are validated by the same rules a ref
+    # is (`Prima.ComponentRef`), which ref_fixture_test.go holds the Go CLI
+    # to: every valid ref of the shared fixture names a directory the one
+    # parser reads back to the same parts.
+    valid = for %{"valid" => true} = case_ <- fixture!("component_refs.json")["cases"], do: case_
+    assert valid != []
+
+    for %{"type" => type, "namespace" => ns, "name" => name, "version" => version} <- valid do
+      segments = Compendium.ComponentPath.version_dir(type, ns, name, version)
+
+      assert {:ok, %{type: ^type, publisher: ^ns, name: ^name, version: ^version, rest: []}} =
+               Compendium.ComponentPath.parse(segments),
+             "#{Enum.join(segments, "/")} does not parse back to its ref's parts"
+    end
+
+    # The source tool reads a path through that parser and restates no
+    # shape of its own.
+    source = read!("apps/cyfr/lib/compendium/providers/source.ex")
+    assert source =~ "Compendium.ComponentPath.parse("
+    refute source =~ ~s(["components", ), "source.ex matches the component layout by hand"
+  end
+
+  test "the Go ref constants match Prima.ComponentRef's" do
+    elixir = read!("apps/prima/lib/prima/component_ref.ex")
     go = read!("apps/codex/internal/ref/ref.go")
 
     # The length caps and rosters the regex test cannot see. Elixir spells
@@ -118,7 +143,7 @@ defmodule Cyfr.CrossLanguageDriftTest do
 
     # Derived, not spelled: a literal roster here goes green for a fifth
     # component kind while checking nothing about it.
-    for type <- Cyfr.ComponentRef.valid_types() do
+    for type <- Prima.ComponentRef.valid_types() do
       assert elixir =~ ~s("#{type}"), "type #{type} missing from Elixir roster"
       assert go =~ ~s("#{type}":), "type #{type} missing from Go roster"
     end
@@ -141,25 +166,42 @@ defmodule Cyfr.CrossLanguageDriftTest do
   test "the consent-tag vocabulary agrees across Sanctum, the MCP boundary and the CLI" do
     # Sanctum.Consent declares the vocabulary; the tuples stay TYPED to the
     # wire router, which promotes them to protocol errors — one -335xx code
-    # per tag (Emissary.MCP.Message), the payload in error.data
-    # (Emissary.MCP.ConsentSignal) — and codex recovers them from the code
+    # per tag (Prima.MCP.Message), the payload in error.data
+    # (Prima.ConsentSignal) — and codex recovers them from the code
     # and data (mcp.ConsentError). A tag or code renamed on one side
     # silently stops being explained (Go) or stops crossing the boundary —
     # this pins every roster.
     consent = read!("apps/sanctum/lib/sanctum/consent.ex")
-    execution_mcp = read!("apps/cyfr/lib/cyfr/execution/mcp.ex")
-    signal = read!("apps/cyfr/lib/emissary/mcp/consent_signal.ex")
-    message = read!("apps/cyfr/lib/emissary/mcp/message.ex")
+    execution_mcp = read!("apps/cyfr/lib/crucible/provider.ex")
+    profile = read!("apps/sanctum/lib/sanctum/providers/profile.ex")
+    signal = read!("apps/prima/lib/prima/consent_signal.ex")
+    message = read!("apps/prima/lib/prima/mcp/message.ex")
     root_go = read!("apps/codex/cmd/root.go")
     client_go = read!("apps/codex/internal/mcp/client.go")
 
-    tags = ~w(setup_required consent_required consent_conflict restart_required)
+    # The roster is Prima.Refusal's, read from Prima.ConsentSignal; every
+    # other side is held to it, so a sixth tag fails here until each side
+    # names it.
+    assert Prima.Refusal.signal_tags() == Prima.ConsentSignal.tags()
+    tags = Enum.map(Prima.Refusal.signal_tags(), &Atom.to_string/1)
+    assert length(tags) == 5
+
+    go_tags = Regex.scan(~r/-335\d\d: "(\w+)"/, client_go, capture: :all_but_first)
+
+    assert Enum.sort(List.flatten(go_tags)) == Enum.sort(tags),
+           "client.go's consentTagByCode is not the roster"
+
+    # The profile tool keeps a signal typed through the roster's guard and
+    # spells no tag list of its own.
+    assert profile =~ "Prima.Refusal.is_consent_signal(tag, payload)"
+    refute profile =~ "tag in [:setup_required", "profile.ex spells the consent tags itself"
 
     codes = %{
       "setup_required" => "-33501",
       "consent_required" => "-33502",
       "consent_conflict" => "-33503",
-      "restart_required" => "-33504"
+      "restart_required" => "-33504",
+      "confirmation_required" => "-33505"
     }
 
     for tag <- tags do
@@ -167,10 +209,10 @@ defmodule Cyfr.CrossLanguageDriftTest do
              "tag #{tag} missing from Sanctum.Consent's authority_error union"
 
       assert signal =~ ":#{tag}",
-             "tag #{tag} missing from Emissary.MCP.ConsentSignal's roster"
+             "tag #{tag} missing from Prima.ConsentSignal's roster"
 
       assert message =~ "#{tag}: #{codes[tag]}",
-             "code #{codes[tag]} for #{tag} missing from Emissary.MCP.Message"
+             "code #{codes[tag]} for #{tag} missing from Prima.MCP.Message"
 
       assert client_go =~ ~s(#{codes[tag]}: "#{tag}"),
              "code #{codes[tag]} for #{tag} missing from client.go's consentTagByCode"
@@ -183,10 +225,19 @@ defmodule Cyfr.CrossLanguageDriftTest do
     assert signal =~ ~s("tag") and signal =~ ~s("payload")
     assert client_go =~ ~s(data["tag"]) and client_go =~ ~s(data["payload"])
 
-    # Cyfr.Execution.MCP spells the roster once, as the guard on format_root_result/1.
-    assert execution_mcp =~
-             "tag in [:setup_required, :consent_required, :consent_conflict, :restart_required]",
-           "execution/mcp.ex guard roster must include the four consent signal tags"
+    # Crucible.Provider spells the roster once, as the guard on format_root_result/1.
+    [guard] =
+      Regex.run(
+        ~r/defp format_root_result\(\{:error, \{tag, payload\}\}\)\s+when tag in \[([^\]]*)\]/,
+        execution_mcp,
+        capture: :all_but_first
+      )
+
+    guard_tags =
+      guard |> String.split(",", trim: true) |> Enum.map(&(&1 |> String.trim() |> trim_colon()))
+
+    assert Enum.sort(guard_tags) == Enum.sort(tags),
+           "crucible/provider.ex guard roster must be the five consent signal tags"
 
     # The payload keys Consent documents as normative are the ones the CLI
     # formatter reads — a renamed key degrades every explanation to the
@@ -195,6 +246,172 @@ defmodule Cyfr.CrossLanguageDriftTest do
       assert consent =~ key, "payload key #{key} missing from Sanctum.Consent"
       assert root_go =~ ~s(payload["#{key}"]), "payload key #{key} not read by root.go"
     end
+
+    # A pending confirmation's payload is its id, operation and expiry; the
+    # CLI names the record by the id's ref, never the id, and sends the
+    # person to Prism to confirm it before repeating the change.
+    [confirmation_go] =
+      Regex.run(~r/case "confirmation_required":(.*?)\n\t(?:case |\})/s, root_go,
+        capture: :all_but_first
+      )
+
+    # The keys are read inside the type itself: `profile_id: ` elsewhere in
+    # the module must not stand in for a missing `id: `.
+    [confirmation_type] =
+      Regex.run(~r/@type confirmation_required :: %\{(.*?)\}/s, consent, capture: :all_but_first)
+
+    type_keys =
+      ~r/^\s*(\w+):/m
+      |> Regex.scan(confirmation_type, capture: :all_but_first)
+      |> List.flatten()
+
+    assert type_keys == ~w(id operation expires_at),
+           "Sanctum.Consent's confirmation_required type must be exactly id, operation, expires_at"
+
+    for key <- ~w(id operation expires_at) do
+      assert confirmation_go =~ ~s(payload["#{key}"]),
+             "payload key #{key} not read by root.go's confirmation_required case"
+    end
+
+    assert confirmation_go =~ "Prism", "root.go does not send the person to Prism to confirm"
+  end
+
+  defp trim_colon(":" <> tag), do: tag
+
+  # ==========================================================================
+  # The vector files each side's test reads
+  # ==========================================================================
+
+  test "the confirmation signal's vector binds every producer and the CLI to one wire" do
+    %{"signal" => signal} = fixture!("confirmation.json")
+    value = Jason.decode!(signal["value"])
+    %{"error" => error} = Jason.decode!(signal["mcp"]["body"])
+    tag = value["tag"]
+
+    # The code the vector answers with is the codec's for its tag and the
+    # CLI's reading of it; the HTTP answer is the class's status, and every
+    # wire carries the one value.
+    assert error["code"] == Prima.MCP.Message.error_code(String.to_existing_atom(tag))
+
+    assert read!("apps/codex/internal/mcp/client.go") =~ ~s(#{error["code"]}: "#{tag}"),
+           "client.go does not read the vector's code as #{tag}"
+
+    assert signal["http"]["status"] == CyfrWeb.ApiError.status(String.to_existing_atom(tag))
+    assert error["data"] == value
+    assert Jason.decode!(signal["http"]["body"])["data"] == value
+
+    # Each side's test holds its producer or reader to the vector, not to a
+    # wire of its own.
+    for test_file <- [
+          "apps/prima/test/prima/consent_signal_test.exs",
+          "apps/prima/test/prima/mcp/message_test.exs",
+          "apps/cyfr/test/cyfr_web/controllers/api_error_test.exs",
+          "apps/codex/cmd/consent_error_test.go"
+        ] do
+      source = read!(test_file)
+      assert source =~ "confirmation.json", "#{test_file} does not read the shared vector"
+      assert source =~ ~s("signal"), "#{test_file} does not read the vector's signal"
+    end
+  end
+
+  test "the browser's carry and device key are held to the vectors the homes read" do
+    # Each test file, the vector file it reads, the name it reads it under,
+    # and the sections it holds its module to.
+    for {test_file, vectors, name, sections} <- [
+          {"apps/cyfr/assets/test/carrier/carry.test.mjs", "carry.json", "vectors",
+           ~w(fragments.parse fragments.valid max_fragment_bytes returns)},
+          {"apps/cyfr/assets/test/system_layer/device_key.test.mjs", "device_cert.json", "certs",
+           ~w(challenge_refusals proof_cases refusals proof_protocol purposes)}
+        ] do
+      source = read!(test_file)
+      assert source =~ vectors, "#{test_file} does not read #{vectors}"
+
+      for section <- sections do
+        assert source =~ "#{name}.#{section}",
+               "#{test_file} does not read #{vectors}'s #{section}"
+      end
+    end
+  end
+
+  # ==========================================================================
+  # The MAC names: domains, service labels and the auth header
+  # ==========================================================================
+
+  test "the MAC names are Prima.MacEnvelope's in every vector file and on every side" do
+    alias Prima.MacEnvelope
+
+    # The Locus services, as the vector files the builds and backends image
+    # harnesses read them from, and as the protocol modules answer them.
+    for {file, service, protocol} <- [
+          {"locus_builds.json", :builds, Prima.BuilderProtocol},
+          {"locus_backends.json", :backends, Prima.LocusBackends}
+        ] do
+      wire = fixture!(file)
+      assert wire["domain"] == MacEnvelope.domain(:locus), file
+      assert wire["service"] == MacEnvelope.service(service), file
+      assert wire["label"] == MacEnvelope.label(service), file
+      assert wire["auth_header"] == MacEnvelope.auth_header(), file
+      assert protocol.domain() == MacEnvelope.domain(:locus)
+      assert protocol.service() == MacEnvelope.service(service)
+      assert protocol.auth_header() == MacEnvelope.auth_header()
+    end
+
+    assert Prima.LocusBackends.label() == MacEnvelope.label(:backends)
+
+    # The worker wire's header, as its vector file and the worker image's
+    # harness and control plane spell it.
+    assert fixture!("host_api.json")["auth_header"] == MacEnvelope.auth_header()
+    assert Prima.WorkerWire.auth_header() == MacEnvelope.auth_header()
+
+    worker_auth_py = read!("tests/worker-image/worker_auth.py")
+    control_plane_py = read!("tests/worker-image/control_plane.py")
+    assert worker_auth_py =~ ~s(["auth_header"] == "#{MacEnvelope.auth_header()}")
+    assert control_plane_py =~ ~s("#{MacEnvelope.auth_header()}")
+
+    # Opus: every canonical string of the worker vector file is under the
+    # domain, and the worker key the Go CLI mints reproduces the file's
+    # over the worker label.
+    vectors = fixture!("worker_auth.json")
+
+    canonicals =
+      for {_section, %{"canonical" => canonical}} <- vectors, do: canonical
+
+    assert canonicals != []
+
+    for canonical <- canonicals do
+      assert String.starts_with?(canonical, MacEnvelope.domain(:opus) <> "/"), canonical
+    end
+
+    assert worker_auth_py =~ ~s(PREFIX = "#{MacEnvelope.domain(:opus)}")
+
+    {:ok, root} = MacEnvelope.decode_root(vectors["root_hex"])
+
+    {:ok, worker_key} =
+      MacEnvelope.derive(root, MacEnvelope.label(:worker), [service: :string], %{
+        service: vectors["service"]
+      })
+
+    assert Base.encode16(worker_key, case: :lower) == vectors["keys"]["worker_hex"]
+    assert Prima.WorkerAuth.worker_key(root, vectors["service"]) == {:ok, worker_key}
+
+    for side <- ["apps/codex/cmd/lifecycle.go", "config/test.exs"] do
+      assert read!(side) =~ ~s("#{MacEnvelope.label(:worker)}\\n),
+             "#{side} derives the worker key over another label"
+    end
+
+    # The protocol modules hold no spelling of their own.
+    for module <- ~w(builder_protocol locus_backends worker_wire) do
+      source = read!("apps/prima/lib/prima/#{module}.ex")
+
+      for literal <- [
+            ~s(@domain "),
+            ~s(@service "),
+            ~s(@label "),
+            ~s(@auth_header ")
+          ] do
+        refute source =~ literal, "#{module}.ex spells #{literal}… itself"
+      end
+    end
   end
 
   # ==========================================================================
@@ -202,29 +419,45 @@ defmodule Cyfr.CrossLanguageDriftTest do
   # ==========================================================================
 
   test "the MCP conformance vocabulary is spelled the same in every client" do
-    # Check shared metadata keys, request headers and binary sentinels across bundled clients.
-    protocol = read!("apps/cyfr/lib/emissary/mcp/protocol.ex")
-    message = read!("apps/cyfr/lib/emissary/mcp/message.ex")
-    mjs = read!("apps/mcp-bridge/server.mjs")
+    # Check shared metadata keys, request headers and binary sentinels across
+    # bundled clients: the Go CLI's literals, the backends wire's vector file
+    # (which the image suite's harness speaks from) and the codes the Locus
+    # backends service answers with, its numeric literals read without their
+    # digit separators.
+    protocol = read!("apps/prima/lib/prima/mcp/protocol.ex")
+    message = read!("apps/prima/lib/prima/mcp/message.ex")
+    fixture = read!("tests/fixtures/locus_backends.json")
+
+    service =
+      "apps/locus/lib/locus/backends/service.ex"
+      |> read!()
+      |> String.replace(~r/(\d)_(\d)/, "\\1\\2")
+
     client_go = read!("apps/codex/internal/mcp/client.go")
     types_go = read!("apps/codex/internal/mcp/types.go")
     go = client_go <> types_go
+    request_metadata = read!("apps/cyfr/lib/emissary/web/plugs/mcp_request_metadata.ex")
 
     # {literal, [sources that must carry it]} — a source is listed only
-    # where it genuinely speaks that part of the vocabulary (the bridge
-    # never reads clientInfo, so it is not held to it).
+    # where it genuinely speaks that part of the vocabulary (the backends
+    # service names its `_meta` keys through Prima.MCP.Protocol, so the
+    # vector file carries them for it).
     vocabulary = [
-      {"io.modelcontextprotocol/protocolVersion", [protocol, mjs, go]},
-      {"io.modelcontextprotocol/clientCapabilities", [protocol, mjs, go]},
+      {"io.modelcontextprotocol/protocolVersion", [protocol, fixture, go]},
+      {"io.modelcontextprotocol/clientCapabilities", [protocol, fixture, go]},
       {"io.modelcontextprotocol/clientInfo", [protocol, go]},
-      {"io.modelcontextprotocol/serverInfo", [protocol, mjs, go]},
-      {"=?base64?", [protocol, mjs, go]},
-      {"-32020", [message, mjs]},
-      {"-32022", [message, mjs]},
+      {"io.modelcontextprotocol/serverInfo", [protocol, go]},
+      # The key a repeated change carries its confirmation's secret under:
+      # spelled apart, the server would ignore it and every repeat would
+      # open a new record.
+      {"cyfr/confirmationId", [request_metadata, go]},
+      {"=?base64?", [protocol, go]},
+      {"-32020", [message, service]},
+      {"-32022", [message, service]},
       # The auth sentinel: the Go CLI keys `errors.Is(err, ErrAuthRequired)`
-      # on this number and the bridge answers with it, but all three defined
-      # it independently and nothing held them together.
-      {"-33001", [message, mjs, go]}
+      # on this number and the backends service answers with it, but all
+      # three define it independently and nothing else holds them together.
+      {"-33001", [message, service, go]}
     ]
 
     for {literal, sources} <- vocabulary,
@@ -236,10 +469,16 @@ defmodule Cyfr.CrossLanguageDriftTest do
 
     # The three request headers, case-insensitively — Go title-cases them.
     for header <- ["mcp-protocol-version", "mcp-method", "mcp-name"] do
-      for {name, source} <- [{"protocol.ex", protocol}, {"server.mjs", mjs}, {"go", go}] do
+      for {name, source} <- [{"protocol.ex", protocol}, {"go", go}] do
         assert String.contains?(String.downcase(source), header),
                "request header #{header} missing from #{name}"
       end
+    end
+
+    # The two every signed invoke of the vector file carries.
+    for header <- ["mcp-protocol-version", "mcp-method"] do
+      assert String.contains?(fixture, header),
+             "request header #{header} missing from tests/fixtures/locus_backends.json"
     end
   end
 end

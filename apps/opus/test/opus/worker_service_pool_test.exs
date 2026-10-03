@@ -13,8 +13,11 @@ defmodule Opus.WorkerServicePoolTest do
   is `:not_found` however busy the runners are, and an execution a runner
   of this boot ended, root or child, is `:ok` again. A runner that ends
   without an `exit` is reported holding its root and every child it said
-  it started, and a caller that awaits the reports is answered once every
-  one in flight is.
+  it started; so is one whose `exit` leaves out a child the service
+  cancelled, and one that completes unclean after such a cancel, whether
+  the cancel reached it as its child's holder or as a busy runner offered
+  it. An unclean completion with no child cancelled is not reported. A
+  caller that awaits the reports is answered once every one in flight is.
 
   A keeper that refuses every runner makes the status report the
   refusal, with the keeper's reason and the sentence naming what the
@@ -28,7 +31,7 @@ defmodule Opus.WorkerServicePoolTest do
 
   import Opus.Test.Wait
 
-  alias Cyfr.{RunnerControl, WorkerAPI, WorkerAuth, WorkerWire}
+  alias Prima.{RunnerControl, WorkerAPI, WorkerAuth, WorkerWire}
   alias Opus.Test.{ScriptedHost, ScriptedKeeper}
   alias Opus.WorkerService
 
@@ -184,6 +187,81 @@ defmodule Opus.WorkerServicePoolTest do
 
       assert Enum.sort(held) == Enum.sort([root.attempt, "att_child"])
     end
+
+    test "a cancelled child the runner's exit leaves out is reported with its root", context do
+      {root, runner} = started!(context)
+      id = runner_id(root)
+      write(runner, %{type: :child, execution_id: "exec_child", attempt: "att_child"})
+      write(runner, %{type: :child, execution_id: "exec_other", attempt: "att_other"})
+      wait_until(fn -> "att_other" in elem(WorkerService.status(), 1).attempts end)
+
+      assert {200, %{"ok" => true}} = post(context, :kill, %{"execution_id" => "exec_child"})
+      wait_until(fn -> cancels(runner) == ["exec_child"] end)
+
+      # The runner no longer speaks for the child it cancelled, and names
+      # only what it still held when it ended.
+      write(runner, %{type: :exit, runner: id, open: [root.attempt]})
+
+      assert [%{args: %{"attempts" => held}}] = reports(context)
+      assert Enum.sort(held) == Enum.sort([root.attempt, "att_child", "att_other"])
+    end
+
+    test "a child's cancel then the runner's unclean completion is reported, naming the child",
+         context do
+      {root, runner} = started!(context)
+      id = runner_id(root)
+      write(runner, %{type: :child, execution_id: "exec_child", attempt: "att_child"})
+      wait_until(fn -> "att_child" in elem(WorkerService.status(), 1).attempts end)
+
+      assert {200, %{"ok" => true}} = post(context, :kill, %{"execution_id" => "exec_child"})
+      wait_until(fn -> cancels(runner) == ["exec_child"] end)
+      write(runner, %{type: :complete, execution_id: root.execution_id, clean: false})
+
+      assert [%{args: %{"attempts" => held, "runner" => reported}}] = reports(context)
+      assert Enum.sort(held) == Enum.sort([root.attempt, "att_child"])
+      assert reported == id
+      wait_until(fn -> elem(WorkerService.status(), 1).attempts == [] end)
+    end
+
+    test "a child cancelled only by the offer to every busy runner is reported too", context do
+      {root, runner} = started!(context)
+
+      # Its runner's word of the child has not arrived: the kill is offered
+      # to every busy runner, and this one cancels it.
+      assert {200, %{"error" => "not_found"}} =
+               post(context, :kill, %{"execution_id" => "exec_child"})
+
+      wait_until(fn -> cancels(runner) == ["exec_child"] end)
+      write(runner, %{type: :child, execution_id: "exec_child", attempt: "att_child"})
+      write(runner, %{type: :complete, execution_id: root.execution_id, clean: false})
+
+      assert [%{args: %{"attempts" => held}}] = reports(context)
+      assert Enum.sort(held) == Enum.sort([root.attempt, "att_child"])
+    end
+
+    test "an unclean completion with no child cancelled is not reported", context do
+      {root, runner} = started!(context)
+      write(runner, %{type: :child, execution_id: "exec_child", attempt: "att_child"})
+      write(runner, %{type: :complete, execution_id: root.execution_id, clean: false})
+
+      wait_until(fn -> elem(WorkerService.status(), 1).attempts == [] end)
+      assert :ok = WorkerService.await_reports()
+      assert ScriptedHost.requests(context.host, "runner_exited") == []
+    end
+  end
+
+  # The one runner exit report the host received, once it has.
+  defp reports(context) do
+    wait_until(fn -> ScriptedHost.requests(context.host, "runner_exited") != [] end, 5_000)
+    assert :ok = WorkerService.await_reports()
+    ScriptedHost.requests(context.host, "runner_exited")
+  end
+
+  # The id of the pool's runner that took `attempt`'s subtree.
+  defp runner_id(attempt) do
+    Opus.RunnerPool
+    |> Opus.RunnerPool.runners()
+    |> Enum.find_value(&(&1.execution_id == attempt.execution_id && &1.id))
   end
 
   test "awaiting the reports answers once every report in flight is answered", context do

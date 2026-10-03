@@ -5,7 +5,7 @@ defmodule Aqua.Aloud do
   @moduledoc """
   Saying part of a private exchange out loud.
 
-  Talking to your own agent happens in your own estate: your files, your
+  Talking to your own agent happens in your own athanor: your files, your
   credentials, nobody else in the room. Nothing you say there reaches a
   shared thread by inference, by plumbing, or because an agent was
   "summoned" — it reaches one because you said so.
@@ -20,9 +20,9 @@ defmodule Aqua.Aloud do
   ## What it refuses, and why
 
     * A source you cannot read, or a target you cannot write. Membership in
-      both estates, checked separately — sharing is not a way to reach an
-      estate you are not in, and there is **no operator bypass**: focusing
-      an estate is an audited open, but a copy out of it is a second act,
+      both athanors, checked separately — sharing is not a way to reach an
+      athanor you are not in, and there is **no operator bypass**: focusing
+      an athanor is an audited open, but a copy out of it is a second act,
       and it belongs to members alone.
     * A line that is not YOURS. You say aloud what you said — every
       selected message must be authored by the caller, or the verb would
@@ -35,12 +35,12 @@ defmodule Aqua.Aloud do
     * A copy into the SAME thread. Nothing to say aloud; the line is
       already there.
 
-  Attachments are copied as **bytes** into the target estate's own tree. A
+  Attachments are copied as **bytes** into the target athanor's own tree. A
   reference left pointing at the source would be a link into your private
   storage handed to everyone in the room — the read would fail for them if
   the boundary held, and leak if it did not. Copying is the only version of
   this that is both honest and reachable, and it is charged to the target
-  estate's quota like any other upload.
+  athanor's quota like any other upload.
   """
 
   alias Arca.ThreadStorage, as: Threads
@@ -48,7 +48,7 @@ defmodule Aqua.Aloud do
   alias Sanctum.Context
   alias Sanctum.Tenancy.{Members, Users}
 
-  @agent_author Cyfr.Author.agent()
+  @agent_author Prima.Author.agent()
 
   @type error ::
           :not_a_member
@@ -62,8 +62,8 @@ defmodule Aqua.Aloud do
   Copy `message_ids` from the thread the caller is in onto a thread in
   `target_athanor_id`, attributed to the caller.
 
-  The source is read under `ctx` as it stands — the estate you are already
-  focused on, tenant-keyed like every other read. The **target estate is
+  The source is read under `ctx` as it stands — the athanor you are already
+  focused on, tenant-keyed like every other read. The **target athanor is
   named**, because a thread id alone would need a lookup that spans
   tenants, and there is no such read in this system by design.
 
@@ -71,7 +71,7 @@ defmodule Aqua.Aloud do
   aloud does not move it out of your own thread.
   """
   @spec post(Context.t(), String.t(), [String.t()], String.t(), String.t()) ::
-          {:ok, [Arca.Schemas.Message.t()]} | {:error, error()}
+          {:ok, [Aqua.Tape.row()]} | {:error, error()}
   def post(%Context{} = ctx, source_id, message_ids, target_athanor_id, target_id)
       when is_binary(source_id) and is_list(message_ids) and
              is_binary(target_athanor_id) and is_binary(target_id) do
@@ -106,10 +106,10 @@ defmodule Aqua.Aloud do
 
   # Checked on BOTH sides, and on the source too rather than trusting the
   # focus: a context is a struct, and this is the one verb that crosses
-  # estates. The tenant-keyed reads would refuse a foreign thread
+  # athanors. The tenant-keyed reads would refuse a foreign thread
   # anyway; this refuses it by name instead of as a confusing miss.
   #
-  # Deliberately NO `platform_admin` arm. An operator's open of an estate
+  # Deliberately NO `platform_admin` arm. An operator's open of an athanor
   # is audited (`Context.focus/2`); a copy out of one is a second, quieter
   # act, and letting the capability bypass membership here would make it
   # an unaudited export verb. An operator who is not a member is refused
@@ -154,7 +154,7 @@ defmodule Aqua.Aloud do
   defp sayable?(%{author: author}, %Context{user_id: author}), do: true
 
   # An assistant's line is the caller's to share only when the source
-  # estate is their own athanor — the one place it was said to them alone.
+  # athanor is their own athanor — the one place it was said to them alone.
   defp sayable?(%{author: @agent_author, kind: "text"}, %Context{} = ctx),
     do: Users.own_athanor?(ctx.user_id, ctx.athanor_id)
 
@@ -179,7 +179,7 @@ defmodule Aqua.Aloud do
   # hear of the row the way they hear of the runner's own — the copy has
   # to appear on the tape it was said onto.
   defp say(source_ctx, target_ctx, source_id, target_id, row) do
-    message_id = Cyfr.UUID7.generate_id("msg")
+    message_id = Prima.UUID7.generate_id("msg")
 
     with {:ok, files} <- carry(source_ctx, source_id, row),
          {:ok, refs} <- Attachments.store(target_ctx, target_id, message_id, files) do
@@ -190,7 +190,7 @@ defmodule Aqua.Aloud do
 
       case Threads.append(Sanctum.Context.actor(target_ctx), target_id, %{
              id: message_id,
-             author: target_ctx.user_id || Cyfr.Author.system(),
+             author: target_ctx.user_id || Prima.Author.system(),
              kind: "text",
              content: row.content || "",
              payload: payload
@@ -201,7 +201,7 @@ defmodule Aqua.Aloud do
 
         {:error, _} = err ->
           # The bytes landed but the row did not: leave nothing behind in
-          # the target estate's quota.
+          # the target athanor's quota.
           Attachments.discard(target_ctx, target_id, message_id, refs)
           err
       end
@@ -218,7 +218,7 @@ defmodule Aqua.Aloud do
 
   defp put_shared_agent(payload, _row), do: payload
 
-  # A message's blobs as upload-shaped files, read out of the source estate
+  # A message's blobs as upload-shaped files, read out of the source athanor
   # so `Attachments.store/4` can write them into the target's own tree.
   defp carry(source_ctx, source_id, row) do
     case Attachments.refs_of(row) do

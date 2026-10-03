@@ -1,0 +1,221 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 CYFR Works Inc.
+
+defmodule Emissary.Web.ExecutionEventsStreamTest do
+  use CyfrWeb.ConnCase, async: false
+
+  import Ecto.Query, only: [from: 2]
+  import Prima.Test.Wait
+
+  alias Emissary.Web.ExecutionEventsController
+  alias Crucible.Events
+
+  setup %{conn: conn} do
+    ctx = Sanctum.TestContext.local(:api)
+
+    {:ok, %{execution: execution}} =
+      Arca.Execution.admit(
+        %{
+          id: Prima.UUID7.execution_id(),
+          reference: "reagent:local.sse:0.1.0",
+          user_id: ctx.user_id,
+          athanor_id: ctx.athanor_id,
+          component_type: "reagent",
+          origin: :programmatic
+        },
+        Cyfr.Test.AttemptFixtures.standing(ctx.athanor_id)
+      )
+
+    # The stream's own deadline, short: a test that leaves it open ends.
+    Cyfr.Test.Settings.put("crucible_events_max_ms", 3_000)
+
+    {:ok, conn: conn, ctx: ctx, exec: execution}
+  end
+
+  defp durable!(exec, type, data) do
+    {:ok, row} =
+      Arca.ExecutionEvents.append(Prima.Actor.in_athanor(exec.athanor_id), exec.id, type,
+        data: data
+      )
+
+    row.seq
+  end
+
+  defp publish!(exec, type, seq, data \\ %{}),
+    do: :ok = Events.publish(exec.id, exec, type, seq, data)
+
+  defp ids(body) do
+    ~r/^id: (\S+)$/m |> Regex.scan(body) |> Enum.map(fn [_, id] -> id end)
+  end
+
+  defp stream(conn, exec, headers \\ []) do
+    conn = Enum.reduce(headers, conn, fn {k, v}, c -> put_req_header(c, k, v) end)
+    get(conn, "/api/executions/#{exec.id}/events")
+  end
+
+  # A stream in `task` is live once it waits in its event loop with no
+  # recheck left to take: subscribed to the execution and to its caller's
+  # standing, its replay sent, and a recheck sent to it before this call
+  # handled. What a case publishes or announces after this reaches the
+  # loop. (The mailbox is never empty: the test adapter tells the process
+  # its response was sent, and the loop takes nothing it does not own.)
+  defp await_live(task) do
+    recheck = CyfrWeb.ContextGuard.recheck_message()
+
+    wait_until(
+      fn ->
+        case Process.info(task.pid, [:current_function, :messages]) do
+          [current_function: {ExecutionEventsController, :event_loop, 4}, messages: messages] ->
+            recheck not in messages
+
+          _elsewhere ->
+            false
+        end
+      end,
+      2_000,
+      "the stream to wait in its event loop"
+    )
+  end
+
+  test "the cursor is <durable> or <durable>.<n>" do
+    assert ExecutionEventsController.parse_cursor("40") == {40, 0}
+    assert ExecutionEventsController.parse_cursor("40.10") == {40, 10}
+    assert ExecutionEventsController.parse_cursor("junk") == {0, 0}
+    assert ExecutionEventsController.parse_cursor("-1.2") == {0, 2}
+  end
+
+  test "replay is the rows in order, each with its deltas, and Last-Event-ID resumes from either",
+       %{conn: conn, exec: exec} do
+    # 1 is execution.started (admission). Deltas under it, a step row, a
+    # delta under that, the end.
+    {:ok, "1.1"} = Events.push(exec.id, %{"i" => 1}, exec)
+    two = durable!(exec, "step.closed", %{"step" => "s"})
+    publish!(exec, "step.closed", two)
+    {:ok, "2.1"} = Events.push(exec.id, %{"i" => 2}, exec)
+    three = durable!(exec, "execution.completed", %{"status" => "completed"})
+    publish!(exec, "execution.completed", three)
+    assert {two, three} == {2, 3}
+
+    body = stream(conn, exec).resp_body
+    assert ids(body) == ["1", "1.1", "2", "2.1", "3"]
+    assert body =~ "event: execution.completed"
+
+    # A client at 2 wants the deltas under 2 and on; one at 2.1, what follows.
+    assert ids(stream(conn, exec, [{"last-event-id", "2"}]).resp_body) == ["2.1", "3"]
+    assert ids(stream(conn, exec, [{"last-event-id", "2.1"}]).resp_body) == ["3"]
+    assert ids(stream(conn, exec, [{"last-event-id", "3"}]).resp_body) == []
+  end
+
+  test "publication out of order is delivered in order: a row overtaken by a later one is not skipped",
+       %{conn: conn, exec: exec} do
+    # The client connects live; writer A commits row 2 and stalls before
+    # publishing; writer B commits row 3 (terminal) and publishes it. The
+    # client receives 2 before 3.
+    task = Task.async(fn -> stream(conn, exec).resp_body end)
+    await_live(task)
+
+    two = durable!(exec, "step.closed", %{"step" => "a"})
+    three = durable!(exec, "execution.completed", %{"status" => "completed"})
+    publish!(exec, "execution.completed", three)
+
+    body = Task.await(task, 10_000)
+    assert ids(body) == ["1", "2", "3"]
+    assert {two, three} == {2, 3}
+  end
+
+  test "live deltas and rows that follow the cursor go straight out, in order", %{
+    conn: conn,
+    exec: exec
+  } do
+    task = Task.async(fn -> stream(conn, exec).resp_body end)
+    await_live(task)
+
+    {:ok, "1.1"} = Events.push(exec.id, %{"i" => 1}, exec)
+    two = durable!(exec, "step.closed", %{"step" => "a"})
+    publish!(exec, "step.closed", two)
+    {:ok, "2.1"} = Events.push(exec.id, %{"i" => 2}, exec)
+    three = durable!(exec, "execution.failed", %{"status" => "failed"})
+    publish!(exec, "execution.failed", three)
+
+    body = Task.await(task, 10_000)
+    assert ids(body) == ["1", "1.1", "2", "2.1", "3"]
+    assert body =~ "event: execution.failed"
+  end
+
+  describe "an open stream holds its credential to its standing" do
+    setup %{exec: exec} do
+      ctx = Sanctum.TestContext.issuer!(Sanctum.TestContext.local(:api))
+      {:ok, session} = Sanctum.Session.create(ctx)
+      {:ok, session: session, person: ctx, exec: exec}
+    end
+
+    defp bearer_stream(conn, exec, token) do
+      Task.async(fn ->
+        started = System.monotonic_time(:millisecond)
+
+        conn =
+          conn
+          |> put_req_header("authorization", "Bearer " <> token)
+          |> get("/api/executions/#{exec.id}/events")
+
+        {conn, System.monotonic_time(:millisecond) - started}
+      end)
+    end
+
+    test "a revocation announced for the caller ends the stream before its deadline", %{
+      conn: conn,
+      exec: exec,
+      session: session,
+      person: person
+    } do
+      task = bearer_stream(conn, exec, session.token)
+      await_live(task)
+
+      {:ok, _} = Sanctum.Session.revoke_all_for_user(person.user_id)
+      {:ok, "1.1"} = Events.push(exec.id, %{"i" => 1}, exec)
+
+      {conn, elapsed} = Task.await(task, 10_000)
+      assert conn.status == 200
+      assert elapsed < 2_500
+      refute "1.1" in ids(conn.resp_body)
+    end
+
+    test "a revocation nobody announced ends the stream at its periodic recheck", %{
+      conn: conn,
+      exec: exec,
+      session: session
+    } do
+      task = bearer_stream(conn, exec, session.token)
+      await_live(task)
+
+      hash = Sanctum.Session.token_hash(session.token)
+
+      Arca.Repo.delete_all(from(s in Arca.Schemas.Session, where: s.token_hash == ^hash))
+
+      # The recheck the stream arms for itself every thirty seconds, now.
+      send(task.pid, CyfrWeb.ContextGuard.recheck_message())
+
+      {_conn, elapsed} = Task.await(task, 10_000)
+      assert elapsed < 2_500
+    end
+
+    test "a standing caller's recheck keeps delivering", %{
+      conn: conn,
+      exec: exec,
+      session: session
+    } do
+      task = bearer_stream(conn, exec, session.token)
+      await_live(task)
+
+      send(task.pid, CyfrWeb.ContextGuard.recheck_message())
+      # Revalidated, the stream is back in its loop, still delivering.
+      await_live(task)
+      {:ok, "1.1"} = Events.push(exec.id, %{"i" => 1}, exec)
+      two = durable!(exec, "execution.completed", %{"status" => "completed"})
+      publish!(exec, "execution.completed", two)
+
+      {conn, _elapsed} = Task.await(task, 10_000)
+      assert ids(conn.resp_body) == ["1", "1.1", "2"]
+    end
+  end
+end

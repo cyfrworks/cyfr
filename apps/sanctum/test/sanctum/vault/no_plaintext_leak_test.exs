@@ -29,9 +29,11 @@ defmodule Sanctum.Vault.NoPlaintextLeakTest do
   alias Sanctum.Vault
   alias Sanctum.VaultReader
 
-  setup do
-    :ok = Ecto.Adapters.SQL.Sandbox.checkout(Arca.Repo)
-    Ecto.Adapters.SQL.Sandbox.mode(Arca.Repo, {:shared, self()})
+  # The edge a consent writes for these entries names the one field they hold.
+  @token_projection %{fields: ["token"], scopes: []}
+
+  setup tags do
+    Arca.Test.Sandbox.setup!(tags)
 
     {:ok, ctx: Sanctum.TestContext.local()}
   end
@@ -48,13 +50,16 @@ defmodule Sanctum.Vault.NoPlaintextLeakTest do
 
     log =
       capture_log(fn ->
-        {:ok, view} =
-          Vault.create(ctx, %{
-            name: "leaky",
-            kind: "api_key",
-            fields: %{"token" => value},
-            oauth: %{"access_token" => value, "refresh_token" => refresh}
-          })
+        params = %{
+          name: "leaky",
+          kind: "api_key",
+          fields: %{"token" => value},
+          oauth: %{"access_token" => value, "refresh_token" => refresh}
+        }
+
+        # Entering the credential is confirmed as a person confirms it; the
+        # confirmation binds the arguments by a keyed digest alone.
+        {:ok, view} = Vault.create(entering(ctx, "vault.create", params, "leaky"), params)
 
         # Everything the facade answers, on the success path.
         {:ok, stored} = Arca.VaultStorage.get(actor, view.id)
@@ -72,12 +77,18 @@ defmodule Sanctum.Vault.NoPlaintextLeakTest do
         # a crash report or a 500.
         refusals = [
           Vault.create(ctx, %{name: "leaky", kind: "api_key", fields: %{"token" => value}}),
-          Vault.rotate(ctx, %{
+          confirmed_call(ctx, "vault.create", "leaky", &Vault.create/2, %{
+            name: "leaky",
+            kind: "api_key",
+            fields: %{"token" => value}
+          }),
+          Vault.rotate(ctx, %{id: view.id, fields: %{"token" => value}, expected_payload_rev: 99}),
+          confirmed_call(ctx, "vault.rotate", "leaky", &Vault.rotate/2, %{
             id: view.id,
             fields: %{"token" => value},
             expected_payload_rev: 99
           }),
-          Vault.rotate(ctx, %{
+          confirmed_call(ctx, "vault.rotate", "leaky", &Vault.rotate/2, %{
             id: view.id,
             fields: %{"other" => value},
             expected_payload_rev: 0
@@ -97,15 +108,24 @@ defmodule Sanctum.Vault.NoPlaintextLeakTest do
             %{oauth_scopes: ~s(["x"])},
             Vault.blocked_profile_status()
           ),
-          Arca.VaultStorage.get(%Cyfr.Actor{athanor_id: "ath_other"}, view.id),
-          VaultReader.fetch(ctx, %{entry_id: view.id, binding_digest: "sha256:wrong"}),
+          Arca.VaultStorage.get(%Prima.Actor{athanor_id: "ath_other"}, view.id),
+          VaultReader.fetch(ctx, %{
+            entry_id: view.id,
+            binding_digest: "sha256:wrong",
+            projection: @token_projection
+          }),
           VaultReader.fetch(%{ctx | anonymous: true}, %{
             entry_id: view.id,
-            binding_digest: "sha256:wrong"
+            binding_digest: "sha256:wrong",
+            projection: @token_projection
           }),
           VaultReader.oauth_token(
             ctx,
-            %{entry_id: view.id, binding_digest: "sha256:wrong"},
+            %{
+              entry_id: view.id,
+              binding_digest: "sha256:wrong",
+              projection: %{fields: [], scopes: ["x"]}
+            },
             "google"
           )
         ]
@@ -122,7 +142,11 @@ defmodule Sanctum.Vault.NoPlaintextLeakTest do
         {:ok, digest} = VaultReader.binding_digest(stored)
 
         assert {:ok, %{"token" => ^value}} =
-                 VaultReader.fetch(ctx, %{entry_id: view.id, binding_digest: digest})
+                 VaultReader.fetch(ctx, %{
+                   entry_id: view.id,
+                   binding_digest: digest,
+                   projection: @token_projection
+                 })
       end)
 
     refute String.contains?(log, value), "the credential reached a log line"
@@ -135,7 +159,7 @@ defmodule Sanctum.Vault.NoPlaintextLeakTest do
 
     # A tampered payload: the decode refusal names the shape it rejected
     # and never the material inside it.
-    id = Cyfr.UUID7.generate_id("vlt")
+    id = Prima.UUID7.generate_id("vlt")
     aad = Sanctum.CipherAAD.vault_entry(ctx.athanor_id, id, "")
     {:ok, sealed} = Sanctum.Cipher.encrypt(~s({"v":2,"fields":{},"extra":"#{value}"}), aad)
 
@@ -150,7 +174,13 @@ defmodule Sanctum.Vault.NoPlaintextLeakTest do
           })
 
         {:ok, digest} = VaultReader.binding_digest(entry)
-        result = VaultReader.fetch(ctx, %{entry_id: id, binding_digest: digest})
+
+        result =
+          VaultReader.fetch(ctx, %{
+            entry_id: id,
+            binding_digest: digest,
+            projection: @token_projection
+          })
 
         assert {:error, {:invalid_payload, {:unknown_keys, ["extra"]}}} = result
         refute contains?(result, value)
@@ -158,4 +188,18 @@ defmodule Sanctum.Vault.NoPlaintextLeakTest do
 
     refute String.contains?(log, value)
   end
+
+  # A credential entry under the confirmation its person proved
+  # (`Sanctum.TestContext.confirmed/3`), for exactly the change the vault
+  # decides: its operation, its arguments and the entry by name.
+  defp entering(ctx, operation, params, name) do
+    Sanctum.TestContext.confirmed(ctx, :credential_entry, %{
+      operation: operation,
+      arguments: params,
+      resource: name
+    })
+  end
+
+  defp confirmed_call(ctx, operation, name, fun, params),
+    do: fun.(entering(ctx, operation, params, name), params)
 end

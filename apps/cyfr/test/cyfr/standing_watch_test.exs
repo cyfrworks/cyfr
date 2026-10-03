@@ -13,25 +13,24 @@ defmodule Cyfr.StandingWatchTest do
   """
   use ExUnit.Case, async: false
 
-  import Cyfr.Test.Wait
+  import Prima.Test.Wait
 
   alias Sanctum.Context
   alias Sanctum.Tenancy.{Athanors, Users}
 
-  setup do
+  setup tags do
     Arca.Cache.init()
-    :ok = Ecto.Adapters.SQL.Sandbox.checkout(Arca.Repo)
-    Ecto.Adapters.SQL.Sandbox.mode(Arca.Repo, {:shared, self()})
+    Cyfr.Test.Sandbox.setup!(tags)
 
-    original = Application.get_env(:sanctum, :establish_cache_ms)
-    Application.put_env(:sanctum, :establish_cache_ms, 60_000)
+    original = Application.get_env(:sanctum, :caller_memo_ttl_ms)
+    Application.put_env(:sanctum, :caller_memo_ttl_ms, 60_000)
 
     on_exit(fn ->
       Arca.Cache.delete_match({:established, :_, :_, :_})
 
       if original,
-        do: Application.put_env(:sanctum, :establish_cache_ms, original),
-        else: Application.delete_env(:sanctum, :establish_cache_ms)
+        do: Application.put_env(:sanctum, :caller_memo_ttl_ms, original),
+        else: Application.delete_env(:sanctum, :caller_memo_ttl_ms)
     end)
 
     n = System.unique_integer([:positive])
@@ -47,7 +46,7 @@ defmodule Cyfr.StandingWatchTest do
     {:ok, group} = Athanors.create_group(owner.id, "Standing #{n}")
 
     {:ok, session} =
-      Sanctum.Session.create(%{
+      Sanctum.TestContext.create_session(%{
         member_ctx(group.id, owner.id)
         | provider: "github",
           email: owner.email
@@ -63,11 +62,11 @@ defmodule Cyfr.StandingWatchTest do
   } do
     assert {:ok, %Context{}} = Sanctum.Caller.establish(session.token)
 
-    Phoenix.PubSub.subscribe(Emissary.PubSub, Cyfr.Bus.caller_invalidated_global())
+    Cyfr.Bus.subscribe_global(Cyfr.Bus.caller_invalidated_global())
 
     assert {:ok, %{status: "archived"}} = Athanors.archive(group)
 
-    assert_receive {:caller_invalidated, ^hash}, 5_000
+    assert_receive %Cyfr.Bus.CallerInvalidated{session_key: ^hash}, 5_000
   end
 
   test "an athanor archived on another member refuses a caller this one had cached", %{
@@ -88,10 +87,9 @@ defmodule Cyfr.StandingWatchTest do
            "the memo under test is not the one a cached caller is served from"
 
     # The announcement arrives.
-    Phoenix.PubSub.broadcast(
-      Emissary.PubSub,
+    Cyfr.Bus.broadcast_global(
       Cyfr.Bus.caller_invalidated_global(),
-      {:caller_invalidated, hash}
+      Cyfr.Bus.CallerInvalidated.new(hash)
     )
 
     assert :ok =

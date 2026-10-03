@@ -11,6 +11,10 @@ defmodule Arca.Supervisor do
 
   @impl true
   def start(_type, _args) do
+    # The contract structs a facade may answer are read before anything
+    # starts: an unreadable `:prima` module list is a boot refusal.
+    :ok = Arca.Data.load_prima!()
+
     # Everything below runs before the pool, in this order: the directory
     # the database file needs, a writability probe that says what a Docker
     # bind mount got wrong, and the migration — DDL on a temporary pool of
@@ -19,18 +23,26 @@ defmodule Arca.Supervisor do
     ensure_db_directory!()
     maybe_migrate_before_pool()
 
-    children = [
-      Arca.Repo,
-      # The write-behind for bookkeeping rows (allowed policy lines, MCP
-      # log completions, vault last-used); right after the repo so it
-      # drains before the repo goes down.
-      Arca.RecordSink,
-      # The shared cache table's one owner. A crash here flushes the
-      # table, harmlessly for a read-through cache — but the catalogues
-      # written into it are rebuilt by their own owners, which watch this
-      # process (`Arca.Cache.monitor_owner/0`).
-      Arca.Cache.Sweeper
-    ]
+    # Shutdown runs in reverse: everything that writes through a pool
+    # stops, draining, while that pool is still open.
+    pools = [Arca.Repo | control_plane_pool()]
+
+    children =
+      pools ++
+        [
+          # The order SQLite's audit writers and the control plane reach
+          # the write lock in, and then the audit writers themselves, which
+          # drain before it stops.
+          Arca.WriteTurn,
+          Arca.DecisionLog,
+          # The write-behind for bookkeeping rows (allowed policy lines,
+          # MCP log completions, vault last-used); after the repo so it
+          # drains before the repo goes down.
+          Arca.RecordSink,
+          # The shared cache table's one owner. A crash here flushes the
+          # table, harmlessly for a read-through cache.
+          Arca.Cache.Sweeper
+        ]
 
     Supervisor.start_link(children,
       strategy: :one_for_one,
@@ -39,6 +51,10 @@ defmodule Arca.Supervisor do
       max_seconds: 60
     )
   end
+
+  # The control plane's own pool of one connection, beside the main one,
+  # where it has one (`Arca.ControlPlane.own_pool?/0`).
+  defp control_plane_pool, do: Arca.ControlPlane.children()
 
   defp ensure_db_directory! do
     config = Application.get_env(:arca, Arca.Repo, [])
@@ -101,7 +117,6 @@ defmodule Arca.Supervisor do
     case Arca.Repo.adapter() do
       Ecto.Adapters.SQLite3 ->
         Arca.Repo.query!("PRAGMA journal_mode=WAL")
-        Arca.Repo.query!("PRAGMA busy_timeout=#{Arca.Repo.busy_timeout_ms()}")
 
       _ ->
         :ok

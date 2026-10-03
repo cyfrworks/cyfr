@@ -8,17 +8,19 @@ defmodule Aqua.RunnerTest do
   one turn runs at a time, the sender's own line steers it and another
   member's waits; a stop cuts the turn and drops the queue; a card pauses
   the turn and its decision continues it; a runner that starts finds the
-  open turns and does what their rows say. A runner's loop dies with it;
+  open turns and does what their rows say, resuming each under the origin
+  its row stores and cancelling one that stores none. A runner's loop dies with it;
   a runner starts and handles loop events only on a boot that owns the
   control plane, and never takes a turn another process on this boot holds.
   """
 
   use ExUnit.Case, async: false
 
-  import Cyfr.Test.Wait
+  import Prima.Test.Wait
 
   alias Aqua.{Approvals, Runner, Tape}
   alias Arca.ThreadStorage, as: Threads
+  alias Cyfr.Bus.ThreadEvent
   alias Cyfr.Test.ScriptedWorker
   alias Sanctum.Consent.{Bootstrap}
   alias Sanctum.Tenancy.{Athanors, Members, Users}
@@ -32,7 +34,7 @@ defmodule Aqua.RunnerTest do
     Cyfr.Test.Sandbox.setup!()
 
     test_path = Path.join(System.tmp_dir!(), "runner_#{System.unique_integer([:positive])}")
-    keys = [arca: :base_path, arca: :seed_path, cyfr: :workers]
+    keys = [arca: :base_path, arca: :seed_path, cyfr: :opus_workers]
     prev = Map.new(keys, fn {app, key} -> {{app, key}, Application.get_env(app, key)} end)
     Application.put_env(:arca, :base_path, test_path)
     Application.put_env(:arca, :seed_path, @seed_root)
@@ -50,15 +52,22 @@ defmodule Aqua.RunnerTest do
     # The runners run under the paths restored above.
     Cyfr.Test.Sandbox.stop_work_on_exit()
 
-    {ctx, user} = Sanctum.TestContext.person!(Sanctum.TestContext.local())
+    {ctx, user} = Sanctum.TestContext.person!(Sanctum.TestContext.local(:prism))
+    # The sends here are the console's: a person on an interactive surface,
+    # the origin `CyfrWeb.ContextGuard` gives the context it establishes.
+    ctx = %{ctx | origin: :interactive}
     {:ok, _} = Members.ensure(user.id, scope: "athanor", athanor_id: ctx.athanor_id)
     :ok = Sanctum.TestContext.shipped!(ctx.athanor_id)
     {:ok, %{errors: 0}} = Compendium.AutoIndexer.scan(ctx: ctx)
     {:ok, _} = Compendium.AgentIndex.sync(ctx)
     {:ok, %{minted: minted}} = Bootstrap.run(ctx)
     assert @soul in minted
-    # The model catalyst unseals its key when its runner attaches.
-    Sanctum.Test.ConsentFixtures.bind_key!(ctx, @model, %{"ANTHROPIC_API_KEY" => "sk-test"})
+    # The model catalyst unseals its key when its runner attaches; the key
+    # is lent to a script's turns over the API as well as the person's.
+    Sanctum.Test.ConsentFixtures.bind_key!(ctx, @model, %{"ANTHROPIC_API_KEY" => "sk-test"},
+      origins: [:interactive, :programmatic]
+    )
+
     ScriptedWorker.fresh_limits!(ctx, [@model, "catalyst:local.files", "catalyst:local.http"])
 
     {:ok, thread} = Threads.create(Sanctum.Context.actor(ctx))
@@ -168,7 +177,7 @@ defmodule Aqua.RunnerTest do
     stranger = %{ctx | user_id: "usr_nobody"}
     assert {:error, :not_member} = Runner.send_message(stranger, thread.id, "@aqua hi")
 
-    # An estate not yet filled refuses an addressed send before any row.
+    # An athanor not yet filled refuses an addressed send before any row.
     {:ok, fresh} =
       Athanors.create_group(ctx.user_id, "Fresh #{System.unique_integer([:positive])}")
 
@@ -199,11 +208,13 @@ defmodule Aqua.RunnerTest do
     assert {:ok, %{accepted: true, turn_id: turn_id, admitted: :turn, replayed: false} = sent} =
              Runner.send_message(ctx, thread.id, "@aqua say hello", client_id: "c-1")
 
-    assert_receive {:thread, _, {:turn_starting, user}}, 5_000
+    assert_receive %ThreadEvent{kind: :turn_starting, data: user}, 5_000
     assert user == ctx.user_id
-    assert_receive {:thread, _, {:turn_finished}}, 60_000
+    assert_receive %ThreadEvent{kind: :turn_finished}, 60_000
     assert {:ok, %{status: "completed"}} = Tape.turn(ctx, turn_id)
-    assert_receive {:thread, _, {:message, %{kind: "text", content: "hello back"}}}, 5_000
+
+    assert_receive %ThreadEvent{kind: :message, data: %{kind: "text", content: "hello back"}},
+                   5_000
 
     # The same client id answers the same identity, and writes nothing new.
     assert {:ok, %{message_id: mid, turn_id: ^turn_id, replayed: true}} =
@@ -231,11 +242,11 @@ defmodule Aqua.RunnerTest do
 
     assert second != first
     assert %{running: true, queued: 1} = Runner.state(thread.id, ctx.athanor_id)
-    assert_receive {:thread, _, {:queued, 1}}, 5_000
+    assert_receive %ThreadEvent{kind: :queued, data: 1}, 5_000
 
     send(worker, :continue)
-    assert_receive {:thread, _, {:turn_finished}}, 60_000
-    assert_receive {:thread, _, {:turn_finished}}, 60_000
+    assert_receive %ThreadEvent{kind: :turn_finished}, 60_000
+    assert_receive %ThreadEvent{kind: :turn_finished}, 60_000
 
     wait_until(fn ->
       match?(%{running: false, queued: 0}, Runner.state(thread.id, ctx.athanor_id))
@@ -267,8 +278,8 @@ defmodule Aqua.RunnerTest do
     assert %{running: true, queued: 1} = Runner.state(thread.id, ctx.athanor_id)
 
     send(worker, :continue)
-    assert_receive {:thread, _, {:turn_finished}}, 60_000
-    assert_receive {:thread, _, {:turn_finished}}, 60_000
+    assert_receive %ThreadEvent{kind: :turn_finished}, 60_000
+    assert_receive %ThreadEvent{kind: :turn_finished}, 60_000
 
     assert {:ok, %{status: "completed", agent: "aqua"}} = Tape.turn(ctx, first)
     assert {:ok, %{status: "completed", agent: "planner"}} = Tape.turn(ctx, second)
@@ -308,27 +319,22 @@ defmodule Aqua.RunnerTest do
             Aqua.Loop.Stream.texts(Runner.state(thread.id, ctx.athanor_id).partials),
           do: id
 
-    Aqua.Tape.announce(
-      ctx,
-      thread.id,
-      {:delta,
-       %{
-         turn_id: turn_id,
-         fence: fence - 1,
-         source: turn_id,
-         step_id: step_id,
-         ordinal: 9,
-         seq: {9, 9},
-         text: " stale",
-         role: nil
-       }}
-    )
+    Aqua.Tape.announce(ctx, thread.id, :delta, %{
+      turn_id: turn_id,
+      fence: fence - 1,
+      source: turn_id,
+      step_id: step_id,
+      ordinal: 9,
+      seq: {9, 9},
+      text: " stale",
+      role: nil
+    })
 
     %{partials: partials} = Runner.state(thread.id, ctx.athanor_id)
     assert [%{text: "Hello"}] = Aqua.Loop.Stream.texts(partials)
 
     send(worker, :continue)
-    assert_receive {:thread, _, {:turn_finished}}, 60_000
+    assert_receive %ThreadEvent{kind: :turn_finished}, 60_000
     assert Aqua.Loop.Stream.texts(Runner.state(thread.id, ctx.athanor_id).partials) == []
   end
 
@@ -348,7 +354,7 @@ defmodule Aqua.RunnerTest do
              Runner.send_message(ctx, thread.id, "@aqua something else", client_id: "steer-1")
 
     send(worker, :continue)
-    assert_receive {:thread, _, {:turn_finished}}, 60_000
+    assert_receive %ThreadEvent{kind: :turn_finished}, 60_000
 
     assert [_] =
              Enum.filter(
@@ -378,7 +384,7 @@ defmodule Aqua.RunnerTest do
     assert {:ok, %{decision: "approved"}} =
              Approvals.resolve(ctx, approval.id, %{decision: :approved})
 
-    assert_receive {:thread, _, {:turn_finished}}, 60_000
+    assert_receive %ThreadEvent{kind: :turn_finished}, 60_000
     assert {:ok, %{status: "completed"}} = Tape.turn(ctx, turn_id)
 
     # The steer rode the paused turn and displaced the card's step.
@@ -433,7 +439,9 @@ defmodule Aqua.RunnerTest do
     )
 
     {:ok, %{turn_id: first}} = Runner.send_message(ctx, thread.id, "@aqua go")
-    assert_receive {:thread, _, {:turn_paused, ^first, :uncertain}}, 60_000
+
+    assert_receive %ThreadEvent{kind: :turn_paused, data: %{turn_id: ^first, reason: :uncertain}},
+                   60_000
 
     assert %{running: false, paused: true, paused_reason: :uncertain} =
              Runner.state(thread.id, ctx.athanor_id)
@@ -448,8 +456,8 @@ defmodule Aqua.RunnerTest do
     assert {:ok, %{admitted: :steer, turn_id: ^first}} =
              Runner.send_message(ctx, thread.id, "@aqua go on")
 
-    assert_receive {:thread, _, {:turn_finished}}, 60_000
-    assert_receive {:thread, _, {:turn_finished}}, 60_000
+    assert_receive %ThreadEvent{kind: :turn_finished}, 60_000
+    assert_receive %ThreadEvent{kind: :turn_finished}, 60_000
     assert {:ok, %{status: "completed"}} = Tape.turn(ctx, first)
     assert {:ok, %{status: "completed", requested_by: requested}} = Tape.turn(ctx, second)
     assert requested == other.user_id
@@ -482,7 +490,7 @@ defmodule Aqua.RunnerTest do
 
     # The acknowledging line, and the turn goes on to its end.
     assert {:ok, %{admitted: :steer}} = Runner.send_message(ctx, thread.id, "@aqua go on")
-    assert_receive {:thread, _, {:turn_finished}}, 60_000
+    assert_receive %ThreadEvent{kind: :turn_finished}, 60_000
     assert {:ok, %{status: "completed"}} = Tape.turn(ctx, turn.id)
   end
 
@@ -514,7 +522,7 @@ defmodule Aqua.RunnerTest do
       })
 
     {:ok, _pid} = Runner.ensure(thread.id, ctx.athanor_id)
-    assert_receive {:thread, _, {:turn_finished}}, 60_000
+    assert_receive %ThreadEvent{kind: :turn_finished}, 60_000
     assert {:ok, %{status: "completed"}} = Tape.turn(ctx, turn.id)
   end
 
@@ -539,7 +547,7 @@ defmodule Aqua.RunnerTest do
              Runner.send_message(ctx, thread.id, "@aqua something else", client_id: "c-open")
 
     send(worker, :continue)
-    assert_receive {:thread, _, {:turn_finished}}, 60_000
+    assert_receive %ThreadEvent{kind: :turn_finished}, 60_000
 
     assert [_] =
              Enum.filter(
@@ -567,7 +575,8 @@ defmodule Aqua.RunnerTest do
 
     # The root the claim admitted is closed, not left running under a
     # released slot.
-    assert %{status: "failed", kind: "turn"} = Arca.Repo.get_by(Arca.Execution, turn_id: turn.id)
+    assert %{status: "failed", kind: "turn"} =
+             Arca.Repo.get_by(Arca.Schemas.Execution, turn_id: turn.id)
   end
 
   test "a turn addressed to a source with no consent claims no root and asks for setup", %{
@@ -585,9 +594,14 @@ defmodule Aqua.RunnerTest do
     assert {:ok, %{status: "failed", root_execution_id: nil, profile_id: nil}} =
              Tape.turn(ctx, turn.id)
 
-    assert nil == Arca.Repo.get_by(Arca.Execution, turn_id: turn.id)
+    assert nil == Arca.Repo.get_by(Arca.Schemas.Execution, turn_id: turn.id)
     user = ctx.user_id
-    assert_receive {:thread, _, {:consent_required, "agent:local.ghost", ^user}}, 5_000
+
+    assert_receive %ThreadEvent{
+                     kind: :consent_required,
+                     data: %{ref: "agent:local.ghost", user_id: ^user}
+                   },
+                   5_000
   end
 
   test "a role addressed directly runs as its own source, with its own consent and key", %{
@@ -602,7 +616,7 @@ defmodule Aqua.RunnerTest do
     {:ok, %{admitted: :turn, turn_id: turn_id}} =
       Runner.send_message(ctx, thread.id, "@planner plan")
 
-    assert_receive {:thread, _, {:turn_finished}}, 60_000
+    assert_receive %ThreadEvent{kind: :turn_finished}, 60_000
 
     {:ok, [planner_profile]} =
       Arca.ConsentStorage.profiles(Sanctum.Context.actor(ctx), "agent:local.planner")
@@ -630,11 +644,11 @@ defmodule Aqua.RunnerTest do
     {:ok, %{turn_id: second}} = Runner.send_message(other, thread.id, "@aqua me too")
 
     assert :ok = Runner.stop_turn(ctx, thread.id)
-    assert_receive {:thread, _, {:turn_finished}}, 10_000
+    assert_receive %ThreadEvent{kind: :turn_finished}, 10_000
     assert {:ok, %{status: "cancelled"}} = Tape.turn(ctx, first)
     assert {:ok, %{status: "cancelled"}} = Tape.turn(ctx, second)
     assert %{running: false, queued: 0} = Runner.state(thread.id, ctx.athanor_id)
-    assert Cyfr.Slots.status(Cyfr.Execution.Slots).root_active == 0
+    assert Prima.Slots.status(Crucible.Slots).root_active == 0
 
     ScriptedWorker.script([reply("new work")])
     {:ok, %{turn_id: fresh}} = Runner.send_message(ctx, thread.id, "@aqua again")
@@ -657,7 +671,7 @@ defmodule Aqua.RunnerTest do
     assert {:ok, %{decision: "approved"}} =
              Approvals.resolve(ctx, approval.id, %{decision: :approved})
 
-    assert_receive {:thread, _, {:turn_finished}}, 60_000
+    assert_receive %ThreadEvent{kind: :turn_finished}, 60_000
     assert {:ok, %{status: "completed"}} = Tape.turn(ctx, turn_id)
     {:ok, steps} = Tape.steps(ctx, paused)
     assert %{action: "keep", outcome: "ok"} = Enum.find(steps, &(&1.action == "keep"))
@@ -689,7 +703,13 @@ defmodule Aqua.RunnerTest do
     assert {:ok, %{decision: "invalidated", replayed: true}} =
              Approvals.resolve(ctx, approval.id, %{decision: :approved})
 
-    send(runner, {:thread, thread.id, {:approval_resolved, %{turn_id: id}}})
+    send(runner, %ThreadEvent{
+      athanor_id: ctx.athanor_id,
+      thread_id: thread.id,
+      kind: :approval_resolved,
+      data: %{turn_id: id}
+    })
+
     _ = :sys.get_state(runner)
     assert ScriptedWorker.calls() == calls
   end
@@ -708,7 +728,7 @@ defmodule Aqua.RunnerTest do
       })
 
     {:ok, _pid} = Runner.ensure(thread.id, ctx.athanor_id)
-    assert_receive {:thread, _, {:turn_finished}}, 60_000
+    assert_receive %ThreadEvent{kind: :turn_finished}, 60_000
     assert {:ok, %{status: "completed"}} = Tape.turn(ctx, accepted.id)
 
     # A turn left running by a boot that died: its root row and attempt
@@ -726,7 +746,7 @@ defmodule Aqua.RunnerTest do
       })
 
     {:ok, claim} =
-      Cyfr.Execution.claim_turn_root(ctx, @soul, turn_id: turn.id, thread_id: other_thread.id)
+      Crucible.claim_turn_root(ctx, @soul, turn_id: turn.id, thread_id: other_thread.id)
 
     {:ok, %{capability_digest: capability, revision_digest: revision}} =
       Compendium.AgentIndex.snapshot(ctx, "aqua")
@@ -739,15 +759,16 @@ defmodule Aqua.RunnerTest do
         profile_id: claim.authority.profile_id,
         consent_id: claim.authority.consent_id,
         agent_revision_digest: revision,
-        agent_capability_digest: capability
+        agent_capability_digest: capability,
+        recovery_limit: Aqua.Runner.RecoveryPolicy.max_attempts()
       })
 
     # The dead boot's slot and keeper are gone; the rows say running.
-    :ok = Cyfr.Execution.release_turn_root(ctx, claim.execution_id, claim: claim)
+    :ok = Crucible.release_turn_root(ctx, claim.execution_id, claim: claim)
     assert running.status == "running"
 
     {:ok, _pid} = Runner.ensure(other_thread.id, ctx.athanor_id)
-    assert_receive {:thread, _, {:turn_finished}}, 60_000
+    assert_receive %ThreadEvent{kind: :turn_finished}, 60_000
     assert {:ok, %{status: "completed", recovery_attempts: 1} = done} = Tape.turn(ctx, turn.id)
     assert done.attempt != claim.attempt
     rows = Threads.messages(Sanctum.Context.actor(ctx), other_thread.id)
@@ -793,10 +814,35 @@ defmodule Aqua.RunnerTest do
       assert {:ok, %{recovered: true, turn: ^turn_id}} =
                Runner.recover_turn(ctx, thread.id, turn_id)
 
-      assert_receive {:thread, _, {:turn_finished}}, 60_000
+      assert_receive %ThreadEvent{kind: :turn_finished}, 60_000
       assert {:ok, %{status: "completed"} = done} = Tape.turn(ctx, turn_id)
       assert done.fence > down.fence
       assert {:ok, %{active_turn_id: nil}} = Tape.thread(ctx, thread.id)
+    end
+
+    test "a recovery asked for over the API is judged under the turn's own origin, not the recoverer's",
+         %{ctx: ctx, thread: thread} do
+      # The grant admits the person's runs alone, so judged under the
+      # recoverer's origin the turn's pinned consent could not be loaded.
+      admit_only!(ctx, [:interactive])
+      script!([{:probe, self()}, reply("carried on")])
+
+      {:ok, %{turn_id: turn_id}} = Runner.send_message(ctx, thread.id, "@aqua go")
+      pids = running!(thread)
+
+      assert {:ok, %{suspended: true, turn: ^turn_id}} =
+               Runner.suspend_turn(ctx, thread.id, turn: turn_id)
+
+      send(pids.call, :continue)
+
+      # The recoverer is a script over the API; the turn was the person's.
+      api = %{ctx | origin: :programmatic}
+
+      assert {:ok, %{recovered: true, turn: ^turn_id}} =
+               Runner.recover_turn(api, thread.id, turn_id)
+
+      assert_receive %ThreadEvent{kind: :turn_finished}, 60_000
+      assert {:ok, %{status: "completed", origin: "interactive"}} = Tape.turn(ctx, turn_id)
     end
 
     test "an approval pause keeps the thread's claim where a suspend releases it", %{
@@ -819,7 +865,7 @@ defmodule Aqua.RunnerTest do
       assert {:ok, %{active_turn_id: nil}} = Tape.thread(ctx, thread.id)
     end
 
-    test "recovery names a turn of the caller's own estate, and anything else is absent", %{
+    test "recovery names a turn of the caller's own athanor, and anything else is absent", %{
       ctx: ctx,
       thread: thread
     } do
@@ -831,7 +877,7 @@ defmodule Aqua.RunnerTest do
       # a takeover.
       assert {:error, :not_suspended} = Runner.recover_turn(ctx, thread.id, turn_id)
 
-      # Another estate's caller is told the turn does not exist — the same
+      # Another athanor's caller is told the turn does not exist — the same
       # answer an id nobody minted gets, so an id cannot be probed for.
       {:ok, other} =
         Athanors.create_group(ctx.user_id, "Other #{System.unique_integer([:positive])}")
@@ -842,13 +888,13 @@ defmodule Aqua.RunnerTest do
       assert {:error, :not_found} = Runner.recover_turn(other_ctx, thread.id, turn_id)
       assert {:error, :not_found} = Runner.recover_turn(ctx, thread.id, "trn_never_minted")
 
-      # And a turn of another thread of the same estate is absent too: the
+      # And a turn of another thread of the same athanor is absent too: the
       # pair has to agree.
       {:ok, elsewhere} = Threads.create(Sanctum.Context.actor(ctx))
       assert {:error, :not_found} = Runner.recover_turn(ctx, elsewhere.id, turn_id)
 
       send(pids.call, :continue)
-      assert_receive {:thread, _, {:turn_finished}}, 60_000
+      assert_receive %ThreadEvent{kind: :turn_finished}, 60_000
     end
 
     test "a suspend on a thread nobody is running here is refused, not started", %{
@@ -871,13 +917,16 @@ defmodule Aqua.RunnerTest do
       assert {:ok, _} = Runner.suspend_turn(ctx, thread.id, turn: turn_id)
       send(pids.call, :continue)
 
-      # The cap is the turn's own count, so spend it on the row and ask
-      # again: the answer is the refusal, and the turn is ended rather
+      # The limit is the turn's own stored one, so spend it on the row and
+      # ask again: the answer is the refusal, and the turn is ended rather
       # than carried on under a recovery nobody may spend.
+      {:ok, %{recovery_limit: limit}} = Tape.turn(ctx, turn_id)
+      assert limit == Aqua.Runner.RecoveryPolicy.max_attempts()
+
       {1, _} =
         Arca.Repo.update_all(
           spend_recoveries(turn_id),
-          set: [recovery_attempts: Tape.recovery_cap()]
+          set: [recovery_attempts: limit]
         )
 
       assert {:error, :recovery_exhausted} = Runner.recover_turn(ctx, thread.id, turn_id)
@@ -898,7 +947,7 @@ defmodule Aqua.RunnerTest do
       pids = running!(thread)
       :ok = kill_and_await!(pids)
 
-      assert_receive {:thread, _, {:turn_finished}}, 60_000
+      assert_receive %ThreadEvent{kind: :turn_finished}, 60_000
       refute Runner.whereis(thread.id) in [nil, pids.runner]
 
       # Released now, the dead call would have answered with the reply the
@@ -939,7 +988,12 @@ defmodule Aqua.RunnerTest do
       pids = running!(thread)
       :ok = kill_and_await!(pids)
 
-      assert_receive {:thread, _, {:turn_paused, ^turn_id, :uncertain}}, 60_000
+      assert_receive %ThreadEvent{
+                       kind: :turn_paused,
+                       data: %{turn_id: ^turn_id, reason: :uncertain}
+                     },
+                     60_000
+
       send(pids.call, :continue)
 
       assert {:ok, %{status: "paused", recovery_attempts: 1} = turn} = Tape.turn(ctx, turn_id)
@@ -983,9 +1037,252 @@ defmodule Aqua.RunnerTest do
 
       Arca.ControlPlane.record(:unclaimed)
       {:ok, _runner} = Runner.ensure(thread.id, ctx.athanor_id)
-      assert_receive {:thread, _, {:turn_finished}}, 60_000
+      assert_receive %ThreadEvent{kind: :turn_finished}, 60_000
       assert {:ok, %{status: "completed", recovery_attempts: 1}} = Tape.turn(ctx, turn_id)
     end
+  end
+
+  describe "the origin a turn resumes under" do
+    test "a programmatic turn queued, the runner restarted before it runs, resumes as programmatic",
+         %{ctx: ctx, thread: thread} do
+      import Ecto.Query, only: [from: 2]
+
+      script!([{:probe, self()}, reply("taken over"), reply("queued one")])
+
+      {:ok, %{turn_id: first}} = Runner.send_message(ctx, thread.id, "@aqua go")
+      pids = running!(thread)
+
+      # A script's line over the HTTP API, behind the running turn.
+      script = %{second_member(ctx) | origin: :programmatic}
+
+      assert {:ok, %{turn_id: queued, admitted: :turn}} =
+               Runner.send_message(script, thread.id, "@aqua after that")
+
+      assert %{queued: 1} = Runner.state(thread.id, ctx.athanor_id)
+      assert {:ok, %{status: "accepted", origin: "programmatic"}} = Tape.turn(ctx, queued)
+
+      # The runner goes before the queued turn runs; its restart takes the
+      # running turn over and then runs the queued one from its row.
+      :ok = kill_and_await!(pids)
+
+      wait_until(
+        fn -> match?({:ok, %{status: "completed"}}, Tape.turn(ctx, queued)) end,
+        60_000
+      )
+
+      send(pids.call, :continue)
+
+      # Resumed as its sender, under the origin its row stores: its root
+      # and every run under it are programmatic, never the interactive
+      # origin of the turn that ran before it.
+      {:ok, %{root_execution_id: root}} = Tape.turn(ctx, queued)
+
+      assert %{origin: "programmatic", user_id: sender} =
+               Arca.Repo.get!(Arca.Schemas.Execution, root)
+
+      assert sender == script.user_id
+
+      children =
+        Arca.Repo.all(
+          from(e in Arca.Schemas.Execution,
+            where: e.parent_execution_id == ^root,
+            select: e.origin
+          )
+        )
+
+      assert children != []
+      assert Enum.all?(children, &(&1 == "programmatic"))
+
+      assert {:ok, %{status: "completed", root_execution_id: first_root}} = Tape.turn(ctx, first)
+      assert %{origin: "interactive"} = Arca.Repo.get!(Arca.Schemas.Execution, first_root)
+    end
+
+    test "a recovered turn whose row stores no origin is cancelled with its reason, never resumed",
+         %{ctx: ctx, thread: thread} do
+      script!([reply("never")])
+
+      # A context no entry gave an origin opens no turn, and writes nothing.
+      before = Threads.messages(Sanctum.Context.actor(ctx), thread.id)
+
+      assert {:error, :no_origin} =
+               Tape.accept(%{ctx | origin: nil}, thread.id, %{
+                 message: %{author: ctx.user_id, content: "@aqua never"},
+                 turn: %{agent: "aqua", requested_by: ctx.user_id}
+               })
+
+      assert Threads.messages(Sanctum.Context.actor(ctx), thread.id) == before
+
+      # Accepted by a runner that is gone; its row then reached past every
+      # writer's guard, as a hand edit or a restored row reaches it.
+      {:ok, %{turn: accepted}} =
+        Tape.accept(ctx, thread.id, %{
+          message: %{author: ctx.user_id, content: "@aqua later"},
+          turn: %{agent: "aqua", requested_by: ctx.user_id}
+        })
+
+      clear_origin!(accepted.id)
+
+      {:ok, _pid} = Runner.ensure(thread.id, ctx.athanor_id)
+      assert_receive %ThreadEvent{kind: :turn_finished}, 60_000
+
+      assert {:ok, %{status: "cancelled", error: error, root_execution_id: nil}} =
+               Tape.turn(ctx, accepted.id)
+
+      assert error =~ "no_origin"
+      assert ScriptedWorker.calls() == []
+    end
+
+    test "a card on a turn whose row stores no origin is refused, and the turn ends, never resumed",
+         %{ctx: ctx, thread: thread} do
+      script!([call("c1", "notes", %{"action" => "keep", "name" => "n", "content" => "x"})])
+
+      # Paused on its card by a loop no runner holds; its row then reached
+      # past every writer's guard. Continuing it from its row needs the
+      # origin the row stores.
+      {:ok, %{turn: turn}} =
+        Tape.accept(ctx, thread.id, %{
+          message: %{author: ctx.user_id, content: "@aqua keep it"},
+          turn: %{agent: "aqua", requested_by: ctx.user_id}
+        })
+
+      assert {:paused, :approval} =
+               Task.await(Task.async(fn -> Aqua.Loop.run(ctx: ctx, turn_id: turn.id) end), 60_000)
+
+      turn_id = turn.id
+      clear_origin!(turn_id)
+      {:ok, _pid} = Runner.ensure(thread.id, ctx.athanor_id)
+      assert %{paused: true} = Runner.state(thread.id, ctx.athanor_id)
+      {:ok, paused} = Tape.turn(ctx, turn_id)
+      assert is_nil(paused.origin)
+      {:ok, [approval]} = Tape.pending_approvals(ctx, paused)
+      calls = ScriptedWorker.calls()
+
+      # The pin check reads the turn's grant under the origin its row
+      # stores, never the approver's: with none, the card cannot hold.
+      assert {:error, :turn_superseded} =
+               Approvals.resolve(ctx, approval.id, %{decision: :approved})
+
+      # The card settles refused and the turn ends: failed by the refusal, or
+      # cancelled by the runner that met the row with no origin first.
+      assert_receive %ThreadEvent{kind: :turn_finished}, 60_000
+      assert {:ok, %{status: status}} = Tape.turn(ctx, turn_id)
+      assert status in ["failed", "cancelled"]
+
+      # Nothing ran past the card.
+      {:ok, steps} = Tape.steps(ctx, paused)
+      refute Enum.any?(steps, &(&1.action == "keep" and &1.outcome == "ok"))
+      assert ScriptedWorker.calls() == calls
+    end
+  end
+
+  describe "a line under another origin" do
+    test "a programmatic line from the sender does not steer an interactive turn; its own turn is judged by its own grant",
+         %{ctx: ctx, thread: thread} do
+      # The soul's grant admits the sender's interactive runs alone.
+      admit_only!(ctx, [:interactive])
+      script!([{:probe, self()}, reply("answered"), reply("never")])
+
+      {:ok, %{turn_id: first}} = Runner.send_message(ctx, thread.id, "@aqua go")
+      pids = running!(thread)
+
+      # The same sender, over the API, to the same agent: no steer, a turn
+      # of its own, queued behind the running one under its own origin.
+      api = %{ctx | origin: :programmatic}
+
+      assert {:ok, %{admitted: :turn, turn_id: queued}} =
+               Runner.send_message(api, thread.id, "@aqua do it my way")
+
+      assert queued != first
+      refute Tape.steer_pending?(ctx, %{id: first})
+      assert {:ok, %{status: "accepted", origin: "programmatic"}} = Tape.turn(ctx, queued)
+
+      send(pids.call, :continue)
+      wait_until(fn -> match?({:ok, %{status: "completed"}}, Tape.turn(ctx, first)) end, 60_000)
+      calls = ScriptedWorker.calls()
+
+      # Its own grant does not name programmatic: it roots nothing and
+      # calls no model.
+      wait_until(
+        fn ->
+          match?({:ok, %{status: status}} when status != "accepted", Tape.turn(ctx, queued))
+        end,
+        60_000
+      )
+
+      assert {:ok, %{status: status, root_execution_id: nil}} = Tape.turn(ctx, queued)
+      refute status in ["running", "completed"]
+      assert ScriptedWorker.calls() == calls
+
+      assert [] =
+               Arca.Repo.all(Arca.Schemas.Execution)
+               |> Enum.filter(&(&1.origin == "programmatic"))
+    end
+
+    test "a programmatic line does not continue an interactive turn stopped on an unknown outcome",
+         %{ctx: ctx, thread: thread} do
+      start_supervised!(
+        {ScriptedWorker,
+         ref: [@model, "catalyst:local.http"],
+         script: [
+           call("c1", "http", %{"action" => "get", "url" => "https://example.test/x"}),
+           {:crash, :before_response},
+           reply("carrying on"),
+           reply("the API line, done")
+         ]}
+      )
+
+      {:ok, %{turn_id: first}} = Runner.send_message(ctx, thread.id, "@aqua go")
+
+      assert_receive %ThreadEvent{
+                       kind: :turn_paused,
+                       data: %{turn_id: ^first, reason: :uncertain}
+                     },
+                     60_000
+
+      # The sender's line over the API neither steers nor continues it: a
+      # turn of its own, queued, while the stopped turn stays stopped.
+      assert {:ok, %{admitted: :turn, turn_id: api_turn}} =
+               Runner.send_message(%{ctx | origin: :programmatic}, thread.id, "@aqua go on")
+
+      assert api_turn != first
+
+      assert %{paused: true, paused_reason: :uncertain, queued: 1} =
+               Runner.state(thread.id, ctx.athanor_id)
+
+      assert {:ok, %{status: "paused", paused_reason: "uncertain"}} = Tape.turn(ctx, first)
+      assert {:ok, %{status: "accepted", origin: "programmatic"}} = Tape.turn(ctx, api_turn)
+
+      # The sender's line in Prism continues it; the API's turn runs after.
+      assert {:ok, %{admitted: :steer, turn_id: ^first}} =
+               Runner.send_message(ctx, thread.id, "@aqua go on")
+
+      assert_receive %ThreadEvent{kind: :turn_finished}, 60_000
+      assert_receive %ThreadEvent{kind: :turn_finished}, 60_000
+      assert {:ok, %{status: "completed"}} = Tape.turn(ctx, first)
+      assert {:ok, %{status: "completed", root_execution_id: root}} = Tape.turn(ctx, api_turn)
+      assert %{origin: "programmatic"} = Arca.Repo.get!(Arca.Schemas.Execution, root)
+    end
+  end
+
+  # A turn row's origin cleared past every writer's guard.
+  defp clear_origin!(turn_id) do
+    import Ecto.Query, only: [from: 2]
+
+    {1, _} =
+      Arca.Repo.update_all(from(t in Arca.Schemas.Turn, where: t.id == ^turn_id),
+        set: [origin: nil]
+      )
+
+    :ok
+  end
+
+  # The soul's grant, granted again admitting `origins` alone.
+  defp admit_only!(ctx, origins) do
+    {:ok, %{profile_id: profile_id}} =
+      Crucible.authority_for(ctx, :default, Prima.AgentRef.soul_ref())
+
+    _ = Sanctum.Test.ConsentFixtures.regrant_origins!(ctx, profile_id, origins)
+    :ok
   end
 
   describe "an existing runner loses control-plane ownership" do
@@ -1012,7 +1309,7 @@ defmodule Aqua.RunnerTest do
         if unquote(event) == :result do
           send(pids.call, :continue)
           assert_receive {:DOWN, ^loop_ref, :process, _, :normal}, 60_000
-          assert_receive {:thread, _, {:turn_finished}}, 60_000
+          assert_receive %ThreadEvent{kind: :turn_finished}, 60_000
           assert {:ok, %{status: "completed"}} = Tape.turn(ctx, first)
           {:messages, messages} = Process.info(pids.runner, :messages)
           assert Enum.any?(messages, &match?({^task_ref, _result}, &1))
@@ -1086,9 +1383,19 @@ defmodule Aqua.RunnerTest do
 
         message =
           case unquote(event) do
-            :approval -> {:thread, thread.id, {:approval_resolved, %{turn_id: first}}}
-            :resume -> {:resume, first}
-            :expire -> {:expire, first}
+            :approval ->
+              %ThreadEvent{
+                athanor_id: ctx.athanor_id,
+                thread_id: thread.id,
+                kind: :approval_resolved,
+                data: %{turn_id: first}
+              }
+
+            :resume ->
+              {:resume, first}
+
+            :expire ->
+              {:expire, first}
           end
 
         send(runner, message)
@@ -1136,7 +1443,11 @@ defmodule Aqua.RunnerTest do
         before = tape_snapshot(ctx, thread.id, [turn_id])
         calls = ScriptedWorker.calls()
         lose_ownership(unquote(loss))
-        send(pids.runner, {:notify, ctx.athanor_id, :athanor_changed, %{}})
+
+        send(
+          pids.runner,
+          Cyfr.Bus.Notify.new(Prima.Actor.in_athanor(ctx.athanor_id), :athanor_changed)
+        )
 
         await_retired(pids.runner, runner_ref)
         for ref <- worker_refs, do: assert_receive({:DOWN, ^ref, :process, _, _}, 5_000)
@@ -1145,7 +1456,12 @@ defmodule Aqua.RunnerTest do
 
         Arca.ControlPlane.record(:unclaimed)
         {:ok, _successor} = Runner.ensure(thread.id, ctx.athanor_id)
-        assert_receive {:thread, _, {:turn_paused, ^turn_id, :uncertain}}, 60_000
+
+        assert_receive %ThreadEvent{
+                         kind: :turn_paused,
+                         data: %{turn_id: ^turn_id, reason: :uncertain}
+                       },
+                       60_000
 
         assert {:ok, %{status: "paused", recovery_attempts: 1, fence: fence} = turn} =
                  Tape.turn(ctx, turn_id)
@@ -1221,7 +1537,14 @@ defmodule Aqua.RunnerTest do
 
     send(runner, {:DOWN, held_ref, :process, holder, :normal})
     send(runner, {:recover, turn.id})
-    send(runner, {:thread, thread.id, {:approval_resolved, %{turn_id: turn.id}}})
+
+    send(runner, %ThreadEvent{
+      athanor_id: ctx.athanor_id,
+      thread_id: thread.id,
+      kind: :approval_resolved,
+      data: %{turn_id: turn.id}
+    })
+
     send(call, :continue)
     assert :ok = Runner.stop_turn(ctx, thread.id)
     assert Tape.turn(ctx, turn.id) == {:ok, cancelled}
@@ -1308,7 +1631,8 @@ defmodule Aqua.RunnerTest do
        } do
     script!([{:probe, self()}, {:probe, self()}, reply("never resumed")])
     {:ok, %{turn_id: first}} = Runner.send_message(ctx, thread.id, "@aqua first")
-    _ = running!(thread)
+    %{runner: stopped} = running!(thread)
+    watched = Process.monitor(stopped)
 
     {:ok, %{turn_id: queued}} =
       Runner.send_message(second_member(ctx), thread.id, "@aqua queued")
@@ -1318,6 +1642,18 @@ defmodule Aqua.RunnerTest do
     assert {:ok, %{status: "cancelled"} = cancelled} = Tape.turn(ctx, first)
     assert {:ok, %{status: "accepted", fence: 1}} = Tape.turn(ctx, queued)
     allow_turn_writes()
+
+    # The runner that stopped on the refusal is gone, and its name with it,
+    # before the thread's runner is asked: until then the name still finds
+    # the one that is stopping, which answers nothing.
+    assert_receive {:DOWN, ^watched, :process, ^stopped, _reason}, 5_000
+    wait_until(fn -> Runner.whereis(thread.id) != stopped end)
+
+    # A runner starts again and runs the queued turn until its loop waits
+    # on the model's call, so the Stop stops a loop that waits and not one
+    # in the middle of a write.
+    assert %{running: true} = Runner.state(thread.id, ctx.athanor_id)
+    assert_receive {:scripted_probe, _call, _}, 60_000
 
     assert :ok = Runner.stop_turn(ctx, thread.id)
     assert {:ok, ^cancelled} = Tape.turn(ctx, first)
@@ -1347,7 +1683,10 @@ defmodule Aqua.RunnerTest do
       send(pids.runner, {:"$gen_call", {self(), tag}, {:stop, caller}})
 
       if unquote(standing) == :denied_person do
-        user |> Ecto.Changeset.change(status: "denied") |> Arca.Repo.update!()
+        Arca.Schemas.User
+        |> Arca.Repo.get!(user.id)
+        |> Ecto.Changeset.change(status: "denied")
+        |> Arca.Repo.update!()
       end
 
       :ok = :sys.resume(pids.runner)
@@ -1451,8 +1790,8 @@ defmodule Aqua.RunnerTest do
     {:ok, successor} = Runner.ensure(thread.id, ctx.athanor_id)
     refute successor == runner
 
-    assert_receive {:thread, _, {:turn_finished}}, 60_000
-    assert_receive {:thread, _, {:turn_finished}}, 60_000
+    assert_receive %ThreadEvent{kind: :turn_finished}, 60_000
+    assert_receive %ThreadEvent{kind: :turn_finished}, 60_000
     assert Runner.whereis(thread.id) == successor
     assert {:ok, %{status: "completed", recovery_attempts: 1}} = Tape.turn(ctx, turn.id)
     assert {:ok, %{status: "completed"}} = Tape.turn(ctx, second)

@@ -18,10 +18,9 @@ defmodule Arca.ExecutionAttemptsClaimTest do
 
   alias Arca.ExecutionAttempts
 
-  setup do
-    :ok = Ecto.Adapters.SQL.Sandbox.checkout(Arca.Repo)
-    Ecto.Adapters.SQL.Sandbox.mode(Arca.Repo, {:shared, self()})
-    {:ok, actor: Sanctum.Context.actor(Sanctum.TestContext.local())}
+  setup tags do
+    Cyfr.Test.Sandbox.setup!(tags)
+    {:ok, actor: Sanctum.Context.actor(Sanctum.TestContext.local(:api))}
   end
 
   defp admit!(actor, attrs \\ %{}) do
@@ -34,10 +33,12 @@ defmodule Arca.ExecutionAttemptsClaimTest do
             user_id: actor.user_id,
             athanor_id: actor.athanor_id,
             component_type: "catalyst",
-            input: "{}"
+            input: "{}",
+            origin: :programmatic
           },
           attrs
-        )
+        ),
+        Arca.Test.Actor.standing(actor.athanor_id)
       )
 
     {execution, attempt}
@@ -50,7 +51,13 @@ defmodule Arca.ExecutionAttemptsClaimTest do
     assert claimed_by(attempt.attempt) == nil
 
     assert :ok =
-             ExecutionAttempts.claim(actor, attempt.attempt, 1, "runner_a")
+             ExecutionAttempts.claim(
+               actor,
+               attempt.attempt,
+               1,
+               "runner_a",
+               Arca.Test.Actor.stored()
+             )
 
     assert claimed_by(attempt.attempt) == "runner_a"
   end
@@ -59,13 +66,31 @@ defmodule Arca.ExecutionAttemptsClaimTest do
     {_execution, attempt} = admit!(actor)
 
     assert :ok =
-             ExecutionAttempts.claim(actor, attempt.attempt, 1, "runner_a")
+             ExecutionAttempts.claim(
+               actor,
+               attempt.attempt,
+               1,
+               "runner_a",
+               Arca.Test.Actor.stored()
+             )
 
     assert :ok =
-             ExecutionAttempts.claim(actor, attempt.attempt, 1, "runner_a")
+             ExecutionAttempts.claim(
+               actor,
+               attempt.attempt,
+               1,
+               "runner_a",
+               Arca.Test.Actor.stored()
+             )
 
     assert {:error, :replayed} =
-             ExecutionAttempts.claim(actor, attempt.attempt, 1, "runner_b")
+             ExecutionAttempts.claim(
+               actor,
+               attempt.attempt,
+               1,
+               "runner_b",
+               Arca.Test.Actor.stored()
+             )
 
     assert claimed_by(attempt.attempt) == "runner_a"
   end
@@ -76,14 +101,21 @@ defmodule Arca.ExecutionAttemptsClaimTest do
     {execution, attempt} = admit!(actor)
 
     assert {:error, :lost} =
-             ExecutionAttempts.claim(actor, attempt.attempt, 2, "runner_a")
+             ExecutionAttempts.claim(
+               actor,
+               attempt.attempt,
+               2,
+               "runner_a",
+               Arca.Test.Actor.stored()
+             )
 
     assert {:error, :lost} =
              ExecutionAttempts.claim(
-               Cyfr.Actor.in_athanor("ath_gamma"),
+               Prima.Actor.in_athanor("ath_gamma"),
                attempt.attempt,
                1,
-               "runner_a"
+               "runner_a",
+               Arca.Test.Actor.stored()
              )
 
     {:ok, _} =
@@ -92,11 +124,18 @@ defmodule Arca.ExecutionAttemptsClaimTest do
         execution.id,
         "completed",
         %{completed_at: DateTime.utc_now(), duration_ms: 1},
-        attempt.attempt
+        attempt.attempt,
+        Arca.Test.Actor.stored()
       )
 
     assert {:error, :lost} =
-             ExecutionAttempts.claim(actor, attempt.attempt, 1, "runner_a")
+             ExecutionAttempts.claim(
+               actor,
+               attempt.attempt,
+               1,
+               "runner_a",
+               Arca.Test.Actor.stored()
+             )
 
     assert claimed_by(attempt.attempt) == nil
   end
@@ -105,14 +144,22 @@ defmodule Arca.ExecutionAttemptsClaimTest do
     {execution, attempt} = admit!(actor)
 
     assert :ok =
-             ExecutionAttempts.claim(actor, attempt.attempt, 1, "runner_a")
+             ExecutionAttempts.claim(
+               actor,
+               attempt.attempt,
+               1,
+               "runner_a",
+               Arca.Test.Actor.stored()
+             )
 
     assert ExecutionAttempts.held?(actor, attempt.attempt, 1, "runner_a")
 
     {:ok, %{attempt: successor}} =
       ExecutionAttempts.takeover(actor, execution.id,
-        boot_id: Cyfr.Boot.id(),
-        lease_until: ExecutionAttempts.lease_until()
+        boot_id: Prima.Boot.id(),
+        lease_until: ExecutionAttempts.lease_until(),
+        grant: :stored,
+        verify: &Arca.Test.Actor.admits/1
       )
 
     assert successor.fence == 2
@@ -124,16 +171,29 @@ defmodule Arca.ExecutionAttemptsClaimTest do
                attempt.attempt,
                1,
                "runner_a",
-               write()
+               write(),
+               Arca.Test.Actor.stored()
              )
 
     refute_received :ran
 
     assert {:error, :lost} =
-             ExecutionAttempts.claim(actor, attempt.attempt, 1, "runner_b")
+             ExecutionAttempts.claim(
+               actor,
+               attempt.attempt,
+               1,
+               "runner_b",
+               Arca.Test.Actor.stored()
+             )
 
     assert :ok =
-             ExecutionAttempts.claim(actor, successor.attempt, 2, "runner_b")
+             ExecutionAttempts.claim(
+               actor,
+               successor.attempt,
+               2,
+               "runner_b",
+               Arca.Test.Actor.stored()
+             )
   end
 
   test "an attempt is held only by its claimant, at its fence, while it runs", %{actor: actor} do
@@ -142,14 +202,20 @@ defmodule Arca.ExecutionAttemptsClaimTest do
     refute ExecutionAttempts.held?(actor, attempt.attempt, 1, "runner_a")
 
     assert :ok =
-             ExecutionAttempts.claim(actor, attempt.attempt, 1, "runner_a")
+             ExecutionAttempts.claim(
+               actor,
+               attempt.attempt,
+               1,
+               "runner_a",
+               Arca.Test.Actor.stored()
+             )
 
     assert ExecutionAttempts.held?(actor, attempt.attempt, 1, "runner_a")
     refute ExecutionAttempts.held?(actor, attempt.attempt, 1, "runner_b")
     refute ExecutionAttempts.held?(actor, attempt.attempt, 2, "runner_a")
 
     refute ExecutionAttempts.held?(
-             Cyfr.Actor.in_athanor("ath_gamma"),
+             Prima.Actor.in_athanor("ath_gamma"),
              attempt.attempt,
              1,
              "runner_a"
@@ -161,7 +227,8 @@ defmodule Arca.ExecutionAttemptsClaimTest do
         execution.id,
         "failed",
         %{completed_at: DateTime.utc_now(), duration_ms: 1, error_message: "stopped"},
-        attempt.attempt
+        attempt.attempt,
+        Arca.Test.Actor.stored()
       )
 
     refute ExecutionAttempts.held?(actor, attempt.attempt, 1, "runner_a")
@@ -172,7 +239,13 @@ defmodule Arca.ExecutionAttemptsClaimTest do
     {execution, attempt} = admit!(actor)
 
     assert :ok =
-             ExecutionAttempts.claim(actor, attempt.attempt, 1, "runner_a")
+             ExecutionAttempts.claim(
+               actor,
+               attempt.attempt,
+               1,
+               "runner_a",
+               Arca.Test.Actor.stored()
+             )
 
     assert {:ok, {:confirmed, :ok}} =
              ExecutionAttempts.while_held(
@@ -180,7 +253,8 @@ defmodule Arca.ExecutionAttemptsClaimTest do
                attempt.attempt,
                1,
                "runner_a",
-               write()
+               write(),
+               Arca.Test.Actor.stored()
              )
 
     assert_received :ran
@@ -192,11 +266,12 @@ defmodule Arca.ExecutionAttemptsClaimTest do
         ] do
       assert {:error, :lost} =
                ExecutionAttempts.while_held(
-                 Cyfr.Actor.in_athanor(athanor),
+                 Prima.Actor.in_athanor(athanor),
                  attempt.attempt,
                  fence,
                  runner,
-                 write()
+                 write(),
+                 Arca.Test.Actor.stored()
                )
     end
 
@@ -209,7 +284,8 @@ defmodule Arca.ExecutionAttemptsClaimTest do
         execution.id,
         "cancelled",
         %{completed_at: DateTime.utc_now(), duration_ms: 1},
-        nil
+        attempt.attempt,
+        Arca.Test.Actor.stored()
       )
 
     assert {:error, :lost} =
@@ -218,7 +294,8 @@ defmodule Arca.ExecutionAttemptsClaimTest do
                attempt.attempt,
                1,
                "runner_a",
-               write()
+               write(),
+               Arca.Test.Actor.stored()
              )
 
     refute_received :ran
@@ -230,14 +307,20 @@ defmodule Arca.ExecutionAttemptsClaimTest do
     refute ExecutionAttempts.live?(actor, attempt.attempt, 1, "runner_a")
 
     assert :ok =
-             ExecutionAttempts.claim(actor, attempt.attempt, 1, "runner_a")
+             ExecutionAttempts.claim(
+               actor,
+               attempt.attempt,
+               1,
+               "runner_a",
+               Arca.Test.Actor.stored()
+             )
 
     assert ExecutionAttempts.live?(actor, attempt.attempt, 1, "runner_a")
     refute ExecutionAttempts.live?(actor, attempt.attempt, 1, "runner_b")
     refute ExecutionAttempts.live?(actor, attempt.attempt, 2, "runner_a")
 
     refute ExecutionAttempts.live?(
-             Cyfr.Actor.in_athanor("ath_gamma"),
+             Prima.Actor.in_athanor("ath_gamma"),
              attempt.attempt,
              1,
              "runner_a"
@@ -249,7 +332,8 @@ defmodule Arca.ExecutionAttemptsClaimTest do
                actor,
                attempt.attempt,
                "cancelled",
-               "cancelled"
+               "cancelled",
+               Arca.Test.Actor.stored()
              )
 
     refute ExecutionAttempts.live?(actor, attempt.attempt, 1, "runner_a")
@@ -262,7 +346,8 @@ defmodule Arca.ExecutionAttemptsClaimTest do
                actor,
                other_attempt.attempt,
                1,
-               "runner_a"
+               "runner_a",
+               Arca.Test.Actor.stored()
              )
 
     {:ok, _} =
@@ -271,7 +356,8 @@ defmodule Arca.ExecutionAttemptsClaimTest do
         other.id,
         "cancelled",
         %{completed_at: DateTime.utc_now(), duration_ms: 1},
-        nil
+        other_attempt.attempt,
+        Arca.Test.Actor.stored()
       )
 
     refute ExecutionAttempts.live?(
@@ -286,7 +372,7 @@ defmodule Arca.ExecutionAttemptsClaimTest do
     {_execution, attempt} = admit!(actor, %{kind: "turn", component_type: "agent"})
 
     assert claimed_by(attempt.attempt) == nil
-    refute ExecutionAttempts.held?(actor, attempt.attempt, 1, Cyfr.Boot.id())
+    refute ExecutionAttempts.held?(actor, attempt.attempt, 1, Prima.Boot.id())
 
     refute ExecutionAttempts.held?(
              actor,
@@ -302,7 +388,13 @@ defmodule Arca.ExecutionAttemptsClaimTest do
     drop_executions!()
 
     assert {:error, :database_error} =
-             ExecutionAttempts.claim(actor, attempt.attempt, 1, "runner_a")
+             ExecutionAttempts.claim(
+               actor,
+               attempt.attempt,
+               1,
+               "runner_a",
+               Arca.Test.Actor.stored()
+             )
 
     assert {:error, :database_error} =
              ExecutionAttempts.held?(actor, attempt.attempt, 1, "runner_a")
@@ -316,7 +408,8 @@ defmodule Arca.ExecutionAttemptsClaimTest do
                attempt.attempt,
                1,
                "runner_a",
-               write()
+               write(),
+               Arca.Test.Actor.stored()
              )
 
     refute_received :ran

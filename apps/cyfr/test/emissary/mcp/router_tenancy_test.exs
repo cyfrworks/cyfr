@@ -12,9 +12,8 @@ defmodule Emissary.MCP.RouterTenancyTest do
 
   alias Emissary.MCP.Router
 
-  setup do
-    :ok = Ecto.Adapters.SQL.Sandbox.checkout(Arca.Repo)
-    Ecto.Adapters.SQL.Sandbox.mode(Arca.Repo, {:shared, self()})
+  setup tags do
+    Cyfr.Test.Sandbox.setup!(tags)
 
     :ok
   end
@@ -33,7 +32,7 @@ defmodule Emissary.MCP.RouterTenancyTest do
   end
 
   defp tool_call_msg(tool_name, action) do
-    %Emissary.MCP.Message{
+    %Prima.MCP.Message{
       type: :request,
       method: "tools/call",
       id: "test-#{System.unique_integer([:positive])}",

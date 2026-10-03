@@ -10,14 +10,14 @@ defmodule Aqua.Tape do
   Each write is one storage transaction (`Arca.TurnStorage`), fenced on
   the turn's `fence`: a runner whose fence moved is refused
   `{:error, :superseded}`. The rows a person sees are broadcast on the
-  thread's topic AFTER the transaction commits, in the vocabulary
-  the console already reads (`{:thread, id, {:message, row}}`);
-  approvals are also announced to the estate (`Sanctum.Notify`). A
+  thread's topic AFTER the transaction commits, as plain maps in
+  `Cyfr.Bus.ThreadEvent`s of kind `:message`; approvals are also
+  announced to the athanor (`Sanctum.Notify`). A
   guest-planed context writes here unchanged: the tape is a narrow
   interface, not a plane, and the tenant is the context's.
 
-  Pausing and resuming a turn are `Cyfr.Execution`'s
-  (`Cyfr.Execution.pause_turn_root/3`, `resume_turn_root/3`): they move
+  Pausing and resuming a turn are `Crucible`'s
+  (`Crucible.pause_turn_root/3`, `resume_turn_root/3`): they move
   the rows with the root's slot and lease, which only the process holding
   them can do.
 
@@ -25,7 +25,7 @@ defmodule Aqua.Tape do
 
   Which turn may run at all is `threads.active_turn_id`, not a process on
   any member. `start_turn/3` takes it, `finish/4` and `suspend/3` give it
-  up, `bump_recovery/2` and `recover/2` take it from a turn whose holder
+  up, `bump_recovery/2` and `recover/3` take it from a turn whose holder
   is not a live member, and `claim_holder/2` reads it. An approval pause
   keeps it.
   """
@@ -34,18 +34,16 @@ defmodule Aqua.Tape do
   alias Arca.TurnStorage
   alias Sanctum.Context
 
-  @type turn :: Arca.Schemas.Turn.t()
-  @type step :: Arca.Schemas.TurnStep.t()
-  @type row :: Arca.Schemas.Message.t()
-  @type approval :: Arca.Schemas.Approval.t()
+  # The rows `Arca.TurnStorage` and `Arca.ThreadStorage` answer, each a
+  # plain map of the row's columns.
+  @type turn :: %{required(:id) => String.t(), optional(atom()) => term()}
+  @type step :: %{required(:id) => String.t(), optional(atom()) => term()}
+  @type row :: %{required(:id) => String.t(), optional(atom()) => term()}
+  @type approval :: %{required(:id) => String.t(), optional(atom()) => term()}
 
   @doc "Whether the turn has a terminal status in the durable lifecycle."
   @spec terminal?(turn()) :: boolean()
-  def terminal?(%{status: status}), do: status in TurnStorage.terminal_statuses()
-
-  @doc "How many automatic recoveries a turn gets before it ends `uncertain`."
-  @spec recovery_cap() :: pos_integer()
-  def recovery_cap, do: TurnStorage.recovery_cap()
+  def terminal?(%{status: status}), do: Prima.TurnState.terminal?(status)
 
   # ---------------------------------------------------------------------------
   # Acceptance
@@ -56,6 +54,12 @@ defmodule Aqua.Tape do
   `:message` (`:author`, `:content`, `:payload`, optional `:id`,
   `:client_id`), and one of `:turn` (`%{agent, requested_by,
   model, options}`) or `:steer_turn_id`, or neither for room content.
+
+  A turn opened here is recorded with the origin `ctx` carries
+  (`Prima.Origin`), which the admission entry that built the context
+  set, so a turn recovered after a restart resumes under it; an origin
+  named in `:turn` is not read. A turn asked for under a context that
+  carries none is refused `{:error, :no_origin}` with nothing written.
 
   A `client_id` this thread already accepted answers the existing
   acceptance as `replayed: true` when it is the same send — same actor,
@@ -68,9 +72,11 @@ defmodule Aqua.Tape do
   @spec accept(Context.t(), String.t(), map()) ::
           {:ok, %{message: row(), turn: turn() | nil, replayed: boolean()}} | {:error, term()}
   def accept(%Context{} = ctx, thread_id, attrs) when is_map(attrs) do
+    attrs = with_origin(attrs, ctx)
+
     case TurnStorage.accept_message(Sanctum.Context.actor(ctx), thread_id, attrs) do
       {:ok, %{message: message, turn: turn}} ->
-        broadcast(ctx, thread_id, {:message, message})
+        broadcast(ctx, thread_id, :message, message)
         {:ok, %{message: message, turn: turn, replayed: false}}
 
       {:error, reason} when reason in [:duplicate_client_id, :message_id_reused] ->
@@ -80,6 +86,12 @@ defmodule Aqua.Tape do
         other
     end
   end
+
+  # The turn takes its context's origin, whatever the caller put in it.
+  defp with_origin(%{turn: %{} = turn} = attrs, %Context{origin: origin}),
+    do: %{attrs | turn: Map.put(turn, :origin, origin)}
+
+  defp with_origin(attrs, _ctx), do: attrs
 
   # The identity offered again — by client id, or by a message id already
   # taken — answers what was accepted when it is the same send; the
@@ -123,7 +135,7 @@ defmodule Aqua.Tape do
   @spec append(Context.t(), String.t(), map()) :: {:ok, row()} | {:error, term()}
   def append(%Context{} = ctx, thread_id, attrs) when is_map(attrs) do
     with {:ok, row} <- Threads.append(Sanctum.Context.actor(ctx), thread_id, attrs) do
-      broadcast(ctx, thread_id, {:message, row})
+      broadcast(ctx, thread_id, :message, row)
       {:ok, row}
     end
   end
@@ -132,7 +144,7 @@ defmodule Aqua.Tape do
   @spec append_aborted(Context.t(), turn(), String.t()) :: {:ok, row()} | {:error, term()}
   def append_aborted(%Context{} = ctx, turn, reason) when is_binary(reason) do
     turn_row(ctx, turn, %{
-      author: Cyfr.Author.system(),
+      author: Prima.Author.system(),
       kind: "turn_aborted",
       content: reason
     })
@@ -149,7 +161,7 @@ defmodule Aqua.Tape do
       |> Map.put(:fence, turn.fence)
 
     with {:ok, row} <- TurnStorage.append_turn_row(Sanctum.Context.actor(ctx), turn.id, attrs) do
-      broadcast(ctx, turn.thread_id, {:message, row})
+      broadcast(ctx, turn.thread_id, :message, row)
       {:ok, row}
     end
   end
@@ -161,7 +173,7 @@ defmodule Aqua.Tape do
   @spec append_compaction(Context.t(), turn(), map()) :: {:ok, row()} | {:error, term()}
   def append_compaction(%Context{} = ctx, turn, attrs) when is_map(attrs) do
     turn_row(ctx, turn, %{
-      author: Cyfr.Author.system(),
+      author: Prima.Author.system(),
       kind: "compaction",
       content: Map.get(attrs, :summary, ""),
       payload: %{
@@ -178,7 +190,9 @@ defmodule Aqua.Tape do
 
   @doc """
   Start an accepted turn with its root, attempt, budget and pins
-  (`TurnStorage.start/3`), taking the thread's claim with it.
+  (`TurnStorage.start/3`), taking the thread's claim with it and storing
+  the recovery limit the caller's policy names (`:recovery_limit`), which
+  the turn is held to from then on.
 
   The claim names the consumed sequence read here, a moment before the
   statement that compares it: that read and that write are the
@@ -187,7 +201,8 @@ defmodule Aqua.Tape do
   not a refusal — a peer accepted the next message, which changes nothing
   about this turn's right to run — so the thread is read again, a bounded
   number of times. A thread another turn holds is
-  `{:error, {:busy, turn_id}}` and is the caller's to queue behind.
+  `{:error, {:held_elsewhere, turn_id}}` and is the caller's to queue
+  behind.
   """
   @spec start_turn(Context.t(), turn(), map()) :: {:ok, turn()} | {:error, term()}
   def start_turn(%Context{} = ctx, turn, attrs) when is_map(attrs),
@@ -222,7 +237,7 @@ defmodule Aqua.Tape do
              fence: turn.fence,
              reason: reason
            }) do
-      broadcast(ctx, turn.thread_id, {:turn_suspended, turn.id})
+      broadcast(ctx, turn.thread_id, :turn_suspended, turn.id)
       {:ok, suspended}
     end
   end
@@ -230,12 +245,20 @@ defmodule Aqua.Tape do
   @doc """
   Take the thread's claim for an open turn no live member runs and count
   the recovery, in one transaction (`TurnStorage.recover/3`), from the
-  fence `turn` was read with. Refused past the cap, and `{:error, :busy}`
-  for a thread a live peer holds.
+  fence `turn` was read with. An accepted turn's recovery is its first
+  claim, which stores `recovery_limit` — the caller's policy — and spends
+  none; any other turn is held to the limit it stores. Refused once that
+  limit is spent, and `{:error, :held_elsewhere}` for a thread a live
+  peer holds.
   """
-  @spec recover(Context.t(), turn()) :: {:ok, turn()} | {:error, term()}
-  def recover(%Context{} = ctx, turn),
-    do: TurnStorage.recover(Sanctum.Context.actor(ctx), turn.id, %{fence: turn.fence})
+  @spec recover(Context.t(), turn(), pos_integer()) :: {:ok, turn()} | {:error, term()}
+  def recover(%Context{} = ctx, turn, recovery_limit),
+    do:
+      TurnStorage.recover(
+        Sanctum.Context.actor(ctx),
+        turn.id,
+        standing(%{fence: turn.fence, recovery_limit: recovery_limit}, :current)
+      )
 
   @doc """
   Which turn holds the thread, and whether a live peer runs it
@@ -248,7 +271,12 @@ defmodule Aqua.Tape do
   def claim_holder(%Context{} = ctx, thread_id),
     do: Threads.claim_holder(Sanctum.Context.actor(ctx), thread_id)
 
-  @doc "End a turn: the one terminal transaction (`TurnStorage.finish/4`)."
+  @doc """
+  End a turn: the one terminal transaction (`TurnStorage.finish/4`),
+  under the grant its root's attempt stores. A completion needs that
+  grant to stand; a turn that fails, is cancelled or ends uncertain
+  retires work and needs only the stored stamp.
+  """
   @spec finish(Context.t(), turn(), String.t(), map()) :: {:ok, turn()} | {:error, term()}
   def finish(%Context{} = ctx, turn, status, attrs \\ %{}) do
     with {:ok, finished} <-
@@ -256,9 +284,11 @@ defmodule Aqua.Tape do
              Sanctum.Context.actor(ctx),
              turn.id,
              status,
-             Map.put_new(attrs, :fence, turn.fence)
+             attrs
+             |> Map.put_new(:fence, turn.fence)
+             |> standing(if(status == "completed", do: :current, else: :retiring))
            ) do
-      broadcast(ctx, turn.thread_id, {:turn_finished})
+      broadcast(ctx, turn.thread_id, :turn_finished, nil)
       {:ok, finished}
     end
   end
@@ -266,11 +296,25 @@ defmodule Aqua.Tape do
   @doc """
   Take over a turn another runner lost: the successor attempt, the new
   fence and the recovery count (`TurnStorage.takeover/3`), from the fence
-  `turn` was read with. Refused past the cap.
+  `turn` was read with. Refused once the turn's stored limit is spent.
   """
   @spec bump_recovery(Context.t(), turn()) :: {:ok, turn()} | {:error, term()}
   def bump_recovery(%Context{} = ctx, turn),
-    do: TurnStorage.takeover(Sanctum.Context.actor(ctx), turn.id, %{fence: turn.fence})
+    do:
+      TurnStorage.takeover(
+        Sanctum.Context.actor(ctx),
+        turn.id,
+        standing(%{fence: turn.fence}, :current)
+      )
+
+  # The grant a write on the turn's root attempt runs under: the stamp that
+  # attempt stores (`TurnStorage`'s "The root's grant"), which must still
+  # stand, or — for a turn that retires its work — need only be carried.
+  defp standing(attrs, :current),
+    do: Map.merge(attrs, %{grant: :stored, verify: &Sanctum.ExecutionStanding.verify/1})
+
+  defp standing(attrs, :retiring),
+    do: Map.merge(attrs, %{grant: :stored, verify: &Sanctum.ExecutionStanding.stamp_only/1})
 
   @doc "Pin the exact catalyst release the turn runs on (`TurnStorage.pin_catalyst/4`)."
   @spec pin_catalyst(Context.t(), turn(), String.t()) :: {:ok, turn()} | {:error, term()}
@@ -314,8 +358,8 @@ defmodule Aqua.Tape do
              model_step.id,
              Map.put_new(response, :fence, turn.fence)
            ) do
-      if text, do: broadcast(ctx, turn.thread_id, {:message, text})
-      Enum.each(calls, &broadcast(ctx, turn.thread_id, {:message, &1.message}))
+      if text, do: broadcast(ctx, turn.thread_id, :message, text)
+      Enum.each(calls, &broadcast(ctx, turn.thread_id, :message, &1.message))
       {:ok, recorded}
     end
   end
@@ -336,7 +380,7 @@ defmodule Aqua.Tape do
              outcome,
              Map.put_new(attrs, :fence, turn.fence)
            ) do
-      if result, do: broadcast(ctx, turn.thread_id, {:message, result})
+      if result, do: broadcast(ctx, turn.thread_id, :message, result)
       {:ok, closed}
     end
   end
@@ -370,7 +414,7 @@ defmodule Aqua.Tape do
              turn.id,
              Map.put_new(attrs, :fence, turn.fence)
            ) do
-      broadcast(ctx, turn.thread_id, {:message, aborted})
+      broadcast(ctx, turn.thread_id, :message, aborted)
       {:ok, paused}
     end
   end
@@ -379,10 +423,11 @@ defmodule Aqua.Tape do
   @spec pause_recovered(Context.t(), turn(), String.t()) :: {:ok, turn()} | {:error, term()}
   def pause_recovered(%Context{} = ctx, turn, content) when is_binary(content),
     do:
-      TurnStorage.pause_recovered(Sanctum.Context.actor(ctx), turn.id, %{
-        content: content,
-        fence: turn.fence
-      })
+      TurnStorage.pause_recovered(
+        Sanctum.Context.actor(ctx),
+        turn.id,
+        standing(%{content: content, fence: turn.fence}, :current)
+      )
 
   @doc "Whether the turn holds an uncertainty its sender has not acknowledged."
   @spec unacknowledged_episode?(Context.t(), turn()) :: boolean()
@@ -403,7 +448,7 @@ defmodule Aqua.Tape do
            }) do
       Enum.each(steps, fn step ->
         with {:ok, row} <- Threads.get_message(Sanctum.Context.actor(ctx), step.result_message_id),
-             do: broadcast(ctx, turn.thread_id, {:message, row})
+             do: broadcast(ctx, turn.thread_id, :message, row)
       end)
 
       {:ok, steps}
@@ -435,7 +480,7 @@ defmodule Aqua.Tape do
   # Approvals
   # ---------------------------------------------------------------------------
 
-  @doc "Open a card for a proposed step; the estate is told after commit."
+  @doc "Open a card for a proposed step; the athanor is told after commit."
   @spec open_approval(Context.t(), turn(), step(), map()) ::
           {:ok, %{approval: approval(), card: row()}} | {:error, term()}
   def open_approval(%Context{} = ctx, turn, step, attrs) when is_map(attrs) do
@@ -445,7 +490,7 @@ defmodule Aqua.Tape do
              step.id,
              Map.put_new(attrs, :fence, turn.fence)
            ) do
-      broadcast(ctx, turn.thread_id, {:message, card})
+      broadcast(ctx, turn.thread_id, :message, card)
 
       Sanctum.Notify.broadcast(Context.athanor!(ctx), :approval_pending, %{
         thread_id: turn.thread_id,
@@ -468,11 +513,11 @@ defmodule Aqua.Tape do
              decision,
              Map.put_new(attrs, :fence, turn.fence)
            ) do
-      broadcast(ctx, turn.thread_id, {:message, card})
+      broadcast(ctx, turn.thread_id, :message, card)
 
       if step.result_message_id do
         with {:ok, row} <- Threads.get_message(Sanctum.Context.actor(ctx), step.result_message_id),
-             do: broadcast(ctx, turn.thread_id, {:message, row})
+             do: broadcast(ctx, turn.thread_id, :message, row)
       end
 
       Sanctum.Notify.broadcast(Context.athanor!(ctx), :approval_resolved, %{
@@ -484,15 +529,12 @@ defmodule Aqua.Tape do
 
       # The runner holding the turn learns the decision from the topic,
       # after the commit like every row.
-      broadcast(ctx, turn.thread_id, {
-        :approval_resolved,
-        %{
-          approval_id: approval_id,
-          turn_id: turn.id,
-          step_id: step.id,
-          decision: decision,
-          resolution_kind: Map.get(resolved.approval, :resolution_kind)
-        }
+      broadcast(ctx, turn.thread_id, :approval_resolved, %{
+        approval_id: approval_id,
+        turn_id: turn.id,
+        step_id: step.id,
+        decision: decision,
+        resolution_kind: Map.get(resolved.approval, :resolution_kind)
       })
 
       {:ok, resolved}
@@ -513,7 +555,7 @@ defmodule Aqua.Tape do
              parent.id,
              Map.put_new(attrs, :fence, parent.fence)
            ) do
-      broadcast(ctx, parent.thread_id, {:message, task})
+      broadcast(ctx, parent.thread_id, :message, task)
       {:ok, opened}
     end
   end
@@ -595,7 +637,7 @@ defmodule Aqua.Tape do
   def pending_approvals(%Context{} = ctx, turn),
     do: TurnStorage.pending_approvals(Sanctum.Context.actor(ctx), turn.id)
 
-  @doc "The estate's pending approvals past their expiry."
+  @doc "The athanor's pending approvals past their expiry."
   @spec expired_approvals(Context.t()) :: {:ok, [approval()]} | {:error, term()}
   def expired_approvals(%Context{} = ctx),
     do: TurnStorage.expired_approvals(Sanctum.Context.actor(ctx), DateTime.utc_now())
@@ -610,11 +652,11 @@ defmodule Aqua.Tape do
   @doc """
   Announce an ephemeral console event on the thread's topic — a
   delta, the tool activity, the usage, the sender's intents — without a
-  row.
+  row: a `Cyfr.Bus.ThreadEvent` of `kind` carrying `data`.
   """
-  @spec announce(Context.t(), String.t(), term()) :: :ok
-  def announce(%Context{} = ctx, thread_id, event),
-    do: broadcast(ctx, thread_id, event)
+  @spec announce(Context.t(), String.t(), Cyfr.Bus.ThreadEvent.kind(), term()) :: :ok
+  def announce(%Context{} = ctx, thread_id, kind, data \\ nil),
+    do: broadcast(ctx, thread_id, kind, data)
 
   @doc "The `tool_call` payloads of the calls a turn and its clones closed."
   @spec closed_calls(Context.t(), turn()) :: {:ok, [map()]} | {:error, term()}
@@ -640,23 +682,18 @@ defmodule Aqua.Tape do
   def latest_messages(%Context{} = ctx, thread_id, n),
     do: Threads.latest_messages(Sanctum.Context.actor(ctx), thread_id, n)
 
-  @doc "The topic a thread's rows are broadcast on."
-  @spec topic(Context.t(), String.t()) :: String.t()
-  def topic(%Context{} = ctx, thread_id),
-    do: Cyfr.Bus.thread(thread_id, Context.athanor!(ctx))
-
   # ---------------------------------------------------------------------------
   # Internal
   # ---------------------------------------------------------------------------
 
-  # Durable rows reach viewers only after their transaction committed.
-  defp broadcast(ctx, thread_id, event) do
-    Phoenix.PubSub.broadcast(
-      Emissary.PubSub,
-      topic(ctx, thread_id),
-      {:thread, thread_id, event}
-    )
-
+  # Durable rows reach viewers only after their transaction committed. A
+  # row is plain data already (`Arca.TurnStorage` answers maps); a
+  # refused or failed publish costs the viewers one update, never the
+  # write.
+  defp broadcast(ctx, thread_id, kind, data) do
+    actor = Sanctum.Context.actor(ctx)
+    event = Cyfr.Bus.ThreadEvent.new(actor, thread_id, kind, data)
+    _ = Cyfr.Bus.broadcast(actor, Cyfr.Bus.thread(actor, thread_id), event)
     :ok
   end
 

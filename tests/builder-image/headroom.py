@@ -5,15 +5,15 @@
 
 Every build runs in a cgroup of its own, bounded at
 LOCUS_BUILDS_MEMORY_BYTES (tests/builder-image/memory.py proves that
-bound). What is not a build runs in the group cyfr-spawn keeps for itself,
-`keeper`: cyfr-spawn, the locus release and the relays. Nothing bounds
+bound). What is not a build runs in the group cyfr-keeper keeps for itself,
+`keeper`: cyfr-keeper, the locus release and the relays. Nothing bounds
 that group but the container's own limit, so docker-compose.yml's limit
 must hold LOCUS_BUILDS_MAX_CONCURRENT bounds and the most the service
 takes, or a build the kernel kills for the container's limit is lost
 without being over its own.
 
 The service takes the most when it answers the largest result the wire
-allows (`Cyfr.BuilderProtocol.max_output_bytes/0`): it holds the build's
+allows (`Prima.BuilderProtocol.max_output_bytes/0`): it holds the build's
 output archive, the files unpacked from it, their base64 and the line that
 carries them, all at once. This measures it, in one container, the kernel's
 own high-water marks read after each step:
@@ -63,8 +63,8 @@ COMPOSE_SETTINGS = {"LOCUS_BUILDS_MEMORY_LIMIT", "LOCUS_BUILDS_CPU_LIMIT"}
 SAMPLER = r"""
 while :; do
   groups=""
-  for d in /sys/fs/cgroup/spawn-*; do
-    [ -d "$d" ] && groups="$groups${d##*spawn-}:$(cat "$d/memory.current" 2>/dev/null):$(cat "$d/memory.peak" 2>/dev/null),"
+  for d in /sys/fs/cgroup/keeper-*; do
+    [ -d "$d" ] && groups="$groups${d##*keeper-}:$(cat "$d/memory.current" 2>/dev/null):$(cat "$d/memory.peak" 2>/dev/null),"
   done
   printf '%s|%s|%s|%s\n' "$(cat /sys/fs/cgroup/keeper/memory.current)" \
     "$(awk '$1 == "anon" {a = $2} $1 == "file" {f = $2} END {print a "|" f}' /sys/fs/cgroup/keeper/memory.stat)" \
@@ -148,8 +148,8 @@ def builds(stack, sources):
 
 
 def main(image, settings):
-    empty = tempfile.mkdtemp(prefix="cyfr-builder-headroom-")
-    stack = Stack("cyfr-builder-headroom", image, empty)
+    empty = tempfile.mkdtemp(prefix="locus-builds-headroom-")
+    stack = Stack("locus-builds-headroom", image, empty)
     try:
         # The container's limits are compose's to read; the rest is the service's.
         for name in COMPOSE_SETTINGS & settings.keys():

@@ -12,9 +12,8 @@ defmodule Sanctum.ContextFocusTest do
   alias Sanctum.Context
   alias Sanctum.Tenancy.{Athanors, Members}
 
-  setup do
-    :ok = Ecto.Adapters.SQL.Sandbox.checkout(Arca.Repo)
-    Ecto.Adapters.SQL.Sandbox.mode(Arca.Repo, {:shared, self()})
+  setup tags do
+    Cyfr.Test.Sandbox.setup!(tags)
 
     alice = "github|https://github.com|alice-#{System.unique_integer([:positive])}"
     ops = "github|https://github.com|ops-#{System.unique_integer([:positive])}"
@@ -55,6 +54,37 @@ defmodule Sanctum.ContextFocusTest do
   test "an archived athanor cannot be focused", %{a: a, alice: alice, ctx: ctx} do
     {:ok, archived} = Athanors.archive(a)
     assert {:error, :archived} = Context.focus(ctx.(alice, nil, false), archived)
+  end
+
+  test "a stale copy of the row is read for its id alone: focus rereads the standing",
+       %{a: a, alice: alice, ctx: ctx} do
+    {:ok, before_archive} = Athanors.get(a.id)
+    {:ok, _} = Athanors.archive(a)
+
+    # The copy still says active; the row it names does not.
+    assert before_archive.status == "active"
+    assert {:error, :archived} = Context.focus(ctx.(alice, nil, false), before_archive)
+
+    # A map that only names the id is as good as the id, and a forged
+    # status on it decides nothing.
+    assert {:error, :archived} =
+             Context.focus(ctx.(alice, nil, false), %{id: a.id, status: "active"})
+  end
+
+  test "a store that cannot answer is unavailable, never an absence or a refusal",
+       %{a: a, alice: alice, ctx: ctx} do
+    c = ctx.(alice, nil, false)
+
+    Arca.Repo.query!("ALTER TABLE memberships RENAME TO memberships_unavailable")
+    assert {:error, :unavailable} = Context.focus(c, a.id)
+    Arca.Repo.query!("ALTER TABLE memberships_unavailable RENAME TO memberships")
+
+    Arca.Repo.query!("ALTER TABLE athanors RENAME TO athanors_unavailable")
+    assert {:error, :unavailable} = Context.focus(c, a.id)
+    assert {:error, :unavailable} = Context.focus(c, a)
+
+    sys = Sanctum.internal_context(user_id: "_test", athanor_id: a.id, scope: :athanor)
+    assert {:error, :unavailable} = Context.refocus(sys, a.id)
   end
 
   test "refocus is focus for a person, and an archive-checked crossing for the system plane",
@@ -123,7 +153,12 @@ defmodule Sanctum.ContextFocusTest do
     assert {:error, _} = Context.authorize(focused, :read, {:tenant, %{athanor_id: b.id}})
     assert {:error, _} = Sanctum.TenantPolicy.verify(focused, %{athanor_id: b.id})
 
-    query = Arca.QueryHelpers.where_tenant_unless_platform(Arca.Execution, Context.actor(focused))
+    query =
+      Arca.QueryHelpers.where_tenant_unless_platform(
+        Arca.Schemas.Execution,
+        Context.actor(focused)
+      )
+
     assert inspect(query) =~ "athanor_id"
   end
 
@@ -148,7 +183,7 @@ defmodule Sanctum.ContextFocusTest do
 
     # the audit ledger of B is invisible from A
     assert {:error, msg} =
-             Cyfr.Ops.Catalog.call_external("record", focused, %{
+             Grimoire.call_external("record", focused, %{
                "action" => "get",
                "id" => b_exec
              })
@@ -156,24 +191,25 @@ defmodule Sanctum.ContextFocusTest do
     assert err_msg(msg) =~ "not found"
 
     assert {:ok, %{executions: listed}} =
-             Cyfr.Ops.Catalog.call_external("record", focused, %{"action" => "list"})
+             Grimoire.call_external("record", focused, %{"action" => "list"})
 
     refute Enum.any?(listed, &(&1.id == b_exec))
 
     # and so is B's storage: a URI is rooted in the focused athanor, never another
-    assert {:error, {:not_found, "File", _}} =
-             Emissary.MCP.Tools.RecordsProvider.read(focused, "arca://files/data/secret.txt")
+    read = %{"action" => "read", "uri" => "arca://files/data/secret.txt"}
 
-    assert {:ok, %{content: content}} =
-             Emissary.MCP.Tools.RecordsProvider.read(b_ctx, "arca://files/data/secret.txt")
+    assert {:error, {:not_found, "File", _}} =
+             Grimoire.call_external("resource", focused, read)
+
+    assert {:ok, %{content: content}} = Grimoire.call_external("resource", b_ctx, read)
 
     assert Base.decode64!(content) == "b's bytes"
   end
 
   test "resolve_status gives an admin the capability, an :athanor scope, and their own athanor",
        %{ops: ops} do
-    {:ok, estate} = Athanors.create_group(ops, "Ops #{System.unique_integer([:positive])}")
-    {:ok, _} = Members.ensure(ops, scope: "athanor", athanor_id: estate.id)
+    {:ok, athanor} = Athanors.create_group(ops, "Ops #{System.unique_integer([:positive])}")
+    {:ok, _} = Members.ensure(ops, scope: "athanor", athanor_id: athanor.id)
 
     {:ok, resolved} =
       Sanctum.Tenancy.resolve_status(
@@ -183,7 +219,7 @@ defmodule Sanctum.ContextFocusTest do
 
     assert resolved.platform_admin
     assert resolved.scope == :athanor
-    assert resolved.athanor_id == estate.id
+    assert resolved.athanor_id == athanor.id
   end
 
   test "revalidate keeps a granted athanor and re-derives the capability", %{
@@ -205,7 +241,7 @@ defmodule Sanctum.ContextFocusTest do
   # renderer is the one spelling of every sentence, so assert through it.
   # Plain strings pass through unchanged.
   defp err_msg(reason) do
-    Cyfr.Ops.Error.render(reason) ||
+    Grimoire.Error.render(reason) ||
       flunk("unrenderable refusal: #{inspect(reason)}")
   end
 end

@@ -3,7 +3,7 @@
 
 defmodule Arca.ProvisioningClaimsTest do
   @moduledoc """
-  The estate's one claim row: taken at a new fence, held against another
+  The athanor's one claim row: taken at a new fence, held against another
   owner while its lease stands, re-entered by its own owner, taken over
   once the lease ran out or the outcome settled — and written only by
   the owner and fence it still reads.
@@ -14,27 +14,110 @@ defmodule Arca.ProvisioningClaimsTest do
   # the database is busy — so this one runs alone.
   use ExUnit.Case, async: false
 
-  import Cyfr.Test.Wait
+  import Ecto.Query, only: [from: 2]
+  import Prima.Test.Wait
 
   alias Arca.ProvisioningClaims, as: Claims
+  alias Arca.Schemas.CellLease
 
   @lease_ms 60_000
 
   setup tags do
     Arca.Test.Sandbox.setup!(tags)
     athanor_id = "ath_claims_#{System.unique_integer([:positive])}"
-    {:ok, actor: %Cyfr.Actor{athanor_id: athanor_id}, athanor_id: athanor_id}
+    slot = slot!()
+    Process.put({__MODULE__, :slot}, slot)
+    {:ok, actor: %Prima.Actor{athanor_id: athanor_id}, athanor_id: athanor_id, slot: slot}
+  end
+
+  # Every case claims as a member holding a slot of its own, written
+  # straight to its row; the cases about the member's slot name theirs.
+  defp claim(actor, owner, entry_kind, lease_ms),
+    do: Claims.claim(actor, owner, entry_kind, lease_ms, slot())
+
+  defp slot, do: Process.get({__MODULE__, :slot})
+
+  defp slot! do
+    node = "node-claims-#{System.unique_integer([:positive])}"
+    now = Arca.ServerMetaStorage.now!()
+
+    row = %{
+      node: node,
+      owner: node <> "#boot_a",
+      generation: 1,
+      fence: 1,
+      lease_until: DateTime.add(now, 60_000, :millisecond),
+      taken_at: now,
+      inserted_at: now,
+      updated_at: now
+    }
+
+    {1, _} = Arca.Repo.insert_all(CellLease, [row])
+    %{node: node, owner: row.owner, generation: 1, fence: 1}
+  end
+
+  describe "the member's slot" do
+    test "a slot taken over is refused before the row is read, and nothing is taken", %{
+      actor: actor,
+      slot: slot
+    } do
+      {1, _} =
+        Arca.Repo.update_all(from(l in CellLease, where: l.node == ^slot.node),
+          set: [owner: slot.node <> "#boot_b", generation: 2, fence: 2]
+        )
+
+      assert {:error, :not_owner} =
+               Claims.claim(actor, "boot_1/a", "first_need", @lease_ms, slot)
+
+      assert {:error, :not_found} = Claims.current(actor)
+    end
+
+    test "a slot that ran out with no successor is refused", %{actor: actor, slot: slot} do
+      past = DateTime.add(Arca.ServerMetaStorage.now!(), -1_000, :millisecond)
+
+      {1, _} =
+        Arca.Repo.update_all(from(l in CellLease, where: l.node == ^slot.node),
+          set: [lease_until: past]
+        )
+
+      assert {:error, :not_owner} =
+               Claims.claim(actor, "boot_1/a", "first_need", @lease_ms, slot)
+
+      assert {:error, :not_found} = Claims.current(actor)
+    end
+
+    test "no slot takes a claim only where no claimant runs", %{actor: actor} do
+      previous = Application.get_env(:arca, :control_plane_claim_enabled)
+
+      on_exit(fn ->
+        if is_nil(previous),
+          do: Application.delete_env(:arca, :control_plane_claim_enabled),
+          else: Application.put_env(:arca, :control_plane_claim_enabled, previous)
+      end)
+
+      Application.put_env(:arca, :control_plane_claim_enabled, true)
+
+      assert {:error, :not_owner} =
+               Claims.claim(actor, "boot_1/a", "first_need", @lease_ms, :none)
+
+      assert {:error, :not_found} = Claims.current(actor)
+
+      Application.put_env(:arca, :control_plane_claim_enabled, false)
+
+      assert {:ok, %{fence: 1}} =
+               Claims.claim(actor, "boot_1/a", "first_need", @lease_ms, :none)
+    end
   end
 
   # A claim with a lease this short has run out by the time anyone looks.
   defp lapsed!(actor, owner, entry_kind \\ "first_need") do
-    {:ok, claim} = Claims.claim(actor, owner, entry_kind, 1)
+    {:ok, claim} = claim(actor, owner, entry_kind, 1)
     wait_until(fn -> not Claims.live?(claim) end, 2_000, "the lease to run out")
     claim
   end
 
   test "an actor without an athanor is refused by every function, before any query" do
-    nobody = %Cyfr.Actor{athanor_id: nil, user_id: "someone"}
+    nobody = %Prima.Actor{athanor_id: nil, user_id: "someone"}
     handler = "claims-no-athanor-#{System.unique_integer([:positive])}"
     parent = self()
 
@@ -49,7 +132,7 @@ defmodule Arca.ProvisioningClaimsTest do
 
     on_exit(fn -> :telemetry.detach(handler) end)
 
-    assert {:error, :no_athanor} = Claims.claim(nobody, "boot_1/a", "provision", @lease_ms)
+    assert {:error, :no_athanor} = claim(nobody, "boot_1/a", "provision", @lease_ms)
     assert {:error, :no_athanor} = Claims.renew(nobody, "boot_1/a", 1, @lease_ms)
     assert {:error, :no_athanor} = Claims.settle(nobody, "boot_1/a", 1, "ready", nil)
     assert {:error, :no_athanor} = Claims.release(nobody, "boot_1/a", 1)
@@ -57,28 +140,30 @@ defmodule Arca.ProvisioningClaimsTest do
     refute_received :queried
 
     # The probe is live: an actor with an athanor does query.
-    assert {:error, :not_found} = Claims.current(%Cyfr.Actor{athanor_id: "ath_claims_probe"})
+    assert {:error, :not_found} = Claims.current(%Prima.Actor{athanor_id: "ath_claims_probe"})
     assert_received :queried
   end
 
   test "a lease is compared on the cell's one clock, and this module keeps no copy of it", %{
     actor: actor
   } do
-    # The lease `claim/4` wrote is bracketed by two readings of the shared
+    # The lease `claim/5` wrote is bracketed by two readings of the shared
     # clock, so it was taken on that clock and on no other. A member whose
     # own clock had drifted would land outside the bracket.
     before = Arca.ServerMetaStorage.now!()
-    assert {:ok, claim} = Claims.claim(actor, "boot_1/a", "first_need", @lease_ms)
+    assert {:ok, claim} = claim(actor, "boot_1/a", "first_need", @lease_ms)
     later = Arca.ServerMetaStorage.now!()
 
     assert DateTime.compare(claim.lease_until, DateTime.add(before, @lease_ms, :millisecond)) !=
              :lt
 
-    assert DateTime.compare(claim.lease_until, DateTime.add(later, @lease_ms, :millisecond)) != :gt
+    assert DateTime.compare(claim.lease_until, DateTime.add(later, @lease_ms, :millisecond)) !=
+             :gt
 
     # `age_ms/1` is measured on the same clock: the row was written between
     # the two readings, so its age cannot exceed the span between them.
-    assert Claims.age_ms(claim) <= DateTime.diff(Arca.ServerMetaStorage.now!(), before, :millisecond)
+    assert Claims.age_ms(claim) <=
+             DateTime.diff(Arca.ServerMetaStorage.now!(), before, :millisecond)
 
     # And the clock is read, not reimplemented: a second copy of it here
     # is a second answer to which member holds a row.
@@ -93,7 +178,7 @@ defmodule Arca.ProvisioningClaimsTest do
   } do
     assert {:error, :not_found} = Claims.current(actor)
 
-    assert {:ok, claim} = Claims.claim(actor, "boot_1/a", "sign_in", @lease_ms)
+    assert {:ok, claim} = claim(actor, "boot_1/a", "sign_in", @lease_ms)
     assert claim.athanor_id == athanor_id
     assert claim.owner == "boot_1/a"
     assert claim.entry_kind == "sign_in"
@@ -107,33 +192,33 @@ defmodule Arca.ProvisioningClaimsTest do
   end
 
   test "a live claim is busy to another owner and re-entrant to its own", %{actor: actor} do
-    {:ok, claim} = Claims.claim(actor, "boot_1/a", "first_need", @lease_ms)
+    {:ok, claim} = claim(actor, "boot_1/a", "first_need", @lease_ms)
 
-    assert {:busy, holder} = Claims.claim(actor, "boot_1/b", "provision", @lease_ms)
+    assert {:busy, holder} = claim(actor, "boot_1/b", "provision", @lease_ms)
     assert holder.owner == "boot_1/a"
     assert holder.fence == 1
 
     # The same owner gets its own claim back: same attempt, same fence, and
     # the entry kind it came in through first.
-    assert {:ok, again} = Claims.claim(actor, "boot_1/a", "install_shipped", @lease_ms)
+    assert {:ok, again} = claim(actor, "boot_1/a", "install_shipped", @lease_ms)
     assert again.attempt == claim.attempt
     assert again.fence == 1
     assert again.entry_kind == "first_need"
   end
 
-  test "one estate's claim is nothing to another's", %{actor: actor} do
-    other = %Cyfr.Actor{athanor_id: "ath_claims_other_#{System.unique_integer([:positive])}"}
+  test "one athanor's claim is nothing to another's", %{actor: actor} do
+    other = %Prima.Actor{athanor_id: "ath_claims_other_#{System.unique_integer([:positive])}"}
 
-    {:ok, _} = Claims.claim(actor, "boot_1/a", "first_need", @lease_ms)
-    assert {:ok, %{fence: 1}} = Claims.claim(other, "boot_1/b", "first_need", @lease_ms)
+    {:ok, _} = claim(actor, "boot_1/a", "first_need", @lease_ms)
+    assert {:ok, %{fence: 1}} = claim(other, "boot_1/b", "first_need", @lease_ms)
 
-    # And an owner's writes land only on the estate its actor names.
+    # And an owner's writes land only on the athanor its actor names.
     assert :stale = Claims.settle(other, "boot_1/a", 1, "ready", nil)
     assert {:ok, %{outcome: nil}} = Claims.current(actor)
   end
 
   test "a settled claim is taken at the next fence, under a new attempt", %{actor: actor} do
-    {:ok, first} = Claims.claim(actor, "boot_1/a", "first_need", @lease_ms)
+    {:ok, first} = claim(actor, "boot_1/a", "first_need", @lease_ms)
     assert :ok = Claims.settle(actor, "boot_1/a", first.fence, "failed", "closure: :timeout")
 
     assert {:ok, %{outcome: "failed", outcome_detail: "closure: :timeout"} = settled} =
@@ -141,7 +226,7 @@ defmodule Arca.ProvisioningClaimsTest do
 
     refute Claims.live?(settled)
 
-    assert {:ok, second} = Claims.claim(actor, "boot_1/b", "provision", @lease_ms)
+    assert {:ok, second} = claim(actor, "boot_1/b", "provision", @lease_ms)
     assert second.id == first.id
     assert second.fence == 2
     assert second.owner == "boot_1/b"
@@ -156,7 +241,7 @@ defmodule Arca.ProvisioningClaimsTest do
   } do
     old = lapsed!(actor, "boot_1/a")
 
-    assert {:ok, new} = Claims.claim(actor, "boot_2/b", "first_need", @lease_ms)
+    assert {:ok, new} = claim(actor, "boot_2/b", "first_need", @lease_ms)
     assert new.fence == old.fence + 1
 
     # The old owner renews nothing, settles nothing and releases nothing —
@@ -174,7 +259,7 @@ defmodule Arca.ProvisioningClaimsTest do
 
   test "a stale owner cannot overwrite its successor's failure", %{actor: actor} do
     old = lapsed!(actor, "boot_1/a")
-    {:ok, new} = Claims.claim(actor, "boot_1/b", "provision", @lease_ms)
+    {:ok, new} = claim(actor, "boot_1/b", "provision", @lease_ms)
     :ok = Claims.settle(actor, new.owner, new.fence, "failed", "seed: :bundle_missing")
 
     assert :stale = Claims.settle(actor, old.owner, old.fence, "ready", nil)
@@ -185,17 +270,17 @@ defmodule Arca.ProvisioningClaimsTest do
   end
 
   test "a renewal keeps a claim that would have run out", %{actor: actor} do
-    {:ok, claim} = Claims.claim(actor, "boot_1/a", "sign_in", 1)
+    {:ok, claim} = claim(actor, "boot_1/a", "sign_in", 1)
     assert :ok = Claims.renew(actor, claim.owner, claim.fence, @lease_ms)
 
     {:ok, renewed} = Claims.current(actor)
     assert DateTime.compare(renewed.lease_until, claim.lease_until) == :gt
     assert Claims.live?(renewed)
-    assert {:busy, _} = Claims.claim(actor, "boot_1/b", "provision", @lease_ms)
+    assert {:busy, _} = claim(actor, "boot_1/b", "provision", @lease_ms)
   end
 
   test "a claim settles once: the outcome it carries is not settled over", %{actor: actor} do
-    {:ok, claim} = Claims.claim(actor, "boot_1/a", "install_shipped", @lease_ms)
+    {:ok, claim} = claim(actor, "boot_1/a", "install_shipped", @lease_ms)
     assert :ok = Claims.release(actor, claim.owner, claim.fence)
     assert {:ok, %{outcome: "released"}} = Claims.current(actor)
 
@@ -205,10 +290,12 @@ defmodule Arca.ProvisioningClaimsTest do
   end
 
   test "of several first claims at once, one wins and the rest are busy", %{actor: actor} do
+    slot = slot()
+
     results =
       1..8
       |> Task.async_stream(
-        fn n -> Claims.claim(actor, "boot_1/racer-#{n}", "first_need", @lease_ms) end,
+        fn n -> Claims.claim(actor, "boot_1/racer-#{n}", "first_need", @lease_ms, slot) end,
         max_concurrency: 8,
         timeout: 30_000
       )
@@ -220,9 +307,9 @@ defmodule Arca.ProvisioningClaimsTest do
   end
 
   test "an entry kind or an outcome the schema does not name is a caller's bug", %{actor: actor} do
-    assert_raise ArgumentError, fn -> Claims.claim(actor, "boot_1/a", "whenever", @lease_ms) end
+    assert_raise ArgumentError, fn -> claim(actor, "boot_1/a", "whenever", @lease_ms) end
 
-    {:ok, claim} = Claims.claim(actor, "boot_1/a", "provision", @lease_ms)
+    {:ok, claim} = claim(actor, "boot_1/a", "provision", @lease_ms)
 
     assert_raise ArgumentError, fn ->
       Claims.settle(actor, claim.owner, claim.fence, "finished", nil)

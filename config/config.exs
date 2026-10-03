@@ -19,47 +19,66 @@ config :mime, :types, %{
 # Order doesn't matter, tools are indexed by name
 config :cyfr,
   tool_providers: [
-    # Foundation services
-    Sanctum.MCP,
-    Emissary.MCP.Tools.RecordsProvider,
-    # Chat on the wire, so Prism is a client of the agent runtime rather
-    # than the only way to reach it.
-    Emissary.MCP.ThreadTool,
+    # Each provider answers its namespace's service label (`service/0`),
+    # and a namespace with several providers is one service. Identity and
+    # authority, `sanctum`:
+    Sanctum.Provider,
+    # `arca`: the records the storage layer keeps (executions, MCP and
+    # policy logs) and its retention policy, handed the caller's actor alone.
+    Arca.Providers.Records,
+    # `aqua`: chat on the wire, so Prism is a client of the agent runtime
+    # rather than the only way to reach it.
+    Aqua.Providers.Thread,
     # A card decided from the wire: the same door the console's buttons use.
-    Emissary.MCP.ApprovalTool,
+    Aqua.Providers.Approval,
     # What was kept out of a thread — a separate object from the tape,
     # which is what lets a thread be erased honestly.
-    Emissary.MCP.NotesTool,
-    # The athanor's files as the Files page shows them, one tier per folder.
-    Emissary.MCP.FileTool,
-    # A component's own source, for the agent authoring it — host-side and
-    # scoped, because the files catalyst's grant is `data/` and widening it
-    # would widen it for every agent.
-    Compendium.MCP.SourceTool,
-    # Domain services
-    Cyfr.Execution.MCP,
-    Cyfr.Schedules.Provider,
+    Aqua.Providers.Notes,
+    # `arca`: the athanor's files as the Files page shows them, one tier
+    # per folder.
+    Arca.Providers.Files,
+    # `compendium`: a component's own source, for the agent authoring it —
+    # host-side and scoped, because the files catalyst's grant is `data/`
+    # and widening it would widen it for every agent.
+    Compendium.Providers.Source,
+    # `crucible`: executions, schedules and a tincture's invocations.
+    Crucible.Provider,
+    Crucible.Schedules.Provider,
+    Crucible.Providers.Tincture,
+    # `compendium`: builds and components.
     Compendium.Builds.Provider,
-    Compendium.MCP,
-    # External MCP server management. `Emissary.MCP.ExternalProvider` is not
-    # here: it owns no tool of its own — the tools it discovers are the
-    # upstream servers', reached through `Cyfr.Ops.Catalog` on a lookup miss.
-    Emissary.MCP.McpServersTool,
-    # System/transport (cross-cutting)
-    Emissary.MCP.Tools.SystemProvider
+    Compendium.Provider,
+    # `compendium`: a person's layout document, which the desktop reads and
+    # every edit, the console's or the assistant's, arranges through.
+    Compendium.Providers.Layout,
+    # `emissary`: external MCP server management. `Emissary.External.Proxy`
+    # is not here: it owns no tool of its own — the tools it discovers are
+    # the upstream servers', reached through `Grimoire.Catalog` on a lookup
+    # miss.
+    Emissary.External.Provider,
+    # `grimoire`: the operation table's own `system` tool.
+    Grimoire.Provider,
+    # `cyfr`: the platform settings, for the server's operators.
+    Cyfr.Providers.Settings
   ]
 
 # Consent proofs are durable: the plan → preview → commit walk spans human
 # minutes and must survive a restart. Tests override to the ETS store.
 config :sanctum, :consent_proof_store, Sanctum.Consent.Proof.DB
 
-# The two ports the identity domain declares and something above it
-# implements. `:catalog` is consent's view of the operation table;
-# `:consent_components` is the component facts a consent decision rests
-# on. Sanctum names neither implementation: with the key unset every call
-# through the port refuses, distinguishably from an absent component.
-config :sanctum, :catalog, Cyfr.Ops.Catalog
-config :sanctum, :consent_components, Compendium.ConsentFacts
+# How long a read of a caller's credential and standing is trusted: the
+# establish memo's TTL and the age past which a retained context is
+# revalidated before it is acted on (`Sanctum.Caller.fresh?/1`). A security
+# bound, not a tuning knob — it is how long a revocation no announcement
+# reached can go unread anywhere in the cell.
+config :sanctum, :caller_memo_ttl_ms, 2_000
+
+# The boot check of stored grants (`Sanctum.Consent.StoredGrants`): every
+# member's boot logs the grants that name a storage path the grammar no
+# longer admits, and the cell announces them to their athanors once per
+# cell, only when the list changes. A notice; the loader refuses such a
+# grant whether or not it runs. The suite turns it off.
+config :sanctum, :stored_grants_check_enabled, true
 
 # Where this deployment is reachable when the operator declared nothing:
 # the endpoint's own scheme, host and port. `CYFR_PUBLIC_URL` overrides it
@@ -71,15 +90,19 @@ config :sanctum, :fallback_origin, "http://localhost:4000"
 # Configures the endpoint
 # The one endpoint: the API, the MCP transport, tinctures, and the Prism
 # LiveViews all answer on it — one origin, one cookie, one login.
-config :cyfr, EmissaryWeb.Endpoint,
+config :cyfr, CyfrWeb.Endpoint,
   url: [host: "localhost"],
   adapter: Bandit.PhoenixAdapter,
   render_errors: [
-    formats: [html: PrismWeb.ErrorHTML, json: EmissaryWeb.ErrorJSON],
+    formats: [html: PrismWeb.ErrorHTML, json: CyfrWeb.ErrorJSON],
     layout: false
   ],
-  pubsub_server: Emissary.PubSub,
-  live_view: [signing_salt: "cyfrLVdev"]
+  pubsub_server: Cyfr.PubSub,
+  live_view: [signing_salt: "cyfrLVdev"],
+  # The drain, in every environment: on shutdown the listener stops
+  # accepting and lets the connections already open finish for this long
+  # before it closes them. Each environment's `http:` merges over it.
+  http: [thousand_island_options: [shutdown_timeout: 30_000]]
 
 # Include module metadata in Logger output for filtering by emitter.
 config :logger, :default_formatter,
@@ -89,20 +112,20 @@ config :logger, :default_formatter,
 # Use Jason for JSON parsing in Phoenix
 config :phoenix, :json_library, Jason
 
-# The worker services runs are dispatched to (`Cyfr.Execution.Dispatch`):
-# each entry is a `Cyfr.WorkerAPI.endpoint/0` — the worker service's
-# configured id (the id `Cyfr.WorkerAuth` derives its keys over), the base
-# URL of its listener (`Cyfr.WorkerWire`) and the components it alone runs
+# The worker services runs are dispatched to (`Crucible.Dispatch`):
+# each entry is a `Prima.WorkerAPI.endpoint/0` — the worker service's
+# configured id (the id `Prima.WorkerAuth` derives its keys over), the base
+# URL of its listener (`Prima.WorkerWire`) and the components it alone runs
 # (nil for any). A run goes to the first entry whose status answers its id,
-# over `Cyfr.Execution.WorkerClient`. With none, a run is refused as
+# over `Crucible.WorkerClient`. With none, a run is refused as
 # :execution_unavailable. The runtime configuration replaces this list with
-# `CYFR_WORKERS`; the default names the Opus service of a local boot.
-config :cyfr, :workers, [%{id: "wrk_local", url: "http://127.0.0.1:4200", components: nil}]
+# `CYFR_OPUS_WORKERS`; the default names the Opus service of a local boot.
+config :cyfr, :opus_workers, [%{id: "wrk_local", url: "http://127.0.0.1:4200", components: nil}]
 
 # The Opus worker service's own id, which every assignment it accepts must
 # name, where it reaches CYFR's host API, and where its listener binds (the
 # `wrk_local` entry above). Its service key is the worker key CYFR derives
-# for that id (`Cyfr.WorkerAuth.worker_key/2`, 64 hex): the test
+# for that id (`Prima.WorkerAuth.worker_key/2`, 64 hex): the test
 # configuration derives it from the test worker root, a development boot
 # derives it from its root in `config/runtime.exs`, and the `opus` release
 # receives it from `OPUS_SERVICE_KEY`.
@@ -117,10 +140,10 @@ config :opus,
 config :arca, :execution_payload_store, Arca.ExecutionPayloads.Store.Overlay
 
 # Inbound request-param redaction (:filter_parameters) is set at boot by
-# Cyfr.Application from Cyfr.Sanitizer.filter_parameters/0 — the one
+# Cyfr.Application from Prima.Sanitizer.filter_parameters/0 — the one
 # redaction vocabulary. It is not spelled here so it cannot drift from it.
 # Outbound response bodies are redacted at their call sites with
-# Cyfr.Sanitizer.sanitize/1.
+# Prima.Sanitizer.sanitize/1.
 
 # Arca Repo adapter is selected at build time — Ecto can't swap adapters at
 # runtime. The one CYFR_DATABASE parse lives in database_choice.exs (shared
@@ -133,9 +156,13 @@ case Cyfr.ConfigEnv.DatabaseChoice.choice!() do
   :sqlite ->
     config :arca, :repo_adapter, Ecto.Adapters.SQLite3
 
-    # Every transaction takes the write lock at BEGIN. A deferred transaction
-    # that reads and then writes fails with SQLITE_BUSY_SNAPSHOT when another
-    # write committed in between, which would surface as a lost write.
+    # Every transaction takes the write lock at its start. A transaction that
+    # reads and then takes the lock fails with SQLITE_BUSY_SNAPSHOT when
+    # another write committed in between, which would surface as a lost
+    # write. `Arca.Repo.prepare_transaction/2` takes it for every transaction
+    # the repo opens, waiting at most `busy_timeout` (the lock-wait deadline);
+    # the immediate default is kept for a transaction opened with no mode,
+    # of which the tree has none today (the sandbox passes its own).
     config :arca, Arca.Repo,
       database: Path.expand("data/cyfr.db"),
       pool_size: 20,
@@ -163,13 +190,6 @@ config :arca,
   base_path: Path.expand("./data"),
   seed_path: Path.expand("../seed", __DIR__)
 
-# Map each overlaid root to its unit locator. Every overlay root requires
-# a locator defining its unit boundaries.
-config :arca, :overlay_locators, %{
-  "aqua" => Compendium.AquaPath,
-  "components" => Compendium.ComponentPath
-}
-
 # Recursive file and byte ceilings for public-profile guest writes.
 # Authenticated tenant storage uses CYFR_ATHANOR_STORAGE_BYTES.
 config :cyfr, :public_storage_quota, %{max_bytes: 26_214_400, max_files: 200}
@@ -190,7 +210,7 @@ config :arca, :cache_max_compiled_components, 32
 
 # External MCP server connections per athanor, concurrent in-flight calls
 # one server process admits before refusing (`Emissary.MCP`), and the
-# backends one stdio server may define (`Emissary.MCP.BackendDefinition`).
+# backends one stdio server may define (`Emissary.External.BackendDefinition`).
 config :cyfr, :max_external_servers, 50
 config :cyfr, :external_server_max_in_flight, 8
 config :cyfr, :max_backends_per_server, 4
@@ -199,7 +219,7 @@ config :cyfr, :max_backends_per_server, 4
 # dependency pulls: the closure of every component the bundle cannot run
 # without, pulled when an athanor is first filled and at the seed sync
 # after a release. A pull past it stops where it is; what landed stays
-# registered, the estate is left unprovisioned with the timeout recorded,
+# registered, the athanor is left unprovisioned with the timeout recorded,
 # and the next attempt resumes from what is installed. The OCI transport
 # waits up to two minutes per request and retries twice, so one stalled
 # blob can hold an attempt for several minutes within this bound.
@@ -211,13 +231,24 @@ config :cyfr, :provisioning_required_pull_budget_ms, :timer.minutes(10)
 config :cyfr, :returning_probe_ms, 5_000
 config :cyfr, :retention_scheduler_interval, :timer.hours(6)
 
+# The reconciler of the component registry and the agent index
+# (`Compendium.ProjectionReconciler`): whether it runs, how often it
+# recovers every athanor a seeded root is behind in while this member holds
+# its slot, and how old a pending change must be before its writer is
+# taken for gone — given one repair attempt, then settled where it stands.
+config :cyfr, Compendium.ProjectionReconciler,
+  enabled: true,
+  interval_ms: :timer.minutes(1),
+  settle_after_ms: :timer.seconds(60)
+
 # How long an approval card waits for a decision before it expires as a
-# denial the agent observes, in hours. An estate overrides it in its
+# denial the agent observes, in hours. An athanor overrides it in its
 # settings under `approvals.expiry_hours`.
 config :cyfr, Aqua.Approvals, expiry_hours: 24
 
-# Default retention windows used by Cyfr.Retention sweeps.
-config :cyfr, Cyfr.Retention,
+# Default retention windows, per kind (`Arca.Retention.Kind`); an athanor's
+# own settings override each. Every kind carries the same default in code.
+config :arca, Arca.Retention,
   # Newest N executions kept per athanor.
   executions: 10_000,
   # Days an execution record is kept, whatever the count.
@@ -235,6 +266,10 @@ config :cyfr, Cyfr.Retention,
   policy_log_days: 30,
   # Days of MCP request log kept.
   mcp_log_days: 30,
+  # Days an athanor keeps its admission decisions. The decisions made
+  # before any tenant was resolved are the host's, kept for
+  # CYFR_DECISION_RETENTION_DAYS (`Cyfr.RetentionScheduler`).
+  decisions_days: 90,
   # Days of thread messages kept.
   messages_days: 365,
   # Days a settled storage write intent is kept — the evidence of what
@@ -247,22 +282,28 @@ config :cyfr, Cyfr.Retention,
   # longer than any commit and short enough that a writer that died does
   # not hold its bytes against the athanor's cap for a week.
   staging_days: 1,
+  # Days the deletion evidence of a seeded unit is kept once the
+  # projection of its root has consumed it
+  # (`Arca.StorageProjectionChanges`). A pending tombstone is kept
+  # whatever its age.
+  projection_tombstone_days: 7,
   # How many staged prefixes one sweep of one athanor collects or
   # repairs. A bound, not a target: the next sweep takes up where this one
   # stopped, so a large backlog is worked off over several runs rather
-  # than in one long walk of the estate's staging area.
+  # than in one long walk of the athanor's staging area.
   staging_sweep_limit: 200
 
 # Read-but-not-set here, deliberately: `:webhook_max_body_bytes` derives
-# its default from `Cyfr.Limits.default_max_request_size/0` (a literal
+# its default from `Prima.Limits.default_max_request_size/0` (a literal
 # here would be a second spelling of a derived value), and
 # `:platform_ceiling` is a structured policy override
 # (`Sanctum.Policy.Ceiling`), not a scalar knob.
 
-# CORS Configuration — wildcard default for fresh installs. The boot guard in
-# Cyfr.Application requires an explicit allowlist once authentication is
-# configured. Override via CYFR_CORS_ALLOWED_ORIGINS.
-config :cyfr, :cors_allowed_origins, ["*"]
+# CORS allowlist — empty by default: no cross-origin browser caller, which
+# a same-origin deployment needs. Set CYFR_CORS_ALLOWED_ORIGINS to name the
+# origins of a frontend served elsewhere; the boot guard in Cyfr.Application
+# refuses a wildcard once authentication is configured.
+config :cyfr, :cors_allowed_origins, []
 
 # Prometheus metrics — off by default because the /metrics endpoint is
 # unauthenticated. Opt in via CYFR_PROMETHEUS_METRICS=true (dev.exs enables it
@@ -280,6 +321,18 @@ config :esbuild,
       ~w(js/app.js --bundle --target=es2017 --outdir=../priv/static/assets --external:/fonts/* --external:/images/*),
     cd: Path.expand("../apps/cyfr/assets", __DIR__),
     env: %{"NODE_PATH" => Path.expand("../deps", __DIR__)}
+  ],
+  # The tincture SDK: one self-contained script, injected into a tincture's
+  # entry page and served at /sdk/cyfr.js. `mix esbuild sdk` rebuilds it;
+  # the built file is tracked, since the entry page embeds it at compile
+  # time.
+  sdk: [
+    args:
+      ~w(js/sdk/index.js --bundle --format=iife --target=es2017 --outfile=../priv/static/sdk/cyfr.js) ++
+        [
+          "--banner:js=// SPDX-License-Identifier: Apache-2.0\n// Copyright 2026 CYFR Works Inc.\n// Built from apps/cyfr/assets/js/sdk by `mix esbuild sdk`."
+        ],
+    cd: Path.expand("../apps/cyfr/assets", __DIR__)
   ]
 
 # Prism tailwind configuration

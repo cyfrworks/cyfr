@@ -3,10 +3,11 @@
 
 defmodule Sanctum.DoorPlacementTest do
   @moduledoc """
-  A session is minted at exactly two places, and both sit behind the
-  door. Reads the sources rather than the behaviour: a new
-  `Session.create/1` caller that forgot the door would pass every
-  behavioural test on the paths that remembered it.
+  A session is minted at exactly five places: four sit behind the door,
+  and the restore ingress behind the installation capability, since no
+  door admits a person who does not exist yet. Reads the sources rather
+  than the behaviour: a new `Session.create/1` caller that forgot the door
+  would pass every behavioural test on the paths that remembered it.
   """
   use ExUnit.Case, async: true
 
@@ -15,15 +16,24 @@ defmodule Sanctum.DoorPlacementTest do
   # so the scan spans two applications.
   @root Path.expand("../../../..", __DIR__)
 
-  # The CLI device flow mints for itself; the browser flows mint through
-  # the shared sign-in responder.
+  # The CLI device flow and the passkey door mint for themselves; the
+  # browser flows mint through the shared sign-in responder.
   @device_flow "apps/sanctum/lib/sanctum/auth/device_flow.ex"
-  @browser_callback "apps/cyfr/lib/emissary_web/controllers/auth_controller.ex"
-  @minters ["apps/cyfr/lib/prism_web/sign_in_response.ex", @device_flow]
+  @passkeys "apps/sanctum/lib/sanctum/passkeys.ex"
+  @recovery "apps/sanctum/lib/sanctum/recovery.ex"
+  @cyfr_door "apps/sanctum/lib/sanctum/auth/cyfr_door.ex"
+  @browser_callback "apps/cyfr/lib/prism_web/controllers/auth_controller.ex"
+  @minters [
+    "apps/cyfr/lib/cyfr_web/sign_in_response.ex",
+    @cyfr_door,
+    @device_flow,
+    @passkeys,
+    @recovery
+  ]
 
   defp lib_files do
-    for dir <- Cyfr.Test.SourceTree.app_libs(@root),
-        file <- Cyfr.Test.SourceTree.files!(Path.join([@root, dir, "**/*.ex"])),
+    for dir <- Prima.Test.SourceTree.app_libs(@root),
+        file <- Prima.Test.SourceTree.files!(Path.join([@root, dir, "**/*.ex"])),
         do: file
   end
 
@@ -31,7 +41,7 @@ defmodule Sanctum.DoorPlacementTest do
     callers =
       lib_files()
       |> Enum.reject(&String.ends_with?(&1, "sanctum/session.ex"))
-      |> Enum.filter(&(Cyfr.Test.SourceTree.read(&1) =~ ~r/\bSession\.create\(/))
+      |> Enum.filter(&(Prima.Test.SourceTree.read(&1) =~ ~r/\bSession\.create\(/))
       |> Enum.map(&Path.relative_to(&1, @root))
       |> Enum.sort()
 
@@ -39,16 +49,37 @@ defmodule Sanctum.DoorPlacementTest do
            "Session.create/1 is called from #{inspect(callers)}; only the sign-in paths may mint"
 
     # The device flow asks the door itself.
-    assert Cyfr.Test.SourceTree.read(Path.join(@root, @device_flow)) =~
+    assert Prima.Test.SourceTree.read(Path.join(@root, @device_flow)) =~
              "Door.admit_identity",
            "#{@device_flow} mints sessions without asking the door"
+
+    # The `cyfr` door asks it about the identity it verified, by its
+    # identifier, before it records the person or mints anything.
+    assert Prima.Test.SourceTree.read(Path.join(@root, @cyfr_door)) =~
+             "Sanctum.Door.admit_identity(key,",
+           "#{@cyfr_door} mints sessions without asking the door"
+
+    # The passkey door asks it for the person's own door identities and
+    # verified email: a person the allowlist no longer admits signs in with
+    # no passkey either.
+    assert Prima.Test.SourceTree.read(Path.join(@root, @passkeys)) =~ "Door.admit(",
+           "#{@passkeys} mints sessions without asking the door"
+
+    # The restore mints the first person of an empty node, whom no door can
+    # have admitted: it checks the installation capability instead, and
+    # mints only the reserved `restore` provider's session, which the
+    # session store holds to the restore attempt that minted the person.
+    recovery = Prima.Test.SourceTree.read(Path.join(@root, @recovery))
+    assert recovery =~ "Application.get_env(:sanctum, :restore_token)"
+    assert recovery =~ "Plug.Crypto.secure_compare("
+    assert recovery =~ "Sanctum.Session.create(ctx, restore: attempt.id)"
 
     # The responder mints only when a flow hands it `session: {:mint, ctx}`;
     # the one producer of that option must be the browser callback, and the
     # callback must ask the door before it does.
     mint_handers =
       lib_files()
-      |> Enum.filter(&(Cyfr.Test.SourceTree.read(&1) =~ ~r/session: \{:mint,/))
+      |> Enum.filter(&(Prima.Test.SourceTree.read(&1) =~ ~r/session: \{:mint,/))
       |> Enum.map(&Path.relative_to(&1, @root))
       |> Enum.sort()
 
@@ -56,7 +87,7 @@ defmodule Sanctum.DoorPlacementTest do
            "session: {:mint, ...} is produced from #{inspect(mint_handers)}; " <>
              "only the browser callback may hand the responder a context to mint for"
 
-    assert Cyfr.Test.SourceTree.read(Path.join(@root, @browser_callback)) =~
+    assert Prima.Test.SourceTree.read(Path.join(@root, @browser_callback)) =~
              "Door.admit_identity",
            "the browser callback mints sessions without asking the door"
   end

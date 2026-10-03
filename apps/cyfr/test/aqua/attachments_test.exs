@@ -18,19 +18,33 @@ defmodule Aqua.AttachmentsTest.UnverifiableUsageAdapter do
   def usage(_ctx, _path), do: {:error, {:usage_walk, "unreachable", :eacces}}
 end
 
+defmodule Aqua.AttachmentsTest.PlantedCaps do
+  @moduledoc false
+  # A cap implementation that reports each storage question to the asking
+  # process and refuses it, so a test sees that the port was asked.
+  @behaviour Prima.Caps
+
+  @impl Prima.Caps
+  def check_counted(%Prima.Actor{}, _key, _count), do: :ok
+
+  @impl Prima.Caps
+  def check_storage(%Prima.Actor{} = actor, incoming) do
+    send(self(), {:check_storage, actor, incoming})
+    {:error, {:limit_reached, :athanor_storage_bytes, 0}}
+  end
+end
+
 defmodule Aqua.AttachmentsTest do
   use ExUnit.Case, async: false
 
   alias Aqua.Attachments
 
-  setup do
-    :ok = Ecto.Adapters.SQL.Sandbox.checkout(Arca.Repo)
-    Ecto.Adapters.SQL.Sandbox.mode(Arca.Repo, {:shared, self()})
+  setup tags do
+    Cyfr.Test.Sandbox.setup!(tags)
 
     test_path = Path.join(System.tmp_dir!(), "attachments_#{:rand.uniform(1_000_000)}")
     prev = Application.get_env(:arca, :base_path)
     Application.put_env(:arca, :base_path, test_path)
-    prev_caps = Application.get_env(:sanctum, :caps)
 
     on_exit(fn ->
       File.rm_rf!(test_path)
@@ -38,10 +52,6 @@ defmodule Aqua.AttachmentsTest do
       if prev,
         do: Application.put_env(:arca, :base_path, prev),
         else: Application.delete_env(:arca, :base_path)
-
-      if prev_caps,
-        do: Application.put_env(:sanctum, :caps, prev_caps),
-        else: Application.delete_env(:sanctum, :caps)
     end)
 
     {:ok, ctx: Sanctum.TestContext.local()}
@@ -152,7 +162,7 @@ defmodule Aqua.AttachmentsTest do
     big = [%{"filename" => "big", "media_type" => "x", "bytes" => :binary.copy("a", 20_000_001)}]
     assert {:error, :attachment_too_large} = Attachments.store(ctx, "c", "m", big)
 
-    Application.put_env(:sanctum, :caps, athanor_storage_bytes: 10)
+    Cyfr.Test.Settings.put("athanor_storage_bytes", 10)
     # The usage cache is suite-shared per athanor and now survives writes
     # (bumped, not dropped) — start this cap check from a fresh walk.
     Arca.Usage.invalidate(Sanctum.Context.actor(ctx))
@@ -163,11 +173,24 @@ defmodule Aqua.AttachmentsTest do
     refute Arca.exists?(Sanctum.Context.actor(ctx), ["threads", "c", "m2", "0-more"])
   end
 
+  test "the storage cap is the port's decision", %{ctx: ctx} do
+    installed = Prima.Caps.impl!()
+    Prima.Caps.install!(Aqua.AttachmentsTest.PlantedCaps)
+    on_exit(fn -> Prima.Caps.install!(installed) end)
+
+    files = [%{"filename" => "a.txt", "media_type" => "text/plain", "bytes" => "12345"}]
+    assert {:error, :storage_full} = Attachments.store(ctx, "c", "m", files)
+
+    actor = Sanctum.Context.actor(ctx)
+    assert_received {:check_storage, ^actor, 5}
+    refute Arca.exists?(actor, ["threads", "c", "m", "0-a.txt"])
+  end
+
   test "an unverifiable usage walk surfaces as itself, not a generic error", %{ctx: ctx} do
     # With a cap configured and the walk unreadable, the cap layer fails
     # CLOSED with :storage_unverifiable — the member must see the honest,
     # transient message, not \"storing failed\".
-    Application.put_env(:sanctum, :caps, athanor_storage_bytes: 1_000_000)
+    Cyfr.Test.Settings.put("athanor_storage_bytes", 1_000_000)
     Arca.Usage.invalidate(Sanctum.Context.actor(ctx))
 
     prev = Application.get_env(:arca, :storage_adapter)

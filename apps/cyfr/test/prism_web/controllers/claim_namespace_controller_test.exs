@@ -11,7 +11,9 @@ defmodule PrismWeb.ClaimNamespaceControllerTest do
   below exercise the controller's cookie/session guards and form rendering
   without making any HTTP calls to cyfr.run.
   """
-  use EmissaryWeb.ConnCase
+  use CyfrWeb.ConnCase
+
+  import Ecto.Query, only: [from: 2]
 
   setup do
     # Tests migrate the cyfr.run endpoint to an unreachable host so any probe
@@ -58,7 +60,7 @@ defmodule PrismWeb.ClaimNamespaceControllerTest do
         })
 
       {:ok, session} =
-        Sanctum.Session.create(
+        Sanctum.TestContext.create_session(
           Sanctum.Context.build(
             user_id: person_id,
             email: "claim#{n}@example.com",
@@ -71,7 +73,7 @@ defmodule PrismWeb.ClaimNamespaceControllerTest do
 
       conn =
         conn
-        |> init_test_session(%{PrismWeb.SignInResponse.session_key() => session.token})
+        |> init_test_session(%{CyfrWeb.SignInResponse.session_key() => session.token})
         |> get(~p"/claim-namespace/")
 
       body = response(conn, 200)
@@ -169,7 +171,7 @@ defmodule PrismWeb.ClaimNamespaceControllerTest do
       # and assert the controller gets PAST the expired branch.
       csrf = get_csrf_from_form(build_conn())
       access_token = "gho_fake_probe_token"
-      endpoint_secret = EmissaryWeb.Endpoint.config(:secret_key_base)
+      endpoint_secret = CyfrWeb.Endpoint.config(:secret_key_base)
 
       writing_conn =
         build_conn()
@@ -240,7 +242,8 @@ defmodule PrismWeb.ClaimNamespaceControllerTest do
     end
 
     # A signed-in person with no publisher namespace yet: a users row
-    # without one, and an ordinary session.
+    # without one, a seat of their own, and an ordinary session — the
+    # session the claim establishes and revalidates before it writes.
     defp unclaimed_person do
       n = System.unique_integer([:positive])
       user_id = "github|https://github.com|claim-#{n}"
@@ -253,21 +256,29 @@ defmodule PrismWeb.ClaimNamespaceControllerTest do
           verified: true
         })
 
+      {:ok, athanor} = Sanctum.Tenancy.Athanors.create_group(person_id, "Claim #{n}")
+
+      {:ok, _} =
+        Sanctum.Tenancy.Members.ensure(person_id, scope: "athanor", athanor_id: athanor.id)
+
       ctx =
         Sanctum.Context.build(
           user_id: person_id,
           email: "claim#{n}@example.com",
           provider: "github",
+          athanor_id: athanor.id,
           permissions: [:*]
         )
 
-      {:ok, session} = Sanctum.Session.create(ctx)
+      {:ok, session} = Sanctum.TestContext.create_session(ctx)
       {person_id, session.token, "claimed#{n}"}
     end
 
-    defp submit(username, session_token) do
+    # `remote_ip`: the claim route is rate limited per address, so a case
+    # past the file's budget submits from an address of its own.
+    defp submit(username, session_token, remote_ip \\ {127, 0, 0, 1}) do
       csrf = get_csrf_from_form(build_conn())
-      endpoint_secret = EmissaryWeb.Endpoint.config(:secret_key_base)
+      endpoint_secret = CyfrWeb.Endpoint.config(:secret_key_base)
 
       %{value: cookie_value} =
         build_conn()
@@ -276,10 +287,62 @@ defmodule PrismWeb.ClaimNamespaceControllerTest do
         |> Map.fetch!(:resp_cookies)
         |> Map.fetch!("_cyfr_pending_probe")
 
-      build_conn()
+      %{build_conn() | remote_ip: remote_ip}
       |> Plug.Test.init_test_session(%{sanctum_session_token: session_token})
       |> Plug.Test.put_req_cookie("_cyfr_pending_probe", cookie_value)
       |> post(~p"/claim-namespace/submit", %{"_csrf_token" => csrf, "username" => username})
+    end
+
+    # `person_id` made a person whose keys are at another home: their
+    # identity row `remote`, their head cached but past its bound, and their
+    # directory a loopback port nothing listens on, so it cannot be
+    # refreshed.
+    defp stale_remote!(person_id) do
+      directory = "https://localhost:1"
+
+      Arca.Repo.delete_all(from(p in Arca.Schemas.PersonIdentity, where: p.user_id == ^person_id))
+
+      {live, _} = :crypto.generate_key(:eddsa, :ed25519)
+      {operational_pub, operational} = :crypto.generate_key(:eddsa, :ed25519)
+      {recovery, _} = :crypto.generate_key(:eddsa, :ed25519)
+
+      {:ok, genesis} =
+        Prima.Identity.Entry.genesis(
+          live_key: live,
+          operational_key: operational_pub,
+          recovery_keys: [recovery],
+          directory: directory
+        )
+
+      genesis = Prima.Identity.sign(genesis, operational)
+      identifier = Prima.Identity.identifier(genesis)
+      head = Prima.Identity.hash(genesis)
+
+      {:ok, _} =
+        Arca.PersonIdentities.create(Prima.Actor.system(), %{
+          user_id: person_id,
+          provenance: "remote",
+          identifier: identifier,
+          directory_url: directory
+        })
+
+      {:ok, _} =
+        Arca.DirectoryHeads.put(Prima.Actor.system(), %{
+          identifier: identifier,
+          genesis: Prima.Identity.canonical(genesis),
+          directory_url: directory,
+          head_hash: head,
+          key_epoch: head,
+          recovery_epoch: head,
+          state: ~s({"head":"#{head}"})
+        })
+
+      Arca.Repo.update_all(
+        from(h in Arca.Schemas.DirectoryHead, where: h.identifier == ^identifier),
+        set: [verified_at: DateTime.add(DateTime.utc_now(), -400, :second)]
+      )
+
+      :ok
     end
 
     test "the claim lands on the users row first; the session becomes a working one", %{
@@ -305,7 +368,91 @@ defmodule PrismWeb.ClaimNamespaceControllerTest do
                Sanctum.Session.load(token, surface: :console)
 
       assert {:ok, %{token: "cyfr_pt_new"}} =
-               Compendium.Registry.CredentialStore.get(user_id, "registry.test", slug)
+               Compendium.Registry.CredentialStore.get(as(user_id), "registry.test", slug)
+    end
+
+    test "a session revoked with nobody told claims nothing and records nothing", %{
+      bypass: bypass
+    } do
+      {user_id, token, slug} = unclaimed_person()
+      hash = Sanctum.Session.token_hash(token)
+
+      Arca.Repo.delete_all(from(s in Arca.Schemas.Session, where: s.token_hash == ^hash))
+
+      # The registry is never asked: the claim is refused at the session.
+      Bypass.pass(bypass)
+
+      conn = submit(slug, token)
+      assert conn.status == 401
+      assert get_resp_header(conn, "location") == ["/login"]
+      assert {:ok, %{namespace: nil}} = Sanctum.Tenancy.Users.get(user_id)
+
+      assert {:error, :not_found} =
+               Compendium.Registry.CredentialStore.get(as(user_id), "registry.test", slug)
+    end
+
+    test "a remote person whose identity could not be confirmed fresh is told to try again",
+         %{bypass: bypass} do
+      {user_id, token, slug} = unclaimed_person()
+      stale_remote!(user_id)
+
+      # The registry is never asked: the claim pauses at the session.
+      Bypass.pass(bypass)
+
+      {conn, log} =
+        ExUnit.CaptureLog.with_log(fn -> submit(slug, token, {198, 51, 100, 41}) end)
+
+      assert log =~ "freshness bound"
+      assert conn.status == 503
+      assert conn.resp_body =~ "We could not confirm your session just now"
+
+      # Never a sign-out: no redirect to sign in, the session stands, and
+      # nothing was recorded.
+      assert get_resp_header(conn, "location") == []
+      hash = Sanctum.Session.token_hash(token)
+      assert Arca.Repo.exists?(from(s in Arca.Schemas.Session, where: s.token_hash == ^hash))
+      assert {:ok, %{namespace: nil}} = Sanctum.Tenancy.Users.get(user_id)
+    end
+
+    test "a session revoked while the registry answered records nothing", %{bypass: bypass} do
+      {user_id, token, slug} = unclaimed_person()
+      hash = Sanctum.Session.token_hash(token)
+
+      Bypass.expect_once(bypass, "POST", "/v1/namespaces/personal/claim", fn c ->
+        Arca.Repo.delete_all(from(s in Arca.Schemas.Session, where: s.token_hash == ^hash))
+
+        c
+        |> Plug.Conn.put_resp_header("content-type", "application/json")
+        |> Plug.Conn.resp(200, Jason.encode!(%{"slug" => slug, "token" => "cyfr_pt_late"}))
+      end)
+
+      conn = submit(slug, token)
+      assert conn.status == 401
+      assert get_resp_header(conn, "location") == ["/login"]
+      assert {:ok, %{namespace: nil}} = Sanctum.Tenancy.Users.get(user_id)
+
+      assert {:error, :not_found} =
+               Compendium.Registry.CredentialStore.get(as(user_id), "registry.test", slug)
+    end
+
+    # One submit: the claim route is rate limited per address, and the
+    # other refusals' reasons are the facade's to show
+    # (`Compendium.FacadeTest`).
+    test "a policy the person has not accepted routes to the acceptance page, recording nothing",
+         %{bypass: bypass} do
+      {user_id, token, slug} = unclaimed_person()
+
+      Bypass.expect_once(bypass, "POST", "/v1/namespaces/personal/claim", fn c ->
+        c
+        |> Plug.Conn.put_resp_header("content-type", "application/json")
+        |> Plug.Conn.resp(
+          412,
+          Jason.encode!(%{"errors" => [%{"code" => "POLICY_ACCEPTANCE_REQUIRED"}]})
+        )
+      end)
+
+      assert redirected_to(submit(slug, token)) == "/legal/accept"
+      assert {:ok, %{namespace: nil}} = Sanctum.Tenancy.Users.get(user_id)
     end
 
     test "a claim answered without a token still records the identity", %{bypass: bypass} do
@@ -321,13 +468,19 @@ defmodule PrismWeb.ClaimNamespaceControllerTest do
       assert redirected_to(conn) == "/"
       assert {:ok, %{namespace: ^slug}} = Sanctum.Tenancy.Users.get(user_id)
       assert {:ok, %{authenticated: true}} = Sanctum.Session.load(token, surface: :console)
-      assert :not_found = Compendium.Registry.CredentialStore.get(user_id, "registry.test", slug)
+
+      assert {:error, :not_found} =
+               Compendium.Registry.CredentialStore.get(as(user_id), "registry.test", slug)
     end
   end
 
   # The submit failure pages render with varying status codes depending on the
   # branch (400 expired, 302 not-logged-in redirect, 200 form re-render); read
   # whatever body came back without pinning the status.
+  # The person a push token is stored as, as a context names them.
+  defp as(user_id),
+    do: Sanctum.Context.build(user_id: user_id, authenticated: true, auth_method: :oidc)
+
   defp response_body(conn), do: conn.resp_body || ""
 
   # The test pipeline renders the form with a CSRF token; pull it out and

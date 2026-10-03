@@ -12,7 +12,7 @@ defmodule PrismWeb.AttachmentController do
   way a LiveView mount focuses it (`Sanctum.Context.focus/2`, so a
   non-member gets nothing); the message is read tenant-scoped, the file
   must be one of the message's own refs, and the path served is rebuilt
-  from the row's identity (`Aqua.Attachments.blob_path/3`) — never taken
+  from the row's identity (`Aqua.attachment_blob_path/3`) — never taken
   from the URL or the stored payload. What comes back is a download with
   a content type from a short allowlist (anything else is
   `application/octet-stream`), `nosniff`, and no caching — the uploader's
@@ -29,13 +29,13 @@ defmodule PrismWeb.AttachmentController do
   @inline_types ~w(image/png image/jpeg image/gif image/webp application/pdf text/plain text/csv application/json)
 
   def show(conn, %{"athanor" => route, "message_id" => message_id, "filename" => filename}) do
-    token = get_session(conn, PrismWeb.SignInResponse.session_key())
+    token = get_session(conn, CyfrWeb.SignInResponse.session_key())
 
     with {:ok, athanor} <- Athanors.by_route_slug(route),
-         {:ok, ctx} <- PrismWeb.AuthHelpers.authenticate_session(token, athanor.id),
+         {:ok, ctx} <- CyfrWeb.ContextGuard.authenticate(token, athanor.id),
          {:ok, msg} <- Threads.get_message(Sanctum.Context.actor(ctx), message_id),
          {:ok, ref} <- find_ref(msg, filename),
-         {:ok, path} <- Aqua.Attachments.blob_path(msg.thread_id, msg.id, ref) do
+         {:ok, path} <- Aqua.attachment_blob_path(msg.thread_id, msg.id, ref) do
       conn
       |> put_resp_header("content-type", serve_type(ref["media_type"]))
       |> put_resp_header("content-disposition", disposition(ref["filename"]))
@@ -57,7 +57,7 @@ defmodule PrismWeb.AttachmentController do
   end
 
   defp find_ref(msg, stored_name) do
-    case Enum.find(Aqua.Attachments.refs_of(msg), &(&1["stored_name"] == stored_name)) do
+    case Enum.find(Aqua.attachment_refs(msg), &(&1["stored_name"] == stored_name)) do
       %{"stored_name" => _} = ref -> {:ok, ref}
       _ -> {:error, :not_found}
     end
@@ -71,16 +71,16 @@ defmodule PrismWeb.AttachmentController do
   end
 
   defp serve_type(type) when type in @inline_types, do: type
-  defp serve_type(_), do: Cyfr.MediaType.binary()
+  defp serve_type(_), do: Prima.MediaType.binary()
 
   defp disposition(filename) do
     # More than quotes must go: a CR/LF here splits the header, and any
     # C0 control character has no place in one. Non-ASCII survives via
     # the RFC 5987 filename* parameter. The control strip is the shared
-    # `Aqua.Attachments.strip_controls/1`; the quote/backslash rule is
+    # `Aqua.strip_attachment_name/1`; the quote/backslash rule is
     # this header's own.
     name = to_string(filename)
-    safe = name |> Aqua.Attachments.strip_controls() |> String.replace(~r/["\\]/, "")
+    safe = name |> Aqua.strip_attachment_name() |> String.replace(~r/["\\]/, "")
 
     if safe == name do
       ~s(attachment; filename="#{safe}")

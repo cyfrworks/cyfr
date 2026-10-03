@@ -48,7 +48,7 @@ defmodule Opus.Runtime do
 
   # Default memory ceiling for sandboxed execution — the shared 64 MiB
   # bound, read from its owner rather than re-spelled here.
-  @default_max_memory_bytes Cyfr.Limits.default_max_memory_bytes()
+  @default_max_memory_bytes Prima.Limits.default_max_memory_bytes()
 
   # What a run's store holds besides its one linear memory. Every shipped
   # component instantiates three core modules with two funcref tables, the
@@ -86,7 +86,7 @@ defmodule Opus.Runtime do
   - `:digest` - Content digest (the compiled-component cache key); required
     when `wasm` is a function
   - `:max_memory_bytes` - Memory limit. Defaults to 64MB.
-  - `:authority` - The `Cyfr.Authority` this execution runs under
+  - `:authority` - The `Prima.Authority` this execution runs under
   - `:authority_required` - Defaults to true: a nil `:authority` raises instead
     of executing (a WASM run always carries one; this is the final invariant
     guard). Pass `false` only for authority-free harness runs in tests.
@@ -133,7 +133,7 @@ defmodule Opus.Runtime do
     if Keyword.get(opts, :authority_required, true) and is_nil(authority) do
       raise ArgumentError,
             "execution requires an authority but none reached the runtime " <>
-              "(reference: #{inspect(reference)}) — an opts filter dropped it"
+              "— an opts filter dropped it"
     end
 
     if authority do
@@ -220,12 +220,12 @@ defmodule Opus.Runtime do
 
             {:error, reason} ->
               {:error,
-               "Component compilation failed: #{inspect(reason)}. " <>
+               "Component compilation failed: #{engine_words(reason)}. " <>
                  "Ensure the component is compiled as a WASI P2 Component Model binary."}
           end
 
         {:error, reason} ->
-          {:error, "Failed to create WASM store: #{inspect(reason)}"}
+          {:error, "Failed to create WASM store: #{engine_words(reason)}"}
       end
     after
       if cleanup_refs.stream_exec_ref,
@@ -263,11 +263,22 @@ defmodule Opus.Runtime do
         "resource_limit: the engine refused the component's memory or tables (#{what})"
 
       nil ->
-        "Component instantiation failed: #{inspect(reason)}"
+        "Component instantiation failed: #{reason}"
     end
   end
 
-  defp instantiation_failure(reason), do: "Component instantiation failed: #{inspect(reason)}"
+  defp instantiation_failure(reason),
+    do: "Component instantiation failed: #{engine_words(reason)}"
+
+  # The engine answers its refusals as its own sentences; anything else is
+  # logged and named generically, never spelled onto the failure the
+  # control plane records.
+  defp engine_words(reason) when is_binary(reason), do: reason
+
+  defp engine_words(reason) do
+    Logger.warning("[Opus.Runtime] the engine refused with a non-sentence: #{inspect(reason)}")
+    "the engine refused the component"
+  end
 
   # Build all host function imports and collect cleanup refs. The node's
   # limits and the attempt's host client are the presence signal for
@@ -375,14 +386,14 @@ defmodule Opus.Runtime do
   a `resource_limit`, before it crosses the wire that would refuse its
   body; a refused host call answers a `dispatch_error`.
   """
-  @spec emit(Opus.HostClient.t(), Cyfr.Limits.t() | nil, String.t()) :: String.t()
+  @spec emit(Opus.HostClient.t(), Prima.Limits.t() | nil, String.t()) :: String.t()
   def emit(%Opus.HostClient{} = host, limits, json_event) when is_binary(json_event) do
     case Opus.EdgeGuard.check_event_size(limits, json_event) do
       :ok ->
         push_event(host, json_event)
 
       {:error, :request_too_large, message} ->
-        Cyfr.WitResponse.encode_error(:resource_limit, message)
+        Prima.WitResponse.encode_error(:resource_limit, message)
     end
   end
 
@@ -396,7 +407,7 @@ defmodule Opus.Runtime do
           "[Opus.Runtime] #{host.execution_id} emit refused by the host: #{inspect(refusal)}"
         )
 
-        Cyfr.WitResponse.encode_error(:dispatch_error, "The emit call failed.")
+        Prima.WitResponse.encode_error(:dispatch_error, "The emit call failed.")
     end
   end
 
@@ -415,7 +426,7 @@ defmodule Opus.Runtime do
   # dispensed them). A read outside them is refused, and reported to CYFR
   # through the attempt's host client (`record_denial`, `secret_denied`),
   # which audits it for the attempt the call key names. The name is the
-  # guest's: one the contract bounds out (`Cyfr.HostAPI.valid_field_name?/1`)
+  # guest's: one the contract bounds out (`Prima.HostAPI.valid_field_name?/1`)
   # is refused unreported, and logged without the name.
   defp build_vault_imports(preloaded, component_ref, host) when is_map(preloaded) do
     %{
@@ -437,7 +448,7 @@ defmodule Opus.Runtime do
   end
 
   defp report_denied(host, name, component_ref) do
-    if Cyfr.HostAPI.valid_field_name?(name) do
+    if Prima.HostAPI.valid_field_name?(name) do
       Logger.warning(
         "[Opus.Runtime] Field '#{name}' is outside the consent's projection for " <>
           "'#{component_ref}'. Re-grant via the consent walk: " <>
@@ -481,8 +492,9 @@ defmodule Opus.Runtime do
   defp execute_json_convention(pid, call_name, input) do
     # Serialize input to JSON string
     case Jason.encode(input) do
-      {:error, err} ->
-        {:error, "Failed to encode input as JSON: #{inspect(err)}"}
+      # The encoder's own message can quote the value it refused.
+      {:error, _err} ->
+        {:error, "Failed to encode input as JSON"}
 
       {:ok, json_input} ->
         case call_function(pid, call_name, json_input) do
@@ -520,7 +532,7 @@ defmodule Opus.Runtime do
             )
 
             {:error,
-             "Component call failed for #{inspect(call_name)}: #{inspect(reason)}. " <>
+             "Component call failed for #{inspect(call_name)}: #{engine_words(reason)}. " <>
                "Ensure the component exports the correct WIT interface (cyfr:reagent/compute@0.1.0, cyfr:catalyst/run@0.1.0, or cyfr:formula/run@0.1.0)."}
         end
     end

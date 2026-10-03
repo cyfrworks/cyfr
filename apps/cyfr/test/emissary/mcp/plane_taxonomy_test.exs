@@ -5,7 +5,7 @@ defmodule Emissary.MCP.PlaneTaxonomyTest.Probes do
   # Start from valid declarations, then corrupt one field to exercise the
   # catalog's refusal of malformed provider output independently of constructors.
   defp tool(changes) do
-    op = Cyfr.Ops.Operation.new("probe", "act", "Probe", [], kind: :read, planes: [:external])
+    op = Prima.Operation.new("probe", "act", "Probe", [], kind: :read, planes: [:external])
     %{name: "probe", operations: [struct!(op, changes)]}
   end
 
@@ -53,9 +53,9 @@ defmodule Emissary.MCP.PlaneTaxonomyTest do
   # Require annotations on registered actions and agent virtual tools.
   use ExUnit.Case, async: true
 
-  alias Emissary.MCP.ExternalProvider
   alias Emissary.MCP.PlaneTaxonomyTest.Probes
-  alias Cyfr.Ops.Catalog
+  alias Grimoire.Catalog
+  alias Grimoire.Proxy
   alias Aqua.Hands
 
   # Sibling-app providers are unavailable when this app's suite runs alone.
@@ -95,7 +95,7 @@ defmodule Emissary.MCP.PlaneTaxonomyTest do
         assert is_atom(kind) and not is_nil(kind), "#{tool}.#{verb} has no kind"
         assert planes != [], "#{tool}.#{verb} has no plane"
 
-        assert Enum.all?(planes, &(&1 in Catalog.valid_planes())),
+        assert Enum.all?(planes, &(&1 in Prima.Operation.valid_planes())),
                "#{tool}.#{verb} has an invalid plane: #{inspect(planes)}"
       end
     end
@@ -125,7 +125,7 @@ defmodule Emissary.MCP.PlaneTaxonomyTest do
 
       served =
         MapSet.new(
-          for tool_def <- Catalog.list_tools(),
+          for tool_def <- Grimoire.list_tools(),
               verb <- get_in(tool_def, ["inputSchema", "properties", "action", "enum"]) || [],
               do: {tool_def["name"], verb}
         )
@@ -157,7 +157,7 @@ defmodule Emissary.MCP.PlaneTaxonomyTest do
       ctx = Sanctum.TestContext.local()
 
       listed =
-        for tool_def <- Cyfr.Ops.Visibility.filter_for_context(Catalog.list_tools(), ctx),
+        for tool_def <- Grimoire.visible_tools(Grimoire.list_tools(), ctx),
             verb <- get_in(tool_def, ["inputSchema", "properties", "action", "enum"]) || [],
             do: "#{tool_def["name"]}.#{verb}"
 
@@ -165,7 +165,7 @@ defmodule Emissary.MCP.PlaneTaxonomyTest do
 
       for pair <- in_chain_only do
         [tool, verb] = String.split(pair, ".")
-        {:ok, {_module, meta}} = Catalog.lookup(tool)
+        {:ok, {_module, meta}} = Grimoire.lookup(tool)
 
         assert {:error, {:unknown_action, ^pair}} =
                  Catalog.authorize_annotated_action(tool, meta, ctx, %{"action" => verb})
@@ -202,7 +202,18 @@ defmodule Emissary.MCP.PlaneTaxonomyTest do
                  {"session", "whoami"},
                  {"session", "device_init"},
                  {"session", "device_poll"},
-                 {"system", "status"}
+                 # The caller's own self-description, from its context alone.
+                 {"session", "read_resource"},
+                 {"system", "status"},
+                 # A published tincture is public by definition; the action
+                 # runs under its public profile and nothing else.
+                 {"tincture", "invoke_public"},
+                 # A new device holds no credential: the single-use pairing
+                 # invitation names the person and athanor.
+                 {"pairing", "complete"},
+                 # A device paired at another home holds no credential
+                 # here: it proves the key this home certified.
+                 {"person", "renew_certificate"}
                ])
              )
     end
@@ -240,21 +251,21 @@ defmodule Emissary.MCP.PlaneTaxonomyTest do
 
   describe "upstream external tools" do
     test "the bucket default is in-chain" do
-      assert ExternalProvider.default_planes() == [:in_chain]
+      assert Proxy.default_planes() == [:in_chain]
     end
 
     test "external tool names remain unreachable over HTTP" do
       # The wiring backstop still holds alongside the per-call gate: the
       # router rejects any name the registered-tool cache does not hold,
       # and proxied `server:tool` names are never cached.
-      assert {:error, :not_found} = Catalog.get_tool("someserver:sometool")
-      refute Enum.any?(Catalog.list_tools(), &String.contains?(&1["name"], ":"))
+      assert {:error, :not_found} = Grimoire.get_tool("someserver:sometool")
+      refute Enum.any?(Grimoire.list_tools(), &String.contains?(&1["name"], ":"))
     end
 
     # The bucket default is also enforced at dispatch, not left to the
     # wiring: an external-plane call of a `server:tool` name is refused
     # unless the server row opts in with "console": true. That needs DB
-    # rows, so it is pinned in `Emissary.MCP.ExternalProviderTest`
+    # rows, so it is pinned in `Emissary.External.ProxyTest`
     # ("call_external refuses a proxied name on the external plane").
   end
 
@@ -264,9 +275,9 @@ defmodule Emissary.MCP.PlaneTaxonomyTest do
 
   # A formula's host intercepts exactly the actions its assignment names,
   # and an assignment names the actions the catalog annotates
-  # `host: :intercepted` (`Cyfr.Execution.Assignments`).
+  # `host: :intercepted` (`Crucible.Assignments`).
   test "the intercept set an assignment carries is the catalog's annotation" do
-    intercepted = Catalog.host_intercepted_actions()
+    intercepted = Grimoire.host_intercepted_actions()
 
     assert "execution.run" in intercepted
     assert "execution.run_stream" in intercepted
@@ -276,7 +287,7 @@ defmodule Emissary.MCP.PlaneTaxonomyTest do
 
     for name <- intercepted do
       [tool, action] = String.split(name, ".", parts: 2)
-      assert Catalog.host_intercepted?(tool, action)
+      assert Grimoire.host_intercepted?(tool, action)
     end
   end
 end

@@ -32,7 +32,10 @@ defmodule Arca.TenantTables do
 
   # Every table carrying `athanor_id`, children first. `verify_roster!/0`
   # checks this against the live schema, so a new athanor-scoped table
-  # fails the boot rather than surviving erasure silently.
+  # fails the boot rather than surviving erasure silently. Three of them
+  # may hold rows with no athanor — `memberships`, `sessions` and
+  # `decision_logs` — and erasure matches the athanor, so those rows stay:
+  # a null-tenant decision is the host's, purged under its own retention.
   @roster [
     "execution_events",
     "rate_windows",
@@ -58,12 +61,23 @@ defmodule Arca.TenantTables do
     "webhooks",
     "sessions",
     "api_keys",
+    "frame_credentials",
+    "device_certificates",
+    "pending_confirmations",
+    "pairing_invitations",
+    "paired_clients",
+    "storage_projection_changes",
+    "storage_projection_roots",
+    "fenced_documents",
+    "storage_staging",
     "storage_commits",
     "storage_units",
     "components",
     "executions",
     "mcp_logs",
     "policy_logs",
+    "decision_logs",
+    "retention_settings",
     "oauth_provider_credentials",
     "mcp_servers",
     "schedule_occurrences",
@@ -108,10 +122,47 @@ defmodule Arca.TenantTables do
   #
   # `cell_leases` and `job_claims` are the cell's: which node holds a member
   # slot, and who is running one of the cell's singleton jobs. A cell has no
-  # estate, and several job kinds have no athanor at all; a claim naming an
+  # athanor, and several job kinds have no athanor at all; a claim naming an
   # athanor's credential in its `key` is a mutual-exclusion token and grants
   # no reach into that athanor, so it is not the athanor's row to delete.
-  @not_athanor_scoped ["registry_tokens", "server_meta", "cell_leases", "job_claims"]
+  #
+  # `platform_settings` and `settings_pins` are the cell's settings and
+  # each member's environment pins of them: node facts every member reads
+  # alike, which no athanor owns and no erasure of one may touch.
+  #
+  # `person_identities`, `identity_attempts`, `identity_log_entries`,
+  # `directory_heads` and `carry_actions` are a person's identity and
+  # their carries, which are not an athanor's to delete: a person's keys
+  # and identifier outlive every athanor they sit in, a directory orders
+  # identifiers, and a carry moves a person between homes.
+  #
+  # `passkeys` are a person's own credentials at this home, revoked with
+  # the person (`Arca.SecurityTransitions`), never with an athanor.
+  #
+  # `device_certifications` are what this home certified for its people's
+  # devices at other homes: the athanor each names is the other home's,
+  # and the row goes with the person.
+  #
+  # `installation_claims` are the node's claims by a restore, and
+  # `request_rate_windows` the node's pre-authentication limits: no
+  # session, and so no athanor, stands behind either.
+  @not_athanor_scoped [
+    "registry_tokens",
+    "server_meta",
+    "cell_leases",
+    "job_claims",
+    "platform_settings",
+    "settings_pins",
+    "person_identities",
+    "identity_attempts",
+    "identity_log_entries",
+    "directory_heads",
+    "carry_actions",
+    "passkeys",
+    "device_certifications",
+    "installation_claims",
+    "request_rate_windows"
+  ]
 
   @doc "The closed roster, children first."
   @spec roster() :: [String.t()]
@@ -140,9 +191,9 @@ defmodule Arca.TenantTables do
   rather than a promise of atomicity across two stores that have no shared
   transaction.
   """
-  @spec delete_all_for(Cyfr.Actor.t()) ::
+  @spec delete_all_for(Prima.Actor.t()) ::
           {:ok, %{String.t() => non_neg_integer()}} | {:error, term()}
-  def delete_all_for(%Cyfr.Actor{athanor_id: athanor_id})
+  def delete_all_for(%Prima.Actor{athanor_id: athanor_id})
       when is_binary(athanor_id) and athanor_id != "" and athanor_id != "" do
     Arca.Repo.Errors.with_db_rescue("Arca.TenantTables.delete_all_for", fn ->
       Arca.Repo.transaction(fn ->
@@ -169,17 +220,15 @@ defmodule Arca.TenantTables do
     end)
   end
 
-  def delete_all_for(%Cyfr.Actor{}), do: {:error, :no_athanor}
+  def delete_all_for(%Prima.Actor{}), do: {:error, :no_athanor}
 
   @doc """
   Every table the live schema says carries `athanor_id`.
 
-  Asked of the database rather than derived from the schema modules: the
-  athanor-scoped tables are declared in four different places (a
-  `schemas/` module for most, an inline `use Ecto.Schema` in
-  `Arca.Execution`, `Arca.McpLog`, `Arca.PolicyLog` and
-  `Arca.CronSchedule`), so a module scan would answer for the modules it
-  happened to find. The column is the fact.
+  Asked of the database rather than derived from the schema modules: a
+  module scan would answer for the modules it happened to find, and a
+  table can carry the column with no schema at all. The column is the
+  fact.
   """
   @spec athanor_scoped_tables() :: [String.t()]
   # arca:unscoped-ok a boot-time schema read over the catalog, not tenant

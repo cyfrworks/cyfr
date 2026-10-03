@@ -3,7 +3,7 @@
 
 defmodule Sanctum.Consent.AgentConsentTest do
   @moduledoc """
-  The estate's agents consent as sources: the fill mints the shipped soul
+  The athanor's agents consent as sources: the fill mints the shipped soul
   and roles with the soul's edges into its roles and each agent's edge
   into its model selecting the model's default profile; the shape reads
   the model target and never the prompt; a role a member authors, and a
@@ -15,12 +15,12 @@ defmodule Sanctum.Consent.AgentConsentTest do
   use ExUnit.Case, async: false
 
   alias Compendium.{AquaAgent, AquaPath}
-  alias Cyfr.Authority.Blob
+  alias Prima.Authority.Blob
   alias Sanctum.Consent.{Bootstrap, Commit, Plan, ShapeDerivation}
 
   @soul "agent:local.aqua"
 
-  setup do
+  setup tags do
     test_path =
       Path.join(System.tmp_dir!(), "agent_consent_#{System.unique_integer([:positive])}")
 
@@ -36,11 +36,10 @@ defmodule Sanctum.Consent.AgentConsentTest do
     end)
 
     Arca.Cache.init()
-    :ok = Ecto.Adapters.SQL.Sandbox.checkout(Arca.Repo)
-    Ecto.Adapters.SQL.Sandbox.mode(Arca.Repo, {:shared, self()})
+    Cyfr.Test.Sandbox.setup!(tags)
 
     Cyfr.Test.SeedBundle.lay!(~w(claude gemini files http))
-    ctx = Sanctum.TestContext.local()
+    ctx = Sanctum.TestContext.local(:prism)
     :ok = Sanctum.TestContext.shipped!(ctx.athanor_id)
     {:ok, %{errors: 0}} = Compendium.AutoIndexer.scan(ctx: ctx)
     {:ok, _} = Compendium.AgentIndex.sync(ctx)
@@ -61,7 +60,7 @@ defmodule Sanctum.Consent.AgentConsentTest do
 
   defp bind_claude!(ctx, opts \\ []) do
     {:ok, entry} =
-      Sanctum.Vault.create(ctx, %{
+      Sanctum.TestContext.create_vault(ctx, %{
         name: Keyword.get(opts, :name, "claude key"),
         kind: "api_key",
         fields: %{"ANTHROPIC_API_KEY" => Keyword.get(opts, :key, "sk-test")}
@@ -358,7 +357,7 @@ defmodule Sanctum.Consent.AgentConsentTest do
     assert edge!(consented.resolved_policy, "agent:local.artisan", "catalyst:local.claude").vault.via.label ==
              "work"
 
-    {:ok, authority} = Cyfr.Execution.authority_for(ctx, :default, @soul)
+    {:ok, authority} = Crucible.authority_for(ctx, :default, @soul)
 
     {:ok, web} =
       Blob.lookup_edge(authority.policy, "agent:local.web", "catalyst:local.claude", "")
@@ -373,7 +372,7 @@ defmodule Sanctum.Consent.AgentConsentTest do
   test "the soul's authority loads with its tools and its edge into the model", %{ctx: ctx} do
     {:ok, _} = Bootstrap.run(ctx)
 
-    assert {:ok, authority} = Cyfr.Execution.authority_for(ctx, :default, @soul)
+    assert {:ok, authority} = Crucible.authority_for(ctx, :default, @soul)
     assert authority.source_ref == @soul
     assert "component.list" in authority.resources.tools
     assert "aqua.list" in authority.resources.tools
@@ -384,7 +383,7 @@ defmodule Sanctum.Consent.AgentConsentTest do
 
     # The person binds the key on claude; the soul's edge resolves to it.
     entry = bind_claude!(ctx)
-    {:ok, lent} = Cyfr.Execution.authority_for(ctx, :default, @soul)
+    {:ok, lent} = Crucible.authority_for(ctx, :default, @soul)
     {:ok, edge} = Blob.lookup_edge(lent.policy, @soul, "catalyst:local.claude", "")
     assert edge.vault.entry_id == entry.id
 

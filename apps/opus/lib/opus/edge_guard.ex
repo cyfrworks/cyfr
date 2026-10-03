@@ -6,37 +6,39 @@ defmodule Opus.EdgeGuard do
   Egress checks over a consent edge, shared by the runner's HTTP host
   handlers.
 
-  An execution's capability is the `%Cyfr.Authority.Blob.Edge{}` it runs
-  under plus the node's `%Cyfr.Limits{}`. This module is the runner's home
+  An execution's capability is the `%Prima.Authority.Blob.Edge{}` it runs
+  under plus the node's `%Prima.Limits{}`. This module is the runner's home
   for matching a concrete request against that edge's egress — domains,
-  schemes, methods and private IPs — and for the envelope, request and
-  response size checks against the limits. Storage grants are checked by
+  schemes and methods — and for the envelope, request and response size
+  checks against the limits. The address a request connects to, and so the
+  edge's private-address grant, is CYFR's to decide when it pins the
+  request (`c:Prima.HostAPI.egress_pin/3`); storage grants are checked by
   CYFR when the attempt asks for a storage operation
-  (`c:Cyfr.HostAPI.storage/3`).
+  (`c:Prima.HostAPI.storage/3`).
 
   ## Semantics
 
   Fail-closed throughout: a `nil` edge (an authority with `resources: :none`)
   or a `nil` resource group behaves as all-empty lists, and an empty list
   denies. Schemes are always explicit in blobs — there is no "no scheme
-  restriction" value. Domain patterns support `"*"` and `"*.example.com"`
-  wildcards. Cloud-metadata addresses are denied regardless of the
-  private-IP allowlist.
+  restriction" value. Domains match as `Prima.Network.domain_allowed?/2`
+  matches them, the matcher CYFR's pin applies to the same edge: `"*"`,
+  `"*.example.com"` by whole label, and exact names, case-folded. The
+  engine's domain check is its own, made before it asks for the pin.
 
   Denial messages are part of the guest-visible contract: components and
   tests pin them, so they must not drift.
   """
 
-  alias Cyfr.Authority.Blob.Edge
-  alias Cyfr.Limits
+  alias Prima.Authority.Blob.Edge
+  alias Prima.Limits
 
   @type edge :: Edge.t() | nil
 
   # Internal accessors for the checks below; the allowed lists themselves
-  # are `Cyfr.Authority.Blob.Edge`'s.
+  # are `Prima.Authority.Blob.Edge`'s.
   defp methods(edge), do: egress(edge, :methods)
   defp schemes(edge), do: egress(edge, :schemes)
-  defp private_ips(edge), do: egress(edge, :private_ips)
 
   # ============================================================================
   # Egress checks
@@ -45,14 +47,14 @@ defmodule Opus.EdgeGuard do
   @doc """
   Check a domain against the edge's egress allowlist.
 
-  Supports `"*"` and `"*.example.com"` wildcard patterns. Returns `:ok` or
+  Matched by `Prima.Network.domain_allowed?/2`. Returns `:ok` or
   `{:error, message}` with the message shape guests and tests pin.
   """
   @spec check_domain(edge(), String.t()) :: :ok | {:error, String.t()}
   def check_domain(edge, domain) when is_binary(domain) do
     allowed = Edge.domains(edge)
 
-    if Enum.any?(allowed, &domain_matches?(&1, domain)) do
+    if Prima.Network.domain_allowed?(domain, allowed) do
       :ok
     else
       {:error,
@@ -93,29 +95,6 @@ defmodule Opus.EdgeGuard do
       {:error,
        "Error: Policy violation - method \"#{upcase_method}\" not in allowed_methods\n" <>
          "Allowed: #{Enum.join(allowed, ", ")}"}
-    end
-  end
-
-  @doc """
-  Whether a private IP is allowed by the edge's `private_ips` allowlist.
-
-  Supports individual IPs (`"192.168.1.100"`) and CIDR ranges (`"10.0.0.0/8"`).
-  Cloud-metadata addresses (`Cyfr.Cidr.metadata?/1`) are always denied
-  regardless of the allowlist. Empty allowlist denies all.
-  """
-  @spec allows_private_ip?(edge(), :inet.ip4_address() | :inet.ip6_address()) :: boolean()
-  def allows_private_ip?(edge, ip_tuple) do
-    case private_ips(edge) do
-      [] ->
-        false
-
-      entries ->
-        if Cyfr.Cidr.metadata?(ip_tuple) do
-          false
-        else
-          ip_string = :inet.ntoa(ip_tuple) |> to_string()
-          Enum.any?(entries, &ip_entry_matches?(&1, ip_tuple, ip_string))
-        end
     end
   end
 
@@ -203,23 +182,6 @@ defmodule Opus.EdgeGuard do
   defp egress(%Edge{egress: nil}, _key), do: []
   defp egress(%Edge{egress: egress}, key), do: Map.get(egress, key, [])
 
-  defp domain_matches?(pattern, domain) when is_binary(pattern) and is_binary(domain) do
-    cond do
-      pattern == "*" ->
-        true
-
-      pattern == domain ->
-        true
-
-      String.starts_with?(pattern, "*.") ->
-        suffix = String.slice(pattern, 1..-1//1)
-        String.ends_with?(domain, suffix)
-
-      true ->
-        false
-    end
-  end
-
   @doc """
   Check an event a guest emits against the node's `max_request_size`: the
   encoded event's bytes, which is what the host call carries. Returns
@@ -240,16 +202,6 @@ defmodule Opus.EdgeGuard do
   end
 
   def check_event_size(_limits, json_event) when is_binary(json_event), do: :ok
-
-  # Exact-IP entries compare against the canonical ntoa string; CIDR entries
-  # delegate to the Cyfr.Cidr SSOT (IPv4 + IPv6).
-  defp ip_entry_matches?(entry, ip_tuple, ip_string) do
-    if String.contains?(entry, "/") do
-      Cyfr.Cidr.ip_in_cidr?(ip_tuple, entry)
-    else
-      entry == ip_string
-    end
-  end
 
   defp refuse_over(%Limits{} = limits, size, what) do
     if size > limits.max_request_size do

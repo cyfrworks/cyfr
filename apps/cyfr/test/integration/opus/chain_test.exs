@@ -3,8 +3,8 @@
 Code.require_file("support/formula_host_helper.exs", __DIR__)
 
 defmodule Opus.ChainTest do
-  # Runs under the authority `Cyfr.Execution.Admission` decides (whose own
-  # cases are `Cyfr.Execution.AdmissionTest`), against the in-memory consent
+  # Runs under the authority `Crucible.Admission` decides (whose own
+  # cases are `Crucible.AdmissionTest`), against the in-memory consent
   # source and a real published component (math.wasm — a core module that
   # fails at component compile, which is irrelevant: every property
   # asserted here is decided before compilation). What a run entered with
@@ -12,18 +12,18 @@ defmodule Opus.ChainTest do
   # admission, read on the suite's wire.
   use ExUnit.Case, async: false
 
-  alias Cyfr.Authority
-  alias Cyfr.Authority.Blob
+  alias Prima.Authority
+  alias Prima.Authority.Blob
   alias Cyfr.Test.TwoServices
   alias Sanctum.Context
   alias Sanctum.Test.ConsentFixtures
-  alias Cyfr.JCS
+  alias Prima.JCS
 
   @math_wasm_path Path.join(__DIR__, "../../support/test_wasm/math.wasm")
   # Activation digests as the resolver spells them; an assignment carries
   # nothing else.
-  @root_act Cyfr.Digest.sha256("root-act")
-  @root_activation Cyfr.Digest.sha256("root-activation")
+  @root_act Prima.Digest.sha256("root-act")
+  @root_activation Prima.Digest.sha256("root-activation")
 
   setup tags do
     Arca.Cache.init()
@@ -34,12 +34,15 @@ defmodule Opus.ChainTest do
     original_base_path = Application.get_env(:arca, :base_path)
     Application.put_env(:arca, :base_path, test_path)
 
+    # A person running a component: its runs are interactive, as the
+    # grants this file seeds admit.
     ctx = %Context{
       user_id: "chain_test_user_#{:rand.uniform(100_000)}",
       athanor_id: Sanctum.TestContext.athanor_id(),
       scope: :athanor,
       permissions: MapSet.new([:execute]),
-      authenticated: true
+      authenticated: true,
+      origin: :interactive
     }
 
     admin_ctx = Sanctum.TestContext.local()
@@ -99,7 +102,7 @@ defmodule Opus.ChainTest do
           fields: %{execution_id: ^parent_id},
           answer: %{"ok" => %{"assignment" => token}}
         } <- TwoServices.calls(),
-        {:ok, %{execution_id: id}} <- [Cyfr.Assignment.read(token)],
+        {:ok, %{execution_id: id}} <- [Prima.Assignment.read(token)],
         do: id
   end
 
@@ -218,7 +221,7 @@ defmodule Opus.ChainTest do
       execution_id = "exec_chain_root_#{System.unique_integer([:positive])}"
 
       _result =
-        Cyfr.Execution.run_root(ctx, :default, "#{@root_node}:0.1.0", %{"a" => 1},
+        Crucible.run_root(ctx, :default, "#{@root_node}:0.1.0", %{"a" => 1},
           execution_id: execution_id,
           type: :reagent
         )
@@ -228,7 +231,7 @@ defmodule Opus.ChainTest do
       assert authority.consent_id == "consent-chain"
       assert authority.cursor == {:bound, @root_node}
 
-      row = Arca.Repo.get(Arca.Execution, execution_id)
+      row = Arca.Repo.get(Arca.Schemas.Execution, execution_id)
       assert row.activation_digest != nil
       assert Jason.decode!(row.activation_graph) == %{@root_node => root.release_digest}
       assert JCS.hash_binary(row.activation_graph) == row.activation_digest
@@ -269,12 +272,12 @@ defmodule Opus.ChainTest do
       execution_id = "exec_route_row_#{System.unique_integer([:positive])}"
 
       _result =
-        Cyfr.Execution.run_root_edge(ctx, @root_node, "#{@target_node}:0.1.0", %{},
+        Crucible.run_root_edge(ctx, @root_node, "#{@target_node}:0.1.0", %{},
           route: :protected,
           execution_id: execution_id
         )
 
-      row = Arca.Repo.get(Arca.Execution, execution_id)
+      row = Arca.Repo.get(Arca.Schemas.Execution, execution_id)
       assert row.activation_digest
       assert row.activation_graph
       assert row.parent_execution_id == nil
@@ -287,12 +290,12 @@ defmodule Opus.ChainTest do
       execution_id = "exec_route_pub_row_#{System.unique_integer([:positive])}"
 
       _result =
-        Cyfr.Execution.run_root_edge(ctx, @root_node, "#{@target_node}:0.1.0", %{},
+        Crucible.run_root_edge(ctx, @root_node, "#{@target_node}:0.1.0", %{},
           route: :public,
           execution_id: execution_id
         )
 
-      assert %{profile_id: "prof-route-pub"} = Arca.Repo.get(Arca.Execution, execution_id)
+      assert %{profile_id: "prof-route-pub"} = Arca.Repo.get(Arca.Schemas.Execution, execution_id)
     end
   end
 
@@ -315,11 +318,13 @@ defmodule Opus.ChainTest do
       auth
     end
 
+    # A child inherits the grant its parent's attempt stores: the parent is
+    # a real row.
     defp child_opts(ctx, overrides \\ []) do
       Keyword.merge(
         [
           ctx: Context.enter_guest(ctx),
-          parent_execution_id: "exec_parent_#{System.unique_integer([:positive])}",
+          parent_execution_id: Cyfr.Test.AttemptFixtures.lineage!(ctx).parent_execution_id,
           root_execution_id: "exec_root_ref",
           activation_digest: @root_activation
         ],
@@ -328,7 +333,7 @@ defmodule Opus.ChainTest do
     end
 
     defp revoked_vault_entry(ctx) do
-      id = Cyfr.UUID7.generate_id("vlt")
+      id = Prima.UUID7.generate_id("vlt")
       aad = Sanctum.CipherAAD.vault_entry(ctx.athanor_id, id, "")
       {:ok, json} = Sanctum.Vault.Payload.encode_material(%{"api_key" => "sk-gone"}, nil)
       {:ok, sealed} = Sanctum.Cipher.encrypt(json, aad)
@@ -356,7 +361,7 @@ defmodule Opus.ChainTest do
       execution_id = "exec_chain_child_#{System.unique_integer([:positive])}"
 
       _result =
-        Cyfr.Execution.run_child(
+        Crucible.run_child(
           auth,
           "#{@target_node}:0.1.0",
           nil,
@@ -370,7 +375,7 @@ defmodule Opus.ChainTest do
       assert authority.chain == [@root_node, @target_node]
       assert Map.get(target, :release_digest) != nil
 
-      row = Arca.Repo.get(Arca.Execution, execution_id)
+      row = Arca.Repo.get(Arca.Schemas.Execution, execution_id)
       # A child carries its root's activation digest, no graph.
       assert row.activation_digest == @root_activation
       assert row.activation_graph == nil
@@ -382,7 +387,7 @@ defmodule Opus.ChainTest do
       execution_id = "exec_chain_zero_#{System.unique_integer([:positive])}"
 
       _result =
-        Cyfr.Execution.run_child(
+        Crucible.run_child(
           auth,
           "#{@target_node}:0.1.0",
           nil,
@@ -400,7 +405,7 @@ defmodule Opus.ChainTest do
       auth = authority_with_edges(%{"reagent:local.gone" => %{}})
 
       assert {:error, {:setup_required, payload}} =
-               Cyfr.Execution.run_child(
+               Crucible.run_child(
                  auth,
                  "reagent:local.gone:1.0.0",
                  nil,
@@ -446,7 +451,7 @@ defmodule Opus.ChainTest do
         })
 
       assert {:error, {:setup_required, payload}} =
-               Cyfr.Execution.run_child(auth, "#{@target_node}:0.1.0", nil, %{}, child_opts(ctx))
+               Crucible.run_child(auth, "#{@target_node}:0.1.0", nil, %{}, child_opts(ctx))
 
       assert payload.profile_id == "prof-chain"
       assert payload.node_ref == "#{@target_node}:0.1.0"
@@ -513,14 +518,14 @@ defmodule Opus.ChainTest do
       # nothing executes, so the blob below is provably the only policy in
       # play.
       assert {:error, no_authority_error} =
-               Cyfr.Execution.Dispatch.run(ctx, "#{cat_node}:0.1.0", %{}, type: :catalyst)
+               Crucible.Dispatch.run(ctx, "#{cat_node}:0.1.0", %{}, type: :catalyst)
 
       assert no_authority_error =~ "without an authority is not a thing"
 
       execution_id = "exec_chain_cat_#{System.unique_integer([:positive])}"
 
       _result =
-        Cyfr.Execution.run_root(ctx, :default, "#{cat_node}:0.1.0", %{},
+        Crucible.run_root(ctx, :default, "#{cat_node}:0.1.0", %{},
           type: :catalyst,
           execution_id: execution_id
         )
@@ -570,7 +575,9 @@ defmodule Opus.ChainTest do
 
       rows =
         Arca.Repo.all(
-          from(e in Arca.Execution, where: e.parent_execution_id in [^parent_id, "exec_forged"])
+          from(e in Arca.Schemas.Execution,
+            where: e.parent_execution_id in [^parent_id, "exec_forged"]
+          )
         )
 
       assert [row] = rows
@@ -691,7 +698,7 @@ defmodule Opus.ChainTest do
       assert Sanctum.Authority.budget(auth).in_flight == 0
 
       _result =
-        Cyfr.Execution.run_child(
+        Crucible.run_child(
           auth,
           "#{@target_node}:0.1.0",
           nil,
@@ -714,9 +721,12 @@ defmodule Opus.ChainTest do
             reference: "formula:local.root:1.0.0",
             user_id: ctx.user_id,
             athanor_id: ctx.athanor_id,
-            component_type: "formula"
+            component_type: "formula",
+            origin: :programmatic
           },
-          reservation: %{budget_id: auth.budget.id, cap: 1}
+          reservation: %{budget_id: auth.budget.id, cap: 1},
+          grant: Cyfr.Test.AttemptFixtures.grant(ctx.athanor_id),
+          verify: &Sanctum.ExecutionStanding.verify/1
         )
 
       charge = %{
@@ -727,7 +737,7 @@ defmodule Opus.ChainTest do
       }
 
       _result =
-        Cyfr.Execution.run_child(
+        Crucible.run_child(
           auth,
           "#{@target_node}:0.1.0",
           nil,
@@ -753,7 +763,7 @@ defmodule Opus.ChainTest do
         )
 
       assert {:error, {:invoke_denied, :invoke_budget_exhausted}} =
-               Cyfr.Execution.run_child(
+               Crucible.run_child(
                  auth,
                  "#{@target_node}:0.1.0",
                  nil,
@@ -776,12 +786,15 @@ defmodule Opus.ChainTest do
             reference: "formula:local.root:1.0.0",
             user_id: ctx.user_id,
             athanor_id: ctx.athanor_id,
-            component_type: "formula"
+            component_type: "formula",
+            origin: :programmatic
           },
-          reservation: %{budget_id: auth.budget.id, cap: 2}
+          reservation: %{budget_id: auth.budget.id, cap: 2},
+          grant: Cyfr.Test.AttemptFixtures.grant(ctx.athanor_id),
+          verify: &Sanctum.ExecutionStanding.verify/1
         )
 
-      child_id = Cyfr.UUID7.execution_id()
+      child_id = Prima.UUID7.execution_id()
 
       charge = %{
         id: "call:t:1:c2:g0",
@@ -800,7 +813,7 @@ defmodule Opus.ChainTest do
         |> Arca.Repo.update_all(set: [admit_by: past])
 
       assert {:error, _} =
-               Cyfr.Execution.run_child(
+               Crucible.run_child(
                  auth,
                  "#{@target_node}:0.1.0",
                  nil,
@@ -808,7 +821,7 @@ defmodule Opus.ChainTest do
                  child_opts(ctx, guest_fn: :spawn, charge: charge, execution_id: child_id)
                )
 
-      assert Arca.Repo.get(Arca.Execution, child_id) == nil
+      assert Arca.Repo.get(Arca.Schemas.Execution, child_id) == nil
       assert Sanctum.Authority.budget(auth).in_flight == 0
     end
   end

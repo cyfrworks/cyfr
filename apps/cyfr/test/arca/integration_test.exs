@@ -14,22 +14,17 @@ defmodule Arca.IntegrationTest do
 
   use ExUnit.Case, async: false
 
-  alias Emissary.MCP.Tools.RecordsProvider, as: MCP
-  alias Cyfr.Retention
+  alias Arca.Retention
   alias Sanctum.Context
 
-  setup do
+  setup tags do
     rand_id = :rand.uniform(100_000)
     test_path = Path.join(System.tmp_dir!(), "arca_integration_#{rand_id}")
     original_base_path = Application.get_env(:arca, :base_path)
     Application.put_env(:arca, :base_path, test_path)
 
     # Checkout Ecto sandbox for SQLite-based operations
-    :ok = Ecto.Adapters.SQL.Sandbox.checkout(Arca.Repo)
-    Ecto.Adapters.SQL.Sandbox.mode(Arca.Repo, {:shared, self()})
-
-    # Retention settings live on the athanor row, so the athanor must exist.
-    Arca.Test.Actor.ensure_athanor_row("ath_integration_#{rand_id}")
+    Cyfr.Test.Sandbox.setup!(tags)
 
     # Use a unique athanor per test: execution retention/listing is
     # per-athanor, so a unique id isolates each test from shared-state pollution.
@@ -110,12 +105,12 @@ defmodule Arca.IntegrationTest do
   # ============================================================================
 
   describe "retention workflow: set settings → create data → cleanup → verify" do
-    test "execution retention workflow", %{ctx: ctx, actor: actor} do
+    test "execution retention workflow", %{actor: actor} do
       # 1. Set retention to keep only 3 executions
-      :ok = Retention.set_settings(ctx, %{"executions" => 3})
+      {:ok, %{"executions" => 3}} = Retention.set_settings(actor, %{"executions" => 3})
 
       # Verify settings
-      {:ok, settings} = Retention.get_settings(ctx)
+      {:ok, settings} = Retention.get_settings(actor)
       assert settings["executions"] == 3
 
       # 2. Create 5 executions with different timestamps via SQLite
@@ -147,10 +142,10 @@ defmodule Arca.IntegrationTest do
       assert length(records) == 5
 
       # 3. Run cleanup (dry_run first — counts, deletes nothing)
-      assert {:ok, 2} = Retention.cleanup(ctx, "executions", dry_run: true)
+      assert {:ok, 2} = Retention.cleanup(actor, "executions", dry_run: true)
 
       # 4. Actually run cleanup
-      assert {:ok, 2} = Retention.cleanup(ctx, "executions")
+      assert {:ok, 2} = Retention.cleanup(actor, "executions")
 
       # 5. Verify only 3 remain
       records =
@@ -172,7 +167,7 @@ defmodule Arca.IntegrationTest do
     test "retention workflow via MCP", %{ctx: ctx, actor: actor} do
       # 1. Set retention via MCP
       {:ok, set_result} =
-        MCP.handle("retention", ctx, %{
+        Grimoire.call_external("retention", ctx, %{
           "action" => "set",
           "settings" => %{"executions" => 2}
         })
@@ -200,7 +195,7 @@ defmodule Arca.IntegrationTest do
 
       # 3. Dry run via MCP
       {:ok, dry_result} =
-        MCP.handle("retention", ctx, %{
+        Grimoire.call_external("retention", ctx, %{
           "action" => "cleanup",
           "cleanup_type" => "executions",
           "dry_run" => true
@@ -210,7 +205,7 @@ defmodule Arca.IntegrationTest do
 
       # 4. Actual cleanup via MCP
       {:ok, cleanup_result} =
-        MCP.handle("retention", ctx, %{
+        Grimoire.call_external("retention", ctx, %{
           "action" => "cleanup",
           "cleanup_type" => "executions"
         })
@@ -219,7 +214,7 @@ defmodule Arca.IntegrationTest do
 
       # 5. Verify via MCP get
       {:ok, get_result} =
-        MCP.handle("retention", ctx, %{
+        Grimoire.call_external("retention", ctx, %{
           "action" => "get"
         })
 
@@ -234,12 +229,12 @@ defmodule Arca.IntegrationTest do
   describe "user isolation" do
     test "members of the same athanor share files; different athanors are isolated" do
       # Same athanor, different users — interchangeable members share storage.
-      member1 = Cyfr.Actor.in_athanor("ath_test")
+      member1 = Prima.Actor.in_athanor("ath_test")
 
-      member2 = Cyfr.Actor.in_athanor("ath_test")
+      member2 = Prima.Actor.in_athanor("ath_test")
 
       # A different athanor must remain isolated.
-      other_tenant = Cyfr.Actor.in_athanor("ath_other")
+      other_tenant = Prima.Actor.in_athanor("ath_other")
 
       :ok = Arca.put(member1, ["data", "private", "secret.txt"], "shared secret")
 
@@ -307,7 +302,8 @@ defmodule Arca.IntegrationTest do
 
       # A member cleans up keeping 2 — retention is per-athanor, so it applies
       # to the whole athanor's executions (6 → 2), regardless of creator.
-      assert {:ok, 4} = Retention.cleanup(user1_ctx, "executions", value: 2)
+      assert {:ok, 4} =
+               Retention.cleanup(Sanctum.Context.actor(user1_ctx), "executions", value: 2)
 
       remaining = Arca.Execution.list(athanor_id: athanor, limit: 100)
 
@@ -315,13 +311,12 @@ defmodule Arca.IntegrationTest do
     end
 
     test "retention settings are shared within an athanor; isolated across athanors" do
-      # Retention is a Cyfr-layer verb and still takes the context; only
-      # the storage facades under it take the actor it projects.
-      member1 = member_ctx("user_alpha", "ath_test")
-      member2 = member_ctx("user_beta", "ath_test")
-      other_tenant = member_ctx("user_gamma", "ath_other")
+      # Retention takes the actor each member's context projects.
+      member1 = Sanctum.Context.actor(member_ctx("user_alpha", "ath_test"))
+      member2 = Sanctum.Context.actor(member_ctx("user_beta", "ath_test"))
+      other_tenant = Sanctum.Context.actor(member_ctx("user_gamma", "ath_other"))
 
-      :ok = Retention.set_settings(member1, %{"executions" => 5})
+      {:ok, %{"executions" => 5}} = Retention.set_settings(member1, %{"executions" => 5})
 
       # Shared within the tenant — a fellow member sees the same setting.
       assert {:ok, %{"executions" => 5}} = Retention.get_settings(member2)
@@ -349,11 +344,11 @@ defmodule Arca.IntegrationTest do
       }
 
       # The server caches a blob under the global root...
-      :ok = Arca.put(Cyfr.Actor.system(), ["cache", "oci", "sha256_abc"], "cached blob")
+      :ok = Arca.put(Prima.Actor.system(), ["cache", "oci", "sha256_abc"], "cached blob")
 
       # ...another internal context reads it back...
       {:ok, content} =
-        Arca.get(%{Cyfr.Actor.system() | user_id: "_probe"}, ["cache", "oci", "sha256_abc"])
+        Arca.get(%{Prima.Actor.system() | user_id: "_probe"}, ["cache", "oci", "sha256_abc"])
 
       assert content == "cached blob"
 

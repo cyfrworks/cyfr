@@ -26,18 +26,18 @@ defmodule PrismWeb.AquaLive.Catalog do
   (`:read | :write | :execute | :destructive`) sourced from
   `annotations.actions[verb].kind` (or `_default.kind` for opaque tools).
   An action without a kind annotation is not policy-manageable — the
-  policy plane (`Aqua.Kinds.kind_for/2`) refuses it, so it is
+  policy plane (`Aqua.tool_kind/2`) refuses it, so it is
   logged and left off this catalogue rather than mislabeled `:write`.
   """
   def enumerate_tool_actions do
     mcp =
-      Cyfr.Ops.Catalog.list_tools()
+      Grimoire.list_tools()
       |> Enum.map(fn t ->
         name = t["name"]
         schema = t["inputSchema"] || %{}
         props = schema["properties"] || %{}
         action_enum = get_in(props, ["action", "enum"]) || []
-        actions_meta = Cyfr.Ops.Annotations.actions_of(t)
+        actions_meta = Grimoire.declared_actions(t)
         default_meta = actions_meta["_default"]
 
         actions =
@@ -71,7 +71,7 @@ defmodule PrismWeb.AquaLive.Catalog do
       end)
       |> Enum.reject(fn {_name, actions} -> actions == [] end)
 
-    virtual = Aqua.Hands.list_for_panel()
+    virtual = Aqua.virtual_tool_catalog()
 
     # `native_search` is a bare-tool exclusivity gate — has no actions but
     # appears in the policy as a single boolean key.
@@ -81,7 +81,7 @@ defmodule PrismWeb.AquaLive.Catalog do
   end
 
   defp reachable?(name, action) when is_binary(name),
-    do: Cyfr.Ops.Catalog.chain_reachable?(name, action)
+    do: Grimoire.chain_reachable?(name, action)
 
   defp reachable?(_name, _action), do: false
 

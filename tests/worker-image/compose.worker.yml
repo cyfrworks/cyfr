@@ -3,7 +3,7 @@
 #
 # Layered over docker-compose.yml by the worker image tests
 # (tests/worker-image/stack.py): the opus service keeps every setting
-# compose gives it — cyfr-spawn's capabilities, its security options
+# compose gives it — cyfr-keeper's capabilities, its security options
 # (`writable-cgroups=true` among them: compose appends a `security_opt`
 # list and refuses an entry named twice, so none is named here), the
 # read-only root, `ipc: none`, the homes and /run/opus tmpfs mounts, the

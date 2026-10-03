@@ -8,12 +8,12 @@ defmodule Arca.ApiKeyStorage do
   This module provides the database layer for API key storage.
   It's called by `Sanctum.ApiKey` which handles key generation and hashing.
 
-  Every function that names an athanor takes the `Cyfr.Actor` first and
+  Every function that names an athanor takes the `Prima.Actor` first and
   matches it in its head, refusing an actor whose athanor is nil or the
   empty string with `{:error, :no_athanor}` before any query.
   `get_key_by_hash/1` and `revoke_all_created_by/1` name no athanor: one
   is the presented secret's own lookup and says so where it stands, the
-  other sweeps one person's keys across every estate as part of denying
+  other sweeps one person's keys across every athanor as part of denying
   them on this server.
   Writes use `insert_all`/`update_all` and trust their caller — they run no
   changeset validation, so callers must validate input first.
@@ -54,15 +54,38 @@ defmodule Arca.ApiKeyStorage do
   ]
 
   @doc """
-  Insert a new API key. `attrs.athanor_id` names the owning athanor;
-  `(athanor_id, name)` is unique among unrevoked keys.
+  Insert a new API key, in the issuance transaction
+  (`Arca.SecurityTransitions.Issuance`): `lock:` names the rows the
+  creator's standing rests on and `verify:` is the caller's policy over
+  them, asked with them locked. `attrs.athanor_id` names the owning
+  athanor; `(athanor_id, name)` is unique among unrevoked keys, and a
+  violation answers `{:error, :already_exists}`.
   """
-  @spec create_key(map()) :: :ok | {:error, term()}
-  def create_key(attrs) do
+  @spec create_key(map(), keyword()) :: :ok | {:error, term()}
+  def create_key(attrs, opts) when is_list(opts) do
+    lock = Keyword.fetch!(opts, :lock)
+    verify = Keyword.fetch!(opts, :verify)
+
+    Arca.SecurityTransitions.Issuance.run(lock, verify, fn _locked -> insert_key(attrs) end)
+    |> case do
+      {:ok, :inserted} -> :ok
+      {:error, _reason} = refusal -> refusal
+    end
+  rescue
+    e in Arca.Repo.Errors.db_errors() ->
+      if Arca.Repo.Errors.unique_constraint_violation?(e) do
+        {:error, :already_exists}
+      else
+        Logger.error("[ApiKeyStorage] Database error in create_key: #{Exception.message(e)}")
+        {:error, :database_error}
+      end
+  end
+
+  defp insert_key(attrs) do
     now = DateTime.utc_now() |> DateTime.truncate(:microsecond)
 
     row = %{
-      id: Cyfr.UUID7.generate_id("key"),
+      id: Prima.UUID7.generate_id("key"),
       name: attrs.name,
       key_hash: attrs.key_hash,
       key_prefix: attrs.key_prefix,
@@ -80,15 +103,7 @@ defmodule Arca.ApiKeyStorage do
     }
 
     Arca.Repo.insert_all(ApiKey, [row])
-    :ok
-  rescue
-    e in Arca.Repo.Errors.db_errors() ->
-      if Arca.Repo.Errors.unique_constraint_violation?(e) do
-        {:error, :already_exists}
-      else
-        Logger.error("[ApiKeyStorage] Database error in create_key: #{Exception.message(e)}")
-        {:error, :database_error}
-      end
+    {:ok, :inserted}
   end
 
   @doc """
@@ -99,9 +114,9 @@ defmodule Arca.ApiKeyStorage do
   presence asks for the predicate rather than the value. It gates an
   admission decision, so an unanswerable store refuses rather than defaults.
   """
-  @spec capability_bearing?(Cyfr.Actor.t(), String.t()) ::
+  @spec capability_bearing?(Prima.Actor.t(), String.t()) ::
           {:ok, boolean()} | {:error, :no_athanor | :database_error}
-  def capability_bearing?(%Cyfr.Actor{athanor_id: athanor_id}, name)
+  def capability_bearing?(%Prima.Actor{athanor_id: athanor_id}, name)
       when is_binary(athanor_id) and athanor_id != "" do
     Arca.Repo.Errors.with_db_rescue("ApiKeyStorage.capability_bearing?", fn ->
       found =
@@ -117,16 +132,16 @@ defmodule Arca.ApiKeyStorage do
     end)
   end
 
-  def capability_bearing?(%Cyfr.Actor{}, _name), do: {:error, :no_athanor}
+  def capability_bearing?(%Prima.Actor{}, _name), do: {:error, :no_athanor}
 
   @doc """
   Get a key by name within an athanor. Excludes revoked keys.
 
   Returns `{:ok, row}` or `{:error, :not_found}`.
   """
-  @spec get_key(Cyfr.Actor.t(), String.t()) ::
-          {:ok, ApiKey.t()} | {:error, :no_athanor | :not_found | :database_error}
-  def get_key(%Cyfr.Actor{athanor_id: athanor_id}, name)
+  @spec get_key(Prima.Actor.t(), String.t()) ::
+          {:ok, map()} | {:error, :no_athanor | :not_found | :database_error}
+  def get_key(%Prima.Actor{athanor_id: athanor_id}, name)
       when is_binary(athanor_id) and athanor_id != "" do
     Arca.Repo.Errors.with_db_rescue("ApiKeyStorage.get_key", fn ->
       query =
@@ -142,17 +157,18 @@ defmodule Arca.ApiKeyStorage do
         row -> {:ok, row}
       end
     end)
+    |> Arca.Data.project()
   end
 
-  def get_key(%Cyfr.Actor{}, _name), do: {:error, :no_athanor}
+  def get_key(%Prima.Actor{}, _name), do: {:error, :no_athanor}
 
   @doc """
   Get an unrevoked key row by its id within an athanor — the lookup a
   key-authenticated context uses to read its own key's attributes.
   """
-  @spec get_key_by_id(Cyfr.Actor.t(), String.t()) ::
-          {:ok, ApiKey.t()} | {:error, :no_athanor | :not_found | :database_error}
-  def get_key_by_id(%Cyfr.Actor{athanor_id: athanor_id}, id)
+  @spec get_key_by_id(Prima.Actor.t(), String.t()) ::
+          {:ok, map()} | {:error, :no_athanor | :not_found | :database_error}
+  def get_key_by_id(%Prima.Actor{athanor_id: athanor_id}, id)
       when is_binary(athanor_id) and athanor_id != "" and is_binary(id) do
     Arca.Repo.Errors.with_db_rescue("ApiKeyStorage.get_key_by_id", fn ->
       query =
@@ -164,9 +180,10 @@ defmodule Arca.ApiKeyStorage do
         row -> {:ok, row}
       end
     end)
+    |> Arca.Data.project()
   end
 
-  def get_key_by_id(%Cyfr.Actor{}, _id), do: {:error, :no_athanor}
+  def get_key_by_id(%Prima.Actor{}, _id), do: {:error, :no_athanor}
 
   @doc """
   Get a key by its hash. Used for validate() lookups.
@@ -179,7 +196,7 @@ defmodule Arca.ApiKeyStorage do
   192-bit globally-unique credential, so this single untenanted lookup is the
   correct and authoritative path regardless of how the deployment is configured.
   """
-  @spec get_key_by_hash(binary()) :: {:ok, ApiKey.t()} | {:error, :not_found | :database_error}
+  @spec get_key_by_hash(binary()) :: {:ok, map()} | {:error, :not_found | :database_error}
   # arca:unscoped-ok a key hash is a 192-bit globally-unique credential; the
   # athanor comes FROM the row, so there is no context to scope by yet.
   def get_key_by_hash(key_hash) do
@@ -196,13 +213,14 @@ defmodule Arca.ApiKeyStorage do
         row -> {:ok, row}
       end
     end)
+    |> Arca.Data.project()
   end
 
   @doc """
   List all non-revoked keys of an athanor, sorted by inserted_at.
   """
-  @spec list_keys(Cyfr.Actor.t()) :: {:ok, [ApiKey.t()]} | {:error, :no_athanor | :database_error}
-  def list_keys(%Cyfr.Actor{athanor_id: athanor_id})
+  @spec list_keys(Prima.Actor.t()) :: {:ok, [map()]} | {:error, :no_athanor | :database_error}
+  def list_keys(%Prima.Actor{athanor_id: athanor_id})
       when is_binary(athanor_id) and athanor_id != "" do
     Arca.Repo.Errors.with_db_rescue("ApiKeyStorage.list_keys", fn ->
       query =
@@ -215,16 +233,17 @@ defmodule Arca.ApiKeyStorage do
 
       {:ok, Arca.Repo.all(query)}
     end)
+    |> Arca.Data.project()
   end
 
-  def list_keys(%Cyfr.Actor{}), do: {:error, :no_athanor}
+  def list_keys(%Prima.Actor{}), do: {:error, :no_athanor}
 
   @doc """
   Revoke a key by name within an athanor.
   """
-  @spec revoke_key(Cyfr.Actor.t(), String.t()) ::
+  @spec revoke_key(Prima.Actor.t(), String.t()) ::
           :ok | {:error, :no_athanor | :not_found | :database_error}
-  def revoke_key(%Cyfr.Actor{athanor_id: athanor_id}, name)
+  def revoke_key(%Prima.Actor{athanor_id: athanor_id}, name)
       when is_binary(athanor_id) and athanor_id != "" do
     Arca.Repo.Errors.with_db_rescue("ApiKeyStorage.revoke_key", fn ->
       now = DateTime.utc_now() |> DateTime.truncate(:microsecond)
@@ -240,7 +259,7 @@ defmodule Arca.ApiKeyStorage do
     end)
   end
 
-  def revoke_key(%Cyfr.Actor{}, _name), do: {:error, :no_athanor}
+  def revoke_key(%Prima.Actor{}, _name), do: {:error, :no_athanor}
 
   @doc """
   Revoke every live key a person created, across athanors. Returns the count.
@@ -258,49 +277,83 @@ defmodule Arca.ApiKeyStorage do
   end
 
   @doc """
-  Revoke every live key of an athanor. Returns the count.
+  Rotate a key, in the issuance transaction
+  (`Arca.SecurityTransitions.Issuance`) under the rotating caller's
+  `lock:` and `verify:`: the key's row is locked last and retired —
+  revoked, its hash replaced so the old secret matches no row — and a new
+  row with the same name and settings carries the new secret. A rotation
+  is a new credential: anything bound to the old row's id (a tincture
+  token derived from it) is retired with it, and no row that follows can
+  take that id back.
   """
-  @spec revoke_all_for_athanor(Cyfr.Actor.t()) ::
-          {:ok, non_neg_integer()} | {:error, :no_athanor | :database_error}
-  def revoke_all_for_athanor(%Cyfr.Actor{athanor_id: athanor_id})
-      when is_binary(athanor_id) and athanor_id != "" do
-    Arca.Repo.Errors.with_db_rescue("ApiKeyStorage.revoke_all_for_athanor", fn ->
-      now = DateTime.utc_now() |> DateTime.truncate(:microsecond)
-      query = from(k in ApiKey, where: k.revoked == ^false) |> where_athanor(athanor_id)
-      {count, _} = Arca.Repo.update_all(query, set: [revoked: true, updated_at: now])
-      {:ok, count}
-    end)
-  end
+  @spec rotate_key(Prima.Actor.t(), String.t(), binary(), String.t(), keyword()) ::
+          :ok | {:error, term()}
+  def rotate_key(%Prima.Actor{athanor_id: athanor_id}, name, new_key_hash, new_key_prefix, opts)
+      when is_binary(athanor_id) and athanor_id != "" and is_list(opts) do
+    lock = Keyword.fetch!(opts, :lock)
+    verify = Keyword.fetch!(opts, :verify)
 
-  def revoke_all_for_athanor(%Cyfr.Actor{}), do: {:error, :no_athanor}
-
-  @doc """
-  Rotate a key: update key_hash, key_prefix, and rotated_at.
-  """
-  @spec rotate_key(Cyfr.Actor.t(), String.t(), binary(), String.t()) ::
-          :ok | {:error, :no_athanor | :not_found | :database_error}
-  def rotate_key(%Cyfr.Actor{athanor_id: athanor_id}, name, new_key_hash, new_key_prefix)
-      when is_binary(athanor_id) and athanor_id != "" do
     Arca.Repo.Errors.with_db_rescue("ApiKeyStorage.rotate_key", fn ->
-      now = DateTime.utc_now() |> DateTime.truncate(:microsecond)
-
-      query =
-        from(k in ApiKey, where: k.name == ^name and k.revoked == ^false)
-        |> where_athanor(athanor_id)
-
-      case Arca.Repo.update_all(query,
-             set: [
-               key_hash: new_key_hash,
-               key_prefix: new_key_prefix,
-               rotated_at: now,
-               updated_at: now
-             ]
-           ) do
-        {0, _} -> {:error, :not_found}
-        {_, _} -> :ok
+      Arca.SecurityTransitions.Issuance.run(lock, verify, fn _locked ->
+        rotate_row(athanor_id, name, new_key_hash, new_key_prefix)
+      end)
+      |> case do
+        {:ok, :rotated} -> :ok
+        {:error, _reason} = refusal -> refusal
       end
     end)
   end
 
-  def rotate_key(%Cyfr.Actor{}, _name, _new_key_hash, _new_key_prefix), do: {:error, :no_athanor}
+  def rotate_key(%Prima.Actor{}, _name, _new_key_hash, _new_key_prefix, _opts),
+    do: {:error, :no_athanor}
+
+  defp rotate_row(athanor_id, name, new_key_hash, new_key_prefix) do
+    now = DateTime.utc_now() |> DateTime.truncate(:microsecond)
+
+    current =
+      from(k in ApiKey, where: k.name == ^name and k.revoked == ^false)
+      |> where_athanor(athanor_id)
+      |> Arca.QueryHelpers.for_update()
+      |> Arca.Repo.one()
+
+    case current do
+      nil ->
+        {:error, :not_found}
+
+      %ApiKey{} = old ->
+        # Retired before its successor is written: the name is unique among
+        # unrevoked keys, and the old secret must match no row at all.
+        {1, _} =
+          from(k in ApiKey, where: k.id == ^old.id and k.athanor_id == ^athanor_id)
+          |> Arca.Repo.update_all(
+            set: [
+              revoked: true,
+              key_hash: :crypto.hash(:sha256, "rotated:" <> old.key_hash),
+              updated_at: now
+            ]
+          )
+
+        Arca.Repo.insert_all(ApiKey, [
+          %{
+            id: Prima.UUID7.generate_id("key"),
+            name: old.name,
+            key_hash: new_key_hash,
+            key_prefix: new_key_prefix,
+            type: old.type,
+            scope: old.scope,
+            rate_limit: old.rate_limit,
+            ip_allowlist: old.ip_allowlist,
+            capability: old.capability,
+            revoked: false,
+            created_by: old.created_by,
+            rotated_at: now,
+            athanor_id: athanor_id,
+            inserted_at: now,
+            updated_at: now
+          }
+        ])
+
+        {:ok, :rotated}
+    end
+  end
 end

@@ -46,9 +46,9 @@ defmodule Sanctum.Vault.OAuth do
   Dispense an access token from a v2 payload's oauth bundle, refreshing
   through the entry-keyed single-flight lock when expired.
   """
-  @spec dispense(Cyfr.Actor.t(), Arca.VaultStorage.entry(), map(), String.t()) ::
+  @spec dispense(Prima.Actor.t(), Arca.VaultStorage.entry(), map(), String.t()) ::
           {:ok, String.t()} | {:error, term()}
-  def dispense(%Cyfr.Actor{athanor_id: athanor_id} = actor, entry, oauth, provider)
+  def dispense(%Prima.Actor{athanor_id: athanor_id} = actor, entry, oauth, provider)
       when is_binary(athanor_id) do
     if token_valid?(oauth) do
       {:ok, oauth["access_token"]}
@@ -75,7 +75,7 @@ defmodule Sanctum.Vault.OAuth do
         "expires_at" => compute_expires_at(response["expires_in"]),
         "token_type" => response["token_type"] || oauth["token_type"] || "bearer"
       }
-      |> Cyfr.MapUtil.put_present("scopes", oauth["scopes"])
+      |> Prima.MapUtil.put_present("scopes", oauth["scopes"])
 
     Map.put(payload, "oauth", new_oauth)
   end
@@ -164,7 +164,7 @@ defmodule Sanctum.Vault.OAuth do
   # re-consent). The conflict is resolved by what the rotate actually
   # wrote — see merge_after_conflict/3. Public for tests, like
   # apply_refresh_response/3: the HTTP half is exercised separately.
-  def write_back(%Cyfr.Actor{} = actor, entry, new_payload, consumed_oauth) do
+  def write_back(%Prima.Actor{} = actor, entry, new_payload, consumed_oauth) do
     case seal_and_cas(actor, entry, new_payload) do
       :ok ->
         emit_telemetry(entry, entry.provider_hint, :ok)
@@ -178,7 +178,7 @@ defmodule Sanctum.Vault.OAuth do
     end
   end
 
-  defp seal_and_cas(%Cyfr.Actor{athanor_id: athanor_id} = actor, entry, new_payload) do
+  defp seal_and_cas(%Prima.Actor{athanor_id: athanor_id} = actor, entry, new_payload) do
     aad = CipherAAD.vault_entry(athanor_id, entry.id, entry.provider_hint)
 
     with {:ok, json} <- encode_payload(new_payload),
@@ -236,7 +236,7 @@ defmodule Sanctum.Vault.OAuth do
   # Pieces
   # ---------------------------------------------------------------------------
 
-  defp load_fresh(%Cyfr.Actor{athanor_id: athanor_id} = actor, entry_id) do
+  defp load_fresh(%Prima.Actor{athanor_id: athanor_id} = actor, entry_id) do
     with {:ok, entry} <- Arca.VaultStorage.get(actor, entry_id),
          {:ok, sealed} <- fetch_sealed(entry) do
       aad = CipherAAD.vault_entry(athanor_id, entry.id, entry.provider_hint)
@@ -267,7 +267,7 @@ defmodule Sanctum.Vault.OAuth do
   defp fetch_token_url(%{"token_url" => url}) when is_binary(url), do: {:ok, url}
   defp fetch_token_url(_), do: {:error, :no_token_url}
 
-  defp fetch_provider_creds(%Cyfr.Actor{athanor_id: athanor_id}, provider) do
+  defp fetch_provider_creds(%Prima.Actor{athanor_id: athanor_id}, provider) do
     Sanctum.ProviderCredentials.fetch_for_oauth(athanor_id, provider)
   end
 

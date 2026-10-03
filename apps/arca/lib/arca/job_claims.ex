@@ -12,7 +12,7 @@ defmodule Arca.JobClaims do
   holder reads and writes through the same tenant-scoped facades under the
   same actor as any other caller, so a `key` naming an athanor's
   credential is a name and not a reach. That is also why the table carries
-  no `athanor_id`: several kinds have no estate at all.
+  no `athanor_id`: several kinds have no athanor at all.
 
   Where a job *should* run is not decided here. The cell proposes an owner
   — rendezvous over the live member roster, so the common case is
@@ -29,14 +29,22 @@ defmodule Arca.JobClaims do
     * `renew/3` moves the lease forward, `record/2` writes `detail`
       without moving it, and `release/1` gives the row up by leaving its
       lease already run out. Each answers the row it wrote.
+    * `hold/1` and `renew_held/3` are the same checks as steps of a
+      caller's locking transaction: the row is held at its owner and
+      fence until the caller commits, and the lease is judged on the
+      clock read after the lock was won.
 
   ## The fence
 
   `fence` rises on **every** write, so a renew is itself a
   compare-and-set and two writers cannot interleave. Each function is
-  given the row it is writing against and answers the row it wrote, so a
-  holder carries its own fence forward; a holder that has lost track of
-  one reads the row again (`read/2`).
+  given the claim it is writing against (`t:held/0`) and answers the row
+  it wrote, so a holder carries its own fence forward; a holder that has
+  lost track of one reads the row again (`read/2`). Of the claim a caller
+  hands back only `kind`, `key`, `owner` and `fence` are read — the row's
+  identity and the compare-and-set expectation — and every other column
+  is read from the row as it stands. Every row a function here answers is
+  a plain map (`Arca.Data`).
 
   ## The two ways to lose, which a caller must tell apart
 
@@ -86,15 +94,37 @@ defmodule Arca.JobClaims do
   """
   @type lost :: :taken | :lapsed
 
+  @typedoc """
+  A claim as its holder carries it: the row's identity (`kind`, `key`)
+  and the compare-and-set expectation (`owner`, `fence`). Any other key
+  is ignored.
+  """
+  @type held :: %{
+          required(:kind) => String.t(),
+          required(:key) => String.t(),
+          required(:owner) => String.t(),
+          required(:fence) => pos_integer(),
+          optional(atom()) => term()
+        }
+
+  @doc """
+  The `key` of a job the cell has exactly one of — retention, the boot
+  reconciliation, the seed release, the notice of stored grants to make
+  again. The kinds that name a thing of their own (a worker service, a
+  credential) carry that thing's id instead.
+  """
+  @spec cell_key() :: String.t()
+  def cell_key, do: "cell"
+
   @doc """
   Take the claim for `(kind, key)` on behalf of `owner`, for `lease_ms`.
 
-  Raises on a kind `Arca.Schemas.JobClaim.kinds/0` does not name: an
+  Raises on a kind the claim roster does not name: an
   undeclared singleton is a caller's bug, and answering `{:busy, …}` for
   one would leave its subject silently unclaimed.
   """
   @spec claim(String.t(), String.t(), String.t(), pos_integer()) ::
-          {:ok, JobClaim.t()} | {:busy, JobClaim.t()} | {:error, :database_error}
+          {:ok, map()} | {:busy, map()} | {:error, :database_error}
   def claim(kind, key, owner, lease_ms)
       when is_binary(kind) and is_binary(key) and key != "" and is_binary(owner) and owner != "" and
              is_integer(lease_ms) and lease_ms > 0 do
@@ -103,6 +133,7 @@ defmodule Arca.JobClaims do
     Arca.Repo.Errors.with_db_rescue("Arca.JobClaims.claim", fn ->
       take(kind, key, owner, lease_ms, @rounds)
     end)
+    |> Arca.Data.project()
   end
 
   @doc """
@@ -112,25 +143,73 @@ defmodule Arca.JobClaims do
   `:detail` in `opts` writes the claim's evidence in the same statement;
   omitted, whatever the row carries is kept.
   """
-  @spec renew(JobClaim.t(), pos_integer(), keyword()) ::
-          {:ok, JobClaim.t()} | lost() | {:error, :database_error}
-  def renew(%JobClaim{} = held, lease_ms, opts \\ [])
+  @spec renew(held(), pos_integer(), keyword()) ::
+          {:ok, map()} | lost() | {:error, :database_error}
+  def renew(held, lease_ms, opts \\ [])
+
+  def renew(%{} = held, lease_ms, opts)
       when is_integer(lease_ms) and lease_ms > 0 and is_list(opts) do
-    detail = Keyword.get(opts, :detail, :keep)
+    held = identity!(held)
 
     Arca.Repo.Errors.with_db_rescue("Arca.JobClaims.renew", fn ->
-      now = Arca.ServerMetaStorage.now!()
-
-      sets =
-        [lease_until: lease_end(now, lease_ms), fence: held.fence + 1, updated_at: now]
-        |> with_detail(detail)
-
-      held
-      |> mine()
-      |> where([c], c.lease_until > ^now)
-      |> Arca.Repo.update_all(set: sets)
-      |> landed(held)
+      checked_renew(held, lease_ms, Keyword.get(opts, :detail, :keep))
     end)
+    |> Arca.Data.project()
+  end
+
+  @doc """
+  Inside a caller's `Arca.Repo.locking_transaction/2`: lock `held`'s row
+  at its owner and fence, then decide on the database's clock read after
+  that lock was won whether its lease still stands.
+
+  `{:ok, claim}` is the row as locked, which nothing else can change
+  before the caller commits. `:taken` and `:lapsed` mean what they mean
+  for `renew/3`. A decision is never taken on an instant read before a
+  wait for the lock: a holder that waited behind a release or a takeover
+  finds the row gone from under its fence, and one that waited past its
+  own lease finds it lapsed.
+
+  Raises outside a transaction and on a store that cannot answer, so the
+  caller's transaction rolls back.
+  """
+  @spec hold(held()) :: {:ok, map()} | lost()
+  # arca:db-raise-ok a step inside the caller's locking transaction; a raise rolls it back.
+  def hold(%{} = held) do
+    held = identity!(held)
+    in_transaction!("hold/1")
+
+    case held |> mine() |> Arca.QueryHelpers.for_update() |> Arca.Repo.one() do
+      nil ->
+        :taken
+
+      %JobClaim{} = claim ->
+        if live?(claim, Arca.ServerMetaStorage.now!()),
+          do: {:ok, Arca.Data.project(claim)},
+          else: :lapsed
+    end
+  end
+
+  @doc """
+  `renew/3` as a step of a caller's `Arca.Repo.locking_transaction/2`: the
+  final checked renewal that records the job's evidence and answers the
+  newest claim, which is the one the caller releases after committing.
+
+  Raises outside a transaction and on a store that cannot answer, so the
+  caller's transaction rolls back rather than committing work whose claim
+  it could not renew.
+  """
+  @spec renew_held(held(), pos_integer(), keyword()) :: {:ok, map()} | lost()
+  # arca:db-raise-ok a step inside the caller's locking transaction; a raise rolls it back.
+  def renew_held(held, lease_ms, opts \\ [])
+
+  def renew_held(%{} = held, lease_ms, opts)
+      when is_integer(lease_ms) and lease_ms > 0 and is_list(opts) do
+    held = identity!(held)
+    in_transaction!("renew_held/3")
+
+    held
+    |> checked_renew(lease_ms, Keyword.get(opts, :detail, :keep))
+    |> Arca.Data.project()
   end
 
   @doc """
@@ -140,9 +219,11 @@ defmodule Arca.JobClaims do
   what a successor inherits is worth keeping either way, and this extends
   nothing and takes nothing. `:taken` once a peer holds the row.
   """
-  @spec record(JobClaim.t(), String.t() | nil) ::
-          {:ok, JobClaim.t()} | :taken | {:error, :database_error}
-  def record(%JobClaim{} = held, detail) when is_binary(detail) or is_nil(detail) do
+  @spec record(held(), String.t() | nil) ::
+          {:ok, map()} | :taken | {:error, :database_error}
+  def record(%{} = held, detail) when is_binary(detail) or is_nil(detail) do
+    held = identity!(held)
+
     Arca.Repo.Errors.with_db_rescue("Arca.JobClaims.record", fn ->
       now = Arca.ServerMetaStorage.now!()
 
@@ -153,6 +234,7 @@ defmodule Arca.JobClaims do
         {0, _} -> :taken
       end
     end)
+    |> Arca.Data.project()
   end
 
   @doc """
@@ -161,8 +243,10 @@ defmodule Arca.JobClaims do
   member inherits what this one learned. `:taken` when the row is no
   longer this owner's at this fence, and then nothing is written.
   """
-  @spec release(JobClaim.t()) :: :ok | :taken | {:error, :database_error}
-  def release(%JobClaim{} = held) do
+  @spec release(held()) :: :ok | :taken | {:error, :database_error}
+  def release(%{} = held) do
+    held = identity!(held)
+
     Arca.Repo.Errors.with_db_rescue("Arca.JobClaims.release", fn ->
       now = Arca.ServerMetaStorage.now!()
 
@@ -177,7 +261,7 @@ defmodule Arca.JobClaims do
 
   @doc "The claim row for `(kind, key)` as it reads now."
   @spec read(String.t(), String.t()) ::
-          {:ok, JobClaim.t()} | {:error, :not_found | :database_error}
+          {:ok, map()} | {:error, :not_found | :database_error}
   def read(kind, key) when is_binary(kind) and is_binary(key) do
     known!(kind)
 
@@ -187,19 +271,51 @@ defmodule Arca.JobClaims do
         claim -> {:ok, claim}
       end
     end)
+    |> Arca.Data.project()
   end
 
-  @doc "Whether `claim`'s lease still stands on the cell's clock."
-  @spec live?(JobClaim.t()) :: boolean()
-  def live?(%JobClaim{} = claim) do
+  @doc """
+  Whether the lease of the claim `held` names still stands on the cell's
+  clock, read from the row as it stands: false once the row has left this
+  owner and fence.
+  """
+  @spec live?(held()) :: boolean()
+  def live?(%{} = held) do
+    held = identity!(held)
+
     Arca.Repo.Errors.with_db_rescue("Arca.JobClaims.live?", false, fn ->
-      live?(claim, Arca.ServerMetaStorage.now!())
+      case Arca.Repo.one(mine(held)) do
+        nil -> false
+        claim -> live?(claim, Arca.ServerMetaStorage.now!())
+      end
     end)
   end
 
   # ---- internal --------------------------------------------------------------
 
   defp live?(%JobClaim{lease_until: until}, now), do: DateTime.compare(until, now) == :gt
+
+  # The clock is read here, after any lock the caller already holds, so the
+  # lease comparison is never older than the write it decides.
+  defp checked_renew(held, lease_ms, detail) do
+    now = Arca.ServerMetaStorage.now!()
+
+    sets =
+      [lease_until: lease_end(now, lease_ms), fence: held.fence + 1, updated_at: now]
+      |> with_detail(detail)
+
+    held
+    |> mine()
+    |> where([c], c.lease_until > ^now)
+    |> Arca.Repo.update_all(set: sets)
+    |> landed(held)
+  end
+
+  defp in_transaction!(fun) do
+    unless Arca.Repo.in_transaction?() do
+      raise ArgumentError, "Arca.JobClaims.#{fun} runs inside a locking transaction"
+    end
+  end
 
   defp take(kind, key, _owner, _lease_ms, 0) do
     case row(kind, key) do
@@ -238,7 +354,7 @@ defmodule Arca.JobClaims do
   # claims: the loser inserts nothing and reads the winner's row.
   defp insert(kind, key, owner, lease_ms, now) do
     row = %{
-      id: Cyfr.UUID7.generate_id("jcl"),
+      id: Prima.UUID7.generate_id("jcl"),
       kind: kind,
       key: key,
       owner: owner,
@@ -277,8 +393,18 @@ defmodule Arca.JobClaims do
     )
   end
 
+  # Of a claim a caller hands back, only the row's identity and the
+  # compare-and-set expectation are kept: nothing else it carries can
+  # reach a write.
+  defp identity!(%{kind: kind, key: key, owner: owner, fence: fence})
+       when is_binary(kind) and is_binary(key) and is_binary(owner) and is_integer(fence),
+       do: %{kind: kind, key: key, owner: owner, fence: fence}
+
+  defp identity!(held),
+    do: raise(ArgumentError, "not a held job claim: #{Prima.LoggerContext.shape(held)}")
+
   # The row while it is still this holder's, at the fence it read.
-  defp mine(%JobClaim{kind: kind, key: key, owner: owner, fence: fence}) do
+  defp mine(%{kind: kind, key: key, owner: owner, fence: fence}) do
     from(c in JobClaim,
       where: c.kind == ^kind and c.key == ^key and c.owner == ^owner and c.fence == ^fence
     )
@@ -289,7 +415,7 @@ defmodule Arca.JobClaims do
   # Nothing landed, and which of the two it is decides whether the caller
   # stops or asks again. The row still reading this holder's own owner and
   # fence means nobody has taken it and the lease alone ran out.
-  defp landed({0, _}, %JobClaim{owner: owner, fence: fence} = held) do
+  defp landed({0, _}, %{owner: owner, fence: fence} = held) do
     case row(held.kind, held.key) do
       %JobClaim{owner: ^owner, fence: ^fence} -> :lapsed
       _taken_or_gone -> :taken
@@ -302,12 +428,12 @@ defmodule Arca.JobClaims do
   defp row(kind, key),
     do: Arca.Repo.one(from(c in JobClaim, where: c.kind == ^kind and c.key == ^key))
 
-  defp reread(%JobClaim{kind: kind, key: key}), do: row(kind, key)
+  defp reread(%{kind: kind, key: key}), do: row(kind, key)
 
   defp lease_end(now, lease_ms), do: DateTime.add(now, lease_ms, :millisecond)
 
   defp known!(kind) do
     if kind not in JobClaim.kinds(),
-      do: raise(ArgumentError, "unknown job claim kind #{inspect(kind)}")
+      do: raise(ArgumentError, "unknown job claim kind #{Prima.LoggerContext.shape(kind)}")
   end
 end

@@ -21,14 +21,11 @@ defmodule Arca.BudgetReservations do
 
   ## Tenancy
 
-  Every function but `fetch/1` takes the `Cyfr.Actor` first and matches
-  it in its head, so the athanor comes from the caller and never from an
-  argument. An actor whose athanor is nil or the empty string is refused
-  before any query — `{:error, :no_athanor}` from an entry point, a
-  raise from a `!` function inside a caller's transaction. `fetch/1` is
-  the exception and says why where it stands: the id is the wire's
-  identity of one root's reservation, and the row answers with its own
-  athanor.
+  Every function takes the `Prima.Actor` first and matches it in its
+  head, so the athanor comes from the caller and never from an argument.
+  An actor whose athanor is nil or the empty string is refused before any
+  query — `{:error, :no_athanor}` from an entry point, a raise from a `!`
+  function inside a caller's transaction.
   """
 
   import Ecto.Query, only: [from: 2]
@@ -51,9 +48,9 @@ defmodule Arca.BudgetReservations do
   Mint the reservation of a root execution inside the caller's
   admission transaction.
   """
-  @spec mint!(Cyfr.Actor.t(), String.t(), String.t(), pos_integer()) :: BudgetReservation.t()
+  @spec mint!(Prima.Actor.t(), String.t(), String.t(), pos_integer()) :: BudgetReservation.t()
   # arca:db-raise-ok inside the caller's transaction
-  def mint!(%Cyfr.Actor{athanor_id: athanor_id}, root_execution_id, budget_id, cap)
+  def mint!(%Prima.Actor{athanor_id: athanor_id}, root_execution_id, budget_id, cap)
       when is_binary(athanor_id) and athanor_id != "" and is_integer(cap) and cap >= 0 do
     Arca.Repo.insert!(%BudgetReservation{
       id: budget_id,
@@ -65,20 +62,21 @@ defmodule Arca.BudgetReservations do
     })
   end
 
-  def mint!(%Cyfr.Actor{}, _root_execution_id, _budget_id, _cap),
+  def mint!(%Prima.Actor{}, _root_execution_id, _budget_id, _cap),
     do: Arca.QueryHelpers.no_athanor!("Arca.BudgetReservations.mint!/4")
 
   @doc "Entry-point form of `mint!/4`."
-  @spec mint(Cyfr.Actor.t(), String.t(), String.t(), pos_integer()) ::
-          {:ok, BudgetReservation.t()} | {:error, term()}
-  def mint(%Cyfr.Actor{athanor_id: athanor_id} = actor, root_execution_id, budget_id, cap)
+  @spec mint(Prima.Actor.t(), String.t(), String.t(), pos_integer()) ::
+          {:ok, map()} | {:error, term()}
+  def mint(%Prima.Actor{athanor_id: athanor_id} = actor, root_execution_id, budget_id, cap)
       when is_binary(athanor_id) and athanor_id != "" do
     Arca.Repo.Errors.with_db_rescue("Arca.BudgetReservations.mint", fn ->
       Arca.Repo.transaction(fn -> mint!(actor, root_execution_id, budget_id, cap) end)
     end)
+    |> Arca.Data.project()
   end
 
-  def mint(%Cyfr.Actor{}, _root_execution_id, _budget_id, _cap), do: {:error, :no_athanor}
+  def mint(%Prima.Actor{}, _root_execution_id, _budget_id, _cap), do: {:error, :no_athanor}
 
   @doc """
   Charge `n` against `reservation_id` for one dispatch. `:ok` when the
@@ -88,12 +86,12 @@ defmodule Arca.BudgetReservations do
   the reservation is closed. `opts`: `:holder_deadline` for a charge
   without a holder execution.
   """
-  @spec charge(Cyfr.Actor.t(), String.t(), charge(), pos_integer(), keyword()) ::
+  @spec charge(Prima.Actor.t(), String.t(), charge(), pos_integer(), keyword()) ::
           :ok | :exhausted | :stale_attempt | :released | {:error, term()}
   def charge(actor, reservation_id, charge, n, opts \\ [])
 
   def charge(
-        %Cyfr.Actor{athanor_id: athanor_id},
+        %Prima.Actor{athanor_id: athanor_id},
         reservation_id,
         %{id: id, attempt: attempt} = charge,
         n,
@@ -120,7 +118,7 @@ defmodule Arca.BudgetReservations do
               generation: Map.get(charge, :generation, 0),
               holder_execution_id: Map.get(charge, :holder_execution_id),
               n: n,
-              runner_id: Cyfr.Boot.id(),
+              runner_id: Prima.Boot.id(),
               admit_by:
                 if(Map.get(charge, :holder_execution_id),
                   do: DateTime.add(now, @admission_window_seconds, :second)
@@ -166,17 +164,18 @@ defmodule Arca.BudgetReservations do
         other -> other
       end
     end)
+    |> Arca.Data.project()
   end
 
-  def charge(%Cyfr.Actor{}, _reservation_id, _charge, _n, _opts), do: {:error, :no_athanor}
+  def charge(%Prima.Actor{}, _reservation_id, _charge, _n, _opts), do: {:error, :no_athanor}
 
   @doc """
   Release the charge `id` on `reservation_id`: the row goes and the
   reservation is decremented by what it held. Idempotent: a charge
   already released answers `:ok` and changes nothing.
   """
-  @spec release(Cyfr.Actor.t(), String.t(), String.t()) :: :ok | {:error, term()}
-  def release(%Cyfr.Actor{athanor_id: athanor_id}, reservation_id, id)
+  @spec release(Prima.Actor.t(), String.t(), String.t()) :: :ok | {:error, term()}
+  def release(%Prima.Actor{athanor_id: athanor_id}, reservation_id, id)
       when is_binary(athanor_id) and athanor_id != "" do
     Arca.Repo.Errors.with_db_rescue("Arca.BudgetReservations.release", fn ->
       Arca.Repo.transaction(fn -> release!(athanor_id, reservation_id, id) end)
@@ -185,18 +184,19 @@ defmodule Arca.BudgetReservations do
         other -> other
       end
     end)
+    |> Arca.Data.project()
   end
 
-  def release(%Cyfr.Actor{}, _reservation_id, _id), do: {:error, :no_athanor}
+  def release(%Prima.Actor{}, _reservation_id, _id), do: {:error, :no_athanor}
 
   @doc """
   The hold barrier, run inside admission's transaction: stamp the charge
   admitted while its hold stands. Answers the rows stamped — 0 when the
   hold expired or was reclaimed, and admission must abort.
   """
-  @spec admit_hold!(Cyfr.Actor.t(), String.t(), String.t()) :: non_neg_integer()
+  @spec admit_hold!(Prima.Actor.t(), String.t(), String.t()) :: non_neg_integer()
   # arca:db-raise-ok inside the caller's transaction
-  def admit_hold!(%Cyfr.Actor{athanor_id: athanor_id}, reservation_id, id)
+  def admit_hold!(%Prima.Actor{athanor_id: athanor_id}, reservation_id, id)
       when is_binary(athanor_id) and athanor_id != "" do
     now = DateTime.utc_now()
 
@@ -210,13 +210,13 @@ defmodule Arca.BudgetReservations do
     count
   end
 
-  def admit_hold!(%Cyfr.Actor{}, _reservation_id, _id),
+  def admit_hold!(%Prima.Actor{}, _reservation_id, _id),
     do: Arca.QueryHelpers.no_athanor!("Arca.BudgetReservations.admit_hold!/3")
 
   @doc "Close a root's reservation inside the caller's transaction."
-  @spec close!(Cyfr.Actor.t(), String.t()) :: non_neg_integer()
+  @spec close!(Prima.Actor.t(), String.t()) :: non_neg_integer()
   # arca:db-raise-ok inside the caller's transaction
-  def close!(%Cyfr.Actor{athanor_id: athanor_id}, root_execution_id)
+  def close!(%Prima.Actor{athanor_id: athanor_id}, root_execution_id)
       when is_binary(athanor_id) and athanor_id != "" do
     {count, _} =
       from(r in BudgetReservation,
@@ -228,41 +228,26 @@ defmodule Arca.BudgetReservations do
     count
   end
 
-  def close!(%Cyfr.Actor{}, _root_execution_id),
+  def close!(%Prima.Actor{}, _root_execution_id),
     do: Arca.QueryHelpers.no_athanor!("Arca.BudgetReservations.close!/2")
 
-  @doc """
-  A reservation by its id alone — the identity an Authority carries over
-  the wire, whose row names the athanor it belongs to.
-  """
-  @spec fetch(String.t()) :: {:ok, BudgetReservation.t()} | {:error, :not_found | term()}
-  # arca:unscoped-ok the id is the wire's identity of one root's
-  # reservation; the row answers with its own athanor.
-  def fetch(id) when is_binary(id) do
-    Arca.Repo.Errors.with_db_rescue("Arca.BudgetReservations.fetch", fn ->
-      case Arca.Repo.get(BudgetReservation, id) do
-        nil -> {:error, :not_found}
-        row -> {:ok, row}
-      end
-    end)
-  end
-
   @doc "A reservation by its id, within the athanor."
-  @spec lookup(Cyfr.Actor.t(), String.t()) :: BudgetReservation.t() | nil | {:error, term()}
-  def lookup(%Cyfr.Actor{athanor_id: athanor_id}, id)
+  @spec lookup(Prima.Actor.t(), String.t()) :: map() | nil | {:error, term()}
+  def lookup(%Prima.Actor{athanor_id: athanor_id}, id)
       when is_binary(athanor_id) and athanor_id != "" do
     Arca.Repo.Errors.with_db_rescue("Arca.BudgetReservations.lookup", fn ->
       Arca.Repo.one(
         from(r in BudgetReservation, where: r.athanor_id == ^athanor_id and r.id == ^id)
       )
     end)
+    |> Arca.Data.project()
   end
 
-  def lookup(%Cyfr.Actor{}, _id), do: {:error, :no_athanor}
+  def lookup(%Prima.Actor{}, _id), do: {:error, :no_athanor}
 
   @doc "The live charges of a reservation."
-  @spec charges(Cyfr.Actor.t(), String.t()) :: {:ok, [BudgetCharge.t()]} | {:error, term()}
-  def charges(%Cyfr.Actor{athanor_id: athanor_id}, reservation_id)
+  @spec charges(Prima.Actor.t(), String.t()) :: {:ok, [map()]} | {:error, term()}
+  def charges(%Prima.Actor{athanor_id: athanor_id}, reservation_id)
       when is_binary(athanor_id) and athanor_id != "" do
     Arca.Repo.Errors.with_db_rescue("Arca.BudgetReservations.charges", fn ->
       {:ok,
@@ -273,9 +258,10 @@ defmodule Arca.BudgetReservations do
          )
        )}
     end)
+    |> Arca.Data.project()
   end
 
-  def charges(%Cyfr.Actor{}, _reservation_id), do: {:error, :no_athanor}
+  def charges(%Prima.Actor{}, _reservation_id), do: {:error, :no_athanor}
 
   @doc """
   Reclaim the athanor's dead holds and recount every open reservation.
@@ -285,8 +271,8 @@ defmodule Arca.BudgetReservations do
   `holder_deadline`, or whose authorizing attempt is terminal. Answers
   the number of charges reclaimed.
   """
-  @spec sweep(Cyfr.Actor.t()) :: {:ok, non_neg_integer()} | {:error, term()}
-  def sweep(%Cyfr.Actor{athanor_id: athanor_id})
+  @spec sweep(Prima.Actor.t()) :: {:ok, non_neg_integer()} | {:error, term()}
+  def sweep(%Prima.Actor{athanor_id: athanor_id})
       when is_binary(athanor_id) and athanor_id != "" do
     Arca.Repo.Errors.with_db_rescue("Arca.BudgetReservations.sweep", fn ->
       Arca.Repo.transaction(fn ->
@@ -295,7 +281,7 @@ defmodule Arca.BudgetReservations do
 
         dead_holders =
           from(a in ExecutionAttempt,
-            join: e in Arca.Execution,
+            join: e in Arca.Schemas.Execution,
             on: e.current_attempt == a.attempt,
             where: a.athanor_id == ^athanor_id and a.state in ^terminal,
             select: e.id
@@ -328,9 +314,10 @@ defmodule Arca.BudgetReservations do
         length(rows)
       end)
     end)
+    |> Arca.Data.project()
   end
 
-  def sweep(%Cyfr.Actor{}), do: {:error, :no_athanor}
+  def sweep(%Prima.Actor{}), do: {:error, :no_athanor}
 
   # arca:db-raise-ok inside the caller's transaction
   defp release!(athanor_id, reservation_id, id) do
@@ -395,7 +382,7 @@ defmodule Arca.BudgetReservations do
   defp attempt_owns?(athanor_id, attempt) do
     Arca.Repo.exists?(
       from(a in ExecutionAttempt,
-        join: e in Arca.Execution,
+        join: e in Arca.Schemas.Execution,
         on: e.id == a.execution_id,
         where: a.athanor_id == ^athanor_id and a.attempt == ^attempt,
         where: e.current_attempt == ^attempt and a.state in ["running", "paused"]

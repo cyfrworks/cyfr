@@ -12,20 +12,23 @@ defmodule Arca.ExecutionEventsTest do
 
   alias Arca.ExecutionEvents
 
-  setup do
-    :ok = Ecto.Adapters.SQL.Sandbox.checkout(Arca.Repo)
-    Ecto.Adapters.SQL.Sandbox.mode(Arca.Repo, {:shared, self()})
+  setup tags do
+    Arca.Test.Sandbox.setup!(tags)
     Arca.Test.Actor.athanor!()
     actor = Arca.Test.Actor.local()
 
     {:ok, %{execution: execution}} =
-      Arca.Execution.admit(%{
-        id: "exec_evt_#{System.unique_integer([:positive])}",
-        reference: "catalyst:local.files:0.1.0",
-        user_id: actor.user_id,
-        athanor_id: actor.athanor_id,
-        component_type: "catalyst"
-      })
+      Arca.Execution.admit(
+        %{
+          id: "exec_evt_#{System.unique_integer([:positive])}",
+          reference: "catalyst:local.files:0.1.0",
+          user_id: actor.user_id,
+          athanor_id: actor.athanor_id,
+          component_type: "catalyst",
+          origin: :programmatic
+        },
+        Arca.Test.Actor.standing(actor.athanor_id)
+      )
 
     {:ok, actor: actor, exec: execution}
   end
@@ -50,17 +53,17 @@ defmodule Arca.ExecutionEventsTest do
              ExecutionEvents.since(actor, exec.id, 0)
 
     assert Enum.map(rows, & &1.seq) == Enum.to_list(2..13)
-    assert Arca.Repo.get!(Arca.Execution, exec.id).event_seq == 13
+    assert Arca.Repo.get!(Arca.Schemas.Execution, exec.id).event_seq == 13
 
     assert {:ok, tail} = ExecutionEvents.since(actor, exec.id, 11)
     assert Enum.map(tail, & &1.seq) == [12, 13]
     assert Enum.all?(rows, &is_integer(ExecutionEvents.data(&1)["i"]))
   end
 
-  test "an execution of another estate takes no event", %{actor: actor, exec: exec} do
+  test "an execution of another athanor takes no event", %{actor: actor, exec: exec} do
     assert {:error, _} =
              ExecutionEvents.append(
-               Cyfr.Actor.in_athanor("ath_elsewhere"),
+               Prima.Actor.in_athanor("ath_elsewhere"),
                exec.id,
                "step.closed"
              )

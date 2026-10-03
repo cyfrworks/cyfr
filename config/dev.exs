@@ -7,7 +7,7 @@ config :cyfr, :prometheus_metrics_enabled, true
 
 # For development, we disable any cache and enable
 # debugging and code reloading.
-config :cyfr, EmissaryWeb.Endpoint,
+config :cyfr, CyfrWeb.Endpoint,
   http: [ip: {127, 0, 0, 1}, port: 4000],
   check_origin: false,
   code_reloader: true,
@@ -21,7 +21,9 @@ config :cyfr, EmissaryWeb.Endpoint,
   live_reload: [
     patterns: [
       ~r"apps/cyfr/priv/static/(?!uploads/).*(js|css|png|jpeg|jpg|gif|svg)$",
-      ~r"apps/cyfr/lib/prism_web/(controllers|live|components)/.*(ex|heex)$"
+      ~r"apps/cyfr/lib/prism_web/(controllers|live|components)/.*(ex|heex)$",
+      ~r"apps/cyfr/lib/cyfr_web/.*(ex|heex)$",
+      ~r"apps/cyfr/lib/emissary/web/.*(ex)$"
     ]
   ]
 

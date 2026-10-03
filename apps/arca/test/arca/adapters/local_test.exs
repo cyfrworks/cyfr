@@ -310,7 +310,7 @@ defmodule Arca.Adapters.LocalTest do
       assert {:ok, precondition} =
                Local.put_if_none_match(actor, key, ["by", "tes"])
 
-      assert precondition == Cyfr.Digest.sha256_hex("bytes")
+      assert precondition == Prima.Digest.sha256_hex("bytes")
       assert {:error, :exists} = Local.put_if_none_match(actor, key, "other")
       assert {:ok, "bytes"} = Local.get(actor, key)
 
@@ -351,7 +351,7 @@ defmodule Arca.Adapters.LocalTest do
                  actor,
                  key,
                  "v3",
-                 Cyfr.Digest.sha256_hex("plain")
+                 Prima.Digest.sha256_hex("plain")
                )
 
       assert list_names(actor, ["data", "cond"]) == ["unit"]
@@ -407,7 +407,7 @@ defmodule Arca.Adapters.LocalTest do
       assert Enum.count(answers, &(&1 == {:error, :exists})) == 15
 
       assert {:ok, bytes} = Local.get(actor, key)
-      assert Cyfr.Digest.sha256_hex(bytes) == winner
+      assert Prima.Digest.sha256_hex(bytes) == winner
       assert list_names(actor, ["data", "cond"]) == ["raced"]
       assert actor |> Local.build_path(["data", "cond"]) |> File.ls!() == ["raced"]
     end
@@ -428,7 +428,7 @@ defmodule Arca.Adapters.LocalTest do
       assert [{:ok, winner}] = Enum.filter(answers, &match?({:ok, _}, &1))
       assert Enum.count(answers, &(&1 == {:error, :precondition_failed})) == 15
       assert {:ok, "writer-" <> _ = bytes} = Local.get(actor, key)
-      assert Cyfr.Digest.sha256_hex(bytes) == winner
+      assert Prima.Digest.sha256_hex(bytes) == winner
     end
 
     test "a symlink is refused, and seed media stays read-only", %{actor: actor} do
@@ -449,7 +449,7 @@ defmodule Arca.Adapters.LocalTest do
                    actor,
                    ["data", "link.txt"],
                    "injected",
-                   Cyfr.Digest.sha256_hex("secret")
+                   Prima.Digest.sha256_hex("secret")
                  )
       end)
 
@@ -606,7 +606,7 @@ defmodule Arca.Adapters.LocalTest do
       # tmp-shaped files where OTHER programs live ("another program's
       # file" per Arca.Storage) — never touched, symlinks there never
       # reported.
-      sidecar = Path.join(@test_base_path, "mcp-bridge")
+      sidecar = Path.join(@test_base_path, "sidecar")
       File.mkdir_p!(sidecar)
       sidecar_file = Path.join(sidecar, "state.tmp.3")
       File.write!(sidecar_file, "sidecar's own")
@@ -1069,7 +1069,7 @@ defmodule Arca.Adapters.LocalTest do
     end
 
     test "rejects segments with a leading slash (absolute-segment denylist)", %{actor: actor} do
-      # Cyfr.PathSafety treats a leading "/" in any segment as an absolute
+      # Prima.PathSafety treats a leading "/" in any segment as an absolute
       # path fragment and fails closed rather than silently normalizing it.
       assert_raise ArgumentError, ~r/absolute segments are not allowed/, fn ->
         Local.put(actor, ["/test/", "/file.txt/"], "content")

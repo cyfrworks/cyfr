@@ -2,16 +2,18 @@
 #   cyfr        — the one endpoint (:4000): Prism (chat + console), API, MCP,
 #                 tinctures; its host API (:4300, the worker network only)
 #                 takes the execution worker's host calls
-#   mcp-bridge  — runs the stdio/npx MCP servers CYFR registers with
+#   locus-backends — runs the stdio/npx MCP servers CYFR registers with
 #                 transport `stdio`, one owner per server row, each backend
-#                 under a uid of its own. Every request between cyfr and the
-#                 bridge is signed under CYFR_MCP_BRIDGE_KEY; the bridge
-#                 keeps no state.
+#                 under a uid and a memory bound of its own. Every request
+#                 between cyfr and the service is signed under
+#                 CYFR_LOCUS_BACKENDS_KEY; the service keeps no state.
 #   opus        — the execution worker: runs WASM components as CYFR
 #                 assigns them, on the internal `worker` network. Every
 #                 request between cyfr and opus is signed under the worker
 #                 key CYFR derives for OPUS_SERVICE_ID; opus holds no
-#                 tenant state.
+#                 tenant state. It runs under keeper.seccomp.json,
+#                 shipped beside this file, on a host that allows
+#                 unprivileged user namespaces (see the service).
 #   locus-builds — the builder: compiles components and tinctures, each
 #                 build under a uid and a memory bound of its own. Every
 #                 build request is signed under CYFR_LOCUS_BUILDS_KEY; the
@@ -21,9 +23,10 @@
 #   caddy      — TLS + reverse proxy in front of cyfr. Opt-in via the `tls`
 #                 profile.                                   [profile: tls]
 #
-# `cyfr init` writes this file (and Caddyfile + .env) into a fresh project dir;
-# from a source checkout, `cp .env.example .env` instead. Then:
-#   docker compose --profile locus-builds up -d   # cyfr + mcp-bridge + opus + locus-builds
+# `cyfr init` writes this file (and Caddyfile, keeper.seccomp.json + .env)
+# into a fresh project dir; from a source checkout, `cp .env.example .env`
+# and `cp apps/keeper/seccomp/keeper.json keeper.seccomp.json` instead. Then:
+#   docker compose --profile locus-builds up -d   # cyfr + locus-backends + opus + locus-builds
 #   docker compose --profile locus-builds --profile tls up -d   # also Caddy for TLS
 # `cyfr up` selects each profile from .env: `locus-builds` when
 # CYFR_LOCUS_BUILDS_URL names that service, and `tls` when
@@ -62,20 +65,23 @@ services:
       # Extra reverse-proxy layers in front of Caddy need this raised to match
       # (see README "Production configuration").
       - CYFR_TRUSTED_PROXY_HOPS=${CYFR_TRUSTED_PROXY_HOPS:-1}
-      # The private hosts outbound calls may reach; the bridge is one.
-      - CYFR_PRIVATE_EGRESS_TARGETS=${CYFR_PRIVATE_EGRESS_TARGETS:-mcp-bridge}
-      # Where cyfr reaches the mcp-bridge service. Stdio MCP servers need this
-      # and CYFR_MCP_BRIDGE_KEY, which cyfr reads from .env (env_file above).
-      - CYFR_MCP_BRIDGE_URL=${CYFR_MCP_BRIDGE_URL:-http://mcp-bridge:8001}
+      # The private hosts outbound calls may reach; the backends service is
+      # one.
+      - CYFR_PRIVATE_EGRESS_TARGETS=${CYFR_PRIVATE_EGRESS_TARGETS:-locus-backends}
+      # Where cyfr reaches the locus-backends service. Stdio MCP servers need
+      # this and CYFR_LOCUS_BACKENDS_KEY, which cyfr reads from .env
+      # (env_file above).
+      - CYFR_LOCUS_BACKENDS_URL=${CYFR_LOCUS_BACKENDS_URL:-http://locus-backends:4101}
       # The execution worker cyfr dispatches runs to, and where it listens
       # for the worker's host calls: every interface, since the container is
-      # reached over the worker network alone. CYFR_WORKER_KEY, the root
+      # reached over the worker network alone. CYFR_OPUS_KEY, the root
       # the worker's key derives from, comes from .env.
-      - CYFR_WORKERS=${CYFR_WORKERS:-wrk_opus=http://opus:4200}
+      - CYFR_OPUS_WORKERS=${CYFR_OPUS_WORKERS:-wrk_opus=http://opus:4200}
       - CYFR_HOST_API_BIND=0.0.0.0
       - CYFR_HOST_API_PORT=${CYFR_HOST_API_PORT:-4300}
     networks:
       - default
+      - locus-backends
       - locus-builds
       - worker
     restart: unless-stopped
@@ -115,8 +121,8 @@ services:
       - "4100"
     # Builder-only settings from .env.locus, every one a LOCUS_BUILDS_*
     # name. The builder never sees the rest of .env: not the keyring, not
-    # the database, not the worker root, not the bridge key, and refuses to
-    # start with any of them in its environment.
+    # the database, not the worker root, not the backends key, and refuses
+    # to start with any of them in its environment.
     env_file:
       - path: .env.locus
         required: false
@@ -127,17 +133,17 @@ services:
       # start (and restart-loops here).
       - LOCUS_BUILDS_KEY=${CYFR_LOCUS_BUILDS_KEY:-}
     # Only cyfr can reach the builder: it sits on its own network, which
-    # cyfr also joins; the bridge, opus and caddy never see port 4100. The
+    # cyfr also joins; locus-backends, opus and caddy never see port 4100. The
     # network is not `internal` — cargo and npm need crates.io and the
     # registry — so the isolation is who is attached, not egress. This is
     # the container's only network, so listening on every interface is
     # listening on it (LOCUS_BUILDS_BIND is for a builder outside compose).
     networks:
       - locus-builds
-    # docker-init is PID 1 and forwards stop signals to cyfr-spawn, the
+    # docker-init is PID 1 and forwards stop signals to cyfr-keeper, the
     # child subreaper of every build process.
     init: true
-    # cyfr-spawn refuses to start with any capability other than these: it
+    # cyfr-keeper refuses to start with any capability other than these: it
     # starts the locus release and each build under their own uids and
     # signals their processes. The release and every build run with none.
     cap_drop:
@@ -148,7 +154,7 @@ services:
       - KILL
     # writable-cgroups=true (Docker Engine 28 or later, on a cgroup v2 host)
     # mounts the container's own cgroup writable, which adds no capability:
-    # cyfr-spawn gives every build a group of its own there, bounded at
+    # cyfr-keeper gives every build a group of its own there, bounded at
     # LOCUS_BUILDS_MEMORY_BYTES. Without the option it cannot bound a build
     # and refuses every one: the service answers each build `unavailable`,
     # naming the option, and none runs unbounded.
@@ -157,7 +163,7 @@ services:
       - writable-cgroups=true
     # No /data mount, read-only root: the builder holds no tenant state —
     # sources arrive in the request, artifacts leave in the response. The
-    # tmpfs mounts below are the only writable surfaces, and cyfr-spawn
+    # tmpfs mounts below are the only writable surfaces, and cyfr-keeper
     # refuses to start if any other location is writable by a build's uid
     # (`ipc: none` leaves /dev/shm unmounted). Build homes: each build's
     # uid creates its own 0700 home holding its sources, Cargo home, npm
@@ -165,13 +171,13 @@ services:
     # one without listing the others, and build scripts and bundler
     # binaries run from there, so it allows exec. What a build writes to its
     # home counts against that build's memory bound, and the mount's size
-    # bounds what all concurrent builds write. /run/cyfr-builder holds the
+    # bounds what all concurrent builds write. /run/locus holds the
     # release's temporary files and the socket builds' relays attach to.
     read_only: true
     ipc: none
     tmpfs:
-      - /var/lib/cyfr-builder/homes:mode=1733,exec,size=2g
-      - /run/cyfr-builder:uid=10001,gid=10001,mode=0700,size=16m
+      - /var/lib/locus/homes:mode=1733,exec,size=2g
+      - /run/locus:uid=10001,gid=10001,mode=0700,size=16m
     restart: unless-stopped
     logging:
       driver: json-file
@@ -194,9 +200,12 @@ services:
           memory: ${LOCUS_BUILDS_MEMORY_LIMIT:-4G}
           cpus: "${LOCUS_BUILDS_CPU_LIMIT:-2}"
 
-  # The execution worker. cyfr reaches it at http://opus:4200 (CYFR_WORKERS)
+  # The execution worker. cyfr reaches it at http://opus:4200 (CYFR_OPUS_WORKERS)
   # and it reaches cyfr's host API at OPUS_HOST_URL; both sit on the worker
-  # network, which nothing else joins.
+  # network, which nothing else joins. The network is the service's alone:
+  # a runner has no interface on it or on any other, and its host calls and
+  # pinned fetches leave through its relay to the service, which posts and
+  # connects for it.
   opus:
     container_name: cyfr-opus
     image: ghcr.io/cyfrworks/cyfr-opus:latest
@@ -220,10 +229,10 @@ services:
       - OPUS_PORT=4200
     networks:
       - worker
-    # docker-init is PID 1 and forwards stop signals to cyfr-spawn, the
+    # docker-init is PID 1 and forwards stop signals to cyfr-keeper, the
     # child subreaper of every runner process.
     init: true
-    # cyfr-spawn refuses to start with any capability other than these: it
+    # cyfr-keeper refuses to start with any capability other than these: it
     # starts the opus release and each runner under their own uids and
     # signals their processes. The release and every runner run with none.
     cap_drop:
@@ -234,13 +243,26 @@ services:
       - KILL
     # writable-cgroups=true (Docker Engine 28 or later, on a cgroup v2 host)
     # mounts the container's own cgroup writable, which adds no capability:
-    # cyfr-spawn bounds a spawn's memory with a group of its own there, and
+    # cyfr-keeper bounds a spawn's memory with a group of its own there, and
     # refuses a spawn that asks for a bound where it cannot make one.
+    # cyfr-keeper clones every runner into a user and network namespace of
+    # its own, with no route out. Docker's default seccomp profile denies a
+    # clone that makes a namespace, so the service runs under
+    # keeper.seccomp.json, shipped beside this file (the image's
+    # /etc/cyfr/keeper.json): Docker's default with that clone allowed and
+    # unshare and setns denied. The host must allow unprivileged user
+    # namespaces: user.max_user_namespaces above 0 and, where AppArmor
+    # restricts them (kernel.apparmor_restrict_unprivileged_userns=1, as on
+    # Ubuntu 24.04 and later), the container keeps Docker's default
+    # AppArmor profile, under which the clone is allowed. Without either,
+    # cyfr-keeper refuses to start, naming both, and the container
+    # restart-loops.
     security_opt:
       - no-new-privileges:true
       - writable-cgroups=true
+      - seccomp=./keeper.seccomp.json
     # The engine holds no tenant state: read-only root, and the tmpfs
-    # mounts below are the only writable surfaces; cyfr-spawn refuses to
+    # mounts below are the only writable surfaces; cyfr-keeper refuses to
     # start if any other location is writable by a runner's uid
     # (`ipc: none` leaves /dev/shm unmounted). Runner homes: each runner's
     # uid creates its own 0700 home, where its VM keeps the release's
@@ -272,7 +294,7 @@ services:
           # charged to it, together, and a runner that reaches it is ended
           # there alone. This limit holds every runner uid the image has (8)
           # at that bound and the service beside them: 8 x 384 MiB + 1 GiB,
-          # where the service (cyfr-spawn and the opus release) peaked at
+          # where the service (cyfr-keeper and the opus release) peaked at
           # 192-206 MiB serving the seed components
           # (tests/worker-image/memory.py --measure). Raise it with the
           # bound (.env.example has the arithmetic).
@@ -281,76 +303,112 @@ services:
           # (a killed tight-loop leaks a spinning native thread).
           cpus: "${OPUS_CPU_LIMIT:-4}"
 
-  mcp-bridge:
-    # Built locally from Dockerfile.node (not a published image), so `docker
-    # compose pull` won't fetch it — `up` builds it on first run.
+  # The backends service: the same image as locus-builds, holding the
+  # backends key and the backend pool in place of the builds key and the
+  # build pool. cyfr reaches it at http://locus-backends:4101
+  # (CYFR_LOCUS_BACKENDS_URL) with CYFR_LOCUS_BACKENDS_KEY, which it reads
+  # from .env; compose hands this service the same key as
+  # LOCUS_BACKENDS_KEY. Its other settings go in .env.locus.
+  locus-backends:
+    container_name: cyfr-locus-backends
+    # Pulled as published; a source checkout builds it with
+    # `docker compose build locus-backends`.
+    image: ghcr.io/cyfrworks/cyfr-locus:latest
     build:
       context: .
-      dockerfile: Dockerfile.node
-      target: mcp-bridge
+      dockerfile: Dockerfile.locus
     expose:
-      - "8001"
-    # docker-init is PID 1 and forwards stop signals to cyfr-spawn. cyfr-spawn
-    # is the child subreaper of everything it starts, so an orphaned backend
-    # process is reparented to it, not to docker-init, and retired with its uid.
+      - "4101"
+    # The image's entrypoint serves builds; this service runs the backend
+    # pool instead: 32 uids, each backend under one of its own.
+    entrypoint: ["cyfr-keeper", "serve", "--pool", "backends:20001-20032", "--home-root", "/var/lib/locus/homes", "--client-user", "locus", "--", "/app/bin/locus", "start"]
+    # Backends-only settings from .env.locus, every one a LOCUS_BACKENDS_*
+    # name. The service never sees the rest of .env: not the keyring, not
+    # the database, not the worker root, not the builds key, and refuses to
+    # start with any control-plane variable in its environment. Backends
+    # receive only the environment their server row defines.
+    env_file:
+      - path: .env.locus
+        required: false
+    environment:
+      # The backends key every control message and MCP request is signed
+      # and verified with, and every sync's environment sealed with: 32
+      # random bytes as 64 hexadecimal digits, the value cyfr reads as
+      # CYFR_LOCUS_BACKENDS_KEY. `cyfr init` generates it. Without a valid
+      # key the service refuses to start (and restart-loops here).
+      - LOCUS_BACKENDS_KEY=${CYFR_LOCUS_BACKENDS_KEY:-}
+    # Only cyfr can reach the service: it sits on its own network, which
+    # cyfr also joins; locus-builds, opus and caddy never see port 4101.
+    # The network is not `internal` — `npx` needs the registry and a
+    # backend its upstream API — so the isolation is who is attached, not
+    # egress. This is the container's only network, so listening on every
+    # interface is listening on it.
+    networks:
+      - locus-backends
+    # docker-init is PID 1 and forwards stop signals to cyfr-keeper, the
+    # child subreaper of every backend process: an orphaned backend
+    # process is reparented to it, not to docker-init, and retired with
+    # its uid.
     init: true
-    # cyfr-spawn refuses to start with any capability other than these: it
-    # starts the bridge and each backend under their own uids and signals
-    # their processes. The bridge and every backend run with none.
+    # cyfr-keeper refuses to start with any capability other than these: it
+    # starts the locus release and each backend under their own uids and
+    # signals their processes. The release and every backend run with none.
     cap_drop:
       - ALL
     cap_add:
       - SETUID
       - SETGID
       - KILL
+    # writable-cgroups=true (Docker Engine 28 or later, on a cgroup v2 host)
+    # mounts the container's own cgroup writable, which adds no capability:
+    # cyfr-keeper gives every backend a group of its own there, bounded at
+    # LOCUS_BACKENDS_MEMORY_BYTES. Without the option it cannot bound a
+    # backend and refuses every spawn as `memory_unavailable`: each backend
+    # reports that refusal as its error, and none runs unbounded.
     security_opt:
       - no-new-privileges:true
+      - writable-cgroups=true
     # The root is read-only and the tmpfs mounts below are the only writable
-    # surfaces; cyfr-spawn refuses to start if any other location is
-    # writable by a backend's uid, so a backend has no shared /tmp, /var/tmp,
-    # /run or /dev/shm (`ipc: none` leaves /dev/shm unmounted) and writes
-    # temporary files under its home. Backend homes: each backend's uid
-    # creates its own 0700 home; mode 1733 lets it create one without
-    # listing the others. Homes hold npx caches, so they allow exec.
-    # /run/cyfr-bridge holds the bridge's private attach socket.
+    # surfaces; cyfr-keeper refuses to start if any other location is
+    # writable by a backend's uid, so a backend has no shared /tmp,
+    # /var/tmp, /run or /dev/shm (`ipc: none` leaves /dev/shm unmounted)
+    # and writes temporary files under its home. Backend homes: each
+    # backend's uid creates its own 0700 home; mode 1733 lets it create one
+    # without listing the others. Homes hold npx caches, so they allow exec,
+    # and what a backend writes there counts against its memory bound.
+    # /run/locus holds the release's temporary files and the socket
+    # backends' relays attach to.
     read_only: true
     ipc: none
     tmpfs:
-      - /var/lib/cyfr-bridge/homes:mode=1733,exec
-      - /run/cyfr-bridge:uid=10001,gid=10001,mode=0700
-    # Read bridge-only settings from .env.bridge; CYFR_MCP_BRIDGE_KEY comes
-    # from .env below.
-    env_file:
-      - path: .env.bridge
-        required: false
-    environment:
-      # The root every signing and sealing key between cyfr and the bridge is
-      # derived from: 32 random bytes as 64 hexadecimal digits. `cyfr init`
-      # generates it into .env, and cyfr reads the same value from there.
-      # Without a valid key the bridge refuses to start (and restart-loops
-      # here). The port is `expose`d, never published.
-      - CYFR_MCP_BRIDGE_KEY=${CYFR_MCP_BRIDGE_KEY:-}
+      - /var/lib/locus/homes:mode=1733,exec,size=2g
+      - /run/locus:uid=10001,gid=10001,mode=0700,size=16m
     restart: unless-stopped
-    # Shutdown retires every backend (SIGTERM, 2s, then SIGKILL for all of
-    # its processes) and drains in-flight requests; compose's default 10s is
-    # tight when several backends are up.
+    # Shutdown retires every backend and drains in-flight requests;
+    # compose's default 10s is tight when several backends are up.
     stop_grace_period: 15s
     logging:
       driver: json-file
       options:
         max-size: "10m"
         max-file: "3"
+    # The backends wire's health operation, answered without a key
+    # (Prima.LocusBackends), in place of the image's builds probe.
     healthcheck:
-      # node:24-alpine ships busybox wget, not curl. /health is unauthenticated
-      # and carries no data (server.mjs).
-      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:8001/health"]
+      test: ["CMD-SHELL", "curl -fsS -X POST -H 'content-type: application/json' -d '{\"version\":1}' http://localhost:4101/locus/v1/backends/health || exit 1"]
       interval: 10s
       timeout: 3s
-      start_period: 15s
+      start_period: 20s
       retries: 3
     deploy:
       resources:
         limits:
+          # Every backend has a memory bound of its own
+          # (LOCUS_BACKENDS_MEMORY_BYTES, 512 MiB): its processes, its
+          # home's tmpfs pages and the kernel memory charged to them,
+          # together, and a backend that reaches it is ended there alone.
+          # This limit bounds every backend running at once and the
+          # service beside them together.
           memory: 1G
 
   caddy:
@@ -368,6 +426,9 @@ services:
       - caddy_config:/config
     environment:
       - CYFR_HOST=${CYFR_HOST:-localhost}
+      # The port the Caddyfile proxies to: cyfr's own listener, with its
+      # default.
+      - CYFR_PORT=${CYFR_PORT:-4000}
       - CADDY_ACME_EMAIL=${CADDY_ACME_EMAIL:-}
     depends_on:
       cyfr:
@@ -393,11 +454,15 @@ services:
 
 networks:
   default: {}
+  # cyfr <-> locus-backends only (see the locus-backends service).
+  locus-backends: {}
   # cyfr <-> locus-builds only (see the locus-builds service).
   locus-builds: {}
-  # cyfr <-> opus only: the bridge, the builder and caddy never see port
-  # 4200. The network is not `internal` — a guest's consented HTTP egress
-  # leaves from the worker — so the isolation is who is attached.
+  # cyfr <-> opus only: the Locus services and caddy never see port
+  # 4200, and no runner is on it (see the opus service). The network is
+  # not `internal` — a guest's consented HTTP egress leaves from the worker
+  # service, which connects to the pinned address for it — so the isolation
+  # is who is attached.
   worker: {}
 
 volumes:

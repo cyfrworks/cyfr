@@ -62,8 +62,8 @@ defmodule Sanctum.Auth.DeviceFlowTest do
     test "polls beyond the per-code budget answer slow_down without provider contact" do
       Application.delete_env(:sanctum, :github_client_id)
       System.delete_env("CYFR_GITHUB_CLIENT_ID")
-      Cyfr.RateLimiter.reset()
-      on_exit(fn -> Cyfr.RateLimiter.reset() end)
+      Prima.RateLimiter.reset()
+      on_exit(fn -> Prima.RateLimiter.reset() end)
 
       code = "budget_test_code"
 
@@ -95,8 +95,8 @@ defmodule Sanctum.Auth.DeviceFlowTest do
     setup do
       Application.delete_env(:sanctum, :github_client_id)
       System.delete_env("CYFR_GITHUB_CLIENT_ID")
-      Cyfr.RateLimiter.reset()
-      on_exit(fn -> Cyfr.RateLimiter.reset() end)
+      Prima.RateLimiter.reset()
+      on_exit(fn -> Prima.RateLimiter.reset() end)
       :ok
     end
 
@@ -284,7 +284,7 @@ defmodule Sanctum.Auth.DeviceFlowTest do
         Application.delete_env(:sanctum, :device_flow_last_ip)
       end)
 
-      Sanctum.MCP.SessionTool.handle(ctx, %{"action" => "device_init", "provider" => "github"})
+      Sanctum.Providers.Session.handle(ctx, %{"action" => "device_init", "provider" => "github"})
 
       assert Application.get_env(:sanctum, :device_flow_last_ip) == "203.0.113.9",
              "the MCP device flow was charged no address"
@@ -296,6 +296,233 @@ defmodule Sanctum.Auth.DeviceFlowTest do
     # refuses the sign-in and the poll carries that reason out.
     def poll_for_session(_provider, _device_code, _client_ip),
       do: {:error, {:limit_reached, :max_athanors, 1}}
+  end
+
+  defmodule IdP do
+    @moduledoc false
+    # A plain HTTP/1.1 stand-in for GitHub's device-flow endpoints on
+    # loopback: one request per connection, answered from `routes`, a map
+    # of `{method, path}` to the JSON body.
+
+    def start(routes) do
+      {:ok, listen} =
+        :gen_tcp.listen(0, [:binary, active: false, reuseaddr: true, ip: {127, 0, 0, 1}])
+
+      {:ok, port} = :inet.port(listen)
+      pid = spawn(fn -> accept(listen, routes) end)
+      %{port: port, pid: pid, listen: listen}
+    end
+
+    def stop(%{pid: pid, listen: listen}) do
+      Process.exit(pid, :kill)
+      :gen_tcp.close(listen)
+    end
+
+    defp accept(listen, routes) do
+      case :gen_tcp.accept(listen) do
+        {:ok, socket} ->
+          serve(socket, routes)
+          accept(listen, routes)
+
+        {:error, _closed} ->
+          :ok
+      end
+    end
+
+    defp serve(socket, routes) do
+      with {:ok, head, _rest} <- read_head(socket, "") do
+        [line | _headers] = String.split(head, "\r\n")
+        [method, target, _version] = String.split(line, " ", parts: 3)
+        body = routes |> Map.fetch!({method, URI.parse(target).path}) |> Jason.encode!()
+
+        :gen_tcp.send(
+          socket,
+          "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: " <>
+            "#{byte_size(body)}\r\nconnection: close\r\n\r\n" <> body
+        )
+      end
+
+      :gen_tcp.close(socket)
+    end
+
+    defp read_head(socket, acc) do
+      case :binary.split(acc, "\r\n\r\n") do
+        [head, rest] ->
+          {:ok, head, rest}
+
+        [_partial] ->
+          with {:ok, data} <- :gen_tcp.recv(socket, 0, 5_000), do: read_head(socket, acc <> data)
+      end
+    end
+  end
+
+  describe "poll_for_link/4 — a device flow that links a door instead of signing in" do
+    setup tags do
+      Arca.Test.Sandbox.setup!(tags)
+      Arca.Cache.init()
+      Prima.RateLimiter.reset()
+      endpoints = Application.get_env(:sanctum, :device_flow_endpoints)
+      {:ok, _} = Sanctum.Door.Store.allow("wildcard", "*", "test")
+
+      on_exit(fn ->
+        if endpoints,
+          do: Application.put_env(:sanctum, :device_flow_endpoints, endpoints),
+          else: Application.delete_env(:sanctum, :device_flow_endpoints)
+
+        Arca.Cache.delete_match({:established, :_, :_, :_})
+        Prima.RateLimiter.reset()
+      end)
+
+      Application.put_env(:sanctum, :github_client_id, "link-client")
+      :ok
+    end
+
+    # GitHub's endpoints, answering a token or a pending poll.
+    defp idp!(token_answer) do
+      n = System.unique_integer([:positive])
+
+      idp =
+        IdP.start(%{
+          {"POST", "/login/oauth/access_token"} => token_answer,
+          {"GET", "/user"} => %{"id" => n, "login" => "linked#{n}", "name" => "Linked #{n}"},
+          {"GET", "/user/emails"} => [
+            %{"email" => "linked#{n}@example.com", "primary" => true, "verified" => true}
+          ]
+        })
+
+      on_exit(fn -> IdP.stop(idp) end)
+      base = "http://127.0.0.1:#{idp.port}"
+
+      Application.put_env(:sanctum, :device_flow_endpoints, %{
+        github: %{
+          token: base <> "/login/oauth/access_token",
+          userinfo: base <> "/user",
+          emails: base <> "/user/emails"
+        }
+      })
+
+      n
+    end
+
+    defp signed_in! do
+      n = System.unique_integer([:positive])
+
+      {:ok, user} =
+        Sanctum.Tenancy.Users.upsert_from_provider(%{
+          id: "oidcc|https://idp.test|device-link-#{n}",
+          provider: "oidcc",
+          email: "device-link-#{n}@idp.test",
+          verified: true
+        })
+
+      {:ok, athanor} = Sanctum.Tenancy.Athanors.create_group(user.id, "Device link #{n}")
+
+      built =
+        Sanctum.Context.build(
+          user_id: user.id,
+          provider: "oidcc",
+          athanor_id: athanor.id,
+          permissions: [:*],
+          auth_method: :oidc,
+          authenticated: true
+        )
+
+      {:ok, session} = Sanctum.TestContext.create_session(built)
+
+      {:ok, ctx} =
+        Sanctum.Caller.establish(session.token, focus: athanor.id, task_supervisor: nil)
+
+      %{user: user, ctx: ctx}
+    end
+
+    test "the identity the provider authorizes is a ticket for the person who polled, " <>
+           "and no one is signed in" do
+      person = signed_in!()
+      n = idp!(%{"access_token" => "gho_link", "token_type" => "bearer"})
+      sessions = Arca.Repo.aggregate(Arca.Schemas.Session, :count)
+      people = Arca.Repo.aggregate(Arca.Schemas.User, :count)
+
+      assert {:ok, %{status: "complete", provider: "github", ticket: ticket}} =
+               DeviceFlow.poll_for_link("github", "dc-link-#{n}", nil, person.ctx)
+
+      assert Arca.Repo.aggregate(Arca.Schemas.Session, :count) == sessions
+      assert Arca.Repo.aggregate(Arca.Schemas.User, :count) == people
+
+      key = "github|https://github.com|#{n}"
+
+      assert {:ok, %{linked: true, door: %{key: ^key}}} =
+               Sanctum.TestContext.confirming(
+                 person.ctx,
+                 &Sanctum.SignIn.link_door(&1, "github", ticket)
+               )
+
+      assert {:ok, %{id: user_id}} = Sanctum.Tenancy.Users.get_by_identity(key)
+      assert user_id == person.user.id
+    end
+
+    test "a Google door is linked the same way, by the subject Google names" do
+      person = signed_in!()
+      n = System.unique_integer([:positive])
+
+      idp =
+        IdP.start(%{
+          {"POST", "/token"} => %{"access_token" => "ya29_link", "token_type" => "Bearer"},
+          {"GET", "/userinfo"} => %{
+            "sub" => "g-#{n}",
+            "email" => "g#{n}@example.com",
+            "email_verified" => true,
+            "name" => "G #{n}"
+          }
+        })
+
+      on_exit(fn ->
+        IdP.stop(idp)
+        Application.delete_env(:sanctum, :google_client_id)
+        Application.delete_env(:sanctum, :google_client_secret)
+      end)
+
+      base = "http://127.0.0.1:#{idp.port}"
+      Application.put_env(:sanctum, :google_client_id, "link-google")
+      Application.put_env(:sanctum, :google_client_secret, "link-google-secret")
+
+      Application.put_env(:sanctum, :device_flow_endpoints, %{
+        google: %{token: base <> "/token", userinfo: base <> "/userinfo"}
+      })
+
+      assert {:ok, %{status: "complete", provider: "google", ticket: ticket}} =
+               DeviceFlow.poll_for_link("google", "dc-google-#{n}", nil, person.ctx)
+
+      key = "google|https://accounts.google.com|g-#{n}"
+
+      assert {:ok, %{linked: true, door: %{key: ^key}}} =
+               Sanctum.TestContext.confirming(
+                 person.ctx,
+                 &Sanctum.SignIn.link_door(&1, "google", ticket)
+               )
+    end
+
+    test "a pending authorization answers pending, and a closed door mints no ticket" do
+      person = signed_in!()
+      n = idp!(%{"error" => "authorization_pending"})
+
+      assert {:ok, %{status: "pending"}} =
+               DeviceFlow.poll_for_link("github", "dc-pending-#{n}", nil, person.ctx)
+
+      [entry] = Sanctum.Door.Store.list()
+      :ok = Sanctum.Door.Store.remove(entry.id)
+      _ = idp!(%{"access_token" => "gho_link", "token_type" => "bearer"})
+
+      assert {:error, {:door, :not_allowed}} =
+               DeviceFlow.poll_for_link("github", "dc-closed-#{n}", nil, person.ctx)
+
+      assert {:error, :unauthenticated} =
+               DeviceFlow.poll_for_link(
+                 "github",
+                 "dc-nosession-#{n}",
+                 nil,
+                 %{person.ctx | session_token_hash: nil}
+               )
+    end
   end
 
   describe "a full server, seen from the CLI" do
@@ -322,7 +549,7 @@ defmodule Sanctum.Auth.DeviceFlowTest do
       ctx = %{Sanctum.TestContext.local() | authenticated: false}
 
       assert {:error, message} =
-               Sanctum.MCP.SessionTool.handle(ctx, %{
+               Sanctum.Providers.Session.handle(ctx, %{
                  "action" => "device_poll",
                  "provider" => "github",
                  "device_code" => "dc_full"

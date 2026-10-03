@@ -10,8 +10,9 @@ defmodule Sanctum.ContextTest do
   alias Sanctum.Context
   alias Sanctum.Unauthorized
 
-  setup do
-    :ok = Ecto.Adapters.SQL.Sandbox.checkout(Arca.Repo)
+  setup tags do
+    Arca.Test.Sandbox.setup!(tags)
+    :ok
   end
 
   describe "local/0" do
@@ -128,6 +129,17 @@ defmodule Sanctum.ContextTest do
       }
 
       assert ctx.authenticated == false
+    end
+  end
+
+  describe "the confirmation secret" do
+    test "is left out of the context's inspection, so no crash report carries it" do
+      secret = "cnf_" <> String.duplicate("A", 43)
+      ctx = Context.build(user_id: "u1", athanor_id: "ath_1", confirmation_id: secret)
+
+      assert ctx.confirmation_id == secret
+      refute inspect(ctx) =~ secret
+      assert inspect(ctx) =~ "Sanctum.Context"
     end
   end
 
@@ -664,6 +676,7 @@ defmodule Sanctum.ContextTest do
       scheduled = Context.for_scheduled("user_1", athanor_id: "ath_o")
 
       assert scheduled.auth_method == :scheduled
+      assert scheduled.origin == :schedule
 
       delegated =
         Context.internal(
@@ -671,13 +684,43 @@ defmodule Sanctum.ContextTest do
           namespace: scheduled.namespace,
           athanor_id: "ath_o",
           scope: :athanor,
-          auth_method: :scheduled
+          auth_method: :scheduled,
+          origin: :schedule
         )
 
       # Single construction path: for_scheduled/2 is byte-identical to the
-      # equivalent internal/1 call (only the provenance tag differs from
-      # internal/1's :system default).
+      # equivalent internal/1 call (only the provenance tag and the origin
+      # differ from internal/1's :system default).
       assert scheduled == delegated
+    end
+
+    test "a paired client, a repeated confirmation and an origin are built, and nothing else is" do
+      ctx =
+        Context.build(
+          user_id: "usr_1",
+          auth_method: :device,
+          client_id: "pcl_1",
+          confirmation_id: "cnf_1",
+          origin: :interactive,
+          authenticated: true
+        )
+
+      assert {ctx.auth_method, ctx.client_id, ctx.confirmation_id, ctx.origin} ==
+               {:device, "pcl_1", "cnf_1", :interactive}
+
+      plain = Context.build(user_id: "usr_1", auth_method: :oidc, authenticated: true)
+      assert {plain.client_id, plain.confirmation_id, plain.origin} == {nil, nil, nil}
+
+      assert_raise ArgumentError, ~r/origin must be a Prima.Origin/, fn ->
+        Context.build(user_id: "usr_1", origin: "interactive")
+      end
+
+      assert_raise ArgumentError, ~r/client_id must be a string/, fn ->
+        Context.build(user_id: "usr_1", client_id: 1)
+      end
+
+      # An internal context names an origin only when its caller does.
+      assert Context.internal().origin == nil
     end
 
     test "TestContext.local/0 impersonates a logged-in user (:oidc)" do
@@ -699,7 +742,7 @@ defmodule Sanctum.ContextTest do
     test "projects an authenticated external context one field each" do
       ctx = Context.build(@external)
 
-      assert Context.actor(ctx) == %Cyfr.Actor{
+      assert Context.actor(ctx) == %Prima.Actor{
                athanor_id: "ath_1",
                plane: :external,
                anonymous: false,
@@ -708,8 +751,18 @@ defmodule Sanctum.ContextTest do
                authenticated: true,
                client_ip: "203.0.113.7",
                scope: :athanor,
-               system: false
+               system: false,
+               platform_admin: false
              }
+    end
+
+    test "projects the platform-admin capability as it stands, widening no scope" do
+      admin = Context.build(Keyword.put(@external, :platform_admin, true))
+
+      assert %Prima.Actor{platform_admin: true, scope: :athanor, athanor_id: "ath_1"} =
+               Context.actor(admin)
+
+      refute Context.actor(Context.build(@external)).platform_admin
     end
 
     test "keeps the guest plane a context has entered" do
@@ -718,6 +771,17 @@ defmodule Sanctum.ContextTest do
 
       assert Context.actor(guest).plane == :guest
       assert %{Context.actor(guest) | plane: :external} == Context.actor(external)
+    end
+
+    test "the admission a context is inside is not the actor's, and survives the guest plane" do
+      ctx = Context.build(Keyword.put(@external, :call_id, "call_1"))
+
+      assert ctx.call_id == "call_1"
+      assert Context.actor(ctx) == Context.actor(Context.build(@external))
+      refute Map.has_key?(Map.from_struct(Context.actor(ctx)), :call_id)
+      assert Context.enter_guest(ctx).call_id == "call_1"
+
+      assert_raise ArgumentError, fn -> Context.build(Keyword.put(@external, :call_id, 1)) end
     end
 
     test "marks an anonymous caller that still has a tenant" do
@@ -797,6 +861,6 @@ defmodule Sanctum.ContextTest do
 
   # The clause a facade that takes the actor matches: a resolved tenant is a
   # binary, and nothing else is admitted before a query.
-  defp tenant_resolved?(%Cyfr.Actor{athanor_id: id}) when is_binary(id), do: true
-  defp tenant_resolved?(%Cyfr.Actor{}), do: false
+  defp tenant_resolved?(%Prima.Actor{athanor_id: id}) when is_binary(id), do: true
+  defp tenant_resolved?(%Prima.Actor{}), do: false
 end

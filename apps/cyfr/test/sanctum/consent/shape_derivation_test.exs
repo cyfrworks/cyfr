@@ -4,16 +4,17 @@
 defmodule Sanctum.Consent.ShapeDerivationTest do
   use ExUnit.Case, async: false
 
+  require Ecto.Query
+
   alias Sanctum.Consent.Bootstrap
   alias Sanctum.Consent.Loader
   alias Sanctum.Consent.ShapeDerivation
 
   @wasm File.read!(Path.join(__DIR__, "../../support/test_wasm/math.wasm"))
 
-  setup do
+  setup tags do
     Arca.Cache.init()
-    :ok = Ecto.Adapters.SQL.Sandbox.checkout(Arca.Repo)
-    Ecto.Adapters.SQL.Sandbox.mode(Arca.Repo, {:shared, self()})
+    Cyfr.Test.Sandbox.setup!(tags)
 
     test_path = Path.join(System.tmp_dir!(), "shape_derivation_#{:rand.uniform(1_000_000)}")
     original_base_path = Application.get_env(:arca, :base_path)
@@ -28,7 +29,7 @@ defmodule Sanctum.Consent.ShapeDerivationTest do
         else: Application.delete_env(:arca, :base_path)
     end)
 
-    {:ok, ctx: Sanctum.TestContext.local()}
+    {:ok, ctx: Sanctum.TestContext.local(:prism)}
   end
 
   defp publish!(ctx, name, version, attrs \\ %{}) do
@@ -304,6 +305,37 @@ defmodule Sanctum.Consent.ShapeDerivationTest do
       assert Map.delete(input, :source_ref) == Map.delete(explicit, :source_ref)
     end
 
+    test "a stored caps block the grammar no longer admits is refused, never read as empty",
+         %{ctx: ctx} do
+      publish!(ctx, "shape-respelled", "1.0.0", %{
+        manifest: Jason.encode!(%{"caps" => %{"storage" => %{"paths" => ["data/secrets/"]}}})
+      })
+
+      ref = "reagent:local.shape-respelled"
+
+      assert {:ok, %{caps: %{"storage.paths" => ["data/secrets/"]}}} =
+               ShapeDerivation.shape_input(ctx, ref)
+
+      # A release published before the grammar refused the spelling: its
+      # row reached past the publish check, as one written then is.
+      stored = Jason.encode!(%{"caps" => %{"storage" => %{"paths" => ["data//secrets/"]}}})
+
+      {1, _} =
+        Arca.Repo.update_all(
+          Ecto.Query.from(c in Arca.Schemas.Component, where: c.name == "shape-respelled"),
+          set: [manifest: stored]
+        )
+
+      Compendium.Registry.invalidate_executor_caches(ctx)
+
+      assert {:error, {:corrupt, {:manifest, ^ref}}} = ShapeDerivation.shape_input(ctx, ref)
+      assert {:error, {:corrupt, {:manifest, ^ref}}} = ShapeDerivation.manifest_blocks(ctx, ref)
+
+      # The builder reads the ask the same way: refused, not asked for nothing.
+      assert {:error, {:corrupt, {:manifest, ^ref}}} =
+               Sanctum.Consent.BlobBuilder.node_grant(ctx, ref, Jason.decode!(stored))
+    end
+
     test "the reason text is not shape — editing it keeps the digest", %{ctx: ctx} do
       publish!(ctx, "shape-prose", "1.0.0", %{manifest: Jason.encode!(@needs_caps_manifest)})
       {:ok, before_digest} = ShapeDerivation.live_digest(ctx, "reagent:local.shape-prose")
@@ -359,6 +391,203 @@ defmodule Sanctum.Consent.ShapeDerivationTest do
       # And no vault pointer was minted — a needs manifest has no legacy
       # grants, so the entry appears only when the operator binds one.
       assert authority.resources.vault == nil
+    end
+  end
+
+  describe "a tincture's frame declaration is part of the shape" do
+    @frame %{
+      "frame" => %{"capabilities" => ["pointer_lock"]},
+      "actions" => ["execution.list"],
+      "streams" => [%{"name" => "mcp_servers.changes"}]
+    }
+
+    defp tincture!(ctx, name, version, tincture) do
+      manifest = %{
+        "name" => name,
+        "type" => "tincture",
+        "version" => version,
+        "publisher" => "local",
+        "tincture" => Map.put(tincture, "entry", "index.html")
+      }
+
+      {:ok, _} =
+        Arca.Test.UnitFixtures.ship_and_register!(ctx, "tincture", "local", name, version,
+          manifest: manifest,
+          files: [{"index.html", "<html></html>"}]
+        )
+
+      "tincture:local.#{name}"
+    end
+
+    test "a declaration's digest joins the shape as tincture_digest", %{ctx: ctx} do
+      ref = tincture!(ctx, "shape-frame", "1.0.0", @frame)
+      {:ok, input} = ShapeDerivation.shape_input(ctx, ref)
+
+      {:ok, declaration} =
+        Prima.Manifest.Tincture.from_manifest(%{"tincture" => @frame})
+
+      assert input.tincture_digest == Prima.Manifest.Tincture.digest(declaration)
+      assert {:ok, _} = Sanctum.Consent.ShapeDigest.compute(input)
+    end
+
+    test "a tincture that declares nothing carries no digest: its shape is unchanged", %{ctx: ctx} do
+      ref = tincture!(ctx, "shape-frameless", "1.0.0", %{})
+      {:ok, input} = ShapeDerivation.shape_input(ctx, ref)
+      refute Map.has_key?(input, :tincture_digest)
+    end
+
+    test "a version that declares more changes the shape; one that declares the same keeps it",
+         %{ctx: ctx} do
+      ref = tincture!(ctx, "shape-frame-drift", "1.0.0", @frame)
+      {:ok, before_digest} = ShapeDerivation.live_digest(ctx, ref)
+
+      reordered = put_in(@frame, ["frame", "capabilities"], ["pointer_lock", "pointer_lock"])
+      tincture!(ctx, "shape-frame-drift", "1.1.0", reordered)
+      Arca.Cache.delete_match(:_)
+      {:ok, same_digest} = ShapeDerivation.live_digest(ctx, ref)
+      assert same_digest == before_digest
+
+      wider = Map.update!(@frame, "actions", &["records.delete" | &1])
+      tincture!(ctx, "shape-frame-drift", "1.2.0", wider)
+      Arca.Cache.delete_match(:_)
+      {:ok, wider_digest} = ShapeDerivation.live_digest(ctx, ref)
+      refute wider_digest == before_digest
+    end
+
+    test "the shape digest refuses a tincture digest that is not one" do
+      assert {:error, {:invalid_shape, :tincture_digest, _}} =
+               Sanctum.Consent.ShapeDigest.compute(%{
+                 scope: :versionless,
+                 source_ref: "tincture:local.x",
+                 tincture_digest: "md5:abc"
+               })
+    end
+  end
+
+  describe "a vault need names its projection" do
+    defp fieldless(need_type, fields) do
+      need = %{"type" => need_type, "reason" => "to call the API with your key"}
+      need = if fields == :absent, do: need, else: Map.put(need, "fields", fields)
+      %{"needs" => %{"api_key" => need}}
+    end
+
+    test "a need without its list, or with an empty one, is refused as a manifest error",
+         %{ctx: ctx} do
+      for {name, manifest} <- [
+            {"shape-nofields", fieldless("api_key:example.com", :absent)},
+            {"shape-emptyfields", fieldless("api_key:example.com", [])},
+            {"shape-oauth-noscopes", fieldless("oauth:google", :absent)},
+            {"shape-oauth-emptyscopes",
+             put_in(fieldless("oauth:google", :absent), ["needs", "api_key", "scopes"], [])},
+            {"shape-bundle-nofields", fieldless("bundle:example.com", [])}
+          ] do
+        publish!(ctx, name, "1.0.0", %{manifest: Jason.encode!(manifest)})
+        ref = "reagent:local.#{name}"
+
+        assert {:error, {:invalid_argument, message} = reason} =
+                 ShapeDerivation.shape_input(ctx, ref)
+
+        # The sentence names the component and the need, and renders as is.
+        assert message =~ ref
+        assert message =~ ~s("api_key")
+
+        assert %Prima.Refusal{class: :invalid_argument, message: ^message} =
+                 Prima.Refusal.classify(reason)
+
+        # The live shape refuses the same way, so a load fails closed.
+        assert ShapeDerivation.live_digest(ctx, ref) == {:error, reason}
+      end
+    end
+
+    test "a fieldless need is refused at consent time and mints nothing", %{ctx: ctx} do
+      publish!(ctx, "shape-nofields-mint", "1.0.0", %{
+        manifest: Jason.encode!(fieldless("api_key:example.com", :absent))
+      })
+
+      ref = "reagent:local.shape-nofields-mint"
+
+      assert {:error, {:invalid_argument, _message}} =
+               Sanctum.Consent.Plan.plan(ctx, %{ref: ref})
+
+      {:ok, _} = Bootstrap.run(ctx)
+      assert {:ok, []} = Arca.ConsentStorage.profiles(Sanctum.Context.actor(ctx), ref)
+    end
+
+    test "an OAuth need's projection is its scopes; it needs no fields", %{ctx: ctx} do
+      manifest =
+        put_in(fieldless("oauth:google", :absent), ["needs", "api_key", "scopes"], ["b", "a"])
+
+      publish!(ctx, "shape-oauth-scopes", "1.0.0", %{manifest: Jason.encode!(manifest)})
+      {:ok, input} = ShapeDerivation.shape_input(ctx, "reagent:local.shape-oauth-scopes")
+
+      assert [%{name: "api_key", fields: [], scopes: ["a", "b"]}] = input.needs
+    end
+
+    test "every derived vault need row carries its declared fields", %{ctx: ctx} do
+      manifest = %{
+        "needs" => %{
+          "api_key" => %{
+            "type" => "api_key:example.com",
+            "reason" => "to call the API with your key",
+            "fields" => ["ORG", "KEY"]
+          }
+        }
+      }
+
+      publish!(ctx, "shape-fields", "1.0.0", %{manifest: Jason.encode!(manifest)})
+      {:ok, input} = ShapeDerivation.shape_input(ctx, "reagent:local.shape-fields")
+
+      assert [%{name: "api_key", fields: ["KEY", "ORG"]}] = input.needs
+    end
+  end
+
+  describe "a stored manifest that does not decode" do
+    # A row altered outside the publish path: its manifest column holds
+    # bytes that are not JSON. The real facts port hands consent those
+    # bytes as storage holds them.
+    defp corrupt_manifest!(name) do
+      {1, _} =
+        Ecto.Query.from(c in Arca.Schemas.Component, where: c.name == ^name)
+        |> Arca.Repo.update_all(set: [manifest: ~s({"needs": {"api_key": )])
+
+      :ok
+    end
+
+    test "has no shape: every entry refuses it as corrupt, never the empty ask", %{ctx: ctx} do
+      publish!(ctx, "shape-corrupt", "1.0.0", %{manifest: Jason.encode!(@needs_caps_manifest)})
+      corrupt_manifest!("shape-corrupt")
+
+      ref = "reagent:local.shape-corrupt"
+      refusal = {:error, {:corrupt, {:manifest, ref}}}
+
+      assert ShapeDerivation.shape_input(ctx, ref) == refusal
+      assert ShapeDerivation.manifest_blocks(ctx, ref) == refusal
+      assert ShapeDerivation.live_digest(ctx, ref) == refusal
+
+      {:ok, row} = Sanctum.Consent.Components.get_latest(ctx, "shape-corrupt", "local", "reagent")
+      assert ShapeDerivation.dependency_releases(ctx, row, ref) == refusal
+
+      assert %Prima.Refusal{class: :corrupt, message: "The stored manifest is damaged."} =
+               Prima.Refusal.classify({:corrupt, {:manifest, ref}})
+    end
+
+    test "reads as corrupt consent, not as a component that asks for nothing", %{ctx: ctx} do
+      publish!(ctx, "shape-corrupt-status", "1.0.0")
+      corrupt_manifest!("shape-corrupt-status")
+
+      assert Aqua.ConsentStatus.state(ctx, "reagent:local.shape-corrupt-status") ==
+               {:error, :corrupt}
+    end
+
+    test "the registry's own reads still read it as none", %{ctx: ctx} do
+      publish!(ctx, "shape-corrupt-registry", "1.0.0")
+      corrupt_manifest!("shape-corrupt-registry")
+
+      assert {:ok, %{manifest: nil}} =
+               Compendium.Registry.get_latest(ctx, "shape-corrupt-registry", "local", "reagent")
+
+      assert {:ok, %{manifest: nil}} =
+               Compendium.Registry.get(ctx, "shape-corrupt-registry", "1.0.0", "local", "reagent")
     end
   end
 end

@@ -14,7 +14,7 @@ defmodule Locus.BuilderTest do
   # Replaces PATH for the duration of one test.
   use ExUnit.Case, async: false
 
-  alias Cyfr.BuilderProtocol
+  alias Prima.BuilderProtocol
   alias Locus.Builder
 
   defp rust(sources, fields \\ %{}) do
@@ -23,11 +23,45 @@ defmodule Locus.BuilderTest do
 
   defp tincture(sources), do: rust(sources, %{language: :javascript, target_type: :tincture})
 
-  defp scripted(script) do
+  # A tincture whose `npm run build` runs `script`, with the lockfile of a
+  # package that installs nothing.
+  defp scripted(script, scripts \\ %{}) do
     tincture(%{
-      "package.json" =>
-        Jason.encode!(%{name: "builder-probe", private: true, scripts: %{build: script}})
+      "package.json" => package(%{scripts: Map.put(scripts, :build, script)}),
+      "package-lock.json" => lockfile(%{})
     })
+  end
+
+  defp package(fields),
+    do:
+      Jason.encode!(Map.merge(%{name: "builder-probe", version: "0.0.1", private: true}, fields))
+
+  # The lockfile npm writes for `builder-probe` with `dependencies` and
+  # the `node_modules` entries `installed`.
+  defp lockfile(dependencies, installed \\ %{}) do
+    root =
+      if dependencies == %{},
+        do: %{name: "builder-probe", version: "0.0.1"},
+        else: %{name: "builder-probe", version: "0.0.1", dependencies: dependencies}
+
+    Jason.encode!(%{
+      name: "builder-probe",
+      version: "0.0.1",
+      lockfileVersion: 3,
+      requires: true,
+      packages: Map.put(installed, "", root)
+    })
+  end
+
+  # A package tarball as npm packs one: `package/` and its files, and the
+  # integrity a lockfile pins it by.
+  defp tarball(files) do
+    entries = for {name, bytes} <- files, do: {~c"package/" ++ String.to_charlist(name), bytes}
+    path = Path.join(System.tmp_dir!(), "builder-tarball-#{System.unique_integer([:positive])}")
+    :ok = :erl_tar.create(String.to_charlist(path), entries, [:compressed])
+    tgz = File.read!(path)
+    File.rm!(path)
+    {tgz, "sha512-" <> Base.encode64(:crypto.hash(:sha512, tgz))}
   end
 
   # Every stage and log line a build reported, oldest first.
@@ -77,6 +111,14 @@ defmodule Locus.BuilderTest do
                Builder.prepare(tincture(%{"src/main.jsx" => "export default function() {}"}))
 
       assert sentence =~ "package.json"
+    end
+
+    test "a javascript build without its lockfile: a tincture builds only from its lockfile" do
+      assert {:error, {:malformed, sentence}} =
+               Builder.prepare(tincture(%{"package.json" => package(%{})}))
+
+      assert sentence =~ "package-lock.json"
+      assert sentence =~ "only from its lockfile"
     end
 
     test "sources past the wire's bound" do
@@ -231,6 +273,126 @@ defmodule Locus.BuilderTest do
     test "past its budget is a timeout naming the budget" do
       assert {:error, {:timeout, 1_500}} = Builder.build(scripted("sleep 60"), timeout_ms: 1_500)
     end
+
+    test "installs from its lockfile alone, and one out of step with its manifest is failed" do
+      {tgz, integrity} = tarball(%{"package.json" => ~s({"name":"pinned","version":"1.0.0"})})
+
+      sources = %{
+        "package.json" =>
+          package(%{
+            scripts: %{
+              build: "mkdir -p dist && cp node_modules/pinned/package.json dist/pinned.json"
+            },
+            dependencies: %{pinned: "file:pinned.tgz"}
+          }),
+        "pinned.tgz" => tgz,
+        "package-lock.json" =>
+          lockfile(%{pinned: "file:pinned.tgz"}, %{
+            "node_modules/pinned" => %{
+              version: "1.0.0",
+              resolved: "file:pinned.tgz",
+              integrity: integrity
+            }
+          })
+      }
+
+      assert {:ok, %{outputs: %{"pinned.json" => pinned}}} = Builder.build(tincture(sources))
+      assert Jason.decode!(pinned)["version"] == "1.0.0"
+
+      # The manifest asks for a dependency the lockfile does not pin: npm ci
+      # refuses rather than resolving it.
+      {on_progress, progress} = collecting()
+
+      stale =
+        Map.put(
+          sources,
+          "package.json",
+          package(%{
+            scripts: %{build: "mkdir -p dist && : > dist/x"},
+            dependencies: %{pinned: "file:pinned.tgz", other: "^1.0.0"}
+          })
+        )
+
+      assert {:error, {:failed, {:status, status}}} =
+               Builder.build(tincture(stale), on_progress: on_progress)
+
+      assert status != 0
+
+      assert Enum.any?(progress.(), fn {_stage, line} -> line =~ "npm ci" or line =~ "in sync" end)
+    end
+
+    test "an install script runs with the build's environment, which holds no credential" do
+      System.put_env("LOCUS_BUILDS_KEY", "builder-test-secret-key")
+      System.put_env("NPM_TOKEN", "builder-test-npm-token")
+
+      on_exit(fn ->
+        System.delete_env("LOCUS_BUILDS_KEY")
+        System.delete_env("NPM_TOKEN")
+      end)
+
+      build =
+        scripted("mkdir -p dist && cp env.txt dist/env.txt", %{postinstall: "env > env.txt"})
+
+      assert {:ok, %{outputs: %{"env.txt" => env}}} = Builder.build(build)
+
+      names =
+        env |> String.split("\n", trim: true) |> Enum.map(&hd(String.split(&1, "=", parts: 2)))
+
+      # The install script ran, under the build's own home.
+      assert "HOME" in names
+      refute env =~ "builder-test-secret-key"
+      refute env =~ "builder-test-npm-token"
+      refute Enum.any?(names, &(&1 =~ ~r/KEY|TOKEN|SECRET|PASSWORD|CREDENTIAL/i))
+    end
+
+    test "keeps the notices of the runtime packages it ships" do
+      {tgz, integrity} =
+        tarball(%{
+          "package.json" => ~s({"name":"noticed","version":"2.1.0","license":"MIT"}),
+          "LICENSE" => "MIT License, noticed's authors\n",
+          "index.js" => "module.exports = 1;\n"
+        })
+
+      sources = %{
+        "package.json" =>
+          package(%{
+            scripts: %{build: "mkdir -p dist && echo hi > dist/index.html"},
+            dependencies: %{noticed: "file:noticed.tgz"}
+          }),
+        "noticed.tgz" => tgz,
+        "package-lock.json" =>
+          lockfile(%{noticed: "file:noticed.tgz"}, %{
+            "node_modules/noticed" => %{
+              version: "2.1.0",
+              resolved: "file:noticed.tgz",
+              integrity: integrity,
+              license: "MIT"
+            }
+          })
+      }
+
+      assert {:ok, %{outputs: %{"third-party-notices.json" => notices}}} =
+               Builder.build(tincture(sources))
+
+      assert [
+               %{
+                 "name" => "noticed",
+                 "version" => "2.1.0",
+                 "license" => "MIT",
+                 "notices" => files
+               }
+             ] =
+               Jason.decode!(notices)
+
+      assert files == [%{"file" => "LICENSE", "text" => "MIT License, noticed's authors\n"}]
+    end
+
+    test "that ships no package writes no notices" do
+      assert {:ok, %{outputs: outputs}} =
+               Builder.build(scripted("mkdir -p dist && echo hi > dist/index.html"))
+
+      refute Map.has_key?(outputs, "third-party-notices.json")
+    end
   end
 
   describe "a rust component" do
@@ -262,7 +424,7 @@ defmodule Locus.BuilderTest do
       wasm = BuilderProtocol.component_wasm()
       lock = BuilderProtocol.component_lockfile()
       assert Map.keys(outputs) |> Enum.sort() == Enum.sort([wasm, lock])
-      assert {:ok, _} = Compendium.WasmValidator.validate(outputs[wasm])
+      assert {:ok, _} = Prima.Wasm.validate(outputs[wasm])
       assert outputs[lock] =~ ~s(name = "wit-bindgen-rt")
 
       assert Enum.dedup(Enum.map(progress.(), &elem(&1, 0))) --

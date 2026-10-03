@@ -13,9 +13,8 @@ defmodule Sanctum.Cipher.RotationTest do
   @k1 :crypto.strong_rand_bytes(32)
   @k2 :crypto.strong_rand_bytes(32)
 
-  setup do
-    :ok = Ecto.Adapters.SQL.Sandbox.checkout(Arca.Repo)
-    Ecto.Adapters.SQL.Sandbox.mode(Arca.Repo, {:shared, self()})
+  setup tags do
+    Arca.Test.Sandbox.setup!(tags)
 
     orig_kr = Application.get_env(:sanctum, :crypto_keyring)
 
@@ -117,7 +116,7 @@ defmodule Sanctum.Cipher.RotationTest do
         created_by: "user_1"
       })
 
-    {:ok, row} = Arca.ProviderCredentialStorage.get(Cyfr.Actor.in_athanor(@athanor), provider)
+    {:ok, row} = Arca.ProviderCredentialStorage.get(Prima.Actor.in_athanor(@athanor), provider)
     row.id
   end
 
@@ -150,6 +149,110 @@ defmodule Sanctum.Cipher.RotationTest do
   defp col(table, id, field) do
     Arca.Repo.one(from(r in table, where: r.id == ^id, select: field(r, ^field)))
   end
+
+  # ---- a person's keys ---------------------------------------------------------
+
+  @directory "https://dir.example"
+
+  # A first sign-in: the person and their key set, sealed under the
+  # keyring's primary as it stands.
+  defp person! do
+    n = System.unique_integer([:positive])
+
+    {:ok, user} =
+      Sanctum.Tenancy.Users.upsert_from_provider(%{
+        id: "github|https://github.com|rotation#{n}",
+        provider: "github",
+        email: "rotation#{n}@example.com",
+        verified: true
+      })
+
+    user
+  end
+
+  defp identity_row(user_id), do: Arca.Repo.get_by!(Arca.Schemas.PersonIdentity, user_id: user_id)
+
+  defp as(user_id), do: %Prima.Actor{user_id: user_id}
+
+  defp request_id, do: "req_#{System.unique_integer([:positive])}"
+
+  # An accepted enrollment: the identifier on the person's row, and the kit
+  # seed sealed to them until the kit is acknowledged.
+  defp enroll!(user_id, seed) do
+    row = identity_row(user_id)
+    {:ok, {recovery, _}} = Prima.Identity.derive_recovery_key(seed)
+
+    {:ok, genesis} =
+      Prima.Identity.Entry.genesis(
+        live_key: row.live_public_key,
+        operational_key: row.operational_public_key,
+        recovery_keys: [recovery],
+        directory: @directory
+      )
+
+    {:ok, sealed_seed} = Cipher.encrypt(seed, Sanctum.CipherAAD.person_key(user_id, :kit_seed))
+
+    {:ok, attempt} =
+      Arca.IdentityAttempts.open(as(user_id), %{
+        kind: "enrollment",
+        request_id: request_id(),
+        user_id: user_id,
+        identifier: Prima.Identity.identifier(genesis),
+        directory_url: @directory,
+        genesis: Prima.Identity.canonical(genesis),
+        request_digest: Prima.Identity.hash(genesis),
+        kit_seed_sealed: sealed_seed
+      })
+
+    {:ok, _} = Arca.IdentityAttempts.advance(as(user_id), attempt.id, "staged", "submitted")
+
+    {:ok, accepted} =
+      Arca.IdentityAttempts.advance(as(user_id), attempt.id, "submitted", "accepted")
+
+    accepted
+  end
+
+  # A restore's attempt past its mint, naming the person it minted, with
+  # its staged keys sealed under `frame`: the restore's own unless a case
+  # says otherwise.
+  defp put_restore_row!(user_id, keys, frame \\ nil) do
+    id = Prima.UUID7.generate_id("iat")
+    rid = request_id()
+    frame = frame || "restore:" <> rid
+
+    {:ok, live} = Cipher.encrypt(keys.live, Sanctum.CipherAAD.person_key(frame, :live))
+
+    {:ok, operational} =
+      Cipher.encrypt(keys.operational, Sanctum.CipherAAD.person_key(frame, :operational))
+
+    {1, _} =
+      Arca.Repo.insert_all(Arca.Schemas.IdentityAttempt, [
+        %{
+          id: id,
+          kind: "restore",
+          request_id: rid,
+          phase: "minted",
+          user_id: user_id,
+          identifier: "per_" <> Prima.Digest.sha256_hex(rid),
+          directory_url: @directory,
+          entry: "recover-request",
+          request_digest: Prima.Digest.sha256(rid),
+          expected_revision: 0,
+          token_digest: Prima.Digest.sha256("token-" <> rid),
+          staged_live_public_key: :crypto.strong_rand_bytes(32),
+          staged_operational_public_key: :crypto.strong_rand_bytes(32),
+          staged_live_key_sealed: live,
+          staged_operational_key_sealed: operational,
+          revision: 1,
+          inserted_at: now(),
+          updated_at: now()
+        }
+      ])
+
+    %{id: id, frame: frame}
+  end
+
+  defp person_key(frame, role), do: Sanctum.CipherAAD.person_key(frame, role)
 
   describe "T-REENCRYPT: happy path + idempotency" do
     test "migrates every table onto the new primary; plaintext preserved" do
@@ -402,6 +505,254 @@ defmodule Sanctum.Cipher.RotationTest do
     end
   end
 
+  describe "T-REENCRYPT: a person's keys" do
+    test "each sealed key moves to the new primary and still opens as its own role" do
+      user = person!()
+      seed = :crypto.strong_rand_bytes(32)
+      enrollment = enroll!(user.id, seed)
+      head = enrollment.request_digest
+
+      # A staged rotation, sealed to the person as their next live key.
+      {:ok, staged} = Sanctum.Person.sign_rotate(user.id, head)
+
+      {:ok, rotation} =
+        Arca.IdentityAttempts.open(
+          as(user.id),
+          Map.merge(staged, %{
+            kind: "rotation",
+            request_id: request_id(),
+            user_id: user.id,
+            expected_head: head
+          })
+        )
+
+      restored = %{
+        live: :crypto.strong_rand_bytes(32),
+        operational: :crypto.strong_rand_bytes(32)
+      }
+
+      restore = put_restore_row!(user.id, restored)
+      row = identity_row(user.id)
+
+      put_keyring(%{primary: "k2", keys: %{"k1" => @k1, "k2" => @k2}})
+
+      assert {:ok, summary} = Rotation.reencrypt_all()
+      assert summary.person_identities == %{scanned: 1, rotated: 1, skipped: 0}
+      # The enrollment's kit seed, the rotation's staged live key and the
+      # restore's staged live and operational keys.
+      assert summary.identity_attempts == %{scanned: 3, rotated: 3, skipped: 0}
+
+      for {table, id, column} <- [
+            {"person_identities", row.id, :live_key_sealed},
+            {"person_identities", row.id, :operational_key_sealed},
+            {"identity_attempts", enrollment.id, :kit_seed_sealed},
+            {"identity_attempts", rotation.id, :staged_live_key_sealed},
+            {"identity_attempts", restore.id, :staged_live_key_sealed},
+            {"identity_attempts", restore.id, :staged_operational_key_sealed}
+          ] do
+        assert {:ok, {4, "k2"}} = Cipher.envelope(col(table, id, column)),
+               "#{table}.#{column} is not on the new primary"
+      end
+
+      # The old key is gone, and nothing needed it: each key opens as what
+      # it is, the person's by their frame, the restore's by its own.
+      put_keyring(%{primary: "k2", keys: %{"k2" => @k2}})
+
+      assert {:ok, ^seed} =
+               Cipher.decrypt(
+                 col("identity_attempts", enrollment.id, :kit_seed_sealed),
+                 person_key(user.id, :kit_seed)
+               )
+
+      assert {:ok, restored_live} =
+               Cipher.decrypt(
+                 col("identity_attempts", restore.id, :staged_live_key_sealed),
+                 person_key(restore.frame, :live)
+               )
+
+      assert restored_live == restored.live
+
+      assert {:ok, restored_operational} =
+               Cipher.decrypt(
+                 col("identity_attempts", restore.id, :staged_operational_key_sealed),
+                 person_key(restore.frame, :operational)
+               )
+
+      assert restored_operational == restored.operational
+
+      # The operational key still signs a rotation its public half verifies.
+      assert {:ok, again} = Sanctum.Person.sign_rotate(user.id, head)
+      assert {:ok, entry} = again.entry |> Jason.decode!() |> Prima.Identity.Entry.decode()
+      assert :ok = Prima.Identity.verify(entry, row.operational_public_key)
+
+      # The rotation's staged key activates as a byte copy and signs as the
+      # person's live key.
+      for {from, to} <- [{"staged", "submitted"}, {"submitted", "accepted"}] do
+        {:ok, _} = Arca.IdentityAttempts.advance(as(user.id), rotation.id, from, to)
+      end
+
+      {:ok, _} =
+        Arca.IdentityAttempts.advance(as(user.id), rotation.id, "accepted", "keys_active")
+
+      assert {:ok, cert} =
+               Sanctum.Person.issue_device_cert(
+                 user.id,
+                 :crypto.strong_rand_bytes(32),
+                 "pcl_rotation",
+                 %{subject: :local, audience: Sanctum.origin(), athanor: @athanor}
+               )
+
+      assert {:ok, _} =
+               Prima.DeviceCert.verify(cert, staged.staged_live_public_key,
+                 home: Sanctum.origin(),
+                 now: cert.not_before,
+                 skew: 0
+               )
+    end
+
+    test "a restore's key sealed under the person's frame aborts the run fail-closed" do
+      # The rotation rebuilds a restore's frame from the restore, whatever
+      # person it names, so keys sealed under that person's frame do not
+      # open.
+      user = person!()
+      keys = %{live: :crypto.strong_rand_bytes(32), operational: :crypto.strong_rand_bytes(32)}
+      %{id: restore_id} = put_restore_row!(user.id, keys, user.id)
+
+      put_keyring(%{primary: "k2", keys: %{"k1" => @k1, "k2" => @k2}})
+
+      assert {:error,
+              {:identity_attempts,
+               {:decrypt_failed, :staged_live_key_sealed, {:decrypt, :aad_or_key_mismatch}},
+               ^restore_id}} = Rotation.reencrypt_all()
+    end
+
+    test "a key sealed as another role aborts the run fail-closed" do
+      # A live key column holding the operational key's ciphertext: the
+      # column binds its role, so the rotation cannot open it as the live
+      # key.
+      user = person!()
+      row = identity_row(user.id)
+      row_id = row.id
+
+      {1, _} =
+        Arca.Repo.update_all(from(p in Arca.Schemas.PersonIdentity, where: p.id == ^row_id),
+          set: [live_key_sealed: row.operational_key_sealed]
+        )
+
+      put_keyring(%{primary: "k2", keys: %{"k1" => @k1, "k2" => @k2}})
+
+      assert {:error,
+              {:person_identities,
+               {:decrypt_failed, :live_key_sealed, {:decrypt, :aad_or_key_mismatch}}, ^row_id}} =
+               Rotation.reencrypt_all()
+    end
+
+    test "the audit counts each sealed column of a person's key rows" do
+      user = person!()
+      enroll!(user.id, :crypto.strong_rand_bytes(32))
+      put_keyring(%{primary: "k2", keys: %{"k1" => @k1, "k2" => @k2}})
+
+      assert {:ok, report} = Rotation.audit()
+
+      # The live and the operational key, each counted.
+      assert report.person_identities == %{
+               total: 2,
+               on_primary: 0,
+               on_other: %{"k1" => 2},
+               unknown: 0
+             }
+
+      assert report.identity_attempts == %{
+               total: 1,
+               on_primary: 0,
+               on_other: %{"k1" => 1},
+               unknown: 0
+             }
+    end
+
+    test "a live key activated mid-run leaves the operational key behind, which the audit shows and a second run moves" do
+      # Two enrolled people; the walk goes in row id order, so the later
+      # row's rotation activates between the two swaps.
+      people = for _ <- 1..2, do: person!()
+      for person <- people, do: enroll!(person.id, :crypto.strong_rand_bytes(32))
+      [earlier, later] = people |> Enum.map(&identity_row(&1.id)) |> Enum.sort_by(& &1.id)
+
+      put_keyring(%{primary: "k2", keys: %{"k1" => @k1, "k2" => @k2}})
+
+      {:ok, staged} = Sanctum.Person.sign_rotate(later.user_id, later.head_hash)
+
+      {:ok, rotation} =
+        Arca.IdentityAttempts.open(
+          as(later.user_id),
+          Map.merge(staged, %{
+            kind: "rotation",
+            request_id: request_id(),
+            user_id: later.user_id,
+            expected_head: later.head_hash
+          })
+        )
+
+      for {from, to} <- [{"staged", "submitted"}, {"submitted", "accepted"}] do
+        {:ok, _} = Arca.IdentityAttempts.advance(as(later.user_id), rotation.id, from, to)
+      end
+
+      handler = "rotation-person-#{System.unique_integer([:positive])}"
+      earlier_id = earlier.id
+
+      :telemetry.attach(
+        handler,
+        [:cyfr, :sanctum, :crypto_rotation, :row],
+        fn _e, _m, meta, _c ->
+          if meta.table == :person_identities and meta.id == earlier_id do
+            {:ok, _} =
+              Arca.IdentityAttempts.advance(
+                as(later.user_id),
+                rotation.id,
+                "accepted",
+                "keys_active"
+              )
+          end
+        end,
+        nil
+      )
+
+      on_exit(fn -> :telemetry.detach(handler) end)
+
+      assert {:ok, summary} = Rotation.reencrypt_all()
+      :telemetry.detach(handler)
+
+      # The activation changed the later row's live key, so its swap missed
+      # and its operational key stayed under the old key.
+      assert summary.person_identities == %{scanned: 2, rotated: 1, skipped: 1}
+
+      assert {:ok, {4, "k2"}} =
+               Cipher.envelope(col("person_identities", later.id, :live_key_sealed))
+
+      assert {:ok, {4, "k1"}} =
+               Cipher.envelope(col("person_identities", later.id, :operational_key_sealed))
+
+      # The audit counts each column, so it is not yet safe to drop k1.
+      assert {:ok, report} = Rotation.audit()
+      assert report.person_identities.on_other == %{"k1" => 1}
+
+      # Run again: it moves, and the old key is no longer needed.
+      assert {:ok, again} = Rotation.reencrypt_all()
+      assert again.person_identities.rotated == 1
+
+      assert {:ok, report} = Rotation.audit()
+
+      assert report.person_identities == %{
+               total: 4,
+               on_primary: 4,
+               on_other: %{},
+               unknown: 0
+             }
+
+      put_keyring(%{primary: "k2", keys: %{"k2" => @k2}})
+      assert {:ok, _} = Sanctum.Person.sign_rotate(later.user_id, rotation.entry_hash)
+    end
+  end
+
   describe "T-REENCRYPT: roster binding" do
     # Every AAD purpose is a table of sealed rows somewhere; a purpose the
     # rotation tool does not walk is a key an operator retires while it still
@@ -410,11 +761,14 @@ defmodule Sanctum.Cipher.RotationTest do
     # each row is re-sealed under is a `rotate_row/3` clause here. The two
     # lists live in different files, so this test is what keeps them one.
     @root Path.expand("../../../../..", __DIR__)
+    # A person's keys are sealed on two tables: the identity row, and the
+    # staged keys and pending kit seed of their attempts.
     @purpose_tables %{
-      vault_entry: :vault_entries,
-      webhook_secret: :webhooks,
-      registry_token: :registry_tokens,
-      oauth_provider_credential: :oauth_provider_credentials
+      vault_entry: [:vault_entries],
+      webhook_secret: [:webhooks],
+      registry_token: [:registry_tokens],
+      oauth_provider_credential: [:oauth_provider_credentials],
+      person_key: [:person_identities, :identity_attempts]
     }
 
     test "every Sanctum.CipherAAD purpose has a rotation and an audit table" do
@@ -434,12 +788,12 @@ defmodule Sanctum.Cipher.RotationTest do
       # inclusion: a table in it with no purpose is a walk over rows nothing
       # here knows how to re-seal.
       assert Enum.sort(Arca.CipherRotation.tables()) ==
-               Enum.sort(Map.values(@purpose_tables)),
+               @purpose_tables |> Map.values() |> List.flatten() |> Enum.sort(),
              "Arca.CipherRotation's table roster and Sanctum.CipherAAD's purposes disagree"
 
       rot_src = File.read!(Path.join(@root, "apps/sanctum/lib/sanctum/cipher/rotation.ex"))
 
-      for {purpose, table} <- @purpose_tables do
+      for {purpose, tables} <- @purpose_tables, table <- tables do
         assert rot_src =~ "defp rotate_row(:#{table}, ",
                "rotation has no rotate_row/3 clause for :#{table} (purpose :#{purpose})"
       end

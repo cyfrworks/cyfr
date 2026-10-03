@@ -21,9 +21,8 @@ defmodule Compendium.ProvenanceTest do
 
   @bundled_dir ["components", "reagents", "local", "bundled-tool", "1.0.0"]
 
-  setup do
-    :ok = Ecto.Adapters.SQL.Sandbox.checkout(Arca.Repo)
-    Ecto.Adapters.SQL.Sandbox.mode(Arca.Repo, {:shared, self()})
+  setup tags do
+    Cyfr.Test.Sandbox.setup!(tags)
     Arca.Cache.init()
 
     base = Path.join(System.tmp_dir!(), "provenance_#{System.unique_integer([:positive])}")

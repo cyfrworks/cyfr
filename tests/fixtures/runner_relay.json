@@ -1,0 +1,110 @@
+{
+  "comment": "The vectors pinning Prima.RunnerRelay, the relay between a runner and its worker service: the runner's host calls and pinned fetches, carried on a socketpair the keeper makes for every spawn of an isolated pool as the runner's file descriptor 4, beside Prima.RunnerControl on fd 3, and over the attach connection as the keeper's relay stream (5, tests/fixtures/keeper_protocol.json), which the service opens with a zero-length frame. The contracts suite (apps/prima/test/prima/runner_relay_test.exs) reads them now and Opus's runner and worker service read them too. A frame is a 4-byte big-endian length and one JSON object of that many bytes. `exchange` is played in order between a runner's channel and a service's, each opened for `attempt`: the sender encodes each frame to exactly `json` behind its length and the receiver decodes it; a `json_fill` is `prefix`, then `repeat` written `times` times, then `suffix`, and `encoded_sha256` is the SHA-256 of the whole frame, length included. Bodies travel in standard base64 with padding, at most max_body_bytes decoded; a fetch starts with initial_credit, and the service sends no chunk past the credit outstanding. Each refusal is decoded by `receiver` after the first `after` frames of `exchange` have passed, and closes the channel with `reason`. Every host_call's header is a real one: the egress_pin call in `exchange` is signed with tests/fixtures/worker_auth.json's attempt call key over its `call` fields and its body is sealed with that attempt's seal key and `body_iv_hex`, and the host_answer's body is that call's answer, a pin, sealed with `answer_iv_hex`, so a service verifies and opens them as it would a runner's (Prima.WorkerAuth.verify_host_call_header_under/3).",
+  "version": 1,
+  "attempt": "att_01a09fee-0a31-7a2b-8f0c-3d1e5b7c9a42",
+  "max_body_bytes": 5242880,
+  "max_frame_bytes": 8388608,
+  "initial_credit": 5242880,
+  "exchange": [
+    {
+      "why": "host_call: the runner's egress_pin call for https://api.example.com/v1/items?page=2, its header signed with worker_auth.json's attempt call key over its call fields and its body sealed with the attempt seal key and body_iv",
+      "from": "runner",
+      "json": "{\"v\":1,\"attempt\":\"att_01a09fee-0a31-7a2b-8f0c-3d1e5b7c9a42\",\"seq\":0,\"kind\":\"host_call\",\"op\":\"egress_pin\",\"header\":\"v1 kind=call athanor_id=ath_01a09fee-045b-770b-b745-a62792bb8798 execution_id=exec_01a09fee-07cc-791f-a598-e7f90608c9e2 attempt=att_01a09fee-0a31-7a2b-8f0c-3d1e5b7c9a42 fence=2 generation=7 service=wrk_4f3c2a1e9d8b7c6a boot=boot_01a09fee-2e4f-7a5b-9c6d-7e8f9a0b1c2d runner=run_01a09fee-1c2d-7e3f-8a4b-5c6d7e8f9a0b member=cyfr@10.0.0.1#boot_01a09fee-5d7e-7f80-91a2-b3c4d5e6f708 ts=1789305249602 nonce=n_7d3e9a body=141d8f79ecca2011563361da4189dc088406e2d23e6070032b053ab7ade3a82d mac=e6UxiFy3UfYP6Mw9qAeny450-CJRi5SE5uWZB1--3a8\",\"body\":\"c0xHeXM3UzF0cmU0dWJxN1FheDZ5UkdMNU5SajBKZlF2VmxDdEZ5UTRXLVVpaW1DTUR5aDR4Y195NzhrWmRMOEV2eTc3enJWYlNCVWl5TFpZOEdGMEJObnY4NDA0MkZfWEY4cTVhdGh1a2w1akFMQUF0X1JCc1hDNWtZaUwtb2RaeVhyaVdtZVNhODRLWnF2aG96S3M3UXFmblM0Ry12dEV2ZDBPYTVrYkVn\"}"
+    },
+    {
+      "why": "host_answer: CYFR's 200 to that call, relayed: the pin pin_2mT0c1Fh sealed with the attempt seal key and answer_iv",
+      "from": "service",
+      "json": "{\"v\":1,\"attempt\":\"att_01a09fee-0a31-7a2b-8f0c-3d1e5b7c9a42\",\"seq\":0,\"kind\":\"host_answer\",\"re\":0,\"status\":200,\"body\":\"d01IQ3c4VEZ4c2ZJeWNyTGl3cXVGU3dmdmF5OXFQWlNPWjJ6TF9oQUxCbE5QN3lhVDVKVTNCWi1FbDQ5MEhIQWUyTlA3eXlPWXlRUUkyaUJwMm5rcXVBUE53MjBoR1M3bDNEdkNzejJ2Qnotak1BODdkN2xnb0JveUdtQ3o2UExJNWZJWG05QlFOREItUnpXLTlPa1JqYkEzT1lLcjBsV011MThxOFRBRGZwMUJrdHllN3FQZjM1QkRUQjBILWpXNzlucWhHRFBqYzZnb0YyNEV4dFN5QlIzN0VLTFJ6eDkydllLaHc=\"}"
+    },
+    {
+      "why": "fetch: a GET through the pin CYFR granted",
+      "from": "runner",
+      "json": "{\"v\":1,\"attempt\":\"att_01a09fee-0a31-7a2b-8f0c-3d1e5b7c9a42\",\"seq\":1,\"kind\":\"fetch\",\"pin\":\"pin_2mT0c1Fh\",\"method\":\"GET\",\"path\":\"/v1/items?page=2\",\"headers\":[[\"accept\",\"application/json\"]],\"body\":\"\"}"
+    },
+    {
+      "why": "fetch_chunk: the answer's first chunk, carrying its status and headers",
+      "from": "service",
+      "json": "{\"v\":1,\"attempt\":\"att_01a09fee-0a31-7a2b-8f0c-3d1e5b7c9a42\",\"seq\":1,\"kind\":\"fetch_chunk\",\"re\":1,\"status\":200,\"headers\":[[\"content-type\",\"application/json\"]],\"body\":\"eyJpdGVtcyI6WzE=\"}"
+    },
+    {
+      "why": "fetch_chunk: a chunk spending the rest of the initial credit (5242869 bytes of 'a')",
+      "from": "service",
+      "json_fill": {
+        "prefix": "{\"v\":1,\"attempt\":\"att_01a09fee-0a31-7a2b-8f0c-3d1e5b7c9a42\",\"seq\":2,\"kind\":\"fetch_chunk\",\"re\":1,\"status\":null,\"headers\":null,\"body\":\"",
+        "repeat": "YWFh",
+        "times": 1747623,
+        "suffix": "\"}"
+      },
+      "encoded_sha256": "cd476ab7e93953d48d8a0787987a9e09dee1f839e72ed987bde57bcf7db65a2b"
+    },
+    {
+      "why": "credit: the runner grants 1024 more bytes",
+      "from": "runner",
+      "json": "{\"v\":1,\"attempt\":\"att_01a09fee-0a31-7a2b-8f0c-3d1e5b7c9a42\",\"seq\":2,\"kind\":\"credit\",\"re\":1,\"bytes\":1024}"
+    },
+    {
+      "why": "fetch_chunk: a chunk within the new credit",
+      "from": "service",
+      "json": "{\"v\":1,\"attempt\":\"att_01a09fee-0a31-7a2b-8f0c-3d1e5b7c9a42\",\"seq\":3,\"kind\":\"fetch_chunk\",\"re\":1,\"status\":null,\"headers\":null,\"body\":\"LDJdfQ==\"}"
+    },
+    {
+      "why": "fetch_end: the answer delivered whole",
+      "from": "service",
+      "json": "{\"v\":1,\"attempt\":\"att_01a09fee-0a31-7a2b-8f0c-3d1e5b7c9a42\",\"seq\":4,\"kind\":\"fetch_end\",\"re\":1,\"error\":null}"
+    },
+    {
+      "why": "close: the runner's work is over",
+      "from": "runner",
+      "json": "{\"v\":1,\"attempt\":\"att_01a09fee-0a31-7a2b-8f0c-3d1e5b7c9a42\",\"seq\":3,\"kind\":\"close\",\"reason\":\"done\"}"
+    }
+  ],
+  "refusals": [
+    {
+      "why": "a frame naming an attempt the channel does not carry",
+      "receiver": "service",
+      "after": 0,
+      "json": "{\"v\":1,\"attempt\":\"att_01a09fee-0bbb-7ccc-8ddd-eeeeeeeeeeee\",\"seq\":0,\"kind\":\"host_call\",\"op\":\"renew\",\"header\":\"v1 kind=call athanor_id=ath_01a09fee-045b-770b-b745-a62792bb8798 execution_id=exec_01a09fee-07cc-791f-a598-e7f90608c9e2 attempt=att_01a09fee-0a31-7a2b-8f0c-3d1e5b7c9a42 fence=2 generation=7 service=wrk_4f3c2a1e9d8b7c6a boot=boot_01a09fee-2e4f-7a5b-9c6d-7e8f9a0b1c2d runner=run_01a09fee-1c2d-7e3f-8a4b-5c6d7e8f9a0b member=cyfr@10.0.0.1#boot_01a09fee-5d7e-7f80-91a2-b3c4d5e6f708 ts=1789305249602 nonce=n_7d3e9a body=141d8f79ecca2011563361da4189dc088406e2d23e6070032b053ab7ade3a82d mac=e6UxiFy3UfYP6Mw9qAeny450-CJRi5SE5uWZB1--3a8\",\"body\":\"AAEC\"}",
+      "reason": "unknown_attempt"
+    },
+    {
+      "why": "a seq out of order: the runner's first frame numbered 1",
+      "receiver": "service",
+      "after": 0,
+      "json": "{\"v\":1,\"attempt\":\"att_01a09fee-0a31-7a2b-8f0c-3d1e5b7c9a42\",\"seq\":1,\"kind\":\"host_call\",\"op\":\"renew\",\"header\":\"v1 kind=call athanor_id=ath_01a09fee-045b-770b-b745-a62792bb8798 execution_id=exec_01a09fee-07cc-791f-a598-e7f90608c9e2 attempt=att_01a09fee-0a31-7a2b-8f0c-3d1e5b7c9a42 fence=2 generation=7 service=wrk_4f3c2a1e9d8b7c6a boot=boot_01a09fee-2e4f-7a5b-9c6d-7e8f9a0b1c2d runner=run_01a09fee-1c2d-7e3f-8a4b-5c6d7e8f9a0b member=cyfr@10.0.0.1#boot_01a09fee-5d7e-7f80-91a2-b3c4d5e6f708 ts=1789305249602 nonce=n_7d3e9a body=141d8f79ecca2011563361da4189dc088406e2d23e6070032b053ab7ade3a82d mac=e6UxiFy3UfYP6Mw9qAeny450-CJRi5SE5uWZB1--3a8\",\"body\":\"AAEC\"}",
+      "reason": "out_of_order"
+    },
+    {
+      "why": "a body one byte over the bound",
+      "receiver": "service",
+      "after": 0,
+      "json_fill": {
+        "prefix": "{\"v\":1,\"attempt\":\"att_01a09fee-0a31-7a2b-8f0c-3d1e5b7c9a42\",\"seq\":0,\"kind\":\"host_call\",\"op\":\"renew\",\"header\":\"v1 kind=call athanor_id=ath_01a09fee-045b-770b-b745-a62792bb8798 execution_id=exec_01a09fee-07cc-791f-a598-e7f90608c9e2 attempt=att_01a09fee-0a31-7a2b-8f0c-3d1e5b7c9a42 fence=2 generation=7 service=wrk_4f3c2a1e9d8b7c6a boot=boot_01a09fee-2e4f-7a5b-9c6d-7e8f9a0b1c2d runner=run_01a09fee-1c2d-7e3f-8a4b-5c6d7e8f9a0b member=cyfr@10.0.0.1#boot_01a09fee-5d7e-7f80-91a2-b3c4d5e6f708 ts=1789305249602 nonce=n_7d3e9a body=141d8f79ecca2011563361da4189dc088406e2d23e6070032b053ab7ade3a82d mac=e6UxiFy3UfYP6Mw9qAeny450-CJRi5SE5uWZB1--3a8\",\"body\":\"",
+        "repeat": "YWFh",
+        "times": 1747627,
+        "suffix": "\"}"
+      },
+      "reason": "body_too_large"
+    },
+    {
+      "why": "a chunk past the granted credit: one byte after the initial credit is spent, before the runner grants more",
+      "receiver": "runner",
+      "after": 5,
+      "json": "{\"v\":1,\"attempt\":\"att_01a09fee-0a31-7a2b-8f0c-3d1e5b7c9a42\",\"seq\":3,\"kind\":\"fetch_chunk\",\"re\":1,\"status\":null,\"headers\":null,\"body\":\"YQ==\"}",
+      "reason": "credit_exceeded"
+    },
+    {
+      "why": "a length above the frame bound, refused as soon as the length is in",
+      "receiver": "service",
+      "after": 0,
+      "encoded_hex": "00800001",
+      "reason": "frame_too_large"
+    },
+    {
+      "why": "a kind the peer does not send: a host_call reaching the runner",
+      "receiver": "runner",
+      "after": 0,
+      "json": "{\"v\":1,\"attempt\":\"att_01a09fee-0a31-7a2b-8f0c-3d1e5b7c9a42\",\"seq\":0,\"kind\":\"host_call\",\"op\":\"renew\",\"header\":\"v1 kind=call athanor_id=ath_01a09fee-045b-770b-b745-a62792bb8798 execution_id=exec_01a09fee-07cc-791f-a598-e7f90608c9e2 attempt=att_01a09fee-0a31-7a2b-8f0c-3d1e5b7c9a42 fence=2 generation=7 service=wrk_4f3c2a1e9d8b7c6a boot=boot_01a09fee-2e4f-7a5b-9c6d-7e8f9a0b1c2d runner=run_01a09fee-1c2d-7e3f-8a4b-5c6d7e8f9a0b member=cyfr@10.0.0.1#boot_01a09fee-5d7e-7f80-91a2-b3c4d5e6f708 ts=1789305249602 nonce=n_7d3e9a body=141d8f79ecca2011563361da4189dc088406e2d23e6070032b053ab7ade3a82d mac=e6UxiFy3UfYP6Mw9qAeny450-CJRi5SE5uWZB1--3a8\",\"body\":\"AAEC\"}",
+      "reason": "wrong_direction"
+    }
+  ]
+}

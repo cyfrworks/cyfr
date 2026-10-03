@@ -1,0 +1,1149 @@
+{
+  "chains": [
+    {
+      "entries": [
+        "alice_genesis"
+      ],
+      "name": "a genesis alone",
+      "state": {
+        "directory": "https://directory.example",
+        "head": "sha256:252020f8258a5ac273ad001a2e428bab70e784bef6676bbdb314956e986a1446",
+        "identifier": "per_252020f8258a5ac273ad001a2e428bab70e784bef6676bbdb314956e986a1446",
+        "key_epoch": "sha256:252020f8258a5ac273ad001a2e428bab70e784bef6676bbdb314956e986a1446",
+        "length": 1,
+        "live_key": "z4SbNwACH3EJP0catDkfCNQWpQNdsYAUCTHlKOcyrGU",
+        "operational_key": "eeutcBO3svGffX_iz5AhBmlHb_sKTBBh1ftMjsgQU5o",
+        "recovery_epoch": "sha256:252020f8258a5ac273ad001a2e428bab70e784bef6676bbdb314956e986a1446",
+        "recovery_keys": [
+          "0OxTidkGKIVD1DjlN78M2Lu5h8USUYAbnaqqniXRcNc"
+        ],
+        "request_ids": [],
+        "revision": 0
+      }
+    },
+    {
+      "entries": [
+        "alice_genesis",
+        "alice_rotate"
+      ],
+      "name": "a rotation",
+      "state": {
+        "directory": "https://directory.example",
+        "head": "sha256:73a092d783b24ce64c8d2704cc971fe9b4fc3a4ad769eb5393b2de3a15c9625b",
+        "identifier": "per_252020f8258a5ac273ad001a2e428bab70e784bef6676bbdb314956e986a1446",
+        "key_epoch": "sha256:73a092d783b24ce64c8d2704cc971fe9b4fc3a4ad769eb5393b2de3a15c9625b",
+        "length": 2,
+        "live_key": "Wc8SfHJKHZOrNh0Qtc7YtRAUCUS82P-Gt8-1horAyAo",
+        "operational_key": "eeutcBO3svGffX_iz5AhBmlHb_sKTBBh1ftMjsgQU5o",
+        "recovery_epoch": "sha256:252020f8258a5ac273ad001a2e428bab70e784bef6676bbdb314956e986a1446",
+        "recovery_keys": [
+          "0OxTidkGKIVD1DjlN78M2Lu5h8USUYAbnaqqniXRcNc"
+        ],
+        "request_ids": [],
+        "revision": 0
+      }
+    },
+    {
+      "entries": [
+        "alice_genesis",
+        "alice_rotate",
+        "alice_recover"
+      ],
+      "name": "a recovery after a rotation",
+      "state": {
+        "directory": "https://directory.example",
+        "head": "sha256:ea5c7b10ed2912adb80a611fd5139ee3aca59dc4962ae07b7569ddc6bb7144a8",
+        "identifier": "per_252020f8258a5ac273ad001a2e428bab70e784bef6676bbdb314956e986a1446",
+        "key_epoch": "sha256:ea5c7b10ed2912adb80a611fd5139ee3aca59dc4962ae07b7569ddc6bb7144a8",
+        "length": 3,
+        "live_key": "_GWuSiJv2Lma_tc6LEN-KJWvA02IH6onW8hxh4qXtTw",
+        "operational_key": "5eAt0KUYrcCNFtmeYPxn9ZEHl_EfSHyKshvGq8FCOGU",
+        "recovery_epoch": "sha256:ea5c7b10ed2912adb80a611fd5139ee3aca59dc4962ae07b7569ddc6bb7144a8",
+        "recovery_keys": [
+          "0OxTidkGKIVD1DjlN78M2Lu5h8USUYAbnaqqniXRcNc"
+        ],
+        "request_ids": [
+          "req-alice-1"
+        ],
+        "revision": 1
+      }
+    },
+    {
+      "entries": [
+        "alice_genesis",
+        "alice_rotate",
+        "alice_recover",
+        "alice_rotate_after_recover"
+      ],
+      "name": "a rotation after a recovery",
+      "state": {
+        "directory": "https://directory.example",
+        "head": "sha256:eba12862b5bcef9cab76b360dbc8a36970963fc9b42af47a3f32f3fd8c7b208d",
+        "identifier": "per_252020f8258a5ac273ad001a2e428bab70e784bef6676bbdb314956e986a1446",
+        "key_epoch": "sha256:eba12862b5bcef9cab76b360dbc8a36970963fc9b42af47a3f32f3fd8c7b208d",
+        "length": 4,
+        "live_key": "t8OJWAwFXl4GO3XApvVprnsOrS0c10pwGpyLDEGD-74",
+        "operational_key": "5eAt0KUYrcCNFtmeYPxn9ZEHl_EfSHyKshvGq8FCOGU",
+        "recovery_epoch": "sha256:ea5c7b10ed2912adb80a611fd5139ee3aca59dc4962ae07b7569ddc6bb7144a8",
+        "recovery_keys": [
+          "0OxTidkGKIVD1DjlN78M2Lu5h8USUYAbnaqqniXRcNc"
+        ],
+        "request_ids": [
+          "req-alice-1"
+        ],
+        "revision": 1
+      }
+    },
+    {
+      "entries": [
+        "alice_genesis",
+        "alice_rotate",
+        "alice_recover",
+        "alice_rotate_after_recover",
+        "alice_recover_add_holder"
+      ],
+      "name": "a second kit enrolled by a recovery",
+      "state": {
+        "directory": "https://directory.example",
+        "head": "sha256:e8ecdf22c1586c7060b06c89440bb99b77876464fa2dfbc743b1a7c29295f091",
+        "identifier": "per_252020f8258a5ac273ad001a2e428bab70e784bef6676bbdb314956e986a1446",
+        "key_epoch": "sha256:e8ecdf22c1586c7060b06c89440bb99b77876464fa2dfbc743b1a7c29295f091",
+        "length": 5,
+        "live_key": "6-nDhxynI_HV-upqVviWPSPT2g1yX9ItgSYtepPfXtA",
+        "operational_key": "gMoxLnnOi3DrTWAe6OaoIgkPyc6hc-wOis3yKk1se-Y",
+        "recovery_epoch": "sha256:e8ecdf22c1586c7060b06c89440bb99b77876464fa2dfbc743b1a7c29295f091",
+        "recovery_keys": [
+          "0OxTidkGKIVD1DjlN78M2Lu5h8USUYAbnaqqniXRcNc",
+          "FBcgExj0vbv72p1suwCmETYk-cffTng7ir_cQf0Bz2g"
+        ],
+        "request_ids": [
+          "req-alice-1",
+          "req-alice-holder"
+        ],
+        "revision": 2
+      }
+    },
+    {
+      "entries": [
+        "alice_genesis",
+        "alice_rotate",
+        "alice_recover",
+        "alice_rotate_after_recover",
+        "alice_recover_add_holder",
+        "alice_recover_by_second_kit"
+      ],
+      "name": "a recovery by the second kit",
+      "state": {
+        "directory": "https://directory.example",
+        "head": "sha256:e542930095479a36dd7c710c861eed6e4cd5e47e0a7a565d5acf6af17c22d4f1",
+        "identifier": "per_252020f8258a5ac273ad001a2e428bab70e784bef6676bbdb314956e986a1446",
+        "key_epoch": "sha256:e542930095479a36dd7c710c861eed6e4cd5e47e0a7a565d5acf6af17c22d4f1",
+        "length": 6,
+        "live_key": "PnDWMCC74EvzJGErWiryLH_P9DYCgRmT1puJexMaWCM",
+        "operational_key": "PS-7PiwaKDwmGoeDBnFsj4D69FYyi3jEaUJMro0vDgc",
+        "recovery_epoch": "sha256:e542930095479a36dd7c710c861eed6e4cd5e47e0a7a565d5acf6af17c22d4f1",
+        "recovery_keys": [
+          "0OxTidkGKIVD1DjlN78M2Lu5h8USUYAbnaqqniXRcNc",
+          "FBcgExj0vbv72p1suwCmETYk-cffTng7ir_cQf0Bz2g"
+        ],
+        "request_ids": [
+          "req-alice-1",
+          "req-alice-holder",
+          "req-alice-kit-b"
+        ],
+        "revision": 3
+      }
+    },
+    {
+      "entries": [
+        "bob_genesis",
+        "bob_recover"
+      ],
+      "name": "one kit recovers another identifier by name",
+      "state": {
+        "directory": "https://directory.example",
+        "head": "sha256:1ca1d968963431cc755a153d76e533dbdee374664ea19c3dafc1d5cabcbc4cd1",
+        "identifier": "per_6cbe1d70f3b818fe0c44503b601b6cd2c8c94feca30540093498706a4465a9d9",
+        "key_epoch": "sha256:1ca1d968963431cc755a153d76e533dbdee374664ea19c3dafc1d5cabcbc4cd1",
+        "length": 2,
+        "live_key": "22LF5_ryFk_jkCvds1l2k1ZKpl_2quOEEA9-E5LG1UE",
+        "operational_key": "ypwQtvb89PvNcj8hNeJTAGZkUYgLUoWwuPNeq-ZXOWI",
+        "recovery_epoch": "sha256:1ca1d968963431cc755a153d76e533dbdee374664ea19c3dafc1d5cabcbc4cd1",
+        "recovery_keys": [
+          "0OxTidkGKIVD1DjlN78M2Lu5h8USUYAbnaqqniXRcNc"
+        ],
+        "request_ids": [
+          "req-bob-1"
+        ],
+        "revision": 1
+      }
+    },
+    {
+      "entries": [],
+      "error": {
+        "index": 0,
+        "reason": "empty"
+      },
+      "name": "an empty log"
+    },
+    {
+      "entries": [
+        "alice_rotate"
+      ],
+      "error": {
+        "index": 0,
+        "reason": "not_genesis"
+      },
+      "name": "a first entry that is not a genesis"
+    },
+    {
+      "entries": [
+        "alice_genesis",
+        "alice_genesis"
+      ],
+      "error": {
+        "index": 1,
+        "reason": "unexpected_genesis"
+      },
+      "name": "a second genesis"
+    },
+    {
+      "entries": [
+        "alice_genesis",
+        "alice_rotate_broken_link"
+      ],
+      "error": {
+        "index": 1,
+        "reason": "broken_link"
+      },
+      "name": "a broken link"
+    },
+    {
+      "entries": [
+        "alice_genesis_signed_by_live_key"
+      ],
+      "error": {
+        "index": 0,
+        "reason": "wrong_signer"
+      },
+      "name": "a genesis its operational key did not sign"
+    },
+    {
+      "entries": [
+        "alice_genesis",
+        "alice_rotate_signed_by_live_key"
+      ],
+      "error": {
+        "index": 1,
+        "reason": "wrong_signer"
+      },
+      "name": "a rotate not signed by the operational key"
+    },
+    {
+      "entries": [
+        "alice_genesis",
+        "alice_rotate",
+        "alice_recover",
+        "alice_rotate_on_old_branch"
+      ],
+      "error": {
+        "index": 3,
+        "reason": "broken_link"
+      },
+      "name": "a rotation after a recovery on the old branch"
+    },
+    {
+      "entries": [
+        "alice_genesis",
+        "alice_rotate",
+        "alice_recover",
+        "alice_rotate_by_replaced_key"
+      ],
+      "error": {
+        "index": 3,
+        "reason": "wrong_signer"
+      },
+      "name": "a rotation by the operational key a recovery replaced"
+    },
+    {
+      "entries": [
+        "alice_genesis",
+        "alice_recover_by_stranger"
+      ],
+      "error": {
+        "index": 1,
+        "reason": "wrong_signer"
+      },
+      "name": "a recover signed by a key that is no holder"
+    },
+    {
+      "entries": [
+        "alice_genesis",
+        "alice_recover_altered_after_signing"
+      ],
+      "error": {
+        "index": 1,
+        "reason": "wrong_signer"
+      },
+      "name": "a recover request altered after it was signed"
+    },
+    {
+      "entries": [
+        "alice_genesis",
+        "alice_recover_stale_revision"
+      ],
+      "error": {
+        "index": 1,
+        "reason": "stale_revision"
+      },
+      "name": "a recover expecting another revision"
+    },
+    {
+      "entries": [
+        "alice_genesis",
+        "alice_rotate",
+        "alice_recover",
+        "alice_recover_replayed"
+      ],
+      "error": {
+        "index": 3,
+        "reason": "stale_revision"
+      },
+      "name": "the same recovery again after the revision moved"
+    },
+    {
+      "entries": [
+        "alice_genesis",
+        "alice_recover_with_request_for_bob"
+      ],
+      "error": {
+        "index": 1,
+        "reason": "wrong_identifier"
+      },
+      "name": "a recover request signed for another identifier by the same kit"
+    },
+    {
+      "entries": [
+        "alice_genesis",
+        "alice_recover_naming_another_directory"
+      ],
+      "error": {
+        "index": 1,
+        "reason": "directory_changed"
+      },
+      "name": "a recover naming another directory"
+    },
+    {
+      "entries": [
+        "alice_genesis",
+        "alice_rotate",
+        "alice_recover",
+        "alice_rotate_after_recover",
+        "alice_recover_reusing_request_id"
+      ],
+      "error": {
+        "index": 4,
+        "reason": "request_id_reused"
+      },
+      "name": "a recover reusing a request id"
+    },
+    {
+      "entries": [
+        "alice_genesis",
+        "alice_recover_live_key_is_a_recovery_key"
+      ],
+      "error": {
+        "index": 1,
+        "reason": "key_overlap"
+      },
+      "name": "a recover whose live key is a recovery key"
+    },
+    {
+      "entries": [
+        "genesis_live_key_is_operational_key"
+      ],
+      "error": {
+        "index": 0,
+        "reason": "key_overlap"
+      },
+      "name": "a genesis whose live key is its operational key"
+    },
+    {
+      "entries": [
+        "alice_genesis",
+        "alice_address"
+      ],
+      "error": {
+        "index": 1,
+        "reason": "unknown_kind"
+      },
+      "name": "an address entry, an unknown kind"
+    },
+    {
+      "entries": [
+        "alice_genesis_other_version"
+      ],
+      "error": {
+        "index": 0,
+        "reason": "wrong_protocol"
+      },
+      "name": "another protocol version"
+    },
+    {
+      "entries": [
+        "alice_genesis_unknown_field"
+      ],
+      "error": {
+        "index": 0,
+        "reason": "unknown_field"
+      },
+      "name": "an unknown field"
+    },
+    {
+      "entries": [
+        "alice_genesis_padded_key"
+      ],
+      "error": {
+        "index": 0,
+        "reason": "invalid_field"
+      },
+      "name": "a padded key"
+    },
+    {
+      "entries": [
+        "alice_genesis_revision_one"
+      ],
+      "error": {
+        "index": 0,
+        "reason": "invalid_field"
+      },
+      "name": "a genesis at revision one"
+    }
+  ],
+  "comment": "The vectors pinning Prima.Identity: every side derives each public key from its seed, re-signs every entry and request whose signer is named and reproduces its sig byte for byte, reproduces every entry hash, request digest and identifier, walks every chain to its state or to the index and reason it is refused, holds every genesis to its identifier as locate does, and derives each kit's recovery key from its seed. Binary values are unpadded base64url; hashes are sha256:<hex> over JCS bytes; the identifier is per_ and the hex of SHA-256 over the genesis's JCS bytes. A signature covers the JCS bytes of its map without sig. A recover entry carries no sig; its request's signer is named under requests. An entry with signer null was altered after signing or is not signed at all. A locate genesis given as raw is read as those exact bytes, padded with spaces to pad_with_spaces_to when present.",
+  "directory": "https://directory.example",
+  "entries": {
+    "alice_address": {
+      "entry": {
+        "address": "https://alice.example",
+        "kind": "address",
+        "prev": "sha256:252020f8258a5ac273ad001a2e428bab70e784bef6676bbdb314956e986a1446",
+        "protocol": "cyfr-identity/v1",
+        "sig": "dY-C-0Pjq4MI1j3ubmSkXbSICr33lH4V4ixvUOJhRthWDgTkwGGBqqZuqzYiFJqWHAk8IWTpc9ReQ8b3-XxNAQ"
+      },
+      "signer": "alice_op_1"
+    },
+    "alice_genesis": {
+      "entry": {
+        "directory": "https://directory.example",
+        "kind": "genesis",
+        "live_key": "z4SbNwACH3EJP0catDkfCNQWpQNdsYAUCTHlKOcyrGU",
+        "operational_key": "eeutcBO3svGffX_iz5AhBmlHb_sKTBBh1ftMjsgQU5o",
+        "protocol": "cyfr-identity/v1",
+        "recovery_keys": [
+          "0OxTidkGKIVD1DjlN78M2Lu5h8USUYAbnaqqniXRcNc"
+        ],
+        "revision": 0,
+        "sig": "lvyhljWNyAjlIV8EKg3FDjMcbCJPf9QPrPieYRm60rey_XxEtXmlDXKLv45nLb_pfid5ozCG1gEBfbQkx7xmDQ"
+      },
+      "hash": "sha256:252020f8258a5ac273ad001a2e428bab70e784bef6676bbdb314956e986a1446",
+      "signer": "alice_op_1"
+    },
+    "alice_genesis_directory_changed": {
+      "entry": {
+        "directory": "https://other-directory.example",
+        "kind": "genesis",
+        "live_key": "z4SbNwACH3EJP0catDkfCNQWpQNdsYAUCTHlKOcyrGU",
+        "operational_key": "eeutcBO3svGffX_iz5AhBmlHb_sKTBBh1ftMjsgQU5o",
+        "protocol": "cyfr-identity/v1",
+        "recovery_keys": [
+          "0OxTidkGKIVD1DjlN78M2Lu5h8USUYAbnaqqniXRcNc"
+        ],
+        "revision": 0,
+        "sig": "lvyhljWNyAjlIV8EKg3FDjMcbCJPf9QPrPieYRm60rey_XxEtXmlDXKLv45nLb_pfid5ozCG1gEBfbQkx7xmDQ"
+      },
+      "hash": "sha256:f78843cb8695c46720aae2d075c43397d4ef84b2786e580147fe82cb5378253b",
+      "signer": null
+    },
+    "alice_genesis_other_version": {
+      "entry": {
+        "directory": "https://directory.example",
+        "kind": "genesis",
+        "live_key": "z4SbNwACH3EJP0catDkfCNQWpQNdsYAUCTHlKOcyrGU",
+        "operational_key": "eeutcBO3svGffX_iz5AhBmlHb_sKTBBh1ftMjsgQU5o",
+        "protocol": "cyfr-identity/v2",
+        "recovery_keys": [
+          "0OxTidkGKIVD1DjlN78M2Lu5h8USUYAbnaqqniXRcNc"
+        ],
+        "revision": 0,
+        "sig": "ldvcfO_RDudyKLutiLx3bOGaGRwMtiambLDSH0gk2ylswSxVNgRwRwJC44HkVKtrNZTaiN9GCcDytK5ysimfAA"
+      },
+      "signer": "alice_op_1"
+    },
+    "alice_genesis_padded_key": {
+      "entry": {
+        "directory": "https://directory.example",
+        "kind": "genesis",
+        "live_key": "z4SbNwACH3EJP0catDkfCNQWpQNdsYAUCTHlKOcyrGU=",
+        "operational_key": "eeutcBO3svGffX_iz5AhBmlHb_sKTBBh1ftMjsgQU5o",
+        "protocol": "cyfr-identity/v1",
+        "recovery_keys": [
+          "0OxTidkGKIVD1DjlN78M2Lu5h8USUYAbnaqqniXRcNc"
+        ],
+        "revision": 0,
+        "sig": "vVSC2YHLHxL5-XMU8DzTFBmkVo0r81mkuE8xpgpH7V9B98P9hXO3hsQWF2Ztbcfu0QC_-I9lrdBRG_AIh9pCCQ"
+      },
+      "signer": "alice_op_1"
+    },
+    "alice_genesis_revision_one": {
+      "entry": {
+        "directory": "https://directory.example",
+        "kind": "genesis",
+        "live_key": "z4SbNwACH3EJP0catDkfCNQWpQNdsYAUCTHlKOcyrGU",
+        "operational_key": "eeutcBO3svGffX_iz5AhBmlHb_sKTBBh1ftMjsgQU5o",
+        "protocol": "cyfr-identity/v1",
+        "recovery_keys": [
+          "0OxTidkGKIVD1DjlN78M2Lu5h8USUYAbnaqqniXRcNc"
+        ],
+        "revision": 1,
+        "sig": "XgacIAe9__g5AO2GAi6pmY64Z0cD0xB1VbGBUJekyHFfiQ_6v5YHQJHepJ4Ep4Y5mPcvQbHx_zWUu2oDo2fDCA"
+      },
+      "signer": "alice_op_1"
+    },
+    "alice_genesis_signed_by_live_key": {
+      "entry": {
+        "directory": "https://directory.example",
+        "kind": "genesis",
+        "live_key": "z4SbNwACH3EJP0catDkfCNQWpQNdsYAUCTHlKOcyrGU",
+        "operational_key": "eeutcBO3svGffX_iz5AhBmlHb_sKTBBh1ftMjsgQU5o",
+        "protocol": "cyfr-identity/v1",
+        "recovery_keys": [
+          "0OxTidkGKIVD1DjlN78M2Lu5h8USUYAbnaqqniXRcNc"
+        ],
+        "revision": 0,
+        "sig": "Y-AwafKyEL7FK6LtZSXZCEGMD485K0_ifeUCkqmMIeOU6sqv82FprfzAPPz4gOcj5vVmHYqY5ChizQfkMhjXBQ"
+      },
+      "hash": "sha256:60b6ec1386ebfb4cb8cfd19f1d7adbafd05c79b946f1c5f801df9c6d1e6d4a9d",
+      "signer": "alice_live_1"
+    },
+    "alice_genesis_unknown_field": {
+      "entry": {
+        "directory": "https://directory.example",
+        "kind": "genesis",
+        "live_key": "z4SbNwACH3EJP0catDkfCNQWpQNdsYAUCTHlKOcyrGU",
+        "note": "hello",
+        "operational_key": "eeutcBO3svGffX_iz5AhBmlHb_sKTBBh1ftMjsgQU5o",
+        "protocol": "cyfr-identity/v1",
+        "recovery_keys": [
+          "0OxTidkGKIVD1DjlN78M2Lu5h8USUYAbnaqqniXRcNc"
+        ],
+        "revision": 0,
+        "sig": "8JDN2envxwiGNyup3g4X6MGwtq9-uCGzJoQPKIjI00XRp-VHS14nGvkJAPlqnE6PUpkoEgQY2exgvOnqLJY9DA"
+      },
+      "signer": "alice_op_1"
+    },
+    "alice_recover": {
+      "entry": {
+        "kind": "recover",
+        "prev": "sha256:73a092d783b24ce64c8d2704cc971fe9b4fc3a4ad769eb5393b2de3a15c9625b",
+        "protocol": "cyfr-identity/v1",
+        "request": {
+          "directory": "https://directory.example",
+          "expected_revision": 0,
+          "identifier": "per_252020f8258a5ac273ad001a2e428bab70e784bef6676bbdb314956e986a1446",
+          "live_key": "_GWuSiJv2Lma_tc6LEN-KJWvA02IH6onW8hxh4qXtTw",
+          "operational_key": "5eAt0KUYrcCNFtmeYPxn9ZEHl_EfSHyKshvGq8FCOGU",
+          "protocol": "cyfr-identity/v1",
+          "request_id": "req-alice-1",
+          "sig": "uASfNWPmehzu6bX7XR4xtp_QM89gXjrRsi7rllBLFHNMaSxL4NFae4IfFaL1r8SyLp7SQ6FJW6DFFZSbL-KZAA"
+        }
+      },
+      "hash": "sha256:ea5c7b10ed2912adb80a611fd5139ee3aca59dc4962ae07b7569ddc6bb7144a8",
+      "signer": null
+    },
+    "alice_recover_add_holder": {
+      "entry": {
+        "kind": "recover",
+        "prev": "sha256:eba12862b5bcef9cab76b360dbc8a36970963fc9b42af47a3f32f3fd8c7b208d",
+        "protocol": "cyfr-identity/v1",
+        "request": {
+          "directory": "https://directory.example",
+          "expected_revision": 1,
+          "identifier": "per_252020f8258a5ac273ad001a2e428bab70e784bef6676bbdb314956e986a1446",
+          "live_key": "6-nDhxynI_HV-upqVviWPSPT2g1yX9ItgSYtepPfXtA",
+          "operational_key": "gMoxLnnOi3DrTWAe6OaoIgkPyc6hc-wOis3yKk1se-Y",
+          "protocol": "cyfr-identity/v1",
+          "recovery_keys": [
+            "0OxTidkGKIVD1DjlN78M2Lu5h8USUYAbnaqqniXRcNc",
+            "FBcgExj0vbv72p1suwCmETYk-cffTng7ir_cQf0Bz2g"
+          ],
+          "request_id": "req-alice-holder",
+          "sig": "4iCn60xWy7YWQ9K-31avtraSm07TVYTI8Ohd2FWcwZ2RX-nZn4vJqAIZq2vzKwa4fEIjQe9zUULp_HTqB4scDw"
+        }
+      },
+      "hash": "sha256:e8ecdf22c1586c7060b06c89440bb99b77876464fa2dfbc743b1a7c29295f091",
+      "signer": null
+    },
+    "alice_recover_altered_after_signing": {
+      "entry": {
+        "kind": "recover",
+        "prev": "sha256:252020f8258a5ac273ad001a2e428bab70e784bef6676bbdb314956e986a1446",
+        "protocol": "cyfr-identity/v1",
+        "request": {
+          "directory": "https://directory.example",
+          "expected_revision": 0,
+          "identifier": "per_252020f8258a5ac273ad001a2e428bab70e784bef6676bbdb314956e986a1446",
+          "live_key": "uVBfMdqGCeReZTvOumX3dKEkwpJ1DvjpXrIbcwZCnrM",
+          "operational_key": "5eAt0KUYrcCNFtmeYPxn9ZEHl_EfSHyKshvGq8FCOGU",
+          "protocol": "cyfr-identity/v1",
+          "request_id": "req-alice-2",
+          "sig": "8B9uNmQtQS8ijtjKUykGo8ktIGZ06qo--ao43VxckOA8GowZtnnngaNZu_ANl2Y-pCTzCYYSmFjLMxw_rHa_BQ"
+        }
+      },
+      "hash": "sha256:e227654b0697f26f4737c43b3651a43deb8a4c67e35950c02c3bdd6e93ad203b",
+      "signer": null
+    },
+    "alice_recover_by_second_kit": {
+      "entry": {
+        "kind": "recover",
+        "prev": "sha256:e8ecdf22c1586c7060b06c89440bb99b77876464fa2dfbc743b1a7c29295f091",
+        "protocol": "cyfr-identity/v1",
+        "request": {
+          "directory": "https://directory.example",
+          "expected_revision": 2,
+          "identifier": "per_252020f8258a5ac273ad001a2e428bab70e784bef6676bbdb314956e986a1446",
+          "live_key": "PnDWMCC74EvzJGErWiryLH_P9DYCgRmT1puJexMaWCM",
+          "operational_key": "PS-7PiwaKDwmGoeDBnFsj4D69FYyi3jEaUJMro0vDgc",
+          "protocol": "cyfr-identity/v1",
+          "request_id": "req-alice-kit-b",
+          "sig": "IGWwV1VBYxXqM5dWNS8JD0u5Qf8uLNXom5YwXaJT-w75qNxacMS3uH6IW-dT8wp2RUIog6IcVvxmlmpimdMBCQ"
+        }
+      },
+      "hash": "sha256:e542930095479a36dd7c710c861eed6e4cd5e47e0a7a565d5acf6af17c22d4f1",
+      "signer": null
+    },
+    "alice_recover_by_stranger": {
+      "entry": {
+        "kind": "recover",
+        "prev": "sha256:252020f8258a5ac273ad001a2e428bab70e784bef6676bbdb314956e986a1446",
+        "protocol": "cyfr-identity/v1",
+        "request": {
+          "directory": "https://directory.example",
+          "expected_revision": 0,
+          "identifier": "per_252020f8258a5ac273ad001a2e428bab70e784bef6676bbdb314956e986a1446",
+          "live_key": "_GWuSiJv2Lma_tc6LEN-KJWvA02IH6onW8hxh4qXtTw",
+          "operational_key": "5eAt0KUYrcCNFtmeYPxn9ZEHl_EfSHyKshvGq8FCOGU",
+          "protocol": "cyfr-identity/v1",
+          "request_id": "req-alice-2",
+          "sig": "-b5gxjV5qKumRN65lIGae2M2MgLPGTxFQzOJkjbERVN0sZmDi7jQX2CXTg_mQJoBS5jsaA5AZ5-hzayxy6XHCg"
+        }
+      },
+      "hash": "sha256:1469c9c6322ce03d3ca383dda30a3e8f5a8cd4a97db61c6bba295b9ddb3dfad4",
+      "signer": null
+    },
+    "alice_recover_live_key_is_a_recovery_key": {
+      "entry": {
+        "kind": "recover",
+        "prev": "sha256:252020f8258a5ac273ad001a2e428bab70e784bef6676bbdb314956e986a1446",
+        "protocol": "cyfr-identity/v1",
+        "request": {
+          "directory": "https://directory.example",
+          "expected_revision": 0,
+          "identifier": "per_252020f8258a5ac273ad001a2e428bab70e784bef6676bbdb314956e986a1446",
+          "live_key": "0OxTidkGKIVD1DjlN78M2Lu5h8USUYAbnaqqniXRcNc",
+          "operational_key": "5eAt0KUYrcCNFtmeYPxn9ZEHl_EfSHyKshvGq8FCOGU",
+          "protocol": "cyfr-identity/v1",
+          "request_id": "req-alice-2",
+          "sig": "q20WyOCGqZTd7qk4m0rE53Q-_WB5qQppPb6M9MZ64C9TXKvh7v-lm4Vu9N5W4AeEMoggPO2EafLwhLhyN0tNDw"
+        }
+      },
+      "hash": "sha256:7501cd175d0088cbabac0f2e7bd9675e8024afa713f83448a94c797ce57f79ec",
+      "signer": null
+    },
+    "alice_recover_naming_another_directory": {
+      "entry": {
+        "kind": "recover",
+        "prev": "sha256:252020f8258a5ac273ad001a2e428bab70e784bef6676bbdb314956e986a1446",
+        "protocol": "cyfr-identity/v1",
+        "request": {
+          "directory": "https://other-directory.example",
+          "expected_revision": 0,
+          "identifier": "per_252020f8258a5ac273ad001a2e428bab70e784bef6676bbdb314956e986a1446",
+          "live_key": "_GWuSiJv2Lma_tc6LEN-KJWvA02IH6onW8hxh4qXtTw",
+          "operational_key": "5eAt0KUYrcCNFtmeYPxn9ZEHl_EfSHyKshvGq8FCOGU",
+          "protocol": "cyfr-identity/v1",
+          "request_id": "req-alice-2",
+          "sig": "VnEWzhrNhzN7pY224NoY04hgsBUENhJYDGCboT02LRRnPBIfXIuGG5dCgJcMHwmyGbedPU50ts4rEYXEGhzbAQ"
+        }
+      },
+      "hash": "sha256:3c8157e1e49a6cb92847635fc93de411ad38176674e2ad1457ee1734c4245cec",
+      "signer": null
+    },
+    "alice_recover_replayed": {
+      "entry": {
+        "kind": "recover",
+        "prev": "sha256:ea5c7b10ed2912adb80a611fd5139ee3aca59dc4962ae07b7569ddc6bb7144a8",
+        "protocol": "cyfr-identity/v1",
+        "request": {
+          "directory": "https://directory.example",
+          "expected_revision": 0,
+          "identifier": "per_252020f8258a5ac273ad001a2e428bab70e784bef6676bbdb314956e986a1446",
+          "live_key": "_GWuSiJv2Lma_tc6LEN-KJWvA02IH6onW8hxh4qXtTw",
+          "operational_key": "5eAt0KUYrcCNFtmeYPxn9ZEHl_EfSHyKshvGq8FCOGU",
+          "protocol": "cyfr-identity/v1",
+          "request_id": "req-alice-1",
+          "sig": "uASfNWPmehzu6bX7XR4xtp_QM89gXjrRsi7rllBLFHNMaSxL4NFae4IfFaL1r8SyLp7SQ6FJW6DFFZSbL-KZAA"
+        }
+      },
+      "hash": "sha256:efdb6bf796218e37561e9b82e625c6de6b04ade10d902cd8cb077801d229013c",
+      "signer": null
+    },
+    "alice_recover_reusing_request_id": {
+      "entry": {
+        "kind": "recover",
+        "prev": "sha256:eba12862b5bcef9cab76b360dbc8a36970963fc9b42af47a3f32f3fd8c7b208d",
+        "protocol": "cyfr-identity/v1",
+        "request": {
+          "directory": "https://directory.example",
+          "expected_revision": 1,
+          "identifier": "per_252020f8258a5ac273ad001a2e428bab70e784bef6676bbdb314956e986a1446",
+          "live_key": "6-nDhxynI_HV-upqVviWPSPT2g1yX9ItgSYtepPfXtA",
+          "operational_key": "gMoxLnnOi3DrTWAe6OaoIgkPyc6hc-wOis3yKk1se-Y",
+          "protocol": "cyfr-identity/v1",
+          "request_id": "req-alice-1",
+          "sig": "HVZDC7cMJITcA0xSz421SKDLgqLERghVt9e4huxVQOyL1WixPOL7_N-ZvdJqhrEuiA8EVHp30T3ImxkGZSTmBg"
+        }
+      },
+      "hash": "sha256:77ab071f486aff4828545b025817384848b007842e6554c48ba00a6e3504e7cf",
+      "signer": null
+    },
+    "alice_recover_stale_revision": {
+      "entry": {
+        "kind": "recover",
+        "prev": "sha256:252020f8258a5ac273ad001a2e428bab70e784bef6676bbdb314956e986a1446",
+        "protocol": "cyfr-identity/v1",
+        "request": {
+          "directory": "https://directory.example",
+          "expected_revision": 1,
+          "identifier": "per_252020f8258a5ac273ad001a2e428bab70e784bef6676bbdb314956e986a1446",
+          "live_key": "_GWuSiJv2Lma_tc6LEN-KJWvA02IH6onW8hxh4qXtTw",
+          "operational_key": "5eAt0KUYrcCNFtmeYPxn9ZEHl_EfSHyKshvGq8FCOGU",
+          "protocol": "cyfr-identity/v1",
+          "request_id": "req-alice-2",
+          "sig": "6poKGzh4WzVlOWB7FiWW4ohd38thcCP6kexMRj3DxIaTcniYddKRxp00KMsmNx2_xxhx6PA5q8EyK3Ed5stCAw"
+        }
+      },
+      "hash": "sha256:f8f7529470b6240eb388e2b1011f789ecda927d32259c951a2707195318728ef",
+      "signer": null
+    },
+    "alice_recover_with_request_for_bob": {
+      "entry": {
+        "kind": "recover",
+        "prev": "sha256:252020f8258a5ac273ad001a2e428bab70e784bef6676bbdb314956e986a1446",
+        "protocol": "cyfr-identity/v1",
+        "request": {
+          "directory": "https://directory.example",
+          "expected_revision": 0,
+          "identifier": "per_6cbe1d70f3b818fe0c44503b601b6cd2c8c94feca30540093498706a4465a9d9",
+          "live_key": "22LF5_ryFk_jkCvds1l2k1ZKpl_2quOEEA9-E5LG1UE",
+          "operational_key": "ypwQtvb89PvNcj8hNeJTAGZkUYgLUoWwuPNeq-ZXOWI",
+          "protocol": "cyfr-identity/v1",
+          "request_id": "req-bob-1",
+          "sig": "d2ZGTePZdy1i-g8GRlpY0kvZoRQ7fx31bFWnYNS9DJjcm93fhcrfyIAmFrYeYKoDuerjIoNqlNN4p-gvhWmFDg"
+        }
+      },
+      "hash": "sha256:0903c2ada83547cb083f204061a86f87c4dae87761eaa246f1107a5534f74758",
+      "signer": null
+    },
+    "alice_rotate": {
+      "entry": {
+        "kind": "rotate",
+        "live_key": "Wc8SfHJKHZOrNh0Qtc7YtRAUCUS82P-Gt8-1horAyAo",
+        "prev": "sha256:252020f8258a5ac273ad001a2e428bab70e784bef6676bbdb314956e986a1446",
+        "protocol": "cyfr-identity/v1",
+        "sig": "lhw0CzOMJbp7wolzNdMbXHwhmHIot00peCDY_XHx7pUfoJuE0PHniBEbnkjwfIzikqT6LSvOj89Ay77IRWEcBw"
+      },
+      "hash": "sha256:73a092d783b24ce64c8d2704cc971fe9b4fc3a4ad769eb5393b2de3a15c9625b",
+      "signer": "alice_op_1"
+    },
+    "alice_rotate_after_recover": {
+      "entry": {
+        "kind": "rotate",
+        "live_key": "t8OJWAwFXl4GO3XApvVprnsOrS0c10pwGpyLDEGD-74",
+        "prev": "sha256:ea5c7b10ed2912adb80a611fd5139ee3aca59dc4962ae07b7569ddc6bb7144a8",
+        "protocol": "cyfr-identity/v1",
+        "sig": "sRtbXGCTMMjXxIGSO0LFwHzO5Apc-MTi-L9aYarxpDhGwvIjv0k9m63Y0otL5dBNXPBkd7KqNCDSjo7Psj-VAA"
+      },
+      "hash": "sha256:eba12862b5bcef9cab76b360dbc8a36970963fc9b42af47a3f32f3fd8c7b208d",
+      "signer": "alice_op_3"
+    },
+    "alice_rotate_broken_link": {
+      "entry": {
+        "kind": "rotate",
+        "live_key": "Wc8SfHJKHZOrNh0Qtc7YtRAUCUS82P-Gt8-1horAyAo",
+        "prev": "sha256:076dfe051c5b704d7c2abddddea9c4e6dca335d7a1b4179b51a31c6de8b4bf23",
+        "protocol": "cyfr-identity/v1",
+        "sig": "3B3VLysczuNos1Ry5yTydLENkbyLOVqdhx8lRjeMq9LYsEoQxy4VM6T6KkFtUGtYDKNv1HXjW7tRSJ3cSr25Aw"
+      },
+      "hash": "sha256:0938efb93214798da858985f1db0c48e06c05fef4127fe1abf33006b3eb07ce4",
+      "signer": "alice_op_1"
+    },
+    "alice_rotate_by_replaced_key": {
+      "entry": {
+        "kind": "rotate",
+        "live_key": "t8OJWAwFXl4GO3XApvVprnsOrS0c10pwGpyLDEGD-74",
+        "prev": "sha256:ea5c7b10ed2912adb80a611fd5139ee3aca59dc4962ae07b7569ddc6bb7144a8",
+        "protocol": "cyfr-identity/v1",
+        "sig": "w9AzDTNCNciOvu4S5FLATis1l8cQ_Lzu7wkEb3khdp0t9lQJM_L84_dJ2dk8JkxEmtPB2EECErUzhBTO-ecYAg"
+      },
+      "hash": "sha256:8813f6af214f31b01e42238df94147305773d653da0f4ef4f5225aff9bc1994d",
+      "signer": "alice_op_1"
+    },
+    "alice_rotate_on_old_branch": {
+      "entry": {
+        "kind": "rotate",
+        "live_key": "t8OJWAwFXl4GO3XApvVprnsOrS0c10pwGpyLDEGD-74",
+        "prev": "sha256:73a092d783b24ce64c8d2704cc971fe9b4fc3a4ad769eb5393b2de3a15c9625b",
+        "protocol": "cyfr-identity/v1",
+        "sig": "haXuESOKr5fBO9o0XKub_fNOHz55DEl9x-h5XaUA742tTQ1ovpzXtBESdT9zKFxJ0P59M4GGdSxQ2D56_A3ECw"
+      },
+      "hash": "sha256:d5a80b119e94d7939cab539b6779ed94f217e8a2809c83f1e8a5c85157bac72d",
+      "signer": "alice_op_1"
+    },
+    "alice_rotate_signed_by_live_key": {
+      "entry": {
+        "kind": "rotate",
+        "live_key": "Wc8SfHJKHZOrNh0Qtc7YtRAUCUS82P-Gt8-1horAyAo",
+        "prev": "sha256:252020f8258a5ac273ad001a2e428bab70e784bef6676bbdb314956e986a1446",
+        "protocol": "cyfr-identity/v1",
+        "sig": "aKod_t_evDzCqsdFxyD27I0fVdGn6OBWjprNHeWmFyTBeseNDdd6tG9oOXcEFb2osp1duVcy4Wdr5V4JtjyOCw"
+      },
+      "hash": "sha256:b7d5177e4d16ff18c612b17a58fc9089df4f6a5909a726c8368fd4b43690f277",
+      "signer": "alice_live_1"
+    },
+    "bob_genesis": {
+      "entry": {
+        "directory": "https://directory.example",
+        "kind": "genesis",
+        "live_key": "izvwid1gv2gjLcroLbURU8WRYLQV6jU6nI71c3jXmKY",
+        "operational_key": "Ot4hSbOmkyKmJr85hpYOg8yScrb7zA26D8BePjBLrjw",
+        "protocol": "cyfr-identity/v1",
+        "recovery_keys": [
+          "0OxTidkGKIVD1DjlN78M2Lu5h8USUYAbnaqqniXRcNc"
+        ],
+        "revision": 0,
+        "sig": "vwLl1IlNSg3fPc5RHbWzv2osciq7udxIF1utIokYMI960o3zXBl69edDepkfJQ_v0NHaVqDrrsSTUBOow3F-CQ"
+      },
+      "hash": "sha256:6cbe1d70f3b818fe0c44503b601b6cd2c8c94feca30540093498706a4465a9d9",
+      "signer": "bob_op"
+    },
+    "bob_recover": {
+      "entry": {
+        "kind": "recover",
+        "prev": "sha256:6cbe1d70f3b818fe0c44503b601b6cd2c8c94feca30540093498706a4465a9d9",
+        "protocol": "cyfr-identity/v1",
+        "request": {
+          "directory": "https://directory.example",
+          "expected_revision": 0,
+          "identifier": "per_6cbe1d70f3b818fe0c44503b601b6cd2c8c94feca30540093498706a4465a9d9",
+          "live_key": "22LF5_ryFk_jkCvds1l2k1ZKpl_2quOEEA9-E5LG1UE",
+          "operational_key": "ypwQtvb89PvNcj8hNeJTAGZkUYgLUoWwuPNeq-ZXOWI",
+          "protocol": "cyfr-identity/v1",
+          "request_id": "req-bob-1",
+          "sig": "d2ZGTePZdy1i-g8GRlpY0kvZoRQ7fx31bFWnYNS9DJjcm93fhcrfyIAmFrYeYKoDuerjIoNqlNN4p-gvhWmFDg"
+        }
+      },
+      "hash": "sha256:1ca1d968963431cc755a153d76e533dbdee374664ea19c3dafc1d5cabcbc4cd1",
+      "signer": null
+    },
+    "genesis_live_key_is_operational_key": {
+      "entry": {
+        "directory": "https://directory.example",
+        "kind": "genesis",
+        "live_key": "eeutcBO3svGffX_iz5AhBmlHb_sKTBBh1ftMjsgQU5o",
+        "operational_key": "eeutcBO3svGffX_iz5AhBmlHb_sKTBBh1ftMjsgQU5o",
+        "protocol": "cyfr-identity/v1",
+        "recovery_keys": [
+          "0OxTidkGKIVD1DjlN78M2Lu5h8USUYAbnaqqniXRcNc"
+        ],
+        "revision": 0,
+        "sig": "tx1H_cLcN3UzsGasVdcufipx0Xupt5A2iv3bO8sdj0OdyPqNFcBbuLf2e5CPs9_a0dmqQFSAshGM-OT9eNKSDQ"
+      },
+      "hash": "sha256:337427c1fd52d2bbd3032e4c5db10f01ab71eaedc47e858f301a85a963a178be",
+      "signer": "alice_op_1"
+    }
+  },
+  "identifiers": {
+    "alice": "per_252020f8258a5ac273ad001a2e428bab70e784bef6676bbdb314956e986a1446",
+    "bob": "per_6cbe1d70f3b818fe0c44503b601b6cd2c8c94feca30540093498706a4465a9d9"
+  },
+  "keys": {
+    "alice_live_1": {
+      "public": "z4SbNwACH3EJP0catDkfCNQWpQNdsYAUCTHlKOcyrGU",
+      "seed": "4vIF-wGusnX6R8S7SdjJjBxW6dBj3EU4QcOQUbcbIe4"
+    },
+    "alice_live_2": {
+      "public": "Wc8SfHJKHZOrNh0Qtc7YtRAUCUS82P-Gt8-1horAyAo",
+      "seed": "3Qr8Wgo0gayyfmVRyc1AnQvPy6Sm-IO3J5IJr4PLBUk"
+    },
+    "alice_live_3": {
+      "public": "_GWuSiJv2Lma_tc6LEN-KJWvA02IH6onW8hxh4qXtTw",
+      "seed": "7nF-tWgTc0ssOVcktGwGSXhuHb9ildATVJf5CNNqabE"
+    },
+    "alice_live_4": {
+      "public": "t8OJWAwFXl4GO3XApvVprnsOrS0c10pwGpyLDEGD-74",
+      "seed": "OWrl4xaZ4AYOSrB1lkqrfrVimDlzstKkqVlERqKHk_g"
+    },
+    "alice_live_5": {
+      "public": "6-nDhxynI_HV-upqVviWPSPT2g1yX9ItgSYtepPfXtA",
+      "seed": "5q5NiDB30iZmZxwy9rCREV-onufnG14X0UcUT7Z0krQ"
+    },
+    "alice_live_6": {
+      "public": "PnDWMCC74EvzJGErWiryLH_P9DYCgRmT1puJexMaWCM",
+      "seed": "ZvDCgw74ULKivVdPXkGXxzlH_RNnHerGWnyqjBLXGqc"
+    },
+    "alice_op_1": {
+      "public": "eeutcBO3svGffX_iz5AhBmlHb_sKTBBh1ftMjsgQU5o",
+      "seed": "jPMRJIjhizAe6c-JHpn_mu0pkNgRyKnng33Q-29zt2g"
+    },
+    "alice_op_3": {
+      "public": "5eAt0KUYrcCNFtmeYPxn9ZEHl_EfSHyKshvGq8FCOGU",
+      "seed": "4XttHfIMyvlJywy8bMskQgZQGCa1UPMh7Qm2ccBB2WA"
+    },
+    "alice_op_5": {
+      "public": "gMoxLnnOi3DrTWAe6OaoIgkPyc6hc-wOis3yKk1se-Y",
+      "seed": "bFVRAKvDSdAbP9n_pgn7F0bAb8w72XCE0NnoA3JUVb4"
+    },
+    "alice_op_6": {
+      "public": "PS-7PiwaKDwmGoeDBnFsj4D69FYyi3jEaUJMro0vDgc",
+      "seed": "M2ynxEEfwJvRgNTCFlz2FmsMnoOlJx28xQ_9RG_3xGg"
+    },
+    "bob_live": {
+      "public": "izvwid1gv2gjLcroLbURU8WRYLQV6jU6nI71c3jXmKY",
+      "seed": "229bxvj6IOXutXkKfZRBVu8J8XIkYFAF7YYUSh4VxoE"
+    },
+    "bob_live_2": {
+      "public": "22LF5_ryFk_jkCvds1l2k1ZKpl_2quOEEA9-E5LG1UE",
+      "seed": "21jkjoxAICn0BpgOMDYsdRMOkCpwW72BLecuZ2gRMCI"
+    },
+    "bob_op": {
+      "public": "Ot4hSbOmkyKmJr85hpYOg8yScrb7zA26D8BePjBLrjw",
+      "seed": "36LAjjXux6K0-YLe-MzxRF3z3wO-cSjarLfzZ_uZqZg"
+    },
+    "bob_op_2": {
+      "public": "ypwQtvb89PvNcj8hNeJTAGZkUYgLUoWwuPNeq-ZXOWI",
+      "seed": "ytWXCp_CCZLyHpB4trYJfOLjjStomu2y4ZiC2ZW8hOc"
+    },
+    "kit_a": {
+      "public": "0OxTidkGKIVD1DjlN78M2Lu5h8USUYAbnaqqniXRcNc",
+      "seed": "ykx6n7J2WvwsQ09vE1IqJO_R1Q8mUXP41S-J7RGvQVs"
+    },
+    "kit_b": {
+      "public": "FBcgExj0vbv72p1suwCmETYk-cffTng7ir_cQf0Bz2g",
+      "seed": "sZ6nELB-GzHz9BL97QzxaTY6CuwBwlEzy9mY_jMTuUU"
+    },
+    "stranger": {
+      "public": "uVBfMdqGCeReZTvOumX3dKEkwpJ1DvjpXrIbcwZCnrM",
+      "seed": "ldiVKG7kxLyNRN_VHEKHfueVbbSQg6yAFDXkOpRuj8I"
+    }
+  },
+  "kinds": [
+    "genesis",
+    "rotate",
+    "recover"
+  ],
+  "kits": {
+    "invalid": [
+      "279UNC8AaEna5-6f87Ah4Lke68fUh_jPTHk8GDYPmg",
+      "gScu7ew219Srm23MjzuEzKnyOD1UUhPKCmMmmDr3uwyG",
+      ""
+    ],
+    "valid": [
+      {
+        "public": "0OxTidkGKIVD1DjlN78M2Lu5h8USUYAbnaqqniXRcNc",
+        "seed": "ykx6n7J2WvwsQ09vE1IqJO_R1Q8mUXP41S-J7RGvQVs"
+      },
+      {
+        "public": "FBcgExj0vbv72p1suwCmETYk-cffTng7ir_cQf0Bz2g",
+        "seed": "sZ6nELB-GzHz9BL97QzxaTY6CuwBwlEzy9mY_jMTuUU"
+      }
+    ]
+  },
+  "locate": [
+    {
+      "directory": "https://directory.example",
+      "genesis": {
+        "raw": "{\"directory\":\"https://directory.example\",\"kind\":\"genesis\",\"live_key\":\"z4SbNwACH3EJP0catDkfCNQWpQNdsYAUCTHlKOcyrGU\",\"operational_key\":\"eeutcBO3svGffX_iz5AhBmlHb_sKTBBh1ftMjsgQU5o\",\"protocol\":\"cyfr-identity/v1\",\"recovery_keys\":[\"0OxTidkGKIVD1DjlN78M2Lu5h8USUYAbnaqqniXRcNc\"],\"revision\":0,\"sig\":\"lvyhljWNyAjlIV8EKg3FDjMcbCJPf9QPrPieYRm60rey_XxEtXmlDXKLv45nLb_pfid5ozCG1gEBfbQkx7xmDQ\"}"
+      },
+      "identifier": "per_252020f8258a5ac273ad001a2e428bab70e784bef6676bbdb314956e986a1446",
+      "name": "the genesis of its identifier, as bytes"
+    },
+    {
+      "directory": "https://directory.example",
+      "genesis": {
+        "entry": {
+          "directory": "https://directory.example",
+          "kind": "genesis",
+          "live_key": "z4SbNwACH3EJP0catDkfCNQWpQNdsYAUCTHlKOcyrGU",
+          "operational_key": "eeutcBO3svGffX_iz5AhBmlHb_sKTBBh1ftMjsgQU5o",
+          "protocol": "cyfr-identity/v1",
+          "recovery_keys": [
+            "0OxTidkGKIVD1DjlN78M2Lu5h8USUYAbnaqqniXRcNc"
+          ],
+          "revision": 0,
+          "sig": "lvyhljWNyAjlIV8EKg3FDjMcbCJPf9QPrPieYRm60rey_XxEtXmlDXKLv45nLb_pfid5ozCG1gEBfbQkx7xmDQ"
+        }
+      },
+      "identifier": "per_252020f8258a5ac273ad001a2e428bab70e784bef6676bbdb314956e986a1446",
+      "name": "the genesis of its identifier, as an object"
+    },
+    {
+      "directory": "https://directory.example",
+      "genesis": {
+        "pad_with_spaces_to": 16384,
+        "raw": "{\"directory\":\"https://directory.example\",\"kind\":\"genesis\",\"live_key\":\"z4SbNwACH3EJP0catDkfCNQWpQNdsYAUCTHlKOcyrGU\",\"operational_key\":\"eeutcBO3svGffX_iz5AhBmlHb_sKTBBh1ftMjsgQU5o\",\"protocol\":\"cyfr-identity/v1\",\"recovery_keys\":[\"0OxTidkGKIVD1DjlN78M2Lu5h8USUYAbnaqqniXRcNc\"],\"revision\":0,\"sig\":\"lvyhljWNyAjlIV8EKg3FDjMcbCJPf9QPrPieYRm60rey_XxEtXmlDXKLv45nLb_pfid5ozCG1gEBfbQkx7xmDQ\"}"
+      },
+      "identifier": "per_252020f8258a5ac273ad001a2e428bab70e784bef6676bbdb314956e986a1446",
+      "name": "the genesis padded to exactly 16 KiB"
+    },
+    {
+      "error": "too_large",
+      "genesis": {
+        "pad_with_spaces_to": 16385,
+        "raw": "{\"directory\":\"https://directory.example\",\"kind\":\"genesis\",\"live_key\":\"z4SbNwACH3EJP0catDkfCNQWpQNdsYAUCTHlKOcyrGU\",\"operational_key\":\"eeutcBO3svGffX_iz5AhBmlHb_sKTBBh1ftMjsgQU5o\",\"protocol\":\"cyfr-identity/v1\",\"recovery_keys\":[\"0OxTidkGKIVD1DjlN78M2Lu5h8USUYAbnaqqniXRcNc\"],\"revision\":0,\"sig\":\"lvyhljWNyAjlIV8EKg3FDjMcbCJPf9QPrPieYRm60rey_XxEtXmlDXKLv45nLb_pfid5ozCG1gEBfbQkx7xmDQ\"}"
+      },
+      "identifier": "per_252020f8258a5ac273ad001a2e428bab70e784bef6676bbdb314956e986a1446",
+      "name": "a genesis over 16 KiB, refused before it is read"
+    },
+    {
+      "error": "identifier_mismatch",
+      "genesis": {
+        "entry": {
+          "directory": "https://directory.example",
+          "kind": "genesis",
+          "live_key": "izvwid1gv2gjLcroLbURU8WRYLQV6jU6nI71c3jXmKY",
+          "operational_key": "Ot4hSbOmkyKmJr85hpYOg8yScrb7zA26D8BePjBLrjw",
+          "protocol": "cyfr-identity/v1",
+          "recovery_keys": [
+            "0OxTidkGKIVD1DjlN78M2Lu5h8USUYAbnaqqniXRcNc"
+          ],
+          "revision": 0,
+          "sig": "vwLl1IlNSg3fPc5RHbWzv2osciq7udxIF1utIokYMI960o3zXBl69edDepkfJQ_v0NHaVqDrrsSTUBOow3F-CQ"
+        }
+      },
+      "identifier": "per_252020f8258a5ac273ad001a2e428bab70e784bef6676bbdb314956e986a1446",
+      "name": "an unrelated genesis"
+    },
+    {
+      "error": "identifier_mismatch",
+      "genesis": {
+        "entry": {
+          "directory": "https://other-directory.example",
+          "kind": "genesis",
+          "live_key": "z4SbNwACH3EJP0catDkfCNQWpQNdsYAUCTHlKOcyrGU",
+          "operational_key": "eeutcBO3svGffX_iz5AhBmlHb_sKTBBh1ftMjsgQU5o",
+          "protocol": "cyfr-identity/v1",
+          "recovery_keys": [
+            "0OxTidkGKIVD1DjlN78M2Lu5h8USUYAbnaqqniXRcNc"
+          ],
+          "revision": 0,
+          "sig": "lvyhljWNyAjlIV8EKg3FDjMcbCJPf9QPrPieYRm60rey_XxEtXmlDXKLv45nLb_pfid5ozCG1gEBfbQkx7xmDQ"
+        }
+      },
+      "identifier": "per_252020f8258a5ac273ad001a2e428bab70e784bef6676bbdb314956e986a1446",
+      "name": "the genesis with its directory changed"
+    },
+    {
+      "error": "wrong_signer",
+      "genesis": {
+        "entry": {
+          "directory": "https://directory.example",
+          "kind": "genesis",
+          "live_key": "z4SbNwACH3EJP0catDkfCNQWpQNdsYAUCTHlKOcyrGU",
+          "operational_key": "eeutcBO3svGffX_iz5AhBmlHb_sKTBBh1ftMjsgQU5o",
+          "protocol": "cyfr-identity/v1",
+          "recovery_keys": [
+            "0OxTidkGKIVD1DjlN78M2Lu5h8USUYAbnaqqniXRcNc"
+          ],
+          "revision": 0,
+          "sig": "Y-AwafKyEL7FK6LtZSXZCEGMD485K0_ifeUCkqmMIeOU6sqv82FprfzAPPz4gOcj5vVmHYqY5ChizQfkMhjXBQ"
+        }
+      },
+      "identifier": "per_60b6ec1386ebfb4cb8cfd19f1d7adbafd05c79b946f1c5f801df9c6d1e6d4a9d",
+      "name": "a genesis its operational key did not sign, under its own identifier"
+    },
+    {
+      "error": "not_genesis",
+      "genesis": {
+        "entry": {
+          "kind": "rotate",
+          "live_key": "Wc8SfHJKHZOrNh0Qtc7YtRAUCUS82P-Gt8-1horAyAo",
+          "prev": "sha256:252020f8258a5ac273ad001a2e428bab70e784bef6676bbdb314956e986a1446",
+          "protocol": "cyfr-identity/v1",
+          "sig": "lhw0CzOMJbp7wolzNdMbXHwhmHIot00peCDY_XHx7pUfoJuE0PHniBEbnkjwfIzikqT6LSvOj89Ay77IRWEcBw"
+        }
+      },
+      "identifier": "per_252020f8258a5ac273ad001a2e428bab70e784bef6676bbdb314956e986a1446",
+      "name": "a rotate entry"
+    },
+    {
+      "error": "invalid_json",
+      "genesis": {
+        "raw": "not json"
+      },
+      "identifier": "per_252020f8258a5ac273ad001a2e428bab70e784bef6676bbdb314956e986a1446",
+      "name": "bytes that are not JSON"
+    }
+  ],
+  "max_entry_bytes": 16384,
+  "prefix": "per",
+  "protocol": "cyfr-identity/v1",
+  "requests": {
+    "alice_recover": {
+      "digest": "sha256:916543b65e9ba249bf8ad45acb16013590b77a1cb61590a16204a000ec58c4b1",
+      "request": {
+        "directory": "https://directory.example",
+        "expected_revision": 0,
+        "identifier": "per_252020f8258a5ac273ad001a2e428bab70e784bef6676bbdb314956e986a1446",
+        "live_key": "_GWuSiJv2Lma_tc6LEN-KJWvA02IH6onW8hxh4qXtTw",
+        "operational_key": "5eAt0KUYrcCNFtmeYPxn9ZEHl_EfSHyKshvGq8FCOGU",
+        "protocol": "cyfr-identity/v1",
+        "request_id": "req-alice-1",
+        "sig": "uASfNWPmehzu6bX7XR4xtp_QM89gXjrRsi7rllBLFHNMaSxL4NFae4IfFaL1r8SyLp7SQ6FJW6DFFZSbL-KZAA"
+      },
+      "signer": "kit_a"
+    },
+    "alice_recover_add_holder": {
+      "digest": "sha256:e484483b308ecc4c1133dedba0f02e25b9d2928bed87b3b5d9d121153359f21f",
+      "request": {
+        "directory": "https://directory.example",
+        "expected_revision": 1,
+        "identifier": "per_252020f8258a5ac273ad001a2e428bab70e784bef6676bbdb314956e986a1446",
+        "live_key": "6-nDhxynI_HV-upqVviWPSPT2g1yX9ItgSYtepPfXtA",
+        "operational_key": "gMoxLnnOi3DrTWAe6OaoIgkPyc6hc-wOis3yKk1se-Y",
+        "protocol": "cyfr-identity/v1",
+        "recovery_keys": [
+          "0OxTidkGKIVD1DjlN78M2Lu5h8USUYAbnaqqniXRcNc",
+          "FBcgExj0vbv72p1suwCmETYk-cffTng7ir_cQf0Bz2g"
+        ],
+        "request_id": "req-alice-holder",
+        "sig": "4iCn60xWy7YWQ9K-31avtraSm07TVYTI8Ohd2FWcwZ2RX-nZn4vJqAIZq2vzKwa4fEIjQe9zUULp_HTqB4scDw"
+      },
+      "signer": "kit_a"
+    },
+    "bob_recover": {
+      "digest": "sha256:53752755f9e226f75e84a9da2b139a90734376143a620624b3ddc3eb79435f16",
+      "request": {
+        "directory": "https://directory.example",
+        "expected_revision": 0,
+        "identifier": "per_6cbe1d70f3b818fe0c44503b601b6cd2c8c94feca30540093498706a4465a9d9",
+        "live_key": "22LF5_ryFk_jkCvds1l2k1ZKpl_2quOEEA9-E5LG1UE",
+        "operational_key": "ypwQtvb89PvNcj8hNeJTAGZkUYgLUoWwuPNeq-ZXOWI",
+        "protocol": "cyfr-identity/v1",
+        "request_id": "req-bob-1",
+        "sig": "d2ZGTePZdy1i-g8GRlpY0kvZoRQ7fx31bFWnYNS9DJjcm93fhcrfyIAmFrYeYKoDuerjIoNqlNN4p-gvhWmFDg"
+      },
+      "signer": "kit_a"
+    }
+  }
+}

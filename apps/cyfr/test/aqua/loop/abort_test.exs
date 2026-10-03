@@ -17,13 +17,13 @@ defmodule Aqua.Loop.AbortTest do
 
   setup do
     Cyfr.Test.Sandbox.setup!()
-    ctx = Sanctum.TestContext.local()
+    ctx = Sanctum.TestContext.local(:prism)
     {:ok, thread} = Threads.create(Sanctum.Context.actor(ctx))
 
     {:ok, %{turn: turn}} =
       TurnStorage.accept_message(Sanctum.Context.actor(ctx), thread.id, %{
         message: %{author: ctx.user_id, content: "@aqua go"},
-        turn: %{agent: "aqua", requested_by: ctx.user_id}
+        turn: %{agent: "aqua", requested_by: ctx.user_id, origin: :interactive}
       })
 
     {:ok, ctx: ctx, turn: turn}
@@ -33,6 +33,8 @@ defmodule Aqua.Loop.AbortTest do
     ctx: ctx,
     turn: turn
   } do
+    turn = started!(ctx, turn)
+
     {:ok, model} =
       TurnStorage.put_step(Sanctum.Context.actor(ctx), turn.id, %{
         kind: "model",
@@ -50,7 +52,9 @@ defmodule Aqua.Loop.AbortTest do
 
     handler = spawn(fn -> Process.sleep(:infinity) end)
     ref = Process.monitor(handler)
-    :ok = Emissary.MCP.RunningTasks.register_handle({turn.id, call.id, call.generation}, handler)
+    handle = {turn.id, call.id, call.generation}
+    :ok = Grimoire.RunningTasks.claim(handle)
+    :ok = Grimoire.RunningTasks.register_handle(handle, handler)
 
     assert {:ok, aborted} = Aqua.Loop.abort(ctx, turn, "stopped")
     assert aborted.fence != turn.fence
@@ -72,6 +76,8 @@ defmodule Aqua.Loop.AbortTest do
          ctx: ctx,
          turn: turn
        } do
+    turn = started!(ctx, turn)
+
     {:ok, flush} =
       TurnStorage.put_step(Sanctum.Context.actor(ctx), turn.id, %{
         kind: "model",
@@ -133,5 +139,17 @@ defmodule Aqua.Loop.AbortTest do
              Threads.messages(Sanctum.Context.actor(ctx), turn.thread_id),
              &(&1.kind == "turn_aborted")
            )
+  end
+
+  # A runner records steps on a running turn only: these turns run
+  # rootless, which is all an abort needs.
+  defp started!(ctx, turn) do
+    {:ok, started} =
+      TurnStorage.start(Sanctum.Context.actor(ctx), turn.id, %{
+        fence: turn.fence,
+        recovery_limit: Aqua.Runner.RecoveryPolicy.max_attempts()
+      })
+
+    started
   end
 end

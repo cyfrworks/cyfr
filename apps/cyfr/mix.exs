@@ -14,6 +14,7 @@ defmodule Cyfr.App.MixProject do
       lockfile: "../../mix.lock",
       elixir: "~> 1.19",
       elixirc_paths: elixirc_paths(Mix.env()),
+      compilers: compilers(Mix.env()),
       # The two-node suite's own modules (`test/cluster/support`) are
       # `.exs` files on no `elixirc_paths`: they are compiled by the first
       # cluster case and pushed to the member nodes, which have no beam to
@@ -51,12 +52,22 @@ defmodule Cyfr.App.MixProject do
     ]
   end
 
+  # The Boundary compiler checks every layer edge in dev and prod; the
+  # forced dev compile with warnings as errors is the enforcement. Test
+  # support reaches internals by design, because a test tests what it
+  # tests, so the test environment compiles without it.
+  defp compilers(:test), do: Mix.compilers()
+  defp compilers(_env), do: [:boundary] ++ Mix.compilers()
+
   defp elixirc_paths(:test), do: ["lib", "test/support"]
   defp elixirc_paths(_), do: ["lib"]
 
   defp deps do
     [
-      {:cyfr_contracts, in_umbrella: true},
+      {:prima, in_umbrella: true},
+      # The layer edges as compile errors: the Boundary compiler checks
+      # every `use Boundary` declaration in this application.
+      {:boundary, "~> 0.11.0", runtime: false},
       # Persistence and the auth domain, each its own application: Arca
       # owns every row, blob and lease; Sanctum owns identity, tenancy,
       # authority, consent and the vault, and reaches Arca downward.
@@ -67,13 +78,11 @@ defmodule Cyfr.App.MixProject do
       {:yaml_elixir, "~> 2.12"},
       {:plug, "~> 1.14"},
       {:phoenix_pubsub, "~> 2.1"},
-      # How the members of a cell find each other. Declared here, in wave 0
-      # of the multi-node work, so the shared lock is settled before the
-      # targets that use it run side by side; `Cyfr.Cell` starts the
+      # How the members of a cell find each other; `Cyfr.Cell` starts the
       # supervisor and `config/runtime.exs` carries the topology.
       {:libcluster, "~> 3.5"},
       # The Ueberauth route table the web face builds from the configured
-      # providers (`EmissaryWeb.Plugs.ConfiguredUeberauth`); the strategies
+      # providers (`CyfrWeb.Plugs.ConfiguredUeberauth`); the strategies
       # themselves are Sanctum's.
       {:ueberauth, "~> 0.10.8"},
       # Ecto, for the errors the surfaces rescue and the sandbox the suite

@@ -4,7 +4,7 @@
 defmodule Aqua.Loop.StreamOrderTest do
   @moduledoc """
   A chat step's stream reaches the thread whole, in order and masked. Every
-  `text.delta` the catalyst emits during its `Cyfr.Execution.run_child/5`
+  `text.delta` the catalyst emits during its `Crucible.run_child/5`
   is forwarded to the thread in sequence order, once, before the loop
   lands the step's row — the forwarder is closed only after the call
   returns, so a delta published after that is never forwarded. A
@@ -22,6 +22,7 @@ defmodule Aqua.Loop.StreamOrderTest do
 
   alias Aqua.Tape
   alias Arca.ThreadStorage, as: Threads
+  alias Cyfr.Bus.ThreadEvent
   alias Cyfr.Test.ScriptedWorker
   alias Sanctum.Consent.{Bootstrap}
 
@@ -35,7 +36,7 @@ defmodule Aqua.Loop.StreamOrderTest do
     Cyfr.Test.Sandbox.setup!()
 
     test_path = Path.join(System.tmp_dir!(), "stream_order_#{System.unique_integer([:positive])}")
-    keys = [arca: :base_path, arca: :seed_path, cyfr: :workers]
+    keys = [arca: :base_path, arca: :seed_path, cyfr: :opus_workers]
     prev = Map.new(keys, fn {app, key} -> {{app, key}, Application.get_env(app, key)} end)
     Application.put_env(:arca, :base_path, test_path)
     Application.put_env(:arca, :seed_path, @seed_root)
@@ -53,7 +54,7 @@ defmodule Aqua.Loop.StreamOrderTest do
     # The loops' work stops before the paths it runs under are restored.
     Cyfr.Test.Sandbox.stop_work_on_exit()
 
-    ctx = Sanctum.TestContext.local()
+    ctx = Sanctum.TestContext.local(:prism)
     :ok = Sanctum.TestContext.shipped!(ctx.athanor_id)
     {:ok, %{errors: 0}} = Compendium.AutoIndexer.scan(ctx: ctx)
     {:ok, _} = Compendium.AgentIndex.sync(ctx)
@@ -64,7 +65,7 @@ defmodule Aqua.Loop.StreamOrderTest do
     ScriptedWorker.fresh_limits!(ctx, [@model, "catalyst:local.files", "catalyst:local.http"])
 
     {:ok, thread} = Threads.create(Sanctum.Context.actor(ctx))
-    :ok = Phoenix.PubSub.subscribe(Emissary.PubSub, Tape.topic(ctx, thread.id))
+    :ok = Aqua.Runner.subscribe(thread.id, ctx.athanor_id)
     {:ok, ctx: ctx, thread: thread}
   end
 
@@ -87,10 +88,10 @@ defmodule Aqua.Loop.StreamOrderTest do
     turn = accept!(ctx, thread, "@aqua count")
 
     assert :completed = Task.await(run(ctx, turn), 60_000)
-    assert_receive {:thread, _, {:turn_finished}}, 5_000
+    assert_receive %ThreadEvent{kind: :turn_finished}, 5_000
 
     events =
-      for {:thread, _, event} <- drain(),
+      for event <- thread_events(drain()),
           match?({:delta, _}, event) or match?({:message, %{kind: "text", author: "aqua"}}, event),
           do: event
 
@@ -126,14 +127,14 @@ defmodule Aqua.Loop.StreamOrderTest do
 
     turn = accept!(ctx, thread, "@aqua my key")
     assert :completed = Task.await(run(ctx, turn), 60_000)
-    assert_receive {:thread, _, {:turn_finished}}, 5_000
+    assert_receive %ThreadEvent{kind: :turn_finished}, 5_000
 
-    forwarded = for {:thread, _, {:delta, delta}} <- drain(), do: delta.text
+    forwarded = for {:delta, delta} <- thread_events(drain()), do: delta.text
     assert Enum.join(forwarded) == "your key is [REDACTED], keep it"
     refute Enum.any?(forwarded, &(&1 =~ secret))
 
     assert [chat_id] = chat_calls()
-    stream = Cyfr.Execution.events_since(chat_id, {0, 0}, ctx.athanor_id)
+    stream = Crucible.events_since(chat_id, {0, 0}, ctx.athanor_id)
     emitted = for %{type: "emit", data: data} <- stream, do: data
 
     assert [
@@ -164,10 +165,10 @@ defmodule Aqua.Loop.StreamOrderTest do
 
     turn = accept!(ctx, thread, "@aqua finish")
     assert :completed = Task.await(run(ctx, turn), 60_000)
-    assert_receive {:thread, _, {:turn_finished}}, 5_000
+    assert_receive %ThreadEvent{kind: :turn_finished}, 5_000
 
     events =
-      for {:thread, _, event} <- drain(),
+      for event <- thread_events(drain()),
           match?({:delta, _}, event) or match?({:message, %{kind: "text", author: "aqua"}}, event),
           do: event
 
@@ -198,6 +199,10 @@ defmodule Aqua.Loop.StreamOrderTest do
   defp chat_calls do
     for %{execution_id: id, input: %{"operation" => "chat"}} <- ScriptedWorker.calls(), do: id
   end
+
+  # What a viewer of the thread heard, as `{kind, data}` pairs.
+  defp thread_events(messages),
+    do: for(%ThreadEvent{kind: kind, data: data} <- messages, do: {kind, data})
 
   defp drain do
     receive do

@@ -13,9 +13,16 @@ defmodule Aqua.Loop.Policy do
   never `auto` without a standing grant. A hand or catalog call reads its
   own key; a clone reads its role's glob; the `ui` event runs at once; an
   external server's tool always asks; a launch reads `execution.run` and
-  then the launch rule: an application the estate consented to and this
+  then the launch rule: an application the athanor consented to and this
   turn has not written to may run under `auto`, anything else needs a
   card. Reads run beside each other; everything else runs alone.
+
+  A key that asks runs at once only when a bounded allow covers this very
+  call (`Sanctum.ToolGrants.admits?/2`): its lifecycle is the call's own
+  execution, turn or schedule and still live, its deadline has not
+  passed and the call's resource lies inside its constraint, read from
+  the rows as they stand when the call is decided and again when it
+  dispatches, never from the turn's start.
 
   What this turn wrote to is read from the durable rows, never from
   memory: `touched_refs/1` names the components the turn's closed write,
@@ -31,7 +38,11 @@ defmodule Aqua.Loop.Policy do
   The decision for `call` under `policy`. `opts`: `:consented?` (a
   function of a reference), `:touched` (a `MapSet` of references this
   turn wrote to), `:restricted?` (the turn holds a call whose outcome is
-  unknown: only a replay-safe read runs, whatever the policy says).
+  unknown: only a replay-safe read runs, whatever the policy says), and
+  where the call is made, which a bounded allow is judged against:
+  `:ctx` (the member's context its rows are read under), `:agent` (the
+  agent's name), `:thread_id`, `:turn_id` and `:execution_id` (the
+  turn's root). Without them a key that asks, asks.
   """
   @spec decide(Call.t(), map(), keyword()) :: decision()
   def decide(%Call{} = call, policy, opts) do
@@ -50,9 +61,7 @@ defmodule Aqua.Loop.Policy do
   """
   @spec replay_safe?(Call.t()) :: boolean()
   def replay_safe?(%Call{kind: :hand, tool: tool, action: action}),
-    do:
-      Cyfr.Ops.Annotations.recovery_of(get_in(Aqua.Hands.catalog(), [tool, :actions, action])) ==
-        :replay_safe
+    do: Grimoire.VirtualTools.recovery(tool, action) == :replay_safe
 
   def replay_safe?(%Call{kind: :catalog, tool: tool, action: action}),
     do: Aqua.Ops.replay_safe?(tool, action)
@@ -73,35 +82,68 @@ defmodule Aqua.Loop.Policy do
     case launch_rule(reference, opts) do
       {:refuse, text} -> {:refuse, text}
       :card -> if Map.get(policy, key(call)) == "deny", do: deny(call), else: :ask
-      :child -> by_key(call, policy)
+      :child -> by_key(call, policy, opts)
     end
   end
 
-  defp decide_open(%Call{} = call, policy, _opts), do: by_key(call, policy)
+  defp decide_open(%Call{} = call, policy, opts), do: by_key(call, policy, opts)
 
   @doc """
   Whether `policy` still grants `call` without asking.
 
   The narrow re-check a call makes against the member's live grants as it
-  dispatches. It can only withdraw an `auto`, never widen one, so it needs
-  none of `decide/3`'s turn context: a restricted turn, a touched reference
-  and a launch rule have all already had their say by the time a step runs.
+  dispatches. It can only withdraw an `auto`, never widen one: a
+  restricted turn, a touched reference and a launch rule have all already
+  had their say by the time a step runs. `opts` are `decide/3`'s place of
+  the call, so a call a bounded allow let run is asked again whether the
+  allow still covers it (`Sanctum.ToolGrants.admits?/2`), from the rows
+  as they stand now.
   """
-  @spec auto?(Call.t(), map()) :: boolean()
-  def auto?(%Call{kind: :ui}, _policy), do: true
+  @spec auto?(Call.t(), map(), keyword()) :: boolean()
+  def auto?(%Call{kind: :ui}, _policy, _opts), do: true
 
-  def auto?(%Call{kind: :clone, target: role}, policy),
+  def auto?(%Call{kind: :clone, target: role}, policy, _opts),
     do: Map.get(policy, "#{role}.*") == "auto"
 
-  def auto?(%Call{} = call, policy), do: Map.get(policy, key(call)) == "auto"
+  def auto?(%Call{} = call, policy, opts) do
+    case Map.get(policy, key(call)) do
+      "auto" -> true
+      "ask" -> admitted?(call, opts)
+      _ -> false
+    end
+  end
 
-  defp by_key(call, policy) do
+  defp by_key(call, policy, opts) do
     case Map.get(policy, key(call)) do
       "auto" -> :auto
-      "ask" -> :ask
+      "ask" -> if admitted?(call, opts), do: :auto, else: :ask
       _ -> deny(call)
     end
   end
+
+  # Whether a bounded allow covers this very call, read fresh. Only a
+  # hand, a catalog call or a child launch runs under a standing answer;
+  # a call made nowhere the rows can be read for asks.
+  defp admitted?(%Call{kind: kind, tool: tool, action: action, args: args}, opts)
+       when kind in [:hand, :catalog, :launch] and is_binary(action) do
+    with %Sanctum.Context{} = ctx <- Keyword.get(opts, :ctx),
+         agent when is_binary(agent) <- Keyword.get(opts, :agent),
+         thread_id when is_binary(thread_id) <- Keyword.get(opts, :thread_id) do
+      Sanctum.ToolGrants.admits?(ctx, %{
+        agent_name: agent,
+        thread_id: thread_id,
+        tool: tool,
+        action: action,
+        args: args,
+        execution_id: Keyword.get(opts, :execution_id),
+        turn_id: Keyword.get(opts, :turn_id)
+      })
+    else
+      _ -> false
+    end
+  end
+
+  defp admitted?(_call, _opts), do: false
 
   defp deny(call), do: {:deny, "#{key(call)} is not in the agent's policy"}
 
@@ -121,8 +163,8 @@ defmodule Aqua.Loop.Policy do
 
   @doc """
   The launch rule: an `execution.run` of `reference` runs as a child of
-  the turn (`:child`) when the estate consented to it and this turn did
-  not write to it; a reference this turn wrote to, or one the estate has
+  the turn (`:child`) when the athanor consented to it and this turn did
+  not write to it; a reference this turn wrote to, or one the athanor has
   not consented to, needs a card (`:card`); a reference that is not a
   component is refused.
   """
@@ -131,7 +173,7 @@ defmodule Aqua.Loop.Policy do
     consented? = Keyword.get(opts, :consented?, fn _ -> false end)
     touched = Keyword.get(opts, :touched, MapSet.new())
 
-    case Cyfr.ComponentRef.parse(reference) do
+    case Prima.ComponentRef.parse(reference) do
       {:ok, _} ->
         cond do
           MapSet.member?(touched, name_level(reference)) -> :card
@@ -147,8 +189,10 @@ defmodule Aqua.Loop.Policy do
   @doc """
   The component references the turn's closed write, destructive and
   execute calls reached, from their `tool_call` payloads: an argument
-  named `reference` or `ref`, and a file path under `components/`. Name
-  level, so any version of a touched component counts.
+  named `reference` or `ref`, and a `path` at or below a component version
+  directory as the component path grammar reads one
+  (`Compendium.parse_component_path/1`). Name level,
+  so any version of a touched component counts.
   """
   @spec touched_refs([map()]) :: MapSet.t()
   def touched_refs(calls) when is_list(calls) do
@@ -185,15 +229,13 @@ defmodule Aqua.Loop.Policy do
 
     %{
       "kind" => "request_approval",
-      "id" => Keyword.get(opts, :id) || Cyfr.UUID7.generate_id("apr"),
+      "id" => Keyword.get(opts, :id) || Prima.UUID7.generate_id("apr"),
       "title" => Keyword.get(opts, :title) || "#{call.tool}.#{call.action}",
       "summary" => Keyword.get(opts, :summary) || "",
       "action_kind" =>
         Atom.to_string(Aqua.Kinds.kind_for(call.tool, call.action || "") || :external),
       "standing" =>
-        Cyfr.Ops.Annotations.standing_to_wire(
-          Aqua.Kinds.standing_for(call.tool, call.action || "")
-        ),
+        Grimoire.standing_to_wire(Aqua.Kinds.standing_for(call.tool, call.action || "")),
       "proposal" => proposal
     }
   end
@@ -208,20 +250,23 @@ defmodule Aqua.Loop.Policy do
   def proposal_digest(%{"proposal" => proposal}), do: proposal_digest(proposal)
 
   def proposal_digest(proposal) when is_map(proposal) do
-    {:ok, digest} = Cyfr.JCS.hash(proposal)
+    {:ok, digest} = Prima.JCS.hash(proposal)
     digest
   end
 
   defp name_level(reference), do: Aqua.Hands.name_level(reference)
 
-  # `components/<types>/<publisher>/<name>/<version>/…` names a component.
+  # A path names a component when the layout's one parser reads a version
+  # directory in it, the same parser the unit locator and the `source` tool
+  # read it with; any other path names none. Its segments are split as
+  # every door that writes it splits them, empty ones dropped, so
+  # `components//…` and `/components/…` name the unit the write lands in.
   defp path_refs(path) when is_binary(path) do
-    case String.split(path, "/") do
-      ["components", plural, publisher, name | _] ->
-        type = String.trim_trailing(plural, "s")
-        ["#{type}:#{publisher}.#{name}"]
+    case Compendium.parse_component_path(String.split(path, "/", trim: true)) do
+      {:ok, %{type: type, publisher: publisher, name: name}} ->
+        [Prima.ComponentRef.build(type, publisher, name)]
 
-      _ ->
+      :error ->
         []
     end
   end

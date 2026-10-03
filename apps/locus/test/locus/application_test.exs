@@ -3,10 +3,10 @@
 
 defmodule Locus.ApplicationTest do
   @moduledoc """
-  What the builder starts, and when it refuses to: a node without a builds
-  key serves nothing; one that serves does so under cyfr-spawn, or, in a
-  build that does not know the direct launcher (every build but the test
-  environment's), not at all.
+  What a Locus node starts, and when it refuses to: a node serves builds,
+  backends, both or neither by the keys it holds; one that serves either
+  does so under cyfr-keeper, or, in a build that does not know the direct
+  launcher (every build but the test environment's), not at all.
   """
 
   # Replaces the logger's level and default formatter for one test.
@@ -14,7 +14,17 @@ defmodule Locus.ApplicationTest do
 
   alias Locus.Application, as: App
 
-  @release_executors [Locus.Spawner]
+  @release_launcher nil
+  @none %{builds: false, backends: false}
+  @builds %{builds: true, backends: false}
+  @backends %{builds: false, backends: true}
+  @both %{builds: true, backends: true}
+  @backends_children [
+    Locus.Backends.Owners,
+    DynamicSupervisor,
+    Locus.Backends.LeaseSweeper,
+    Bandit
+  ]
 
   defp ids(children) do
     Enum.map(children, fn
@@ -23,26 +33,74 @@ defmodule Locus.ApplicationTest do
     end)
   end
 
-  test "a node that holds no builds key serves nothing, whoever started it" do
-    assert ids(App.children(false, false)) == [Cyfr.Slots]
-    assert ids(App.children(false, true)) == [Cyfr.Slots, Locus.Spawner]
-    assert ids(App.children(false, false, @release_executors)) == [Cyfr.Slots]
+  test "a node that holds neither key serves nothing, whoever started it" do
+    assert ids(App.children(@none, false)) == [Prima.Slots]
+    assert ids(App.children(@none, true)) == [Prima.Slots, Locus.Keeper]
+    assert ids(App.children(@none, false, @release_launcher)) == [Prima.Slots]
   end
 
-  test "a node that serves under cyfr-spawn starts the spawner before the listener that depends on it" do
-    for executors <- [Locus.Executor.executors(), @release_executors] do
-      assert ids(App.children(true, true, executors)) == [Cyfr.Slots, Locus.Spawner, Bandit]
+  test "a node that serves under cyfr-keeper starts the keeper's client before the services that depend on it" do
+    for launcher <- [Locus.Executor.direct_launcher(), @release_launcher] do
+      assert ids(App.children(@builds, true, launcher)) == [Prima.Slots, Locus.Keeper, Bandit]
+
+      assert ids(App.children(@backends, true, launcher)) ==
+               [Prima.Slots, Locus.Keeper | @backends_children]
+
+      # Both services on one node: the backends' children after the builds'.
+      assert ids(App.children(@both, true, launcher)) ==
+               [Prima.Slots, Locus.Keeper, Bandit | @backends_children]
     end
   end
 
-  test "serving without cyfr-spawn refuses the boot wherever the direct launcher is unknown" do
+  test "the backends children are the owners, the backend supervisor, the tick and the listener" do
+    assert [
+             {Locus.Backends.Owners, owners},
+             {DynamicSupervisor, supervisor},
+             {Locus.Backends.LeaseSweeper, sweeper},
+             {Bandit, listener}
+           ] = Locus.Backends.children()
+
+    assert owners[:name] == Locus.Backends.Owners
+    assert supervisor[:name] == Locus.Backends.BackendSupervisor
+    assert sweeper[:owners] == Locus.Backends.Owners
+    assert listener[:plug] == Locus.Backends.Service
+    assert listener[:ip] == Locus.Config.backends_bind()
+    assert listener[:port] == Locus.Config.backends_port()
+    assert listener[:http_2_options] == [enabled: false]
+    refute listener[:port] == Locus.Config.port()
+  end
+
+  test "serving without cyfr-keeper refuses the boot wherever the direct launcher is unknown" do
     assert_raise RuntimeError,
-                 ~r/runs a build only through cyfr-spawn.*fd 3 is not that channel/s,
-                 fn -> App.children(true, false, @release_executors) end
+                 ~r/every build and every backend only through cyfr-keeper.*fd 3 is not that channel.*--pool build:… --/s,
+                 fn -> App.children(@builds, false, @release_launcher) end
+
+    assert_raise RuntimeError,
+                 ~r/fd 3 is not that channel.*`cyfr-keeper serve --pool backends:… --/s,
+                 fn -> App.children(@backends, false, @release_launcher) end
+
+    assert_raise RuntimeError,
+                 ~r/--pool build:… --pool backends:… --/s,
+                 fn -> App.children(@both, false, @release_launcher) end
 
     # The test build knows the launcher, and serves through it.
-    assert Locus.DirectLauncher in Locus.Executor.executors()
-    assert ids(App.children(true, false)) == [Cyfr.Slots, Bandit]
+    assert Locus.Executor.direct_launcher() == Locus.DirectLauncher
+    assert ids(App.children(@builds, false)) == [Prima.Slots, Bandit]
+    assert ids(App.children(@backends, false)) == [Prima.Slots | @backends_children]
+    assert ids(App.children(@both, false)) == [Prima.Slots, Bandit | @backends_children]
+  end
+
+  test "both services' nonce tables exist before the tree, owned by the application" do
+    children =
+      for {_id, pid, _type, _modules} <- Supervisor.which_children(Locus.Supervisor), do: pid
+
+    for table <- [Locus.BuilderService.Nonces, Locus.Backends.Service.Nonces] do
+      assert :ets.whereis(table) != :undefined
+      # Neither a listener's restart nor the tree's forgets what it holds.
+      owner = :ets.info(table, :owner)
+      refute owner in children
+      refute owner == Process.whereis(Locus.Supervisor)
+    end
   end
 
   test "the running tree restarts a child with everything started after it" do
@@ -51,7 +109,7 @@ defmodule Locus.ApplicationTest do
   end
 
   test "the build slots take their caps from the builder's settings and refuse, never queue" do
-    assert {Cyfr.Slots, opts} = App.build_slots()
+    assert {Prima.Slots, opts} = App.build_slots()
     assert opts[:name] == Locus.BuildSlots
     assert opts[:max] == Locus.Config.max_concurrent()
     assert opts[:key_max] == Locus.Config.max_concurrent_per_tenant()
@@ -66,7 +124,7 @@ defmodule Locus.ApplicationTest do
       Application.delete_env(:locus, :max_concurrent_per_tenant)
     end)
 
-    assert {Cyfr.Slots, opts} = App.build_slots()
+    assert {Prima.Slots, opts} = App.build_slots()
     assert {opts[:max], opts[:key_max]} == {5, 3}
   end
 
@@ -98,7 +156,7 @@ defmodule Locus.ApplicationTest do
 
     assert Logger.level() == :error
     assert {:ok, %{formatter: {Logger.Formatter, config}}} = :logger.get_handler_config(:default)
-    assert inspect(config) =~ "Cyfr.JsonFormatter"
+    assert inspect(config) =~ "Prima.JsonFormatter"
 
     # Text leaves the handler's formatter as it was configured.
     :logger.update_handler_config(:default, :formatter, formatter)

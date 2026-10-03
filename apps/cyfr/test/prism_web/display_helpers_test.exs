@@ -18,8 +18,8 @@ defmodule PrismWeb.DisplayHelpersTest do
       assert principal_label(nil) == "-"
     end
 
-    test "an unknown person id is shortened, never shown raw in full" do
-      :ok = Ecto.Adapters.SQL.Sandbox.checkout(Arca.Repo)
+    test "an unknown person id is shortened, never shown raw in full", tags do
+      Cyfr.Test.Sandbox.setup!(tags)
       id = "github|https://github.com|" <> String.duplicate("9", 40)
       label = principal_label(id)
       assert String.ends_with?(label, "…")

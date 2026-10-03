@@ -1,0 +1,1029 @@
+{
+  "comment": "The vectors pinning Prima.ConsentPreview: every side reads the preview, which holds a row of every kind, and writes it back to the same map; accepts each origin spelling and refuses each invalid one; and refuses each refusal with the named reason. A preview carries no sentence. Only egress, storage, tools and limits can be narrowed. Origins are answered in the enum's order: interactive, programmatic, schedule, webhook. A row is one per kind and node; a credential one per entry and the edge it rides (@ingress for the node's own key, otherwise the dependency's name-level ref, ref|need for a named need); a stream one per name and subject; a tool server and a card one per name. So one entry lent on two edges is two rows, and so is one stream under two subjects. A tools row names tool.action names, or * alone and never narrowed when the ask names every tool and the grant is the whole ask.",
+  "kinds": [
+    "credential",
+    "egress",
+    "storage",
+    "tools",
+    "tool_servers",
+    "limits",
+    "frame",
+    "streams",
+    "cards",
+    "system_actions"
+  ],
+  "narrowable_kinds": [
+    "egress",
+    "storage",
+    "tools",
+    "limits"
+  ],
+  "origins": {
+    "invalid": [
+      "cli",
+      "Interactive",
+      "",
+      "any",
+      "api"
+    ],
+    "spellings": [
+      "interactive",
+      "programmatic",
+      "schedule",
+      "webhook"
+    ]
+  },
+  "preview": {
+    "commit_digest": "sha256:9505cacb7c710ed17125fcc6cb3669e8ddca6c8cd8af6a31f6b3cd64604c3098",
+    "origins": [
+      "interactive",
+      "programmatic"
+    ],
+    "rows": [
+      {
+        "kind": "credential",
+        "narrowed": false,
+        "node": "reagent:local.weather",
+        "values": {
+          "edge": "@ingress",
+          "fields": [
+            "api_key"
+          ],
+          "name": "weather-api",
+          "scopes": []
+        }
+      },
+      {
+        "kind": "credential",
+        "narrowed": false,
+        "node": "reagent:local.weather",
+        "values": {
+          "edge": "reagent:local.maps|tiles",
+          "fields": [
+            "token"
+          ],
+          "label": "shared-maps",
+          "name": "maps",
+          "scopes": [
+            "read"
+          ]
+        }
+      },
+      {
+        "kind": "credential",
+        "narrowed": false,
+        "node": "reagent:local.weather",
+        "values": {
+          "edge": "reagent:local.geo",
+          "fields": [
+            "api_key"
+          ],
+          "name": "weather-api",
+          "scopes": [
+            "read"
+          ]
+        }
+      },
+      {
+        "kind": "egress",
+        "narrowed": true,
+        "node": "reagent:local.weather",
+        "values": {
+          "domains": [
+            "api.weather.example"
+          ],
+          "methods": [
+            "GET"
+          ],
+          "private_ips": [],
+          "schemes": [
+            "https"
+          ]
+        }
+      },
+      {
+        "kind": "storage",
+        "narrowed": true,
+        "node": "reagent:local.weather",
+        "values": {
+          "actions": [
+            "read",
+            "list"
+          ],
+          "paths": [
+            "data/weather/"
+          ]
+        }
+      },
+      {
+        "kind": "tools",
+        "narrowed": false,
+        "node": "reagent:local.weather",
+        "values": {
+          "tools": [
+            "file.read",
+            "file.list"
+          ]
+        }
+      },
+      {
+        "kind": "tool_servers",
+        "narrowed": false,
+        "node": "reagent:local.weather",
+        "values": {
+          "digest": "sha256:e0cc26f8514695ce7696d7660aac368a3f9a7b99dd1056650518b3c8296c28b6",
+          "name": "forecasts",
+          "tool_patterns": [
+            "forecast_*"
+          ]
+        }
+      },
+      {
+        "kind": "limits",
+        "narrowed": true,
+        "node": "reagent:local.weather",
+        "values": {
+          "batch_timeout": "5m",
+          "max_concurrent_tasks": 4,
+          "max_memory_bytes": 67108864,
+          "max_request_size": 1048576,
+          "max_response_size": 5242880,
+          "rate_limit": {
+            "requests": 60,
+            "window": "1m"
+          },
+          "timeout": "30s"
+        }
+      },
+      {
+        "kind": "tools",
+        "narrowed": false,
+        "node": "reagent:local.geo",
+        "values": {
+          "tools": [
+            "*"
+          ]
+        }
+      },
+      {
+        "kind": "frame",
+        "narrowed": false,
+        "node": "tincture:local.dashboard",
+        "values": {
+          "background": true,
+          "capabilities": [
+            "clipboard-write"
+          ],
+          "placement": "panel"
+        }
+      },
+      {
+        "kind": "streams",
+        "narrowed": false,
+        "node": "tincture:local.dashboard",
+        "values": {
+          "name": "executions.deltas",
+          "subject": "*"
+        }
+      },
+      {
+        "kind": "streams",
+        "narrowed": false,
+        "node": "tincture:local.dashboard",
+        "values": {
+          "name": "executions.deltas",
+          "subject": "exe_1"
+        }
+      },
+      {
+        "kind": "streams",
+        "narrowed": false,
+        "node": "tincture:local.dashboard",
+        "values": {
+          "name": "threads.messages"
+        }
+      },
+      {
+        "kind": "cards",
+        "narrowed": false,
+        "node": "tincture:local.dashboard",
+        "values": {
+          "args": {
+            "city": "Lisbon"
+          },
+          "component": "reagent:local.weather",
+          "name": "today",
+          "operation": "run"
+        }
+      },
+      {
+        "kind": "cards",
+        "narrowed": false,
+        "node": "tincture:local.dashboard",
+        "values": {
+          "name": "about"
+        }
+      },
+      {
+        "kind": "system_actions",
+        "narrowed": false,
+        "node": "tincture:local.dashboard",
+        "values": {
+          "actions": [
+            "execution.list"
+          ]
+        }
+      }
+    ],
+    "v": 1
+  },
+  "refusals": [
+    {
+      "error": "unknown_kind",
+      "name": "a row of an unknown kind",
+      "preview": {
+        "commit_digest": "sha256:9505cacb7c710ed17125fcc6cb3669e8ddca6c8cd8af6a31f6b3cd64604c3098",
+        "origins": [
+          "interactive"
+        ],
+        "rows": [
+          {
+            "kind": "vault_unlock",
+            "narrowed": false,
+            "node": "reagent:local.weather",
+            "values": {
+              "edge": "@ingress",
+              "fields": [
+                "api_key"
+              ],
+              "name": "weather-api",
+              "scopes": []
+            }
+          }
+        ],
+        "v": 1
+      }
+    },
+    {
+      "error": "unknown_field",
+      "name": "a row carrying a sentence",
+      "preview": {
+        "commit_digest": "sha256:9505cacb7c710ed17125fcc6cb3669e8ddca6c8cd8af6a31f6b3cd64604c3098",
+        "origins": [
+          "interactive"
+        ],
+        "rows": [
+          {
+            "kind": "credential",
+            "narrowed": false,
+            "node": "reagent:local.weather",
+            "summary": "Uses your weather key",
+            "values": {
+              "edge": "@ingress",
+              "fields": [
+                "api_key"
+              ],
+              "name": "weather-api",
+              "scopes": []
+            }
+          }
+        ],
+        "v": 1
+      }
+    },
+    {
+      "error": "unknown_field",
+      "name": "a preview carrying a sentence",
+      "preview": {
+        "commit_digest": "sha256:9505cacb7c710ed17125fcc6cb3669e8ddca6c8cd8af6a31f6b3cd64604c3098",
+        "origins": [
+          "interactive"
+        ],
+        "rows": [
+          {
+            "kind": "egress",
+            "narrowed": true,
+            "node": "reagent:local.weather",
+            "values": {
+              "domains": [
+                "api.weather.example"
+              ],
+              "methods": [
+                "GET"
+              ],
+              "private_ips": [],
+              "schemes": [
+                "https"
+              ]
+            }
+          }
+        ],
+        "summary": [
+          "Grant weather"
+        ],
+        "v": 1
+      }
+    },
+    {
+      "error": "not_narrowable",
+      "name": "a credential marked narrowed",
+      "preview": {
+        "commit_digest": "sha256:9505cacb7c710ed17125fcc6cb3669e8ddca6c8cd8af6a31f6b3cd64604c3098",
+        "origins": [
+          "interactive"
+        ],
+        "rows": [
+          {
+            "kind": "credential",
+            "narrowed": true,
+            "node": "reagent:local.weather",
+            "values": {
+              "edge": "@ingress",
+              "fields": [
+                "api_key"
+              ],
+              "name": "weather-api",
+              "scopes": []
+            }
+          }
+        ],
+        "v": 1
+      }
+    },
+    {
+      "error": "missing_field",
+      "name": "a credential naming no edge",
+      "preview": {
+        "commit_digest": "sha256:9505cacb7c710ed17125fcc6cb3669e8ddca6c8cd8af6a31f6b3cd64604c3098",
+        "origins": [
+          "interactive"
+        ],
+        "rows": [
+          {
+            "kind": "credential",
+            "narrowed": false,
+            "node": "reagent:local.weather",
+            "values": {
+              "fields": [
+                "api_key"
+              ],
+              "name": "weather-api",
+              "scopes": []
+            }
+          }
+        ],
+        "v": 1
+      }
+    },
+    {
+      "error": "invalid_field",
+      "name": "a credential edge in the reserved namespace",
+      "preview": {
+        "commit_digest": "sha256:9505cacb7c710ed17125fcc6cb3669e8ddca6c8cd8af6a31f6b3cd64604c3098",
+        "origins": [
+          "interactive"
+        ],
+        "rows": [
+          {
+            "kind": "credential",
+            "narrowed": false,
+            "node": "reagent:local.weather",
+            "values": {
+              "edge": "@egress",
+              "fields": [
+                "api_key"
+              ],
+              "name": "weather-api",
+              "scopes": []
+            }
+          }
+        ],
+        "v": 1
+      }
+    },
+    {
+      "error": "invalid_field",
+      "name": "a credential edge naming a version",
+      "preview": {
+        "commit_digest": "sha256:9505cacb7c710ed17125fcc6cb3669e8ddca6c8cd8af6a31f6b3cd64604c3098",
+        "origins": [
+          "interactive"
+        ],
+        "rows": [
+          {
+            "kind": "credential",
+            "narrowed": false,
+            "node": "reagent:local.weather",
+            "values": {
+              "edge": "reagent:local.geo:1.0.0",
+              "fields": [
+                "api_key"
+              ],
+              "name": "weather-api",
+              "scopes": [
+                "read"
+              ]
+            }
+          }
+        ],
+        "v": 1
+      }
+    },
+    {
+      "error": "invalid_field",
+      "name": "a credential edge naming an empty need",
+      "preview": {
+        "commit_digest": "sha256:9505cacb7c710ed17125fcc6cb3669e8ddca6c8cd8af6a31f6b3cd64604c3098",
+        "origins": [
+          "interactive"
+        ],
+        "rows": [
+          {
+            "kind": "credential",
+            "narrowed": false,
+            "node": "reagent:local.weather",
+            "values": {
+              "edge": "reagent:local.geo|",
+              "fields": [
+                "api_key"
+              ],
+              "name": "weather-api",
+              "scopes": [
+                "read"
+              ]
+            }
+          }
+        ],
+        "v": 1
+      }
+    },
+    {
+      "error": "not_narrowable",
+      "name": "a frame marked narrowed",
+      "preview": {
+        "commit_digest": "sha256:9505cacb7c710ed17125fcc6cb3669e8ddca6c8cd8af6a31f6b3cd64604c3098",
+        "origins": [
+          "interactive"
+        ],
+        "rows": [
+          {
+            "kind": "frame",
+            "narrowed": true,
+            "node": "tincture:local.dashboard",
+            "values": {
+              "background": true,
+              "capabilities": [
+                "clipboard-write"
+              ],
+              "placement": "panel"
+            }
+          }
+        ],
+        "v": 1
+      }
+    },
+    {
+      "error": "empty_origins",
+      "name": "no origins",
+      "preview": {
+        "commit_digest": "sha256:9505cacb7c710ed17125fcc6cb3669e8ddca6c8cd8af6a31f6b3cd64604c3098",
+        "origins": [],
+        "rows": [
+          {
+            "kind": "egress",
+            "narrowed": true,
+            "node": "reagent:local.weather",
+            "values": {
+              "domains": [
+                "api.weather.example"
+              ],
+              "methods": [
+                "GET"
+              ],
+              "private_ips": [],
+              "schemes": [
+                "https"
+              ]
+            }
+          }
+        ],
+        "v": 1
+      }
+    },
+    {
+      "error": "unknown_origin",
+      "name": "an origin outside the enum",
+      "preview": {
+        "commit_digest": "sha256:9505cacb7c710ed17125fcc6cb3669e8ddca6c8cd8af6a31f6b3cd64604c3098",
+        "origins": [
+          "interactive",
+          "cli"
+        ],
+        "rows": [
+          {
+            "kind": "egress",
+            "narrowed": true,
+            "node": "reagent:local.weather",
+            "values": {
+              "domains": [
+                "api.weather.example"
+              ],
+              "methods": [
+                "GET"
+              ],
+              "private_ips": [],
+              "schemes": [
+                "https"
+              ]
+            }
+          }
+        ],
+        "v": 1
+      }
+    },
+    {
+      "error": "unknown_origin",
+      "name": "an origin spelled in capitals",
+      "preview": {
+        "commit_digest": "sha256:9505cacb7c710ed17125fcc6cb3669e8ddca6c8cd8af6a31f6b3cd64604c3098",
+        "origins": [
+          "Interactive"
+        ],
+        "rows": [
+          {
+            "kind": "egress",
+            "narrowed": true,
+            "node": "reagent:local.weather",
+            "values": {
+              "domains": [
+                "api.weather.example"
+              ],
+              "methods": [
+                "GET"
+              ],
+              "private_ips": [],
+              "schemes": [
+                "https"
+              ]
+            }
+          }
+        ],
+        "v": 1
+      }
+    },
+    {
+      "error": "duplicate_origin",
+      "name": "an origin named twice",
+      "preview": {
+        "commit_digest": "sha256:9505cacb7c710ed17125fcc6cb3669e8ddca6c8cd8af6a31f6b3cd64604c3098",
+        "origins": [
+          "schedule",
+          "schedule"
+        ],
+        "rows": [
+          {
+            "kind": "egress",
+            "narrowed": true,
+            "node": "reagent:local.weather",
+            "values": {
+              "domains": [
+                "api.weather.example"
+              ],
+              "methods": [
+                "GET"
+              ],
+              "private_ips": [],
+              "schemes": [
+                "https"
+              ]
+            }
+          }
+        ],
+        "v": 1
+      }
+    },
+    {
+      "error": "missing_field",
+      "name": "no commit digest",
+      "preview": {
+        "origins": [
+          "interactive"
+        ],
+        "rows": [
+          {
+            "kind": "egress",
+            "narrowed": true,
+            "node": "reagent:local.weather",
+            "values": {
+              "domains": [
+                "api.weather.example"
+              ],
+              "methods": [
+                "GET"
+              ],
+              "private_ips": [],
+              "schemes": [
+                "https"
+              ]
+            }
+          }
+        ],
+        "v": 1
+      }
+    },
+    {
+      "error": "invalid_field",
+      "name": "a commit digest that is not a digest",
+      "preview": {
+        "commit_digest": "abc",
+        "origins": [
+          "interactive"
+        ],
+        "rows": [
+          {
+            "kind": "egress",
+            "narrowed": true,
+            "node": "reagent:local.weather",
+            "values": {
+              "domains": [
+                "api.weather.example"
+              ],
+              "methods": [
+                "GET"
+              ],
+              "private_ips": [],
+              "schemes": [
+                "https"
+              ]
+            }
+          }
+        ],
+        "v": 1
+      }
+    },
+    {
+      "error": "unknown_field",
+      "name": "egress values with a field egress does not carry",
+      "preview": {
+        "commit_digest": "sha256:9505cacb7c710ed17125fcc6cb3669e8ddca6c8cd8af6a31f6b3cd64604c3098",
+        "origins": [
+          "interactive"
+        ],
+        "rows": [
+          {
+            "kind": "egress",
+            "narrowed": true,
+            "node": "reagent:local.weather",
+            "values": {
+              "domains": [
+                "api.weather.example"
+              ],
+              "methods": [
+                "GET"
+              ],
+              "ports": [
+                "443"
+              ],
+              "private_ips": [],
+              "schemes": [
+                "https"
+              ]
+            }
+          }
+        ],
+        "v": 1
+      }
+    },
+    {
+      "error": "invalid_field",
+      "name": "a domain named twice",
+      "preview": {
+        "commit_digest": "sha256:9505cacb7c710ed17125fcc6cb3669e8ddca6c8cd8af6a31f6b3cd64604c3098",
+        "origins": [
+          "interactive"
+        ],
+        "rows": [
+          {
+            "kind": "egress",
+            "narrowed": true,
+            "node": "reagent:local.weather",
+            "values": {
+              "domains": [
+                "a.example",
+                "a.example"
+              ],
+              "methods": [
+                "GET"
+              ],
+              "private_ips": [],
+              "schemes": [
+                "https"
+              ]
+            }
+          }
+        ],
+        "v": 1
+      }
+    },
+    {
+      "error": "invalid_field",
+      "name": "a wildcard beside another tool",
+      "preview": {
+        "commit_digest": "sha256:9505cacb7c710ed17125fcc6cb3669e8ddca6c8cd8af6a31f6b3cd64604c3098",
+        "origins": [
+          "interactive"
+        ],
+        "rows": [
+          {
+            "kind": "tools",
+            "narrowed": false,
+            "node": "reagent:local.geo",
+            "values": {
+              "tools": [
+                "*",
+                "file.read"
+              ]
+            }
+          }
+        ],
+        "v": 1
+      }
+    },
+    {
+      "error": "invalid_field",
+      "name": "a wildcard marked narrowed",
+      "preview": {
+        "commit_digest": "sha256:9505cacb7c710ed17125fcc6cb3669e8ddca6c8cd8af6a31f6b3cd64604c3098",
+        "origins": [
+          "interactive"
+        ],
+        "rows": [
+          {
+            "kind": "tools",
+            "narrowed": true,
+            "node": "reagent:local.geo",
+            "values": {
+              "tools": [
+                "*"
+              ]
+            }
+          }
+        ],
+        "v": 1
+      }
+    },
+    {
+      "error": "missing_field",
+      "name": "limits missing a limit",
+      "preview": {
+        "commit_digest": "sha256:9505cacb7c710ed17125fcc6cb3669e8ddca6c8cd8af6a31f6b3cd64604c3098",
+        "origins": [
+          "interactive"
+        ],
+        "rows": [
+          {
+            "kind": "limits",
+            "narrowed": true,
+            "node": "reagent:local.weather",
+            "values": {
+              "batch_timeout": "5m",
+              "max_concurrent_tasks": 4,
+              "max_memory_bytes": 67108864,
+              "max_request_size": 1048576,
+              "max_response_size": 5242880,
+              "rate_limit": {
+                "requests": 60,
+                "window": "1m"
+              }
+            }
+          }
+        ],
+        "v": 1
+      }
+    },
+    {
+      "error": "invalid_field",
+      "name": "a limit that does not parse",
+      "preview": {
+        "commit_digest": "sha256:9505cacb7c710ed17125fcc6cb3669e8ddca6c8cd8af6a31f6b3cd64604c3098",
+        "origins": [
+          "interactive"
+        ],
+        "rows": [
+          {
+            "kind": "limits",
+            "narrowed": true,
+            "node": "reagent:local.weather",
+            "values": {
+              "batch_timeout": "5m",
+              "max_concurrent_tasks": 4,
+              "max_memory_bytes": 67108864,
+              "max_request_size": 1048576,
+              "max_response_size": 5242880,
+              "rate_limit": {
+                "requests": 60,
+                "window": "1m"
+              },
+              "timeout": "forever"
+            }
+          }
+        ],
+        "v": 1
+      }
+    },
+    {
+      "error": "invalid_field",
+      "name": "a card naming half a source",
+      "preview": {
+        "commit_digest": "sha256:9505cacb7c710ed17125fcc6cb3669e8ddca6c8cd8af6a31f6b3cd64604c3098",
+        "origins": [
+          "interactive"
+        ],
+        "rows": [
+          {
+            "kind": "cards",
+            "narrowed": false,
+            "node": "tincture:local.dashboard",
+            "values": {
+              "component": "reagent:local.weather",
+              "name": "today",
+              "operation": "run"
+            }
+          }
+        ],
+        "v": 1
+      }
+    },
+    {
+      "error": "duplicate_row",
+      "name": "two egress rows for one node",
+      "preview": {
+        "commit_digest": "sha256:9505cacb7c710ed17125fcc6cb3669e8ddca6c8cd8af6a31f6b3cd64604c3098",
+        "origins": [
+          "interactive"
+        ],
+        "rows": [
+          {
+            "kind": "egress",
+            "narrowed": true,
+            "node": "reagent:local.weather",
+            "values": {
+              "domains": [
+                "api.weather.example"
+              ],
+              "methods": [
+                "GET"
+              ],
+              "private_ips": [],
+              "schemes": [
+                "https"
+              ]
+            }
+          },
+          {
+            "kind": "egress",
+            "narrowed": true,
+            "node": "reagent:local.weather",
+            "values": {
+              "domains": [
+                "api.weather.example"
+              ],
+              "methods": [
+                "GET"
+              ],
+              "private_ips": [],
+              "schemes": [
+                "https"
+              ]
+            }
+          }
+        ],
+        "v": 1
+      }
+    },
+    {
+      "error": "duplicate_row",
+      "name": "two rows for one credential on one edge",
+      "preview": {
+        "commit_digest": "sha256:9505cacb7c710ed17125fcc6cb3669e8ddca6c8cd8af6a31f6b3cd64604c3098",
+        "origins": [
+          "interactive"
+        ],
+        "rows": [
+          {
+            "kind": "credential",
+            "narrowed": false,
+            "node": "reagent:local.weather",
+            "values": {
+              "edge": "@ingress",
+              "fields": [
+                "api_key"
+              ],
+              "name": "weather-api",
+              "scopes": []
+            }
+          },
+          {
+            "kind": "credential",
+            "narrowed": false,
+            "node": "reagent:local.weather",
+            "values": {
+              "edge": "@ingress",
+              "fields": [
+                "token"
+              ],
+              "name": "weather-api",
+              "scopes": []
+            }
+          }
+        ],
+        "v": 1
+      }
+    },
+    {
+      "error": "duplicate_row",
+      "name": "two rows for one stream under one subject",
+      "preview": {
+        "commit_digest": "sha256:9505cacb7c710ed17125fcc6cb3669e8ddca6c8cd8af6a31f6b3cd64604c3098",
+        "origins": [
+          "interactive"
+        ],
+        "rows": [
+          {
+            "kind": "streams",
+            "narrowed": false,
+            "node": "tincture:local.dashboard",
+            "values": {
+              "name": "executions.deltas",
+              "subject": "exe_1"
+            }
+          },
+          {
+            "kind": "streams",
+            "narrowed": false,
+            "node": "tincture:local.dashboard",
+            "values": {
+              "name": "executions.deltas",
+              "subject": "exe_1"
+            }
+          }
+        ],
+        "v": 1
+      }
+    },
+    {
+      "error": "unsupported_version",
+      "name": "another version",
+      "preview": {
+        "commit_digest": "sha256:9505cacb7c710ed17125fcc6cb3669e8ddca6c8cd8af6a31f6b3cd64604c3098",
+        "origins": [
+          "interactive"
+        ],
+        "rows": [
+          {
+            "kind": "egress",
+            "narrowed": true,
+            "node": "reagent:local.weather",
+            "values": {
+              "domains": [
+                "api.weather.example"
+              ],
+              "methods": [
+                "GET"
+              ],
+              "private_ips": [],
+              "schemes": [
+                "https"
+              ]
+            }
+          }
+        ],
+        "v": 2
+      }
+    },
+    {
+      "error": "invalid_field",
+      "name": "a system action that is not tool.action",
+      "preview": {
+        "commit_digest": "sha256:9505cacb7c710ed17125fcc6cb3669e8ddca6c8cd8af6a31f6b3cd64604c3098",
+        "origins": [
+          "interactive"
+        ],
+        "rows": [
+          {
+            "kind": "system_actions",
+            "narrowed": false,
+            "node": "tincture:local.dashboard",
+            "values": {
+              "actions": [
+                "execution"
+              ]
+            }
+          }
+        ],
+        "v": 1
+      }
+    }
+  ],
+  "version": 1
+}

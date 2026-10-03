@@ -8,9 +8,8 @@ defmodule Sanctum.NamespaceTest do
   alias Sanctum.Namespace
   alias Sanctum.Tenancy.Users
 
-  setup do
-    :ok = Ecto.Adapters.SQL.Sandbox.checkout(Arca.Repo)
-    Ecto.Adapters.SQL.Sandbox.mode(Arca.Repo, {:shared, self()})
+  setup tags do
+    Cyfr.Test.Sandbox.setup!(tags)
     :ok
   end
 
@@ -28,7 +27,11 @@ defmodule Sanctum.NamespaceTest do
 
     if is_binary(namespace) do
       # Written straight to the row: the rule is re-checked on read.
-      {:ok, _} = user |> Ecto.Changeset.change(namespace: namespace) |> Arca.Repo.update()
+      {:ok, _} =
+        Arca.Schemas.User
+        |> Arca.Repo.get!(user.id)
+        |> Ecto.Changeset.change(namespace: namespace)
+        |> Arca.Repo.update()
     end
 
     user.id
@@ -57,14 +60,16 @@ defmodule Sanctum.NamespaceTest do
       # users row, tokens are for pushing.
       registry = Compendium.RegistryHost.canonical_host()
 
+      person = Sanctum.Context.build(user_id: user_id, authenticated: true, auth_method: :oidc)
+
       :ok =
-        CredentialStore.put_push_token(user_id, registry, "stripe.com", "cyfr_pt_pub", "member")
+        CredentialStore.put_push_token(person, registry, "stripe.com", "cyfr_pt_pub", "member")
 
       Namespace.invalidate(user_id)
       assert Namespace.lookup(user_id) == "alice"
 
       # And losing every token loses nothing.
-      :ok = CredentialStore.delete(user_id, registry, "stripe.com")
+      :ok = CredentialStore.delete(person, registry, "stripe.com")
       Namespace.invalidate(user_id)
       assert Namespace.lookup(user_id) == "alice"
     end
@@ -104,7 +109,7 @@ defmodule Sanctum.NamespaceTest do
     # (distinct from :not_claimed) — is exercised end-to-end by
     # Arca.AuditHandlerTest, where a DBConnection.OwnershipError from an
     # un-owned process is rescued into {:error, _} (and collapsed to nil by
-    # lookup/1). It cannot be induced here under this module's
-    # {:shared, self()} sandbox.
+    # lookup/1). It cannot be induced here under this module's shared
+    # sandbox.
   end
 end

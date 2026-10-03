@@ -18,7 +18,7 @@ import (
 // Uses the "list" action which runs locally and is fast, rather than "search"
 // which may hit the remote registry.
 func FetchComponents(ctx context.Context, client *mcp.Client) ([]Option, error) {
-	result, err := client.CallTool(ctx, "component", ops.ComponentListArgs{})
+	result, err := client.CallTool(ctx, ops.Component, ops.ComponentListArgs{})
 	if err != nil {
 		return nil, fmt.Errorf("fetch components: %w", err)
 	}
@@ -68,7 +68,7 @@ func FetchVersions(ctx context.Context, client *mcp.Client, name, namespace, com
 		args.Type = ops.Value(componentType)
 	}
 
-	result, err := client.CallTool(ctx, "component", args)
+	result, err := client.CallTool(ctx, ops.Component, args)
 	if err != nil {
 		return nil, fmt.Errorf("fetch versions: %w", err)
 	}
@@ -111,7 +111,7 @@ func FetchVersions(ctx context.Context, client *mcp.Client, name, namespace, com
 
 // FetchKeys calls key list and returns options for selection.
 func FetchKeys(ctx context.Context, client *mcp.Client) ([]Option, error) {
-	result, err := client.CallTool(ctx, "key", ops.KeyListArgs{})
+	result, err := client.CallTool(ctx, ops.Key, ops.KeyListArgs{})
 	if err != nil {
 		return nil, fmt.Errorf("fetch keys: %w", err)
 	}
@@ -120,7 +120,7 @@ func FetchKeys(ctx context.Context, client *mcp.Client) ([]Option, error) {
 
 // FetchGuides calls aqua list and returns options for selection.
 func FetchGuides(ctx context.Context, client *mcp.Client) ([]Option, error) {
-	result, err := client.CallTool(ctx, "aqua", ops.AquaListArgs{})
+	result, err := client.CallTool(ctx, ops.Aqua, ops.AquaListArgs{})
 	if err != nil {
 		return nil, fmt.Errorf("fetch guides: %w", err)
 	}
@@ -130,7 +130,7 @@ func FetchGuides(ctx context.Context, client *mcp.Client) ([]Option, error) {
 // FetchScrolls calls aqua skill_list and returns the scrolls as options
 // for selection.
 func FetchScrolls(ctx context.Context, client *mcp.Client) ([]Option, error) {
-	result, err := client.CallTool(ctx, "aqua", ops.AquaSkillListArgs{})
+	result, err := client.CallTool(ctx, ops.Aqua, ops.AquaSkillListArgs{})
 	if err != nil {
 		return nil, fmt.Errorf("fetch scrolls: %w", err)
 	}

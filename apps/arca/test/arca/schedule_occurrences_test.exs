@@ -7,6 +7,7 @@ defmodule Arca.ScheduleOccurrencesTest do
   import Ecto.Query, only: [from: 2]
 
   alias Arca.{CronSchedule, ScheduleOccurrences}
+  alias Arca.Schemas.CronSchedule, as: ScheduleRow
 
   # Taking a cell slot for a stand-in member writes this VM's one standing
   # record, which every gate in the suite reads: each case puts back what
@@ -17,9 +18,8 @@ defmodule Arca.ScheduleOccurrencesTest do
     {Arca.ControlPlane, :slot}
   ]
 
-  setup do
-    :ok = Ecto.Adapters.SQL.Sandbox.checkout(Arca.Repo)
-    Ecto.Adapters.SQL.Sandbox.mode(Arca.Repo, {:shared, self()})
+  setup tags do
+    Arca.Test.Sandbox.setup!(tags)
 
     saved = for key <- @standing_keys, do: {key, :persistent_term.get(key, :absent)}
 
@@ -54,7 +54,7 @@ defmodule Arca.ScheduleOccurrencesTest do
     past = DateTime.add(DateTime.utc_now(), -60, :second)
 
     {1, _} =
-      Arca.Repo.update_all(from(s in CronSchedule, where: s.id == ^schedule.id),
+      Arca.Repo.update_all(from(s in ScheduleRow, where: s.id == ^schedule.id),
         set: [next_run_at: past]
       )
 
@@ -62,11 +62,11 @@ defmodule Arca.ScheduleOccurrencesTest do
   end
 
   # The cursor of an existing schedule, moved back so its next occurrence is due.
-  defp due_again!(%CronSchedule{} = schedule) do
+  defp due_again!(%{id: _} = schedule) do
     past = DateTime.add(DateTime.utc_now(), -60, :second)
 
     {1, _} =
-      Arca.Repo.update_all(from(s in CronSchedule, where: s.id == ^schedule.id),
+      Arca.Repo.update_all(from(s in ScheduleRow, where: s.id == ^schedule.id),
         set: [next_run_at: past]
       )
 
@@ -127,7 +127,7 @@ defmodule Arca.ScheduleOccurrencesTest do
     future = DateTime.add(DateTime.utc_now(), 600, :second)
 
     {1, _} =
-      Arca.Repo.update_all(from(s in CronSchedule, where: s.id == ^schedule.id),
+      Arca.Repo.update_all(from(s in ScheduleRow, where: s.id == ^schedule.id),
         set: [next_run_at: future]
       )
 
@@ -186,6 +186,18 @@ defmodule Arca.ScheduleOccurrencesTest do
              ScheduleOccurrences.claim(forbid, "node-a", next_occurrence())
   end
 
+  test "the claim decides on the row's concurrency, never on the caller's copy", %{actor: actor} do
+    forbid = due!(actor, %{concurrency: "forbid"})
+    {:ok, open} = ScheduleOccurrences.claim(forbid, "node-a", next_occurrence())
+    assert 1 = ScheduleOccurrences.start!(actor, open.id, "exec_#{open.id}")
+
+    # A stale or forged copy that says `allow` is read for its id, its
+    # athanor and the cursor it saw; the row still forbids an overlap.
+    forged = %{due_again!(forbid) | concurrency: "allow"}
+    assert :overlapping = ScheduleOccurrences.claim(forged, "node-a", next_occurrence())
+    assert {:ok, [_only]} = ScheduleOccurrences.list(actor, forbid.id)
+  end
+
   test "start moves a claimed occurrence once; finish and settle_dead end it as the row says", %{
     actor: actor
   } do
@@ -213,7 +225,7 @@ defmodule Arca.ScheduleOccurrencesTest do
     assert {:ok, "failed"} =
              ScheduleOccurrences.settle_dead(actor, claimed.id)
 
-    # Another estate reads none of it.
+    # Another athanor reads none of it.
     assert {:error, :not_found} =
              ScheduleOccurrences.get(
                %{actor | athanor_id: "ath_elsewhere"},
@@ -237,9 +249,12 @@ defmodule Arca.ScheduleOccurrencesTest do
           user_id: actor.user_id,
           athanor_id: actor.athanor_id,
           component_type: "reagent",
-          schedule_id: running.id
+          schedule_id: running.id,
+          origin: :schedule
         },
-        occurrence_id: started.id
+        occurrence_id: started.id,
+        grant: Arca.Test.Actor.grant(actor.athanor_id),
+        verify: &Arca.Test.Actor.admits/1
       )
 
     # Still running: not recoverable.
@@ -254,7 +269,8 @@ defmodule Arca.ScheduleOccurrencesTest do
         "exec_live",
         "failed",
         %{completed_at: DateTime.utc_now(), duration_ms: 1, error_message: "swept"},
-        attempt.attempt
+        attempt.attempt,
+        Arca.Test.Actor.stored()
       )
 
     assert {:ok, %{lapsed: [%{id: started_id}]}} = ScheduleOccurrences.recoverable(now())
@@ -317,7 +333,7 @@ defmodule Arca.ScheduleOccurrencesTest do
     assert 1 = ScheduleOccurrences.start!(actor, abandoned.id, "exec_started")
     assert :held = ScheduleOccurrences.recover(actor, abandoned.id, "boot-a", "boot-c")
 
-    # Nor is another estate's.
+    # Nor is another athanor's.
     assert :held =
              ScheduleOccurrences.recover(
                %{actor | athanor_id: "ath_elsewhere"},
@@ -340,11 +356,14 @@ defmodule Arca.ScheduleOccurrencesTest do
                  user_id: actor.user_id,
                  athanor_id: actor.athanor_id,
                  component_type: "reagent",
-                 schedule_id: schedule.id
+                 schedule_id: schedule.id,
+                 origin: :schedule
                },
-               occurrence_id: occurrence.id
+               occurrence_id: occurrence.id,
+               grant: Arca.Test.Actor.grant(actor.athanor_id),
+               verify: &Arca.Test.Actor.admits/1
              )
 
-    assert Arca.Repo.get(Arca.Execution, "exec_second") == nil
+    assert Arca.Repo.get(Arca.Schemas.Execution, "exec_second") == nil
   end
 end

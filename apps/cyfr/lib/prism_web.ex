@@ -6,14 +6,57 @@ defmodule PrismWeb do
   The entrypoint for defining the Prism web interface.
 
   Prism is the LiveView face served by the one endpoint
-  (`EmissaryWeb.Endpoint`, routes in `EmissaryWeb.Router`). This can be
-  used in your application as:
+  (`CyfrWeb.Endpoint`); its routes are `Prism.Router`'s, composed into
+  `CyfrWeb.Router`. This can be used in your application as:
 
       use PrismWeb, :controller
       use PrismWeb, :live_view
       use PrismWeb, :html
 
   """
+
+  use Boundary,
+    deps: [Prism, CyfrWeb, Grimoire, Sanctum, Arca, Cyfr, Compendium, Aqua, Crucible],
+    exports: [
+      ActiveContext,
+      ActivitiesLive,
+      ApiKeysLive,
+      AquaLive,
+      AttachmentController,
+      AuthController,
+      BuildsLive,
+      CarryLive,
+      ChatLive,
+      ChatRedirectLive,
+      ClaimNamespaceController,
+      ComponentDetailLive,
+      ComponentsLive,
+      EnforcementsLive,
+      ExecutionsLive,
+      FileController,
+      FilesLive,
+      Focus,
+      Layouts,
+      LegalAcceptController,
+      LegalLive,
+      LoginLive,
+      McpServersLive,
+      MembersLive,
+      MyReportsLive,
+      PairLive,
+      PasskeyController,
+      ReauthController,
+      RegistryLive,
+      RestoreLive,
+      RootRedirectLive,
+      SchedulesLive,
+      SettingsLive,
+      ShellLive,
+      VaultLive,
+      WebhooksLive
+    ],
+    dirty_xrefs: [CyfrWeb.Endpoint, CyfrWeb.Router],
+    check: [aliases: true]
 
   def controller do
     quote do
@@ -81,9 +124,9 @@ defmodule PrismWeb do
   def verified_routes do
     quote do
       use Phoenix.VerifiedRoutes,
-        endpoint: EmissaryWeb.Endpoint,
-        router: EmissaryWeb.Router,
-        statics: EmissaryWeb.static_paths()
+        endpoint: CyfrWeb.Endpoint,
+        router: CyfrWeb.Router,
+        statics: CyfrWeb.static_paths()
     end
   end
 

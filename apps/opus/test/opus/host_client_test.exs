@@ -16,9 +16,15 @@ defmodule Opus.HostClientTest do
 
   import ExUnit.CaptureLog
 
-  alias Cyfr.{Assignment, WorkerWire}
+  alias Prima.{Assignment, PinnedTarget, WorkerWire}
   alias Opus.HostClient
   alias Opus.Test.ScriptedHost
+
+  # Read as this module compiles, so a checkout without the file fails
+  # here, naming it, rather than running without the vectors.
+  @host_api Path.expand("../../../../tests/fixtures/host_api.json", __DIR__)
+            |> File.read!()
+            |> Jason.decode!()
 
   setup do
     host = ScriptedHost.start!()
@@ -72,7 +78,8 @@ defmodule Opus.HostClientTest do
 
     for %{op: op, header: header, body: body, caller: caller} <- ScriptedHost.requests(host) do
       assert String.starts_with?(header, "v1 kind=call ")
-      assert %{"op" => ^op, "args" => %{}} = Jason.decode!(body)
+      assert %{"v" => 1, "op" => ^op, "args" => %{}} = Jason.decode!(body)
+      assert String.starts_with?(body, ~s({"v":1,))
       assert caller.execution_id == attempt.execution_id
       assert caller.runner == client.runner
       assert caller.boot == client.boot
@@ -122,7 +129,7 @@ defmodule Opus.HostClientTest do
 
     assert [first, second] = ScriptedHost.requests(host, "admit_child")
     assert first.body == second.body
-    assert Cyfr.HostAPI.valid_child_key?(first.args["child_key"])
+    assert Prima.HostAPI.valid_child_key?(first.args["child_key"])
     assert first.args["child_key"] == second.args["child_key"]
 
     # A new admission mints a new key.
@@ -172,7 +179,7 @@ defmodule Opus.HostClientTest do
     ScriptedHost.script(
       host,
       "renew",
-      {:raw, 200, String.duplicate("x", Cyfr.HostAPI.max_answer_bytes() + 1)}
+      {:raw, 200, String.duplicate("x", Prima.HostAPI.max_answer_bytes() + 1)}
     )
 
     assert {:error, :lost} = HostClient.renew(client, [client.attempt])
@@ -182,6 +189,141 @@ defmodule Opus.HostClientTest do
 
     ScriptedHost.script(host, "renew", {:raw, 200, ~s({"neither": "ok"})})
     assert {:error, :lost} = HostClient.renew(client, [client.attempt])
+  end
+
+  describe "the wire's version" do
+    test "an answer without v, or at another version, is no answer: lost under the retry class",
+         %{host: host, client: client} do
+      ScriptedHost.script(host, "renew", [
+        {:answer, ~s({"ok":{}})},
+        {:answer, ~s({"v":2,"ok":{}})}
+      ])
+
+      assert {:error, :lost} = HostClient.renew(client, [client.attempt])
+      assert length(ScriptedHost.requests(host, "renew")) == 2
+
+      ScriptedHost.script(host, "take_rate", {:answer, ~s({"v":"1","ok":true})})
+      assert {:error, {:uncertain, _}} = HostClient.take_rate(client, "http:x")
+      assert length(ScriptedHost.requests(host, "take_rate")) == 1
+
+      ScriptedHost.script(host, "renew", {:answer, ~s({"v":1,"ok":{},"extra":true})})
+      assert {:error, :lost} = HostClient.renew(client, [client.attempt])
+    end
+
+    test "a host at another version is not this engine's: its refusal stops the attempt, asked once",
+         %{host: host, client: client} do
+      # Refused before the body, plain, whatever version the host speaks.
+      for refusal <- [
+            ~s({"v":1,"error":"unknown_version"}),
+            ~s({"v":2,"error":"unknown_version"})
+          ] do
+        ScriptedHost.script(host, "renew", {:raw, 401, refusal})
+        before = length(ScriptedHost.requests(host, "renew"))
+
+        log =
+          capture_log(fn ->
+            assert {:error, :lost} = HostClient.renew(client, [client.attempt])
+          end)
+
+        assert log =~ "another version"
+        assert length(ScriptedHost.requests(host, "renew")) == before + 1
+      end
+
+      # Refused after the body was opened, sealed.
+      ScriptedHost.script(host, "storage", {:error, :unknown_version})
+
+      capture_log(fn ->
+        assert {:error, :lost} = HostClient.storage(client, :read, %{"path" => "a"})
+      end)
+
+      # Any other refusal by status is lost, and asked again as its class allows.
+      ScriptedHost.script(host, "renew", {:raw, 401, ~s({"v":1,"error":"bad_mac"})})
+      before = length(ScriptedHost.requests(host, "renew"))
+      assert {:error, :lost} = HostClient.renew(client, [client.attempt])
+      assert length(ScriptedHost.requests(host, "renew")) == before + 2
+    end
+  end
+
+  describe "egress_pin/3" do
+    test "every egress_pin vector crosses as its body and reads as its answer", %{
+      host: host,
+      client: client
+    } do
+      cases = @host_api["egress_pin_cases"] ++ @host_api["egress_policy_cases"]
+
+      assert Enum.map(@host_api["egress_pin_cases"], & &1["name"]) ==
+               ~w(fetch stream redirect denied metadata resolution redirect_credentials)
+
+      assert Enum.map(@host_api["egress_policy_cases"], & &1["name"]) ==
+               ~w(fetch outside_domains redirect_other_port redirect_default_port
+                  redirect_strip_credentials fetch_ipv6 redirect_ipv6_spelling)
+
+      for vector <- cases do
+        %{"v" => 1, "op" => "egress_pin", "args" => args} = Jason.decode!(vector["body"])
+        ScriptedHost.script(host, "egress_pin", {:answer, vector["answer"]})
+
+        opts =
+          [purpose: String.to_existing_atom(args["purpose"])] ++
+            if(args["from"], do: [from: args["from"]], else: [])
+
+        result = HostClient.egress_pin(client, args["url"], opts)
+
+        assert %{body: body} = List.last(ScriptedHost.requests(host, "egress_pin"))
+        assert body == vector["body"], vector["name"]
+
+        case Jason.decode!(vector["answer"]) do
+          %{"ok" => wire} ->
+            assert {:ok, %PinnedTarget{} = pin} = result, vector["name"]
+            assert PinnedTarget.to_wire(pin) == wire
+
+          %{"error" => name} ->
+            assert result == {:error, String.to_existing_atom(name)}, vector["name"]
+        end
+      end
+
+      assert length(ScriptedHost.requests(host, "egress_pin")) == length(cases)
+    end
+
+    test "a pin answer that is not a pin is lost, and a lost answer is asked once more", %{
+      host: host,
+      client: client
+    } do
+      ScriptedHost.script(host, "egress_pin", [
+        {:ok, %{"id" => "pin_x", "ip" => "not an address"}},
+        :drop,
+        :drop
+      ])
+
+      assert {:error, :lost} = HostClient.egress_pin(client, "https://api.test/")
+      assert length(ScriptedHost.requests(host, "egress_pin")) == 1
+
+      assert {:error, :lost} = HostClient.egress_pin(client, "https://api.test/")
+      assert [_, first, second] = ScriptedHost.requests(host, "egress_pin")
+      assert first.body == second.body
+    end
+
+    test "a request the contract refuses is malformed, asked of no one", %{
+      host: host,
+      client: client
+    } do
+      assert {:error, :malformed} = HostClient.egress_pin(client, "ftp://api.test/")
+
+      assert {:error, :malformed} =
+               HostClient.egress_pin(client, "https://api.test/", purpose: :x)
+
+      assert {:error, :malformed} =
+               HostClient.egress_pin(client, "https://api.test/", purpose: :redirect)
+
+      assert {:error, :malformed} =
+               HostClient.egress_pin(client, "https://api.test/", purpose: :fetch, from: "pin_1")
+
+      assert ScriptedHost.requests(host, "egress_pin") == []
+    end
+
+    test "a pin refusal answers only an egress_pin", %{host: host, client: client} do
+      ScriptedHost.script(host, "renew", {:error, :denied})
+      assert {:error, :lost} = HostClient.renew(client, [client.attempt])
+    end
   end
 
   test "a host that cannot be reached loses every call", %{host: host} do
@@ -310,6 +452,66 @@ defmodule Opus.HostClientTest do
              ScriptedHost.requests(host)
   end
 
+  describe "a runner's client" do
+    test "posts nothing itself: each call leaves through its relay and the service posts it",
+         %{host: host} do
+      attempt = ScriptedHost.attempt!(host) |> Opus.Test.ScriptedKeeper.relayed!()
+
+      assert attempt.client.host_url == nil and attempt.client.relay == attempt.endpoint
+      refute inspect(attempt.client) =~ host.url
+
+      assert {:ok, %{}} = HostClient.attach(attempt.client, attempt.assignment)
+      assert [%{caller: %{runner: runner}}] = ScriptedHost.requests(host, "attach")
+      assert runner == attempt.runner
+    end
+
+    test "loses a call its relay cannot carry, and asks an idempotent one once more", %{
+      host: host
+    } do
+      attempt = ScriptedHost.attempt!(host) |> Opus.Test.ScriptedKeeper.relayed!()
+      :ok = stop_supervised_pid(attempt.endpoint)
+
+      assert {:error, :lost} = HostClient.renew(attempt.client, [attempt.attempt])
+      assert ScriptedHost.requests(host) == []
+    end
+
+    test "post_call/4 answers CYFR's status and bytes, once", %{host: host} do
+      attempt = ScriptedHost.attempt!(host)
+      fields = call_fields(attempt)
+      json = Jason.encode!(Prima.WorkerWire.request_body(:renew, %{"attempts" => []}))
+      {:ok, sealed} = Prima.WorkerAuth.seal_call(attempt.keys.seal, :body, fields, json)
+      {:ok, header} = Prima.WorkerAuth.host_call_header(attempt.keys.call, fields, sealed)
+
+      assert {:ok, 200, answer} = HostClient.post_call(host.url, :renew, header, sealed)
+      assert {:ok, _json} = Prima.WorkerAuth.open_call(attempt.keys.seal, :answer, fields, answer)
+
+      assert {:ok, 401, _refusal} = HostClient.post_call(host.url, :renew, header, "tampered")
+      assert :error = HostClient.post_call("http://127.0.0.1:9", :renew, header, sealed)
+    end
+  end
+
+  defp stop_supervised_pid(pid) do
+    ref = Process.monitor(pid)
+    Process.exit(pid, :kill)
+
+    receive do
+      {:DOWN, ^ref, :process, ^pid, _reason} -> :ok
+    end
+  end
+
+  defp call_fields(attempt) do
+    {:ok, assignment} = Assignment.read(attempt.assignment)
+
+    attempt.keys.attempt
+    |> Map.merge(%{
+      boot: attempt.boot,
+      runner: attempt.runner,
+      member: assignment.member,
+      ts: System.system_time(:millisecond),
+      nonce: Base.url_encode64(:crypto.strong_rand_bytes(12), padding: false)
+    })
+  end
+
   describe "where an attempt's calls go" do
     test "is the member its assignment names, not the address the service is configured with",
          %{host: issuer} do
@@ -402,18 +604,20 @@ defmodule Opus.HostClientTest do
   end
 
   defp sealed_for(seal_key, keys) do
-    {:ok, sealed} = Cyfr.WorkerAuth.seal_attempt_keys(seal_key, keys)
+    {:ok, sealed} = Prima.WorkerAuth.seal_attempt_keys(seal_key, keys)
     sealed
   end
 
   defp worker_key(host, service) do
-    {:ok, key} = Cyfr.WorkerAuth.worker_key(host.root, service)
+    {:ok, key} = Prima.WorkerAuth.worker_key(host.root, service)
     key
   end
 
-  # The answer envelope the client reads is the one `Cyfr.WorkerWire` builds.
+  # The answer envelope the client reads is the one `Prima.WorkerWire` builds.
   test "the answers read are the worker protocol's envelopes" do
-    assert WorkerWire.ok(1) == %{"ok" => 1}
-    assert WorkerWire.error(:lost) == %{"error" => "lost"}
+    assert WorkerWire.ok(1) |> Jason.encode!() |> Jason.decode!() == %{"v" => 1, "ok" => 1}
+
+    assert WorkerWire.error(:lost) |> Jason.encode!() |> Jason.decode!() ==
+             %{"v" => 1, "error" => "lost"}
   end
 end

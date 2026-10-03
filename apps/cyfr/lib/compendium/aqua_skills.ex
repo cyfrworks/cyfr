@@ -3,7 +3,7 @@
 
 defmodule Compendium.AquaSkills do
   @moduledoc """
-  The estate's scrolls — procedures kept as Agent Skills under
+  The athanor's scrolls — procedures kept as Agent Skills under
   `aqua/skills/<name>/SKILL.md` (`Compendium.AquaPath`), served through the
   seed overlay like the soul and the roles.
 

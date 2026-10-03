@@ -5,20 +5,19 @@ defmodule PrismWeb.ComponentsLive do
   use PrismWeb, :live_view
   require Logger
 
-  alias Phoenix.LiveView.JS
   alias PrismWeb.ComponentsLive.Editor
-  alias PrismWeb.ConsentSheetComponent
+  alias PrismWeb.SystemLayer
 
   # The one spelling of the local namespace. Exact equality on purpose: a
   # nil publisher is a display question, not `local_publisher?/1`'s
   # nil-collapses-to-local policy question.
-  @local_publisher Compendium.ComponentPath.default_publisher()
+  @local_publisher Prima.ComponentPath.default_publisher()
 
   @impl true
   def mount(_params, _session, socket) do
     if connected?(socket) do
-      ctx = socket.assigns[:context]
-      Phoenix.PubSub.subscribe(Emissary.PubSub, Cyfr.Bus.components(ctx))
+      actor = bus_actor(socket)
+      Cyfr.Bus.subscribe(actor, Cyfr.Bus.components(actor))
     end
 
     socket =
@@ -35,7 +34,10 @@ defmodule PrismWeb.ComponentsLive do
       |> assign(:expanded_loading, false)
       |> assign(:expanded_detail, nil)
       |> assign(:expanded_plan, nil)
-      |> assign(:consent_sheet_ref, nil)
+      # The grant prompt this page asked its system layer for, and the
+      # count its prompt ids are numbered by.
+      |> assign(:grant_prompt, nil)
+      |> assign(:prompt_seq, 0)
       |> assign(:pushing, false)
       |> assign(:setup_readiness, %{})
       |> assign(:component_groups, [])
@@ -154,13 +156,13 @@ defmodule PrismWeb.ComponentsLive do
   end
 
   def handle_event("pull", %{"ref" => ref}, socket) do
-    progress_id = Cyfr.Hex.short()
+    progress_id = Prima.Hex.short()
 
     socket =
       resubscribe(
         socket,
         :progress_topic,
-        Cyfr.Bus.progress(progress_id, socket.assigns[:context])
+        Cyfr.Bus.progress(bus_actor(socket), {:pull, progress_id})
       )
 
     socket =
@@ -171,11 +173,12 @@ defmodule PrismWeb.ComponentsLive do
 
     lv = self()
     ctx = socket.assigns.context
+    tag = CyfrWeb.ContextGuard.capture(ctx)
 
-    logger_metadata = Cyfr.LoggerContext.capture()
+    logger_metadata = Prima.LoggerContext.capture()
 
-    case Task.Supervisor.start_child(Aqua.TaskSupervisor, fn ->
-           Cyfr.LoggerContext.restore(logger_metadata)
+    case Task.Supervisor.start_child(Prism.TaskSupervisor, fn ->
+           Prima.LoggerContext.restore(logger_metadata)
 
            result =
              try do
@@ -187,7 +190,7 @@ defmodule PrismWeb.ComponentsLive do
                e -> {:error, Exception.message(e)}
              end
 
-           send(lv, {:pull_complete, ref, result})
+           send(lv, {:deliver, tag, {:pull_complete, ref, result}})
          end) do
       {:ok, _pid} ->
         {:noreply, arm_task_timeout(socket, :pull)}
@@ -214,13 +217,13 @@ defmodule PrismWeb.ComponentsLive do
   end
 
   def handle_event("register", _params, socket) do
-    register_id = Cyfr.Hex.short()
+    register_id = Prima.Hex.short()
 
     socket =
       resubscribe(
         socket,
         :register_topic,
-        Cyfr.Bus.register(register_id, socket.assigns[:context])
+        Cyfr.Bus.progress(bus_actor(socket), {:register, register_id})
       )
 
     socket =
@@ -233,11 +236,12 @@ defmodule PrismWeb.ComponentsLive do
     # The context, never the socket, crosses into the task: a socket in
     # the closure pins every assign (streams included) in the task's heap.
     ctx = socket.assigns.context
+    tag = CyfrWeb.ContextGuard.capture(ctx)
 
-    logger_metadata = Cyfr.LoggerContext.capture()
+    logger_metadata = Prima.LoggerContext.capture()
 
-    case Task.Supervisor.start_child(Aqua.TaskSupervisor, fn ->
-           Cyfr.LoggerContext.restore(logger_metadata)
+    case Task.Supervisor.start_child(Prism.TaskSupervisor, fn ->
+           Prima.LoggerContext.restore(logger_metadata)
 
            result =
              call_tool(ctx, "component", %{
@@ -245,7 +249,7 @@ defmodule PrismWeb.ComponentsLive do
                "register_id" => register_id
              })
 
-           send(lv, {:register_complete, result})
+           send(lv, {:deliver, tag, {:register_complete, result}})
          end) do
       {:ok, _pid} ->
         {:noreply, arm_task_timeout(socket, :register)}
@@ -288,24 +292,19 @@ defmodule PrismWeb.ComponentsLive do
   end
 
   def handle_event("open_consent", %{"ref" => _ref}, socket) do
-    # The consent sheet plans against the latest versioned ref; the walk
-    # itself decides what the grant covers.
-    {:noreply, assign(socket, :consent_sheet_ref, latest_versioned_ref(socket))}
-  end
-
-  # The dialog's backdrop and Escape; the sheet's own Cancel arrives as a message.
-  def handle_event("close_consent", _params, socket) do
-    {:noreply, assign(socket, :consent_sheet_ref, nil)}
+    # The grant plans against the latest versioned ref; the walk itself
+    # decides what the grant covers.
+    {:noreply, ask_grant(socket, latest_versioned_ref(socket))}
   end
 
   def handle_event("push", %{"ref" => ref}, socket) do
-    progress_id = Cyfr.Hex.short()
+    progress_id = Prima.Hex.short()
 
     socket =
       resubscribe(
         socket,
         :progress_topic,
-        Cyfr.Bus.progress(progress_id, socket.assigns[:context])
+        Cyfr.Bus.progress(bus_actor(socket), {:pull, progress_id})
       )
 
     socket =
@@ -316,11 +315,12 @@ defmodule PrismWeb.ComponentsLive do
 
     lv = self()
     ctx = socket.assigns.context
+    tag = CyfrWeb.ContextGuard.capture(ctx)
 
-    logger_metadata = Cyfr.LoggerContext.capture()
+    logger_metadata = Prima.LoggerContext.capture()
 
-    case Task.Supervisor.start_child(Aqua.TaskSupervisor, fn ->
-           Cyfr.LoggerContext.restore(logger_metadata)
+    case Task.Supervisor.start_child(Prism.TaskSupervisor, fn ->
+           Prima.LoggerContext.restore(logger_metadata)
 
            result =
              try do
@@ -332,7 +332,7 @@ defmodule PrismWeb.ComponentsLive do
                e -> {:error, Exception.message(e)}
              end
 
-           send(lv, {:push_complete, ref, result})
+           send(lv, {:deliver, tag, {:push_complete, ref, result}})
          end) do
       {:ok, _pid} ->
         {:noreply, arm_task_timeout(socket, :push)}
@@ -388,9 +388,13 @@ defmodule PrismWeb.ComponentsLive do
     {:noreply, socket}
   end
 
-  # --- PubSub handlers ---
+  # --- Bus handlers ---
 
+  # A task's answer, taken only under the focus it was started for.
   @impl true
+  def handle_info({:deliver, tag, message}, socket),
+    do: CyfrWeb.ContextGuard.deliver(socket, tag, &handle_info(message, &1))
+
   def handle_info(:load, socket) do
     {:noreply, socket |> fetch_components() |> assign(:loading, false)}
   end
@@ -432,22 +436,35 @@ defmodule PrismWeb.ComponentsLive do
     end
   end
 
-  def handle_info({:consent_granted, _ref, _result}, socket) do
-    {:noreply,
-     socket
-     |> assign(:consent_sheet_ref, nil)
-     |> refresh_expanded_plan()}
+  # The grant this page asked for: granted, the expanded component's
+  # plan is read again; a refused commit leaves the prompt open; anything
+  # else ended it.
+  def handle_info({:system_layer, id, outcome}, %{assigns: %{grant_prompt: id}} = socket) do
+    case outcome do
+      :confirmed ->
+        {:noreply, socket |> assign(:grant_prompt, nil) |> refresh_expanded_plan()}
+
+      {:refused, reason} when reason != :invalid_prompt ->
+        {:noreply, socket}
+
+      _ended ->
+        {:noreply, assign(socket, :grant_prompt, nil)}
+    end
   end
 
-  def handle_info({:consent_sheet_closed, _ref}, socket) do
-    {:noreply, assign(socket, :consent_sheet_ref, nil)}
+  def handle_info({:system_layer, _id, _outcome} = report, socket) do
+    {:ok, socket} = SystemLayer.reported(socket, report)
+    {:noreply, socket}
   end
 
-  def handle_info(:components_changed, socket) do
+  def handle_info(%Cyfr.Bus.Components{}, socket) do
     {:noreply, fetch_components(socket)}
   end
 
-  def handle_info({:register_progress, %{phase: phase, message: message}}, socket) do
+  def handle_info(
+        %Cyfr.Bus.Progress{subject: {:register, _id}, phase: phase, message: message},
+        socket
+      ) do
     entry = %{phase: phase, message: message, at: DateTime.utc_now()}
     {:noreply, assign(socket, :register_log, socket.assigns.register_log ++ [entry])}
   end
@@ -455,12 +472,7 @@ defmodule PrismWeb.ComponentsLive do
   def handle_info({:register_complete, {:ok, result}}, socket) do
     socket = clear_task_timeout(socket, :register)
 
-    if socket.assigns.register_id do
-      Phoenix.PubSub.unsubscribe(
-        Emissary.PubSub,
-        Cyfr.Bus.register(socket.assigns.register_id, socket.assigns[:context])
-      )
-    end
+    unsubscribe_register(socket)
 
     total = result[:total] || 0
     registered = result[:registered] || 0
@@ -477,12 +489,7 @@ defmodule PrismWeb.ComponentsLive do
   def handle_info({:register_complete, {:error, reason}}, socket) do
     socket = clear_task_timeout(socket, :register)
 
-    if socket.assigns.register_id do
-      Phoenix.PubSub.unsubscribe(
-        Emissary.PubSub,
-        Cyfr.Bus.register(socket.assigns.register_id, socket.assigns[:context])
-      )
-    end
+    unsubscribe_register(socket)
 
     {:noreply,
      socket
@@ -496,7 +503,10 @@ defmodule PrismWeb.ComponentsLive do
     {:noreply, do_registry_search(socket, query)}
   end
 
-  def handle_info({:progress, %{phase: phase, message: message}}, socket) do
+  def handle_info(
+        %Cyfr.Bus.Progress{subject: {:pull, _id}, phase: phase, message: message},
+        socket
+      ) do
     entry = %{phase: phase, message: message, at: DateTime.utc_now()}
     {:noreply, assign(socket, :progress_log, socket.assigns.progress_log ++ [entry])}
   end
@@ -576,8 +586,8 @@ defmodule PrismWeb.ComponentsLive do
   end
 
   def handle_info({:deep_link_setup, ref}, socket) do
-    # Find the component group matching the ref, auto-expand it, and open
-    # the consent sheet so the operator can grant access straight away.
+    # Find the component group matching the ref, auto-expand it, and ask
+    # for the grant so the operator can grant access straight away.
     socket = fetch_components(socket)
     groups = socket.assigns.component_groups
 
@@ -600,7 +610,7 @@ defmodule PrismWeb.ComponentsLive do
        |> assign(:expanded_detail, nil)
        |> assign(:expanded_plan, nil)
        |> assign(:expanded_versions, group.versions)
-       |> assign(:consent_sheet_ref, latest_ref)
+       |> ask_grant(latest_ref)
        |> assign(:loading, false)}
     else
       {:noreply,
@@ -615,7 +625,7 @@ defmodule PrismWeb.ComponentsLive do
   end
 
   def handle_info(msg, socket) do
-    Cyfr.UnexpectedMessage.log(__MODULE__, msg, :debug)
+    Prima.LoggerContext.unexpected(__MODULE__, msg, :debug)
     {:noreply, socket}
   end
 
@@ -634,13 +644,20 @@ defmodule PrismWeb.ComponentsLive do
   defp register_phase_color(_), do: "bg-gray-600"
 
   defp unsubscribe_progress(socket) do
-    if socket.assigns.progress_id do
-      Phoenix.PubSub.unsubscribe(
-        Emissary.PubSub,
-        Cyfr.Bus.progress(socket.assigns.progress_id, socket.assigns[:context])
-      )
+    if id = socket.assigns.progress_id do
+      actor = bus_actor(socket)
+      Cyfr.Bus.unsubscribe(actor, Cyfr.Bus.progress(actor, {:pull, id}))
     end
   end
+
+  defp unsubscribe_register(socket) do
+    if id = socket.assigns.register_id do
+      actor = bus_actor(socket)
+      Cyfr.Bus.unsubscribe(actor, Cyfr.Bus.progress(actor, {:register, id}))
+    end
+  end
+
+  defp bus_actor(socket), do: Sanctum.Context.actor(socket.assigns[:context])
 
   defp collapse(socket) do
     socket
@@ -652,6 +669,24 @@ defmodule PrismWeb.ComponentsLive do
     |> assign(:pushing, false)
     |> assign(:progress_log, [])
     |> assign(:progress_id, nil)
+  end
+
+  # The grant for `ref`, asked in the page's system layer, whose sheet
+  # binds the vault entries the component needs; a walk that cannot be
+  # read is said instead.
+  defp ask_grant(socket, ref) do
+    seq = socket.assigns.prompt_seq + 1
+    id = "grant-#{seq}"
+    socket = assign(socket, :prompt_seq, seq)
+
+    case SystemLayer.grant_prompt(socket, id, ref) do
+      {:ok, prompt} ->
+        SystemLayer.show(prompt)
+        assign(socket, :grant_prompt, id)
+
+      {:error, reason} ->
+        put_flash(socket, :error, "Cannot ask for this grant: " <> error_message(reason))
+    end
   end
 
   # Re-fetch the expanded component's setup plan after a grant so the
@@ -711,7 +746,7 @@ defmodule PrismWeb.ComponentsLive do
   end
 
   defp group_search_results(components),
-    do: Compendium.Catalogue.group_search_results(components)
+    do: Compendium.group_search_results(components)
 
   # Small inline badge next to the publisher cell for deprecated / yanked /
   # taken_down versions. Returns `nil` for active (no badge rendered). Colors
@@ -786,11 +821,12 @@ defmodule PrismWeb.ComponentsLive do
   defp load_readiness_async(socket, groups) do
     lv = self()
     ctx = socket.assigns.context
+    tag = CyfrWeb.ContextGuard.capture(ctx)
 
-    logger_metadata = Cyfr.LoggerContext.capture()
+    logger_metadata = Prima.LoggerContext.capture()
 
-    Task.Supervisor.start_child(Aqua.TaskSupervisor, fn ->
-      Cyfr.LoggerContext.restore(logger_metadata)
+    Task.Supervisor.start_child(Prism.TaskSupervisor, fn ->
+      Prima.LoggerContext.restore(logger_metadata)
 
       # Fetch setup plans with bounded concurrency; result ordering is irrelevant.
       readiness =
@@ -833,7 +869,7 @@ defmodule PrismWeb.ComponentsLive do
             acc
         end)
 
-      send(lv, {:readiness_loaded, readiness})
+      send(lv, {:deliver, tag, {:readiness_loaded, readiness}})
     end)
 
     socket
@@ -853,7 +889,7 @@ defmodule PrismWeb.ComponentsLive do
   end
 
   defp group_by_component(components),
-    do: Compendium.Catalogue.group_by_component(components)
+    do: Compendium.group_by_component(components)
 
   # --- Data helpers ---
 
@@ -897,9 +933,9 @@ defmodule PrismWeb.ComponentsLive do
     # refuses — so every action on a merged remote-search row without a
     # stored ref failed.
     if is_binary(type) and is_binary(name) do
-      Cyfr.ComponentRef.build(
+      Prima.ComponentRef.build(
         type,
-        Compendium.ComponentPath.normalize_publisher(publisher),
+        Prima.ComponentPath.normalize_publisher(publisher),
         name,
         version
       )
@@ -927,12 +963,12 @@ defmodule PrismWeb.ComponentsLive do
 
   # Strip type prefix from a ref: "catalyst:local.claude" -> "local.claude".
   #
-  # Through the grammar's own parser, not by hand: `Cyfr.ComponentRef`
+  # Through the grammar's own parser, not by hand: `Prima.ComponentRef`
   # exists because the publisher/name split is the LAST dot, so a hand-rolled
   # split gets `stripe.com.api` wrong — and display is where a
   # multi-dot publisher is most likely to be seen.
   defp strip_type(ref) when is_binary(ref) do
-    case Cyfr.ComponentRef.parse(ref) do
+    case Prima.ComponentRef.parse(ref) do
       {:ok, %{namespace: ns, name: name}} -> "#{ns}.#{name}"
       {:error, _} -> ref
     end
@@ -940,7 +976,7 @@ defmodule PrismWeb.ComponentsLive do
 
   # Extract publisher from a component or ref
   defp extract_publisher(comp) when is_map(comp) do
-    Compendium.ComponentPath.normalize_publisher(
+    Prima.ComponentPath.normalize_publisher(
       comp_field(comp, :publisher) || comp_field(comp, :namespace_slug)
     )
   end
@@ -949,7 +985,7 @@ defmodule PrismWeb.ComponentsLive do
   # "catalyst:moonmoon69.supabase" -> "supabase". Same reason as above: the
   # grammar owns where the publisher ends.
   defp extract_name(ref) when is_binary(ref) do
-    case Cyfr.ComponentRef.parse(ref) do
+    case Prima.ComponentRef.parse(ref) do
       {:ok, %{name: name}} -> name
       {:error, _} -> strip_type(ref)
     end
@@ -979,18 +1015,18 @@ defmodule PrismWeb.ComponentsLive do
   defp newer_shipped_ref(ver, versions) do
     with true <- comp_field(ver, :provenance) == "bundled",
          [newest | _] <- comp_field(ver, :shipped_versions) || [],
-         true <- Compendium.Semver.strictly_newer?(newest, comp_field(ver, :version)),
+         true <- Prima.Semver.strictly_newer?(newest, comp_field(ver, :version)),
          false <- Enum.any?(versions, &(comp_field(&1, :version) == newest)),
-         {:ok, cref} <- Cyfr.ComponentRef.parse(comp_ref(ver)) do
-      Cyfr.ComponentRef.to_string(%Cyfr.ComponentRef{cref | version: newest})
+         {:ok, cref} <- Prima.ComponentRef.parse(comp_ref(ver)) do
+      Prima.ComponentRef.to_string(%Prima.ComponentRef{cref | version: newest})
     else
       _ -> nil
     end
   end
 
   defp shipped_version(ref) do
-    case Cyfr.ComponentRef.parse(ref) do
-      {:ok, %Cyfr.ComponentRef{version: version}} -> version
+    case Prima.ComponentRef.parse(ref) do
+      {:ok, %Prima.ComponentRef{version: version}} -> version
       _ -> ref
     end
   end
@@ -1231,7 +1267,7 @@ defmodule PrismWeb.ComponentsLive do
             All
           </button>
           <button
-            :for={type <- Cyfr.ComponentRef.valid_types()}
+            :for={type <- Prima.ComponentRef.valid_types()}
             phx-click="filter_type"
             phx-value-type={type}
             class={"inline-flex items-center px-3 py-1.5 rounded-full text-sm font-medium transition-colors #{if @type_filter == type, do: type_badge_color(type), else: "bg-gray-800 text-gray-400 hover:text-gray-300"}"}
@@ -1619,13 +1655,13 @@ defmodule PrismWeb.ComponentsLive do
         </section>
       </div>
 
-      <%!-- The consent sheet for a model's key: the house dialog. --%>
-      <ConsentSheetComponent.consent_sheet_modal
-        ref={@consent_sheet_ref}
+      <%!-- A grant is asked here, the one place a consent is shown. --%>
+      <.live_component
+        module={SystemLayer}
+        id={SystemLayer.layer_id()}
         context={@context}
         athanor_route={@athanor_route}
         athanor_name={@athanor && @athanor.name}
-        on_cancel={JS.push("close_consent")}
       />
     </div>
     """
@@ -1636,11 +1672,13 @@ defmodule PrismWeb.ComponentsLive do
   # from leaking N live subscriptions for the socket's lifetime (the
   # unsub-then-sub idiom the topbar's athanor topics use).
   defp resubscribe(socket, key, topic) do
+    actor = bus_actor(socket)
+
     if old = socket.assigns[key] do
-      Phoenix.PubSub.unsubscribe(Emissary.PubSub, old)
+      Cyfr.Bus.unsubscribe(actor, old)
     end
 
-    Phoenix.PubSub.subscribe(Emissary.PubSub, topic)
+    Cyfr.Bus.subscribe(actor, topic)
     assign(socket, key, topic)
   end
 end

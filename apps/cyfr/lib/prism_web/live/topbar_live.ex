@@ -29,9 +29,9 @@ defmodule PrismWeb.TopbarLive do
 
   The tray — badges on the switcher rows for what happened in an athanor
   while the person was elsewhere — is `Prism.Tray`, per session, so it
-  survives the remounts; reading an estate in the chat clears its count.
-  Which estate is being looked at is `@viewing`: the focused one on a
-  workbench page, and on the chat page whichever estate the page has open
+  survives the remounts; reading an athanor in the chat clears its count.
+  Which athanor is being looked at is `@viewing`: the focused one on a
+  workbench page, and on the chat page whichever athanor the page has open
   — the chat says so (`viewing/2`) each time it moves, since it moves by
   patch and this bar does not remount for a patch.
   """
@@ -39,6 +39,7 @@ defmodule PrismWeb.TopbarLive do
   use PrismWeb, :live_view
 
   alias Cyfr.Bus
+  alias Cyfr.Bus.{Notify, Viewing}
 
   @recent_requests_limit 5
   @recent_tincture_limit 5
@@ -48,70 +49,43 @@ defmodule PrismWeb.TopbarLive do
   @refresh_window_ms 250
   @refresh_order [:requests, :executions, :log_stats, :schedules]
 
+  on_mount {CyfrWeb.ContextGuard, :protected}
+
+  # `CyfrWeb.ContextGuard` established the session, focused on the page's
+  # athanor, and subscribed this bar to the person's standing — their
+  # memberships among it, which is what the switcher lists; a session the
+  # guard refuses never reaches here.
   @impl true
   def mount(_params, session, socket) do
-    token = session[to_string(PrismWeb.SignInResponse.session_key())]
+    token = session[to_string(CyfrWeb.SignInResponse.session_key())]
+    ctx = socket.assigns.context
+    ui_mode = Prism.Labels.mode(session["ui_mode"], ctx)
 
-    socket =
-      case PrismWeb.AuthHelpers.authenticate_session(token, session["athanor_id"]) do
-        {:ok, ctx} ->
-          ui_mode = Prism.Labels.mode(session["ui_mode"], ctx)
+    if connected?(socket) do
+      # The page this bar sits on says which athanor it has in view.
+      Bus.subscribe_page(Bus.page_viewing(socket.parent_pid))
 
-          if connected?(socket) do
-            # The person's own memberships change what the switcher lists.
-            Phoenix.PubSub.subscribe(Emissary.PubSub, Sanctum.Tenancy.Members.topic(ctx.user_id))
-            # The page this bar sits on says which estate it has in view.
-            Phoenix.PubSub.subscribe(Emissary.PubSub, viewing_topic(socket.parent_pid))
+      if ctx.platform_admin,
+        do: Bus.subscribe_global(Bus.platform_notify())
 
-            if ctx.platform_admin,
-              do: Phoenix.PubSub.subscribe(Emissary.PubSub, Sanctum.Notify.platform_topic())
+      if ui_mode == "dev", do: subscribe_indicators(ctx)
+      send(self(), :load_topbar)
+    end
 
-            if ui_mode == "dev", do: subscribe_indicators(ctx)
-          end
-
-          # Use cheap defaults for the disconnected render. Defer database reads,
-          # cache writes and tool calls to the connected mount.
-          socket =
-            socket
-            |> assign(:context, ctx)
-            |> assign(:personal_namespace_slug, ctx.namespace)
-            |> assign(:authenticated, true)
-            |> assign(:tray_key, Prism.Tray.session_hash(token))
-            |> assign(:ui_mode, ui_mode)
-            |> assign(:athanor_route, PrismWeb.Focus.route_of(ctx))
-            |> assign(:viewing, ctx.athanor_id)
-            |> assign(:badges, %{})
-            |> assign(:platform_requests, 0)
-            |> assign(:athanors, [])
-            |> assign(:labels, %{})
-
-          if connected?(socket) do
-            send(self(), :load_topbar)
-          end
-
-          socket
-
-        # Every refusal renders as the signed-out topbar on purpose: this
-        # is a nested layout LiveView on every page — redirecting here
-        # would fight the page's own gate, which owns the bounce
-        # (AuthHelpers.disposition/1).
-        _ ->
-          socket
-          |> assign(:context, nil)
-          |> assign(:personal_namespace_slug, nil)
-          |> assign(:authenticated, false)
-          |> assign(:tray_key, nil)
-          |> assign(:ui_mode, Prism.Labels.mode(session["ui_mode"]))
-          |> assign(:athanor_route, nil)
-          |> assign(:viewing, nil)
-          |> assign(:athanors, [])
-          |> assign(:labels, %{})
-          |> assign(:badges, %{})
-          |> assign(:platform_requests, 0)
-      end
-
+    # Use cheap defaults for the disconnected render. Defer database reads,
+    # cache writes and tool calls to the connected mount.
     {:ok,
      socket
+     |> assign(:personal_namespace_slug, ctx.namespace)
+     |> assign(:authenticated, true)
+     |> assign(:tray_key, Prism.Tray.session_hash(token))
+     |> assign(:ui_mode, ui_mode)
+     |> assign(:athanor_route, PrismWeb.Focus.route_of(ctx))
+     |> assign(:viewing, ctx.athanor_id)
+     |> assign(:badges, %{})
+     |> assign(:platform_requests, 0)
+     |> assign(:athanors, [])
+     |> assign(:labels, %{})
      |> assign(:open_popover, nil)
      |> assign(:system_status, nil)
      |> assign(:running_requests, [])
@@ -125,14 +99,16 @@ defmodule PrismWeb.TopbarLive do
 
   # The live indicators are dev's: their fan-in is subscribed only there.
   defp subscribe_indicators(ctx) do
+    actor = Sanctum.Context.actor(ctx)
+
     for topic <- [
-          Bus.requests(ctx),
-          Bus.executions(ctx),
-          Bus.schedule_runs(ctx),
-          Bus.builds(ctx),
-          Bus.tinctures(ctx)
+          Bus.requests(actor),
+          Bus.executions(actor),
+          Bus.schedule_runs(actor),
+          Bus.builds(actor),
+          Bus.tinctures(actor)
         ] do
-      Phoenix.PubSub.subscribe(Emissary.PubSub, topic)
+      Bus.subscribe(actor, topic)
     end
   end
 
@@ -142,21 +118,12 @@ defmodule PrismWeb.TopbarLive do
 
   @doc """
   Tell the bar over page `host` (the LiveView it is rendered in) that
-  `athanor_id` is the estate in view — the chat calls it as it moves
-  between estates, and after it has read the estate's tray count.
+  `athanor_id` is the athanor in view — the chat calls it as it moves
+  between athanors, and after it has read the athanor's tray count.
   """
-  @spec viewing(pid(), String.t()) :: :ok | {:error, term()}
-  def viewing(host, athanor_id) when is_pid(host) and is_binary(athanor_id) do
-    Phoenix.PubSub.broadcast(Emissary.PubSub, viewing_topic(host), {:viewing, athanor_id})
-  end
-
-  @doc "The topic a page tells its own bar what it has in view on."
-  @spec viewing_topic(pid() | nil) :: String.t()
-  def viewing_topic(host) when is_pid(host),
-    do: "topbar:viewing:" <> List.to_string(:erlang.pid_to_list(host))
-
-  # A bar rendered with no page over it (a test mount) listens to nobody.
-  def viewing_topic(nil), do: "topbar:viewing:none"
+  @spec viewing(pid(), String.t()) :: :ok
+  def viewing(host, athanor_id) when is_pid(host) and is_binary(athanor_id),
+    do: Bus.broadcast_page(Bus.page_viewing(host), Viewing.new(athanor_id))
 
   # ============================================================================
   # Events
@@ -173,7 +140,7 @@ defmodule PrismWeb.TopbarLive do
   end
 
   # The one create the chat list offers: a group, born with its creator as
-  # the only member. The chat opens on the new estate — named in the
+  # the only member. The chat opens on the new athanor — named in the
   # address, since the session's default is still the previous one.
   def handle_event("create_group", %{"name" => name}, socket) do
     case call_tool(socket, "athanor/create", %{"name" => String.trim(name)}) do
@@ -199,7 +166,7 @@ defmodule PrismWeb.TopbarLive do
 
     socket =
       socket
-      # The counts as the session left them: reading an estate in the chat
+      # The counts as the session left them: reading an athanor in the chat
       # is what clears one, and the chat has done so before this bar loads.
       |> assign(:badges, Prism.Tray.get(socket.assigns.tray_key))
       |> assign(:platform_requests, platform_requests(ctx))
@@ -209,13 +176,13 @@ defmodule PrismWeb.TopbarLive do
     {:noreply, socket}
   end
 
-  # The chat moved to another estate (and cleared its count on the way):
+  # The chat moved to another athanor (and cleared its count on the way):
   # follow it, and re-read the tray rather than trust the copy held here.
-  # Only an estate this person holds a seat in — the set the rows and the
+  # Only an athanor this person holds a seat in — the set the rows and the
   # badges are drawn from — can be the one in view.
-  # The chat moves between estates by `push_patch`; the bar's name AND its
-  # links follow, so every page the bar offers is the viewed estate's.
-  def handle_info({:viewing, athanor_id}, socket) do
+  # The chat moves between athanors by `push_patch`; the bar's name AND its
+  # links follow, so every page the bar offers is the viewed athanor's.
+  def handle_info(%Viewing{athanor_id: athanor_id}, socket) do
     known = Enum.map(socket.assigns.athanors, & &1.id)
 
     case Enum.find(socket.assigns.athanors, &(&1.id == athanor_id)) do
@@ -232,33 +199,29 @@ defmodule PrismWeb.TopbarLive do
   end
 
   @impl true
-  def handle_info({:request, _meta, _meas}, socket) do
+  def handle_info(%Bus.Request{}, socket) do
     {:noreply, refresh(socket, [:requests, :log_stats])}
   end
 
-  def handle_info({:tincture_invoke_started, metadata, _meas}, socket) do
-    {:noreply, socket |> add_recent_tincture(metadata, :started) |> refresh([:requests])}
+  def handle_info(%Bus.Tinctures{kind: :invoke_started} = invoked, socket) do
+    {:noreply, socket |> add_recent_tincture(invoked, :started) |> refresh([:requests])}
   end
 
-  def handle_info({:tincture_invoke_stopped, metadata, _meas}, socket) do
-    {:noreply, socket |> add_recent_tincture(metadata, :stopped) |> refresh([:requests])}
+  def handle_info(%Bus.Tinctures{kind: :invoke_stopped} = invoked, socket) do
+    {:noreply, socket |> add_recent_tincture(invoked, :stopped) |> refresh([:requests])}
   end
 
-  def handle_info({:execution_started, _meta, _meas}, socket) do
+  def handle_info(%Bus.Tinctures{}, socket), do: {:noreply, socket}
+
+  def handle_info(%Bus.Execution{}, socket) do
     {:noreply, refresh(socket, [:executions])}
   end
 
-  def handle_info({:execution_completed, _meta, _meas}, socket) do
-    {:noreply, refresh(socket, [:executions])}
-  end
-
-  def handle_info({:execution_failed, _meta, _meas}, socket) do
-    {:noreply, refresh(socket, [:executions])}
-  end
-
-  def handle_info({:schedule_fired, _meta, _meas}, socket) do
+  def handle_info(%Bus.ScheduleRun{kind: :fired}, socket) do
     {:noreply, refresh(socket, [:schedules, :requests])}
   end
+
+  def handle_info(%Bus.ScheduleRun{}, socket), do: {:noreply, socket}
 
   def handle_info(:do_refresh, socket) do
     pending = socket.assigns.refresh_pending
@@ -271,14 +234,14 @@ defmodule PrismWeb.TopbarLive do
     {:noreply, assign(socket, :refresh_pending, MapSet.new())}
   end
 
-  def handle_info({:build_started, metadata, _meas}, socket) do
-    {:noreply, track_build_started(socket, metadata)}
+  def handle_info(%Bus.Build{kind: :started} = build, socket) do
+    {:noreply, track_build_started(socket, build)}
   end
 
-  def handle_info({:build_progress, _meta, _meas}, socket), do: {:noreply, socket}
+  def handle_info(%Bus.Build{kind: :progress}, socket), do: {:noreply, socket}
 
-  def handle_info({:build_stopped, metadata, _meas}, socket) do
-    {:noreply, track_build_stopped(socket, metadata)}
+  def handle_info(%Bus.Build{kind: :stopped} = build, socket) do
+    {:noreply, track_build_stopped(socket, build)}
   end
 
   # The tray: one fan-in topic per athanor the person belongs to. Something
@@ -286,16 +249,16 @@ defmodule PrismWeb.TopbarLive do
   # the one in view shows its own live indicators. Only what wants a
   # person's attention badges: a card settled by someone else does not,
   # and an athanor renamed or reconfigured just redraws the list.
-  def handle_info({:notify, _athanor_id, :approval_resolved, _payload}, socket) do
+  def handle_info(%Notify{kind: :approval_resolved}, socket) do
     {:noreply, socket}
   end
 
-  def handle_info({:notify, _athanor_id, :athanor_changed, _payload}, socket) do
+  def handle_info(%Notify{kind: :athanor_changed}, socket) do
     {:noreply, load_athanors(socket, socket.assigns.context)}
   end
 
   # The door's queue changed: an operator's chip re-counts.
-  def handle_info({:notify, :platform, _kind, _payload}, socket) do
+  def handle_info(%Notify{athanor_id: :platform}, socket) do
     {:noreply, assign(socket, :platform_requests, platform_requests(socket.assigns.context))}
   end
 
@@ -304,28 +267,30 @@ defmodule PrismWeb.TopbarLive do
   # their tray. The runner still broadcasts on the one athanor topic — the
   # filter lives at the reader, so no per-user topics exist and the tray
   # is where following becomes a notification fact.
-  def handle_info({:notify, athanor_id, _kind, %{thread_id: thread_id}}, socket)
+  #
+  # The subscription was keyed when the list was read; whether this person
+  # still holds a seat there is read again, through the focus rule, before
+  # anything of that athanor is read or counted.
+  def handle_info(%Notify{athanor_id: athanor_id, payload: %{thread_id: thread_id}}, socket)
       when is_binary(athanor_id) and is_binary(thread_id) do
     %{context: ctx, viewing: viewing} = socket.assigns
 
-    cond do
-      athanor_id == viewing ->
-        {:noreply, socket}
-
-      Arca.ThreadSubscriptionStorage.follows?(
-        Cyfr.Actor.in_athanor(athanor_id),
-        thread_id,
-        ctx.user_id
-      ) ->
-        {:noreply, assign(socket, :badges, Prism.Tray.bump(socket.assigns.tray_key, athanor_id))}
-
-      true ->
-        {:noreply, socket}
+    with false <- athanor_id == viewing,
+         {:ok, there} <- Sanctum.Context.focus(ctx, athanor_id),
+         true <-
+           Arca.ThreadSubscriptionStorage.follows?(
+             Sanctum.Context.actor(there),
+             thread_id,
+             ctx.user_id
+           ) do
+      {:noreply, assign(socket, :badges, Prism.Tray.bump(socket.assigns.tray_key, athanor_id))}
+    else
+      _ -> {:noreply, socket}
     end
   end
 
-  def handle_info({:notify, athanor_id, _kind, _payload}, socket) do
-    if athanor_id == socket.assigns.viewing do
+  def handle_info(%Notify{athanor_id: athanor_id}, socket) do
+    if athanor_id == socket.assigns.viewing or not seated?(socket, athanor_id) do
       {:noreply, socket}
     else
       badges = Prism.Tray.bump(socket.assigns.tray_key, athanor_id)
@@ -333,14 +298,16 @@ defmodule PrismWeb.TopbarLive do
     end
   end
 
-  def handle_info({:membership_changed, _change}, socket) do
+  def handle_info(%Bus.Membership{}, socket) do
     {:noreply, load_athanors(socket, socket.assigns.context)}
   end
 
   def handle_info(msg, socket) do
-    Cyfr.UnexpectedMessage.log(__MODULE__, msg, :debug)
+    Prima.LoggerContext.unexpected(__MODULE__, msg, :debug)
     {:noreply, socket}
   end
+
+  defp seated?(socket, athanor_id), do: Enum.any?(socket.assigns.athanors, &(&1.id == athanor_id))
 
   # ============================================================================
   # Loaders
@@ -441,12 +408,12 @@ defmodule PrismWeb.TopbarLive do
   # In-memory feeds
   # ============================================================================
 
-  defp add_recent_tincture(socket, metadata, lifecycle) do
+  defp add_recent_tincture(socket, %Bus.Tinctures{} = invoked, lifecycle) do
     entry = %{
-      request_id: metadata[:request_id],
-      tincture_ref: metadata[:tincture_ref],
-      reference: metadata[:reference],
-      status: lifecycle_status(lifecycle, metadata),
+      request_id: invoked.request_id,
+      tincture_ref: invoked.tincture_ref,
+      reference: invoked.reference,
+      status: lifecycle_status(lifecycle, invoked),
       ts: System.system_time(:millisecond)
     }
 
@@ -463,10 +430,10 @@ defmodule PrismWeb.TopbarLive do
   defp lifecycle_status(:stopped, %{status: :error}), do: "error"
   defp lifecycle_status(:stopped, _), do: "success"
 
-  defp track_build_started(socket, metadata) do
+  defp track_build_started(socket, %Bus.Build{} = build) do
     entry = %{
-      build_id: metadata[:build_id],
-      reference: metadata[:reference],
+      build_id: build.build_id,
+      reference: build.reference,
       ts: System.system_time(:millisecond)
     }
 
@@ -478,9 +445,9 @@ defmodule PrismWeb.TopbarLive do
     assign(socket, :in_flight_builds, list)
   end
 
-  defp track_build_stopped(socket, metadata) do
+  defp track_build_stopped(socket, %Bus.Build{} = build) do
     list =
-      Enum.reject(socket.assigns.in_flight_builds, fn b -> b.build_id == metadata[:build_id] end)
+      Enum.reject(socket.assigns.in_flight_builds, fn b -> b.build_id == build.build_id end)
 
     assign(socket, :in_flight_builds, list)
   end
@@ -614,7 +581,7 @@ defmodule PrismWeb.TopbarLive do
             ]}
           >
             <span id="viewing-name" class="truncate text-xs font-medium">
-              {Map.get(@labels, @viewing, "Estate")}
+              {Map.get(@labels, @viewing, "Athanor")}
             </span>
             <span
               :if={badge_total(@badges, @viewing) > 0}
@@ -628,7 +595,7 @@ defmodule PrismWeb.TopbarLive do
             phx-click-away="close_popover"
             class="absolute left-0 top-full mt-2 w-64 rounded-lg border border-gray-700 bg-gray-900 shadow-xl p-2 z-40"
           >
-            <%!-- A row opens the estate's chat; its small AQUA link, the
+            <%!-- A row opens the athanor's chat; its small AQUA link, the
                   workbench. --%>
             <ul :if={length(@athanors) > 1} class="space-y-0.5 text-sm">
               <li
@@ -651,7 +618,7 @@ defmodule PrismWeb.TopbarLive do
                     <span
                       :if={a.roster == "frozen"}
                       class="rounded bg-gray-800 px-1 text-[10px] text-gray-500 ml-1"
-                      title="A DM — a frozen two-person estate"
+                      title="A DM — a frozen two-person athanor"
                     >
                       DM
                     </span>
@@ -917,7 +884,7 @@ defmodule PrismWeb.TopbarLive do
                 <% end %>
               </ul>
               <.link
-                navigate={PrismWeb.Focus.path(@athanor_route, "/activities?status=pending")}
+                navigate={PrismWeb.Focus.path(@athanor_route, "/activities")}
                 class="block mt-2 text-xs text-blue-400 hover:text-blue-300"
               >
                 View activity →
@@ -1011,12 +978,17 @@ defmodule PrismWeb.TopbarLive do
       ids = MapSet.new(athanors, & &1.id)
       previous = MapSet.new(socket.assigns[:athanors] || [], & &1.id)
 
-      for gone <- MapSet.difference(previous, ids),
-          do: Phoenix.PubSub.unsubscribe(Emissary.PubSub, Sanctum.Notify.topic(gone))
+      for gone <- MapSet.difference(previous, ids) do
+        actor = Prima.Actor.in_athanor(gone)
+        Bus.unsubscribe(actor, Bus.notify(actor))
+      end
 
+      # Each seat's own tray topic, keyed by the athanor the person's
+      # membership list names.
       for a <- athanors do
-        Phoenix.PubSub.unsubscribe(Emissary.PubSub, Sanctum.Notify.topic(a.id))
-        Phoenix.PubSub.subscribe(Emissary.PubSub, Sanctum.Notify.topic(a.id))
+        actor = Prima.Actor.in_athanor(a.id)
+        Bus.unsubscribe(actor, Bus.notify(actor))
+        Bus.subscribe(actor, Bus.notify(actor))
       end
     end
 
@@ -1026,10 +998,10 @@ defmodule PrismWeb.TopbarLive do
     |> assign(:badges, Map.take(socket.assigns[:badges] || %{}, Enum.map(athanors, & &1.id)))
   end
 
-  # Named once, at load: the person's own estate is "You", a DM is the
+  # Named once, at load: the person's own athanor is "You", a DM is the
   # other person, a group its name — read here rather than in the render,
   # which would ask the store for every DM row on every paint.
-  defp row_label(athanor, ctx), do: PrismWeb.Estates.label(athanor, ctx)
+  defp row_label(athanor, ctx), do: PrismWeb.Athanors.label(athanor, ctx)
 
   defp badge_total(badges, viewing) do
     badges |> Map.delete(viewing) |> Map.values() |> Enum.sum()

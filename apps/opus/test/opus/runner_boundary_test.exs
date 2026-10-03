@@ -33,12 +33,12 @@ defmodule Opus.RunnerBoundaryTest do
 
   @settings [:keeper, :pool_size, :idle_ttl_ms, :watchdog_grace_ms, :release_grace_ms]
 
-  setup do
+  setup context do
     previous = Map.new(@settings, &{&1, Application.get_env(:opus, &1)})
     Application.put_env(:opus, :keeper, :direct)
     Application.put_env(:opus, :pool_size, 1)
     Application.put_env(:opus, :idle_ttl_ms, 30_000)
-    Application.put_env(:opus, :watchdog_grace_ms, 1_000)
+    Application.put_env(:opus, :watchdog_grace_ms, context[:watchdog_grace_ms] || 1_000)
     Application.put_env(:opus, :release_grace_ms, 1_000)
 
     host = ScriptedHost.start!()
@@ -65,7 +65,7 @@ defmodule Opus.RunnerBoundaryTest do
 
     ScriptedHost.attempt!(
       host,
-      [boot: boot, component_type: :reagent, digest: Cyfr.Digest.sha256(@echo)] ++ opts
+      [boot: boot, component_type: :reagent, digest: Prima.Digest.sha256(@echo)] ++ opts
     )
   end
 
@@ -74,7 +74,7 @@ defmodule Opus.RunnerBoundaryTest do
 
     ScriptedHost.attempt!(
       host,
-      [boot: boot, component_type: :reagent, digest: Cyfr.Digest.sha256(@spin)] ++ opts
+      [boot: boot, component_type: :reagent, digest: Prima.Digest.sha256(@spin)] ++ opts
     )
   end
 
@@ -85,6 +85,18 @@ defmodule Opus.RunnerBoundaryTest do
   end
 
   defp os_pid(%{pid: pid}), do: RunnerProcess.info(pid).os_pid
+
+  # The pool's one runner once it has attached, before any take.
+  defp fresh_runner! do
+    wait_until(
+      fn -> match?([%{state: :fresh}], RunnerPool.runners(RunnerPool)) end,
+      @boot_ms,
+      "the pool's runner to attach"
+    )
+
+    [runner] = RunnerPool.runners(RunnerPool)
+    runner
+  end
 
   defp alive?(os_pid) do
     case System.cmd("kill", ["-0", Integer.to_string(os_pid)], stderr_to_stdout: true) do
@@ -148,12 +160,12 @@ defmodule Opus.RunnerBoundaryTest do
 
   test "the status has the contract's shape", %{host: host, boot: boot} do
     {:ok, status} = WorkerService.status()
-    assert Cyfr.WorkerAPI.valid_status?(status)
+    assert Prima.WorkerAPI.valid_status?(status)
 
     assert :ok = start(spin!(host, boot))
     wait_until(fn -> ScriptedHost.requests(host, "attach") != [] end, @boot_ms)
     {:ok, status} = WorkerService.status()
-    assert Cyfr.WorkerAPI.valid_status?(status)
+    assert Prima.WorkerAPI.valid_status?(status)
     assert %{busy: 1} = status.runners
   end
 
@@ -229,28 +241,47 @@ defmodule Opus.RunnerBoundaryTest do
       {:ok, "held"}
     end)
 
+    # The pool's one runner, taken before the attempt's deadline is set.
+    # The watchdog halts it a grace after that deadline, which on a loaded
+    # host can come before the guest's first host call: the runner is known
+    # by its process and its report, never by a poll for the busy runner
+    # or by what its guest said.
+    runner = fresh_runner!()
+    os_pid = os_pid(runner)
+    assert is_integer(os_pid)
+
     attempt = spin!(host, boot, timeout_ms: 500)
     assert :ok = start(attempt)
-    wait_until(fn -> ScriptedHost.requests(host, "attach") != [] end, @boot_ms)
-    wait_until(fn -> busy_runner() != nil end)
-    os_pid = os_pid(busy_runner())
 
-    wait_until(fn -> not alive?(os_pid) end, 10_000, "the spinning runner to be halted")
+    wait_until(fn -> not alive?(os_pid) end, @boot_ms, "the spinning runner to be halted")
     wait_until(fn -> ScriptedHost.requests(host, "runner_exited") != [] end, 5_000)
 
-    assert [%{args: %{"attempts" => [held]}}] = ScriptedHost.requests(host, "runner_exited")
+    assert [%{args: %{"attempts" => [held], "runner" => reported}}] =
+             ScriptedHost.requests(host, "runner_exited")
+
     assert held == attempt.attempt
+    assert reported == runner.id
     assert ScriptedHost.requests(host, "complete") == []
     wait_until(fn -> match?(%{busy: 0, tainted: 0}, runners()) end, 10_000)
   end
 
+  # The watchdog, armed at the deadline plus its grace, would halt the
+  # runner and report its exit: its grace outlasts the test, so only the
+  # call's timeout ends the subtree.
+  @tag watchdog_grace_ms: 60_000
   test "a guest killed at its timeout taints its runner, which is ended with no process left",
        %{host: host, boot: boot} do
+    # The pool's one runner, attached before the attempt's deadline is
+    # set: its busy moment ends at that deadline, sooner than a poll may
+    # look.
+    runner = fresh_runner!()
+    os_pid = os_pid(runner)
+    assert is_integer(os_pid)
+
     attempt = spin!(host, boot, timeout_ms: 500)
     assert :ok = start(attempt)
     wait_until(fn -> ScriptedHost.requests(host, "attach") != [] end, @boot_ms)
-    wait_until(fn -> busy_runner() != nil end)
-    os_pid = os_pid(busy_runner())
+    assert attach_runners(host) == [runner.id]
 
     # The attempt's own timeout kills the component call and closes the
     # attempt failed as abandoned; the call's native thread spins on.

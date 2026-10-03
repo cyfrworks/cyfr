@@ -36,6 +36,7 @@ defmodule Arca.Schemas.Turn do
     field :runner_id, :string
     field :fence, :integer
     field :recovery_attempts, :integer, default: 0
+    field :recovery_limit, :integer
     field :profile_id, :string
     field :consent_id, :string
     field :agent_revision_digest, :string
@@ -49,5 +50,8 @@ defmodule Arca.Schemas.Turn do
     field :paused_at, :utc_datetime_usec
     field :paused_reason, :string
     field :launch_step_id, :string
+    # How the turn was started (`Prima.Origin`'s wire spelling), written
+    # when it is accepted; a clone carries its parent's.
+    field :origin, :string
   end
 end

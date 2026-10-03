@@ -30,7 +30,7 @@ defmodule Opus.ExecutorMaskedOutputTest do
 
   use ExUnit.Case, async: false
 
-  import Cyfr.Test.Wait
+  import Prima.Test.Wait
 
   alias Cyfr.Test.TwoServices
   alias Opus.Test.NestedExecution, as: Probe
@@ -57,10 +57,10 @@ defmodule Opus.ExecutorMaskedOutputTest do
     Application.put_env(:arca, :base_path, Path.join(run_dir, "data"))
     Application.put_env(:arca, :seed_path, lay_seed!(Path.join(run_dir, "seed")))
 
-    ctx = Sanctum.TestContext.local()
+    ctx = Sanctum.TestContext.local(:prism)
 
     on_exit(fn ->
-      Cyfr.Slots.forgive_unreaped(Cyfr.Execution.Slots, ctx.athanor_id)
+      Prima.Slots.forgive_unreaped(Crucible.Slots, ctx.athanor_id)
 
       for {key, value} <- previous do
         if value,
@@ -86,17 +86,17 @@ defmodule Opus.ExecutorMaskedOutputTest do
 
   test "a completed run's output, stream, payload, events and result are masked", %{ctx: ctx} do
     secrets = arm!(ctx, @stub, key: "stub answers", token: "at once")
-    id = Cyfr.UUID7.execution_id()
-    :ok = Cyfr.Execution.subscribe_events(id, ctx)
+    id = Prima.UUID7.execution_id()
+    :ok = Crucible.subscribe_events(id, ctx)
 
     assert {:ok, result} =
-             Cyfr.Execution.run_root(ctx, :default, @stub, chat(), execution_id: id)
+             Crucible.run_root(ctx, :default, @stub, chat(), execution_id: id)
 
     assert %{"data" => %{"content" => [%{"text" => text}]}} = result.output
     assert text == "The #{@redacted} #{@redacted}."
     refute_unmasked(result, secrets)
 
-    row = Arca.Repo.get!(Arca.Execution, id)
+    row = Arca.Repo.get!(Arca.Schemas.Execution, id)
     assert row.status == "completed"
     refute_unmasked(row, secrets)
 
@@ -110,7 +110,7 @@ defmodule Opus.ExecutorMaskedOutputTest do
     assert streamed_text(live) == text
     refute_unmasked(live, secrets)
 
-    replayed = Cyfr.Execution.Events.since(id, {0, 0}, ctx.athanor_id)
+    replayed = Crucible.Events.since(id, {0, 0}, ctx.athanor_id)
     assert streamed_text(replayed) == text
     refute_unmasked(replayed, secrets)
 
@@ -119,17 +119,17 @@ defmodule Opus.ExecutorMaskedOutputTest do
 
   test "a failed run's message is masked in the row, its event and the result", %{ctx: ctx} do
     secrets = arm!(ctx, @stub, key: "stub answers", token: "describe")
-    id = Cyfr.UUID7.execution_id()
-    :ok = Cyfr.Execution.subscribe_events(id, ctx)
+    id = Prima.UUID7.execution_id()
+    :ok = Crucible.subscribe_events(id, ctx)
 
     assert {:error, message} =
-             Cyfr.Execution.run_root(ctx, :default, @stub, %{"operation" => "unknown"},
+             Crucible.run_root(ctx, :default, @stub, %{"operation" => "unknown"},
                execution_id: id
              )
 
     assert message == "the #{@redacted} #{@redacted}, models and chat"
 
-    row = Arca.Repo.get!(Arca.Execution, id)
+    row = Arca.Repo.get!(Arca.Schemas.Execution, id)
     assert row.status == "failed" and row.error_message == message
     refute_unmasked(row, secrets)
 
@@ -146,15 +146,15 @@ defmodule Opus.ExecutorMaskedOutputTest do
     # The budget is what remains of the absolute deadline at receipt, so the
     # milliseconds vary; the words around them are the planted secrets.
     secrets = arm!(ctx, @brief, key: "Execution timeout", token: "after")
-    id = Cyfr.UUID7.execution_id()
+    id = Prima.UUID7.execution_id()
     hold_attach_past_deadline!(id)
 
     assert {:error, message} =
-             Cyfr.Execution.run_root(ctx, :default, @brief, chat(), execution_id: id)
+             Crucible.run_root(ctx, :default, @brief, chat(), execution_id: id)
 
     assert message =~ ~r/^#{Regex.escape(@redacted)} #{Regex.escape(@redacted)} \d+ms$/
 
-    row = Arca.Repo.get!(Arca.Execution, id)
+    row = Arca.Repo.get!(Arca.Schemas.Execution, id)
     assert row.status == "failed" and row.error_message == message
     refute_unmasked(row, secrets)
 
@@ -165,7 +165,7 @@ defmodule Opus.ExecutorMaskedOutputTest do
 
   test "what a parent is handed of its child is masked", %{ctx: ctx} do
     secrets = arm!(ctx, @stub, key: "stub answers", token: "at once")
-    parent_id = Cyfr.UUID7.execution_id()
+    parent_id = Prima.UUID7.execution_id()
 
     request = %{
       "tool" => "execution",
@@ -176,7 +176,7 @@ defmodule Opus.ExecutorMaskedOutputTest do
     # The formula calls the stub and answers what its host function handed
     # it, verbatim.
     assert {:ok, %{output: output}} =
-             Cyfr.Execution.run_root(
+             Crucible.run_root(
                ctx,
                :default,
                Probe.probe_ref(),
@@ -189,11 +189,11 @@ defmodule Opus.ExecutorMaskedOutputTest do
     assert %{"data" => %{"content" => [%{"text" => text}]}} = envelope
     assert text == "The #{@redacted} #{@redacted}."
     refute_unmasked(handed, secrets)
-    refute_unmasked(Arca.Repo.get!(Arca.Execution, parent_id), secrets)
+    refute_unmasked(Arca.Repo.get!(Arca.Schemas.Execution, parent_id), secrets)
 
     assert [child] = Arca.Repo.all(children_of(parent_id))
     refute_unmasked(child, secrets)
-    refute_unmasked(Cyfr.Execution.Events.since(child.id, {0, 0}, ctx.athanor_id), secrets)
+    refute_unmasked(Crucible.Events.since(child.id, {0, 0}, ctx.athanor_id), secrets)
     refute_unmasked(event_rows(ctx, child.id), secrets)
 
     assert {:ok, _row, payload} =
@@ -205,20 +205,20 @@ defmodule Opus.ExecutorMaskedOutputTest do
 
   test "a run whose attempt ends mid-run records nothing unmasked", %{ctx: ctx} do
     secrets = arm!(ctx, @stub, key: "stub answers", token: "at once")
-    id = Cyfr.UUID7.execution_id()
-    :ok = Cyfr.Execution.subscribe_events(id, ctx)
+    id = Prima.UUID7.execution_id()
+    :ok = Crucible.subscribe_events(id, ctx)
     TwoServices.hold!(:push_deltas, id, once: true)
 
     run =
       Task.async(fn ->
-        Cyfr.Execution.run_root(ctx, :default, @stub, chat(), execution_id: id)
+        Crucible.run_root(ctx, :default, @stub, chat(), execution_id: id)
       end)
 
     # Held at its first delta: its guest wrote both credentials, and
     # nothing of it has reached the host yet.
     assert_receive {:held, ^id, held}, 30_000
 
-    attempt = Cyfr.Execution.Attempt.whereis(id)
+    attempt = Crucible.Attempt.whereis(id)
     ref = Process.monitor(attempt)
     Process.exit(attempt, :kill)
     assert_receive {:DOWN, ^ref, :process, ^attempt, :killed}
@@ -227,7 +227,7 @@ defmodule Opus.ExecutorMaskedOutputTest do
     assert {:error, message} = Task.await(run, 60_000)
     assert message == "Execution attempt ended before it closed"
 
-    row = Arca.Repo.get!(Arca.Execution, id)
+    row = Arca.Repo.get!(Arca.Schemas.Execution, id)
     assert row.status == "failed" and row.error_message == message
     refute_unmasked(row, secrets)
     refute_unmasked(live_events(), secrets)
@@ -238,7 +238,7 @@ defmodule Opus.ExecutorMaskedOutputTest do
   end
 
   # ---------------------------------------------------------------------------
-  # The estate
+  # The athanor
   # ---------------------------------------------------------------------------
 
   defp lay_seed!(seed) do
@@ -271,13 +271,14 @@ defmodule Opus.ExecutorMaskedOutputTest do
       "version" => @version,
       "publisher" => "local",
       "description" => "A model/chat@1 catalyst the masking matrix runs",
-      "contracts" => [Cyfr.Models.chat_contract()],
+      "contracts" => [Prima.Model.chat_contract()],
       "needs" => %{
         "api_key" => %{
-          "type" => "api_key:#{name}",
-          "reason" => "to read a key as a model catalyst does",
+          "type" => "oauth:#{name}",
+          "reason" => "to read a key and a token as a model catalyst does",
           "required" => true,
-          "fields" => [@key_field]
+          "fields" => [@key_field],
+          "scopes" => TwoServices.stub_scopes()
         }
       },
       "caps" => %{
@@ -308,7 +309,7 @@ defmodule Opus.ExecutorMaskedOutputTest do
       spawn_link(fn ->
         receive do
           {:attach_held, %{args: %{"assignment" => token}}, conn} ->
-            {:ok, assignment} = Cyfr.Assignment.read(token)
+            {:ok, assignment} = Prima.Assignment.read(token)
 
             wait_until(
               fn -> System.system_time(:millisecond) > assignment.deadline end,
@@ -338,7 +339,7 @@ defmodule Opus.ExecutorMaskedOutputTest do
 
   defp live_events do
     receive do
-      {:execution_event, event} -> [event | live_events()]
+      %Cyfr.Bus.ExecutionEvent{} = event -> [Cyfr.Bus.ExecutionEvent.event(event) | live_events()]
     after
       200 -> []
     end
@@ -357,7 +358,7 @@ defmodule Opus.ExecutorMaskedOutputTest do
 
   defp children_of(parent_id) do
     import Ecto.Query, only: [from: 2]
-    from(e in Arca.Execution, where: e.parent_execution_id == ^parent_id)
+    from(e in Arca.Schemas.Execution, where: e.parent_execution_id == ^parent_id)
   end
 
   defp refute_unmasked(term, secrets) do

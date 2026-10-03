@@ -9,7 +9,7 @@ defmodule PrismWeb.RegistryLive do
   namespace state owned by the current user.
 
   Sources:
-    * Personal namespace — from `@personal_namespace_slug` (set by `LiveAuth`).
+    * Personal namespace — from `@personal_namespace_slug` (set by `PrismWeb.Focus`).
     * Publisher memberships — fetched via `registry.whoami` MCP action.
 
   For each owned namespace we call `component.discover` (which hits
@@ -32,8 +32,8 @@ defmodule PrismWeb.RegistryLive do
     # doesn't block on the cyfr.run round-trip. The load handler below
     # flips `:loading` to false and fills `:components`.
     if connected?(socket) do
-      ctx = socket.assigns[:context]
-      Phoenix.PubSub.subscribe(Emissary.PubSub, Cyfr.Bus.components(ctx))
+      actor = Sanctum.Context.actor(socket.assigns[:context])
+      Cyfr.Bus.subscribe(actor, Cyfr.Bus.components(actor))
       send(self(), :load_registry)
     end
 
@@ -261,12 +261,12 @@ defmodule PrismWeb.RegistryLive do
     end
   end
 
-  def handle_info(:components_changed, socket) do
+  def handle_info(%Cyfr.Bus.Components{}, socket) do
     {:noreply, load_registry(socket)}
   end
 
   def handle_info(msg, socket) do
-    Cyfr.UnexpectedMessage.log(__MODULE__, msg, :debug)
+    Prima.LoggerContext.unexpected(__MODULE__, msg, :debug)
     {:noreply, socket}
   end
 
@@ -329,7 +329,7 @@ defmodule PrismWeb.RegistryLive do
     end
   end
 
-  # Personal-namespace slug is already computed by `LiveAuth`; publisher
+  # Personal-namespace slug is already computed by `PrismWeb.Focus`; publisher
   # memberships come from `registry.whoami`. Both are strings; uniq to guard
   # against the edge case where a user is also a member of their own personal
   # slug (shouldn't happen today, but cheap to defend).
@@ -744,13 +744,13 @@ defmodule PrismWeb.RegistryLive do
   defp reference_of(c) do
     # cyfr.run's /v1/components response uses `component_type` (full word:
     # catalyst / reagent / formula / tincture). That's also the canonical
-    # type prefix accepted by `Cyfr.ComponentRef.parse/1` — use it
+    # type prefix accepted by `Prima.ComponentRef.parse/1` — use it
     # directly with no remapping.
     t = cf(c, "component_type") || "catalyst"
     ns = c["_namespace"] || cf(c, "namespace_slug") || ""
     n = cf(c, "name") || ""
     v = cf(c, "version") || ""
-    Cyfr.ComponentRef.build(t, ns, n, v)
+    Prima.ComponentRef.build(t, ns, n, v)
   end
 
   defp badge_class(c) do

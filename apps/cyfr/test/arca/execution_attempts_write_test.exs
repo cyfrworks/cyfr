@@ -25,9 +25,8 @@ defmodule Arca.ExecutionAttemptsWriteTest do
   @runner "runner_a"
   @path ["data", "intent.txt"]
 
-  setup do
-    :ok = Ecto.Adapters.SQL.Sandbox.checkout(Arca.Repo)
-    Ecto.Adapters.SQL.Sandbox.mode(Arca.Repo, {:shared, self()})
+  setup tags do
+    Cyfr.Test.Sandbox.setup!(tags)
     Arca.Cache.init()
     Arca.Cache.delete_match({:scope_usage, :_, :_, :_})
 
@@ -46,20 +45,24 @@ defmodule Arca.ExecutionAttemptsWriteTest do
         else: Application.delete_env(:arca, :base_path)
     end)
 
-    ctx = Sanctum.TestContext.local()
+    ctx = Sanctum.TestContext.local(:api)
     actor = Sanctum.Context.actor(ctx)
 
     {:ok, %{execution: execution, attempt: attempt}} =
-      Arca.Execution.admit(%{
-        id: "exec_write_#{System.unique_integer([:positive])}",
-        reference: "catalyst:local.write:0.1.0",
-        user_id: actor.user_id,
-        athanor_id: actor.athanor_id,
-        component_type: "catalyst",
-        input: "{}"
-      })
+      Arca.Execution.admit(
+        %{
+          id: "exec_write_#{System.unique_integer([:positive])}",
+          reference: "catalyst:local.write:0.1.0",
+          user_id: actor.user_id,
+          athanor_id: actor.athanor_id,
+          component_type: "catalyst",
+          input: "{}",
+          origin: :programmatic
+        },
+        Arca.Test.Actor.standing(actor.athanor_id)
+      )
 
-    :ok = ExecutionAttempts.claim(actor, attempt.attempt, 1, @runner)
+    :ok = ExecutionAttempts.claim(actor, attempt.attempt, 1, @runner, Arca.Test.Actor.stored())
     {:ok, ctx: ctx, actor: actor, execution: execution, attempt: attempt.attempt}
   end
 
@@ -75,7 +78,8 @@ defmodule Arca.ExecutionAttemptsWriteTest do
         path: Keyword.get(opts, :path, @path),
         bytes: Keyword.get(opts, :bytes, 5),
         io: io
-      }
+      },
+      Arca.Test.Actor.stored()
     )
   end
 
@@ -87,14 +91,15 @@ defmodule Arca.ExecutionAttemptsWriteTest do
 
   defp states(test), do: for(i <- intents(test), do: {i.state, i.reason})
 
-  defp cancel!(%{actor: actor, execution: execution}) do
+  defp cancel!(%{actor: actor, execution: execution, attempt: attempt}) do
     {:ok, _} =
       Arca.Execution.record_end(
         actor,
         execution.id,
         "cancelled",
         %{completed_at: DateTime.utc_now(), duration_ms: 1},
-        nil
+        attempt,
+        Arca.Test.Actor.stored()
       )
 
     :ok
@@ -103,8 +108,10 @@ defmodule Arca.ExecutionAttemptsWriteTest do
   defp takeover!(%{actor: actor, execution: execution}) do
     {:ok, %{attempt: successor}} =
       ExecutionAttempts.takeover(actor, execution.id,
-        boot_id: Cyfr.Boot.id(),
-        lease_until: ExecutionAttempts.lease_until()
+        boot_id: Prima.Boot.id(),
+        lease_until: ExecutionAttempts.lease_until(),
+        grant: :stored,
+        verify: &Arca.Test.Actor.admits/1
       )
 
     successor
@@ -115,7 +122,7 @@ defmodule Arca.ExecutionAttemptsWriteTest do
   describe "a write its attempt holds throughout" do
     test "records its intent before the store is touched and confirms it after", test do
       io = fn ->
-        assert [%StorageWriteIntent{} = intent] = intents(test)
+        assert [%{id: _} = intent] = intents(test)
         assert intent.state == "pending"
         assert intent.attempt == test.attempt
         assert intent.execution_id == test.execution.id
@@ -293,7 +300,7 @@ defmodule Arca.ExecutionAttemptsWriteTest do
       assert %{state: "lapsed", outcome: "uncertain"} = attempt_row(test)
 
       %{attempt: next, fence: 2} = Agent.get(successor, & &1)
-      :ok = ExecutionAttempts.claim(test.actor, next, 2, @runner)
+      :ok = ExecutionAttempts.claim(test.actor, next, 2, @runner, Arca.Test.Actor.stored())
 
       assert {:ok, {:confirmed, :ok}} = write(%{test | attempt: next}, put(test, "new"), fence: 2)
       assert {:ok, "new"} = Arca.get(test.actor, @path)
@@ -305,7 +312,7 @@ defmodule Arca.ExecutionAttemptsWriteTest do
     test "a lapse between the intent and the settlement is uncertain", test do
       io = fn ->
         lease = attempt_row(test).lease_until
-        assert {:ok, ran} = ExecutionAttempts.lapse(test.attempt, lease)
+        assert {:ok, ran} = ExecutionAttempts.lapse(test.attempt, lease, Arca.Test.Actor.stored())
         assert is_integer(ran)
         put(test).()
       end
@@ -424,14 +431,14 @@ defmodule Arca.ExecutionAttemptsWriteTest do
 
       # Both are older than the cutoff; only the settled one may go.
       Arca.Repo.update_all(StorageWriteIntent, set: [inserted_at: days_ago(40)])
-      cutoff = Cyfr.Retention.Kind.days_cutoff(30)
+      cutoff = Arca.Retention.Kind.days_cutoff(30)
       opts = [athanor_id: actor.athanor_id]
 
       assert {:ok, 1} = ExecutionAttempts.count_intents_before(cutoff, opts)
       assert {:ok, 1} = ExecutionAttempts.delete_intents_before(cutoff, opts)
       assert states(test) == [{"pending", nil}]
 
-      # And nothing of another estate's is counted or taken.
+      # And nothing of another athanor's is counted or taken.
       assert {:ok, 0} = ExecutionAttempts.count_intents_before(cutoff, athanor_id: "ath_gamma")
 
       # Stopped before the sandbox connection is given back. An assertion
@@ -444,7 +451,7 @@ defmodule Arca.ExecutionAttemptsWriteTest do
       %{actor: actor} = test
       assert {:ok, {:confirmed, :ok}} = write(test, put(test))
 
-      cutoff = Cyfr.Retention.Kind.days_cutoff(30)
+      cutoff = Arca.Retention.Kind.days_cutoff(30)
       opts = [athanor_id: actor.athanor_id]
 
       assert {:ok, 0} = ExecutionAttempts.count_intents_before(cutoff, opts)
@@ -457,14 +464,15 @@ defmodule Arca.ExecutionAttemptsWriteTest do
       assert {:ok, {:confirmed, :ok}} = write(test, put(test))
       Arca.Repo.update_all(StorageWriteIntent, set: [inserted_at: days_ago(40)])
 
-      assert Cyfr.Retention.WriteIntents.key() == "write_intent_days"
-      assert Cyfr.Retention.WriteIntents.unit() == :days
-      assert Cyfr.Retention.WriteIntents in Cyfr.Retention.kinds()
+      assert Arca.Retention.WriteIntents.key() == "write_intent_days"
+      assert Arca.Retention.WriteIntents.unit() == :days
+      assert Arca.Retention.WriteIntents in Arca.Retention.kinds()
 
-      assert {:ok, 1} = Cyfr.Retention.cleanup(ctx, "write_intent_days", dry_run: true)
+      actor = Sanctum.Context.actor(ctx)
+      assert {:ok, 1} = Arca.Retention.cleanup(actor, "write_intent_days", dry_run: true)
       assert [{"confirmed", nil}] = states(test)
 
-      assert {:ok, 1} = Cyfr.Retention.cleanup(ctx, "write_intent_days")
+      assert {:ok, 1} = Arca.Retention.cleanup(actor, "write_intent_days")
       assert states(test) == []
     end
 
@@ -479,18 +487,19 @@ defmodule Arca.ExecutionAttemptsWriteTest do
     end
   end
 
-  test "an intent is another estate's to neither read nor settle", test do
+  test "an intent is another athanor's to neither read nor settle", test do
     assert {:ok, {:confirmed, :ok}} = write(test, put(test))
 
-    assert [] = ExecutionAttempts.write_intents(Cyfr.Actor.in_athanor("ath_gamma"), test.attempt)
+    assert [] = ExecutionAttempts.write_intents(Prima.Actor.in_athanor("ath_gamma"), test.attempt)
 
     assert {:error, :lost} =
              ExecutionAttempts.while_held(
-               Cyfr.Actor.in_athanor("ath_gamma"),
+               Prima.Actor.in_athanor("ath_gamma"),
                test.attempt,
                1,
                @runner,
-               %{op: :put, path: @path, io: fn -> flunk("the store was touched") end}
+               %{op: :put, path: @path, io: fn -> flunk("the store was touched") end},
+               Arca.Test.Actor.stored()
              )
   end
 end

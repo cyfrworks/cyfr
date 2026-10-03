@@ -9,11 +9,25 @@ defmodule Cyfr.RetentionScheduler do
   When retention is disabled, this GenServer returns `:ignore` and never
   starts. When enabled, each tick asks for the cell's `retention` claim
   (`Arca.JobClaims`, key `"cell"`) and, holding it, runs one cycle: every
-  kind in `Cyfr.Retention.kinds/0` inside every active athanor, each in
-  its own context, plus the declared sweeps below. The tick repeats on a
-  configurable interval (default 6 hours) to prevent unbounded storage
-  growth. Every step runs behind one crash barrier: a fault in one is
-  logged and the cycle moves on.
+  kind in `Arca.Retention.kinds/0` inside every active athanor, each
+  under its own settings, plus the declared sweeps below — among them the
+  host's own decisions, the ones made before any tenant was resolved,
+  purged past the `decision_retention_days` platform setting. The tick
+  repeats on a configurable interval (default 6 hours) to prevent
+  unbounded storage growth. Every step runs behind one crash barrier: a
+  fault in one is logged and the cycle moves on.
+
+  ## The athanors it walks
+
+  Which athanors are active is the identity domain's
+  (`Sanctum.Tenancy.Athanors.list_active/0`), and the walk asks again
+  (`active?/1`) just before each one: an athanor archived after the list
+  was read is passed over, since its records freeze with it. Each athanor
+  is cleaned by `Arca.Retention.cleanup_athanor/2` under an actor of its
+  own — the server's, narrowed to that one athanor, reading and writing
+  storage and nothing else. A kind that fails is logged against its
+  athanor; settings that cannot be read refuse the whole athanor, which
+  is logged once. Either way the walk goes on to the next.
 
   ## Only a current claimant acts, and only the proposed one asks
 
@@ -75,11 +89,22 @@ defmodule Cyfr.RetentionScheduler do
   require Logger
 
   alias Arca.JobClaims
-  alias Arca.Schemas.JobClaim
 
   @default_interval_ms :timer.hours(6)
 
   @kind "retention"
+  # The carry sweep's batch, how many batches of carry actions one cycle
+  # takes, and its counts before the first.
+  @carry_batch 500
+  @carry_batches 10
+  # How many batches of heads one cycle takes. The heads a relying home's
+  # challenges cache for no one here are bounded by the installation's
+  # 200 carries a minute (`Sanctum.Auth.CyfrDoor`): 72,000 in a six-hour
+  # cycle. 150 batches, 75,000 heads, clear that within the cycle, so a
+  # flood at the cap never leaves more behind than one cycle cached.
+  @head_batches 150
+  @carry_left %{carries: @carry_batches, heads: @head_batches}
+  @carry_none %{expired: 0, removed: 0, heads: 0}
   @lease_ms :timer.minutes(5)
   @renew_ms :timer.minutes(1)
 
@@ -89,7 +114,9 @@ defmodule Cyfr.RetentionScheduler do
   @steps [
     {"flush", "record sink flush"},
     {"retention", "retention cleanup"},
+    {"decisions_global", "host decision purge"},
     {"sessions", "expired session sweep"},
+    {"carry", "carry action sweep"},
     {"webhooks", "webhook delivery sweep"},
     {"rates", "rate window sweep"},
     {"tmp", "stale tmp sweep"},
@@ -143,7 +170,7 @@ defmodule Cyfr.RetentionScheduler do
 
   @impl true
   def handle_info(msg, state) do
-    Cyfr.UnexpectedMessage.log(__MODULE__, msg)
+    Prima.LoggerContext.unexpected(__MODULE__, msg)
     {:noreply, state}
   end
 
@@ -166,13 +193,13 @@ defmodule Cyfr.RetentionScheduler do
           | {:stopped, stopped(), summary()}
           | {:error, :database_error}
   def cycle(opts \\ []) when is_list(opts) do
-    key = Keyword.get(opts, :key, JobClaim.cell_key())
-    owner = Keyword.get(opts, :owner, Cyfr.Boot.id())
+    key = Keyword.get(opts, :key, JobClaims.cell_key())
+    owner = Keyword.get(opts, :owner, Prima.Boot.id())
     lease_ms = Keyword.get(opts, :lease_ms, @lease_ms)
 
     case JobClaims.claim(@kind, key, owner, lease_ms) do
       {:ok, claim} -> open(claim, opts, lease_ms)
-      {:busy, %JobClaim{owner: peer}} -> {:busy, peer}
+      {:busy, %{owner: peer}} -> {:busy, peer}
       {:error, :database_error} = unavailable -> unavailable
     end
   end
@@ -187,7 +214,7 @@ defmodule Cyfr.RetentionScheduler do
       |> Map.get(:job, [])
       |> Keyword.put_new(:interval, Map.get(state, :interval, @default_interval_ms))
 
-    if Arca.ControlPlane.held?() and mine?(Keyword.get(opts, :key, JobClaim.cell_key())) do
+    if Arca.ControlPlane.held?() and mine?(Keyword.get(opts, :key, JobClaims.cell_key())) do
       report(cycle(opts))
     end
   end
@@ -241,7 +268,7 @@ defmodule Cyfr.RetentionScheduler do
   # its cycle is younger than a tick interval, or a fresh cycle. A
   # takeover leaves `detail` as it found it, so what is read here is what
   # the predecessor had completed.
-  defp resume(%JobClaim{detail: detail}, now, interval) do
+  defp resume(%{detail: detail}, now, interval) do
     with %{"cycle" => cycle, "step" => step} = recorded when is_binary(step) <- decode(detail),
          {:ok, began, _offset} <- DateTime.from_iso8601(cycle),
          true <- step in step_ids(),
@@ -313,17 +340,26 @@ defmodule Cyfr.RetentionScheduler do
   end
 
   defp sweep_athanors(state, [athanor_id | rest]) do
-    if Arca.ControlPlane.held?() do
-      deleted = run_step(label("retention"), fn -> run_retention(athanor_id) end)
+    cond do
+      not Arca.ControlPlane.held?() ->
+        _ = JobClaims.release(state.claim)
+        {:stopped, :not_held, state.summary}
 
-      state
-      |> put_cursor(%{state.cursor | athanor: athanor_id})
-      |> tally(:athanors, athanor_id)
-      |> count(deleted)
-      |> renew_then(fn held -> sweep_athanors(held, rest) end)
-    else
-      _ = JobClaims.release(state.claim)
-      {:stopped, :not_held, state.summary}
+      # Archived since the list was read: its records freeze with it. The
+      # cursor still passes it, so a successor does not ask again.
+      not Sanctum.Tenancy.Athanors.active?(athanor_id) ->
+        state
+        |> put_cursor(%{state.cursor | athanor: athanor_id})
+        |> renew_then(fn held -> sweep_athanors(held, rest) end)
+
+      true ->
+        deleted = run_step(label("retention"), fn -> run_retention(athanor_id) end)
+
+        state
+        |> put_cursor(%{state.cursor | athanor: athanor_id})
+        |> tally(:athanors, athanor_id)
+        |> count(deleted)
+        |> renew_then(fn held -> sweep_athanors(held, rest) end)
     end
   end
 
@@ -400,7 +436,9 @@ defmodule Cyfr.RetentionScheduler do
     fn -> Arca.RecordSink.flush() end
   end
 
+  defp step_fun("decisions_global"), do: &purge_host_decisions/0
   defp step_fun("sessions"), do: &sweep_expired_sessions/0
+  defp step_fun("carry"), do: fn -> sweep_carry_actions(@carry_left, @carry_none) end
   defp step_fun("webhooks"), do: &sweep_webhook_deliveries/0
   defp step_fun("rates"), do: &sweep_rate_windows/0
   defp step_fun("tmp"), do: &sweep_stale_tmp_files/0
@@ -408,7 +446,7 @@ defmodule Cyfr.RetentionScheduler do
 
   # The rate-window rows whose window and prior window are both past —
   # the buckets nobody claims any more. It is not housekeeping: a bucket
-  # is whatever a caller names, and `Cyfr.Execution.Admission` names one
+  # is whatever a caller names, and `Crucible.Admission` names one
   # per client address, so the rows an athanor can open are as wide as
   # the addresses that reach it. A claim that opens a new bucket already
   # reclaims its own athanor's dead rows, which bounds a tenant that is
@@ -420,6 +458,27 @@ defmodule Cyfr.RetentionScheduler do
     case Arca.RateWindows.purge_expired() do
       0 -> :ok
       count -> Logger.info("[RetentionScheduler] Removed #{count} expired rate window(s)")
+    end
+  end
+
+  # The admission decisions made before any tenant was resolved carry no
+  # athanor, so no athanor's retention reaches them: the host purges them
+  # under the claim it holds, as the platform's own actor, once they are
+  # older than the `decision_retention_days` platform setting, which serves
+  # a stale value. Never an athanor's row.
+  defp purge_host_decisions do
+    {:ok, days} = Arca.PlatformSettings.effective("decision_retention_days")
+    cutoff = DateTime.add(DateTime.utc_now(), -days * 86_400, :second)
+
+    case Arca.DecisionLog.purge_global(Prima.Actor.system(), cutoff) do
+      {:ok, 0} ->
+        :ok
+
+      {:ok, count} ->
+        Logger.info("[RetentionScheduler] Purged #{count} host decision row(s)")
+
+      {:error, reason} ->
+        Logger.warning("[RetentionScheduler] Host decision purge failed: #{inspect(reason)}")
     end
   end
 
@@ -435,6 +494,57 @@ defmodule Cyfr.RetentionScheduler do
       {:error, reason} ->
         Logger.warning("[RetentionScheduler] Expired-session sweep failed: #{inspect(reason)}")
     end
+  end
+
+  # Every person's sign-in carries past their expiry move to expired with
+  # their payloads cleared, terminal ones and login receipts past their
+  # retention go, and so do the heads a relying home's challenges cached
+  # for no one here (`Sanctum.Carry.sweep/1`): opening a carry ends only its
+  # own person's, so this is what reaches a person who opens none, and
+  # nothing else removes such a head. Each kind batch after batch until one
+  # moves fewer than a batch's worth of it: carry actions at most
+  # `@carry_batches` a cycle, so their backlog is taken over several
+  # cycles rather than holding the claim, and heads at most
+  # `@head_batches`. `left` holds the batches each kind has left; a kind
+  # that came up short has none.
+  defp sweep_carry_actions(%{carries: 0, heads: 0}, swept), do: carried(swept)
+
+  defp sweep_carry_actions(left, swept) do
+    batches =
+      for {kind, n} <- [carries: left.carries, heads: left.heads], n > 0, do: {kind, @carry_batch}
+
+    case Sanctum.Carry.sweep(batches) do
+      {:ok, %{expired: expired, removed: removed, heads: heads}} ->
+        swept = %{
+          expired: swept.expired + expired,
+          removed: swept.removed + removed,
+          heads: swept.heads + heads
+        }
+
+        left = %{
+          carries: next(left.carries, expired >= @carry_batch or removed >= @carry_batch),
+          heads: next(left.heads, heads >= @carry_batch)
+        }
+
+        sweep_carry_actions(left, swept)
+
+      {:error, reason} ->
+        Logger.warning("[RetentionScheduler] Carry action sweep failed: #{inspect(reason)}")
+        carried(swept)
+    end
+  end
+
+  # A kind with batches left and a full one behind it goes on; otherwise it is done.
+  defp next(left, true) when left > 0, do: left - 1
+  defp next(_left, _full?), do: 0
+
+  defp carried(%{expired: 0, removed: 0, heads: 0}), do: :ok
+
+  defp carried(%{expired: expired, removed: removed, heads: heads}) do
+    Logger.info(
+      "[RetentionScheduler] Expired #{expired} and removed #{removed} sign-in carry action(s), " <>
+        "and removed #{heads} cached identity head(s) no one here holds"
+    )
   end
 
   # One crash barrier for every step: retention must never take the
@@ -461,45 +571,75 @@ defmodule Cyfr.RetentionScheduler do
 
   # One athanor's whole policy. Answers what it deleted, per kind, which
   # the cycle sums and reports once rather than a line per tenant.
+  #
+  # The athanor rides as metadata, not as text in the sentence: it is on
+  # the configured log roster, so an aggregator can filter a whole tenant's
+  # retention failures out of a shared server without parsing messages.
   defp run_retention(athanor_id) do
-    {:ok, %{deleted: deleted, errors: errors}} = Cyfr.Retention.cleanup_athanor(athanor_id)
-
-    # The athanor rides as metadata, not as text in the sentence: it is on
-    # the configured log roster, so an aggregator can filter a whole tenant's
-    # retention failures out of a shared server without parsing messages.
-    for {failed_in, kind, reason} <- errors do
-      Logger.warning("[RetentionScheduler] #{kind} cleanup failed: #{inspect(reason)}",
-        athanor_id: failed_in
-      )
-    end
-
-    deleted
-  end
-
-  # Thread blob dirs no row backs (a blob delete that failed after
-  # its rows were reclaimed) — swept so the bytes stop counting against
-  # the athanor's storage cap forever.
-  defp sweep_thread_blob_orphans do
-    case Cyfr.Retention.sweep_thread_blob_orphans() do
-      {:ok, %{dirs_deleted: 0, errors: []}} ->
-        :ok
-
-      {:ok, %{dirs_deleted: deleted, tenants: tenants, errors: errors}} ->
-        if deleted > 0 do
-          Logger.info(
-            "[RetentionScheduler] Reclaimed #{deleted} orphaned thread blob dirs " <>
-              "across #{tenants} tenants"
-          )
-        end
-
-        for {athanor_id, reason} <- errors do
-          Logger.warning("[RetentionScheduler] Blob orphan sweep failed: #{inspect(reason)}",
+    case Arca.Retention.cleanup_athanor(athanor_actor(athanor_id)) do
+      {:ok, %{deleted: deleted, errors: errors}} ->
+        for {kind, reason} <- errors do
+          Logger.warning("[RetentionScheduler] #{kind} cleanup failed: #{inspect(reason)}",
             athanor_id: athanor_id
           )
         end
 
-        :ok
+        deleted
+
+      {:error, reason} ->
+        Logger.warning("[RetentionScheduler] Retention skipped: #{inspect(reason)}",
+          athanor_id: athanor_id
+        )
+
+        %{}
     end
+  end
+
+  # Thread blob dirs no row backs (a blob delete that failed after
+  # its rows were reclaimed) — swept so the bytes stop counting against
+  # the athanor's storage cap forever. Every active athanor, each inside
+  # its own actor.
+  defp sweep_thread_blob_orphans do
+    athanors = Sanctum.Tenancy.Athanors.list_active()
+
+    reclaimed =
+      Enum.reduce(athanors, 0, fn athanor, reclaimed ->
+        case Arca.ThreadStorage.sweep_orphaned_blobs(athanor_actor(athanor.id)) do
+          {:ok, count} when is_integer(count) ->
+            reclaimed + count
+
+          {:error, reason} ->
+            Logger.warning("[RetentionScheduler] Blob orphan sweep failed: #{inspect(reason)}",
+              athanor_id: athanor.id
+            )
+
+            reclaimed
+        end
+      end)
+
+    if reclaimed > 0 do
+      Logger.info(
+        "[RetentionScheduler] Reclaimed #{reclaimed} orphaned thread blob dirs " <>
+          "across #{length(athanors)} tenants"
+      )
+    end
+
+    :ok
+  end
+
+  # The actor each athanor's retention runs under: the server's own, inside
+  # that one athanor; the user_id is audit attribution only. Least
+  # privilege: a deleter reads settings and drops rows and blobs, it
+  # executes nothing.
+  defp athanor_actor(athanor_id) do
+    Sanctum.Context.actor(
+      Sanctum.internal_context(
+        user_id: "_retention",
+        athanor_id: athanor_id,
+        scope: :athanor,
+        permissions: [:storage_read, :storage_write]
+      )
+    )
   end
 
   # Orphaned atomic-write temp files are an adapter artifact; the facade
@@ -518,13 +658,37 @@ defmodule Cyfr.RetentionScheduler do
     end
   end
 
-  # Webhook idempotency table sweep. Default TTL 24h — webhook senders that
-  # retry beyond this window cannot rely on idempotency, but in practice
-  # senders give up well before that.
+  # Webhook idempotency table sweep, past the
+  # `webhook_idempotency_ttl_seconds` platform setting (24h by default) —
+  # webhook senders that retry beyond this window cannot rely on
+  # idempotency, but in practice senders give up well before that. The
+  # window refuses a stale value: a store that cannot answer it sweeps
+  # nothing this cycle, since a window read wrong would delete the claims
+  # that stop a replay.
   defp sweep_webhook_deliveries do
-    ttl = Application.get_env(:cyfr, :webhook_idempotency_ttl_seconds, 86_400)
-    cutoff = DateTime.utc_now() |> DateTime.add(-ttl, :second)
+    case Arca.PlatformSettings.effective("webhook_idempotency_ttl_seconds") do
+      {:ok, ttl} when is_integer(ttl) and ttl > 0 ->
+        sweep_webhook_deliveries(DateTime.utc_now() |> DateTime.add(-ttl, :second))
 
+      {:ok, other} ->
+        Logger.error(
+          "[RetentionScheduler] the stored webhook_idempotency_ttl_seconds " <>
+            "#{inspect(other)} is not a positive whole number; skipping the sweep"
+        )
+
+      {:error, :unavailable} ->
+        Logger.warning(
+          "[RetentionScheduler] webhook_idempotency_ttl_seconds could not be read; " <>
+            "skipping the webhook delivery sweep"
+        )
+
+      {:error, reason} when reason in [:uninstalled, :unknown_key] ->
+        raise "[RetentionScheduler] webhook_idempotency_ttl_seconds cannot be read: " <>
+                "the setting is #{reason}"
+    end
+  end
+
+  defp sweep_webhook_deliveries(cutoff) do
     case Arca.WebhookDeliveryStorage.sweep(cutoff) do
       {:ok, count} when count > 0 ->
         Logger.info("[RetentionScheduler] Cleaned #{count} webhook delivery records")

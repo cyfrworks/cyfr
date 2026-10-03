@@ -13,9 +13,8 @@ defmodule Sanctum.CipherIntegrationTest do
 
   @key :crypto.strong_rand_bytes(32)
 
-  setup do
-    :ok = Ecto.Adapters.SQL.Sandbox.checkout(Arca.Repo)
-    Ecto.Adapters.SQL.Sandbox.mode(Arca.Repo, {:shared, self()})
+  setup tags do
+    Cyfr.Test.Sandbox.setup!(tags)
 
     orig_kr = Application.get_env(:sanctum, :crypto_keyring)
     Application.put_env(:sanctum, :crypto_keyring, %{primary: "k1", keys: %{"k1" => @key}})
@@ -56,7 +55,7 @@ defmodule Sanctum.CipherIntegrationTest do
       profile = Sanctum.Test.ConsentFixtures.bindable_profile(ctx, "catalyst:local.x:1.0.0")
 
       {:ok, %{secret: secret, slug: slug}} =
-        Webhook.create(ctx, %{
+        Sanctum.TestContext.create_webhook(ctx, %{
           name: "h",
           replay_protection: "none",
           target_ref: "catalyst:local.x:1.0.0",
@@ -81,7 +80,7 @@ defmodule Sanctum.CipherIntegrationTest do
       assert {:error, :secret_unreadable} =
                Webhook.verify_with_grace(%{row | athanor_id: "ath_b"}, body, sign(secret, body))
 
-      {:ok, %{secret: new_secret}} = Webhook.rotate(ctx, "h")
+      {:ok, %{secret: new_secret}} = Sanctum.TestContext.rotate_webhook(ctx, "h")
       {:ok, rotated} = Arca.WebhookStorage.get_by_slug(slug)
 
       assert :ok = Webhook.verify_with_grace(rotated, body, sign(new_secret, body))
@@ -119,36 +118,27 @@ defmodule Sanctum.CipherIntegrationTest do
     end
 
     test "CredentialStore keeps users isolated end-to-end under the cipher" do
-      cred = %{
-        type: :push_token,
-        token: "cyfr_pt_alice",
-        namespace: "alice",
-        issued_at: DateTime.utc_now() |> DateTime.to_iso8601(),
-        label: "test"
-      }
+      alice = person_context("github|https://github.com|111")
+      other = person_context("github|https://github.com|222")
 
       assert :ok =
-               Compendium.Registry.CredentialStore.put(
-                 "github|https://github.com|111",
+               Compendium.Registry.CredentialStore.put_push_token(
+                 alice,
                  "reg.test",
                  "alice",
-                 cred
+                 "cyfr_pt_alice",
+                 "personal"
                )
 
       assert {:ok, %{token: "cyfr_pt_alice"}} =
-               Compendium.Registry.CredentialStore.get(
-                 "github|https://github.com|111",
-                 "reg.test",
-                 "alice"
-               )
+               Compendium.Registry.CredentialStore.get(alice, "reg.test", "alice")
 
       # A different principal cannot read it (distinct secret name → no row).
-      assert :not_found =
-               Compendium.Registry.CredentialStore.get(
-                 "github|https://github.com|222",
-                 "reg.test",
-                 "alice"
-               )
+      assert {:error, :not_found} =
+               Compendium.Registry.CredentialStore.get(other, "reg.test", "alice")
     end
   end
+
+  defp person_context(user_id),
+    do: Sanctum.Context.build(user_id: user_id, authenticated: true, auth_method: :oidc)
 end

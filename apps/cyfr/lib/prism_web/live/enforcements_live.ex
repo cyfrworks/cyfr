@@ -6,7 +6,7 @@ defmodule PrismWeb.EnforcementsLive do
   Live feed of policy enforcement decisions.
 
   Each row is one `Arca.PolicyLog` record — an allow/deny outcome from one
-  of the enforcement chokepoints (`Cyfr.Execution.Admission` pre-execution gate, the
+  of the enforcement chokepoints (`Crucible.Admission` pre-execution gate, the
   HTTP egress validators, or the tincture rate limiter). Telemetry from
   `[:cyfr, :sanctum, :policy, :decision]` fans out via PubSub so the table
   updates without a full reload.
@@ -35,8 +35,8 @@ defmodule PrismWeb.EnforcementsLive do
   @impl true
   def mount(_params, _session, socket) do
     if connected?(socket) do
-      ctx = socket.assigns[:context]
-      Phoenix.PubSub.subscribe(Emissary.PubSub, Cyfr.Bus.enforcement(ctx))
+      actor = Sanctum.Context.actor(socket.assigns[:context])
+      Cyfr.Bus.subscribe(actor, Cyfr.Bus.enforcement(actor))
     end
 
     {:ok,
@@ -88,7 +88,7 @@ defmodule PrismWeb.EnforcementsLive do
   end
 
   @impl true
-  def handle_info({:policy_decision, _metadata, _measurements}, socket),
+  def handle_info(%Cyfr.Bus.PolicyDecision{}, socket),
     do: schedule_refresh(socket)
 
   def handle_info(:load_data, socket) do
@@ -100,7 +100,7 @@ defmodule PrismWeb.EnforcementsLive do
   end
 
   def handle_info(msg, socket) do
-    Cyfr.UnexpectedMessage.log(__MODULE__, msg, :debug)
+    Prima.LoggerContext.unexpected(__MODULE__, msg, :debug)
     {:noreply, socket}
   end
 
@@ -111,7 +111,7 @@ defmodule PrismWeb.EnforcementsLive do
   defp fetch_logs(socket) do
     args =
       %{"action" => "list", "limit" => @page_size}
-      |> Cyfr.MapUtil.put_present("event_type", socket.assigns.event_type_filter)
+      |> Prima.MapUtil.put_present("event_type", socket.assigns.event_type_filter)
 
     case call_tool(socket, "policy_log", args) do
       {:ok, %{logs: logs}} when is_list(logs) ->

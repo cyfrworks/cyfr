@@ -76,67 +76,277 @@ defmodule Cyfr.RuntimeConfigWiringTest do
             assert Keyword.has_key?(repo_config, :url)
             refute Keyword.has_key?(repo_config, :journal_mode)
         end
+
+        # The busy timeout is the pool's lock-wait deadline, config.exs's
+        # value (`Arca.Repo.busy_timeout_ms/0`); the runtime file does not
+        # restate it for either adapter.
+        refute Keyword.has_key?(repo_config, :busy_timeout)
       end)
     end
   end
 
-  describe "CYFR_WORKER_KEY" do
+  describe "CYFR_OPUS_KEY" do
     test "is the 32-byte root its 64 hexadecimal digits spell, in either case" do
       root = :crypto.strong_rand_bytes(32)
 
       for text <- [Base.encode16(root, case: :lower), Base.encode16(root)] do
-        with_env(%{"CYFR_WORKER_KEY" => text}, fn ->
-          assert get_in(read_prod_config!(), [:cyfr, :worker_key]) == root
+        with_env(%{"CYFR_OPUS_KEY" => text}, fn ->
+          assert get_in(read_prod_config!(), [:cyfr, :opus_key]) == root
         end)
       end
     end
 
     test "unset or blank configures no root" do
       for value <- [nil, ""] do
-        with_env(%{"CYFR_WORKER_KEY" => value}, fn ->
-          assert get_in(read_prod_config!(), [:cyfr, :worker_key]) == nil
+        with_env(%{"CYFR_OPUS_KEY" => value}, fn ->
+          assert get_in(read_prod_config!(), [:cyfr, :opus_key]) == nil
         end)
       end
     end
 
     test "a malformed key refuses the boot" do
       for text <- ["abc", String.duplicate("g", 64), Base.encode64(:crypto.strong_rand_bytes(32))] do
-        with_env(%{"CYFR_WORKER_KEY" => text}, fn ->
+        with_env(%{"CYFR_OPUS_KEY" => text}, fn ->
           error = assert_raise RuntimeError, fn -> read_prod_config!() end
-          assert Exception.message(error) =~ "CYFR_WORKER_KEY must be exactly 64 hexadecimal"
+          assert Exception.message(error) =~ "CYFR_OPUS_KEY must be exactly 64 hexadecimal"
         end)
       end
     end
   end
 
-  describe "the MCP bridge's lease and idle period" do
-    test "unset, neither is configured; set, each is taken in milliseconds" do
-      with_env(%{"CYFR_MCP_BRIDGE_LEASE_MS" => nil, "CYFR_MCP_BRIDGE_IDLE_MS" => nil}, fn ->
+  describe "the admission floors" do
+    # Each rate-limit maximum and window, concurrency ceiling, subscription
+    # and event limit, the setting it pins and the least value it takes.
+    @floors [
+      {"CYFR_CRUCIBLE_MAX_CONCURRENT", :crucible_max_concurrent, 32},
+      {"CYFR_CRUCIBLE_MAX_CONCURRENT_PER_TENANT", :crucible_max_concurrent_per_tenant, 1},
+      {"CYFR_MCP_RATE_LIMIT_MAX", :mcp_rate_limit_max, 1},
+      {"CYFR_MCP_RATE_LIMIT_WINDOW_MS", :mcp_rate_limit_window_ms, 1},
+      {"CYFR_WEBHOOK_PER_IP_RATE_LIMIT_MAX", :webhook_per_ip_rate_limit_max, 1},
+      {"CYFR_API_RATE_LIMIT_MAX", :api_rate_limit_max, 1},
+      {"CYFR_API_RATE_LIMIT_WINDOW_MS", :api_rate_limit_window_ms, 1},
+      {"CYFR_MCP_SUBSCRIPTION_MAX_CONCURRENT", :mcp_subscription_max_concurrent, 1},
+      {"CYFR_MCP_SUBSCRIPTION_MAX_MS", :mcp_subscription_max_ms, 1},
+      {"CYFR_CRUCIBLE_EVENTS_MAX_CONCURRENT", :crucible_events_max_concurrent, 1},
+      {"CYFR_CRUCIBLE_EVENTS_MAX_MS", :crucible_events_max_ms, 1}
+    ]
+
+    test "unset pins nothing; set, the least value and above are pinned" do
+      with_env(Map.new(@floors, fn {name, _key, _least} -> {name, nil} end), fn ->
         cyfr = read_prod_config!()[:cyfr]
-        refute Keyword.has_key?(cyfr, :mcp_bridge_lease_ms)
-        refute Keyword.has_key?(cyfr, :mcp_bridge_idle_ms)
+
+        for {_name, key, _least} <- @floors do
+          refute List.keymember?(cyfr[:deployment_pinned], Atom.to_string(key), 0),
+                 "#{key} is pinned with its variable unset"
+
+          refute Keyword.has_key?(cyfr, key), "#{key} is configured with its variable unset"
+        end
+      end)
+
+      for {name, key, least} <- @floors, value <- [least, least + 1] do
+        with_env(%{name => Integer.to_string(value)}, fn ->
+          pinned = read_prod_config!()[:cyfr][:deployment_pinned]
+          assert {Atom.to_string(key), value} in pinned, "#{name}=#{value}"
+        end)
+      end
+    end
+
+    test "zero, a negative number, anything below the least value or not a whole number refuses the boot naming the variable" do
+      for {name, _key, least} <- @floors,
+          bad <- Enum.uniq(["0", "-1", Integer.to_string(least - 1), "ten", "1.5", "60s"]) do
+        with_env(%{name => bad}, fn ->
+          message = Exception.message(assert_raise(RuntimeError, &read_prod_config!/0))
+
+          assert message =~ "[Cyfr] FATAL: #{name}=#{inspect(bad)} must be a whole number",
+                 "#{name}=#{bad}: #{message}"
+
+          assert message =~ "from #{least} to "
+        end)
+      end
+    end
+  end
+
+  describe "the trusted proxies" do
+    @proxy_unset %{
+      "CYFR_BEHIND_PROXY" => nil,
+      "CYFR_TRUSTED_PROXY_HOPS" => nil,
+      "CYFR_TRUSTED_PROXY_CIDRS" => nil
+    }
+
+    test "behind a proxy, one hop unless set, any count from 0 to 16, and the CIDRs as listed" do
+      with_env(Map.put(@proxy_unset, "CYFR_BEHIND_PROXY", "on"), fn ->
+        sanctum = read_prod_config!()[:sanctum]
+        assert sanctum[:trust_x_forwarded_for] == true
+        assert sanctum[:trusted_proxy_hops] == 1
+        refute Keyword.has_key?(sanctum, :trusted_proxy_cidrs)
+      end)
+
+      for hops <- [0, 1, 16] do
+        env = %{"CYFR_BEHIND_PROXY" => "on", "CYFR_TRUSTED_PROXY_HOPS" => "#{hops}"}
+
+        with_env(Map.merge(@proxy_unset, env), fn ->
+          assert read_prod_config!()[:sanctum][:trusted_proxy_hops] == hops
+        end)
+      end
+
+      env = %{
+        "CYFR_BEHIND_PROXY" => "on",
+        "CYFR_TRUSTED_PROXY_CIDRS" => "10.0.0.0/8, 192.0.2.7, fd00::/8"
+      }
+
+      with_env(Map.merge(@proxy_unset, env), fn ->
+        assert read_prod_config!()[:sanctum][:trusted_proxy_cidrs] ==
+                 ["10.0.0.0/8", "192.0.2.7", "fd00::/8"]
+      end)
+    end
+
+    test "not behind a proxy, nothing is trusted" do
+      with_env(@proxy_unset, fn ->
+        sanctum = read_prod_config!()[:sanctum]
+        refute Keyword.has_key?(sanctum, :trust_x_forwarded_for)
+        refute Keyword.has_key?(sanctum, :trusted_proxy_hops)
+      end)
+    end
+
+    test "a hop count outside 0 to 16 refuses the boot naming it, behind a proxy or not" do
+      for behind <- ["on", nil], bad <- ["17", "-1", "one", "1.0"] do
+        env = %{"CYFR_BEHIND_PROXY" => behind, "CYFR_TRUSTED_PROXY_HOPS" => bad}
+
+        with_env(Map.merge(@proxy_unset, env), fn ->
+          message = Exception.message(assert_raise(RuntimeError, &read_prod_config!/0))
+
+          assert message =~
+                   "[Cyfr] FATAL: CYFR_TRUSTED_PROXY_HOPS=#{inspect(bad)} must be a whole " <>
+                     "number of proxy hops from 0 to 16"
+        end)
+      end
+    end
+
+    test "an entry that is neither an address nor a CIDR refuses the boot naming the entry" do
+      for behind <- ["on", nil],
+          bad <- ["10.0.0.0/33", "10.0.0.0/8/1", "proxy.internal", "10.0.0.0/x", "::1/129"] do
+        env = %{
+          "CYFR_BEHIND_PROXY" => behind,
+          "CYFR_TRUSTED_PROXY_CIDRS" => "10.0.0.0/8, #{bad}"
+        }
+
+        with_env(Map.merge(@proxy_unset, env), fn ->
+          message = Exception.message(assert_raise(RuntimeError, &read_prod_config!/0))
+
+          assert message =~
+                   "[Cyfr] FATAL: CYFR_TRUSTED_PROXY_CIDRS entry #{inspect(bad)} is neither"
+        end)
+      end
+    end
+  end
+
+  describe "the signing salts" do
+    # The names the salts were read under before, spelled in parts so the
+    # vocabulary scans do not find them here.
+    @old_session_salt "CYFR_EMISSARY" <> "_SESSION_SALT"
+    @old_live_salt "CYFR_LV" <> "_SALT"
+    @salts_unset %{
+      "CYFR_SESSION_SALT" => nil,
+      "CYFR_LIVE_SALT" => nil,
+      @old_session_salt => nil,
+      @old_live_salt => nil
+    }
+
+    defp salts(config) do
+      {config[:cyfr][:session_salt], config[:cyfr][CyfrWeb.Endpoint][:live_view][:signing_salt]}
+    end
+
+    test "CYFR_SESSION_SALT and CYFR_LIVE_SALT are the session's and the LiveView socket's" do
+      env = %{"CYFR_SESSION_SALT" => "session-salt-set", "CYFR_LIVE_SALT" => "live-salt-set"}
+
+      with_env(Map.merge(@salts_unset, env), fn ->
+        assert salts(read_prod_config!()) == {"session-salt-set", "live-salt-set"}
+      end)
+    end
+
+    test "unset, each is derived from the key base" do
+      key_base = Base.encode64(:crypto.strong_rand_bytes(48))
+
+      derived =
+        for label <- ["emissary_session", "live_view"] do
+          :sha256
+          |> :crypto.hash(label <> key_base)
+          |> Base.url_encode64(padding: false)
+          |> binary_part(0, 16)
+        end
+
+      with_env(Map.put(@salts_unset, "CYFR_SECRET_KEY_BASE", key_base), fn ->
+        assert salts(read_prod_config!()) == List.to_tuple(derived)
+      end)
+    end
+
+    # No roster declares the old names, so the boot refuses each by name
+    # rather than ignoring it (`Cyfr.Platform.Settings.Roster.unknown/2`).
+    test "the old names refuse the boot, naming them" do
+      old = %{@old_session_salt => "old-session", @old_live_salt => "old-live"}
+
+      with_env(Map.merge(@salts_unset, old), fn ->
+        message = Exception.message(assert_raise(RuntimeError, &read_prod_config!/0))
+        assert message =~ "[Cyfr] FATAL: "
+        assert message =~ @old_session_salt and message =~ @old_live_salt
+        assert message =~ "not a variable this server reads"
+      end)
+    end
+  end
+
+  describe "the Locus backends service" do
+    @backends_key :binary.copy(<<0xBA>>, 32)
+    @backends_unset %{
+      "CYFR_LOCUS_BACKENDS_URL" => nil,
+      "CYFR_LOCUS_BACKENDS_KEY" => nil,
+      "CYFR_LOCUS_BACKENDS_LEASE_MS" => nil,
+      "CYFR_LOCUS_BACKENDS_IDLE_MS" => nil
+    }
+
+    test "unset, none is configured; set, the URL without its trailing slash, the key's 32 bytes and each period pinned in milliseconds" do
+      with_env(@backends_unset, fn ->
+        cyfr = read_prod_config!()[:cyfr]
+        assert cyfr[:locus_backends_url] == nil
+        assert cyfr[:locus_backends_key] == nil
+        refute List.keymember?(cyfr[:deployment_pinned], "locus_backends_lease_ms", 0)
+        refute List.keymember?(cyfr[:deployment_pinned], "locus_backends_idle_ms", 0)
       end)
 
       with_env(
-        %{"CYFR_MCP_BRIDGE_LEASE_MS" => "5000", "CYFR_MCP_BRIDGE_IDLE_MS" => "600000"},
+        %{
+          "CYFR_LOCUS_BACKENDS_URL" => "http://locus-backends:4101/",
+          "CYFR_LOCUS_BACKENDS_KEY" => Base.encode16(@backends_key),
+          "CYFR_LOCUS_BACKENDS_LEASE_MS" => "5000",
+          "CYFR_LOCUS_BACKENDS_IDLE_MS" => "600000"
+        },
         fn ->
           cyfr = read_prod_config!()[:cyfr]
-          assert cyfr[:mcp_bridge_lease_ms] == 5_000
-          assert cyfr[:mcp_bridge_idle_ms] == 600_000
+          assert cyfr[:locus_backends_url] == "http://locus-backends:4101"
+          assert cyfr[:locus_backends_key] == @backends_key
+          assert {"locus_backends_lease_ms", 5_000} in cyfr[:deployment_pinned]
+          assert {"locus_backends_idle_ms", 600_000} in cyfr[:deployment_pinned]
+          refute Keyword.has_key?(cyfr, :locus_backends_lease_ms)
         end
       )
     end
 
-    test "a value that is not a whole number of milliseconds in range refuses the boot" do
+    test "a malformed URL or key, or a period that is not a whole number of milliseconds in range, refuses the boot by name and never echoes the key" do
+      hex = Base.encode16(@backends_key, case: :lower)
+
       for {key, bad} <- [
-            {"CYFR_MCP_BRIDGE_LEASE_MS", "999"},
-            {"CYFR_MCP_BRIDGE_LEASE_MS", "30s"},
-            {"CYFR_MCP_BRIDGE_IDLE_MS", "86400001"},
-            {"CYFR_MCP_BRIDGE_IDLE_MS", "15m"}
+            {"CYFR_LOCUS_BACKENDS_URL", "locus-backends:4101"},
+            {"CYFR_LOCUS_BACKENDS_URL", "http://locus-backends:4101/mcp"},
+            {"CYFR_LOCUS_BACKENDS_KEY", String.slice(hex, 0..62)},
+            {"CYFR_LOCUS_BACKENDS_LEASE_MS", "999"},
+            {"CYFR_LOCUS_BACKENDS_LEASE_MS", "30s"},
+            {"CYFR_LOCUS_BACKENDS_IDLE_MS", "86400001"},
+            {"CYFR_LOCUS_BACKENDS_IDLE_MS", "15m"}
           ] do
-        with_env(%{key => bad}, fn ->
-          error = assert_raise RuntimeError, fn -> read_prod_config!() end
-          assert Exception.message(error) =~ key
+        with_env(Map.put(@backends_unset, key, bad), fn ->
+          message = Exception.message(assert_raise(RuntimeError, &read_prod_config!/0))
+          assert message =~ "[Cyfr] FATAL: "
+          assert message =~ key
+          refute message =~ String.slice(hex, 0..62)
         end)
       end
     end
@@ -231,6 +441,24 @@ defmodule Cyfr.RuntimeConfigWiringTest do
     end
   end
 
+  describe "OPUS_KEEPER" do
+    test "is retired: set to any keeper, or blank, it refuses the boot naming it and cyfr-keeper" do
+      for value <- ["direct", "channel", ""] do
+        with_env(opus_env(%{"OPUS_KEEPER" => value}), fn ->
+          message = Exception.message(assert_raise(RuntimeError, &read_prod_config!/0))
+          assert message =~ "[Cyfr] FATAL: OPUS_KEEPER is retired"
+          assert message =~ "cyfr-keeper"
+        end)
+      end
+    end
+
+    test "unset, no keeper is configured: the channel keeper is the one launcher" do
+      with_env(opus_env(%{"OPUS_KEEPER" => nil}), fn ->
+        refute Keyword.has_key?(read_prod_config!()[:opus], :keeper)
+      end)
+    end
+  end
+
   describe "the releases this file configures" do
     test "the opus release configures nothing of CYFR's, and any other release is CYFR" do
       with_env(
@@ -245,7 +473,7 @@ defmodule Cyfr.RuntimeConfigWiringTest do
 
       with_env(%{"RELEASE_NAME" => "cyfr"}, fn ->
         config = read_prod_config!()
-        assert Keyword.has_key?(config[:cyfr], :workers)
+        assert Keyword.has_key?(config[:cyfr], :opus_workers)
         refute Keyword.has_key?(config, :opus)
       end)
     end
@@ -300,11 +528,11 @@ defmodule Cyfr.RuntimeConfigWiringTest do
   describe "the worker wire" do
     test "the cyfr release takes the local worker and loopback host API by default" do
       with_env(
-        %{"CYFR_WORKERS" => nil, "CYFR_HOST_API_BIND" => nil, "CYFR_HOST_API_PORT" => nil},
+        %{"CYFR_OPUS_WORKERS" => nil, "CYFR_HOST_API_BIND" => nil, "CYFR_HOST_API_PORT" => nil},
         fn ->
           cyfr = read_prod_config!()[:cyfr]
 
-          assert cyfr[:workers] == [
+          assert cyfr[:opus_workers] == [
                    %{id: "wrk_local", url: "http://127.0.0.1:4200", components: nil}
                  ]
 
@@ -320,10 +548,10 @@ defmodule Cyfr.RuntimeConfigWiringTest do
       )
     end
 
-    test "CYFR_WORKERS, CYFR_HOST_API_BIND, _PORT and _URL are taken as set" do
+    test "CYFR_OPUS_WORKERS, CYFR_HOST_API_BIND, _PORT and _URL are taken as set" do
       with_env(
         %{
-          "CYFR_WORKERS" => "wrk_opus=http://opus:4200, wrk_b=https://b.internal/",
+          "CYFR_OPUS_WORKERS" => "wrk_opus=http://opus:4200, wrk_b=https://b.internal/",
           "CYFR_HOST_API_BIND" => "0.0.0.0",
           "CYFR_HOST_API_PORT" => "4301",
           "CYFR_HOST_API_URL" => "http://cyfr-1:4301"
@@ -331,7 +559,7 @@ defmodule Cyfr.RuntimeConfigWiringTest do
         fn ->
           cyfr = read_prod_config!()[:cyfr]
 
-          assert cyfr[:workers] == [
+          assert cyfr[:opus_workers] == [
                    %{id: "wrk_opus", url: "http://opus:4200", components: nil},
                    %{id: "wrk_b", url: "https://b.internal", components: nil}
                  ]
@@ -345,8 +573,8 @@ defmodule Cyfr.RuntimeConfigWiringTest do
 
     test "a malformed worker entry, address or port refuses the boot by name" do
       for {var, value} <- [
-            {"CYFR_WORKERS", "opus=http://opus:4200"},
-            {"CYFR_WORKERS", "wrk_opus=opus:4200"},
+            {"CYFR_OPUS_WORKERS", "opus=http://opus:4200"},
+            {"CYFR_OPUS_WORKERS", "wrk_opus=opus:4200"},
             {"CYFR_HOST_API_BIND", "cyfr"},
             {"CYFR_HOST_API_PORT", "65536"}
           ] do
@@ -411,17 +639,17 @@ defmodule Cyfr.RuntimeConfigWiringTest do
 
     test "a boot that runs Opus beside CYFR derives the service key from the root, minting one if unset" do
       root = :crypto.strong_rand_bytes(32)
-      {:ok, derived} = Cyfr.WorkerAuth.worker_key(root, "wrk_local")
+      {:ok, derived} = Prima.WorkerAuth.worker_key(root, "wrk_local")
 
       with_env(
         %{
           "RELEASE_NAME" => nil,
-          "CYFR_WORKER_KEY" => Base.encode16(root),
+          "CYFR_OPUS_KEY" => Base.encode16(root),
           "OPUS_SERVICE_KEY" => nil
         },
         fn ->
           config = read_prod_config!()
-          assert config[:cyfr][:worker_key] == root
+          assert config[:cyfr][:opus_key] == root
           assert config[:opus][:service_id] == "wrk_local"
           assert config[:opus][:service_key] == Base.encode16(derived, case: :lower)
           assert config[:opus][:host_url] == "http://127.0.0.1:4300"
@@ -430,12 +658,12 @@ defmodule Cyfr.RuntimeConfigWiringTest do
       )
 
       with_env(
-        %{"RELEASE_NAME" => nil, "CYFR_WORKER_KEY" => nil, "OPUS_SERVICE_KEY" => nil},
+        %{"RELEASE_NAME" => nil, "CYFR_OPUS_KEY" => nil, "OPUS_SERVICE_KEY" => nil},
         fn ->
           config = read_prod_config!()
-          minted = config[:cyfr][:worker_key]
+          minted = config[:cyfr][:opus_key]
           assert byte_size(minted) == 32
-          {:ok, key} = Cyfr.WorkerAuth.worker_key(minted, "wrk_local")
+          {:ok, key} = Prima.WorkerAuth.worker_key(minted, "wrk_local")
           assert config[:opus][:service_key] == Base.encode16(key, case: :lower)
         end
       )

@@ -29,7 +29,9 @@ defmodule Cyfr.Release do
   run the rotation: it re-encrypts every sealed row onto the primary key,
   skipping rows already there. Read `cipher_audit/0` first to see the spread,
   and again afterwards to confirm nothing is left on the old label — only then
-  is the old key safe to drop from the keyring.
+  is the old key safe to drop from the keyring. A row a concurrent write
+  touched mid-run can keep a column on the old label; the audit shows it,
+  and running the rotation again moves it.
   """
 
   @app :arca
@@ -83,8 +85,8 @@ defmodule Cyfr.Release do
   end
 
   @doc """
-  Report which key label every sealed row is encrypted under, without
-  decrypting anything.
+  Report which key label every sealed value is encrypted under, each
+  sealed column of a row counted, without decrypting anything.
 
   Run it before a rotation to see the spread, and after one to confirm the old
   label is gone. A non-zero `unknown`, or an `on_other` label the keyring no

@@ -25,7 +25,6 @@ defmodule Aqua.SeedContractTest do
   use ExUnit.Case, async: true
 
   alias Aqua.Hands
-  alias Cyfr.Ops.Catalog
 
   @seed Path.expand("../../../../seed/aqua", __DIR__)
 
@@ -52,7 +51,7 @@ defmodule Aqua.SeedContractTest do
     refused =
       for key <- granted,
           {tool, action} = split(key),
-          not Catalog.chain_reachable?(tool, action),
+          not Grimoire.chain_reachable?(tool, action),
           do: key
 
     assert refused == [], "caps grant actions a chain cannot reach: #{inspect(refused)}"
@@ -69,7 +68,8 @@ defmodule Aqua.SeedContractTest do
     # never a turn of its own, so an `ask` on it is a verb nothing can
     # fire. (A role addressed by `@mention` runs as a turn and could raise
     # a card; the shipped roles are only ever cloned, and the `aqua` door
-    # refuses `ask` on any role — `Aqua.Policy`.)
+    # refuses `ask` on any role —
+    # `Compendium.AquaAgent.validate_tool_policy/2`.)
     asking =
       for {name, key, mode} <- seed_policy(),
           name != Compendium.AquaPath.soul_name(),
@@ -178,7 +178,7 @@ defmodule Aqua.SeedContractTest do
 
     [
       if(not MapSet.member?(granted, key), do: "is not in the manifest caps"),
-      if(Catalog.in_chain_refused?(tool, action), do: "is not reachable from a chain")
+      if(Grimoire.in_chain_refused?(tool, action), do: "is not reachable from a chain")
     ]
     |> Enum.reject(&is_nil/1)
   end
@@ -196,7 +196,10 @@ defmodule Aqua.SeedContractTest do
 
     agents
     |> Enum.flat_map(fn agent ->
-      Compendium.Manifest.Caps.from_manifest(Compendium.AgentSource.manifest(agent, roster)).tools
+      agent
+      |> Compendium.AgentSource.manifest(roster)
+      |> Prima.Manifest.Caps.from_manifest(&Arca.Storage.valid_guest_path?/1)
+      |> Map.fetch!(:tools)
     end)
     |> Enum.uniq()
     |> Enum.reject(fn key -> key |> split() |> elem(0) |> Hands.hand?() end)
@@ -206,7 +209,7 @@ defmodule Aqua.SeedContractTest do
     roles = Path.join(@seed, Compendium.AquaPath.roles_dirname())
 
     files =
-      [Path.join(@seed, "aqua.md") | Cyfr.Test.SourceTree.files!(Path.join(roles, "*.md"))]
+      [Path.join(@seed, "aqua.md") | Prima.Test.SourceTree.files!(Path.join(roles, "*.md"))]
 
     for path <- files,
         name = Path.basename(path, ".md"),

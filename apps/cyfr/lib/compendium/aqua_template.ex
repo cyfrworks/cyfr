@@ -58,7 +58,7 @@ defmodule Compendium.AquaTemplate do
   """
   @spec files() :: [[String.t()]]
   def files do
-    case Arca.list_recursive(Cyfr.Actor.system(), @seed_prefix) do
+    case Arca.list_recursive(Prima.Actor.system(), @seed_prefix) do
       {:ok, leaves} ->
         leaves
         |> Enum.map(&Enum.drop(&1, length(@seed_prefix)))

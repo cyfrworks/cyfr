@@ -39,6 +39,10 @@ permissions:
 
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+  # Mix through 1.20 can wait forever on its own build lock the second
+  # time a fresh lock directory is taken, and a runner starts every one
+  # fresh. One Mix process at a time builds here, so the lock is off.
+  MIX_OS_CONCURRENCY_LOCK: 0
 
 jobs:
   elixir-audit:
@@ -69,21 +73,18 @@ jobs:
         run: mix compile
 
       - name: Check retired packages
-        # Suppress the same decimal advisory aliases as deps.audit below, and
-        # the two cowlib advisories, which have no fixed release: 2.20.0 is
-        # the newest and still carries them. cowlib is test-only here — it
-        # arrives through `bypass` (`only: :test`) and the server speaks HTTP
-        # through Bandit, so no cowboy code ships. Remove each when cowlib
-        # publishes a fix, or when `bypass` no longer pulls it.
+        # Suppress the two cowlib advisories, which have no fixed release:
+        # 2.20.0 is the newest and still carries them. cowlib is test-only
+        # here — it arrives through `bypass` (`only: :test`) and the server
+        # speaks HTTP through Bandit, so no cowboy code ships. Remove the
+        # suppression when cowlib publishes a fix, or when `bypass` no
+        # longer pulls it.
         env:
-          HEX_IGNORE_ADVISORIES: "CVE-2026-32686,CVE-2026-43966,CVE-2026-43969"
+          HEX_IGNORE_ADVISORIES: "CVE-2026-43966,CVE-2026-43969"
         run: mix hex.audit
 
       - name: Check vulnerable dependencies
-        # Suppress decimal advisory GHSA-rhv4-8758-jx7v / EEF-CVE-2026-32686.
-        # The fix requires decimal 3.x; the installed Ecto dependency requires 2.x.
-        # Remove the suppression when the dependency constraint permits the fix.
-        run: mix deps.audit --ignore-advisory-ids "GHSA-rhv4-8758-jx7v,EEF-CVE-2026-32686"
+        run: mix deps.audit
 
       - name: Check unused dependencies
         run: mix deps.unlock --check-unused
@@ -93,41 +94,43 @@ jobs:
         working-directory: apps/cyfr
 
   go-audit:
-    name: Go Vulnerability Check
+    name: Go Vulnerability Check (${{ matrix.tree }})
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        # Every Go tree in the repository, each scanned under the Go version
+        # its own go.mod names.
+        tree: [apps/codex, apps/keeper]
     defaults:
       run:
-        working-directory: apps/codex
+        working-directory: ${{ matrix.tree }}
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
 
       - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
         with:
-          go-version-file: apps/codex/go.mod
-          cache-dependency-path: apps/codex/go.sum
+          go-version-file: ${{ matrix.tree }}/go.mod
+          cache-dependency-path: ${{ matrix.tree }}/go.sum
 
       - name: Install govulncheck
-        # Pinned like every other tool in CI — @latest was the one unpinned
-        # executable in the pipeline.
-        run: go install golang.org/x/vuln/cmd/govulncheck@v1.4.0
+        # Pinned like every other tool in CI.
+        run: go install golang.org/x/vuln/cmd/govulncheck@v1.8.0
 
       - name: Run govulncheck
-        # govulncheck v1.4.0 panics (exit 2) while analyzing generics under
-        # Go 1.26 ("ForEachElement called on type containing *types.TypeParam")
-        # — a known upstream tool bug, NOT a code finding. A real finding exits
-        # 3 and still fails CI; only the tool crash is tolerated so it doesn't
-        # block the pipeline. Revisit when a govulncheck release supports the
-        # toolchain pinned in apps/codex/go.mod.
-        run: |
-          set +e
-          govulncheck ./...
-          code=$?
-          set -e
-          case "$code" in
-            0) echo "govulncheck: no known vulnerabilities" ;;
-            3) echo "::error::govulncheck found vulnerabilities"; exit 1 ;;
-            *) echo "::warning::govulncheck exited $code (known v1.4.0 panic on Go 1.26 generics — not a finding)" ;;
-          esac
+        # Every nonzero exit fails: a finding (3), a scanner panic and any
+        # other tool failure alike, since a scan that did not complete is not
+        # clean coverage.
+        run: bash ../../scripts/security-scan.sh govulncheck ./...
+
+  security-scan-harness:
+    name: Security Scan Wrapper Tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+
+      - name: Run security scan regression tests
+        run: bash tests/security-scan-test.sh
 
   installer-verify:
     name: Installer Verification Tests

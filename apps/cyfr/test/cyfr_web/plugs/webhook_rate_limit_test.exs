@@ -1,0 +1,233 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 CYFR Works Inc.
+
+defmodule CyfrWeb.Plugs.WebhookRateLimitTest do
+  use ExUnit.Case, async: false
+
+  alias CyfrWeb.Plugs.WebhookRateLimit
+
+  setup tags do
+    Cyfr.Test.Sandbox.setup!(tags)
+
+    {:ok, ctx: Sanctum.TestContext.local()}
+  end
+
+  defp build_conn(slug, remote_ip \\ {127, 0, 0, 1}) do
+    Plug.Test.conn(:post, "/hooks/" <> slug, "{}")
+    |> Map.put(:path_params, %{"slug" => slug})
+    |> Map.put(:remote_ip, remote_ip)
+  end
+
+  defp create_webhook!(ctx, name, opts \\ %{}) do
+    Sanctum.Test.ComponentHelpers.register_test_component("h", "1.0.0", "formula", %{})
+    profile = Sanctum.Test.ConsentFixtures.bindable_profile(ctx, "f:local.h")
+    attrs = Map.merge(%{name: name, target_ref: "f:local.h", profile_id: profile}, opts)
+
+    {:ok, result} =
+      Sanctum.TestContext.create_webhook(ctx, Map.put_new(attrs, :replay_protection, "none"))
+
+    result.slug
+  end
+
+  describe "known, enabled slug" do
+    test "passes through under default 100/min", %{ctx: ctx} do
+      slug = create_webhook!(ctx, "rl-pass-#{:rand.uniform(1_000_000)}")
+      conn = build_conn(slug)
+
+      Enum.each(1..10, fn _ ->
+        result = WebhookRateLimit.call(conn, %{})
+        refute result.halted
+      end)
+    end
+
+    test "halts with 429 after 100 requests in window", %{ctx: ctx} do
+      slug = create_webhook!(ctx, "rl-cap-#{:rand.uniform(1_000_000)}")
+      conn = build_conn(slug)
+
+      statuses =
+        for _ <- 1..120 do
+          WebhookRateLimit.call(conn, %{}).status
+        end
+
+      accepted = Enum.count(statuses, &is_nil/1)
+      rate_limited = Enum.count(statuses, &(&1 == 429))
+
+      assert accepted >= 99
+      assert accepted <= 100
+      assert rate_limited >= 20
+    end
+
+    test "different slugs get isolated buckets", %{ctx: ctx} do
+      slug_a = create_webhook!(ctx, "rl-isolated-a-#{:rand.uniform(1_000_000)}")
+      slug_b = create_webhook!(ctx, "rl-isolated-b-#{:rand.uniform(1_000_000)}")
+
+      # Saturate A; B must still pass.
+      conn_a = build_conn(slug_a)
+      Enum.each(1..101, fn _ -> WebhookRateLimit.call(conn_a, %{}) end)
+
+      conn_b = build_conn(slug_b)
+      refute WebhookRateLimit.call(conn_b, %{}).halted
+    end
+
+    test "honors per-webhook rate_limit override", %{ctx: ctx} do
+      name = "rl-tight-#{:rand.uniform(1_000_000)}"
+      slug = create_webhook!(ctx, name, %{rate_limit: "5/1m"})
+      conn = build_conn(slug)
+
+      statuses =
+        for _ <- 1..10 do
+          WebhookRateLimit.call(conn, %{}).status
+        end
+
+      accepted = Enum.count(statuses, &is_nil/1)
+      assert accepted >= 4
+      assert accepted <= 5
+    end
+
+    # The per-IP bucket is checked FIRST, so it clamps whatever the row
+    # configures. It was a hard-coded 600 with no knob, and one provider
+    # delivering from one stable address is the ordinary case — so an
+    # operator who set a higher rate_limit was held to 600 with nothing
+    # saying why.
+    test "a per-slug limit above the per-IP ceiling is not silently clamped", %{ctx: ctx} do
+      Cyfr.Test.Settings.put("webhook_per_ip_rate_limit_max", 3)
+
+      name = "rl-clamped-#{:rand.uniform(1_000_000)}"
+      slug = create_webhook!(ctx, name, %{rate_limit: "50/1m"})
+      conn = build_conn(slug, {10, 1, 2, 3})
+
+      statuses = for _ <- 1..6, do: WebhookRateLimit.call(conn, %{}).status
+
+      # The ceiling bites at 3, well before the row's 50 — proving the
+      # per-IP bucket is the binding constraint and therefore has to be a
+      # knob rather than a constant.
+      assert Enum.count(statuses, &is_nil/1) == 3
+      assert Enum.count(statuses, &(&1 == 429)) == 3
+    end
+
+    test "an unparseable rate_limit falls back loudly, not silently", %{ctx: ctx} do
+      import ExUnit.CaptureLog
+
+      name = "rl-typo-#{:rand.uniform(1_000_000)}"
+
+      log =
+        capture_log(fn ->
+          slug = create_webhook!(ctx, name, %{rate_limit: "100 per minute"})
+          WebhookRateLimit.call(build_conn(slug, {10, 9, 9, 9}), %{})
+        end)
+
+      assert log =~ "unparseable rate_limit"
+    end
+  end
+
+  describe "unknown or disabled slug — scan-evasion bucket" do
+    test "limits unknown slugs to 10/min keyed by IP" do
+      slug = "wh_does_not_exist_#{:rand.uniform(1_000_000_000)}"
+      conn = build_conn(slug, {10, 0, 0, 1})
+
+      statuses =
+        for _ <- 1..15 do
+          WebhookRateLimit.call(conn, %{}).status
+        end
+
+      accepted = Enum.count(statuses, &is_nil/1)
+      rate_limited = Enum.count(statuses, &(&1 == 429))
+
+      assert accepted >= 9
+      assert accepted <= 10
+      assert rate_limited >= 5
+    end
+
+    test "different unknown slugs from same IP share the bucket (no enumeration evasion)" do
+      ip = {10, 0, 0, 2}
+
+      # Saturate the IP bucket via slug A.
+      conn_a = build_conn("wh_unknown_a_#{:rand.uniform(1_000_000_000)}", ip)
+      Enum.each(1..11, fn _ -> WebhookRateLimit.call(conn_a, %{}) end)
+
+      # Slug B from same IP should be rate-limited.
+      conn_b = build_conn("wh_unknown_b_#{:rand.uniform(1_000_000_000)}", ip)
+      result = WebhookRateLimit.call(conn_b, %{})
+      assert result.halted
+      assert result.status == 429
+    end
+
+    test "different IPs get isolated unknown-slug buckets" do
+      conn_a = build_conn("wh_unknown_#{:rand.uniform(1_000_000_000)}", {10, 0, 0, 3})
+      Enum.each(1..11, fn _ -> WebhookRateLimit.call(conn_a, %{}) end)
+
+      conn_b = build_conn("wh_unknown_#{:rand.uniform(1_000_000_000)}", {10, 0, 0, 4})
+      refute WebhookRateLimit.call(conn_b, %{}).halted
+    end
+
+    test "disabled webhook routes to scan-evasion bucket (10/min)", %{ctx: ctx} do
+      name = "rl-disabled-#{:rand.uniform(1_000_000)}"
+      slug = create_webhook!(ctx, name)
+      :ok = Sanctum.Webhook.revoke(ctx, name)
+
+      conn = build_conn(slug, {10, 0, 0, 50})
+
+      statuses =
+        for _ <- 1..15 do
+          WebhookRateLimit.call(conn, %{}).status
+        end
+
+      accepted = Enum.count(statuses, &is_nil/1)
+      assert accepted <= 10
+      assert Enum.count(statuses, &(&1 == 429)) >= 5
+    end
+  end
+
+  describe "the cached lookup" do
+    test "a refused request carries no opened secret out of the limiter", %{ctx: ctx} do
+      slug = create_webhook!(ctx, "rl-scrub-#{:rand.uniform(1_000_000)}", %{rate_limit: "1/1m"})
+      conn = build_conn(slug, {10, 0, 0, 77})
+
+      passed = WebhookRateLimit.call(conn, %{})
+      refute passed.halted
+      assert {:ok, %{enabled: true, signing_secrets: _}} = passed.assigns[:webhook_lookup]
+
+      refused = WebhookRateLimit.call(conn, %{})
+      assert refused.status == 429
+      refute Map.has_key?(refused.assigns, :webhook_lookup)
+    end
+  end
+
+  describe "the limiter opens no secret" do
+    test "a request it refuses, or passes on, has decrypted nothing", %{ctx: ctx} do
+      slug = create_webhook!(ctx, "rl-lazy-#{:rand.uniform(1_000_000)}", %{rate_limit: "1/1m"})
+      conn = build_conn(slug, {10, 0, 0, 78})
+
+      # With no keyring any decryption raises, so a limiter that opened a
+      # secret at the lookup would crash here rather than answer.
+      keyring = Application.fetch_env!(:sanctum, :crypto_keyring)
+      Application.delete_env(:sanctum, :crypto_keyring)
+      on_exit(fn -> Application.put_env(:sanctum, :crypto_keyring, keyring) end)
+
+      passed = WebhookRateLimit.call(conn, %{})
+      refute passed.halted
+      assert {:ok, %{signing_secrets: opener}} = passed.assigns[:webhook_lookup]
+      assert is_function(opener, 0)
+
+      assert WebhookRateLimit.call(conn, %{}).status == 429
+
+      Application.put_env(:sanctum, :crypto_keyring, keyring)
+    end
+  end
+
+  describe "no slug" do
+    test "falls back to IP scan-evasion bucket" do
+      conn =
+        Plug.Test.conn(:post, "/hooks/", "{}")
+        |> Map.put(:remote_ip, {10, 0, 0, 99})
+
+      statuses =
+        for _ <- 1..15 do
+          WebhookRateLimit.call(conn, %{}).status
+        end
+
+      accepted = Enum.count(statuses, &is_nil/1)
+      assert accepted <= 10
+    end
+  end
+end

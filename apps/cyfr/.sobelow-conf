@@ -3,8 +3,8 @@
 #
 # Ignored checks — each is a structural false positive here, verified:
 #   Config.CSP       — Content-Security-Policy is set by our own pipeline
-#                      plugs (EmissaryWeb.Plugs.BrowserCSP on :browser,
-#                      EmissaryWeb.Plugs.ApiSecurityHeaders on the API/MCP
+#                      plugs (CyfrWeb.Plugs.BrowserCSP on :browser,
+#                      CyfrWeb.Plugs.ApiSecurityHeaders on the API/MCP
 #                      pipelines), which Sobelow's scan does not recognise
 #                      as a CSP source.
 #   Config.Headers   — the :tincture pipelines deliberately skip

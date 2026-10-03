@@ -63,7 +63,7 @@ defmodule Cyfr.Integration.Locus.CompileLockTest do
       Arca.put(
         Sanctum.Context.actor(ctx),
         @src ++ ["Cargo.toml"],
-        Cyfr.CargoToml.template(:reagent)
+        Prima.CargoToml.template(:reagent)
       )
 
     {:ok, ctx: ctx}
@@ -87,7 +87,7 @@ defmodule Cyfr.Integration.Locus.CompileLockTest do
       )
 
     assert {:error, reason} = compile(ctx)
-    assert Cyfr.Ops.Error.render(reason) =~ "--locked"
+    assert Grimoire.Error.render(reason) =~ "--locked"
     assert {:ok, ^first_lock} = Arca.get(Sanctum.Context.actor(ctx), @src ++ ["Cargo.lock"])
 
     assert {:ok, %{status: "compiled"}} = compile(ctx, %{"resolve" => true})
@@ -99,7 +99,7 @@ defmodule Cyfr.Integration.Locus.CompileLockTest do
 
     # Each successful build started its registration; it ends while the
     # tree it writes is still this test's.
-    Cyfr.Test.Wait.wait_until(
+    Prima.Test.Wait.wait_until(
       fn -> Task.Supervisor.children(Compendium.Builds.TaskSupervisor) == [] end,
       60_000,
       "the builds' registrations to finish"

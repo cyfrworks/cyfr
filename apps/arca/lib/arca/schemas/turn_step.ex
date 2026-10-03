@@ -56,10 +56,10 @@ defmodule Arca.Schemas.TurnStep do
 
   @doc """
   What becomes of a step that was dispatched and never closed, read from
-  the row alone — the rule is `Cyfr.TurnStep.unresolved/1`, where the loop
+  the row alone — the rule is `Prima.TurnStep.unresolved/1`, where the loop
   and the recovery table read it too. This head is the stored row's
   spelling of it and takes nothing but a step.
   """
   @spec unresolved(t()) :: :unanswered | :replay | :unknown | :uncertain
-  def unresolved(%__MODULE__{} = step), do: Cyfr.TurnStep.unresolved(step)
+  def unresolved(%__MODULE__{} = step), do: Prima.TurnStep.unresolved(step)
 end

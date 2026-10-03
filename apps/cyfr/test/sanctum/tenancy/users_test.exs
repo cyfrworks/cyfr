@@ -7,9 +7,8 @@ defmodule Sanctum.Tenancy.UsersTest do
   alias Sanctum.Context
   alias Sanctum.Tenancy.{Athanors, Members, Users}
 
-  setup do
-    :ok = Ecto.Adapters.SQL.Sandbox.checkout(Arca.Repo)
-    Ecto.Adapters.SQL.Sandbox.mode(Arca.Repo, {:shared, self()})
+  setup tags do
+    Cyfr.Test.Sandbox.setup!(tags)
     :ok
   end
 
@@ -80,7 +79,7 @@ defmodule Sanctum.Tenancy.UsersTest do
     key = "github|https://github.com|minted-#{n}"
     user = person(n, %{id: key})
 
-    assert Cyfr.PersonId.person?(user.id)
+    assert Prima.PersonId.person?(user.id)
     refute user.id == key
     assert {:ok, %{id: same}} = Users.get_by_identity(key)
     assert same == user.id
@@ -99,9 +98,9 @@ defmodule Sanctum.Tenancy.UsersTest do
     end
 
     # A row's id is a person's, never a synthetic principal's.
-    refute Cyfr.PersonId.person?("system")
-    refute Cyfr.PersonId.person?("webhook:orders")
-    assert Cyfr.PersonId.person?("usr_01")
+    refute Prima.PersonId.person?("system")
+    refute Prima.PersonId.person?("webhook:orders")
+    assert Prima.PersonId.person?("usr_01")
   end
 
   test "list/1 pages the people the server knows" do
@@ -175,17 +174,17 @@ defmodule Sanctum.Tenancy.UsersTest do
         authenticated: true
       )
 
-    {:ok, session} = Sanctum.Session.create(ctx)
-    {:ok, %{api_key: key}} = Sanctum.ApiKey.create(ctx, %{name: "k4"})
+    {:ok, session} = Sanctum.TestContext.create_session(ctx)
+    {:ok, %{api_key: key}} = Sanctum.TestContext.create_key(ctx, %{name: "k4"})
 
-    Phoenix.PubSub.subscribe(Emissary.PubSub, Sanctum.Session.topic())
+    Cyfr.Bus.subscribe_global(Cyfr.Bus.sessions())
 
     assert {:ok, denied} = Users.deny(u)
     assert denied.status == "denied"
     assert denied.denied_at
 
     assert {:error, _} = Sanctum.Session.load(session.token, surface: :console)
-    assert_receive {:sessions_revoked, uid}
+    assert_receive %Cyfr.Bus.Session{kind: :revoked, user_id: uid}
     assert uid == u.id
     assert {:error, :revoked} = Sanctum.ApiKey.validate(key, [])
     assert {:ok, %{status: "archived"}} = Athanors.get(personal.id)

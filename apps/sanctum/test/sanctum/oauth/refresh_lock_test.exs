@@ -24,9 +24,8 @@ defmodule Sanctum.OAuth.RefreshLockTest do
 
   @kind "oauth_refresh"
 
-  setup do
-    :ok = Ecto.Adapters.SQL.Sandbox.checkout(Arca.Repo)
-    Ecto.Adapters.SQL.Sandbox.mode(Arca.Repo, {:shared, self()})
+  setup tags do
+    Arca.Test.Sandbox.setup!(tags)
 
     n = System.unique_integer([:positive])
     athanor_id = "ath_refresh_#{n}"
@@ -44,7 +43,7 @@ defmodule Sanctum.OAuth.RefreshLockTest do
     assert {:ok, "fresh"} = RefreshLock.run(key, fn -> {:ok, "fresh"} end, fn -> :stale end)
 
     assert {:ok, row} = JobClaims.read(@kind, claim_key)
-    assert row.owner == Cyfr.Boot.id()
+    assert row.owner == Prima.Boot.id()
 
     refute JobClaims.live?(row),
            "a one-shot claim held past its refresh makes the next member wait out a lease"
@@ -111,7 +110,7 @@ defmodule Sanctum.OAuth.RefreshLockTest do
     assert :counters.get(posted, 1) == 1
 
     assert {:ok, row} = JobClaims.read(@kind, claim_key)
-    assert row.owner == Cyfr.Boot.id()
+    assert row.owner == Prima.Boot.id()
     refute JobClaims.live?(row)
   end
 

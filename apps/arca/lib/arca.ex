@@ -11,13 +11,14 @@ defmodule Arca do
 
   Two persistence planes share the `Arca` name and only tenancy besides:
   **blobs** go through this module (backed by `Arca.Storage` adapters),
-  **rows** go through the Ecto modules (`Arca.*Storage`, `Arca.Execution`,
-  `Arca.McpLog`, …) on `Arca.Repo`. Structured records want queries and
+  **rows** go through the row facades (`Arca.*Storage`, `Arca.Execution`,
+  `Arca.McpLog`, …) over the private `Arca.Schemas.*` on `Arca.Repo`, and
+  answer plain maps. Structured records want queries and
   uniqueness; WASM binaries, tincture trees and attachments want a
   filesystem or object store. Don't put "storage" in a new blob helper's
   name — the suffix is the row plane's.
 
-  Every operation takes a `%Cyfr.Actor{}` first and matches it in its
+  Every operation takes a `%Prima.Actor{}` first and matches it in its
   head. The athanor a path is resolved under is the actor's and never an
   argument, so no path a caller passes can name another tenant's tree; an
   actor whose athanor is nil or the empty string is refused before any
@@ -70,20 +71,20 @@ defmodule Arca do
   `:storage_unverifiable` (any capped tenant create — the write gate
   checks by default, see `put/4`'s `cap:` option); plus the adapter
   vocabulary in `t:Arca.Storage.error/0`. `get_json/2` adds
-  `:invalid_json` (`Cyfr.Json`'s spelling — the one this repo uses for a
+  `:invalid_json` (`Prima.Json`'s spelling — the one this repo uses for a
   corrupt stored value).
 
   Raises, reserved for programmer error: a malformed path (traversal or
-  over-long segments — `ArgumentError` from `Cyfr.PathSafety`, at the
+  over-long segments — `ArgumentError` from `Prima.PathSafety`, at the
   adapter's single validation site) and an athanor-less context on a
   tenant path (`ArgumentError` from `Arca.Storage.tenant_segments/1`).
   Every untrusted-path ingress validates at its own boundary first
-  (`Cyfr.Execution.GuestStorage`, the MCP resource read, attachment filenames);
+  (`Crucible.GuestStorage`, the MCP resource read, attachment filenames);
   `exists?/2` alone is total over both path and context.
 
   ## Usage
 
-      actor = Cyfr.Actor.in_athanor("ath_test")
+      actor = Prima.Actor.in_athanor("ath_test")
 
       # Tenant-scoped storage (auto-prefixed with {athanor_id}/)
       :ok = Arca.put(actor, ["data", "notes.txt"], content)
@@ -101,7 +102,7 @@ defmodule Arca do
 
   ## Retention
 
-  See `Cyfr.Retention` for managing data retention policies. Retention
+  See `Arca.Retention` for managing data retention policies. Retention
   settings can also be managed via the MCP `retention` tool.
 
   ## Configuration
@@ -110,23 +111,135 @@ defmodule Arca do
         storage_adapter: Arca.Adapters.Local,
         base_path: "./data"
 
-      # Retention windows are the host's: the sweeps that read them are
-      # `Cyfr.Retention`'s, and this layer only deletes what it is asked to.
+      # Default retention windows, per kind (`Arca.Retention.Kind`); an
+      # athanor's own settings override them.
+      config :arca, Arca.Retention, executions: 10_000, mcp_log_days: 30
   """
+
+  use Boundary,
+    deps: [],
+    exports: [
+      AgentRevisions,
+      AgentStorage,
+      ApiKeyStorage,
+      Athanors,
+      AuditHandler,
+      BudgetReservations,
+      BuildRecords,
+      Cache,
+      Cache.Keys,
+      CarryActions,
+      CipherRotation,
+      ComponentStorage,
+      ConsentProofStorage,
+      ConsentStorage,
+      ControlPlane,
+      CredentialBindings,
+      CronSchedule,
+      DecisionLog,
+      DecisionLog.AuditFailure,
+      DeviceCertificates,
+      DeviceCertifications,
+      DirectoryHeads,
+      Doors,
+      Execution,
+      ExecutionAttempts,
+      ExecutionEvents,
+      ExecutionPayloads,
+      ExecutionStanding,
+      FencedPublication,
+      FencedPublication.Change,
+      FrameCredentials,
+      Files,
+      Health,
+      IdentityAttempts,
+      IdentityLog,
+      InstallationClaims,
+      JobClaims,
+      Layouts,
+      McpLog,
+      McpServerStorage,
+      Members,
+      Overlay,
+      PairedClients,
+      PairingInvitations,
+      Passkeys,
+      PendingConfirmations,
+      PersonIdentities,
+      PlatformSettings,
+      PolicyLog,
+      ProfileStorage,
+      ProviderCredentialStorage,
+      Providers.Records,
+      ProvisioningClaims,
+      RateWindows,
+      RecordSink,
+      RegistryTokenStorage,
+      RequestRateWindows,
+      Repo.Errors,
+      Retention,
+      ScheduleOccurrences,
+      SchemaFingerprint,
+      SchemaFingerprint.Check,
+      SecurityTransitions,
+      ServerMetaStorage,
+      SessionStorage,
+      Storage,
+      Storage.UnitLocator,
+      StorageProjectionChanges,
+      StorageProjectionRoots,
+      TenantTables,
+      ThreadStorage,
+      ThreadSubscriptionStorage,
+      ToolGrantStorage,
+      TurnStorage,
+      Usage,
+      Users,
+      VaultStorage,
+      WebhookDeliveryStorage,
+      WebhookStorage
+    ],
+    check: [aliases: true]
+
+  @doc """
+  The database adapter this build was compiled against
+  (`config :arca, :repo_adapter`), read at runtime.
+  """
+  @spec repo_adapter() :: module()
+  defdelegate repo_adapter(), to: Arca.Repo, as: :adapter
+
+  @doc """
+  Whether the calling process is inside a transaction of the repository:
+  for a layer above that must make no network call and no write of its
+  own while a caller's transaction holds its locks.
+  """
+  @spec in_transaction?() :: boolean()
+  defdelegate in_transaction?(), to: Arca.Repo
+
+  @doc "The configured tenant storage adapter (`config :arca, :storage_adapter`)."
+  @spec storage_adapter() :: module()
+  defdelegate storage_adapter(), to: Arca.Storage, as: :configured_adapter
+
+  @doc """
+  Whether `adapter` keeps objects every member of a cell shares: the
+  object store does, one member's filesystem does not.
+  """
+  @spec shared_storage?(module()) :: boolean()
+  def shared_storage?(adapter), do: adapter == Arca.Adapters.S3
 
   @doc """
   Read content from storage.
 
   ## Examples
 
-      iex> actor = Cyfr.Actor.in_athanor("ath_test")
+      iex> actor = Prima.Actor.in_athanor("ath_test")
       iex> Arca.put(actor, ["data", "file.txt"], "hello")
       :ok
       iex> Arca.get(actor, ["data", "file.txt"])
       {:ok, "hello"}
   """
-  @spec get(Cyfr.Actor.t(), Arca.Storage.path()) :: {:ok, binary()} | {:error, term()}
-  def get(%Cyfr.Actor{} = actor, path),
+  @spec get(Prima.Actor.t(), Arca.Storage.path()) :: {:ok, binary()} | {:error, term()}
+  def get(%Prima.Actor{} = actor, path),
     do: guarded(actor, normalize(path), fn p -> adapter(p).get(actor, p) end)
 
   @doc """
@@ -136,9 +249,9 @@ defmodule Arca do
   `Arca.Overlay.update/3`'s compare-and-set. The precondition is the
   adapter's own: carry it to `put_if_match/5` unread.
   """
-  @spec get_for_update(Cyfr.Actor.t(), Arca.Storage.path()) ::
+  @spec get_for_update(Prima.Actor.t(), Arca.Storage.path()) ::
           {:ok, binary(), Arca.Storage.precondition()} | {:error, term()}
-  def get_for_update(%Cyfr.Actor{} = actor, path),
+  def get_for_update(%Prima.Actor{} = actor, path),
     do: guarded(actor, normalize(path), fn p -> adapter(p).get_for_update(actor, p) end)
 
   @doc """
@@ -146,17 +259,17 @@ defmodule Arca do
 
   ## Examples
 
-      iex> actor = Cyfr.Actor.in_athanor("ath_test")
+      iex> actor = Prima.Actor.in_athanor("ath_test")
       iex> Arca.put_json(actor, ["data", "data.json"], %{"key" => "value"})
       :ok
       iex> Arca.get_json(actor, ["data", "data.json"])
       {:ok, %{"key" => "value"}}
   """
-  @spec get_json(Cyfr.Actor.t(), Arca.Storage.path()) :: {:ok, term()} | {:error, term()}
-  def get_json(%Cyfr.Actor{} = actor, path) do
+  @spec get_json(Prima.Actor.t(), Arca.Storage.path()) :: {:ok, term()} | {:error, term()}
+  def get_json(%Prima.Actor{} = actor, path) do
     with {:ok, content} <- get(actor, path) do
-      # Normalize storage JSON errors through Cyfr.Json.decode/1.
-      Cyfr.Json.decode(content)
+      # Normalize storage JSON errors through Prima.Json.decode/1.
+      Prima.Json.decode(content)
     end
   end
 
@@ -169,7 +282,7 @@ defmodule Arca do
 
     * `cap:` — `:checked` (default) or `:exempt`. A tenant-scoped write
       is checked against the athanor's storage cap
-      (`Cyfr.Caps.check_storage/2`) before a byte moves,
+      (`Prima.Caps.check_storage/2`) before a byte moves,
       refusing with `{:error, {:limit_reached, :athanor_storage_bytes,
       cap}}` or `{:error, :storage_unverifiable}`. The default is the
       protective posture — a new writer that states nothing is capped —
@@ -181,12 +294,12 @@ defmodule Arca do
 
   ## Examples
 
-      iex> actor = Cyfr.Actor.in_athanor("ath_test")
+      iex> actor = Prima.Actor.in_athanor("ath_test")
       iex> Arca.put(actor, ["data", "nested", "path", "file.txt"], "content")
       :ok
   """
-  @spec put(Cyfr.Actor.t(), Arca.Storage.path(), binary(), keyword()) :: :ok | {:error, term()}
-  def put(%Cyfr.Actor{} = actor, path, content, opts \\ []),
+  @spec put(Prima.Actor.t(), Arca.Storage.path(), binary(), keyword()) :: :ok | {:error, term()}
+  def put(%Prima.Actor{} = actor, path, content, opts \\ []),
     do:
       mutating(actor, normalize(path), {:create, byte_size(content)}, opts, fn p ->
         adapter(p).put(actor, p, content)
@@ -205,13 +318,13 @@ defmodule Arca do
   nothing is written.
   """
   @spec put_if_match(
-          Cyfr.Actor.t(),
+          Prima.Actor.t(),
           Arca.Storage.path(),
           binary(),
           Arca.Storage.precondition(),
           keyword()
         ) :: :ok | {:error, :precondition_failed | :missing | term()}
-  def put_if_match(%Cyfr.Actor{} = actor, path, content, precondition, opts \\ []),
+  def put_if_match(%Prima.Actor{} = actor, path, content, precondition, opts \\ []),
     do:
       mutating(actor, normalize(path), {:create, byte_size(content)}, opts, fn p ->
         # The new precondition is the adapter's answer to this write; a
@@ -228,16 +341,17 @@ defmodule Arca do
 
   ## Examples
 
-      iex> actor = Cyfr.Actor.in_athanor("ath_test")
+      iex> actor = Prima.Actor.in_athanor("ath_test")
       iex> Arca.put_json(actor, ["data", "data.json"], %{"key" => "value"})
       :ok
   """
-  @spec put_json(Cyfr.Actor.t(), Arca.Storage.path(), term(), keyword()) :: :ok | {:error, term()}
-  def put_json(%Cyfr.Actor{} = actor, path, data, opts \\ []) do
-    # `Cyfr.Json` on both sides of the round-trip: `get_json/2` speaks its
+  @spec put_json(Prima.Actor.t(), Arca.Storage.path(), term(), keyword()) ::
+          :ok | {:error, term()}
+  def put_json(%Prima.Actor{} = actor, path, data, opts \\ []) do
+    # `Prima.Json` on both sides of the round-trip: `get_json/2` speaks its
     # `:invalid_json`, so the write side speaks its `:unencodable` too —
     # not a `%Jason.EncodeError{}` escaping into the caller's error tuple.
-    case Cyfr.Json.encode(data) do
+    case Prima.Json.encode(data) do
       {:ok, json} -> put(actor, path, json, opts)
       {:error, :unencodable} -> {:error, :unencodable}
     end
@@ -262,14 +376,15 @@ defmodule Arca do
 
   ## Examples
 
-      iex> actor = Cyfr.Actor.in_athanor("ath_test")
+      iex> actor = Prima.Actor.in_athanor("ath_test")
       iex> Arca.append(actor, ["data", "logs", "2025-01-15.jsonl"], ~s|{"event":"login"}\\n|)
       :ok
       iex> Arca.append(actor, ["data", "logs", "2025-01-15.jsonl"], ~s|{"event":"logout"}\\n|)
       :ok
   """
-  @spec append(Cyfr.Actor.t(), Arca.Storage.path(), binary(), keyword()) :: :ok | {:error, term()}
-  def append(%Cyfr.Actor{} = actor, path, content, opts \\ []),
+  @spec append(Prima.Actor.t(), Arca.Storage.path(), binary(), keyword()) ::
+          :ok | {:error, term()}
+  def append(%Prima.Actor{} = actor, path, content, opts \\ []),
     do:
       mutating(actor, normalize(path), {:create, byte_size(content)}, opts, fn p ->
         adapter(p).append(actor, p, content)
@@ -280,7 +395,7 @@ defmodule Arca do
 
   ## Examples
 
-      iex> actor = Cyfr.Actor.in_athanor("ath_test")
+      iex> actor = Prima.Actor.in_athanor("ath_test")
       iex> Arca.put(actor, ["data", "file.txt"], "hello")
       :ok
       iex> Arca.delete(actor, ["data", "file.txt"])
@@ -288,8 +403,8 @@ defmodule Arca do
       iex> Arca.get(actor, ["data", "file.txt"])
       {:error, :not_found}
   """
-  @spec delete(Cyfr.Actor.t(), Arca.Storage.path()) :: :ok | {:error, term()}
-  def delete(%Cyfr.Actor{} = actor, path),
+  @spec delete(Prima.Actor.t(), Arca.Storage.path()) :: :ok | {:error, term()}
+  def delete(%Prima.Actor{} = actor, path),
     do: mutating(actor, normalize(path), :delete, [], fn p -> adapter(p).delete(actor, p) end)
 
   @doc """
@@ -300,7 +415,7 @@ defmodule Arca do
 
   ## Examples
 
-      iex> actor = Cyfr.Actor.in_athanor("ath_test")
+      iex> actor = Prima.Actor.in_athanor("ath_test")
       iex> Arca.put(actor, ["data", "listdir", "a.txt"], "a")
       :ok
       iex> Arca.put(actor, ["data", "listdir", "b.txt"], "b")
@@ -311,8 +426,8 @@ defmodule Arca do
   """
   # Names are the typed listing minus its kinds — one adapter callback, not
   # two spellings of the same walk.
-  @spec list(Cyfr.Actor.t(), Arca.Storage.path()) :: {:ok, [String.t()]} | {:error, term()}
-  def list(%Cyfr.Actor{} = actor, path) do
+  @spec list(Prima.Actor.t(), Arca.Storage.path()) :: {:ok, [String.t()]} | {:error, term()}
+  def list(%Prima.Actor{} = actor, path) do
     with {:ok, entries} <- list_typed(actor, path) do
       {:ok, Enum.map(entries, fn {name, _kind} -> name end)}
     end
@@ -325,9 +440,9 @@ defmodule Arca do
   know which adapter is configured or how it lays paths out. A path that is
   itself a file answers `{:error, :enotdir}`.
   """
-  @spec list_typed(Cyfr.Actor.t(), Arca.Storage.path()) ::
+  @spec list_typed(Prima.Actor.t(), Arca.Storage.path()) ::
           {:ok, [{String.t(), :file | :dir}]} | {:error, term()}
-  def list_typed(%Cyfr.Actor{} = actor, path),
+  def list_typed(%Prima.Actor{} = actor, path),
     do: guarded(actor, normalize(path), fn p -> adapter(p).list_typed(actor, p) end)
 
   @doc """
@@ -335,9 +450,9 @@ defmodule Arca do
 
   Returns `{:ok, %{files: n, bytes: n}}`. Quota enforcement reads this.
   """
-  @spec usage(Cyfr.Actor.t(), Arca.Storage.path()) ::
+  @spec usage(Prima.Actor.t(), Arca.Storage.path()) ::
           {:ok, %{files: non_neg_integer(), bytes: non_neg_integer()}} | {:error, term()}
-  def usage(%Cyfr.Actor{} = actor, path),
+  def usage(%Prima.Actor{} = actor, path),
     do: guarded(actor, normalize(path), fn p -> adapter(p).usage(actor, p) end)
 
   @doc """
@@ -356,19 +471,19 @@ defmodule Arca do
 
   ## Examples
 
-      iex> actor = Cyfr.Actor.in_athanor("ath_test")
+      iex> actor = Prima.Actor.in_athanor("ath_test")
       iex> Arca.exists?(actor, ["data", "nonexistent"])
       false
 
-      iex> actor = Cyfr.Actor.in_athanor("ath_test")
+      iex> actor = Prima.Actor.in_athanor("ath_test")
       iex> Arca.exists?(actor, ["data", "..", "aqua"])
       false
   """
-  @spec exists?(Cyfr.Actor.t(), Arca.Storage.path()) :: boolean()
-  def exists?(%Cyfr.Actor{} = actor, path) do
+  @spec exists?(Prima.Actor.t(), Arca.Storage.path()) :: boolean()
+  def exists?(%Prima.Actor{} = actor, path) do
     path = normalize(path)
 
-    with :ok <- Cyfr.PathSafety.validate_segments(path),
+    with :ok <- Prima.PathSafety.validate_segments(path),
          :ok <- Arca.Storage.authorize_path(actor, path),
          true <- tenant_ctx_ok?(actor, path) do
       adapter(path).exists?(actor, path)
@@ -389,14 +504,14 @@ defmodule Arca do
 
   ## Examples
 
-      iex> actor = Cyfr.Actor.in_athanor("ath_test")
+      iex> actor = Prima.Actor.in_athanor("ath_test")
       iex> Arca.put(actor, ["threads", "thread_1", "msg_1.json"], "{}")
       :ok
       iex> Arca.delete_tree(actor, ["threads", "thread_1"])
       :ok
   """
-  @spec delete_tree(Cyfr.Actor.t(), Arca.Storage.path()) :: :ok | {:error, term()}
-  def delete_tree(%Cyfr.Actor{} = actor, path),
+  @spec delete_tree(Prima.Actor.t(), Arca.Storage.path()) :: :ok | {:error, term()}
+  def delete_tree(%Prima.Actor{} = actor, path),
     do:
       mutating(actor, normalize(path), :delete_tree, [], fn p ->
         adapter(p).delete_tree(actor, p)
@@ -408,9 +523,9 @@ defmodule Arca do
   Returns full segment lists so callers can pass them straight to `get/2`.
   Order is unspecified.
   """
-  @spec list_recursive(Cyfr.Actor.t(), Arca.Storage.path()) ::
+  @spec list_recursive(Prima.Actor.t(), Arca.Storage.path()) ::
           {:ok, [Arca.Storage.path()]} | {:error, term()}
-  def list_recursive(%Cyfr.Actor{} = actor, path),
+  def list_recursive(%Prima.Actor{} = actor, path),
     do: guarded(actor, normalize(path), fn p -> adapter(p).list_recursive(actor, p) end)
 
   @doc """
@@ -422,9 +537,9 @@ defmodule Arca do
 
   Memory-bounded; for large single files use `serve_to_conn/4` instead.
   """
-  @spec read_subtree(Cyfr.Actor.t(), Arca.Storage.path()) ::
+  @spec read_subtree(Prima.Actor.t(), Arca.Storage.path()) ::
           {:ok, [{Arca.Storage.path(), binary()}]} | {:error, term()}
-  def read_subtree(%Cyfr.Actor{} = actor, path),
+  def read_subtree(%Prima.Actor{} = actor, path),
     do:
       guarded(actor, normalize(path), fn p ->
         Arca.Storage.read_subtree_via(adapter(p), actor, p)
@@ -454,9 +569,9 @@ defmodule Arca do
   `cap:` is threaded through to each `put/4` (default `:checked`, like
   any other write).
   """
-  @spec copy_tree(Cyfr.Actor.t(), Arca.Storage.path(), Arca.Storage.path(), keyword()) ::
+  @spec copy_tree(Prima.Actor.t(), Arca.Storage.path(), Arca.Storage.path(), keyword()) ::
           {:ok, [Arca.Storage.path()]} | {:error, term()}
-  def copy_tree(%Cyfr.Actor{} = actor, src, dest, opts \\ []) do
+  def copy_tree(%Prima.Actor{} = actor, src, dest, opts \\ []) do
     exclude = Keyword.get(opts, :exclude, fn _relative -> false end)
     transform = Keyword.get(opts, :transform, fn _relative, content -> content end)
     src = normalize(src)
@@ -521,12 +636,12 @@ defmodule Arca do
   counters, so the next cap check measures the tree afresh.
   """
   @spec replace_tree(
-          Cyfr.Actor.t(),
+          Prima.Actor.t(),
           Arca.Storage.path(),
           [Arca.Storage.tree_file()],
           keyword()
         ) :: :ok | {:error, term()}
-  def replace_tree(%Cyfr.Actor{} = actor, path, files, opts) when is_list(files) do
+  def replace_tree(%Prima.Actor{} = actor, path, files, opts) when is_list(files) do
     path = normalize(path)
     files = Enum.map(files, fn {rel, content} when is_list(rel) -> {normalize(rel), content} end)
 
@@ -546,13 +661,13 @@ defmodule Arca do
 
   @doc """
   Make a directory exist at a tenant path, holding nothing — every folder
-  of a fresh estate from the first day (`ensure_roots/1`). Not a write of
+  of a fresh athanor from the first day (`ensure_roots/1`). Not a write of
   bytes: nothing is capped or counted, and the reserved roots are not
   refused — a directory carries no bytes a row could name. Refused like
   any path outside the tenant roster; seed media stays read-only.
   """
-  @spec ensure_dir(Cyfr.Actor.t(), Arca.Storage.path()) :: :ok | {:error, term()}
-  def ensure_dir(%Cyfr.Actor{} = actor, path) do
+  @spec ensure_dir(Prima.Actor.t(), Arca.Storage.path()) :: :ok | {:error, term()}
+  def ensure_dir(%Prima.Actor{} = actor, path) do
     path = normalize(path)
 
     cond do
@@ -566,8 +681,8 @@ defmodule Arca do
   Make every tenant root of the context's athanor exist — the folder
   structure a person browses, laid at provisioning and healed at boot.
   """
-  @spec ensure_roots(Cyfr.Actor.t()) :: :ok | {:error, term()}
-  def ensure_roots(%Cyfr.Actor{} = actor) do
+  @spec ensure_roots(Prima.Actor.t()) :: :ok | {:error, term()}
+  def ensure_roots(%Prima.Actor{} = actor) do
     Enum.reduce_while(Arca.Storage.tenant_roots(), :ok, fn root, :ok ->
       case ensure_dir(actor, [root]) do
         :ok -> {:cont, :ok}
@@ -582,9 +697,9 @@ defmodule Arca do
   Caller owns Content-Type, CSP, and caching headers; the adapter handles
   the body transfer. Returns `{:ok, conn}` or `{:error, term()}`.
   """
-  @spec serve_to_conn(Plug.Conn.t(), Cyfr.Actor.t(), Arca.Storage.path(), keyword()) ::
+  @spec serve_to_conn(Plug.Conn.t(), Prima.Actor.t(), Arca.Storage.path(), keyword()) ::
           {:ok, Plug.Conn.t()} | {:error, term()}
-  def serve_to_conn(conn, %Cyfr.Actor{} = actor, path, opts \\ []) do
+  def serve_to_conn(conn, %Prima.Actor{} = actor, path, opts \\ []) do
     guarded(actor, normalize(path), fn p -> adapter(p).serve_to_conn(conn, actor, p, opts) end)
   end
 
@@ -611,7 +726,7 @@ defmodule Arca do
   # the filesystem, one joins into a key) can never disagree about which
   # object a path names, and every gate (depth, reserved names, overlay)
   # sees the real shape. `guarded/3`, `mutating/4` and the `bare_*`
-  # helpers assume normalized input. `Cyfr.PathSafety` still refuses a
+  # helpers assume normalized input. `Prima.PathSafety` still refuses a
   # bare `""` at the adapter, for callers that reach one directly.
   defp normalize(segments) when is_list(segments) do
     Enum.flat_map(segments, fn
@@ -710,7 +825,7 @@ defmodule Arca do
         # new writer cannot forget — and the cap check rides the same
         # chokepoint (`check_cap/4` below): checked by default, exempt
         # only where a call site says so. `Arca.Usage` owns the cache
-        # discipline, `Cyfr.Caps.check_storage/2` the policy.
+        # discipline, `Prima.Caps.check_storage/2` the policy.
         with :ok <- check_cap(actor, path, kind, opts) do
           result = guarded(actor, path, fun)
           Arca.Usage.account(actor, path, kind, result)
@@ -730,13 +845,14 @@ defmodule Arca do
     if Arca.Storage.classify(path) == :tenant and not Arca.Overlay.internal_writes?() do
       case Keyword.get(opts, :cap, :checked) do
         :checked ->
-          Cyfr.Caps.check_storage(actor, bytes)
+          Prima.Caps.check_storage(actor, bytes)
 
         :exempt ->
           :ok
 
         other ->
-          raise ArgumentError, "cap: must be :checked or :exempt, got #{inspect(other)}"
+          raise ArgumentError,
+                "cap: must be :checked or :exempt, got #{Prima.LoggerContext.shape(other)}"
       end
     else
       :ok
@@ -749,14 +865,15 @@ defmodule Arca do
     case Keyword.fetch!(opts, :cap) do
       {:checked, bytes} when is_integer(bytes) and bytes >= 0 ->
         if Arca.Storage.classify(path) == :tenant and not Arca.Overlay.internal_writes?(),
-          do: Cyfr.Caps.check_storage(actor, bytes),
+          do: Prima.Caps.check_storage(actor, bytes),
           else: :ok
 
       :exempt ->
         :ok
 
       other ->
-        raise ArgumentError, "cap: must be {:checked, bytes} or :exempt, got #{inspect(other)}"
+        raise ArgumentError,
+              "cap: must be {:checked, bytes} or :exempt, got #{Prima.LoggerContext.shape(other)}"
     end
   end
 

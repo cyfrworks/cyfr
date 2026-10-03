@@ -1,0 +1,392 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 CYFR Works Inc.
+
+defmodule Prima.MCP.Message do
+  @moduledoc """
+  The JSON-RPC 2.0 message codec for MCP: pure framing and validation,
+  shared by every side that reads or writes an MCP message.
+
+  Handles encoding/decoding of:
+  - Requests (method call with id)
+  - Notifications (method call without id)
+  - Responses (result or error, never both)
+  - Batches are refused at the transport (one message per request)
+
+  A message carrying `method` is a request or a notification whatever
+  else it carries, so a peer's request is never read as the answer to a
+  pending call.
+
+  ## Examples
+
+      iex> Prima.MCP.Message.decode(%{"jsonrpc" => "2.0", "id" => 1, "method" => "tools/list"})
+      {:ok, %Prima.MCP.Message{type: :request, id: 1, method: "tools/list", params: nil}}
+
+      iex> encoded = Prima.MCP.Message.encode_result(1, %{"tools" => []})
+      iex> encoded["result"]["resultType"]
+      "complete"
+  """
+
+  alias Prima.MCP.Protocol
+
+  @type message_type :: :request | :notification | :response | :error
+  @type id :: integer() | String.t()
+  @type t :: %__MODULE__{
+          type: message_type(),
+          id: id() | nil,
+          method: String.t() | nil,
+          params: map() | nil,
+          result: any() | nil,
+          error: map() | nil
+        }
+
+  defstruct [:type, :id, :method, :params, :result, :error]
+
+  @jsonrpc_version "2.0"
+
+  # Standard JSON-RPC 2.0 error codes, plus the codes the MCP specification
+  # reserves for itself in -32020..-32099. Those are protocol-defined, not
+  # CYFR-defined, so they live here rather than with the -33xxx block.
+  @error_codes %{
+    parse_error: -32700,
+    invalid_request: -32600,
+    method_not_found: -32601,
+    invalid_params: -32602,
+    internal_error: -32603,
+    # MCP resource-not-found code.
+    resource_not_found: -32002,
+    header_mismatch: -32020,
+    unsupported_protocol_version: -32022
+  }
+
+  # CYFR-specific error codes.
+  # Transport errors: -33300 to -33399
+  @cyfr_transport_codes %{
+    rate_limited: -33304,
+    # A call stopped by cancellation. Recorded when the caller closed the
+    # stream, so the request log tells "the caller went away" from a
+    # genuine failure; answered when a read ends cancelled.
+    request_cancelled: -33305
+  }
+
+  # Authentication errors: -33000 to -33099
+  @cyfr_auth_codes %{
+    auth_required: -33001,
+    auth_invalid: -33002,
+    insufficient_permissions: -33004
+  }
+
+  # Execution errors: -33100 to -33199, one per refusal class a call can
+  # end in once it was admitted.
+  @cyfr_execution_codes %{
+    internal: -33100,
+    conflict: -33101,
+    not_owner: -33102,
+    unavailable: -33103,
+    corrupt: -33104,
+    timeout: -33105,
+    uncertain: -33106
+  }
+
+  # Consent signals use codes -33500 to -33599.
+  # Clients read their structured payloads from error.data.
+  @cyfr_consent_codes %{
+    setup_required: -33501,
+    consent_required: -33502,
+    consent_conflict: -33503,
+    restart_required: -33504,
+    confirmation_required: -33505
+  }
+
+  # Combined CYFR error codes for lookup.
+  @cyfr_error_codes @cyfr_transport_codes
+                    |> Map.merge(@cyfr_auth_codes)
+                    |> Map.merge(@cyfr_execution_codes)
+                    |> Map.merge(@cyfr_consent_codes)
+
+  @doc """
+  The CYFR-specific error codes, `name => code`.
+
+  The set an integrator writes against, so it is readable rather than only
+  lookup-able: `Cyfr.DocsDriftTest` checks integration-guide's error table
+  against it in both directions. Standard JSON-RPC codes are not here.
+  """
+  @spec cyfr_error_codes() :: %{atom() => integer()}
+  def cyfr_error_codes, do: @cyfr_error_codes
+
+  @doc "Whether `name` is a code name from this module's tables."
+  @spec code?(term()) :: boolean()
+  def code?(name) when is_atom(name),
+    do: Map.has_key?(@error_codes, name) or Map.has_key?(@cyfr_error_codes, name)
+
+  def code?(_name), do: false
+
+  @doc """
+  The code name a refusal answers with: `override` when the refusal's row
+  carries one, a consent signal's own tag, and otherwise its class's code
+  (`class_code/2`).
+
+  `override` is required: the caller that classified the refusal reads
+  it from the row (`Grimoire.code_override/1`), and a row's override —
+  Sanctum's `:auth_required`, for one — outranks the class.
+  """
+  @spec refusal_code(
+          Prima.Refusal.t(),
+          :tools_call | :resources_read | :transport,
+          atom() | nil
+        ) :: atom()
+  def refusal_code(%Prima.Refusal{} = refusal, where, override) do
+    cond do
+      override -> override
+      Prima.ConsentSignal.signal?(refusal.reason) -> elem(refusal.reason, 0)
+      true -> class_code(refusal.class, where)
+    end
+  end
+
+  @doc """
+  The code name a refusal class answers with. `where` is the method it
+  answers — `:resources_read` answers an absent resource with the MCP
+  resource code, `:tools_call` and `:transport` with invalid params.
+  """
+  @spec class_code(Prima.Refusal.class(), :tools_call | :resources_read | :transport) :: atom()
+  def class_code(:invalid_argument, _where), do: :invalid_params
+  def class_code(:not_found, :resources_read), do: :resource_not_found
+  def class_code(:not_found, _where), do: :invalid_params
+  def class_code(:unauthenticated, _where), do: :auth_required
+  def class_code(:forbidden, _where), do: :insufficient_permissions
+  def class_code(:setup_required, _where), do: :setup_required
+  def class_code(:consent_required, _where), do: :consent_required
+  def class_code(:confirmation_required, _where), do: :confirmation_required
+  def class_code(:rate_limited, _where), do: :rate_limited
+  def class_code(:cancelled, _where), do: :request_cancelled
+
+  def class_code(class, _where)
+      when class in [
+             :conflict,
+             :not_owner,
+             :unavailable,
+             :corrupt,
+             :timeout,
+             :uncertain,
+             :internal
+           ],
+      do: class
+
+  @doc """
+  Decode a JSON-RPC message from a map (already parsed from JSON).
+
+  One message, never a batch: "The body of the HTTP POST **MUST** be a single
+  JSON-RPC *request* or *notification*." A batch arrives as a list and is
+  refused at the transport, so nothing reaches here that this could not decode.
+  """
+  @spec decode(map()) :: {:ok, t()} | {:error, :invalid_request, String.t()}
+  def decode(message) when is_map(message), do: decode_single(message)
+
+  @doc """
+  Decode one JSON-RPC message from its JSON text.
+
+  Text that is not JSON is a `:parse_error`; JSON that is not a single
+  message object — a batch, a scalar — is an `:invalid_request`, as is
+  every shape `decode/1` refuses.
+  """
+  @spec decode_json(binary()) ::
+          {:ok, t()} | {:error, :parse_error | :invalid_request, String.t()}
+  def decode_json(json) when is_binary(json) do
+    case Prima.Json.decode(json) do
+      {:ok, message} when is_map(message) -> decode(message)
+      {:ok, _other} -> {:error, :invalid_request, "Expected a single JSON-RPC message"}
+      {:error, :invalid_json} -> {:error, :parse_error, "Invalid JSON"}
+    end
+  end
+
+  defp decode_single(%{"jsonrpc" => @jsonrpc_version} = msg) do
+    cond do
+      # Method must be a string if present
+      Map.has_key?(msg, "method") and not is_binary(msg["method"]) ->
+        {:error, :invalid_request, "Method must be a string"}
+
+      # Request: has method and id (MCP: id MUST NOT be null)
+      Map.has_key?(msg, "method") and Map.has_key?(msg, "id") ->
+        if is_nil(msg["id"]) do
+          {:error, :invalid_request, "Request ID must not be null"}
+        else
+          {:ok,
+           %__MODULE__{
+             type: :request,
+             id: msg["id"],
+             method: msg["method"],
+             params: msg["params"]
+           }}
+        end
+
+      # Notification: has method but no id
+      Map.has_key?(msg, "method") ->
+        {:ok,
+         %__MODULE__{
+           type: :notification,
+           method: msg["method"],
+           params: msg["params"]
+         }}
+
+      # A response carries result or error, never both: which one it
+      # answers is not decidable.
+      Map.has_key?(msg, "result") and Map.has_key?(msg, "error") ->
+        {:error, :invalid_request, "Response must not carry both result and error"}
+
+      # Response: has result and id (MCP: id MUST NOT be null)
+      Map.has_key?(msg, "result") and Map.has_key?(msg, "id") ->
+        if is_nil(msg["id"]) do
+          {:error, :invalid_request, "Response ID must not be null"}
+        else
+          {:ok,
+           %__MODULE__{
+             type: :response,
+             id: msg["id"],
+             result: msg["result"]
+           }}
+        end
+
+      # Error response: has error and id (MCP: id MUST NOT be null)
+      Map.has_key?(msg, "error") and Map.has_key?(msg, "id") ->
+        if is_nil(msg["id"]) do
+          {:error, :invalid_request, "Error response ID must not be null"}
+        else
+          {:ok,
+           %__MODULE__{
+             type: :error,
+             id: msg["id"],
+             error: msg["error"]
+           }}
+        end
+
+      true ->
+        {:error, :invalid_request, "Missing required fields"}
+    end
+  end
+
+  defp decode_single(%{"jsonrpc" => version}) do
+    {:error, :invalid_request, "Unsupported jsonrpc version: #{version}"}
+  end
+
+  defp decode_single(_) do
+    {:error, :invalid_request, "Missing jsonrpc field"}
+  end
+
+  @doc """
+  Encode a successful result response.
+
+  Stamps the two things the specification requires of every result and that no
+  individual handler should have to remember: `resultType`, which tells a client
+  whether this is a finished answer or a request for more input, and the server's
+  identity under `_meta`.
+
+  Both are applied here rather than by each producer — a router and a
+  discovery path each encode results — because a result that reaches the
+  wire without a `resultType` is invalid to a conforming client.
+
+  Any `_meta` a handler already built is preserved; the server identity is merged
+  into it, never over it.
+  """
+  @spec encode_result(id(), term(), :complete | :input_required) :: map()
+  def encode_result(id, result, kind \\ :complete) do
+    %{
+      "jsonrpc" => @jsonrpc_version,
+      "id" => id,
+      "result" => stamp_result(result, kind)
+    }
+  end
+
+  defp stamp_result(result, kind) when is_map(result) do
+    meta =
+      result
+      |> Map.get("_meta", %{})
+      |> Map.put(Protocol.meta_server_info_key(), Protocol.server_info())
+
+    result
+    |> Map.put("resultType", Protocol.result_type(kind))
+    |> Map.put("_meta", meta)
+  end
+
+  # A non-map result cannot carry the required fields. No handler produces one;
+  # passing it through unchanged beats corrupting it into a map that the caller
+  # did not ask for.
+  defp stamp_result(result, _kind), do: result
+
+  @doc """
+  Encode an error response.
+
+  Accepts either an atom error code (from standard codes) or a numeric code.
+  """
+  @spec encode_error(id() | nil, atom() | integer(), String.t(), term()) :: map()
+  def encode_error(id, code, message, data \\ nil)
+
+  def encode_error(id, code, message, data) when is_atom(code) do
+    numeric_code =
+      Map.get(@error_codes, code) ||
+        Map.get(@cyfr_error_codes, code) ||
+        -32603
+
+    encode_error(id, numeric_code, message, data)
+  end
+
+  def encode_error(id, code, message, data) when is_integer(code) do
+    error =
+      %{
+        "code" => code,
+        "message" => message
+      }
+      |> maybe_add_data(data)
+
+    %{
+      "jsonrpc" => @jsonrpc_version,
+      "id" => id,
+      "error" => error
+    }
+  end
+
+  defp maybe_add_data(error, nil), do: error
+  defp maybe_add_data(error, data), do: Map.put(error, "data", data)
+
+  @doc """
+  Encode a request this node sends AS a client (external MCP servers).
+
+  Plain JSON-RPC: the CYFR envelope stamping (`_meta`) belongs to
+  `encode_result/3`, on responses this node serves — never on what it
+  asks an upstream.
+  """
+  @spec encode_request(id(), String.t(), term()) :: map()
+  def encode_request(id, method, params \\ nil) do
+    %{
+      "jsonrpc" => @jsonrpc_version,
+      "id" => id,
+      "method" => method
+    }
+    |> maybe_add_params(params)
+  end
+
+  @doc """
+  Encode a notification (no id, no response expected).
+  """
+  @spec encode_notification(String.t(), term()) :: map()
+  def encode_notification(method, params \\ nil) do
+    %{
+      "jsonrpc" => @jsonrpc_version,
+      "method" => method
+    }
+    |> maybe_add_params(params)
+  end
+
+  defp maybe_add_params(msg, nil), do: msg
+  defp maybe_add_params(msg, params), do: Map.put(msg, "params", params)
+
+  @doc """
+  Get the numeric error code for an atom.
+
+  Supports both standard JSON-RPC 2.0 codes and CYFR-specific codes.
+  """
+  @spec error_code(atom()) :: integer()
+  def error_code(atom) when is_atom(atom) do
+    Map.get(@error_codes, atom) ||
+      Map.get(@cyfr_error_codes, atom) ||
+      -32603
+  end
+end

@@ -4,9 +4,9 @@
 defmodule Arca.Schemas.ProvisioningClaim do
   @moduledoc """
   Ecto schema for the `provisioning_claims` table: who is filling an
-  estate.
+  athanor.
 
-  One row per athanor — every entry point that fills or heals an estate
+  One row per athanor — every entry point that fills or heals an athanor
   shares it, as every fill shares one lock today. A claim is taken and
   settled by compare-and-set on `(owner, fence)`: `owner` is the boot
   holding it, `attempt` the attempt run under it, `fence` the fencing
@@ -21,16 +21,16 @@ defmodule Arca.Schemas.ProvisioningClaim do
 
     * `sign_in` — the personal fill and group retries of `after_sign_in/1`.
     * `first_need` — `start_provisioning/1` and `ready/1` on an unfilled
-      estate.
+      athanor.
     * `provision` — the explicit `provision/2` behind `athanor.provision`.
     * `install_shipped` — `install_shipped/2`, one shipped version copied
       in.
-    * `seed_sync` — `sync_seeds/0` at boot, healing a filled estate.
+    * `seed_sync` — `sync_seeds/0` at boot, healing a filled athanor.
 
   `outcome` is nil while the attempt holds the claim and settles to
-  `ready` (the estate is filled), `failed` (the attempt recorded a
+  `ready` (the athanor is filled), `failed` (the attempt recorded a
   failure; `outcome_detail` says where) or `released` (the attempt ended
-  with no verdict on readiness — a sync or an install on an estate that
+  with no verdict on readiness — a sync or an install on an athanor that
   was already filled). Owned by the athanor.
   """
 

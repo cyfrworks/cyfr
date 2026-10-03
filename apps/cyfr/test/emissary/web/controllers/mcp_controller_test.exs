@@ -1,0 +1,1274 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 CYFR Works Inc.
+
+defmodule Emissary.Web.MCPControllerTest do
+  use Emissary.Web.ConnCase, async: false
+
+  describe "POST /mcp - tool calls" do
+    test "lists available tools", %{conn: conn} do
+      conn =
+        conn
+        |> recycle()
+        |> put_req_header("content-type", "application/json")
+        |> mcp_post(%{
+          "jsonrpc" => "2.0",
+          "id" => 2,
+          "method" => "tools/list"
+        })
+
+      assert json_response(conn, 200)
+      response = json_response(conn, 200)
+
+      assert response["result"]["tools"]
+      tools = response["result"]["tools"]
+      tool_names = Enum.map(tools, & &1["name"])
+
+      assert "system" in tool_names
+      assert "session" in tool_names
+      assert "retention" in tool_names
+
+      # Should return request ID header
+      assert [request_id] = get_resp_header(conn, "x-request-id")
+      assert String.starts_with?(request_id, "req_")
+    end
+
+    test "calls system status action", %{conn: conn} do
+      conn =
+        conn
+        |> recycle()
+        |> put_req_header("content-type", "application/json")
+        |> mcp_post(%{
+          "jsonrpc" => "2.0",
+          "id" => 3,
+          "method" => "tools/call",
+          "params" => %{
+            "name" => "system",
+            "arguments" => %{"action" => "status"}
+          }
+        })
+
+      assert json_response(conn, 200)
+      response = json_response(conn, 200)
+
+      assert response["result"]["content"]
+      [content] = response["result"]["content"]
+      assert content["type"] == "text"
+
+      # Parse the JSON text content
+      result = Jason.decode!(content["text"])
+      # Status may be "ok" or "degraded" depending on which services are available
+      assert result["status"] in ["ok", "degraded"]
+      assert is_map(result["services"])
+    end
+
+    test "calls system status with scope", %{conn: conn} do
+      conn =
+        conn
+        |> recycle()
+        |> put_req_header("content-type", "application/json")
+        |> mcp_post(%{
+          "jsonrpc" => "2.0",
+          "id" => 3,
+          "method" => "tools/call",
+          "params" => %{
+            "name" => "system",
+            "arguments" => %{"action" => "status", "scope" => "sanctum"}
+          }
+        })
+
+      assert json_response(conn, 200)
+      response = json_response(conn, 200)
+
+      [content] = response["result"]["content"]
+      result = Jason.decode!(content["text"])
+      assert result["status"] in ["ok", "degraded"]
+      # Only sanctum should be in services
+      assert Map.keys(result["services"]) == ["sanctum"]
+    end
+
+    test "calls system notify action", %{conn: conn} do
+      # Use a mock endpoint that won't actually connect
+      # The test verifies the action is recognized and parameters are processed
+      conn =
+        conn
+        |> recycle()
+        |> put_req_header("content-type", "application/json")
+        |> mcp_post(%{
+          "jsonrpc" => "2.0",
+          "id" => 4,
+          "method" => "tools/call",
+          "params" => %{
+            "name" => "system",
+            "arguments" => %{
+              "action" => "notify",
+              "event" => "test.event",
+              "target" => "http://localhost:9999/webhook",
+              "payload" => %{"test" => true}
+            }
+          }
+        })
+
+      response = json_response(conn, 200)
+
+      [content] = response["result"]["content"]
+
+      # Delivery fails (the endpoint does not exist) and a failed delivery
+      # is a failed tool call now, naming the target.
+      assert response["result"]["isError"] == true
+      assert content["text"] =~ "http://localhost:9999/webhook"
+    end
+
+    test "calls session whoami tool", %{conn: conn} do
+      conn =
+        conn
+        |> recycle()
+        |> put_req_header("content-type", "application/json")
+        |> mcp_post(%{
+          "jsonrpc" => "2.0",
+          "id" => 4,
+          "method" => "tools/call",
+          "params" => %{
+            "name" => "session",
+            "arguments" => %{"action" => "whoami"}
+          }
+        })
+
+      assert json_response(conn, 200)
+      response = json_response(conn, 200)
+
+      [content] = response["result"]["content"]
+      # With test auth provider, whoami returns user info
+      result = Jason.decode!(content["text"])
+      assert result["user_id"] == "test_user"
+    end
+
+    test "returns protocol error for unknown tool", %{conn: conn} do
+      conn =
+        conn
+        |> recycle()
+        |> put_req_header("content-type", "application/json")
+        |> mcp_post(%{
+          "jsonrpc" => "2.0",
+          "id" => 5,
+          "method" => "tools/call",
+          "params" => %{
+            "name" => "nonexistent/tool",
+            "arguments" => %{}
+          }
+        })
+
+      # Per MCP spec: unknown tools return JSON-RPC protocol error, not isError result
+      response = json_response(conn, 400)
+      assert response["error"]["code"] == -32602
+      assert response["error"]["message"] =~ "Unknown tool: nonexistent/tool"
+    end
+  end
+
+  describe "POST /mcp - API key authentication" do
+    setup %{conn: _conn} do
+      # Use a temp directory for API key tests
+      test_dir =
+        Path.join(
+          System.tmp_dir!(),
+          "cyfr_api_key_ctrl_test_#{System.unique_integer([:positive])}"
+        )
+
+      File.mkdir_p!(test_dir)
+
+      # Store original config
+      original_base_path = Application.get_env(:arca, :base_path)
+      Application.put_env(:arca, :base_path, test_dir)
+
+      # Create a test API key
+      ctx = Sanctum.TestContext.issuer!(Sanctum.TestContext.local())
+
+      {:ok, key_result} =
+        Sanctum.TestContext.create_key(ctx, %{
+          name: "test-ctrl-key",
+          type: :application
+        })
+
+      on_exit(fn ->
+        File.rm_rf!(test_dir)
+
+        if original_base_path do
+          Application.put_env(:arca, :base_path, original_base_path)
+        else
+          Application.delete_env(:arca, :base_path)
+        end
+      end)
+
+      {:ok, api_key: key_result.api_key}
+    end
+
+    test "tools/list works with API key (no session)", %{conn: conn, api_key: api_key} do
+      conn =
+        conn
+        |> put_req_header("content-type", "application/json")
+        |> put_req_header("authorization", "Bearer #{api_key}")
+        |> mcp_post(%{
+          "jsonrpc" => "2.0",
+          "id" => 1,
+          "method" => "tools/list"
+        })
+
+      assert json_response(conn, 200)
+      response = json_response(conn, 200)
+
+      assert response["result"]["tools"]
+      tools = response["result"]["tools"]
+      tool_names = Enum.map(tools, & &1["name"])
+
+      assert "system" in tool_names
+    end
+
+    test "tools/call works with API key", %{conn: conn, api_key: api_key} do
+      conn =
+        conn
+        |> put_req_header("content-type", "application/json")
+        |> put_req_header("authorization", "Bearer #{api_key}")
+        |> mcp_post(%{
+          "jsonrpc" => "2.0",
+          "id" => 2,
+          "method" => "tools/call",
+          "params" => %{
+            "name" => "system",
+            "arguments" => %{"action" => "status"}
+          }
+        })
+
+      assert json_response(conn, 200)
+      response = json_response(conn, 200)
+
+      assert response["result"]["content"]
+      [content] = response["result"]["content"]
+      assert content["type"] == "text"
+    end
+
+    test "an unauthenticated-surface method works with an API key", %{
+      conn: conn,
+      api_key: api_key
+    } do
+      conn =
+        conn
+        |> put_req_header("content-type", "application/json")
+        |> put_req_header("authorization", "Bearer #{api_key}")
+        |> mcp_post(%{
+          "jsonrpc" => "2.0",
+          "id" => 3,
+          "method" => "server/discover"
+        })
+
+      assert json_response(conn, 200)
+      response = json_response(conn, 200)
+      assert response["result"]["resultType"] == "complete"
+    end
+
+    test "response does NOT include mcp-session-id header for non-initialize requests", %{
+      conn: conn,
+      api_key: api_key
+    } do
+      conn =
+        conn
+        |> put_req_header("content-type", "application/json")
+        |> put_req_header("authorization", "Bearer #{api_key}")
+        |> mcp_post(%{
+          "jsonrpc" => "2.0",
+          "id" => 5,
+          "method" => "tools/list"
+        })
+
+      assert json_response(conn, 200)
+      assert get_resp_header(conn, "mcp-session-id") == []
+    end
+  end
+
+  describe "request logging" do
+    # The request's rows: the gate's decisions' projections, correlated to
+    # the response by its request id.
+    defp rows(request_id) do
+      import Ecto.Query
+      Arca.Repo.all(from(l in Arca.Schemas.McpLog, where: l.request_id == ^request_id))
+    end
+
+    test "discovery writes no row: the transport records nothing of its own", %{conn: conn} do
+      conn =
+        conn
+        |> put_req_header("content-type", "application/json")
+        |> mcp_post(%{"jsonrpc" => "2.0", "id" => 1, "method" => "server/discover"})
+
+      [request_id] = get_resp_header(conn, "x-request-id")
+      assert json_response(conn, 200)
+      assert rows(request_id) == []
+    end
+
+    test "a tool call is one row, the gate's, under its own call id", %{conn: conn} do
+      tool_conn =
+        conn
+        |> recycle()
+        |> put_req_header("content-type", "application/json")
+        |> mcp_post(%{
+          "jsonrpc" => "2.0",
+          "id" => 2,
+          "method" => "tools/call",
+          "params" => %{
+            "name" => "session",
+            "arguments" => %{"action" => "whoami"}
+          }
+        })
+
+      [request_id] = get_resp_header(tool_conn, "x-request-id")
+      assert json_response(tool_conn, 200)
+
+      assert [log] = rows(request_id)
+      assert "call_" <> _ = log.id
+      assert log.method == "tools/call"
+      assert log.tool == "session"
+      assert log.action == "whoami"
+      assert log.status == "success"
+      assert log.routed_to == "sanctum"
+      assert is_integer(log.duration_ms)
+
+      assert %{admission: "admitted", completion: "succeeded", request_id: ^request_id} =
+               Arca.Repo.get(Arca.Schemas.DecisionLog, log.id)
+    end
+
+    test "a resources/read row keeps the wire method", %{conn: conn} do
+      read_conn =
+        conn
+        |> recycle()
+        |> put_req_header("content-type", "application/json")
+        |> mcp_post(%{
+          "jsonrpc" => "2.0",
+          "id" => 3,
+          "method" => "resources/read",
+          "params" => %{"uri" => "arca://files/data/nothing-here.txt"}
+        })
+
+      [request_id] = get_resp_header(read_conn, "x-request-id")
+
+      assert [log] = rows(request_id)
+      assert log.method == "resources/read"
+      assert "call_" <> _ = log.id
+    end
+  end
+
+  # Note: Batch requests are not supported via HTTP in this revision
+  # Batch request support is only available through the internal API (Emissary.MCP)
+
+  describe "POST /mcp - notifications" do
+    test "an unknown notification is accepted and dropped", %{conn: conn} do
+      conn =
+        conn
+        |> recycle()
+        |> put_req_header("content-type", "application/json")
+        |> mcp_post(%{"jsonrpc" => "2.0", "method" => "notifications/cancelled"})
+
+      # Notifications return 202 Accepted with no body
+      assert response(conn, 202)
+    end
+
+    test "notifications/cancelled is not a cancellation channel on this transport",
+         %{conn: conn} do
+      # This revision confines `notifications/cancelled` to stdio; on Streamable
+      # HTTP the cancellation signal is the caller closing its response stream.
+      # The notification is accepted the way any unrecognized one is — 202, no
+      # body, no effect — and must never reach a running task.
+      conn =
+        conn
+        |> recycle()
+        |> put_req_header("content-type", "application/json")
+        |> mcp_post(%{
+          "jsonrpc" => "2.0",
+          "method" => "notifications/cancelled",
+          "params" => %{"requestId" => 123}
+        })
+
+      assert response(conn, 202)
+    end
+
+    # Note: Batch requests (mixing requests and notifications) are rejected —
+    # the specification requires the POST body to be a single message.
+  end
+
+  describe "POST /mcp - resources" do
+    test "lists available resources", %{conn: conn} do
+      conn =
+        conn
+        |> recycle()
+        |> put_req_header("content-type", "application/json")
+        |> mcp_post(%{
+          "jsonrpc" => "2.0",
+          "id" => 2,
+          "method" => "resources/list"
+        })
+
+      assert json_response(conn, 200)
+      response = json_response(conn, 200)
+
+      assert response["result"]["resources"]
+      assert is_list(response["result"]["resources"])
+    end
+
+    test "returns error for unknown resource URI scheme", %{conn: conn} do
+      conn =
+        conn
+        |> recycle()
+        |> put_req_header("content-type", "application/json")
+        |> mcp_post(%{
+          "jsonrpc" => "2.0",
+          "id" => 3,
+          "method" => "resources/read",
+          "params" => %{
+            "uri" => "unknown://resource/path"
+          }
+        })
+
+      # Resource errors return 400 with JSON-RPC error
+      assert json_response(conn, 400)
+      response = json_response(conn, 400)
+
+      assert response["error"]["message"] =~ "No provider found"
+    end
+
+    test "returns error for invalid URI format", %{conn: conn} do
+      conn =
+        conn
+        |> recycle()
+        |> put_req_header("content-type", "application/json")
+        |> mcp_post(%{
+          "jsonrpc" => "2.0",
+          "id" => 4,
+          "method" => "resources/read",
+          "params" => %{
+            "uri" => "invalid-uri-no-scheme"
+          }
+        })
+
+      assert json_response(conn, 400)
+      response = json_response(conn, 400)
+
+      assert response["error"]["message"] =~ "Invalid URI"
+    end
+  end
+
+  describe "POST /mcp - JSON-RPC validation" do
+    test "rejects invalid JSON-RPC version", %{conn: conn} do
+      conn =
+        conn
+        |> recycle()
+        |> put_req_header("content-type", "application/json")
+        |> mcp_post(%{
+          "jsonrpc" => "1.0",
+          "id" => 2,
+          "method" => "tools/list"
+        })
+
+      assert json_response(conn, 400)
+      response = json_response(conn, 400)
+      assert response["error"]["message"] =~ "jsonrpc"
+    end
+
+    test "rejects missing jsonrpc field", %{conn: conn} do
+      conn =
+        conn
+        |> recycle()
+        |> put_req_header("content-type", "application/json")
+        |> mcp_post(%{
+          "id" => 2,
+          "method" => "tools/list"
+        })
+
+      assert json_response(conn, 400)
+      response = json_response(conn, 400)
+      assert response["error"]["message"] =~ "jsonrpc"
+    end
+
+    test "handles server/discover", %{conn: conn} do
+      conn =
+        conn
+        |> recycle()
+        |> put_req_header("content-type", "application/json")
+        |> mcp_post(%{
+          "jsonrpc" => "2.0",
+          "id" => 2,
+          "method" => "server/discover"
+        })
+
+      assert json_response(conn, 200)
+      response = json_response(conn, 200)
+      assert response["result"]["supportedVersions"] == Prima.MCP.Protocol.supported()
+    end
+  end
+
+  describe "POST /mcp - JSON-RPC edge cases" do
+    test "rejects null id in request", %{conn: conn} do
+      conn =
+        conn
+        |> recycle()
+        |> put_req_header("content-type", "application/json")
+        |> mcp_post(%{
+          "jsonrpc" => "2.0",
+          "id" => nil,
+          "method" => "server/discover"
+        })
+
+      # MCP spec: unlike base JSON-RPC, the ID MUST NOT be null
+      response = json_response(conn, 400)
+      assert response["error"]["message"] =~ "Request ID must not be null"
+    end
+
+    test "handles string id in request", %{conn: conn} do
+      conn =
+        conn
+        |> recycle()
+        |> put_req_header("content-type", "application/json")
+        |> mcp_post(%{
+          "jsonrpc" => "2.0",
+          "id" => "string-request-id",
+          "method" => "server/discover"
+        })
+
+      assert json_response(conn, 200)
+      response = json_response(conn, 200)
+      assert response["id"] == "string-request-id"
+      assert response["result"]["resultType"] == "complete"
+    end
+
+    test "handles missing params field (optional per spec)", %{conn: conn} do
+      conn =
+        conn
+        |> recycle()
+        |> put_req_header("content-type", "application/json")
+        |> mcp_post(%{
+          "jsonrpc" => "2.0",
+          "id" => 3,
+          "method" => "tools/list"
+        })
+
+      # Request without params field should work
+      assert json_response(conn, 200)
+      response = json_response(conn, 200)
+      assert is_list(response["result"]["tools"])
+    end
+
+    test "handles empty object as valid JSON-RPC (fails validation)", %{conn: conn} do
+      conn =
+        conn
+        |> recycle()
+        |> put_req_header("content-type", "application/json")
+        |> mcp_post(%{})
+
+      # Empty object is missing required fields
+      assert json_response(conn, 400)
+      response = json_response(conn, 400)
+
+      assert response["error"]["message"] =~ "jsonrpc" or
+               response["error"]["message"] =~ "required"
+    end
+
+    test "handles deeply nested params", %{conn: conn} do
+      # Create deeply nested structure
+      deep_nested =
+        Enum.reduce(1..50, %{"value" => "bottom"}, fn i, acc ->
+          %{"level_#{i}" => acc}
+        end)
+
+      conn =
+        conn
+        |> recycle()
+        |> put_req_header("content-type", "application/json")
+        |> mcp_post(%{
+          "jsonrpc" => "2.0",
+          "id" => 4,
+          "method" => "tools/call",
+          "params" => %{
+            "name" => "system",
+            "arguments" => %{"action" => "status", "nested" => deep_nested}
+          }
+        })
+
+      # `nested` is not a declared argument of `system/status`, so the typed
+      # gate refuses it by name. The refusal must still be a well-formed
+      # JSON-RPC error at 50 levels of nesting, not a decoder crash.
+      body = json_response(conn, 400)
+      assert body["id"] == 4
+      assert body["error"]["code"] == -32602
+      assert body["error"]["message"] == "Unknown field: nested"
+    end
+
+    test "handles very long method name", %{conn: conn} do
+      long_method = String.duplicate("a", 10_000)
+
+      conn =
+        conn
+        |> recycle()
+        |> put_req_header("content-type", "application/json")
+        |> mcp_post(%{
+          "jsonrpc" => "2.0",
+          "id" => 5,
+          "method" => long_method
+        })
+
+      # An unimplemented method is 404 with -32601, not 400. A dual-era client
+      # reads the status and the body together to tell "modern server, no such
+      # method" from "legacy server, no such endpoint"; answering 400 for both
+      # makes that undecidable.
+      assert json_response(conn, 404)["error"]["code"] == -32601
+    end
+
+    test "an unknown method is 404, not 400", %{conn: conn} do
+      conn =
+        conn
+        |> recycle()
+        |> put_req_header("content-type", "application/json")
+        |> mcp_post(%{"jsonrpc" => "2.0", "id" => 7, "method" => "no/such/method"})
+
+      body = json_response(conn, 404)
+      assert body["error"]["code"] == -32601
+      assert body["id"] == 7
+    end
+
+    test "rejects numeric method (invalid per spec)", %{conn: conn} do
+      conn =
+        conn
+        |> recycle()
+        |> put_req_header("content-type", "application/json")
+        |> mcp_post(%{
+          "jsonrpc" => "2.0",
+          "id" => 6,
+          "method" => 12345
+        })
+
+      response = json_response(conn, 400)
+      # A non-string method cannot be mirrored into `Mcp-Method`, so the
+      # transport rejects it before the JSON-RPC layer sees it. That the message
+      # layer also rejects it is asserted directly in message_test.
+      assert response["error"]["code"] == Prima.MCP.Message.error_code(:header_mismatch)
+    end
+
+    test "rejects array as method (invalid per spec)", %{conn: conn} do
+      conn =
+        conn
+        |> recycle()
+        |> put_req_header("content-type", "application/json")
+        |> mcp_post(%{
+          "jsonrpc" => "2.0",
+          "id" => 7,
+          "method" => ["tools", "list"]
+        })
+
+      response = json_response(conn, 400)
+      # A non-string method cannot be mirrored into `Mcp-Method`, so the
+      # transport rejects it before the JSON-RPC layer sees it. That the message
+      # layer also rejects it is asserted directly in message_test.
+      assert response["error"]["code"] == Prima.MCP.Message.error_code(:header_mismatch)
+    end
+
+    test "handles negative integer id", %{conn: conn} do
+      conn =
+        conn
+        |> recycle()
+        |> put_req_header("content-type", "application/json")
+        |> mcp_post(%{
+          "jsonrpc" => "2.0",
+          "id" => -999,
+          "method" => "server/discover"
+        })
+
+      # Negative IDs are valid per JSON-RPC
+      assert json_response(conn, 200)
+      response = json_response(conn, 200)
+      assert response["id"] == -999
+    end
+
+    test "handles float id (should work per JSON-RPC)", %{conn: conn} do
+      conn =
+        conn
+        |> recycle()
+        |> put_req_header("content-type", "application/json")
+        |> mcp_post(%{
+          "jsonrpc" => "2.0",
+          "id" => 3.14,
+          "method" => "server/discover"
+        })
+
+      # JSON-RPC ids may be numbers, and 3.14 is a number: the request is
+      # served and the id comes back unchanged, not coerced to 3 and not
+      # rejected. That round trip is the whole contract here, and
+      # `status in [200, 400]` asserted neither end of it.
+      assert conn.status == 200
+      assert json_response(conn, 200)["id"] == 3.14
+    end
+
+    test "handles special characters in string id", %{conn: conn} do
+      special_id = "id-with-special-\u0000-\n-\t-chars"
+
+      conn =
+        conn
+        |> recycle()
+        |> put_req_header("content-type", "application/json")
+        |> mcp_post(%{
+          "jsonrpc" => "2.0",
+          "id" => special_id,
+          "method" => "server/discover"
+        })
+
+      # A string id is opaque: a NUL, a newline and a tab inside it are
+      # carried, not interpreted, and come back byte-for-byte.
+      assert conn.status == 200
+      assert json_response(conn, 200)["id"] == special_id
+    end
+
+    test "handles unicode in params", %{conn: conn} do
+      conn =
+        conn
+        |> recycle()
+        |> put_req_header("content-type", "application/json")
+        |> mcp_post(%{
+          "jsonrpc" => "2.0",
+          "id" => 8,
+          "method" => "tools/call",
+          "params" => %{
+            "name" => "system",
+            "arguments" => %{"action" => "status", "unicode" => "日本語 🎉 émojis"}
+          }
+        })
+
+      # The undeclared `unicode` argument is refused by name; the multibyte
+      # value must neither break decoding nor appear in the refusal.
+      body = json_response(conn, 400)
+      assert body["id"] == 8
+      assert body["error"]["code"] == -32602
+      assert body["error"]["message"] == "Unknown field: unicode"
+      refute Jason.encode!(body) =~ "日本語"
+    end
+  end
+
+  describe "concurrent requests" do
+    @tag :slow
+    test "handles 50 concurrent tool calls", %{conn: conn} do
+      # Spawn 50 concurrent requests
+      tasks =
+        for i <- 1..50 do
+          Task.async(fn ->
+            conn
+            |> recycle()
+            |> put_req_header("content-type", "application/json")
+            |> mcp_post(%{
+              "jsonrpc" => "2.0",
+              "id" => i,
+              "method" => "tools/call",
+              "params" => %{
+                "name" => "system",
+                "arguments" => %{"action" => "status"}
+              }
+            })
+          end)
+        end
+
+      # Wait for all and verify results
+      results = Task.await_many(tasks, 30_000)
+
+      for conn <- results do
+        assert json_response(conn, 200)
+        response = json_response(conn, 200)
+        assert response["result"]["content"]
+      end
+    end
+
+    @tag :slow
+    test "concurrent callers do not interfere", %{conn: conn} do
+      # Five independent callers. There is no session to establish, so what is
+      # being exercised is concurrent requests, not concurrent sessions.
+      tasks =
+        for i <- 0..4 do
+          Task.async(fn ->
+            conn
+            |> recycle()
+            |> put_req_header("content-type", "application/json")
+            |> mcp_post(%{
+              "jsonrpc" => "2.0",
+              "id" => i,
+              "method" => "tools/call",
+              "params" => %{
+                "name" => "session",
+                "arguments" => %{"action" => "whoami"}
+              }
+            })
+          end)
+        end
+
+      results = Task.await_many(tasks, 10_000)
+
+      # Each should succeed
+      for conn <- results do
+        assert conn.status == 200
+      end
+
+      # One caller finishing cannot affect another: nothing is shared between
+      # them server-side.
+      result_conn =
+        conn
+        |> recycle()
+        |> put_req_header("content-type", "application/json")
+        |> mcp_post(%{
+          "jsonrpc" => "2.0",
+          "id" => 99,
+          "method" => "server/discover"
+        })
+
+      assert json_response(result_conn, 200)
+    end
+  end
+
+  describe "tool routing" do
+    # An admitted call's row names the service that answered it.
+    @tool_routing_cases [
+      {"component", "status", "compendium"},
+      {"build", "toolchains", "compendium"},
+      {"retention", "get", "arca"},
+      {"session", "whoami", "sanctum"},
+      {"execution", "status", "crucible"}
+    ]
+
+    for {tool, action, expected_service} <- @tool_routing_cases do
+      @tool tool
+      @action action
+      @expected_service expected_service
+
+      test "routes #{tool}.#{action} to #{expected_service}", %{conn: conn} do
+        tool_conn =
+          conn
+          |> recycle()
+          |> put_req_header("content-type", "application/json")
+          |> mcp_post(%{
+            "jsonrpc" => "2.0",
+            "id" => 2,
+            "method" => "tools/call",
+            "params" => %{
+              "name" => @tool,
+              "arguments" => %{"action" => @action}
+            }
+          })
+
+        [request_id] = get_resp_header(tool_conn, "x-request-id")
+
+        assert [log] = rows(request_id)
+
+        assert log.routed_to == @expected_service
+      end
+    end
+
+    test "a tool the router does not know reaches no gate and is one refused decision",
+         %{conn: conn} do
+      tool_conn =
+        conn
+        |> recycle()
+        |> put_req_header("content-type", "application/json")
+        |> mcp_post(%{
+          "jsonrpc" => "2.0",
+          "id" => 2,
+          "method" => "tools/call",
+          "params" => %{
+            "name" => "unknown_tool",
+            "arguments" => %{"action" => "test"}
+          }
+        })
+
+      assert json_response(tool_conn, 400)
+      [request_id] = get_resp_header(tool_conn, "x-request-id")
+
+      # The router refused it before the gate, under the request's call id:
+      # the row is the refusal's, with its class, and there is one.
+      assert [log] = rows(request_id)
+      assert "call_" <> _ = log.id
+      assert log.status == "error"
+      assert log.refusal_class == "not_found"
+      assert log.tool == "unknown_tool"
+
+      import Ecto.Query
+
+      assert [%{admission: "refused", refusal_class: "not_found", call_id: call_id}] =
+               Arca.Repo.all(
+                 from(d in Arca.Schemas.DecisionLog, where: d.request_id == ^request_id)
+               )
+
+      assert call_id == log.id
+    end
+  end
+
+  describe "payload handling" do
+    test "handles large request body (100KB)", %{conn: conn} do
+      # Create a large payload (~100KB)
+      large_data = String.duplicate("x", 100_000)
+
+      conn =
+        conn
+        |> recycle()
+        |> put_req_header("content-type", "application/json")
+        |> mcp_post(%{
+          "jsonrpc" => "2.0",
+          "id" => 2,
+          "method" => "tools/call",
+          "params" => %{
+            "name" => "system",
+            "arguments" => %{"action" => "status", "extra" => large_data}
+          }
+        })
+
+      # 100KB is under the body limit, so the request is decoded and reaches
+      # the typed gate, which refuses the undeclared `extra` argument by
+      # name. A 413 here would mean the body limit sat below this size; a
+      # 200 would mean the gate silently dropped an unknown field.
+      body = json_response(conn, 400)
+      assert body["id"] == 2
+      assert body["error"]["code"] == -32602
+      assert body["error"]["message"] == "Unknown field: extra"
+    end
+
+    test "handles large response from tool", %{conn: conn} do
+      # Call a tool that returns substantial data
+      conn =
+        conn
+        |> recycle()
+        |> put_req_header("content-type", "application/json")
+        |> mcp_post(%{
+          "jsonrpc" => "2.0",
+          "id" => 3,
+          "method" => "tools/list"
+        })
+
+      assert json_response(conn, 200)
+      response = json_response(conn, 200)
+
+      # Verify we got a valid list back
+      assert is_list(response["result"]["tools"])
+    end
+  end
+
+  describe "CYFR error codes" do
+    test "an unsupported protocol version returns -32022 with the supported list",
+         %{conn: conn} do
+      # Declared consistently in both places, but not a revision we speak.
+      conn =
+        conn
+        |> recycle()
+        |> put_req_header("content-type", "application/json")
+        |> put_req_header("mcp-protocol-version", "1999-01-01")
+        |> post("/mcp", %{
+          "jsonrpc" => "2.0",
+          "id" => 1,
+          "method" => "server/discover",
+          "params" => %{
+            "_meta" => %{"io.modelcontextprotocol/protocolVersion" => "1999-01-01"}
+          }
+        })
+
+      response = json_response(conn, 400)
+
+      assert response["error"]["code"] == -32022
+      assert response["error"]["message"] =~ Prima.MCP.Protocol.version()
+    end
+
+    test "a header that disagrees with _meta returns -32020", %{conn: conn} do
+      # A gateway routes on the header while the server executes the body, so
+      # the two disagreeing is refused rather than resolved in favour of either.
+      conn =
+        conn
+        |> recycle()
+        |> put_req_header("content-type", "application/json")
+        |> put_req_header("mcp-protocol-version", Prima.MCP.Protocol.version())
+        |> post("/mcp", %{
+          "jsonrpc" => "2.0",
+          "id" => 1,
+          "method" => "server/discover",
+          "params" => %{
+            "_meta" => %{"io.modelcontextprotocol/protocolVersion" => "1999-01-01"}
+          }
+        })
+
+      response = json_response(conn, 400)
+
+      assert response["error"]["code"] == -32020
+      assert response["error"]["message"] =~ "does not match"
+    end
+
+    test "a missing protocol version header returns -32020", %{conn: conn} do
+      conn =
+        conn
+        |> recycle()
+        |> put_req_header("content-type", "application/json")
+        |> post("/mcp", %{"jsonrpc" => "2.0", "id" => 1, "method" => "server/discover"})
+
+      response = json_response(conn, 400)
+
+      assert response["error"]["code"] == -32020
+      assert response["error"]["message"] =~ "Missing required MCP-Protocol-Version"
+    end
+
+    test "CYFR error codes keep their numbers" do
+      alias Prima.MCP.Message
+
+      # Wire error codes are stable client contracts; unused numbers must not be reassigned.
+      assert Message.error_code(:rate_limited) == -33304
+      assert Message.error_code(:request_cancelled) == -33305
+
+      # Auth: -33000 to -33099
+      assert Message.error_code(:auth_required) == -33001
+      assert Message.error_code(:auth_invalid) == -33002
+      assert Message.error_code(:insufficient_permissions) == -33004
+
+      # Execution: -33100 to -33199, one per refusal class
+      assert Message.error_code(:internal) == -33100
+      assert Message.error_code(:conflict) == -33101
+      assert Message.error_code(:not_owner) == -33102
+      assert Message.error_code(:unavailable) == -33103
+      assert Message.error_code(:corrupt) == -33104
+      assert Message.error_code(:timeout) == -33105
+      assert Message.error_code(:uncertain) == -33106
+
+      # Registry: -33200 to -33299
+
+      # An unknown atom falls back to the JSON-RPC internal error.
+      assert Message.error_code(:no_such_error) == -32603
+    end
+
+    test "encode_error/4 handles CYFR error code atoms", %{conn: _conn} do
+      alias Prima.MCP.Message
+
+      # Verify encode_error produces correct code for CYFR atoms
+      error = Message.encode_error(1, :rate_limited, "Test error")
+      assert error["error"]["code"] == -33304
+
+      error = Message.encode_error(2, :auth_required, "Auth needed")
+      assert error["error"]["code"] == -33001
+
+      error = Message.encode_error(3, :internal, "Exec failed")
+      assert error["error"]["code"] == -33100
+    end
+  end
+
+  describe "mcp-protocol-version header" do
+    test "included on a discovery response", %{conn: conn} do
+      conn =
+        conn
+        |> put_req_header("content-type", "application/json")
+        |> mcp_post(%{"jsonrpc" => "2.0", "id" => 1, "method" => "server/discover"})
+
+      assert json_response(conn, 200)
+      assert get_resp_header(conn, "mcp-protocol-version") == [Prima.MCP.Protocol.version()]
+    end
+
+    test "included on notification 202 response", %{conn: conn} do
+      conn =
+        conn
+        |> recycle()
+        |> put_req_header("content-type", "application/json")
+        |> mcp_post(%{"jsonrpc" => "2.0", "method" => "notifications/cancelled"})
+
+      assert response(conn, 202)
+      assert get_resp_header(conn, "mcp-protocol-version") == [Prima.MCP.Protocol.version()]
+    end
+
+    test "included on a protocol error response", %{conn: conn} do
+      # No version header at all — rejected before anything else runs.
+      conn =
+        conn
+        |> put_req_header("content-type", "application/json")
+        |> post("/mcp", %{"jsonrpc" => "2.0", "id" => 1, "method" => "tools/list"})
+
+      assert json_response(conn, 400)
+      assert get_resp_header(conn, "mcp-protocol-version") == [Prima.MCP.Protocol.version()]
+    end
+
+    test "included on error responses", %{conn: conn} do
+      # Initialize first
+
+      conn =
+        conn
+        |> recycle()
+        |> put_req_header("content-type", "application/json")
+        |> mcp_post(%{
+          "jsonrpc" => "2.0",
+          "id" => 2,
+          "method" => "tools/call",
+          "params" => %{
+            "name" => "nonexistent/tool",
+            "arguments" => %{}
+          }
+        })
+
+      assert json_response(conn, 400)
+      assert get_resp_header(conn, "mcp-protocol-version") == [Prima.MCP.Protocol.version()]
+    end
+
+    test "included on batch rejection response", %{conn: conn} do
+      # Send a batch (array) which should be rejected
+      # Must encode manually since Phoenix ConnTest.post/3 expects a map
+      batch_body =
+        Jason.encode!([
+          %{"jsonrpc" => "2.0", "id" => 1, "method" => "server/discover"},
+          %{"jsonrpc" => "2.0", "id" => 2, "method" => "server/discover"}
+        ])
+
+      conn =
+        conn
+        |> put_req_header("content-type", "application/json")
+        |> Plug.Conn.put_req_header("content-type", "application/json")
+        |> Phoenix.ConnTest.dispatch(CyfrWeb.Endpoint, :post, "/mcp", batch_body)
+
+      # Through the real pipeline Plug.Parsers delivers the array as
+      # %{"_json" => [...]} — assert the dedicated batch rejection fires,
+      # not the generic session error.
+      response = json_response(conn, 400)
+      assert response["error"]["code"] == -32600
+      assert response["error"]["message"] =~ "Batch requests not supported"
+      assert get_resp_header(conn, "mcp-protocol-version") == [Prima.MCP.Protocol.version()]
+    end
+  end
+
+  defmodule AnonymousAuthProvider do
+    @moduledoc false
+    # An auth provider IS configured, but this caller presented no credential.
+    def current_user(_conn), do: nil
+  end
+
+  describe "subscriptions/listen gating" do
+    setup do
+      ctx = Sanctum.TestContext.issuer!(Sanctum.TestContext.local())
+
+      {:ok, key_result} =
+        Sanctum.TestContext.create_key(ctx, %{name: "listen-gate-key", type: :application})
+
+      {:ok, api_key: key_result.api_key}
+    end
+
+    test "an uncredentialed caller cannot hold a stream open", %{conn: conn} do
+      Application.put_env(:sanctum, :auth_provider, AnonymousAuthProvider)
+
+      conn =
+        conn
+        |> put_req_header("content-type", "application/json")
+        |> mcp_post(%{
+          "jsonrpc" => "2.0",
+          "id" => 1,
+          "method" => "subscriptions/listen",
+          "params" => %{"notifications" => %{"toolsListChanged" => true}}
+        })
+
+      assert conn.status == 401
+      response = json_response(conn, 401)
+      assert response["error"]["code"] == Prima.MCP.Message.error_code(:auth_required)
+    end
+
+    test "the uncredentialed listen is one recorded refusal, rendered once", %{conn: conn} do
+      import Ecto.Query, only: [from: 2]
+
+      Application.put_env(:sanctum, :auth_provider, AnonymousAuthProvider)
+
+      conn =
+        conn
+        |> put_req_header("content-type", "application/json")
+        |> mcp_post(%{
+          "jsonrpc" => "2.0",
+          "id" => 7,
+          "method" => "subscriptions/listen",
+          "params" => %{"notifications" => %{}}
+        })
+
+      response = json_response(conn, 401)
+      assert response["id"] == 7
+      assert get_resp_header(conn, "www-authenticate") == ["Bearer"]
+
+      assert [Prima.MCP.Protocol.version()] ==
+               get_resp_header(conn, Prima.MCP.Protocol.protocol_version_header())
+
+      assert [request_id] = get_resp_header(conn, "x-request-id")
+
+      assert [decision] =
+               Arca.Repo.all(
+                 from(d in Arca.Schemas.DecisionLog,
+                   where: d.request_id == ^request_id
+                 )
+               )
+
+      assert decision.admission == "refused"
+      assert decision.refusal_class == "unauthenticated"
+      assert decision.plane == "external"
+      assert is_nil(decision.athanor_id)
+    end
+
+    test "an install with no auth provider still refuses an uncredentialed caller", %{conn: conn} do
+      # The operator authenticates with an API key on these installs too, so
+      # a request carrying nothing is a stranger here as well.
+      Application.delete_env(:sanctum, :auth_provider)
+
+      conn =
+        conn
+        |> put_req_header("content-type", "application/json")
+        |> mcp_post(%{
+          "jsonrpc" => "2.0",
+          "id" => 1,
+          "method" => "subscriptions/listen",
+          "params" => %{"notifications" => %{}}
+        })
+
+      assert conn.status == 401
+    end
+
+    test "a credentialed caller opens the stream", %{conn: conn, api_key: api_key} do
+      # A test conn's chunk writes always succeed, so nothing would close the
+      # stream before its deadline — bound the window to milliseconds and let
+      # the graceful close end it.
+      Cyfr.Test.Settings.put("mcp_subscription_max_ms", 50)
+
+      conn =
+        conn
+        |> put_req_header("content-type", "application/json")
+        |> put_req_header("authorization", "Bearer #{api_key}")
+        |> mcp_post(%{
+          "jsonrpc" => "2.0",
+          "id" => 1,
+          "method" => "subscriptions/listen",
+          "params" => %{"notifications" => %{}}
+        })
+
+      assert conn.status == 200
+      assert get_resp_header(conn, "content-type") |> hd() =~ "text/event-stream"
+    end
+
+    test "an exhausted per-user slot budget refuses with rate_limited", %{
+      conn: conn,
+      api_key: api_key
+    } do
+      # One stream the key holds open fills a budget of one; the next the
+      # same key asks for is refused while it stays open.
+      Cyfr.Test.Settings.put("mcp_subscription_max_concurrent", 1)
+      Cyfr.Test.Settings.put("mcp_subscription_max_ms", 5_000)
+
+      listen = fn conn ->
+        conn
+        |> put_req_header("content-type", "application/json")
+        |> put_req_header("authorization", "Bearer #{api_key}")
+        |> mcp_post(%{
+          "jsonrpc" => "2.0",
+          "id" => 1,
+          "method" => "subscriptions/listen",
+          "params" => %{"notifications" => %{"toolsListChanged" => true}}
+        })
+      end
+
+      open = Task.async(fn -> listen.(conn) end)
+      on_exit(fn -> Process.exit(open.pid, :kill) end)
+
+      Prima.Test.Wait.wait_until(fn -> Registry.count(CyfrWeb.SSE.Registry) == 1 end)
+
+      conn = listen.(recycle(conn))
+
+      assert conn.status == 429
+      response = json_response(conn, 429)
+      assert response["error"]["code"] == Prima.MCP.Message.error_code(:rate_limited)
+    end
+  end
+end

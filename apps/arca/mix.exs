@@ -14,11 +14,19 @@ defmodule Arca.MixProject do
       lockfile: "../../mix.lock",
       elixir: "~> 1.19",
       elixirc_paths: elixirc_paths(Mix.env()),
+      compilers: compilers(Mix.env()),
       start_permanent: Mix.env() == :prod,
       aliases: aliases(),
       deps: deps()
     ]
   end
+
+  # The Boundary compiler checks every layer edge in dev and prod; the
+  # forced dev compile with warnings as errors is the enforcement. Test
+  # support reaches internals by design, because a test tests what it
+  # tests, so the test environment compiles without it.
+  defp compilers(:test), do: Mix.compilers()
+  defp compilers(_env), do: [:boundary] ++ Mix.compilers()
 
   defp elixirc_paths(:test), do: ["lib", "test/support"]
   defp elixirc_paths(_), do: ["lib"]
@@ -38,9 +46,12 @@ defmodule Arca.MixProject do
   # `:arca, :storage_adapter`.
   defp deps do
     [
-      {:cyfr_contracts, in_umbrella: true},
+      {:prima, in_umbrella: true},
+      # The layer edges as compile errors: the Boundary compiler checks
+      # every `use Boundary` declaration in this application.
+      {:boundary, "~> 0.11.0", runtime: false},
       {:ecto_sql, "~> 3.12"},
-      {:ecto_sqlite3, "~> 0.22.0"},
+      {:ecto_sqlite3, "~> 0.23.0"},
       {:exqlite, "~> 0.22"},
       {:postgrex, "~> 0.21"},
       {:jason, "~> 1.4"},

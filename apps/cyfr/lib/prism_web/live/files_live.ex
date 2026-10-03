@@ -35,7 +35,7 @@ defmodule PrismWeb.FilesLive do
      |> allow_upload(:files,
        accept: :any,
        max_entries: 10,
-       max_file_size: Cyfr.Files.max_write()
+       max_file_size: Arca.Files.max_write()
      )}
   end
 
@@ -56,7 +56,7 @@ defmodule PrismWeb.FilesLive do
   def handle_info(:load, socket), do: {:noreply, load(socket)}
 
   def handle_info(msg, socket) do
-    Cyfr.UnexpectedMessage.log(__MODULE__, msg, :debug)
+    Prima.LoggerContext.unexpected(__MODULE__, msg, :debug)
     {:noreply, socket}
   end
 

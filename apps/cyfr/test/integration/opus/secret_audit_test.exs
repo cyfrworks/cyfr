@@ -30,9 +30,9 @@ defmodule Opus.SecretAuditTest do
 
   import ExUnit.CaptureLog
 
-  alias Cyfr.Authority
-  alias Cyfr.Authority.Blob
-  alias Cyfr.Authority.Blob.Edge
+  alias Prima.Authority
+  alias Prima.Authority.Blob
+  alias Prima.Authority.Blob.Edge
   alias Cyfr.Test.{AttemptFixtures, ChatFixture, OpusService, TwoServices}
 
   @moduletag timeout: 120_000
@@ -76,10 +76,10 @@ defmodule Opus.SecretAuditTest do
 
     on_exit(fn -> :telemetry.detach(attach_id) end)
 
-    ctx = Sanctum.TestContext.local()
+    ctx = Sanctum.TestContext.local(:api)
 
     on_exit(fn ->
-      Cyfr.Slots.forgive_unreaped(Cyfr.Execution.Slots, ctx.athanor_id)
+      Prima.Slots.forgive_unreaped(Crucible.Slots, ctx.athanor_id)
 
       for {{app, key}, value} <- previous do
         case value do
@@ -150,13 +150,14 @@ defmodule Opus.SecretAuditTest do
   # and answer its result, its id, what its stream and the executions topic
   # carried, and the log.
   defp probe!(ctx, authority) do
-    id = Cyfr.UUID7.execution_id()
-    :ok = Cyfr.Execution.subscribe_events(id, ctx)
-    :ok = Phoenix.PubSub.subscribe(Emissary.PubSub, Cyfr.Bus.executions(ctx.athanor_id))
+    id = Prima.UUID7.execution_id()
+    :ok = Crucible.subscribe_events(id, ctx)
+    actor = Sanctum.Context.actor(ctx)
+    :ok = Cyfr.Bus.subscribe(actor, Cyfr.Bus.executions(actor))
 
     {result, log} =
       with_log(fn ->
-        Cyfr.Execution.Dispatch.run(ctx, @ref, %{"operation" => "probe"},
+        Crucible.Dispatch.run(ctx, @ref, %{"operation" => "probe"},
           type: :catalyst,
           authority: authority,
           execution_id: id
@@ -170,7 +171,8 @@ defmodule Opus.SecretAuditTest do
   # message but the sink's.
   defp drain do
     receive do
-      message when elem(message, 0) != :audited -> [message | drain()]
+      message when not is_tuple(message) or elem(message, 0) != :audited ->
+        [message | drain()]
     after
       200 -> []
     end
@@ -193,7 +195,7 @@ defmodule Opus.SecretAuditTest do
   defp identity(ctx, id, authority) do
     row = Arca.ExecutionAttempts.current(Sanctum.Context.actor(ctx), id)
     [%{args: %{"assignment" => token}} | _] = TwoServices.calls(:attach, id)
-    {:ok, assignment} = Cyfr.Assignment.read(token)
+    {:ok, assignment} = Prima.Assignment.read(token)
 
     %{
       athanor_id: ctx.athanor_id,
@@ -277,8 +279,8 @@ defmodule Opus.SecretAuditTest do
       {authority, _entry} =
         AttemptFixtures.vault_authority!(ctx, %{kind: "api_key", fields: %{"KEY" => @canary}})
 
-      mine = AttemptFixtures.attached!(authority: authority)
-      other = AttemptFixtures.attached!()
+      mine = AttemptFixtures.attached!(ctx: Sanctum.TestContext.local(:api), authority: authority)
+      other = AttemptFixtures.attached!(ctx: Sanctum.TestContext.local(:api))
       {:ok, mine: mine, other: other}
     end
 
@@ -317,6 +319,7 @@ defmodule Opus.SecretAuditTest do
          %{mine: mine, other: other} do
       body =
         Jason.encode!(%{
+          "v" => 1,
           "op" => "record_denial",
           "args" => %{
             "type" => "secret_denied",

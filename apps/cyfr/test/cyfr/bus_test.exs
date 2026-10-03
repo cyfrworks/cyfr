@@ -2,12 +2,20 @@
 # Copyright 2026 CYFR Works Inc.
 
 defmodule Cyfr.BusTest do
-  use ExUnit.Case, async: true
+  @moduledoc """
+  The bus owns every topic: the tenant prefix and its refusals, the exact
+  global roster, the page scope, the checks every publish and subscribe
+  passes, and — by source scan — that nothing else in any `lib` tree
+  reaches the PubSub server, spells a topic or sends a retired message.
+  """
+  use ExUnit.Case, async: false
 
   alias Cyfr.Bus
-  alias Sanctum.Context
+  alias Cyfr.Bus.{Execution, Notify, Progress, RoomInView, Session, Viewing}
 
-  @scoped_1 [
+  defp actor(athanor_id), do: Prima.Actor.in_athanor(athanor_id)
+
+  @tenant_1 [
     :executions,
     :requests,
     :components,
@@ -19,68 +27,68 @@ defmodule Cyfr.BusTest do
     :api_keys,
     :mcp_servers,
     :schedules,
-    :vault_changed
+    :vault_changed,
+    :notify
   ]
 
-  @scoped_2 [:build, :register, :progress, :execution_events, :thread]
+  @tenant_2 [
+    execution_events: "exec_1",
+    thread: "thr_1",
+    progress: {:build, "b1"},
+    cards: "usr_1",
+    layouts: "usr_1"
+  ]
 
-  defp ctx(athanor_id), do: %Context{user_id: "u1", athanor_id: athanor_id}
+  describe "the tenant prefix" do
+    test "is tenant:<athanor_id>:, taken from the actor" do
+      assert Bus.prefix(actor("ath_1")) == "tenant:ath_1:"
+    end
 
-  describe "athanor-scoped topics" do
-    test "every one carries the tenant prefix and the bus: vocabulary" do
-      for fun <- @scoped_1 do
-        topic = apply(Bus, fun, [ctx("ath_1")])
+    test "an actor with a nil or empty athanor raises rather than routing somewhere" do
+      for athanor <- [nil, ""] do
+        assert_raise ArgumentError, fn -> Bus.prefix(%Prima.Actor{athanor_id: athanor}) end
 
-        assert String.starts_with?(topic, "tenant:ath_1:"),
-               "#{fun}/1 is not tenant-prefixed"
-
-        # One vocabulary: every tenant topic is spelled under `bus:`.
-        assert String.starts_with?(topic, "tenant:ath_1:bus:"),
-               "#{fun}/1 does not use the bus: vocabulary"
-      end
-
-      for fun <- @scoped_2 do
-        assert String.starts_with?(apply(Bus, fun, ["id_1", ctx("ath_1")]), "tenant:ath_1:"),
-               "#{fun}/2 is not tenant-prefixed"
+        for fun <- @tenant_1 do
+          assert_raise ArgumentError, fn ->
+            apply(Bus, fun, [%Prima.Actor{athanor_id: athanor}])
+          end
+        end
       end
     end
 
-    test "a Context and a bare athanor id name the same topic" do
-      for fun <- @scoped_1 do
-        assert apply(Bus, fun, [ctx("ath_1")]) == apply(Bus, fun, ["ath_1"])
-      end
-
-      for fun <- @scoped_2 do
-        assert apply(Bus, fun, ["id_1", ctx("ath_1")]) ==
-                 apply(Bus, fun, ["id_1", "ath_1"])
+    test "anything but an actor raises" do
+      for other <- [nil, "ath_1", %{athanor_id: "ath_1"}] do
+        assert_raise ArgumentError, fn -> Bus.prefix(other) end
       end
     end
 
-    test "two athanors never share a topic" do
-      for fun <- @scoped_1 do
-        refute apply(Bus, fun, [ctx("ath_1")]) == apply(Bus, fun, [ctx("ath_2")])
+    test "every tenant topic carries it, and two athanors never share one" do
+      for fun <- @tenant_1 do
+        topic = apply(Bus, fun, [actor("ath_1")])
+        assert String.starts_with?(topic, "tenant:ath_1:"), "#{fun}/1 is not tenant-prefixed"
+        refute topic == apply(Bus, fun, [actor("ath_2")])
       end
-    end
 
-    test "an unresolved athanor raises rather than routing somewhere" do
-      for fun <- @scoped_1 do
-        assert_raise ArgumentError, fn -> apply(Bus, fun, [ctx(nil)]) end
+      for {fun, subject} <- @tenant_2 do
+        topic = apply(Bus, fun, [actor("ath_1"), subject])
+        assert String.starts_with?(topic, "tenant:ath_1:"), "#{fun}/2 is not tenant-prefixed"
       end
     end
 
     test "every name is distinct" do
-      names = Enum.map(@scoped_1, &apply(Bus, &1, [ctx("ath_1")]))
+      names = Enum.map(@tenant_1, &apply(Bus, &1, [actor("ath_1")]))
       assert length(Enum.uniq(names)) == length(names)
     end
 
-    test "schedule rows and schedule firings are different topics" do
-      # One word apart in the vocabulary, two different message shapes:
-      # `:schedules_updated` vs `{:schedule_fired, meta, meas}`.
-      refute Bus.schedules(ctx("ath_1")) == Bus.schedule_runs(ctx("ath_1"))
+    test "a request's progress and a subject's are different topics" do
+      a = actor("ath_1")
+      refute Bus.progress(a, {:build, "x"}) == Bus.progress(a, {:request, "x"})
+      refute Bus.progress(a, {:build, "x"}) == Bus.progress(a, {:pull, "x"})
+      assert_raise FunctionClauseError, fn -> apply(Bus, :progress, [a, {:other, "x"}]) end
     end
   end
 
-  describe "global topics" do
+  describe "the global topics" do
     test "carry no tenant prefix" do
       for topic <- [
             Bus.vault_changed_global(),
@@ -89,34 +97,447 @@ defmodule Cyfr.BusTest do
             Bus.sessions(),
             Bus.memberships("user_1"),
             Bus.platform_notify(),
-            Bus.health_check(7)
+            Bus.health_check(7),
+            Bus.schedule_completions()
           ] do
         refute String.starts_with?(topic, "tenant:"), "#{topic} should be global"
       end
     end
 
-    test "global/0 lists exactly the unscoped topics" do
-      listed = Enum.map(Bus.global(), &elem(&1, 0))
-
-      assert listed == [
+    test "global/0 lists exactly the unscoped topics, each with its reason" do
+      assert Enum.map(Bus.global(), &elem(&1, 0)) == [
                "sanctum:vault_changed",
                "sanctum:athanor_archived",
                "sanctum:caller_invalidated",
                "sanctum:sessions",
                "sanctum:memberships:<user_id>",
                "platform:notify",
-               "health_check:<nonce>"
+               "health_check:<nonce>",
+               "cyfr:schedule_completions",
+               "cyfr:settings_changed"
              ]
 
-      for {_topic, reason} <- Bus.global() do
-        assert is_binary(reason) and reason != ""
+      for {_topic, reason} <- Bus.global(), do: assert(is_binary(reason) and reason != "")
+    end
+
+    test "only a global topic passes the global doors" do
+      assert :ok = Bus.subscribe_global(Bus.sessions())
+      assert :ok = Bus.unsubscribe_global(Bus.sessions())
+
+      assert_raise ArgumentError, fn -> Bus.subscribe_global(Bus.executions(actor("ath_1"))) end
+      assert_raise ArgumentError, fn -> Bus.subscribe_global("sanctum:other") end
+
+      assert_raise ArgumentError, fn ->
+        Bus.broadcast_global(Bus.executions(actor("ath_1")), Session.new(:created))
+      end
+
+      # A global topic carries its own struct and no other.
+      assert_raise ArgumentError, fn ->
+        Bus.broadcast_global(Bus.sessions(), Notify.platform(:allowlist_changed))
       end
     end
 
-    test "the tray topic is tenant-prefixed and agrees with Sanctum.Notify" do
-      # Notify.topic/1 uses the shared tenant-topic builder.
-      assert Bus.notify("ath_1") == Sanctum.Notify.topic("ath_1")
-      assert String.starts_with?(Bus.notify("ath_1"), "tenant:ath_1:")
+    test "the standing announcements are one subscription, and one undo" do
+      :ok = Bus.subscribe_standing("user_standing")
+
+      subscribed = Registry.keys(Cyfr.PubSub, self())
+
+      for topic <- [
+            Bus.sessions(),
+            Bus.caller_invalidated_global(),
+            Bus.athanor_archived_global(),
+            Bus.memberships("user_standing")
+          ] do
+        assert topic in subscribed
+      end
+
+      :ok = Bus.unsubscribe_standing("user_standing")
+      assert Registry.keys(Cyfr.PubSub, self()) == []
+
+      # A caller with no person hears the three that are not keyed by one.
+      :ok = Bus.subscribe_standing(nil)
+      assert length(Registry.keys(Cyfr.PubSub, self())) == 3
+      :ok = Bus.unsubscribe_standing(nil)
     end
+  end
+
+  describe "the page topics" do
+    test "stay on this node and carry their own structs" do
+      topic = Bus.page_viewing(self())
+      assert :ok = Bus.subscribe_page(topic)
+      assert :ok = Bus.broadcast_page(topic, Viewing.new("ath_1"))
+      assert_receive %Viewing{athanor_id: "ath_1"}
+
+      assert_raise ArgumentError, fn -> Bus.broadcast_page(topic, RoomInView.new(nil)) end
+      assert_raise ArgumentError, fn -> Bus.subscribe_page(Bus.sessions()) end
+
+      room = Bus.room_feed("phx-1")
+      :ok = Bus.subscribe_page(room)
+      :ok = Bus.broadcast_page(room, RoomInView.new(%{"thread_id" => "t"}))
+      assert_receive %RoomInView{room: %{"thread_id" => "t"}}
+    end
+  end
+
+  describe "a tenant publish" do
+    setup do
+      test = self()
+      handler = "bus-refused-#{System.unique_integer([:positive])}"
+
+      :telemetry.attach(
+        handler,
+        [:cyfr, :bus, :publish_refused],
+        fn _event, measurements, metadata, _config ->
+          send(test, {:refused, measurements, metadata})
+        end,
+        nil
+      )
+
+      on_exit(fn -> :telemetry.detach(handler) end)
+      :ok
+    end
+
+    test "reaches the tenant's subscribers when topic, actor and payload agree" do
+      a = actor("ath_pub")
+      :ok = Bus.subscribe(a, Bus.executions(a))
+      assert :ok = Bus.broadcast(a, Bus.executions(a), Execution.new(a, :started))
+      assert_receive %Execution{athanor_id: "ath_pub", kind: :started}
+    end
+
+    test "is refused and counted when the topic is another tenant's" do
+      a = actor("ath_a")
+      b = actor("ath_b")
+      :ok = Bus.subscribe(b, Bus.executions(b))
+
+      assert {:error, :cross_tenant} =
+               Bus.broadcast(a, Bus.executions(b), Execution.new(a, :started))
+
+      assert_receive {:refused, %{count: 1},
+                      %{athanor_id: "ath_a", payload: Execution, topic_key: :executions}}
+
+      refute_receive %Execution{}, 100
+    end
+
+    test "is refused when the payload names another tenant" do
+      a = actor("ath_a")
+      b = actor("ath_b")
+      :ok = Bus.subscribe(a, Bus.executions(a))
+
+      assert {:error, :cross_tenant} =
+               Bus.broadcast(a, Bus.executions(a), Execution.new(b, :started))
+
+      assert_receive {:refused, %{count: 1}, %{payload: Execution}}
+      refute_receive %Execution{}, 100
+    end
+
+    test "is refused when the payload is not the topic's struct" do
+      a = actor("ath_a")
+
+      assert {:error, :cross_tenant} =
+               Bus.broadcast(a, Bus.executions(a), Notify.new(a, :member_changed))
+
+      assert_receive {:refused, _, %{payload: Notify, topic_key: :executions}}
+    end
+
+    test "is refused for an actor that names no athanor" do
+      assert {:error, :cross_tenant} =
+               Bus.broadcast(
+                 %Prima.Actor{athanor_id: nil},
+                 Bus.executions(actor("ath_a")),
+                 Execution.new(actor("ath_a"), :started)
+               )
+    end
+
+    test "of progress reaches the subject's topic and its request's" do
+      a = actor("ath_progress_pub")
+      :ok = Bus.subscribe(a, Bus.progress(a, {:pull, "p1"}))
+      :ok = Bus.subscribe(a, Bus.progress(a, {:request, "req_1"}))
+
+      step = Progress.new(a, {:pull, "p1"}, request_id: "req_1", phase: :pulling)
+      assert :ok = Bus.broadcast_progress(a, step)
+
+      assert_receive %Progress{subject: {:pull, "p1"}}
+      assert_receive %Progress{subject: {:pull, "p1"}}
+    end
+  end
+
+  describe "a tenant subscribe" do
+    test "to another tenant's topic is refused" do
+      assert {:error, :cross_tenant} =
+               Bus.subscribe(actor("ath_a"), Bus.executions(actor("ath_b")))
+
+      assert {:error, :cross_tenant} = Bus.subscribe(actor("ath_a"), Bus.sessions())
+      assert {:error, :cross_tenant} = Bus.subscribe(actor("ath_a"), "tenant:ath_a:not_a_topic")
+      assert Registry.keys(Cyfr.PubSub, self()) == []
+    end
+  end
+
+  describe "a payload's refusal" do
+    test "is a class and a sentence cut to 200 bytes on a character boundary, never the term" do
+      assert Cyfr.Bus.Payload.refusal(nil) == nil
+
+      assert Cyfr.Bus.Payload.refusal(:timeout) ==
+               %{class: :timeout, message: Prima.Refusal.message(:timeout)}
+
+      assert %{class: :internal, message: "short"} = Cyfr.Bus.Payload.refusal("short")
+
+      %{message: cut} = Cyfr.Bus.Payload.refusal(String.duplicate("é", 150))
+      assert byte_size(cut) <= 200 and String.valid?(cut)
+
+      ExUnit.CaptureLog.capture_log(fn ->
+        for other <- [{:error, %{token: "sk"}}, %{a: 1}, [1], 42, self()] do
+          assert Cyfr.Bus.Payload.refusal(other) ==
+                   %{class: :internal, message: "The outcome could not be confirmed."}
+        end
+      end)
+
+      refute function_exported?(Bus, :bounded_reason, 1)
+    end
+  end
+
+  # ---------------------------------------------------------------------------
+  # Streams: the roster keys a grant names, and the boot check
+  # ---------------------------------------------------------------------------
+
+  defp grant(topic, subject) do
+    %Prima.StreamGrant{
+      topic: topic,
+      projection: ["kind"],
+      subject: subject,
+      deadline: DateTime.utc_now(),
+      grant_id: "sgr_1"
+    }
+  end
+
+  defp stream(name, topic, subject \\ nil) do
+    %Prima.Provider.Stream{
+      name: name,
+      topic: topic,
+      projection: ["kind"],
+      subject: subject,
+      deadline_bound: 60
+    }
+  end
+
+  describe "topic?/1" do
+    test "knows every roster key, as an atom or its string, and nothing else" do
+      for %{key: key} <- Bus.topics() do
+        assert Bus.topic?(key)
+        assert Bus.topic?(Atom.to_string(key))
+      end
+
+      refute Bus.topic?(:no_such_topic)
+      refute Bus.topic?("no_such_topic")
+      refute Bus.topic?("tenant:ath_1:bus:mcp_servers")
+      refute Bus.topic?(nil)
+      refute Bus.topic?(42)
+    end
+  end
+
+  describe "a stream grant's topic" do
+    test "is the key under the holder's tenant prefix" do
+      assert Bus.granted_topic(actor("ath_1"), grant(:mcp_servers, nil)) ==
+               Bus.mcp_servers(actor("ath_1"))
+
+      assert Bus.granted_topic(actor("ath_1"), grant(:execution_events, "exec_1")) ==
+               Bus.execution_events(actor("ath_1"), "exec_1")
+    end
+
+    test "for a person's cards is that person's own topic, and no other person's" do
+      mine = Bus.granted_topic(actor("ath_1"), grant(:cards, "usr_a"))
+      assert mine == Bus.cards(actor("ath_1"), "usr_a")
+      refute mine == Bus.cards(actor("ath_1"), "usr_b")
+      assert Bus.grantable?(:cards, true)
+      refute Bus.grantable?(:cards, false)
+    end
+
+    test "is the holder's own, so the bus's tenant check admits it and no other's" do
+      topic = Bus.granted_topic(actor("ath_1"), grant(:mcp_servers, nil))
+      assert :ok = Bus.subscribe(actor("ath_1"), topic)
+      assert {:error, :cross_tenant} = Bus.subscribe(actor("ath_2"), topic)
+    end
+
+    test "refuses a key that is not a tenant row, or a subject its row does not take" do
+      for {key, subject} <- [
+            {:sessions, nil},
+            {:page_viewing, "x"},
+            {:no_such_topic, nil},
+            {:mcp_servers, "x"},
+            {:execution_events, nil},
+            {:execution_events, ""}
+          ] do
+        assert_raise ArgumentError, fn ->
+          Bus.granted_topic(actor("ath_1"), grant(key, subject))
+        end
+      end
+    end
+
+    test "grantable?/2 answers the same shapes" do
+      assert Bus.grantable?(:mcp_servers, false)
+      refute Bus.grantable?(:mcp_servers, true)
+      assert Bus.grantable?(:execution_events, true)
+      refute Bus.grantable?(:execution_events, false)
+      refute Bus.grantable?(:sessions, false)
+      refute Bus.grantable?(:no_such_topic, false)
+    end
+  end
+
+  describe "the boot check on declared streams" do
+    test "passes the table this boot loaded" do
+      assert Cyfr.Application.check_stream_topics!() == :ok
+      assert Cyfr.Application.stream_topic_findings(Grimoire.Catalog.stream_entries()) == []
+    end
+
+    test "refuses a stream naming no rostered topic, naming the provider, stream and topic" do
+      entries = [
+        {Emissary.External.Provider, stream("mcp_servers.changes", :mcp_servers)},
+        {Some.Provider, stream("some.stream", :no_such_topic)}
+      ]
+
+      error =
+        assert_raise RuntimeError, fn -> Cyfr.Application.check_stream_topics!(entries) end
+
+      assert error.message =~ "refusing to boot"
+      assert error.message =~ "Some.Provider declares some.stream on :no_such_topic"
+      refute error.message =~ "mcp_servers.changes"
+    end
+
+    test "refuses a stream on a topic no grant can scope" do
+      assert [finding] =
+               Cyfr.Application.stream_topic_findings([
+                 {Some.Provider, stream("some.sessions", :sessions)}
+               ])
+
+      assert finding =~ "Some.Provider declares some.sessions on :sessions"
+
+      assert [_subject_shape] =
+               Cyfr.Application.stream_topic_findings([
+                 {Some.Provider, stream("some.servers", :mcp_servers, ~S"\A[a-z]+\z")}
+               ])
+    end
+  end
+
+  # ---------------------------------------------------------------------------
+  # The tree
+  # ---------------------------------------------------------------------------
+
+  defp root, do: Path.expand("../../../..", __DIR__)
+
+  # The bus's own file and its bounded dispatcher are the one place the
+  # PubSub server is named and a topic is spelled; the boundary catalog
+  # names every namespace it rosters and is read by its own scans.
+  @owners ["apps/cyfr/lib/cyfr/bus.ex", "apps/cyfr/lib/cyfr/bus/bounded_dispatcher.ex"] ++
+            Cyfr.Boundaries.scan_exclusions()
+
+  @topic_literals ~w("tenant: "sanctum:vault "sanctum:athanor "sanctum:caller "sanctum:sessions
+                     "sanctum:memberships "platform:notify "health_check: "room_feed:
+                     "topbar:viewing "page: "bus: "thread: "execution:events "progress:
+                     "cyfr:schedule_completions "cyfr:settings_changed)
+
+  @retired [
+    "{:execution_started,",
+    "{:execution_completed,",
+    "{:execution_failed,",
+    "{:policy_decision,",
+    "{:build_started,",
+    "{:build_progress,",
+    "{:build_stopped,",
+    "{:schedule_fired,",
+    "{:schedule_failed,",
+    "{:component_installed,",
+    "{:component_removed,",
+    "{:component_pushed,",
+    "{:tincture_invoke_started,",
+    "{:tincture_invoke_stopped,",
+    "{:tinctures_changed,",
+    "{:vault_entry_changed,",
+    "{:vault_entry_changed_global,",
+    "{:athanor_archived_global,",
+    "{:caller_invalidated,",
+    "{:session_created,",
+    "{:sessions_revoked,",
+    "{:membership_changed,",
+    "{:notify,",
+    "{:register_progress,",
+    "{:execution_event,",
+    "{:thread,",
+    "{:room_in_view,",
+    "{:viewing,",
+    "{:mcp_progress,",
+    ":components_changed",
+    ":schedules_updated",
+    ":mcp_servers_changed",
+    ":webhooks_changed",
+    ":api_keys_changed"
+  ]
+
+  defp lib_lines do
+    for lib <- Prima.Test.SourceTree.app_libs(root()),
+        path <- Prima.Test.SourceTree.files!(Path.join([root(), lib, "**/*.ex"])),
+        rel = Path.relative_to(path, root()),
+        rel not in @owners,
+        {line, n} <- Prima.Test.SourceTree.code_lines(path),
+        do: {rel, n, line}
+  end
+
+  test "the scan reads every lib tree" do
+    lines = lib_lines()
+    assert length(lines) > 10_000
+    assert Enum.any?(lines, fn {rel, _n, _line} -> String.starts_with?(rel, "apps/sanctum/") end)
+    assert Enum.any?(lines, fn {rel, _n, _line} -> String.starts_with?(rel, "apps/arca/") end)
+  end
+
+  test "no lib tree but the bus names the PubSub server or calls it" do
+    found =
+      for {rel, n, line} <- lib_lines(),
+          line =~ ~r/\bPhoenix\.PubSub\.|\bEmissary\.PubSub\b|\bCyfr\.PubSub\b/,
+          # The one process start and the one server name the endpoint reads.
+          rel != "apps/cyfr/lib/cyfr/application.ex",
+          do: "#{rel}:#{n}: #{String.trim(line)}"
+
+    assert found == []
+  end
+
+  test "no lib tree but the bus spells a topic" do
+    found =
+      for {rel, n, line} <- lib_lines(),
+          Enum.any?(@topic_literals, &String.contains?(line, &1)),
+          do: "#{rel}:#{n}: #{String.trim(line)}"
+
+    assert found == []
+  end
+
+  test "no lib tree sends or matches a retired message shape" do
+    found =
+      for {rel, n, line} <- lib_lines(),
+          Enum.any?(@retired, &String.contains?(line, &1)),
+          do: "#{rel}:#{n}: #{String.trim(line)}"
+
+    assert found == []
+  end
+
+  test "a planted reach, topic and retired shape are each found" do
+    planted = ~S'''
+    defmodule Planted do
+      def a, do: Phoenix.PubSub.broadcast(Cyfr.PubSub, "tenant:x:bus:executions", :x)
+      def b(msg), do: match?({:execution_started, _, _}, msg)
+    end
+    '''
+
+    lines = Prima.Test.CodeLines.code_lines(planted)
+
+    assert Enum.any?(lines, fn {line, _} -> line =~ ~r/\bPhoenix\.PubSub\./ end)
+    assert Enum.any?(lines, fn {line, _} -> String.contains?(line, ~s("tenant:)) end)
+    assert Enum.any?(lines, fn {line, _} -> Enum.any?(@retired, &String.contains?(line, &1)) end)
+  end
+
+  test "the retired helpers are gone" do
+    refute Code.ensure_loaded?(Sanctum.PubSub)
+    refute Code.ensure_loaded?(Prism.TelemetryBridge)
+    refute function_exported?(Sanctum.Notify, :topic, 1)
+    refute function_exported?(Sanctum.Notify, :platform_topic, 0)
+    refute function_exported?(Sanctum.Session, :topic, 0)
+    refute function_exported?(Sanctum.Tenancy.Members, :topic, 1)
+    refute function_exported?(Emissary.MCP.Progress, :emit, 2)
+    refute Code.ensure_loaded?(Emissary.MCP.Progress.Registry)
   end
 end

@@ -21,8 +21,8 @@ defmodule Sanctum.ToolServerDigest do
   row's epoch (process identity), which consent has no business pinning.
   """
 
-  alias Cyfr.JCS
-  alias Cyfr.ToolPattern
+  alias Prima.JCS
+  alias Prima.ToolPattern
 
   @doc "Compute the digest for a server's stored configuration."
   @spec compute(map()) :: {:ok, String.t()} | {:error, term()}
@@ -88,14 +88,14 @@ defmodule Sanctum.ToolServerDigest do
 
   Some upstream servers publish `parameters` instead of `inputSchema`; both
   the descriptions digest (here) and the exposed tool definition
-  (`Emissary.MCP.ExternalProvider`) must apply the identical mapping, or the
+  (`Emissary.External.Proxy`) must apply the identical mapping, or the
   digest silently stops covering the schema it is supposed to pin.
   """
   def normalize_input_schema(tool) when is_map(tool) do
     tool["inputSchema"] || tool["parameters"] || %{}
   end
 
-  @doc "The digest for a stored `Arca.Schemas.McpServer` row."
+  @doc "The digest for a stored server row (`Arca.McpServerStorage`)."
   @spec from_server(map()) :: {:ok, String.t()} | {:error, term()}
   def from_server(server) do
     config = Arca.McpServerStorage.config(server)

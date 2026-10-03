@@ -24,6 +24,7 @@ cat > "$scratch/bin/mix" <<'FAKE'
 #!/usr/bin/env bash
 set -eu
 printf '%s\n' "$1 ${!#}" >> "$TRACE/mix-calls"
+[ "${MIX_OS_CONCURRENCY_LOCK:-}" = 0 ] || printf '%s\n' "$1 ${!#}" >> "$TRACE/mix-calls-with-build-lock"
 case "$1" in
   compile)
     case "${CORRUPT_AFTER_COMPILE:-}" in
@@ -95,6 +96,13 @@ refuses -n 2 -a postgres apps/cyfr/test/cluster
 refuses -n 2 -a postgres test/cluster
 refuses -n 1 -a sqlite -- --include cluster
 CYFR_DATABASE_URL=bad refuses -n 1 -a postgres
+CYFR_TEST_CORES=0 refuses -n 1
+CYFR_TEST_CORES=many refuses -n 1
+
+# A caller's share of the cores sizes the partitions in place of the machine's.
+CYFR_TEST_CORES=6 bash "$runner" -n 2 >"$scratch/share" 2>&1 || fail 'a run on a share of the cores failed'
+grep -q '^==> compiling once (sqlite, 2 partitions, 3 schedulers each)$' "$scratch/share" || fail 'a share of the cores did not size the partitions'
+rm -f "$TRACE"/cyfr-t.*-p*
 
 # /bin/bash is Bash 3.2 on macOS; this specifically exercises empty "$@".
 /bin/bash "$runner" -n 2 >"$scratch/success" 2>&1
@@ -176,4 +184,36 @@ sleeper=$(cat "$TRACE/sleeper")
 if kill -0 "$sleeper" 2>/dev/null; then fail 'cancelled child survived'; fi
 cancel_dir=$(sed -n 's/^==> logs and disposable resources kept: //p' "$scratch/cancel")
 [ ! -f "$cancel_dir/p1/database-created" ] || fail 'cancelled run database was not cleaned'
+
+# Mix splits test files per application and refuses a partition the named
+# paths give no file. Here apps/one's paths hold two test files (a helper
+# and a dot-directory's file are not tests) and apps/two's one, so four
+# partitions run as two: the first with both applications' paths, the
+# second with apps/one's alone, and the last two not at all. An option, its
+# value and a missing path reach every started partition unchanged.
+tree="$scratch/tree"
+mkdir -p "$tree/apps/one/test/deep" "$tree/apps/one/test/.hidden" "$tree/apps/two/test" "$tree/apps/three/test"
+touch "$tree/apps/one/test/a_test.exs" "$tree/apps/one/test/deep/b_test.exs" "$tree/apps/one/test/test_helper.exs" \
+  "$tree/apps/one/test/.hidden/c_test.exs" "$tree/apps/two/test/only_test.exs" "$tree/apps/three/test/test_helper.exs"
+(cd "$tree" && bash "$runner" -n 4 -- --warnings-as-errors --only sparse apps/one/test ./apps/two/test/only_test.exs:12 \
+  apps/one/test/deep/b_test.exs:3 apps/two/missing_test.exs) >"$scratch/sparse" 2>&1 || fail 'sparse partitions failed'
+partitions_with() { grep -lxF -- "$1" "$TRACE"/cyfr-t.*-p* 2>/dev/null | sed 's/.*-p//' | sort | tr '\n' ' '; }
+[ "$(partitions_with apps/one/test)" = '1 2 ' ] || fail "apps/one reached partitions $(partitions_with apps/one/test)"
+[ "$(partitions_with apps/one/test/deep/b_test.exs:3)" = '1 2 ' ] || fail 'a named file of apps/one missed its partitions'
+[ "$(partitions_with ./apps/two/test/only_test.exs:12)" = '1 ' ] || fail 'apps/two reached a partition its one file does not fall to'
+[ "$(partitions_with apps/two/missing_test.exs)" = '1 2 ' ] || fail 'a missing path did not pass through'
+[ "$(partitions_with sparse)" = '1 2 ' ] || fail 'an option value did not pass through'
+for n in 3 4; do
+  grep -A1 -x "==> partition $n/4" "$scratch/sparse" | grep -q 'not started' || fail "partition $n's account does not say it was not started"
+done
+grep -q '^==> 4 partitions (2 not started: ' "$scratch/sparse" || fail 'the run does not count the partitions it did not start'
+grep -q 'exit 0$' "$scratch/sparse" || fail 'a run with partitions not started did not pass'
+
+# A named path that holds no test file is every partition's, so Mix says
+# so as it would.
+(cd "$tree" && bash "$runner" -n 2 -- apps/three/test) >"$scratch/empty-app" 2>&1 || fail 'the empty-application run failed'
+[ "$(partitions_with apps/three/test)" = '1 2 ' ] || fail 'a path with no test file was withheld from a partition'
+# Every Mix process of a run has Mix's build lock off.
+[ -s "$TRACE/mix-calls" ] || fail 'no Mix call was traced'
+[ ! -e "$TRACE/mix-calls-with-build-lock" ] || fail "Mix ran with its build lock on: $(sort -u "$TRACE/mix-calls-with-build-lock" | tr '\n' ' ')"
 echo 'partition runner tests passed'

@@ -3,11 +3,11 @@
 
 defmodule Sanctum.ProvisioningReadinessTest do
   @moduledoc """
-  What an estate answers while it is being filled.
+  What an athanor answers while it is being filled.
 
   The agent tree reads through the seed overlay from the moment the row
   exists, so a roster is real straight away. A component listing is
-  database rows and answers what is registered, which on a bare estate is
+  database rows and answers what is registered, which on a bare athanor is
   nothing until its scan lands. What provisioning adds is the baseline
   consent a turn pins, so a turn is what waits — and it says so, rather
   than failing later as a missing profile.
@@ -18,10 +18,10 @@ defmodule Sanctum.ProvisioningReadinessTest do
   alias Sanctum.Provisioning
   alias Sanctum.Tenancy.Athanors
 
-  # Another attempt — another boot's — holding the estate's claim.
+  # Another attempt — another boot's — holding the athanor's claim.
   defp held_elsewhere!(athanor_id) do
-    actor = %Cyfr.Actor{athanor_id: athanor_id}
-    {:ok, claim} = Claims.claim(actor, "boot_elsewhere/own_held", "first_need", 60_000)
+    actor = %Prima.Actor{athanor_id: athanor_id}
+    {:ok, claim} = Claims.claim(actor, "boot_elsewhere/own_held", "first_need", 60_000, :none)
     claim
   end
 
@@ -36,7 +36,7 @@ defmodule Sanctum.ProvisioningReadinessTest do
     {:ok, group: group, ctx: ctx}
   end
 
-  test "an unfilled estate is not ready, and asking starts the fill", %{ctx: ctx, group: group} do
+  test "an unfilled athanor is not ready, and asking starts the fill", %{ctx: ctx, group: group} do
     refute Provisioning.provisioned?(ctx)
     assert {:error, :not_provisioned} = Provisioning.ready(ctx)
 
@@ -46,13 +46,13 @@ defmodule Sanctum.ProvisioningReadinessTest do
     assert group.provisioned_at || Athanors.provisioning_failure(group)
   end
 
-  test "a filled estate is ready", %{ctx: ctx, group: group} do
+  test "a filled athanor is ready", %{ctx: ctx, group: group} do
     {:ok, _} = Athanors.mark_provisioned(group)
     assert Provisioning.provisioned?(ctx)
     assert :ok = Provisioning.ready(ctx)
   end
 
-  test "an addressed send to an unready estate refuses before acceptance", %{
+  test "an addressed send to an unready athanor refuses before acceptance", %{
     ctx: ctx,
     group: group
   } do
@@ -70,7 +70,7 @@ defmodule Sanctum.ProvisioningReadinessTest do
     assert [] = Arca.ThreadStorage.messages(Sanctum.Context.actor(ctx), thread.id)
 
     # And the refusal has a sentence every surface renders the same way.
-    assert Cyfr.Ops.Error.render(:not_provisioned) =~ "still being prepared"
+    assert Grimoire.Error.render(:not_provisioned) =~ "still being prepared"
   end
 
   test "a reader adds nothing while a fill is already running", %{ctx: ctx, group: group} do
@@ -88,7 +88,7 @@ defmodule Sanctum.ProvisioningReadinessTest do
     # reader reads it, and only a fill takes it.
     assert {:ok, %{provisioned_at: nil} = untouched} = Athanors.get(group.id)
     refute Athanors.provisioning_failure(untouched)
-    assert {:ok, current} = Claims.current(%Cyfr.Actor{athanor_id: group.id})
+    assert {:ok, current} = Claims.current(%Prima.Actor{athanor_id: group.id})
 
     assert {current.owner, current.fence, current.attempt} ==
              {held.owner, held.fence, held.attempt}
@@ -96,7 +96,7 @@ defmodule Sanctum.ProvisioningReadinessTest do
 
   test "a sign-in's own fill asks for the claim like any other" do
     # Every filler asks for the claim, not only the readers. Pinned on the
-    # estate the sign-in actually fills: mint it first, hold ITS claim, then
+    # athanor the sign-in actually fills: mint it first, hold ITS claim, then
     # sign in again. A sign-in that filled unclaimed would fill it anyway.
     n = System.unique_integer([:positive])
 
@@ -122,7 +122,7 @@ defmodule Sanctum.ProvisioningReadinessTest do
     assert {:ok, _} = Sanctum.Provisioning.ensure_personal_athanor(user)
     assert {:ok, %{provisioned_at: nil}} = Athanors.get(own.id)
     assert Athanors.provisioning_failure(Athanors.get(own.id) |> elem(1)) == nil
-    assert {:ok, %{fence: fence, outcome: nil}} = Claims.current(%Cyfr.Actor{athanor_id: own.id})
+    assert {:ok, %{fence: fence, outcome: nil}} = Claims.current(%Prima.Actor{athanor_id: own.id})
     assert fence == held.fence
   end
 
@@ -141,18 +141,18 @@ defmodule Sanctum.ProvisioningReadinessTest do
 
     # This suite ships no bundle, so the fill failed — under the sign-in's
     # own claim, which says so and no longer stands.
-    assert {:ok, claim} = Claims.current(%Cyfr.Actor{athanor_id: own.id})
+    assert {:ok, claim} = Claims.current(%Prima.Actor{athanor_id: own.id})
     assert claim.entry_kind == "sign_in"
     assert claim.outcome == "failed"
     assert claim.outcome_detail =~ "seed"
-    assert String.starts_with?(claim.owner, Cyfr.Boot.id() <> "/")
+    assert String.starts_with?(claim.owner, Prima.Boot.id() <> "/")
     refute Claims.live?(claim)
   end
 
   test "a claim is released when its attempt ends, not when its task does" do
-    # One task fills several estates in turn — a sign-in retries a person's
+    # One task fills several athanors in turn — a sign-in retries a person's
     # groups — so a key held for the life of the task would keep the next
-    # caller out of an estate nobody is filling.
+    # caller out of an athanor nobody is filling.
     n = System.unique_integer([:positive])
     creator = "github|https://github.com|serial-#{n}"
     {:ok, first} = Athanors.create_group(creator, "Serial one #{n}")
@@ -165,13 +165,15 @@ defmodule Sanctum.ProvisioningReadinessTest do
     assert :ok = Sanctum.Provisioning.start_provisioning(ctx.(second.id))
 
     # Neither claim outlives its own attempt: each is settled, and the next
-    # caller takes the estate at once.
+    # caller takes the athanor at once.
     for id <- [first.id, second.id] do
-      actor = %Cyfr.Actor{athanor_id: id}
+      actor = %Prima.Actor{athanor_id: id}
       assert {:ok, %{entry_kind: "first_need", outcome: outcome} = claim} = Claims.current(actor)
       assert outcome in ["ready", "failed"]
       refute Claims.live?(claim)
-      assert {:ok, %{fence: 2}} = Claims.claim(actor, "boot_elsewhere/next", "provision", 1_000)
+
+      assert {:ok, %{fence: 2}} =
+               Claims.claim(actor, "boot_elsewhere/next", "provision", 1_000, :none)
     end
   end
 
@@ -195,7 +197,7 @@ defmodule Sanctum.ProvisioningReadinessTest do
     # The reader is told the fill failed, from the claim the failed attempt
     # settled — which no reader took again.
     assert Provisioning.status(ctx) == :failed
-    actor = %Cyfr.Actor{athanor_id: group.id}
+    actor = %Prima.Actor{athanor_id: group.id}
     assert {:ok, %{fence: 1, outcome: "failed", entry_kind: "first_need"}} = Claims.current(actor)
 
     # A person who asks is never told to wait: the explicit verb fills now.
@@ -211,17 +213,21 @@ defmodule Sanctum.ProvisioningReadinessTest do
     assert Provisioning.status(ctx) == :failed
 
     # The same failure, a minute and a second ago, on the claim and the row.
-    actor = %Cyfr.Actor{athanor_id: group.id}
+    actor = %Prima.Actor{athanor_id: group.id}
     {:ok, claim} = Claims.current(actor)
     long_ago = DateTime.add(DateTime.utc_now(), -61, :second)
 
     {:ok, _} =
-      claim |> Ecto.Changeset.change(updated_at: long_ago) |> Arca.Repo.update()
-
-    {:ok, failed} = Athanors.get(group.id)
+      Arca.Schemas.ProvisioningClaim
+      |> Arca.Repo.get!(claim.id)
+      |> Ecto.Changeset.change(updated_at: long_ago)
+      |> Arca.Repo.update()
 
     {:ok, _} =
-      failed |> Ecto.Changeset.change(provisioning_failed_at: long_ago) |> Arca.Repo.update()
+      Arca.Schemas.Athanor
+      |> Arca.Repo.get!(group.id)
+      |> Ecto.Changeset.change(provisioning_failed_at: long_ago)
+      |> Arca.Repo.update()
 
     assert Provisioning.status(ctx) == :unfilled
 

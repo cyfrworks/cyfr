@@ -11,13 +11,12 @@ defmodule Compendium.ActivationTest do
   # behaviour — what a rebuild produces.
   @wasm_variant @wasm <> <<0x00, 0x05, 0x04>> <> "cyfr"
 
-  setup do
+  setup tags do
     test_path = Path.join(System.tmp_dir!(), "activation_test_#{:rand.uniform(1_000_000)}")
     original_base_path = Application.get_env(:arca, :base_path)
     Application.put_env(:arca, :base_path, test_path)
 
-    :ok = Ecto.Adapters.SQL.Sandbox.checkout(Arca.Repo)
-    Ecto.Adapters.SQL.Sandbox.mode(Arca.Repo, {:shared, self()})
+    Cyfr.Test.Sandbox.setup!(tags)
 
     on_exit(fn ->
       File.rm_rf!(test_path)
@@ -147,7 +146,7 @@ defmodule Compendium.ActivationTest do
         end)
 
       assert {:ok, _blob} =
-               Cyfr.Authority.Blob.parse(%{"canonical" => "jcs-1", "nodes" => nodes})
+               Prima.Authority.Blob.parse(%{"canonical" => "jcs-1", "nodes" => nodes})
     end
 
     test "a version-pinned dependency resolves to that exact release", %{ctx: ctx} do
@@ -227,7 +226,12 @@ defmodule Compendium.ActivationTest do
           manifest: %{"dependencies" => %{"static" => [%{"ref" => "reagent:local.absent:1.0.0"}]}}
         )
 
-      assert {:error, {:incomplete, :unresolvable_dependency}} = Activation.resolve(ctx, root)
+      # The refusal names the dependency that is not installed, at name level.
+      assert {:error, {:incomplete, {:unresolvable_dependency, "reagent:local.absent"}}} =
+               Activation.resolve(ctx, root)
+
+      assert {:error, {:incomplete, {:unresolvable_dependency, "reagent:local.absent"}}} =
+               Activation.resolve_verified(ctx, root)
     end
 
     test "a missing OPTIONAL dependency is absent from the graph, not a refusal", %{ctx: ctx} do
@@ -255,7 +259,8 @@ defmodule Compendium.ActivationTest do
       component = publish!(ctx, "legacy")
       legacy = %{component | release_digest: nil}
 
-      assert {:error, {:incomplete, :missing_release_digest}} = Activation.resolve(ctx, legacy)
+      assert {:error, {:incomplete, {:missing_release_digest, "reagent:local.legacy"}}} =
+               Activation.resolve(ctx, legacy)
     end
   end
 
@@ -276,7 +281,7 @@ defmodule Compendium.ActivationTest do
       {:ok, %{digest: digest, graph: graph}} = Activation.resolve(ctx, root)
       {:ok, encoded} = Activation.encode_graph(graph)
 
-      assert Cyfr.JCS.hash_binary(encoded) == digest
+      assert Prima.JCS.hash_binary(encoded) == digest
       assert Jason.decode!(encoded) == graph
     end
 
@@ -342,6 +347,48 @@ defmodule Compendium.ActivationTest do
       assert {:ok, %{nodes: nodes}} = Activation.resolve_verified(ctx, row)
       assert nodes[key].integrity == :mismatch
       assert nodes[key].release_digest == "sha256:forged"
+    end
+  end
+
+  describe "a dependency the registry cannot answer for" do
+    test "fails the resolution with its own error, never as an absent dependency", %{ctx: ctx} do
+      root =
+        publish!(ctx, "agent-caller",
+          type: "formula",
+          manifest: %{
+            "dependencies" => %{
+              "static" => [%{"ref" => "agent:local.scout", "optional" => true}]
+            }
+          }
+        )
+
+      # No such agent: an optional dependency that is not there is absent.
+      assert {:ok, %{graph: graph}} = Activation.resolve(ctx, root)
+      assert Map.keys(graph) == ["formula:local.agent-caller"]
+
+      # A roster that cannot be read says nothing about whether the agent
+      # is there.
+      :ok = Arca.put(Sanctum.Context.actor(ctx), ["aqua", "roles"], "not a directory")
+      Registry.invalidate_executor_caches(ctx)
+
+      assert {:error, :enotdir} = Activation.resolve(ctx, root)
+      assert {:error, :enotdir} = Activation.resolve_verified(ctx, root)
+    end
+
+    test "a registry behind its tree answers unavailable before the cache is asked", %{ctx: ctx} do
+      component = publish!(ctx, "behind")
+      assert {:ok, _} = Activation.resolve(ctx, component)
+
+      # A change of a unit whose bytes are still moving.
+      {:ok, _pending} =
+        Arca.StorageProjectionChanges.begin_edit(
+          Sanctum.Context.actor(ctx),
+          "components",
+          "reagents/local/behind/1.0.0"
+        )
+
+      assert {:error, :projection_unavailable} = Activation.resolve(ctx, component)
+      assert {:error, :projection_unavailable} = Activation.resolve_verified(ctx, component)
     end
   end
 end

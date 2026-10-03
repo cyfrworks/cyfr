@@ -20,7 +20,7 @@ defmodule Prism.Tray do
 
   @doc "The per-session tray name derived from a session token."
   @spec session_hash(String.t() | nil) :: String.t() | nil
-  def session_hash(token) when is_binary(token), do: Cyfr.Digest.sha256_hex(token)
+  def session_hash(token) when is_binary(token), do: Prima.Digest.sha256_hex(token)
   def session_hash(_), do: nil
 
   @doc "The badges of a session."

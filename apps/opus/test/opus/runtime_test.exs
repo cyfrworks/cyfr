@@ -23,7 +23,7 @@ defmodule Opus.RuntimeTest do
     # check passed and execution was attempted.
     result =
       Opus.Runtime.execute_component(<<0, 1, 2, 3>>, %{},
-        authority: Cyfr.Authority.zero(),
+        authority: Prima.Authority.zero(),
         authority_required: true
       )
 

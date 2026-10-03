@@ -31,7 +31,10 @@ defmodule Aqua.Approvals do
   @type choice :: %{
           required(:decision) => :approved | :declined,
           optional(:scope) => Standing.scope(),
-          optional(:reason) => String.t() | nil
+          optional(:reason) => String.t() | nil,
+          optional(:lifecycle) => Standing.lifecycle() | nil,
+          optional(:until) => DateTime.t() | nil,
+          optional(:constraint) => %{kind: String.t(), patterns: [String.t()]} | nil
         }
 
   @type outcome :: %{
@@ -48,18 +51,24 @@ defmodule Aqua.Approvals do
   @doc """
   Decide a pending approval as the calling person. `choice`: `:decision`
   (`:approved` | `:declined`), `:scope` (`:once` by default; `:thread`
-  or `:always` with an approval, `:never` with a decline), `:reason`.
+  or `:always` with an approval, `:never` with a decline), `:reason`,
+  and a standing approval's bounds: `:lifecycle` (`:execution`, `:turn`
+  or `:schedule`, the card's own), `:until` (a `DateTime`) and
+  `:constraint` (`%{kind, patterns}`), carried with the scope into the
+  standing row (`Aqua.Standing.rows/5`).
 
   Answers the outcome, with `pending` the turn's approvals still open
   after this one. `{:error, :not_found}` for no such approval;
-  `{:error, {:scope_not_permitted, _}}` when the scope may not stand for
-  the action; `{:error, :turn_superseded}` when the turn's pins moved and
-  the turn was failed.
+  `{:error, {:scope_not_permitted, _}}` when the scope or its bounds may
+  not stand for the action, with the approval still open;
+  `{:error, :turn_superseded}` when the turn's pins moved and the turn
+  was failed.
   """
   @spec resolve(Context.t(), String.t(), choice()) :: {:ok, outcome()} | {:error, term()}
   def resolve(%Context{} = ctx, approval_id, %{decision: decision} = choice)
       when decision in [:approved, :declined] do
     scope = Map.get(choice, :scope) || :once
+    bounds = Map.take(choice, [:lifecycle, :until, :constraint])
 
     with {:ok, approval} <- fetch_approval(ctx, approval_id),
          {:ok, turn} <- Tape.turn(ctx, approval.turn_id),
@@ -86,10 +95,10 @@ defmodule Aqua.Approvals do
           })
 
         decision == :declined ->
-          decline(ctx, turn, approval, intent, scope, Map.get(choice, :reason))
+          decline(ctx, turn, approval, intent, scope, bounds, Map.get(choice, :reason))
 
         true ->
-          approve(ctx, turn, approval, step, intent, scope)
+          approve(ctx, turn, approval, step, intent, scope, bounds)
       end
     end
   end
@@ -110,7 +119,7 @@ defmodule Aqua.Approvals do
   def proposal?(_approval, _proposal), do: false
 
   @doc """
-  How long a card stays open, in seconds: the estate's
+  How long a card stays open, in seconds: the athanor's
   `settings["approvals"]["expiry_hours"]` (a positive integer, read
   defensively — member-writable settings are not trusted to have a
   shape), else `config :cyfr, Aqua.Approvals, expiry_hours:`.
@@ -137,7 +146,7 @@ defmodule Aqua.Approvals do
   end
 
   @doc """
-  Resolve every pending approval of the estate past its expiry as
+  Resolve every pending approval of the athanor past its expiry as
   `expired`. Answers how many were settled.
   """
   @spec expire_due(Context.t()) :: {:ok, non_neg_integer()} | {:error, term()}
@@ -170,19 +179,23 @@ defmodule Aqua.Approvals do
   # Decisions
   # ---------------------------------------------------------------------------
 
-  defp approve(ctx, turn, approval, step, intent, scope) do
+  defp approve(ctx, turn, approval, step, intent, scope, bounds) do
     proposal = intent["proposal"] || %{}
 
     with :ok <- Standing.check(intent, scope),
          :ok <- authorize_card(ctx, turn, proposal),
          :ok <- pins_hold(ctx, turn, approval, intent),
-         {:ok, grants} <- Standing.rows(ctx, turn, proposal, scope) do
+         {:ok, grants} <- Standing.rows(ctx, turn, proposal, scope, bounds) do
       kind = if step.kind == "launch", do: "launch", else: "continue"
 
       settle(ctx, turn, approval, "approved", %{
         scope: Atom.to_string(scope),
         resolution_kind: kind,
-        resolution: %{"summary" => "approved", "scope" => Atom.to_string(scope)},
+        resolution:
+          Map.merge(
+            %{"summary" => "approved", "scope" => Atom.to_string(scope)},
+            resolution_bounds(bounds)
+          ),
         grants: grants
       })
     else
@@ -209,12 +222,12 @@ defmodule Aqua.Approvals do
     end
   end
 
-  defp decline(ctx, turn, approval, intent, scope, reason) do
+  defp decline(ctx, turn, approval, intent, scope, bounds, reason) do
     proposal = intent["proposal"] || %{}
     reason = if is_binary(reason) and reason != "", do: reason, else: nil
     why = if reason, do: "declined: #{reason}", else: "declined"
 
-    with {:ok, grants} <- Standing.rows(ctx, turn, proposal, scope) do
+    with {:ok, grants} <- Standing.rows(ctx, turn, proposal, scope, bounds) do
       settle(ctx, turn, approval, "declined", %{
         scope: Atom.to_string(scope),
         resolution_kind: "denied",
@@ -353,28 +366,38 @@ defmodule Aqua.Approvals do
     end
   end
 
+  # The consent is loaded under the origin the turn's row records, not the
+  # approver's: the question is whether the run's own grant still stands,
+  # and the run continues under that origin. Whether this approver may
+  # decide is the approval's own check, made before this one.
   defp consent_holds(ctx, turn) do
-    case Cyfr.Execution.authority_for(
-           ctx,
-           {:id, turn.profile_id},
-           Compendium.AgentSource.soul_ref()
-         ) do
-      {:ok, %{consent_id: consent_id}} when consent_id == turn.consent_id ->
-        :ok
-
+    with {:ok, origin} <- Prima.Origin.from_wire(Map.get(turn, :origin)),
+         {:ok, %{consent_id: consent_id}} when consent_id == turn.consent_id <-
+           Crucible.authority_for(
+             %{ctx | origin: origin},
+             {:id, turn.profile_id},
+             Prima.AgentRef.soul_ref()
+           ) do
+      :ok
+    else
       {:ok, _moved} ->
         {:error, "the consent the turn ran under has moved"}
 
       {:error, reason} ->
-        {:error, "the turn's consent could not be loaded: #{Aqua.Ops.render_refusal(reason)}"}
+        {:error, "the turn's consent could not be loaded: " <> unloaded(reason)}
     end
   end
+
+  # A turn row that records no origin has no grant to be judged under: it
+  # is never judged under the caller's.
+  defp unloaded({:unknown_origin, _spelling}), do: "the turn records no origin"
+  defp unloaded(reason), do: Aqua.Ops.render_refusal(reason)
 
   defp capability_holds(_ctx, %{agent_capability_digest: nil}), do: :ok
 
   defp capability_holds(ctx, %{agent: name, agent_capability_digest: pinned}) do
-    with {:ok, agent} <- Compendium.AquaAgent.get(ctx, name),
-         {:ok, ^pinned} <- Compendium.AquaAgent.capability_digest(agent) do
+    with {:ok, agent} <- Compendium.agent(ctx, name),
+         {:ok, ^pinned} <- Compendium.agent_capability_digest(agent) do
       :ok
     else
       {:ok, _other} -> {:error, "#{name} changed since the turn started"}
@@ -385,6 +408,25 @@ defmodule Aqua.Approvals do
   # ---------------------------------------------------------------------------
   # Rows and telemetry
   # ---------------------------------------------------------------------------
+
+  # The bounds an approval stood under, kept on its resolution as the card
+  # and the tape read them.
+  defp resolution_bounds(bounds) do
+    %{}
+    |> put_bound("lifecycle", Map.get(bounds, :lifecycle), &Atom.to_string/1)
+    |> put_bound("until", Map.get(bounds, :until), &DateTime.to_iso8601/1)
+    |> put_bound("constraint", Map.get(bounds, :constraint), &constraint_wire/1)
+  end
+
+  defp constraint_wire(constraint) do
+    %{
+      "kind" => to_string(Map.get(constraint, :kind, Map.get(constraint, "kind"))),
+      "patterns" => Map.get(constraint, :patterns, Map.get(constraint, "patterns"))
+    }
+  end
+
+  defp put_bound(resolution, _key, nil, _spell), do: resolution
+  defp put_bound(resolution, key, value, spell), do: Map.put(resolution, key, spell.(value))
 
   # What a refused step leaves for the model: its tool result, an error.
   defp denied_result(intent, why) do

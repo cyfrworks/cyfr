@@ -1,0 +1,83 @@
+name: Keeper CI (cyfr-keeper)
+
+# Test cyfr-keeper, the process helper the Opus and Locus images start
+# every runner, build and backend under. The images' own proofs — that
+# they isolate their spawns from each other and from the service, refuse
+# every request they cannot attribute, and leave no residue across a uid's
+# reuse — run in test.yml beside the other image suites, which the tag's
+# `verify` calls.
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'apps/keeper/**'
+      # The keeper-protocol vectors the suite reproduces, and the residue
+      # canary, which the gofmt step checks with them.
+      - 'tests/fixtures/keeper_protocol.json'
+      - 'tests/fixtures/residue-canary.go'
+      - '.github/workflows/keeper-ci.yml'
+  pull_request:
+    paths:
+      - 'apps/keeper/**'
+      - 'tests/fixtures/keeper_protocol.json'
+      - 'tests/fixtures/residue-canary.go'
+      - '.github/workflows/keeper-ci.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  keeper:
+    name: vet + test (cyfr-keeper)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: apps/keeper
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
+        with:
+          go-version-file: apps/keeper/go.mod
+          cache-dependency-path: apps/keeper/go.sum
+
+      - name: gofmt
+        run: test -z "$(gofmt -l . ../../tests/fixtures)"
+
+      - name: go vet
+        run: go vet ./...
+
+      - name: go test
+        run: go test ./... -race
+
+      # The keeper's real-kernel tests start processes under pooled uids and
+      # hold each spawn to a memory bound in a cgroup v2 group of its own, so
+      # they need root and a cgroup namespace whose root is mounted writable:
+      # what the shipped services get from `writable-cgroups=true` (Docker
+      # Engine 28 or later on a cgroup v2 host). As the runner's user above
+      # they skip; here they run as root in a Go container started with the
+      # option, and a skip for want of root or of a bound fails the step.
+      - name: go test as root with writable-cgroups=true (the real kernel)
+        run: |
+          set -euo pipefail
+          version="$(docker version --format '{{.Server.Version}}')"
+          cgroup="$(docker info --format '{{.CgroupVersion}}')"
+          if [ "${version%%.*}" -lt 28 ] || [ "$cgroup" != "2" ]; then
+            echo "::error::Docker Engine $version on cgroup v$cgroup: writable-cgroups=true needs Docker Engine 28 or later on a cgroup v2 host"
+            exit 1
+          fi
+          go_version="$(sed -n 's/^go //p' go.mod)"
+          docker run --rm --security-opt writable-cgroups=true --security-opt seccomp="$GITHUB_WORKSPACE/apps/keeper/seccomp/keeper.json" \
+            -v "$GITHUB_WORKSPACE:/src:ro" -w /src/apps/keeper \
+            -e GOFLAGS=-buildvcs=false \
+            "golang:$go_version" \
+            go test ./... -race -count=1 -v 2>&1 | tee "$RUNNER_TEMP/keeper-kernel.log"
+          if grep -E 'needs root|no memory bound can be enforced here' "$RUNNER_TEMP/keeper-kernel.log"; then
+            echo "::error::a real-kernel test skipped for want of root or of a memory bound"
+            exit 1
+          fi
+          for t in TestTheProbeProvesIsolationWhereTheHostAllowsIt TestAnIsolatedSpawnHasItsOwnNamespaceAndNoCapability TestAnIsolatedSpawnsRelayIsCarriedOnceOpened TestAnIsolatedSpawnsRelayIsSilentUnopened TestAnIsolatedSpawnRunsInItsBoundedGroup; do grep -q -- "--- PASS: $t " "$RUNNER_TEMP/keeper-kernel.log" || { echo "::error::the isolation test $t did not run and pass"; exit 1; }; done
+
+      - name: Static build
+        run: CGO_ENABLED=0 go build -o "$RUNNER_TEMP/cyfr-keeper" .

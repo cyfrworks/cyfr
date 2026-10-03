@@ -1,0 +1,10 @@
+{
+  "name": "containment-probe",
+  "type": "tincture",
+  "version": "1.0.0",
+  "publisher": "local",
+  "description": "The frame sandbox containment proof's probe: it declares nothing and attempts what a frame must not be able to do.",
+  "tincture": {
+    "entry": "index.html"
+  }
+}

@@ -5,8 +5,9 @@ defmodule Arca.Schemas.ServerAllowlistEntry do
   @moduledoc """
   One entry of the server allowlist — the door.
 
-  `kind` is `"email"`, `"user_id"` (an IdP subject) or `"wildcard"` (whose
-  `value` is `"*"`); `effect` is `"allow"` or `"deny"`; `status` is
+  `kind` is `"email"`, `"user_id"` (an IdP subject), `"identifier"` (a
+  person identifier, `per_…`) or `"wildcard"` (whose `value` is `"*"`);
+  `effect` is `"allow"` or `"deny"`; `status` is
   `"allowed"` for entries in force and `"requested"` for allow entries a
   member asked for by inviting an address the door does not know, pending a
   platform admin's decision. Managed by `Sanctum.Door.Store`.
@@ -17,7 +18,7 @@ defmodule Arca.Schemas.ServerAllowlistEntry do
 
   @primary_key {:id, :string, autogenerate: false}
 
-  @kinds ["email", "user_id", "wildcard"]
+  @kinds ["email", "user_id", "identifier", "wildcard"]
   @effects ["allow", "deny"]
   @statuses ["allowed", "requested"]
 
@@ -62,13 +63,26 @@ defmodule Arca.Schemas.ServerAllowlistEntry do
   end
 
   # A wildcard is spelled one way; an email is stored lowercased so the door
-  # matches what the provider asserts regardless of how it was typed.
+  # matches what the provider asserts regardless of how it was typed; an
+  # identifier has exactly one spelling, which is checked, never changed.
   defp validate_value(changeset) do
     case {get_field(changeset, :kind), get_field(changeset, :value)} do
-      {"wildcard", "*"} -> changeset
-      {"wildcard", _} -> add_error(changeset, :value, "a wildcard entry's value is *")
-      {"email", v} when is_binary(v) -> put_change(changeset, :value, String.downcase(v))
-      _ -> changeset
+      {"wildcard", "*"} ->
+        changeset
+
+      {"wildcard", _} ->
+        add_error(changeset, :value, "a wildcard entry's value is *")
+
+      {"email", v} when is_binary(v) ->
+        put_change(changeset, :value, String.downcase(v))
+
+      {"identifier", v} ->
+        if Prima.Identity.Encoding.identifier?(v),
+          do: changeset,
+          else: add_error(changeset, :value, "is not a person identifier")
+
+      _ ->
+        changeset
     end
   end
 end

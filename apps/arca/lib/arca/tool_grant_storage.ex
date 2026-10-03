@@ -3,14 +3,38 @@
 
 defmodule Arca.ToolGrantStorage do
   @moduledoc """
-  Persistence mechanics for tool grants. The scope rules and the
-  composition with declared policy live in `Aqua.ToolGrants`, which is the
-  only caller. Every read and write is keyed by the owning athanor.
+  Persistence mechanics for tool grants. The row shape, its tenancy and
+  the rule for which answers may stand live in `Sanctum.ToolGrants`, the
+  only caller above this layer, which also builds the rows
+  `Arca.TurnStorage` writes inside a decision's transaction; the
+  composition with declared policy lives in `Aqua.ToolGrants`. Every
+  read and write is keyed by the owning athanor, and every grant a
+  function here answers is a plain map (`Arca.Data`).
   """
 
   import Ecto.Query
 
-  alias Arca.Schemas.ToolGrant
+  alias Arca.Schemas.{CronSchedule, Execution, ToolGrant, Turn}
+
+  @doc "The scopes a grant may carry."
+  @spec scopes() :: [String.t()]
+  def scopes, do: ToolGrant.scopes()
+
+  @doc "The effects a grant may carry."
+  @spec effects() :: [String.t()]
+  def effects, do: ToolGrant.effects()
+
+  @doc "The lifecycles a bounded allow may end with."
+  @spec lifecycle_kinds() :: [String.t()]
+  def lifecycle_kinds, do: ToolGrant.lifecycle_kinds()
+
+  @doc """
+  Why a resource kind and its patterns make no constraint a row may
+  carry, or `[]` when they make one: the grammar the write holds a row to
+  (`Arca.Schemas.ToolGrant.constraint_errors/2`).
+  """
+  @spec constraint_errors(term(), term()) :: [String.t()]
+  def constraint_errors(kind, patterns), do: ToolGrant.constraint_errors(kind, patterns)
 
   @doc """
   Record a decision, replacing whatever the same key already said.
@@ -21,7 +45,7 @@ defmodule Arca.ToolGrantStorage do
   carries no thread, and a nullable column in a composite unique
   index constrains nothing.
   """
-  @spec put(map()) :: {:ok, ToolGrant.t()} | {:error, term()}
+  @spec put(map()) :: {:ok, map()} | {:error, term()}
   # arca:unscoped-ok the athanor arrives in attrs and its absence fails loudly below.
   def put(attrs) when is_map(attrs) do
     Arca.Repo.Errors.with_db_rescue("Arca.ToolGrantStorage.put", fn ->
@@ -29,7 +53,7 @@ defmodule Arca.ToolGrantStorage do
 
       row =
         attrs
-        |> Map.put_new(:id, Cyfr.UUID7.generate_id("grant"))
+        |> Map.put_new(:id, Prima.UUID7.generate_id("grant"))
         |> Map.put_new(:granted_at, DateTime.utc_now())
 
       # One transaction: the delete and the insert are two statements, and
@@ -41,11 +65,12 @@ defmodule Arca.ToolGrantStorage do
         :ok = delete_matching(row)
 
         case Arca.Repo.insert(changeset(row)) do
-          {:ok, stored} -> stored
+          {:ok, stored} -> decoded(stored)
           {:error, changeset} -> Arca.Repo.rollback(changeset)
         end
       end)
     end)
+    |> Arca.Data.project()
   end
 
   @doc false
@@ -72,40 +97,82 @@ defmodule Arca.ToolGrantStorage do
       _ = Map.fetch!(attrs, :athanor_id)
       delete_matching(attrs)
     end)
+    |> Arca.Data.project()
   end
 
   @doc """
   Every grant that could bear on one thread: this thread's
   thread-scope rows and the agent-scope rows for the agents in play.
 
+  A deny is always answered. An allow is answered only while it stands:
+  before its `expires_at` on the database's clock, and while the
+  execution, turn or schedule it was given for is still open (running or
+  paused, open, not deleted). A bounded allow whose row has ended, or is
+  gone, is not answered. A row's `constraint` is answered decoded, as
+  `%{kind, patterns}` or nil.
+
   Read whole and filtered in memory — a thread has a handful of
   grants, and one indexed read beats a query per agent per turn.
   """
-  @spec list_for_thread(Cyfr.Actor.t(), String.t()) ::
-          {:ok, [ToolGrant.t()]} | {:error, term()}
-  def list_for_thread(%Cyfr.Actor{athanor_id: athanor_id}, thread_id)
+  @spec list_for_thread(Prima.Actor.t(), String.t()) ::
+          {:ok, [map()]} | {:error, term()}
+  def list_for_thread(%Prima.Actor{athanor_id: athanor_id}, thread_id)
       when is_binary(athanor_id) and athanor_id != "" and is_binary(thread_id) do
     # A read that cannot reach the store is an ERROR, never an empty list:
     # "no standing answers" would drop every deny and leave an authored
     # `auto` automatic, so an outage would widen what runs with no card.
     # The caller refuses the turn instead.
     Arca.Repo.Errors.with_db_rescue("Arca.ToolGrantStorage.list_for_thread", fn ->
-      {:ok,
-       from(g in ToolGrant,
-         where:
-           g.athanor_id == ^athanor_id and
-             (g.scope == ^ToolGrant.agent_scope() or g.thread_id == ^thread_id),
-         order_by: [asc: g.granted_at, asc: g.id]
-       )
-       |> Arca.Repo.all()}
+      now = Arca.ServerMetaStorage.now!()
+      open_turns = Prima.TurnState.open_statuses()
+
+      rows =
+        from(g in ToolGrant,
+          left_join: e in Execution,
+          on:
+            g.lifecycle_kind == "execution" and e.id == g.lifecycle_id and
+              e.athanor_id == g.athanor_id,
+          left_join: t in Turn,
+          on:
+            g.lifecycle_kind == "turn" and t.id == g.lifecycle_id and t.athanor_id == g.athanor_id,
+          left_join: s in CronSchedule,
+          on:
+            g.lifecycle_kind == "schedule" and s.id == g.lifecycle_id and
+              s.athanor_id == g.athanor_id,
+          where:
+            g.athanor_id == ^athanor_id and
+              (g.scope == ^ToolGrant.agent_scope() or g.thread_id == ^thread_id),
+          where:
+            g.effect == "deny" or
+              ((is_nil(g.expires_at) or g.expires_at > ^now) and
+                 (is_nil(g.lifecycle_kind) or
+                    (g.lifecycle_kind == "execution" and e.status in ["running", "paused"]) or
+                    (g.lifecycle_kind == "turn" and t.status in ^open_turns) or
+                    (g.lifecycle_kind == "schedule" and not is_nil(s.id) and
+                       s.status != "deleted"))),
+          order_by: [asc: g.granted_at, asc: g.id]
+        )
+        |> Arca.Repo.all()
+
+      {:ok, Enum.map(rows, &decoded/1)}
     end)
+    |> Arca.Data.project()
   end
 
-  def list_for_thread(%Cyfr.Actor{}, _thread_id), do: {:error, :no_athanor}
+  def list_for_thread(%Prima.Actor{}, _thread_id), do: {:error, :no_athanor}
 
   # ---------------------------------------------------------------------------
   # Internal
   # ---------------------------------------------------------------------------
+
+  # A row answered with its constraint decoded. A stored constraint that
+  # does not decode is not a narrower allow to guess at: the row is
+  # answered with `constraint: :corrupt`, which no caller may admit under.
+  defp decoded(%ToolGrant{constraint: constraint} = grant),
+    do:
+      grant
+      |> Arca.Data.project()
+      |> Map.put(:constraint, ToolGrant.decode_constraint(constraint))
 
   defp conflict_columns("thread"), do: [:thread_id, :agent_name, :tool, :action]
   defp conflict_columns("agent"), do: [:athanor_id, :agent_name, :tool, :action]

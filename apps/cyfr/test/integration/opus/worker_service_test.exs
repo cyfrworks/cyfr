@@ -34,11 +34,11 @@ defmodule Opus.WorkerServiceWireTest do
 
   use ExUnit.Case, async: false
 
-  import Cyfr.Test.Wait
+  import Prima.Test.Wait
 
-  alias Cyfr.Authority.Budget
-  alias Cyfr.Execution.{Attempt, Keys}
-  alias Cyfr.Slots
+  alias Prima.Authority.Budget
+  alias Crucible.{Attempt, Keys}
+  alias Prima.Slots
   alias Cyfr.Test.{AttemptFixtures, OpusService, TwoServices}
   alias Opus.Test.NestedExecution, as: Probe
   alias Sanctum.Consent.{Bootstrap}
@@ -46,7 +46,7 @@ defmodule Opus.WorkerServiceWireTest do
   @moduletag timeout: 120_000
 
   @probe_node "formula:local.nested-probe"
-  @slots Cyfr.Execution.Slots
+  @slots Crucible.Slots
   @lapsed "Execution terminated: runner stopped without cleanup"
 
   setup tags do
@@ -60,7 +60,7 @@ defmodule Opus.WorkerServiceWireTest do
     previous = Map.new(keys, &{&1, Application.get_env(:arca, &1)})
     Application.put_env(:arca, :base_path, test_path)
 
-    ctx = Sanctum.TestContext.local()
+    ctx = Sanctum.TestContext.local(:api)
 
     on_exit(fn ->
       Slots.forgive_unreaped(@slots, ctx.athanor_id)
@@ -79,9 +79,9 @@ defmodule Opus.WorkerServiceWireTest do
     {:ok, %{minted: minted}} = Bootstrap.run(ctx)
     assert @probe_node in minted
 
-    {:ok, authority} = Cyfr.Execution.authority_for(ctx, :default, @probe_node)
+    {:ok, authority} = Crucible.authority_for(ctx, :default, @probe_node)
     authority = %{authority | budget: Budget.new(2)}
-    root_id = Cyfr.UUID7.execution_id()
+    root_id = Prima.UUID7.execution_id()
 
     {:ok, %{attempt: attempt}} =
       Arca.Execution.admit(
@@ -90,9 +90,12 @@ defmodule Opus.WorkerServiceWireTest do
           reference: Probe.probe_ref(),
           user_id: ctx.user_id,
           athanor_id: ctx.athanor_id,
-          component_type: "formula"
+          component_type: "formula",
+          origin: :programmatic
         },
-        reservation: %{budget_id: authority.budget.id, cap: 2}
+        reservation: %{budget_id: authority.budget.id, cap: 2},
+        grant: Cyfr.Test.AttemptFixtures.grant(ctx.athanor_id),
+        verify: &Sanctum.ExecutionStanding.verify/1
       )
 
     {:ok, ctx: ctx, authority: authority, root_id: root_id, attempt: attempt.attempt}
@@ -141,7 +144,7 @@ defmodule Opus.WorkerServiceWireTest do
 
     for _ <- 1..2 do
       spawn_link(fn ->
-        id = Cyfr.UUID7.execution_id()
+        id = Prima.UUID7.execution_id()
         ran = child!(ctx, authority, root_id, attempt, execution_id: id)
         send(test_pid, {:ran, id, ran})
       end)
@@ -173,7 +176,7 @@ defmodule Opus.WorkerServiceWireTest do
        %{ctx: ctx} do
     children_before = Slots.status(@slots).child_active
     slots_before = Slots.status(@slots).active
-    root_id = Cyfr.UUID7.execution_id()
+    root_id = Prima.UUID7.execution_id()
     hold_children!(root_id)
     test_pid = self()
 
@@ -187,7 +190,7 @@ defmodule Opus.WorkerServiceWireTest do
       send(
         test_pid,
         {:root,
-         Cyfr.Execution.run_root(
+         Crucible.run_root(
            ctx,
            :default,
            Probe.probe_ref(),
@@ -255,7 +258,12 @@ defmodule Opus.WorkerServiceWireTest do
       assert service != "wrk_other"
 
       other_service =
-        AttemptFixtures.attached!(service_id: "wrk_other", boot_id: boot, attach: false)
+        AttemptFixtures.attached!(
+          ctx: Sanctum.TestContext.local(:api),
+          service_id: "wrk_other",
+          boot_id: boot,
+          attach: false
+        )
 
       assert {:error, :malformed} =
                OpusService.start!(
@@ -265,7 +273,12 @@ defmodule Opus.WorkerServiceWireTest do
                )
 
       other_boot =
-        AttemptFixtures.attached!(service_id: service, boot_id: "boot_other", attach: false)
+        AttemptFixtures.attached!(
+          ctx: Sanctum.TestContext.local(:api),
+          service_id: service,
+          boot_id: "boot_other",
+          attach: false
+        )
 
       assert {:error, :malformed} =
                OpusService.start!(
@@ -279,7 +292,13 @@ defmodule Opus.WorkerServiceWireTest do
     end
 
     test "refuses input its assignment's digest does not bind", %{service: service, boot: boot} do
-      fixture = AttemptFixtures.attached!(service_id: service, boot_id: boot, attach: false)
+      fixture =
+        AttemptFixtures.attached!(
+          ctx: Sanctum.TestContext.local(:api),
+          service_id: service,
+          boot_id: boot,
+          attach: false
+        )
 
       assert {:error, :malformed} =
                OpusService.start!(fixture.assignment, ~s({"fixture":false}), sealed(fixture))
@@ -291,10 +310,24 @@ defmodule Opus.WorkerServiceWireTest do
       service: service,
       boot: boot
     } do
-      fixture = AttemptFixtures.attached!(service_id: service, boot_id: boot, attach: false)
-      other = AttemptFixtures.attached!(service_id: service, boot_id: boot, attach: false)
-      elsewhere = Cyfr.WorkerAuth.dispatch_seal_key(worker_key!("wrk_other"))
-      signing = Cyfr.WorkerAuth.dispatch_key(worker_key!(service))
+      fixture =
+        AttemptFixtures.attached!(
+          ctx: Sanctum.TestContext.local(:api),
+          service_id: service,
+          boot_id: boot,
+          attach: false
+        )
+
+      other =
+        AttemptFixtures.attached!(
+          ctx: Sanctum.TestContext.local(:api),
+          service_id: service,
+          boot_id: boot,
+          attach: false
+        )
+
+      elsewhere = Prima.WorkerAuth.dispatch_seal_key(worker_key!("wrk_other"))
+      signing = Prima.WorkerAuth.dispatch_key(worker_key!(service))
 
       for sealed <- [
             sealed(other),
@@ -314,7 +347,7 @@ defmodule Opus.WorkerServiceWireTest do
 
   # A child of the root: the probe asking for a catalog tool, held there.
   defp child!(ctx, authority, root_id, attempt, opts) do
-    Cyfr.Execution.run_child(
+    Crucible.run_child(
       authority,
       Probe.probe_ref(),
       nil,
@@ -368,17 +401,17 @@ defmodule Opus.WorkerServiceWireTest do
   # The fixture's attempt keys, sealed with `key` (default the dispatch seal
   # key of the worker service the attempt is dispatched to).
   defp sealed(fixture, key \\ nil) do
-    key = key || Cyfr.WorkerAuth.dispatch_seal_key(worker_key!(fixture.service))
-    {:ok, sealed} = Cyfr.WorkerAuth.seal_attempt_keys(key, fixture.keys)
+    key = key || Prima.WorkerAuth.dispatch_seal_key(worker_key!(fixture.service))
+    {:ok, sealed} = Prima.WorkerAuth.seal_attempt_keys(key, fixture.keys)
     sealed
   end
 
   defp worker_key!(worker) do
-    {:ok, key} = Keys.worker_key(worker)
+    {:ok, key} = Keys.opus_key(worker)
     key
   end
 
-  defp row(id), do: Arca.Repo.get!(Arca.Execution, id)
+  defp row(id), do: Arca.Repo.get!(Arca.Schemas.Execution, id)
 
   # An authority naming the invocation reservation a root was admitted
   # with, for reading its budget.
@@ -392,7 +425,7 @@ defmodule Opus.WorkerServiceWireTest do
         )
       )
 
-    %{Cyfr.Authority.zero() | budget: %Budget{id: reservation.id, cap: reservation.cap}}
+    %{Prima.Authority.zero() | budget: %Budget{id: reservation.id, cap: reservation.cap}}
   end
 
   defp attempt_row(ctx, id),

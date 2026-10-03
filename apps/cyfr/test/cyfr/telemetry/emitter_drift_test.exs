@@ -99,14 +99,14 @@ defmodule Cyfr.Telemetry.EmitterDriftTest do
   # ---------------------------------------------------------------------------
 
   defp emitted_by_tree do
-    Map.new(Cyfr.Test.SourceTree.app_libs(@root), fn lib ->
+    Map.new(Prima.Test.SourceTree.app_libs(@root), fn lib ->
       events =
         @root
         |> Path.join(lib)
         |> Path.join("**/*.ex")
         |> Path.wildcard()
         |> Enum.reduce(MapSet.new(), fn path, acc ->
-          MapSet.union(acc, emitted_by_source(Cyfr.Test.SourceTree.read(path)))
+          MapSet.union(acc, emitted_by_source(Prima.Test.SourceTree.read(path)))
         end)
 
       {lib, events}
@@ -326,7 +326,7 @@ defmodule Cyfr.Telemetry.EmitterDriftTest do
   test "an event emitted by the contracts or by Locus is refused" do
     event = [:cyfr, :opus, :emit]
 
-    for lib <- ["apps/cyfr_contracts/lib", "apps/locus/lib"] do
+    for lib <- ["apps/prima/lib", "apps/locus/lib"] do
       emitted = Map.update!(emitted_by_tree(), lib, &MapSet.put(&1, event))
 
       assert violations(Catalog.all(), emitted) == [

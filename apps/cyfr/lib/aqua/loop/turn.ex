@@ -9,7 +9,9 @@ defmodule Aqua.Loop.Turn do
   roles the soul may clone into, the effective policy composed with the
   standing rows, the resolved model catalyst with its capabilities, the
   system prompt, the tool surface, the room excerpt the sender attached,
-  and the deadline the authority allows.
+  and the deadline the authority allows, and the admission decision the
+  turn's root execution was started under (`call_id`), which every call
+  the turn makes names as its parent call.
 
   A clone's spec is built the same way from the role's definition, under
   the parent's authority and catalyst.
@@ -17,7 +19,7 @@ defmodule Aqua.Loop.Turn do
 
   alias Aqua.Loop.Request
   alias Aqua.Tape
-  alias Cyfr.Authority
+  alias Prima.Authority
   alias Sanctum.Context
 
   @default_deadline_ms 15 * 60 * 1000
@@ -29,6 +31,7 @@ defmodule Aqua.Loop.Turn do
     :ctx,
     :guest,
     :turn,
+    :call_id,
     :thread,
     :agent,
     :roster,
@@ -56,8 +59,8 @@ defmodule Aqua.Loop.Turn do
   `:excerpt?` (read the room excerpt the turn's options name).
 
   Refuses an agent that names no model (`:no_model`), a catalyst the
-  estate does not hold or that does not speak `model/chat@1`, and a
-  model its catalyst cannot describe (`Cyfr.Models.capabilities/5`; a
+  athanor does not hold or that does not speak `model/chat@1`, and a
+  model its catalyst cannot describe (`Aqua.Models.capabilities/5`; a
   typed refusal is `{:model_refused, catalyst, error}`, and a catalyst
   whose consent lacks its key `{:setup_required, catalyst}`).
   """
@@ -68,7 +71,7 @@ defmodule Aqua.Loop.Turn do
     with {:ok, thread} <- Tape.thread(ctx, turn.thread_id),
          {:ok, roster} <- Aqua.AgentConfig.roster(ctx),
          {:ok, agent} <- agent(ctx, turn, roster),
-         soul? = Compendium.AgentSource.soul?(agent["name"]),
+         soul? = Prima.AgentRef.soul?(agent["name"]),
          roles = if(soul?, do: roles(roster), else: []),
          {:ok, grants} <-
            Aqua.ToolGrants.for_agents(ctx, turn.thread_id, [agent["name"]]),
@@ -83,6 +86,7 @@ defmodule Aqua.Loop.Turn do
         ctx: ctx,
         guest: Context.enter_guest(ctx),
         turn: turn,
+        call_id: root_call_id(ctx, turn),
         thread: thread,
         agent: agent,
         roster: roster,
@@ -116,6 +120,18 @@ defmodule Aqua.Loop.Turn do
       {:ok, spec}
     end
   end
+
+  # The admission the turn's root execution was started under, read off
+  # its row once: the parent call of the calls the turn makes. It is audit
+  # correlation, so a row that cannot be read names none.
+  defp root_call_id(ctx, %{root_execution_id: id}) when is_binary(id) do
+    case Crucible.get(ctx, id) do
+      {:ok, %{call_id: call_id}} -> call_id
+      _ -> nil
+    end
+  end
+
+  defp root_call_id(_ctx, _turn), do: nil
 
   @doc "The turn row replaced, everything else kept."
   @spec with_turn(t(), Tape.turn()) :: t()
@@ -155,8 +171,8 @@ defmodule Aqua.Loop.Turn do
   end
 
   defp pinned_agent(turn, bytes) do
-    with {:ok, parsed} <- Compendium.AquaAgent.parse(turn.agent, bytes),
-         {:ok, digest} <- Compendium.AquaAgent.capability_digest(parsed) do
+    with {:ok, parsed} <- Compendium.parse_agent(turn.agent, bytes),
+         {:ok, digest} <- Compendium.agent_capability_digest(parsed) do
       if is_nil(turn.agent_capability_digest) or digest == turn.agent_capability_digest,
         do: {:ok, agent_map(parsed)},
         else: {:error, :agent_changed}
@@ -207,7 +223,7 @@ defmodule Aqua.Loop.Turn do
     end
   end
 
-  defp role_type, do: Compendium.AquaAgent.role_type()
+  defp role_type, do: Compendium.agent_role_type()
 
   # ---------------------------------------------------------------------------
   # The model
@@ -215,7 +231,7 @@ defmodule Aqua.Loop.Turn do
 
   # The catalyst release a turn runs on: once its row pins one, exactly
   # that release; before, the agent's catalyst resolved against the working
-  # estate's listing, a clone falling back to the parent's. It must be
+  # athanor's listing, a clone falling back to the parent's. It must be
   # installed and speak `model/chat@1`.
   defp model(ctx, turn, agent, opts) do
     listing =
@@ -233,7 +249,7 @@ defmodule Aqua.Loop.Turn do
   defp catalyst(listing, %{catalyst_ref: pinned} = turn, agent, _opts) when is_binary(pinned) do
     if Enum.any?(listing, &(&1["component_ref"] == pinned)),
       do: {:ok, pinned, turn.model || agent["model"]},
-      else: {:error, {:catalyst_not_in_estate, pinned}}
+      else: {:error, {:catalyst_not_in_athanor, pinned}}
   end
 
   defp catalyst(listing, turn, agent, opts) do
@@ -248,20 +264,20 @@ defmodule Aqua.Loop.Turn do
         {:ok, parent, model || Keyword.get(opts, :model)}
 
       {{:error, _}, _} ->
-        {:error, {:catalyst_not_in_estate, agent["catalyst_ref"]}}
+        {:error, {:catalyst_not_in_athanor, agent["catalyst_ref"]}}
     end
   end
 
   defp speaks_chat(listing, catalyst) do
     row = Enum.find(listing, &(&1["component_ref"] == catalyst)) || %{}
 
-    if Cyfr.Models.speaks_chat?(row["manifest"]),
+    if Prima.Model.speaks_chat?(row["manifest"]),
       do: :ok,
       else: {:error, {:catalyst_not_chat, catalyst}}
   end
 
   defp capabilities(ctx, authority, catalyst, model, turn) do
-    case Cyfr.Models.capabilities(ctx, catalyst, model, authority.consent_id,
+    case Aqua.Models.capabilities(ctx, catalyst, model, authority.consent_id,
            run: capability_probe(ctx, authority, catalyst, turn)
          ) do
       {:ok, capabilities} -> {:ok, capabilities}
@@ -280,7 +296,7 @@ defmodule Aqua.Loop.Turn do
     fn input ->
       task =
         Aqua.Loop.Worker.async(fn ->
-          Cyfr.Execution.run_child(authority, catalyst, nil, input,
+          Crucible.run_child(authority, catalyst, nil, input,
             ctx: guest,
             parent_execution_id: turn.root_execution_id,
             root_execution_id: turn.root_execution_id,
@@ -305,7 +321,7 @@ defmodule Aqua.Loop.Turn do
     for {key, mode} <- policy,
         mode in ["auto", "ask"],
         String.contains?(key, ":"),
-        {:ok, definition} <- [Cyfr.Ops.Catalog.get_tool(key)] do
+        {:ok, definition} <- [Grimoire.get_tool(key)] do
       %{
         name: key,
         description: definition["description"],
@@ -315,7 +331,7 @@ defmodule Aqua.Loop.Turn do
   end
 
   defp deadline_ms(%Authority{} = authority) do
-    case Cyfr.Limits.timeout_ms(Authority.limits(authority)) do
+    case Prima.Limits.timeout_ms(Authority.limits(authority)) do
       {:ok, ms} when ms > 0 -> ms
       _ -> @default_deadline_ms
     end
@@ -361,7 +377,7 @@ defmodule Aqua.Loop.Turn do
     case Aqua.RoomExcerpt.read(ctx, %{
            athanor_id: athanor_id,
            thread_id: thread_id,
-           estate: room["estate"],
+           athanor: room["athanor"],
            title: room["title"]
          }) do
       {:ok, text} -> text

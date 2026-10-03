@@ -67,13 +67,13 @@ defmodule Cyfr.RuntimeEnvReadingTest do
 
     assert src =~ "env_str = fn key, default -> env!(key, :string?, nil) || default end"
     assert src =~ "env_int = fn key, default -> env!(key, :integer?, nil) || default end"
-    assert src =~ "case Cyfr.EnvValue.switch(getenv, key, default) do"
+    assert src =~ "case Prima.EnvValue.switch(getenv, key, default) do"
   end
 
   test "no switch is read by comparing its string" do
     offenders =
       for path <- [@runtime_exs, @runtime_config_ex],
-          {line, n} <- path |> File.read!() |> Cyfr.Test.CodeLines.code_lines(),
+          {line, n} <- path |> File.read!() |> Prima.Test.CodeLines.code_lines(),
           Regex.match?(@env_read, line) and Regex.match?(@string_compared_switch, line),
           do: "#{Path.basename(path)}:#{n}: #{String.trim(line)}"
 
@@ -172,30 +172,54 @@ defmodule Cyfr.RuntimeEnvReadingTest do
     refute src =~ ~S|env_str.("CYFR_LOCUS_BUILDS|
   end
 
-  # The pool's bounds and the worker watch's are read through the strict
-  # readers, so a set value that does not parse refuses the boot by name.
-  test "the Opus pool bounds and the worker watch bounds are read strictly" do
+  # The pool's bounds are read through the strict readers, so a set value
+  # that does not parse refuses the boot by name.
+  test "the Opus pool bounds are read strictly" do
     src = source()
 
     for name <- ~w(OPUS_POOL_SIZE OPUS_IDLE_TTL_MS OPUS_WATCHDOG_GRACE_MS OPUS_RELEASE_GRACE_MS) do
-      assert src =~ ~s|opus_bound.("#{name}", |, "#{name} must go through the strict bound reader"
+      assert src =~ ~s|env_bound.("#{name}", |, "#{name} must go through the strict bound reader"
       refute src =~ ~s|env_int.("#{name}"|, "#{name} must not be read with env_int"
     end
 
     # The runner's memory bound is a byte count, whose range the bound
     # reader cannot hold: it is read by the byte reader, in the keeper's range.
     assert src =~ ~S|runner_memory_bytes: opus_bytes.("OPUS_RUNNER_MEMORY_BYTES")|
-    assert src =~ ~S|Cyfr.EnvValue.bytes(getenv, key, Opus.Settings.runner_memory_range())|
+    assert src =~ ~S|Prima.EnvValue.bytes(getenv, key, Opus.Settings.runner_memory_range())|
     refute src =~ ~S|env_int.("OPUS_RUNNER_MEMORY_BYTES"|
-    refute src =~ ~S|opus_bound.("OPUS_RUNNER_MEMORY_BYTES"|
+    refute src =~ ~S|env_bound.("OPUS_RUNNER_MEMORY_BYTES"|
 
-    assert src =~ ~S|Opus.Settings.pool(opus_pool, System.get_env())|
-    assert src =~ ~S|Cyfr.RuntimeConfig.resolve_worker_watch(getenv)|
+    # The pool is checked against everything this file reads, so the retired
+    # keeper variable is refused from an .env file as from the process.
+    assert src =~ ~S|Opus.Settings.pool(opus_pool, sourced)|
+    assert src =~ ~S|{:error, {:retired, name}} ->|
+    assert src =~ ~S|{:error, {:unknown, names}} ->|
 
-    assert src =~ ~S|names no keeper; use spawn or direct|,
-           "OPUS_KEEPER must name spawn or direct, or refuse the boot"
+    # The keeper is the channel: nothing here reads a choice of another.
+    refute src =~ ~S|"OPUS_KEEPER"|
+    refute src =~ ~S|keeper:|
+  end
 
-    refute src =~ ~S|"local" ->|, "OPUS_KEEPER names two keepers, and local is neither"
+  # Every platform setting is read through its roster entry
+  # (`Cyfr.Platform.Settings.Roster.read/2`), whose validator is the one
+  # definition of its floor and range: the file spells none of their
+  # variables itself, so no second, hand-written bound can disagree with
+  # the roster's. The trusted proxy count, a deployment variable, is read
+  # by the strict bound reader from its floor.
+  test "the platform settings are read through the roster, and the proxy count strictly" do
+    src = source()
+
+    assert src =~ ~S|roster.read(entry, getenv)|
+    assert src =~ ~S|roster.unknown(file_names, Map.keys(System.get_env()))|
+
+    # CYFR_LOG_LEVEL is the one exception: the `opus` release reads it too,
+    # and carries no roster to read it through.
+    for name <- Cyfr.Platform.Settings.Roster.variables() -- ["CYFR_LOG_LEVEL"] do
+      refute src =~ ~s|"#{name}"|, "config/runtime.exs spells the rostered #{name} itself"
+    end
+
+    assert src =~ ~S|env_bound.("CYFR_TRUSTED_PROXY_HOPS", 0..16, "proxy hops")|
+    refute src =~ ~S|env_int.("CYFR_TRUSTED_PROXY_HOPS"|
   end
 
   # Dotenvy is a dependency; these are the behaviours the helpers above

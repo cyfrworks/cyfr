@@ -3,9 +3,11 @@
 
 defmodule Arca.CipherRotation do
   @moduledoc """
-  The rows a key rotation walks: the sealed columns of the four credential
-  tables, read a page at a time and written back only while the ciphertext
-  the page carried is still the one in the row.
+  The rows a key rotation walks: the sealed columns of the credential
+  tables and of a person's own key rows (`person_identities`, and the
+  staged keys and pending kit seed of `identity_attempts`), read a page at
+  a time and written back only while the ciphertext the page carried is
+  still the one in the row.
 
   This module moves **ciphertext**. Keys, plaintext and the envelope
   vocabulary are `Sanctum.Cipher`'s and never reach here — a facade that
@@ -16,11 +18,11 @@ defmodule Arca.CipherRotation do
 
   ## The first argument
 
-  Every function takes `%Cyfr.Actor{}` first and matches `scope:
+  Every function takes `%Prima.Actor{}` first and matches `scope:
   :platform` in the head. A rotation retires a key everywhere or nowhere,
   so its walk crosses every athanor by construction; the one authority a
-  `Cyfr.Actor` carries for a read that is not scoped to a tenant is the
-  platform scope (`Cyfr.Actor.system/0` holds it, and the operator's
+  `Prima.Actor` carries for a read that is not scoped to a tenant is the
+  platform scope (`Prima.Actor.system/0` holds it, and the operator's
   `bin/cyfr eval` runs as the server). An athanor-scoped actor is refused
   with `{:error, :not_platform}` before any query, so walking every
   tenant's sealed rows is not something a tenant's own caller can ask for.
@@ -30,24 +32,28 @@ defmodule Arca.CipherRotation do
   `page/4` is keyset pagination by `id`: bounded memory whatever the table
   holds, and a run that stops part-way resumes from the last id it saw
   instead of starting over. There is no unpaged read of a credential
-  table here — the audit walk (`ciphertext_page/4`) takes the same cursor.
+  table here — the audit walk (`ciphertext_page/4`) takes the same cursor,
+  and reads every sealed column of a row, not the CAS column alone.
 
   `swap/5` writes a row's re-sealed columns **only while the ciphertext
   the page read is still in the row's CAS column** — `cas_column/1`, the
-  table's primary sealed column. A concurrent legitimate write (a rotated
-  webhook secret, a re-sealed vault payload) changes that column, the swap
+  table's primary sealed column, or for a table whose rows seal one of
+  several columns (`identity_attempts`: staged keys or a kit seed), the
+  first of them the row holds, in the order `cas_column/1` lists. A
+  concurrent legitimate write (a rotated webhook secret, a re-sealed vault
+  payload) changes that column, the swap
   then matches no row and answers `:stale`, and the caller counts the row
   as not rotated. A plain update in its place would silently discard that
   write and leave the rotation half-applied with no failing test.
   """
 
-  import Ecto.Query, only: [from: 2, where: 3]
+  import Ecto.Query, only: [from: 2, where: 2, where: 3, dynamic: 2]
 
   # Each table: the schema, the CAS column, every sealed column in
   # compare-and-set-first order, and the columns a caller rebuilds the
   # row's AAD from. The CAS column is the table's primary sealed column —
   # the one a legitimate concurrent write to the row's credential must
-  # change — and it is also the column `ciphertext_page/4` audits.
+  # change.
   @tables %{
     webhooks: %{
       schema: Arca.Schemas.Webhook,
@@ -72,6 +78,23 @@ defmodule Arca.CipherRotation do
       cas: :payload_ciphertext,
       sealed: [:payload_ciphertext],
       binding: [:athanor_id, :provider]
+    },
+    # A person's live and operational private keys, sealed to the person.
+    # A remote person's row holds none and is not walked.
+    person_identities: %{
+      schema: Arca.Schemas.PersonIdentity,
+      cas: :live_key_sealed,
+      sealed: [:live_key_sealed, :operational_key_sealed],
+      binding: [:user_id]
+    },
+    # An attempt seals staged keys (a rotation's live key; a restore's live
+    # and operational keys) or an enrollment's pending kit seed, never both,
+    # so its CAS column is the first of these the row holds.
+    identity_attempts: %{
+      schema: Arca.Schemas.IdentityAttempt,
+      cas: [:staged_live_key_sealed, :kit_seed_sealed, :staged_operational_key_sealed],
+      sealed: [:staged_live_key_sealed, :kit_seed_sealed, :staged_operational_key_sealed],
+      binding: [:user_id, :kind, :request_id]
     }
   }
 
@@ -102,8 +125,11 @@ defmodule Arca.CipherRotation do
   @spec tables() :: [atom()]
   def tables, do: Map.keys(@tables)
 
-  @doc "The column a `swap/5` on `table` compares against, and the one `ciphertext_page/4` reads."
-  @spec cas_column(atom()) :: atom()
+  @doc """
+  The column a `swap/5` on `table` compares against: one column, or an
+  ordered list whose first non-null column a row compares.
+  """
+  @spec cas_column(atom()) :: atom() | [atom(), ...]
   def cas_column(table) when is_map_key(@tables, table), do: @tables[table].cas
 
   @doc """
@@ -118,9 +144,9 @@ defmodule Arca.CipherRotation do
   as a cursor and behave as the beginning, which is how a lost resume
   point turns into a silent restart of the walk; it matches no head here.
   """
-  @spec page(Cyfr.Actor.t(), atom(), String.t() | nil, pos_integer()) ::
+  @spec page(Prima.Actor.t(), atom(), String.t() | nil, pos_integer()) ::
           {:ok, [row()]} | refusal()
-  def page(%Cyfr.Actor{scope: :platform}, table, cursor, limit)
+  def page(%Prima.Actor{scope: :platform}, table, cursor, limit)
       when is_map_key(@tables, table) and is_cursor(cursor) and is_page_limit(limit) do
     spec = @tables[table]
 
@@ -132,44 +158,53 @@ defmodule Arca.CipherRotation do
 
       {:ok, rows}
     end)
+    |> Arca.Data.project()
   end
 
-  def page(%Cyfr.Actor{scope: :platform}, table, cursor, limit)
+  def page(%Prima.Actor{scope: :platform}, table, cursor, limit)
       when is_cursor(cursor) and is_page_limit(limit),
       do: unknown(table)
 
-  def page(%Cyfr.Actor{scope: scope}, _table, _cursor, _limit) when scope != :platform,
+  def page(%Prima.Actor{scope: scope}, _table, _cursor, _limit) when scope != :platform,
     do: {:error, :not_platform}
 
   @doc """
-  The next page of `table`'s CAS column after `cursor`, as
-  `%{id: id, ciphertext: bytes}`.
+  The next page of `table`'s sealed columns after `cursor`, as
+  `%{id: id, ciphertexts: [{column, bytes}]}`: every non-null sealed
+  column, CAS column first, as `page/4` answers them, without the binding
+  columns.
 
   The audit reads labels off these bytes without decrypting; the labels
-  are the caller's vocabulary, not this module's.
+  are the caller's vocabulary, not this module's. It reads every sealed
+  column because a concurrent write to one column of a row (a person's
+  live key activated mid-rotation) makes that row's swap stale while its
+  other columns stay under the old key, and only a count of each column
+  shows it.
   """
-  @spec ciphertext_page(Cyfr.Actor.t(), atom(), String.t() | nil, pos_integer()) ::
-          {:ok, [%{id: String.t(), ciphertext: binary()}]} | refusal()
-  def ciphertext_page(%Cyfr.Actor{scope: :platform}, table, cursor, limit)
+  @spec ciphertext_page(Prima.Actor.t(), atom(), String.t() | nil, pos_integer()) ::
+          {:ok, [%{id: String.t(), ciphertexts: [{atom(), binary()}]}]} | refusal()
+  def ciphertext_page(%Prima.Actor{scope: :platform}, table, cursor, limit)
       when is_map_key(@tables, table) and is_cursor(cursor) and is_page_limit(limit) do
-    cas = @tables[table].cas
+    sealed = @tables[table].sealed
 
     Arca.Repo.Errors.with_db_rescue("Arca.CipherRotation.ciphertext_page", fn ->
       rows =
         table
-        |> load([:id, cas], cursor, limit)
-        |> Enum.map(&%{id: &1.id, ciphertext: &1[cas]})
+        |> load([:id | sealed], cursor, limit)
+        |> Enum.map(&split_ciphertexts(&1, sealed))
 
       {:ok, rows}
     end)
+    |> Arca.Data.project()
   end
 
-  def ciphertext_page(%Cyfr.Actor{scope: :platform}, table, cursor, limit)
+  def ciphertext_page(%Prima.Actor{scope: :platform}, table, cursor, limit)
       when is_cursor(cursor) and is_page_limit(limit),
       do: unknown(table)
 
-  def ciphertext_page(%Cyfr.Actor{scope: scope}, _table, _cursor, _limit) when scope != :platform,
-    do: {:error, :not_platform}
+  def ciphertext_page(%Prima.Actor{scope: scope}, _table, _cursor, _limit)
+      when scope != :platform,
+      do: {:error, :not_platform}
 
   @doc """
   Write `sealed` — a map of sealed column to new bytes — into the row `id`
@@ -192,9 +227,9 @@ defmodule Arca.CipherRotation do
   would report a race that never happened and leave the row unrotated with
   nothing to say so.
   """
-  @spec swap(Cyfr.Actor.t(), atom(), String.t(), binary(), %{atom() => binary()}) ::
+  @spec swap(Prima.Actor.t(), atom(), String.t(), binary(), %{atom() => binary()}) ::
           {:ok, :swapped | :stale} | {:error, :unknown_column} | refusal()
-  def swap(%Cyfr.Actor{scope: :platform}, table, id, cas, sealed)
+  def swap(%Prima.Actor{scope: :platform}, table, id, cas, sealed)
       when is_map_key(@tables, table) and is_token(id) and is_token(cas) and is_map(sealed) and
              map_size(sealed) > 0 do
     spec = @tables[table]
@@ -214,11 +249,11 @@ defmodule Arca.CipherRotation do
     end
   end
 
-  def swap(%Cyfr.Actor{scope: :platform}, table, id, cas, sealed)
+  def swap(%Prima.Actor{scope: :platform}, table, id, cas, sealed)
       when is_token(id) and is_token(cas) and is_map(sealed) and map_size(sealed) > 0,
       do: unknown(table)
 
-  def swap(%Cyfr.Actor{scope: scope}, _table, _id, _cas, _sealed) when scope != :platform,
+  def swap(%Prima.Actor{scope: scope}, _table, _id, _cas, _sealed) when scope != :platform,
     do: {:error, :not_platform}
 
   # ---- queries ---------------------------------------------------------------
@@ -237,7 +272,7 @@ defmodule Arca.CipherRotation do
     # resume cursor: a page filtered in Elixir could end on a row the
     # caller never sees and walk backwards.
     from(r in schema,
-      where: not is_nil(field(r, ^cas)),
+      where: ^held(cas),
       order_by: [asc: r.id],
       limit: ^limit,
       select: map(r, ^columns)
@@ -245,6 +280,16 @@ defmodule Arca.CipherRotation do
     |> after_cursor(cursor)
     |> Arca.Repo.all()
   end
+
+  # The row's CAS value: its one CAS column, or the first non-null of an
+  # ordered list of them.
+  defp cas_value(cas) when is_atom(cas), do: dynamic([r], field(r, ^cas))
+  defp cas_value([cas]), do: dynamic([r], field(r, ^cas))
+
+  defp cas_value([cas | rest]),
+    do: dynamic([r], coalesce(field(r, ^cas), ^cas_value(rest)))
+
+  defp held(cas), do: dynamic([r], not is_nil(^cas_value(cas)))
 
   defp after_cursor(query, nil), do: query
   defp after_cursor(query, cursor), do: where(query, [r], r.id > ^cursor)
@@ -256,7 +301,8 @@ defmodule Arca.CipherRotation do
   defp cas_update(table, id, cas, set) do
     %{schema: schema, cas: cas_column} = @tables[table]
 
-    from(r in schema, where: r.id == ^id and field(r, ^cas_column) == ^cas)
+    from(r in schema, where: r.id == ^id)
+    |> where(^dynamic([r], ^cas_value(cas_column) == type(^cas, :binary)))
     |> Arca.Repo.update_all(set: set)
   end
 

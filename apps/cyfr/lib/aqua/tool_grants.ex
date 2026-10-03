@@ -18,51 +18,75 @@ defmodule Aqua.ToolGrants do
   `resolve/2` is the composition, and it is the only thing that should
   ever be handed to a turn as its policy.
 
-  ## An agent's answers live in its estate
+  ## An agent's answers live in its athanor
 
-  An agent belongs to the estate whose `aqua/` tree holds it, and a tape
-  runs its own estate's agents alone, so every row is keyed by the estate
+  An agent belongs to the athanor whose `aqua/` tree holds it, and a tape
+  runs its own athanor's agents alone, so every row is keyed by the athanor
   in focus: a thread-scope answer by the thread, an agent-scope one
-  by the estate and the agent's name.
+  by the athanor and the agent's name.
 
-  ## Destructive and external actions take no standing allow
+  ## Which answers may stand is the identity domain's rule
 
   Both scopes answer for calls nobody has seen yet, so a standing
-  **allow** for a `destructive` or `external` action is refused here — in
-  the write path itself, not only in the runner's card handler — with the
-  kind derived from the registry annotation, the same source the card
-  shows. A standing **deny** stands: "never do this" is exactly the
-  standing answer a destructive action should be able to take.
+  **allow** for a `destructive` or `external` action is refused, and an
+  action's `standing:` declaration says how far one reaches: `false` none
+  at any scope (a pinned page, read into every turn, is changed one click
+  at a time), `:thread` one thread and never agent scope (a filed note
+  follows the thread it was kept from, not the agent). A standing
+  **deny** always stands: "never do this" is exactly the standing answer
+  a destructive action should be able to take. The rule is
+  `Sanctum.ToolGrants.check_standing/2`, applied at the write and again
+  to every row read here; the same declaration is minted into the
+  approval intent the runner checks, so the two gates cannot disagree.
 
-  ## An action may say how far a standing allow reaches
+  ## A bounded allow asks
 
-  A tool declares `standing:` beside `kind:` on an action. `false` means
-  no standing allow at any scope (a pinned page, read into every turn, is
-  changed one click at a time); `:thread` means a standing allow for
-  one thread and never agent scope (a filed note follows the thread
-  it was kept from, not the agent). Absent means either scope. The same
-  declaration is minted into the approval intent the runner checks, so
-  the two gates cannot disagree.
+  An allow may carry bounds: the execution, turn or schedule it ends
+  with, a deadline, and the resources it covers. `effective/2` keeps them
+  on the pair's decision, and the guest reads the pair as `"ask"`: no
+  bounded allow is automatic for a whole turn. Each call is decided as it
+  is made, and again as it dispatches, by `Sanctum.ToolGrants.admits?/2`
+  against the rows as they stand then (`Aqua.Loop.Policy`). A bounded
+  allow never narrows what the author made automatic.
   """
 
-  alias Arca.Schemas.ToolGrant
-  alias Arca.ToolGrantStorage
   alias Sanctum.Context
 
-  @scopes ToolGrant.scopes()
-  @effects ToolGrant.effects()
+  @scopes Sanctum.ToolGrants.scopes()
+  @effects Sanctum.ToolGrants.effects()
+
+  # The bounds an allow may carry, as its row names them.
+  @bounds [:lifecycle_kind, :lifecycle_id, :expires_at, :constraint]
 
   @type key :: {tool :: String.t(), action :: String.t()}
 
-  @typedoc "One effective decision: the mode, and whether a grant or the author made it."
-  @type decision :: {:auto | :ask | :deny, :authored | :grant}
+  @typedoc "One stored grant, as the plain map `Sanctum.ToolGrants` answers."
+  @type grant :: %{required(:scope) => String.t(), optional(atom()) => term()}
+
+  @typedoc """
+  A bounded allow's bounds, as its row holds them: the scope it was given
+  at, the lifecycle it ends with, its deadline and its constraint.
+  """
+  @type bounds :: %{
+          scope: String.t() | nil,
+          lifecycle_kind: String.t() | nil,
+          lifecycle_id: String.t() | nil,
+          expires_at: DateTime.t() | nil,
+          constraint: map() | :corrupt | nil
+        }
+
+  @typedoc """
+  One effective decision: the mode, and who made it — the author, a
+  standing grant, or bounded allows, whose bounds it keeps.
+  """
+  @type decision :: {:auto | :ask | :deny, :authored | :grant | {:bounded, [bounds()]}}
 
   @doc """
   The effective policy for a turn, as the guest reads it: `effective/2`
   projected to `"auto" | "ask" | "deny"`. The only thing that should ever
   be handed to a turn — the soul's or a role's — as its policy.
   """
-  @spec resolve(map(), [Arca.Schemas.ToolGrant.t()]) :: map()
+  @spec resolve(map(), [grant()]) :: map()
   def resolve(declared, grants) when is_map(declared) and is_list(grants) do
     declared |> effective(grants) |> to_guest()
   end
@@ -80,29 +104,60 @@ defmodule Aqua.ToolGrants do
   untouched. A key for a tool nobody catalogues passes through too — the
   guest offers no such tool.
 
-  Then the decisions: a standing allow makes its pair `:auto` (a grant's);
-  a standing deny KEEPS its pair, as `:deny` — an absent key would let a
+  Then the decisions: a bounded allow keeps its bounds on its pair, as
+  `{:auto, {:bounded, bounds}}`, unless the author already made the pair
+  automatic; an unbounded allow makes its pair `:auto` (a grant's); a
+  standing deny KEEPS its pair, as `:deny` — an absent key would let a
   surviving glob answer, and the guest stops at a present one. Last the
   ceiling: an `:auto` on a destructive or external action, or on an
   action whose kind is unknown, becomes `:ask`; an action a catalogued
   tool does not have is dropped. A hand-edited file reaches the guest
   already within the rule.
   """
-  @spec effective(map(), [Arca.Schemas.ToolGrant.t()]) :: %{String.t() => decision()}
+  @spec effective(map(), [grant()]) :: %{String.t() => decision()}
   def effective(authored, grants) when is_map(authored) and is_list(grants) do
     {denied, allowed} = Enum.split_with(grants, &(&1.effect == "deny"))
+    {bounded, unbounded} = allowed |> standing_allows() |> Enum.split_with(&bounded?/1)
 
     authored
     |> expand_globs()
-    |> Map.merge(Map.new(standing_allows(allowed), fn g -> {key_string(g), {:auto, :grant}} end))
+    |> with_bounded(bounded)
+    |> Map.merge(Map.new(unbounded, fn g -> {key_string(g), {:auto, :grant}} end))
     |> Map.merge(Map.new(denied, fn g -> {key_string(g), {:deny, :grant}} end))
     |> ceiling()
   end
 
-  @doc "The guest's spelling of `effective/2`: `\"auto\" | \"ask\" | \"deny\"` per key."
+  @doc """
+  The guest's spelling of `effective/2`: `"auto" | "ask" | "deny"` per
+  key. A bounded allow is `"ask"`: it covers only the calls its bounds
+  admit, each decided as it is made.
+  """
   @spec to_guest(%{String.t() => decision()}) :: map()
   def to_guest(decisions) when is_map(decisions),
-    do: Map.new(decisions, fn {key, {mode, _by}} -> {key, Atom.to_string(mode)} end)
+    do: Map.new(decisions, fn {key, decision} -> {key, guest_mode(decision)} end)
+
+  defp guest_mode({:auto, {:bounded, _bounds}}), do: "ask"
+  defp guest_mode({mode, _by}), do: Atom.to_string(mode)
+
+  # A bounded allow joins its pair's decision, kept beside any other
+  # bounded allow for the pair. It never narrows an authored `auto`, and
+  # an unbounded allow or a deny merged after it outranks it.
+  defp with_bounded(decisions, bounded) do
+    Enum.reduce(bounded, decisions, fn grant, acc ->
+      bounds = bounds_of(grant)
+
+      Map.update(acc, key_string(grant), {:auto, {:bounded, [bounds]}}, fn
+        {:auto, :authored} = authored -> authored
+        {:auto, {:bounded, kept}} -> {:auto, {:bounded, kept ++ [bounds]}}
+        {_mode, _by} -> {:auto, {:bounded, [bounds]}}
+      end)
+    end)
+  end
+
+  defp bounds_of(grant),
+    do: Map.new([:scope | @bounds], &{&1, Map.get(grant, &1)})
+
+  defp bounded?(grant), do: Enum.any?(@bounds, &(not is_nil(Map.get(grant, &1))))
 
   # Authored values are `"ask" | "auto"` (the parser's grammar); anything
   # else in a file is read as ask, the fail-closed reading the guest
@@ -168,14 +223,18 @@ defmodule Aqua.ToolGrants do
   end
 
   # An allow row is honoured only while the action's current declaration
-  # would still accept it as a standing allow — the same rule `put/2`
-  # applies at the write, applied again at every read. A row written
-  # before an action gained `standing: false` (or by a surface that never
-  # went through `put/2`) must not auto-run anything; it simply stops
-  # counting. A deny is always honoured.
+  # would still accept it as a standing allow — the rule the write applies
+  # (`Sanctum.ToolGrants.check_standing/2`), applied again at every read. A
+  # row written before an action gained `standing: false` (or by a surface
+  # that never went through the write) must not auto-run anything; it
+  # simply stops counting. A deny is always honoured. A row that names no
+  # scope is read at thread scope, the narrower.
   defp standing_allows(rows) do
+    now = DateTime.utc_now()
+
     Enum.filter(rows, fn row ->
-      is_map(row) and check_standing(row, Map.get(row, :scope, "thread"), "allow") == :ok
+      is_map(row) and
+        Sanctum.ToolGrants.check_standing(Map.put_new(row, :scope, "thread"), now) == :ok
     end)
   end
 
@@ -186,14 +245,14 @@ defmodule Aqua.ToolGrants do
 
   @doc """
   The standing decisions bearing on one thread and one agent: this
-  thread's own, and the agent-scope ones of the estate.
+  thread's own, and the agent-scope ones of the athanor.
 
   A store that cannot be read is `{:error, {:unavailable, _}}`, never an
   empty list: "no rows" would drop every deny and leave an authored
   `auto` automatic — an outage must stop the turn, not widen it.
   """
   @spec for_thread(Context.t(), String.t(), String.t()) ::
-          {:ok, [ToolGrant.t()]} | {:error, unavailable()}
+          {:ok, [grant()]} | {:error, unavailable()}
   def for_thread(%Context{} = ctx, thread_id, agent_name) do
     with {:ok, by_agent} <- for_agents(ctx, thread_id, [agent_name]) do
       {:ok, Map.get(by_agent, agent_name, [])}
@@ -207,9 +266,9 @@ defmodule Aqua.ToolGrants do
   that agent, with no read per role. Fails closed like it.
   """
   @spec for_agents(Context.t(), String.t(), [String.t()]) ::
-          {:ok, %{String.t() => [ToolGrant.t()]}} | {:error, unavailable()}
+          {:ok, %{String.t() => [grant()]}} | {:error, unavailable()}
   def for_agents(%Context{} = ctx, thread_id, names) when is_list(names) do
-    case ToolGrantStorage.list_for_thread(Context.actor(ctx), thread_id) do
+    case Sanctum.ToolGrants.for_thread(ctx, thread_id) do
       {:ok, rows} ->
         by_name = rows |> Enum.filter(&(&1.agent_name in names)) |> Enum.group_by(& &1.agent_name)
         {:ok, Map.new(names, &{&1, Map.get(by_name, &1, [])})}
@@ -220,16 +279,16 @@ defmodule Aqua.ToolGrants do
   end
 
   @doc """
-  Every `{agent_name, tool, action}` a thread currently auto-approves
-  by a grant, for every agent that has rows in it — the runner's fast
-  path, keyed by the agent a card names, so an answer given for one
-  agent never runs another's card. Standing-checked and deny-subtracted
-  per agent exactly as `allowed_keys/1`. Fails closed like the reads.
+  Every `{agent_name, tool, action}` a thread has a standing allow for,
+  for every agent that has rows in it: what the thread pane lists as the
+  thread's standing answers, each revocable, keyed by the agent the
+  answer was given for. Standing-checked and deny-subtracted per agent
+  exactly as `allowed_keys/1`. Fails closed like the reads.
   """
   @spec allowed_by_agent(Context.t(), String.t()) ::
           {:ok, MapSet.t({String.t(), String.t(), String.t()})} | {:error, unavailable()}
   def allowed_by_agent(%Context{} = ctx, thread_id) do
-    case ToolGrantStorage.list_for_thread(Context.actor(ctx), thread_id) do
+    case Sanctum.ToolGrants.for_thread(ctx, thread_id) do
       {:ok, rows} ->
         {:ok,
          rows
@@ -245,14 +304,17 @@ defmodule Aqua.ToolGrants do
   end
 
   @doc """
-  The `{tool, action}` pairs a thread currently auto-approves BY A
-  GRANT — what the runner's fast path checks before re-asking, and what
-  the chat shows as its standing grants. An authored `auto` never mints a
-  card, so it is never here; a deny for the same pair subtracts, so a
-  pair a person refused cannot be auto on the fast path while denied in
-  the policy.
+  The `{tool, action}` pairs a person answered with a standing allow that
+  still stands — what the chat shows as its standing answers, each
+  revocable there. A bounded allow is listed too, though it covers only
+  the calls its bounds admit (each decided as it is made, `effective/2`),
+  so every standing answer a person gave can be seen and withdrawn. An
+  authored `auto` never mints a card, so it is never here; an allow the
+  action's current declaration would refuse no longer stands and is not
+  here; a deny for the same pair subtracts, since the pair asks no more.
+  Nothing decides a call from this list.
   """
-  @spec allowed_keys([Arca.Schemas.ToolGrant.t()]) :: MapSet.t(key())
+  @spec allowed_keys([grant()]) :: MapSet.t(key())
   def allowed_keys(grants) when is_list(grants) do
     denied = grants |> Enum.filter(&(&1.effect == "deny")) |> MapSet.new(&{&1.tool, &1.action})
 
@@ -269,38 +331,25 @@ defmodule Aqua.ToolGrants do
 
   @doc """
   Record a decision. `scope` is `"thread"` or `"agent"`, `effect`
-  `"allow"` or `"deny"`. A standing allow for a destructive or external
-  action is refused outright at either scope; a deny is always recordable.
+  `"allow"` or `"deny"`, and an allow may name its bounds. An answer that
+  may not stand is refused with its reason
+  (`Sanctum.ToolGrants.check_standing/2`): a standing allow for a
+  destructive or external action at either scope, and a deny carrying a
+  bound. A plain deny is always recordable.
   """
-  @spec put(Context.t(), map()) :: {:ok, ToolGrant.t()} | {:error, term()}
+  @spec put(Context.t(), map()) :: {:ok, grant()} | {:error, term()}
   def put(%Context{} = ctx, %{scope: scope, effect: effect} = attrs)
-      when scope in @scopes and effect in @effects do
-    with {:ok, row} <- row(ctx, attrs), do: ToolGrantStorage.put(row)
-  end
-
-  @doc """
-  The row a decision writes, checked and not written: `put/2`'s attrs
-  with the athanor, the deciding person and the thread the scope
-  keys on, for a caller that lands it inside a transaction of its own
-  (`Arca.ToolGrantStorage.put/1`).
-  """
-  @spec row(Context.t(), map()) :: {:ok, map()} | {:error, term()}
-  def row(%Context{} = ctx, %{scope: scope, effect: effect} = attrs)
-      when scope in @scopes and effect in @effects do
-    with :ok <- check_standing(attrs, scope, effect) do
-      {:ok,
-       attrs
-       |> Map.merge(%{athanor_id: Context.athanor!(ctx), granted_by: ctx.user_id})
-       |> Map.put(:thread_id, thread_for(scope, attrs))}
-    end
-  end
+      when scope in @scopes and effect in @effects,
+      do: Sanctum.ToolGrants.put(ctx, attrs)
 
   @doc """
   The sentence a person reads when a standing answer was refused — one per
   reason a `{:scope_not_permitted, reason}` can carry, whether it came
-  from this module's write path or from the runner's own check of the
-  card's intent (which spells the kind as the intent stores it, a
-  string). The atom is the machine's; nobody should read `never_standing`.
+  from the write path's rule (`Sanctum.ToolGrants.check_standing/2`), from
+  the bounds a decision names (`Aqua.Standing`) or from the runner's own
+  check of the card's intent (which spells the kind as the intent stores
+  it, a string). The atom is the machine's; nobody should read
+  `never_standing`.
   """
   @spec refusal_message({:scope_not_permitted, term()}) :: String.t()
   def refusal_message({:scope_not_permitted, kind})
@@ -316,56 +365,45 @@ defmodule Aqua.ToolGrants do
   def refusal_message({:scope_not_permitted, :unknown_kind}),
     do: "This action's kind is unknown, so no standing answer was recorded."
 
+  def refusal_message({:scope_not_permitted, :bounded_deny}),
+    do: "A \"never\" answer always stands — it ends with no run or time and covers every path."
+
+  def refusal_message({:scope_not_permitted, :bounds_without_standing}),
+    do:
+      "Only a standing answer ends with a run or a time, or covers some paths — once takes none."
+
+  def refusal_message({:scope_not_permitted, :invalid_lifecycle}),
+    do: "That run is not one this card belongs to, so no answer can end with it."
+
+  def refusal_message({:scope_not_permitted, :no_schedule}),
+    do: "This run was not started by a schedule, so no answer can end with one."
+
+  def refusal_message({:scope_not_permitted, :invalid_deadline}),
+    do: "The time a standing answer ends at must be a date and time."
+
+  def refusal_message({:scope_not_permitted, :deadline_passed}),
+    do: "The time a standing answer ends at has already passed."
+
+  def refusal_message({:scope_not_permitted, :no_resource}),
+    do: "This action names no file or domain, so its standing answer cannot be limited to some."
+
+  def refusal_message({:scope_not_permitted, :resource_kind}),
+    do: "This action names another kind of resource than the answer is limited to."
+
+  def refusal_message({:scope_not_permitted, :invalid_constraint}),
+    do: "The paths or domains the answer is limited to are not valid ones."
+
   def refusal_message({:scope_not_permitted, _other}),
     do: "A standing answer is not permitted for this action — decide it once."
 
   @doc "Withdraw a decision. Idempotent — a pair nobody granted is already withdrawn."
   @spec revoke(Context.t(), map()) :: :ok | {:error, term()}
-  def revoke(%Context{} = ctx, %{scope: scope} = attrs) when scope in @scopes do
-    attrs
-    |> Map.put(:athanor_id, Context.athanor!(ctx))
-    |> Map.put(:thread_id, thread_for(scope, attrs))
-    |> ToolGrantStorage.delete()
-  end
+  def revoke(%Context{} = ctx, %{scope: scope} = attrs) when scope in @scopes,
+    do: Sanctum.ToolGrants.revoke(ctx, attrs)
 
   # ---------------------------------------------------------------------------
   # Internal
   # ---------------------------------------------------------------------------
-
-  # Standing allows require a known read, write or execute kind and must
-  # satisfy the action's standing declaration. Destructive and external
-  # actions always require approval; standing denies can always be recorded.
-  # Use Aqua.Kinds for both the kind and standing limits.
-  defp check_standing(_attrs, _scope, "deny"), do: :ok
-
-  # A row whose scope or effect is outside the vocabulary — nothing writes
-  # one, but a stored row is read back trusting nobody — counts for no
-  # standing allow.
-  defp check_standing(_attrs, scope, _effect) when scope not in @scopes,
-    do: {:error, {:scope_not_permitted, :unknown_kind}}
-
-  defp check_standing(%{tool: tool, action: action}, scope, "allow")
-       when is_binary(tool) and is_binary(action) and scope in @scopes do
-    case Aqua.Kinds.kind_for(tool, action) do
-      k when k in [:destructive, :external] -> {:error, {:scope_not_permitted, k}}
-      nil -> {:error, {:scope_not_permitted, :unknown_kind}}
-      _ -> check_declared_standing(tool, action, scope)
-    end
-  end
-
-  defp check_declared_standing(tool, action, scope) do
-    case Aqua.Kinds.standing_for(tool, action) do
-      false -> {:error, {:scope_not_permitted, :never_standing}}
-      :thread when scope == "agent" -> {:error, {:scope_not_permitted, :thread_only}}
-      _ -> :ok
-    end
-  end
-
-  # An agent-scope row names no thread: it is the same answer in
-  # every thread, and storing the one it happened to be given in would
-  # make the key ambiguous.
-  defp thread_for("agent", _attrs), do: nil
-  defp thread_for("thread", attrs), do: Map.fetch!(attrs, :thread_id)
 
   defp key_string(%{tool: tool, action: action}), do: "#{tool}.#{action}"
 end

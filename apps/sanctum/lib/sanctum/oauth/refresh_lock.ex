@@ -80,10 +80,20 @@ defmodule Sanctum.OAuth.RefreshLock do
   mid-refresh). It is also what a member waiting on a PEER's claim polls,
   so a refresh that landed on another member is read rather than repeated.
   """
-  @spec run({atom(), String.t(), String.t()}, (-> result), (-> {:ok, term()} | :stale), non_neg_integer()) ::
+  @spec run(
+          {atom(), String.t(), String.t()},
+          (-> result),
+          (-> {:ok, term()} | :stale),
+          non_neg_integer()
+        ) ::
           result
         when result: {:ok, term()} | {:error, term()}
-  def run({_kind, athanor_id, subject_id} = key, refresh_fun, recheck_fun, timeout_ms \\ @default_timeout_ms)
+  def run(
+        {_kind, athanor_id, subject_id} = key,
+        refresh_fun,
+        recheck_fun,
+        timeout_ms \\ @default_timeout_ms
+      )
       when is_binary(athanor_id) and athanor_id != "" and is_binary(subject_id) and
              subject_id != "" do
     do_run(key, refresh_fun, recheck_fun, timeout_ms, 2)
@@ -94,11 +104,11 @@ defmodule Sanctum.OAuth.RefreshLock do
   end
 
   defp do_run(key, refresh_fun, recheck_fun, timeout_ms, attempts) do
-    logger_metadata = Cyfr.LoggerContext.capture()
+    logger_metadata = Prima.LoggerContext.capture()
 
     task =
       Task.Supervisor.async_nolink(@task_supervisor, fn ->
-        Cyfr.LoggerContext.restore(logger_metadata)
+        Prima.LoggerContext.restore(logger_metadata)
 
         case Registry.register(@registry, key, :leader) do
           {:ok, _} ->
@@ -162,7 +172,7 @@ defmodule Sanctum.OAuth.RefreshLock do
   defp claimed(key, refresh_fun, recheck_fun, timeout_ms) do
     claim_key = claim_key(key)
 
-    case JobClaims.claim(@kind, claim_key, Cyfr.Boot.id(), @claim_lease_ms) do
+    case JobClaims.claim(@kind, claim_key, Prima.Boot.id(), @claim_lease_ms) do
       {:ok, claim} ->
         try do
           {:done, refresh_fun.()}
@@ -220,5 +230,5 @@ defmodule Sanctum.OAuth.RefreshLock do
   defp describe_exit(reason) when is_atom(reason), do: inspect(reason)
 
   defp describe_exit(other),
-    do: inspect(Cyfr.Sanitizer.sanitize(other), limit: 20, printable_limit: 200)
+    do: inspect(Prima.Sanitizer.sanitize(other), limit: 20, printable_limit: 200)
 end

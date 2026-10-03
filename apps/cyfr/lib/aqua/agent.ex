@@ -3,12 +3,12 @@
 
 defmodule Aqua.Agent do
   @moduledoc """
-  The agent a turn is addressed to — the estate's soul or one of its roles
+  The agent a turn is addressed to — the athanor's soul or one of its roles
   — as the runner carries it from the pick to the running turn.
 
   A pick is a NAME: the roster entry an `@tom` matched, the entry the
-  picker sent, the previous turn's agent, or the estate's first. The
-  agent lives in the estate in focus — a tape runs its own estate's soul
+  picker sent, the previous turn's agent, or the athanor's first. The
+  agent lives in the athanor in focus — a tape runs its own athanor's soul
   and roles alone — so the name is the whole identity: the thread
   row (`agent`), the standing-grant key and the recovery read after
   a restart are written in terms of it.
@@ -41,7 +41,7 @@ defmodule Aqua.Agent do
   @enforce_keys [:name]
   defstruct [:name, :agent, :policy]
 
-  @doc "A pick by name, from the estate in focus."
+  @doc "A pick by name, from the athanor in focus."
   @spec by_name(String.t()) :: t()
   def by_name(name) when is_binary(name), do: %__MODULE__{name: name}
 
@@ -66,7 +66,7 @@ defmodule Aqua.Agent do
   def resolved?(%__MODULE__{}), do: false
 
   @doc """
-  Read the agent's CURRENT definition from the estate's tree — always,
+  Read the agent's CURRENT definition from the athanor's tree — always,
   even for a pick that was resolved before: a definition edited or
   disabled since the last turn must not run as it was.
   `{:error, :no_agent}` when the tree holds no such enabled agent
@@ -79,7 +79,7 @@ defmodule Aqua.Agent do
   end
 
   @doc """
-  `resolve/2` that also hands back the roster it read — the estate's whole
+  `resolve/2` that also hands back the roster it read — the athanor's whole
   tree, once — so a turn composes its roles from the same read rather
   than reading the tree twice. A disabled agent is not on the roster and
   so does not resolve.
@@ -128,7 +128,7 @@ defmodule Aqua.Agent do
   from a previous composition — so a decision withdrawn since is gone
   from the next turn. A pick has to be resolved first.
   """
-  @spec with_grants(t(), [Arca.Schemas.ToolGrant.t()]) :: t()
+  @spec with_grants(t(), [Aqua.ToolGrants.grant()]) :: t()
   def with_grants(%__MODULE__{agent: %{}} = pick, grants) when is_list(grants) do
     %{pick | policy: Aqua.ToolGrants.resolve(authored_policy(pick), grants)}
   end

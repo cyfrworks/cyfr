@@ -7,10 +7,9 @@ defmodule Compendium.RegistryRemoveCascadeTest do
 
   @wasm File.read!(Path.join(__DIR__, "../support/test_wasm/math.wasm"))
 
-  setup do
+  setup tags do
     Arca.Cache.init()
-    :ok = Ecto.Adapters.SQL.Sandbox.checkout(Arca.Repo)
-    Ecto.Adapters.SQL.Sandbox.mode(Arca.Repo, {:shared, self()})
+    Cyfr.Test.Sandbox.setup!(tags)
 
     test_path = Path.join(System.tmp_dir!(), "remove_cascade_#{:rand.uniform(1_000_000)}")
     original_base_path = Application.get_env(:arca, :base_path)
@@ -24,7 +23,7 @@ defmodule Compendium.RegistryRemoveCascadeTest do
         else: Application.delete_env(:arca, :base_path)
     end)
 
-    {:ok, ctx: Sanctum.TestContext.local()}
+    {:ok, ctx: Sanctum.TestContext.local(:api)}
   end
 
   defp publish!(ctx, name, version) do
@@ -60,9 +59,10 @@ defmodule Compendium.RegistryRemoveCascadeTest do
           invoke_mode: "open_inert",
           shape_digest: "sha256:s",
           commit_digest: "sha256:c",
-          blob_digest: Cyfr.JCS.hash_binary("{}"),
+          blob_digest: Prima.JCS.hash_binary("{}"),
           resolved_policy: "{}",
           activation: "{}",
+          admitted_origins: [:interactive],
           granted_by: "test",
           granted_via: "bootstrap"
         },
@@ -79,7 +79,11 @@ defmodule Compendium.RegistryRemoveCascadeTest do
     {profile_id, consent} = seed_profile!(ctx, name_ref)
 
     {:ok, entry} =
-      Sanctum.Vault.create(ctx, %{name: "survivor", kind: "api_key", fields: %{"k" => "v"}})
+      Sanctum.TestContext.create_vault(ctx, %{
+        name: "survivor",
+        kind: "api_key",
+        fields: %{"k" => "v"}
+      })
 
     {:ok, _} = Compendium.Registry.delete(ctx, "cascade-target", "1.0.0", "local")
 
@@ -101,7 +105,7 @@ defmodule Compendium.RegistryRemoveCascadeTest do
       Sanctum.Test.ConsentFixtures.bindable_profile(ctx, "reagent:local.cascade-hooked:1.0.0")
 
     {:ok, _} =
-      Sanctum.Webhook.create(ctx, %{
+      Sanctum.TestContext.create_webhook(ctx, %{
         name: "cascade-hook",
         replay_protection: "none",
         target_ref: "reagent:local.cascade-hooked:1.0.0",

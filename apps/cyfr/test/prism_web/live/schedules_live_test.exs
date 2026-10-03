@@ -37,11 +37,34 @@ defmodule PrismWeb.SchedulesLiveTest do
     {:ok, view: view, ctx: ctx, params: params}
   end
 
+  # The profile's grant, made again through the walk with `origins`.
+  defp grant_origins!(ctx, origins) do
+    ref = "reagent:local.schedule-target"
+    {:ok, plan} = Sanctum.Consent.Plan.plan(ctx, %{ref: ref})
+    decisions = %{ref: ref, origins: origins}
+    {:ok, preview} = Sanctum.Consent.Commit.preview(ctx, decisions)
+
+    {:ok, _} =
+      Sanctum.Consent.Commit.commit(ctx, %{
+        decisions: decisions,
+        plan_token: plan.plan_token,
+        proof: preview.proof,
+        commit_digest: preview.commit_digest,
+        expected_consent_revision: plan.expected_consent_revision
+      })
+  end
+
+  defp schedule(ctx, params),
+    do: Arca.CronSchedule.get_by_id_or_name(Sanctum.Context.actor(ctx), params["name"])
+
+  defp grant_open?(view), do: has_element?(view, ~s(#system-layer-dialog [data-kind="grant"]))
+
   test "creation binds the explicitly entered profile and preserves JSON values", %{
     view: view,
     ctx: ctx,
     params: params
   } do
+    grant_origins!(ctx, [:interactive, :schedule])
     assert has_element?(view, "input[name=profile_id][required]")
     render_submit(view, "create", params)
 
@@ -98,6 +121,77 @@ defmodule PrismWeb.SchedulesLiveTest do
              Arca.CronSchedule.get_by_id_or_name(Sanctum.Context.actor(ctx), params["name"])
 
     assert_form(view, submitted)
+  end
+
+  describe "a profile whose grant does not admit schedules" do
+    test "raises the grant prompt first, and a dismissal makes no schedule", %{
+      view: view,
+      ctx: ctx,
+      params: params
+    } do
+      render_submit(view, "create", params)
+      render(view)
+
+      assert grant_open?(view)
+      assert {:error, :not_found} = schedule(ctx, params)
+      refute has_element?(view, ~s(input[data-origin="schedule"][checked]))
+
+      view |> element(~s(#system-layer button[phx-click="dismiss"])) |> render_click()
+      render(view)
+
+      assert {:error, :not_found} = schedule(ctx, params)
+      assert :sys.get_state(view.pid).socket.assigns.flash["error"] =~ "No schedule was made"
+    end
+
+    test "granted with the schedule origin, the schedule is made", %{
+      view: view,
+      ctx: ctx,
+      params: params
+    } do
+      render_submit(view, "create", params)
+      render(view)
+      assert grant_open?(view)
+
+      view
+      |> element(~s(input[phx-click="toggle_origin"][phx-value-origin="schedule"]))
+      |> render_click()
+
+      render(view)
+      view |> element(~s(#system-layer button[phx-click="confirm"])) |> render_click()
+
+      Prima.Test.Wait.wait_until(
+        fn -> render(view) && match?({:ok, _}, schedule(ctx, params)) end,
+        2_000,
+        "the schedule"
+      )
+
+      {:ok, made} = schedule(ctx, params)
+      assert made.profile_id == params["profile_id"]
+
+      {:ok, head} = Sanctum.Consent.head_consent(ctx, params["profile_id"])
+      assert :schedule in head.admitted_origins
+    end
+
+    test "granted without the schedule origin, no schedule is made", %{
+      view: view,
+      ctx: ctx,
+      params: params
+    } do
+      render_submit(view, "create", params)
+      render(view)
+      view |> element(~s(#system-layer button[phx-click="confirm"])) |> render_click()
+
+      Prima.Test.Wait.wait_until(
+        fn ->
+          render(view)
+          (:sys.get_state(view.pid).socket.assigns.flash["error"] || "") =~ "No schedule was made"
+        end,
+        2_000,
+        "the refusal"
+      )
+
+      assert {:error, :not_found} = schedule(ctx, params)
+    end
   end
 
   defp assert_form(view, params) do

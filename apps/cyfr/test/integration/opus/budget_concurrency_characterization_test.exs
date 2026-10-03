@@ -24,9 +24,9 @@ defmodule Opus.BudgetConcurrencyCharacterizationTest do
 
   use ExUnit.Case, async: false
 
-  import Cyfr.Test.Wait
+  import Prima.Test.Wait
 
-  alias Cyfr.Authority.Budget
+  alias Prima.Authority.Budget
   alias Opus.Test.FormulaHost
   alias Opus.Test.NestedExecution, as: Probe
   alias Sanctum.Consent.{Bootstrap}
@@ -61,12 +61,12 @@ defmodule Opus.BudgetConcurrencyCharacterizationTest do
 
     Cyfr.Test.Sandbox.stop_work_on_exit()
 
-    ctx = Sanctum.TestContext.local()
+    ctx = Sanctum.TestContext.local(:api)
     :ok = Probe.publish_probe!(ctx)
     {:ok, %{minted: minted}} = Bootstrap.run(ctx)
     assert @probe_node in minted
 
-    {:ok, authority} = Cyfr.Execution.authority_for(ctx, :default, @probe_node)
+    {:ok, authority} = Crucible.authority_for(ctx, :default, @probe_node)
     authority = %{authority | budget: Budget.new(@cap)}
 
     formula =
@@ -78,7 +78,7 @@ defmodule Opus.BudgetConcurrencyCharacterizationTest do
   test "five concurrent spawns under a cap of 2 never hold more than 2, and give everything back",
        %{ctx: ctx, authority: authority, formula: formula} do
     root_id = formula.execution_id
-    children_before = Cyfr.Slots.status(Cyfr.Execution.Slots).child_active
+    children_before = Prima.Slots.status(Crucible.Slots).child_active
     sampler = sample(ctx, authority)
     test_pid = self()
 
@@ -110,7 +110,9 @@ defmodule Opus.BudgetConcurrencyCharacterizationTest do
 
     assert refused ==
              List.duplicate(
-               {:guest_error, "resource_limit", "Invocation denied: invoke_budget_exhausted"},
+               {:guest_error, "resource_limit",
+                "Invocation denied: " <>
+                  Prima.Authority.Transition.deny_message(:invoke_budget_exhausted)},
                @spawns - @cap
              )
 
@@ -120,7 +122,7 @@ defmodule Opus.BudgetConcurrencyCharacterizationTest do
     assert Arca.BudgetReservations.lookup(Sanctum.Context.actor(ctx), authority.budget.id).charged ==
              @cap
 
-    assert Cyfr.Slots.status(Cyfr.Execution.Slots).child_active == children_before + @cap
+    assert Prima.Slots.status(Crucible.Slots).child_active == children_before + @cap
 
     # Each admitted child closes as the runner it was handed to closes it.
     for child <- children do
@@ -128,11 +130,11 @@ defmodule Opus.BudgetConcurrencyCharacterizationTest do
       id = child.assignment.execution_id
 
       assert %{status: "completed", parent_execution_id: ^root_id} =
-               Arca.Repo.get!(Arca.Execution, id)
+               Arca.Repo.get!(Arca.Schemas.Execution, id)
     end
 
     wait_until(fn ->
-      Cyfr.Slots.status(Cyfr.Execution.Slots).child_active == children_before
+      Prima.Slots.status(Crucible.Slots).child_active == children_before
     end)
 
     wait_until(fn -> Sanctum.Authority.budget(authority).in_flight == 0 end)

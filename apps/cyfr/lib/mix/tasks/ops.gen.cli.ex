@@ -14,6 +14,8 @@ defmodule Mix.Tasks.Ops.Gen.Cli do
       mix ops.gen.cli --check
   """
 
+  use Boundary, classify_to: Cyfr.Mix
+
   use Mix.Task
 
   @target "apps/codex/internal/ops/catalog_gen.go"
@@ -70,7 +72,7 @@ defmodule Mix.Tasks.Ops.Gen.Cli do
   @spec render() :: String.t()
   def render do
     operations =
-      for provider <- Cyfr.Ops.Catalog.configured_providers(),
+      for provider <- Grimoire.configured_providers(),
           tool <- provider.tools(),
           operation <- tool.operations,
           :external in operation.planes,
@@ -80,7 +82,7 @@ defmodule Mix.Tasks.Ops.Gen.Cli do
   end
 
   @doc "Render explicit declarations, without starting the catalog."
-  @spec render([Cyfr.Ops.Operation.t()]) :: String.t()
+  @spec render([Prima.Operation.t()]) :: String.t()
   def render(operations) do
     operations = Enum.sort_by(operations, &{&1.tool, &1.action})
 

@@ -19,7 +19,8 @@ defmodule Cyfr.TwoWorkersTest do
   (`record_denial`, which ends uncertain) — and a run whose stream and
   completion crossed a lossy wire keeps every delta once, in order, before
   its terminal event. Cancelling a formula ends its children with it and
-  the runner they ran in; a restarted service holds none of its
+  the runner they ran in, whose end the service reports naming every
+  child, and that report stops the children's attempts; a restarted service holds none of its
   predecessor's attempts, which the worker watch lapses when it hears the
   new boot; an exit report signed with another service's key,
   naming a boot that no longer runs or a runner that holds nothing lapses
@@ -40,14 +41,14 @@ defmodule Cyfr.TwoWorkersTest do
       seen: 1
     ]
 
-  import Cyfr.Test.Wait
+  import Prima.Test.Wait
   import Ecto.Query, only: [from: 2]
 
-  alias Cyfr.Execution.{Attempt, Keys, WorkerClient}
-  alias Cyfr.Slots
+  alias Crucible.{Attempt, Keys, WorkerClient}
+  alias Prima.Slots
   alias Cyfr.Test.{AttemptFixtures, OpusService, ScriptedWorker, TwoServices}
   alias Cyfr.Test.TwoServices.Wire
-  alias Cyfr.{WorkerAuth, WorkerWire}
+  alias Prima.{WorkerAuth, WorkerWire}
   alias Opus.Test.NestedExecution, as: Probe
   alias Sanctum.Consent.{Bootstrap}
 
@@ -58,7 +59,7 @@ defmodule Cyfr.TwoWorkersTest do
   @stub TwoServices.stub()
   @scripted TwoServices.scripted()
   @soul "agent:local.aqua"
-  @slots Cyfr.Execution.Slots
+  @slots Crucible.Slots
   @version TwoServices.version()
   @stub_text "The stub answers at once."
   @stub_deltas ["The stub ", "answers ", "at ", "once."]
@@ -71,11 +72,11 @@ defmodule Cyfr.TwoWorkersTest do
     Cyfr.Test.Sandbox.setup!(tags)
 
     run_dir = Path.join(System.tmp_dir!(), "two_workers_#{System.unique_integer([:positive])}")
-    keys = [arca: :base_path, arca: :seed_path, cyfr: :workers]
+    keys = [arca: :base_path, arca: :seed_path, cyfr: :opus_workers]
     previous = Map.new(keys, fn {app, key} -> {{app, key}, Application.get_env(app, key)} end)
     Application.put_env(:arca, :base_path, Path.join(run_dir, "data"))
 
-    ctx = Sanctum.TestContext.local()
+    ctx = Sanctum.TestContext.local(:prism)
 
     on_exit(fn ->
       Slots.forgive_unreaped(@slots, ctx.athanor_id)
@@ -120,11 +121,11 @@ defmodule Cyfr.TwoWorkersTest do
       arm!(ctx, key: "k-#{System.unique_integer([:positive])}", token: "t-unused")
       answer = %{"content" => [%{"type" => "text", "text" => "scripted"}]}
       start_supervised!({ScriptedWorker, ref: @scripted, script: [answer]})
-      opus_id = Cyfr.UUID7.execution_id()
+      opus_id = Prima.UUID7.execution_id()
 
       on_opus =
         Task.async(fn ->
-          Cyfr.Execution.run_root(ctx, :default, @stub, chat(), execution_id: opus_id)
+          Crucible.run_root(ctx, :default, @stub, chat(), execution_id: opus_id)
         end)
 
       on_scripted = Task.async(fn -> scripted_run!(ctx) end)
@@ -149,8 +150,8 @@ defmodule Cyfr.TwoWorkersTest do
 
       # The keys differ, and each listener refuses a request under the
       # other's before reading it.
-      {:ok, local_key} = Keys.worker_key(@local)
-      {:ok, other_key} = Keys.worker_key(@other)
+      {:ok, local_key} = Keys.opus_key(@local)
+      {:ok, other_key} = Keys.opus_key(@other)
       refute local_key == other_key
 
       assert {401, %{"error" => "bad_mac"}} = status_request(OpusService.url(), @local, other_key)
@@ -168,7 +169,7 @@ defmodule Cyfr.TwoWorkersTest do
       # tainted runners among it: neither service holds one after its run.
       for endpoint <- [OpusService.endpoint(), ScriptedWorker.endpoint()] do
         assert {:ok, %{runners: %{tainted: 0}} = status} = WorkerClient.status(endpoint)
-        assert Cyfr.WorkerAPI.valid_status?(status)
+        assert Prima.WorkerAPI.valid_status?(status)
       end
     end
 
@@ -219,11 +220,11 @@ defmodule Cyfr.TwoWorkersTest do
       plan!(:push_deltas, [:drop])
       plan!(:complete, [:forward_then_drop])
 
-      id = Cyfr.UUID7.execution_id()
-      :ok = Cyfr.Execution.subscribe_events(id, ctx)
+      id = Prima.UUID7.execution_id()
+      :ok = Crucible.subscribe_events(id, ctx)
 
       assert {:ok, result} =
-               Cyfr.Execution.run_root(ctx, :default, @stub, chat(), execution_id: id)
+               Crucible.run_root(ctx, :default, @stub, chat(), execution_id: id)
 
       assert %{"data" => %{"content" => [%{"text" => @stub_text}]}} = result.output
       refute_unmasked(result, secrets)
@@ -244,7 +245,7 @@ defmodule Cyfr.TwoWorkersTest do
 
       assert List.last(live).type == "execution.completed"
 
-      replayed = Cyfr.Execution.Events.since(id, {0, 0}, ctx.athanor_id)
+      replayed = Crucible.Events.since(id, {0, 0}, ctx.athanor_id)
       assert delta_texts(replayed) == @stub_deltas
       assert List.last(replayed).type == "execution.completed"
       assert %{status: "completed"} = row(id)
@@ -272,7 +273,7 @@ defmodule Cyfr.TwoWorkersTest do
 
       assert Wire.seen(wire, WorkerWire.host_route(:record_denial)) == [:forward_then_drop]
 
-      {:ok, authority} = Cyfr.Execution.authority_for(ctx, :default, @soul)
+      {:ok, authority} = Crucible.authority_for(ctx, :default, @soul)
 
       parent =
         Opus.Test.FormulaHost.attached!(
@@ -312,8 +313,8 @@ defmodule Cyfr.TwoWorkersTest do
     test "an exit report signed with another key, for a boot that no longer runs or a runner holding nothing lapses nothing",
          %{ctx: ctx} do
       fixture = attached!(ctx)
-      {:ok, local_key} = Keys.worker_key(@local)
-      {:ok, other_key} = Keys.worker_key(@other)
+      {:ok, local_key} = Keys.opus_key(@local)
+      {:ok, other_key} = Keys.opus_key(@other)
       running = fn -> match?(%{status: "running"}, row(fixture.execution_id)) end
 
       # Another service's key, naming this one.
@@ -351,20 +352,20 @@ defmodule Cyfr.TwoWorkersTest do
 
     test "a run cancelled mid-flight releases nothing its masking set covers", %{ctx: ctx} do
       secrets = arm!(ctx, key: "stub answers", token: "at once")
-      id = Cyfr.UUID7.execution_id()
-      :ok = Cyfr.Execution.subscribe_events(id, ctx)
+      id = Prima.UUID7.execution_id()
+      :ok = Crucible.subscribe_events(id, ctx)
       hold!(:push_deltas, id, once: true)
 
       run =
         Task.async(fn ->
-          Cyfr.Execution.run_root(ctx, :default, @stub, chat(), execution_id: id)
+          Crucible.run_root(ctx, :default, @stub, chat(), execution_id: id)
         end)
 
       # Held at its first delta: the key is unsealed and the token dispensed
       # — both in the masking set — and its guest wrote both, but nothing of
       # it has reached the host yet.
       assert_receive {:held, ^id, guest}, 30_000
-      assert {:ok, %{cancelled: true}} = Cyfr.Execution.cancel(ctx, id)
+      assert {:ok, %{cancelled: true}} = Crucible.cancel(ctx, id)
       release!(guest, :forward)
 
       assert {:error, message} = Task.await(run, 60_000)
@@ -396,7 +397,7 @@ defmodule Cyfr.TwoWorkersTest do
 
     test "cancelling a formula over the wire ends its children with it", %{ctx: ctx} do
       children_before = Slots.status(@slots).child_active
-      root_id = Cyfr.UUID7.execution_id()
+      root_id = Prima.UUID7.execution_id()
 
       # Each child asks for a catalog tool, and is held at that call.
       hold!(:tool_call, fn row, _call -> row && row.parent_execution_id == root_id end, [])
@@ -409,7 +410,7 @@ defmodule Cyfr.TwoWorkersTest do
 
       root =
         Task.async(fn ->
-          Cyfr.Execution.run_root(
+          Crucible.run_root(
             ctx,
             :default,
             Probe.probe_ref(),
@@ -427,18 +428,20 @@ defmodule Cyfr.TwoWorkersTest do
       runner = runner_of(ctx, root_id)
       assert Enum.all?(held, &(runner_of(ctx, &1) == runner))
       assert Slots.status(@slots).child_active == children_before + 3
-      assert {:ok, %{cancelled: true}} = Cyfr.Execution.cancel(ctx, root_id)
+      assert {:ok, %{cancelled: true}} = Crucible.cancel(ctx, root_id)
       assert {:error, _cancelled} = Task.await(root, 30_000)
       assert %{status: "cancelled"} = row(root_id)
 
-      for id <- held do
-        wait_until(fn -> row(id).status == "failed" end, 10_000)
-        wait_until(fn -> Attempt.whereis(id) == nil end)
-      end
+      for id <- held, do: wait_until(fn -> row(id).status == "failed" end, 10_000)
 
       # The kill ended the runner the formula and its children ran in: the
-      # service reported it gone, and holds nothing.
+      # service reported it gone, naming every child, whether the runner's
+      # own exit still listed it or had already fenced it by its cancel.
+      # That report, answered before the wire records it, is what stops
+      # the children's attempts, and it holds nothing after.
       wait_until(fn -> reported_exit?(runner) end, 10_000, "the runner's exit report")
+      assert Enum.all?(held, &reported_exit?(runner, attempt_of(ctx, &1)))
+      for id <- held, do: wait_until(fn -> Attempt.whereis(id) == nil end)
       wait_until(fn -> OpusService.status().attempts == [] end, 10_000)
       wait_until(fn -> Slots.status(@slots).child_active == children_before end)
     end
@@ -448,16 +451,16 @@ defmodule Cyfr.TwoWorkersTest do
       # The worker watch is off in the test boot; this case runs one of its
       # own over the Opus service, polling fast.
       start_supervised!(
-        {Cyfr.Execution.WorkerWatch,
+        {Crucible.WorkerWatch,
          workers: [OpusService.endpoint()], poll_ms: 50, misses: 3, name: :two_workers_watch}
       )
 
-      root_id = Cyfr.UUID7.execution_id()
+      root_id = Prima.UUID7.execution_id()
       hold!(:complete, root_id, once: true)
 
       root =
         Task.async(fn ->
-          Cyfr.Execution.run_root(ctx, :default, Probe.probe_ref(), %{"op" => "echo"},
+          Crucible.run_root(ctx, :default, Probe.probe_ref(), %{"op" => "echo"},
             execution_id: root_id
           )
         end)
@@ -472,7 +475,7 @@ defmodule Cyfr.TwoWorkersTest do
 
       wait_until(
         fn ->
-          Cyfr.Execution.WorkerWatch.fresh_boot(OpusService.endpoint(), :two_workers_watch) ==
+          Crucible.WorkerWatch.fresh_boot(OpusService.endpoint(), :two_workers_watch) ==
             {:ok, old_boot}
         end,
         10_000,
@@ -524,7 +527,7 @@ defmodule Cyfr.TwoWorkersTest do
 
     request = %{
       service: service,
-      boot: Cyfr.Boot.id(),
+      boot: Prima.Boot.id(),
       ts: System.system_time(:millisecond),
       nonce: nonce()
     }
@@ -539,9 +542,10 @@ defmodule Cyfr.TwoWorkersTest do
   defp report(worker_key, service, boot, runner, attempts) do
     body =
       Jason.encode!(%{
+        "v" => 1,
         "op" => "runner_exited",
         "args" => %{
-          "member" => Cyfr.Execution.Keys.member(),
+          "member" => Crucible.Keys.member(),
           "runner" => runner,
           "attempts" => attempts
         }
@@ -572,26 +576,34 @@ defmodule Cyfr.TwoWorkersTest do
 
   defp chat, do: %{"operation" => "chat", "params" => %{}}
 
-  defp row(id), do: Arca.Repo.get!(Arca.Execution, id)
+  defp row(id), do: Arca.Repo.get!(Arca.Schemas.Execution, id)
 
   # The runner that claimed the run's attempt, as its host calls present it.
   defp runner_of(ctx, id),
     do: Arca.ExecutionAttempts.current(Sanctum.Context.actor(ctx), id).claimed_by
 
-  # Whether the Opus service reported `runner`'s exit over the wire.
-  defp reported_exit?(runner) do
-    Enum.any?(
-      TwoServices.calls(),
-      &match?(%{callback: :runner_exited, args: %{"runner" => ^runner}}, &1)
-    )
+  # The attempt of the run's current attempt row.
+  defp attempt_of(ctx, id),
+    do: Arca.ExecutionAttempts.current(Sanctum.Context.actor(ctx), id).attempt
+
+  # Whether the Opus service reported `runner`'s exit over the wire, naming
+  # `attempt` when one is given.
+  defp reported_exit?(runner, attempt \\ nil) do
+    Enum.any?(TwoServices.calls(), fn
+      %{callback: :runner_exited, args: %{"runner" => ^runner, "attempts" => attempts}} ->
+        is_nil(attempt) or attempt in attempts
+
+      _other ->
+        false
+    end)
   end
 
   defp children_of(parent_id),
-    do: from(e in Arca.Execution, where: e.parent_execution_id == ^parent_id)
+    do: from(e in Arca.Schemas.Execution, where: e.parent_execution_id == ^parent_id)
 
   defp live_events do
     receive do
-      {:execution_event, event} -> [event | live_events()]
+      %Cyfr.Bus.ExecutionEvent{} = event -> [Cyfr.Bus.ExecutionEvent.event(event) | live_events()]
     after
       200 -> []
     end

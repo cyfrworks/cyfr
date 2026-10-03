@@ -7,9 +7,8 @@ defmodule Sanctum.DoorTest do
   alias Sanctum.Door
   alias Sanctum.Door.Store
 
-  setup do
-    :ok = Ecto.Adapters.SQL.Sandbox.checkout(Arca.Repo)
-    Ecto.Adapters.SQL.Sandbox.mode(Arca.Repo, {:shared, self()})
+  setup tags do
+    Arca.Test.Sandbox.setup!(tags)
 
     original = Application.get_env(:sanctum, :platform_admin_emails, [])
     Application.put_env(:sanctum, :platform_admin_emails, ["ops@example.com"])
@@ -165,6 +164,46 @@ defmodule Sanctum.DoorTest do
     end
   end
 
+  describe "the cyfr door's identities, judged by their identifier" do
+    defp identifier(n), do: "per_" <> Prima.Digest.sha256_hex("door-#{n}")
+
+    defp cyfr(n), do: Sanctum.Auth.Identity.cyfr_key("https://dir.example", identifier(n))
+
+    test "an identifier entry admits the person it names, and only them" do
+      assert {:error, :not_allowed} = Door.admit(cyfr(1), nil, :unknown)
+
+      {:ok, _} = Store.allow("identifier", identifier(1), "ops")
+      assert {:ok, :allowed} = Door.admit(cyfr(1), nil, :unknown)
+      assert {:error, :not_allowed} = Door.admit(cyfr(2), nil, :unknown)
+
+      # An identifier entry names a person identifier, never an IdP subject.
+      assert {:error, :not_allowed} = Door.admit(uid(1), nil, :unknown)
+    end
+
+    test "a deny naming the identifier wins over * and over an exact entry" do
+      {:ok, _} = Store.allow("wildcard", "*", "ops")
+      assert {:ok, :allowed} = Door.admit(cyfr(3), nil, :unknown)
+
+      {:ok, _} = Store.deny("identifier", identifier(3), "ops")
+      assert {:error, :denied} = Door.admit(cyfr(3), nil, :unknown)
+      assert {:ok, :allowed} = Door.admit(cyfr(4), nil, :unknown)
+      assert {:ok, true} = Store.denied(nil, nil, identifier(3))
+    end
+
+    test "an unadmitted identifier waits as an identifier request, once, and resolve admits it" do
+      assert {:error, {:door, :not_allowed}} =
+               Door.admit_identity(cyfr(5), %{email: nil, verified: :unknown})
+
+      assert {:error, {:door, :not_allowed}} =
+               Door.admit_identity(cyfr(5), %{email: nil, verified: :unknown})
+
+      assert [request] = Enum.filter(Store.requests(), &(&1.value == identifier(5)))
+      assert request.kind == "identifier"
+      assert {:ok, _} = Store.resolve(request.id, :allow, "ops")
+      assert {:ok, :allowed} = Door.admit(cyfr(5), nil, :unknown)
+    end
+  end
+
   describe "admit_identity/2" do
     test "wraps the verdict for a provider and audits a refusal" do
       handler = "door-test-#{System.unique_integer([:positive])}"
@@ -203,16 +242,17 @@ defmodule Sanctum.DoorTest do
     end
 
     defp session_for(user) do
-      {:ok, session} =
-        Sanctum.Session.create(
-          Sanctum.Context.build(
-            user_id: user.id,
-            email: user.email,
-            provider: "github",
-            authenticated: true,
-            permissions: [:read]
-          )
+      ctx =
+        Sanctum.Context.build(
+          user_id: user.id,
+          email: user.email,
+          provider: "github",
+          authenticated: true,
+          permissions: [:read]
         )
+
+      {:ok, session} =
+        Sanctum.Session.create(ctx, generation_snapshot: Sanctum.TestContext.snapshot!(ctx))
 
       session
     end
@@ -244,7 +284,8 @@ defmodule Sanctum.DoorTest do
 
       tenant = Sanctum.TestContext.local()
       ctx = %{tenant | user_id: stranger.id, email: stranger.email}
-      {:ok, key} = Sanctum.ApiKey.create(ctx, %{name: "stranger-key"})
+
+      {:ok, key} = Sanctum.TestContext.create_key(ctx, %{name: "stranger-key"})
 
       assert Enum.any?(elem(Sanctum.ApiKey.list(ctx), 1), &(&1.name == "stranger-key"))
 

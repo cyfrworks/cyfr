@@ -11,11 +11,25 @@ defmodule PrismWeb.WebhooksLive do
 
   The webhook URL is rendered against `CYFR_PUBLIC_URL` so users can copy
   the full URL into their external service (GitHub, Stripe, etc).
+
+  Creating a webhook and rotating its secret are sensitive changes: the
+  page asks for a fresh confirmation through its system layer
+  (`PrismWeb.SystemLayer.call/5`), which shows the request as this page's
+  own, and the page repeats the change once its record is confirmed,
+  wherever the person proved it.
+
+  A delivery starts a run with the `webhook` origin. Creating a webhook
+  for a profile whose grant does not admit that origin raises the grant
+  prompt for that profile first, in the same layer: once the grant is
+  confirmed the page reads the profile's grant again and creates the
+  webhook only if it now admits webhooks. A grant dismissed, or confirmed
+  without that origin, creates nothing.
   """
 
   use PrismWeb, :live_view
 
   alias Phoenix.LiveView.JS
+  alias PrismWeb.SystemLayer
   require Logger
 
   @default_signature_header Sanctum.Webhook.default_signature_header()
@@ -27,8 +41,8 @@ defmodule PrismWeb.WebhooksLive do
     # Subscribe once, at mount — handle_params re-fires on every patch,
     # and PubSub's :duplicate registry would deliver every message twice.
     if connected?(socket) do
-      ctx = socket.assigns[:context]
-      Phoenix.PubSub.subscribe(Emissary.PubSub, Cyfr.Bus.webhooks(ctx))
+      actor = Sanctum.Context.actor(socket.assigns[:context])
+      Cyfr.Bus.subscribe(actor, Cyfr.Bus.webhooks(actor))
     end
 
     {:ok,
@@ -50,7 +64,8 @@ defmodule PrismWeb.WebhooksLive do
      |> assign(:form_rate_limit, "")
      |> assign(:form_input_template, "{}")
      |> assign(:form_error, nil)
-     |> assign(:new_secret, nil)}
+     |> assign(:new_secret, nil)
+     |> assign(:origin_grant, nil)}
   end
 
   @impl true
@@ -68,12 +83,40 @@ defmodule PrismWeb.WebhooksLive do
     {:noreply, socket |> fetch_webhooks() |> assign(:loading, false)}
   end
 
-  def handle_info(:webhooks_changed, socket) do
+  def handle_info(%Cyfr.Bus.Webhooks{}, socket) do
     {:noreply, fetch_webhooks(socket)}
   end
 
+  # The grant prompt a webhook waited for. A refused commit leaves the
+  # prompt open for the person to try again or dismiss; any other end
+  # makes no webhook.
+  def handle_info({:system_layer, id, outcome}, %{assigns: %{origin_grant: {id, args}}} = socket) do
+    case outcome do
+      :confirmed ->
+        socket |> assign(:origin_grant, nil) |> origin_granted(args)
+
+      {:refused, reason} when reason != :invalid_prompt ->
+        {:noreply, socket}
+
+      _ended ->
+        {:noreply,
+         socket
+         |> assign(:origin_grant, nil)
+         |> assign(:form_error, "No webhook was made: the grant was not changed.")}
+    end
+  end
+
+  # A change this page asked for was confirmed: made again, once.
+  def handle_info({:system_layer, _id, _outcome} = report, socket) do
+    case SystemLayer.reported(socket, report) do
+      {:repeat, :webhook_create, _tool, args, socket} -> create(socket, args)
+      {:repeat, {:webhook_rotate, name}, _tool, _args, socket} -> rotate(socket, name)
+      {:ok, socket} -> {:noreply, socket}
+    end
+  end
+
   def handle_info(msg, socket) do
-    Cyfr.UnexpectedMessage.log(__MODULE__, msg, :debug)
+    Prima.LoggerContext.unexpected(__MODULE__, msg, :debug)
     {:noreply, socket}
   end
 
@@ -184,9 +227,13 @@ defmodule PrismWeb.WebhooksLive do
     end
   end
 
-  def handle_event("rotate", %{"id" => name}, socket) do
-    case call_tool(socket, "webhook/rotate", %{"name" => name}) do
-      {:ok, result} ->
+  def handle_event("rotate", %{"id" => name}, socket), do: rotate(socket, name)
+
+  # Rotating a secret needs a fresh confirmation: asked for through the
+  # system layer, and repeated from `handle_info/2` once confirmed.
+  defp rotate(socket, name) do
+    case SystemLayer.call(socket, {:webhook_rotate, name}, "webhook/rotate", %{"name" => name}) do
+      {:ok, result, socket} ->
         {:noreply,
          socket
          |> assign(:new_secret, %{
@@ -196,7 +243,10 @@ defmodule PrismWeb.WebhooksLive do
          })
          |> put_flash(:info, "Secret rotated. Copy the new secret now.")}
 
-      {:error, reason} ->
+      {:asked, socket} ->
+        {:noreply, socket}
+
+      {:error, reason, socket} ->
         {:noreply, put_flash(socket, :error, "Failed to rotate: #{error_message(reason)}")}
     end
   end
@@ -205,11 +255,67 @@ defmodule PrismWeb.WebhooksLive do
   # Submission helpers
   # ============================================================================
 
+  # A webhook is made only under a grant that admits its deliveries: one
+  # whose profile's grant lacks the `webhook` origin raises the grant
+  # prompt for that profile first, and the webhook waits for its outcome.
   defp submit_create(socket, params, template_map) do
     args = build_args(params, template_map)
 
-    case call_tool(socket, "webhook/create", args) do
-      {:ok, result} ->
+    case admitted(socket, args) do
+      {:missing, label} -> {:noreply, ask_origin(socket, args, label)}
+      _admitted_or_unknown -> create(socket, args)
+    end
+  end
+
+  defp admitted(socket, %{"target_ref" => ref, "profile_id" => profile_id})
+       when is_binary(ref) and is_binary(profile_id),
+       do: SystemLayer.admits_origin(socket, ref, profile_id, :webhook)
+
+  defp admitted(_socket, _args), do: :unknown
+
+  defp ask_origin(socket, %{"target_ref" => ref} = args, label) do
+    id = "grant-webhook-#{System.unique_integer([:positive])}"
+
+    case SystemLayer.grant_prompt(socket, id, ref, label: label) do
+      {:ok, prompt} ->
+        SystemLayer.show(prompt)
+
+        socket
+        |> assign(:origin_grant, {id, args})
+        |> assign(
+          :form_error,
+          "This profile's grant does not let webhooks start it. " <>
+            "Grant it \"Also from webhooks\" to make this webhook."
+        )
+
+      {:error, reason} ->
+        assign(socket, :form_error, "No webhook was made: #{format_tool_error(reason)}")
+    end
+  end
+
+  # The grant the webhook waited for, confirmed: its profile's grant is
+  # read again, and the webhook made only if it now admits webhooks.
+  defp origin_granted(socket, args) do
+    case admitted(socket, args) do
+      {:missing, _label} ->
+        {:noreply,
+         assign(
+           socket,
+           :form_error,
+           "No webhook was made: the grant does not let webhooks start this profile."
+         )}
+
+      _admitted_or_unknown ->
+        create(socket, args)
+    end
+  end
+
+  # Minting a webhook's secret needs a fresh confirmation: asked for
+  # through the system layer, and repeated from `handle_info/2` once
+  # confirmed.
+  defp create(socket, args) do
+    case SystemLayer.call(socket, :webhook_create, "webhook/create", args) do
+      {:ok, result, socket} ->
         {:noreply,
          socket
          |> reset_form(false, nil)
@@ -221,7 +327,10 @@ defmodule PrismWeb.WebhooksLive do
          |> fetch_webhooks()
          |> put_flash(:info, "Webhook created. Copy the secret now — it won't be shown again.")}
 
-      {:error, reason} ->
+      {:asked, socket} ->
+        {:noreply, assign(socket, :form_error, nil)}
+
+      {:error, reason, socket} ->
         {:noreply, assign(socket, :form_error, format_tool_error(reason))}
     end
   end
@@ -577,6 +686,8 @@ defmodule PrismWeb.WebhooksLive do
           </:col>
         </.table>
       </.card>
+
+      <.live_component module={SystemLayer} id={SystemLayer.layer_id()} context={@context} />
     </div>
     """
   end

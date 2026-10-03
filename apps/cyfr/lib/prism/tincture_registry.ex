@@ -10,7 +10,10 @@ defmodule Prism.TinctureRegistry do
   cyfr-manifest.json files with `"type": "tincture"` and provides lookup APIs
   for the shell and public tincture controllers. Each row carries the
   athanor's route segment (`athanor_segment`) so callers can build public
-  URLs without a lookup per render.
+  URLs without a lookup per render, and the frame its manifest declares
+  (`frame`: capabilities, placement, background, or nil for a declaration
+  the rules refuse), read through the frame's rules
+  (`Compendium.tincture_declaration/1`), which the shell grants from.
 
   Reads go straight to a protected ETS table owned by the GenServer, so
   lookups never queue behind a `reload/1` scan (which walks Arca and can be
@@ -26,6 +29,14 @@ defmodule Prism.TinctureRegistry do
   row remembers it), so boot never walks every athanor's tree and a
   server with a thousand furnaces pays only for the ones whose shell is
   actually opened. `reload/1` remains the full rescan.
+
+  The marker holds the epoch the component registry had acknowledged for
+  the athanor's `components/` root when the scan began
+  (`Compendium.acknowledged_projection_epoch/3`). A read past
+  the registry's barrier that finds the epoch moved rescans the athanor,
+  so a tincture change reaches the table whether or not the domain's
+  `%Cyfr.Bus.Tinctures{kind: :changed}` on the athanor's tinctures topic
+  did.
   """
 
   use GenServer
@@ -46,10 +57,10 @@ defmodule Prism.TinctureRegistry do
   lists nothing.
   """
   @spec list_tinctures(atom(), Context.t()) :: [map()]
-  def list_tinctures(server \\ __MODULE__, %Context{athanor_id: athanor_id}) do
+  def list_tinctures(server \\ __MODULE__, %Context{athanor_id: athanor_id} = ctx) do
     case athanor_id do
       id when is_binary(id) and id != "" ->
-        ensure_scanned(server, id)
+        ensure_scanned(server, id, current_epoch(ctx))
 
         server
         |> :ets.match_object({{id, :_, :_}, :_})
@@ -60,18 +71,46 @@ defmodule Prism.TinctureRegistry do
     end
   end
 
-  # First read for an athanor scans exactly that athanor. A busy or
-  # restarting registry lists what the table already holds rather than
-  # crashing the page.
-  defp ensure_scanned(server, athanor_id) do
-    if :ets.lookup(server, {:scanned, athanor_id}) == [] do
-      GenServer.call(server, {:ensure_scanned, athanor_id}, 30_000)
+  # First read for an athanor scans exactly that athanor, and so does a
+  # read that finds the registry's acknowledged epoch moved since the scan.
+  # A busy or restarting registry lists what the table already holds rather
+  # than crashing the page, and so does an epoch that could not be read.
+  defp ensure_scanned(server, athanor_id, epoch) do
+    unless current?(:ets.lookup(server, {:scanned, athanor_id}), epoch) do
+      GenServer.call(server, {:ensure_scanned, athanor_id, epoch}, 30_000)
     end
 
     :ok
   catch
     :exit, _ -> :ok
     :error, :badarg -> :ok
+  end
+
+  defp current?([{_marker, _scanned_at}], :unknown), do: true
+  defp current?([{_marker, epoch}], epoch), do: true
+  defp current?(_absent_or_moved, _epoch), do: false
+
+  # Past the registry's barrier: a change the reader's own write made is
+  # acknowledged before the epoch is read.
+  defp current_epoch(ctx) do
+    case Compendium.acknowledged_projection_epoch(ctx, "components") do
+      {:ok, epoch} -> epoch
+      {:error, _} -> :unknown
+    end
+  end
+
+  # The epoch a scan starts from, read without reconciling: this process
+  # derives nothing, and a change made while it scans moves the epoch past
+  # what the marker records.
+  defp scan_epoch(athanor_id) do
+    case Compendium.acknowledged_projection_epoch(
+           scan_context(athanor_id),
+           "components",
+           await: false
+         ) do
+      {:ok, epoch} -> epoch
+      {:error, _} -> :unknown
+    end
   end
 
   @doc """
@@ -116,11 +155,11 @@ defmodule Prism.TinctureRegistry do
   end
 
   @impl true
-  def handle_call({:ensure_scanned, athanor_id}, _from, state) do
+  def handle_call({:ensure_scanned, athanor_id, epoch}, _from, state) do
     # Re-check under the serializing process: a second caller that queued
     # behind the first scan finds the marker and pays nothing.
-    if :ets.lookup(state.table, {:scanned, athanor_id}) == [] do
-      scan_athanor_into(state.table, athanor_id)
+    unless current?(:ets.lookup(state.table, {:scanned, athanor_id}), epoch) do
+      scan_athanor_into(state.table, athanor_id, epoch)
     end
 
     {:reply, :ok, watch(state, athanor_id)}
@@ -128,7 +167,7 @@ defmodule Prism.TinctureRegistry do
 
   @impl true
   def handle_call({:reload_athanor, athanor_id}, _from, state) do
-    count = scan_athanor_into(state.table, athanor_id)
+    count = scan_athanor_into(state.table, athanor_id, scan_epoch(athanor_id))
     Logger.info("[TinctureRegistry] reloaded #{count} tincture(s) for #{athanor_id}")
     {:reply, :ok, watch(state, athanor_id)}
   end
@@ -139,7 +178,8 @@ defmodule Prism.TinctureRegistry do
     if MapSet.member?(state.watching, athanor_id) do
       state
     else
-      Phoenix.PubSub.subscribe(Emissary.PubSub, Cyfr.Bus.tinctures(athanor_id))
+      actor = Prima.Actor.in_athanor(athanor_id)
+      :ok = Cyfr.Bus.subscribe(actor, Cyfr.Bus.tinctures(actor))
       %{state | watching: MapSet.put(state.watching, athanor_id)}
     end
   end
@@ -149,7 +189,7 @@ defmodule Prism.TinctureRegistry do
     |> Enum.reduce(state, &watch(&2, &1))
   end
 
-  defp scan_athanor_into(table, athanor_id) do
+  defp scan_athanor_into(table, athanor_id, epoch) do
     count =
       case Sanctum.Tenancy.Athanors.get(athanor_id) do
         {:ok, %{status: "active"} = athanor} ->
@@ -162,21 +202,25 @@ defmodule Prism.TinctureRegistry do
           store_athanor_tinctures(table, athanor_id, [])
       end
 
-    :ets.insert(table, {{:scanned, athanor_id}, true})
+    :ets.insert(table, {{:scanned, athanor_id}, epoch})
     count
   end
 
-  # The domain announced a change (Compendium.AutoIndexer broadcasts on the
-  # athanor's tinctures topic); this cache follows.
+  # The domain announced a change (`Compendium.ProjectionReconciler`
+  # broadcasts on the athanor's tinctures topic after a replacement that
+  # touched a tincture); this cache follows. The topic's invocation kinds
+  # are the console's activity feed, not this cache's business.
   @impl true
-  def handle_info({:tinctures_changed, athanor_id}, state) do
-    scan_athanor_into(state.table, athanor_id)
+  def handle_info(%Cyfr.Bus.Tinctures{kind: :changed, athanor_id: athanor_id}, state) do
+    scan_athanor_into(state.table, athanor_id, scan_epoch(athanor_id))
     {:noreply, state}
   end
 
+  def handle_info(%Cyfr.Bus.Tinctures{}, state), do: {:noreply, state}
+
   @impl true
   def handle_info(msg, state) do
-    Cyfr.UnexpectedMessage.log(__MODULE__, msg)
+    Prima.LoggerContext.unexpected(__MODULE__, msg)
     {:noreply, state}
   end
 
@@ -184,15 +228,15 @@ defmodule Prism.TinctureRegistry do
   # then prune keys that vanished — readers never observe an empty table
   # mid-reload. Returns the fresh tincture count. The 3-tuple match keeps
   # {:scanned, id} marker rows out of the prune; the full scan then marks
-  # every athanor it walked as scanned.
-  defp store_tinctures(table, tinctures) do
+  # every athanor it walked as scanned, at the epoch it began from.
+  defp store_tinctures(table, {tinctures, epochs}) do
     old_keys =
       :ets.select(table, [{{{:"$1", :"$2", :"$3"}, :_}, [], [{{:"$1", :"$2", :"$3"}}]}])
 
     count = replace(table, old_keys, tinctures)
 
     for athanor_id <- Enum.uniq(Enum.map(tinctures, & &1.athanor_id)) do
-      :ets.insert(table, {{:scanned, athanor_id}, true})
+      :ets.insert(table, {{:scanned, athanor_id}, Map.get(epochs, athanor_id, :unknown)})
     end
 
     count
@@ -221,7 +265,7 @@ defmodule Prism.TinctureRegistry do
   # -- Scanning --
 
   # Pinned at compile time from the SSOT.
-  @tincture_type_plural Compendium.ComponentPath.type_plural("tincture")
+  @tincture_type_plural Prima.ComponentPath.type_plural("tincture")
 
   # Scanning runs through Arca (`list_recursive` + `get`) so the registry
   # populates identically on the Local FS adapter and any configured
@@ -231,9 +275,15 @@ defmodule Prism.TinctureRegistry do
   # whole-root filesystem walk, so nothing outside a registered athanor is
   # ever read and an archived athanor drops out by not being enumerated.
   defp scan_tinctures do
-    Sanctum.Tenancy.Athanors.list_active()
-    |> Enum.flat_map(&scan_athanor/1)
-    |> pick_latest_versions()
+    athanors = Sanctum.Tenancy.Athanors.list_active()
+    epochs = Map.new(athanors, &{&1.id, scan_epoch(&1.id)})
+
+    tinctures =
+      athanors
+      |> Enum.flat_map(&scan_athanor/1)
+      |> pick_latest_versions()
+
+    {tinctures, epochs}
   end
 
   # One athanor's scan, version-picked the same way the full scan is — the
@@ -254,13 +304,13 @@ defmodule Prism.TinctureRegistry do
 
     case Arca.list_recursive(
            Sanctum.Context.actor(ctx),
-           Compendium.ComponentPath.base_prefix() ++ [@tincture_type_plural]
+           Prima.ComponentPath.base_prefix() ++ [@tincture_type_plural]
          ) do
       {:ok, leaves} ->
         segment = Sanctum.Tenancy.Athanors.route_slug(athanor)
 
         leaves
-        |> Compendium.ComponentPath.manifest_leaves()
+        |> Compendium.manifest_leaves()
         |> Enum.flat_map(fn manifest_segs -> read_and_parse(ctx, manifest_segs, athanor.id) end)
         |> Enum.map(&put_segment(&1, segment))
 
@@ -286,7 +336,7 @@ defmodule Prism.TinctureRegistry do
   end
 
   defp put_segment(tincture, segment) do
-    entry_url = Cyfr.TinctureHelpers.tincture_path(segment, tincture.publisher, tincture.name)
+    entry_url = Prima.TinctureUrl.path(segment, tincture.publisher, tincture.name)
     %{tincture | athanor_segment: segment, entry_url: entry_url}
   end
 
@@ -312,19 +362,13 @@ defmodule Prism.TinctureRegistry do
   end
 
   # A tincture manifest exactly at its version directory — the one parser
-  # (`Compendium.ComponentPath.parse/1`) decides, so a manifest nested
+  # (`Compendium.parse_component_path/1`) decides, so a manifest nested
   # BELOW a version dir is refused instead of indexed with the wrong
   # version segments. Tenant-relative; the athanor is the scanning
   # context's.
   defp tincture_path?(segs),
     do:
-      match?({:ok, %{type: "tincture", rest: [_manifest]}}, Compendium.ComponentPath.parse(segs))
-
-  # Launch constraint: tinctures can't SURFACE raster image assets in the
-  # discovery slots until CSAM hash matching (PhotoDNA) is live. Vector
-  # (.svg) is allowed. The roster lives with the serve-gate policy
-  # (`Cyfr.TinctureHelpers`) so the two cannot drift.
-  @blocked_image_extensions Cyfr.TinctureHelpers.blocked_raster_extensions()
+      match?({:ok, %{type: "tincture", rest: [_manifest]}}, Compendium.parse_component_path(segs))
 
   defp parse_manifest(ctx, manifest_segs, raw, athanor_id) do
     with {:ok, manifest} <- Jason.decode(raw),
@@ -332,11 +376,11 @@ defmodule Prism.TinctureRegistry do
          true <- is_binary(manifest["name"]) do
       version_segs = Enum.drop(manifest_segs, -1)
       tincture_block = manifest["tincture"] || %{}
-      publisher = Compendium.ComponentPath.normalize_publisher(manifest["publisher"])
+      publisher = Prima.ComponentPath.normalize_publisher(manifest["publisher"])
       name = manifest["name"]
       version = manifest["version"] || "0.1.0"
 
-      entry_result = Cyfr.TinctureHelpers.entry_of(manifest)
+      entry_result = Compendium.tincture_entry(manifest)
       icon = tincture_block["icon"] || "palette"
       window = tincture_block["window"] || %{}
       tagline = tincture_block["tagline"]
@@ -344,7 +388,7 @@ defmodule Prism.TinctureRegistry do
       # Convention auto-discovery via Arca.exists? (works for both Local and
       # S3). Manifest-declared media still wins for non-standard layouts.
       media_block = tincture_block["media"] || %{}
-      discovered = Cyfr.TinctureHelpers.discover_media_via_arca(ctx, version_segs)
+      discovered = Compendium.tincture_media(ctx, version_segs)
 
       media_icon = media_block["icon"] || discovered.icon
 
@@ -358,9 +402,10 @@ defmodule Prism.TinctureRegistry do
       # entry the serve side will refuse lists something that 404s on the
       # first click — and says nothing about why.
       case {entry_result, blocked_image_refs(media_icon, media_previews)} do
-        {{:error, message}, _} ->
+        {{:error, refused}, _} ->
           Logger.warning(
-            "[TinctureRegistry] skipping tincture at #{Enum.join(manifest_segs, "/")} — #{message}"
+            "[TinctureRegistry] skipping tincture at #{Enum.join(manifest_segs, "/")} — " <>
+              "its entry is refused (#{refused})"
           )
 
           []
@@ -381,6 +426,7 @@ defmodule Prism.TinctureRegistry do
               media_icon: media_icon,
               media_previews: media_previews,
               entry: entry,
+              frame: declared_frame(manifest, manifest_segs),
               window: window,
               segments: version_segs,
               manifest: manifest
@@ -422,6 +468,27 @@ defmodule Prism.TinctureRegistry do
     end
   end
 
+  # The declared frame — its capabilities, placement and whether it runs
+  # in the background — as the frame's rules read it
+  # (`Compendium.tincture_declaration/1`), for the shell to grant from; nil
+  # when the rules refuse the declaration. Such a tincture is still listed:
+  # the publish check keeps it from being installed, and the shell opening
+  # one reads the declaration again and renders its refusal, never a frame.
+  defp declared_frame(manifest, manifest_segs) do
+    case Compendium.tincture_declaration(manifest) do
+      {:ok, declaration} ->
+        declaration.frame
+
+      {:error, {:invalid_tincture, refused}} ->
+        Logger.warning(
+          "[TinctureRegistry] tincture at #{Enum.join(manifest_segs, "/")} declares a frame " <>
+            "the rules refuse (#{refused}); it opens no frame"
+        )
+
+        nil
+    end
+  end
+
   defp blocked_image_refs(media_icon, media_previews) do
     candidates = [media_icon | List.wrap(media_previews)]
 
@@ -430,20 +497,24 @@ defmodule Prism.TinctureRegistry do
     |> Enum.filter(&blocked_image?/1)
   end
 
+  # Launch constraint: tinctures can't SURFACE raster image assets in the
+  # discovery slots until CSAM hash matching (PhotoDNA) is live. Vector
+  # (.svg) is allowed. The roster is the component domain's rule map, read
+  # where it is used, so the serve gate and the listing cannot drift.
   defp blocked_image?(path) when is_binary(path) do
     ext = path |> Path.extname() |> String.downcase()
-    ext in @blocked_image_extensions
+    ext in Compendium.tincture_asset_rules().blocked_raster_extensions
   end
 
   defp blocked_image?(_), do: false
 
-  # Select the latest tincture version using Compendium.Semver.
+  # Select the latest tincture version using Prima.Semver.
   defp pick_latest_versions(tinctures) do
     tinctures
     |> Enum.group_by(fn t -> {t.athanor_id, t.publisher, t.name} end)
     |> Enum.map(fn {_key, versions} ->
       versions
-      |> Compendium.Semver.sort_desc_by(&(&1.version || "0.0.0"))
+      |> Prima.Semver.sort_desc_by(&(&1.version || "0.0.0"))
       |> hd()
     end)
   end

@@ -9,8 +9,8 @@ defmodule Cyfr.WithElseScopeTest do
   hands that arm the updated value. It hands it the *outer* one, silently,
   and the compiler says nothing because the name is bound either way. Where
   the state carries what a failure is masked or closed with — the run
-  `Cyfr.Execution.Admission.admit/4` threads through its stages, the
-  resolved headers `Emissary.MCP.ExternalServer` masks an upstream error
+  `Crucible.Admission.admit/4` threads through its stages, the
+  resolved headers `Emissary.External.Server` masks an upstream error
   with — the outer value closes the failure with the wrong state.
 
   Names bound by a with expression must not be read by its own else
@@ -22,7 +22,7 @@ defmodule Cyfr.WithElseScopeTest do
   defp root, do: Path.expand("../../../..", __DIR__)
 
   defp source_files do
-    Cyfr.Test.SourceTree.files!(Path.join(root(), "apps/*/lib/**/*.ex"))
+    Prima.Test.SourceTree.files!(Path.join(root(), "apps/*/lib/**/*.ex"))
   end
 
   # Every variable name appearing anywhere in an AST fragment. `_`-prefixed
@@ -114,7 +114,7 @@ defmodule Cyfr.WithElseScopeTest do
   defp offenders(path) do
     ast =
       path
-      |> Cyfr.Test.SourceTree.read()
+      |> Prima.Test.SourceTree.read()
       |> Code.string_to_quoted!(columns: true)
 
     {_, found} =

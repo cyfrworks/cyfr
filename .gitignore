@@ -21,7 +21,9 @@ erl_crash.dump
 .env.*.local
 # Per-container env files (the .example copies are tracked).
 .env.locus
-.env.bridge
+# The opus service's seccomp profile beside docker-compose.yml: a source
+# checkout's copy of apps/keeper/seccomp/keeper.json, the tracked original.
+/keeper.seccomp.json
 
 # IDE and editors
 .idea/

@@ -21,9 +21,8 @@ defmodule Arca.TurnTapeStorageTest do
 
   import Ecto.Query, only: [from: 2]
 
-  setup do
-    :ok = Ecto.Adapters.SQL.Sandbox.checkout(Arca.Repo)
-    Ecto.Adapters.SQL.Sandbox.mode(Arca.Repo, {:shared, self()})
+  setup tags do
+    Arca.Test.Sandbox.setup!(tags)
     Arca.Test.Actor.athanor!()
     actor = Arca.Test.Actor.local()
     {:ok, thread} = Threads.create(actor)
@@ -43,9 +42,12 @@ defmodule Arca.TurnTapeStorageTest do
           athanor_id: actor.athanor_id,
           component_type: "agent",
           kind: "turn",
-          turn_id: turn_id
+          turn_id: turn_id,
+          origin: :interactive
         },
-        reservation: %{budget_id: budget_id, cap: 4}
+        reservation: %{budget_id: budget_id, cap: 4},
+        grant: Arca.Test.Actor.grant(actor.athanor_id),
+        verify: &Arca.Test.Actor.admits/1
       )
 
     %{execution: execution, attempt: attempt, budget_id: budget_id}
@@ -63,7 +65,8 @@ defmodule Arca.TurnTapeStorageTest do
           agent: "aqua",
           requested_by: Keyword.get(opts, :author, actor.user_id),
           model: Keyword.get(opts, :model),
-          options: %{"room" => nil}
+          options: %{"room" => nil},
+          origin: :interactive
         }
       })
 
@@ -82,6 +85,7 @@ defmodule Arca.TurnTapeStorageTest do
         consent_id: "consent_x",
         agent_revision_digest: "sha256:rev",
         agent_capability_digest: "sha256:cap",
+        recovery_limit: 3,
         fence: turn.fence
       })
 
@@ -100,6 +104,7 @@ defmodule Arca.TurnTapeStorageTest do
         root_execution_id: root.execution.id,
         attempt: root.attempt.attempt,
         budget_id: root.budget_id,
+        recovery_limit: 3,
         fence: turn.fence
       })
     )
@@ -112,7 +117,9 @@ defmodule Arca.TurnTapeStorageTest do
 
   # One live member of the cell that is not this boot, under a node name
   # nothing else writes: the row's own slot, so the case measures its own
-  # delta rather than whatever the suite left in a shared table.
+  # delta rather than whatever the suite left in a shared table. The row is
+  # the sandbox's and goes with it: a delete on another connection would
+  # wait behind the owner's write lock until the owner stops.
   defp peer_member!(lease_ms \\ 60_000) do
     node = "h1-peer-#{System.unique_integer([:positive])}@test"
     owner = "#{node}#boot_#{System.unique_integer([:positive])}"
@@ -131,16 +138,10 @@ defmodule Arca.TurnTapeStorageTest do
         }
       ])
 
-    on_exit(fn ->
-      Ecto.Adapters.SQL.Sandbox.unboxed_run(Arca.Repo, fn ->
-        Arca.Repo.delete_all(from(l in Arca.Schemas.CellLease, where: l.node == ^node))
-      end)
-    end)
-
     %{node: node, owner: owner}
   end
 
-  defp execution(id), do: Arca.Repo.get!(Arca.Execution, id)
+  defp execution(id), do: Arca.Repo.get!(Arca.Schemas.Execution, id)
 
   defp respond!(actor, turn, calls) do
     {:ok, step} =
@@ -195,7 +196,7 @@ defmodule Arca.TurnTapeStorageTest do
       assert turn.status == "accepted"
       assert turn.message_id == message.id
       assert turn.fence != ""
-      assert turn.runner_id == Cyfr.Boot.id()
+      assert turn.runner_id == Prima.Boot.id()
 
       assert {:ok, %{turn_seq: 1, agent: "aqua"}} = Threads.get(actor, thread.id)
 
@@ -203,7 +204,7 @@ defmodule Arca.TurnTapeStorageTest do
       assert {:error, :duplicate_client_id} =
                TurnStorage.accept_message(actor, thread.id, %{
                  message: %{author: actor.user_id, content: "@aqua do it", client_id: "c-1"},
-                 turn: %{agent: "aqua", requested_by: actor.user_id}
+                 turn: %{agent: "aqua", requested_by: actor.user_id, origin: :interactive}
                })
 
       assert {:ok, %{message: %{id: mid}, turn: %{id: tid}}} =
@@ -238,7 +239,12 @@ defmodule Arca.TurnTapeStorageTest do
       %{turn: turn} = accept_turn!(actor, thread, "@aqua go")
       {turn, _root} = start!(actor, turn)
 
-      {:ok, _} = TurnStorage.finish(actor, turn.id, "completed", %{fence: turn.fence})
+      {:ok, _} =
+        TurnStorage.finish(actor, turn.id, "completed", %{
+          grant: :stored,
+          verify: &Arca.Test.Actor.admits/1,
+          fence: turn.fence
+        })
 
       before = length(Threads.messages(actor, thread.id))
 
@@ -306,11 +312,17 @@ defmodule Arca.TurnTapeStorageTest do
       # Another member's turn on the same thread claims nothing while this
       # one holds it: the claim is not something a peer takes over.
       %{turn: second} = accept_turn!(actor, thread, "@aqua again")
-      assert {:error, {:busy, ^held}} = start_with(actor, second, [])
+      assert {:error, {:held_elsewhere, ^held}} = start_with(actor, second, [])
       assert %{active_turn_id: ^held} = reread(actor, thread)
 
       # The turn that is over holds nothing.
-      {:ok, _} = TurnStorage.finish(actor, turn.id, "completed", %{fence: started.fence})
+      {:ok, _} =
+        TurnStorage.finish(actor, turn.id, "completed", %{
+          grant: :stored,
+          verify: &Arca.Test.Actor.admits/1,
+          fence: started.fence
+        })
+
       assert %{active_turn_id: nil} = reread(actor, thread)
 
       # And the one behind it may now take the thread.
@@ -333,7 +345,13 @@ defmodule Arca.TurnTapeStorageTest do
       assert paused.paused_reason == "approval"
       assert %{active_turn_id: ^held} = reread(actor, thread)
 
-      {:ok, resumed} = TurnStorage.resume(actor, turn.id, %{fence: paused.fence})
+      {:ok, resumed} =
+        TurnStorage.resume(actor, turn.id, %{
+          grant: :stored,
+          verify: &Arca.Test.Actor.admits/1,
+          fence: paused.fence
+        })
+
       assert %{active_turn_id: ^held} = reread(actor, thread)
 
       # Suspending gives it up, so any member may pick the turn up.
@@ -386,7 +404,12 @@ defmodule Arca.TurnTapeStorageTest do
       {started, _root} = start!(actor, turn)
       {:ok, suspended} = TurnStorage.suspend(actor, turn.id, %{fence: started.fence})
 
-      assert {:ok, recovered} = TurnStorage.recover(actor, turn.id, %{fence: suspended.fence})
+      assert {:ok, recovered} =
+               TurnStorage.recover(actor, turn.id, %{
+                 grant: :stored,
+                 verify: &Arca.Test.Actor.admits/1,
+                 fence: suspended.fence
+               })
 
       assert recovered.fence != suspended.fence
       assert recovered.recovery_attempts == 1
@@ -400,12 +423,28 @@ defmodule Arca.TurnTapeStorageTest do
                TurnStorage.put_step(actor, turn.id, %{kind: "model", fence: suspended.fence})
 
       # The cap is three, and the fourth attempt is refused rather than continuing.
-      {:ok, second} = TurnStorage.recover(actor, turn.id, %{fence: recovered.fence})
-      {:ok, third} = TurnStorage.recover(actor, turn.id, %{fence: second.fence})
+      {:ok, second} =
+        TurnStorage.recover(actor, turn.id, %{
+          grant: :stored,
+          verify: &Arca.Test.Actor.admits/1,
+          fence: recovered.fence
+        })
+
+      {:ok, third} =
+        TurnStorage.recover(actor, turn.id, %{
+          grant: :stored,
+          verify: &Arca.Test.Actor.admits/1,
+          fence: second.fence
+        })
+
       assert third.recovery_attempts == 3
 
       assert {:error, :recovery_exhausted} =
-               TurnStorage.recover(actor, turn.id, %{fence: third.fence})
+               TurnStorage.recover(actor, turn.id, %{
+                 grant: :stored,
+                 verify: &Arca.Test.Actor.admits/1,
+                 fence: third.fence
+               })
 
       assert Arca.Repo.get!(Arca.Schemas.Turn, turn.id).recovery_attempts == 3
     end
@@ -436,8 +475,19 @@ defmodule Arca.TurnTapeStorageTest do
       assert holder == turn.id
       assert runner == peer.owner
 
-      assert {:error, :busy} = TurnStorage.recover(actor, turn.id, %{fence: started.fence})
-      assert {:error, :busy} = TurnStorage.takeover(actor, turn.id, %{fence: started.fence})
+      assert {:error, :held_elsewhere} =
+               TurnStorage.recover(actor, turn.id, %{
+                 grant: :stored,
+                 verify: &Arca.Test.Actor.admits/1,
+                 fence: started.fence
+               })
+
+      assert {:error, :held_elsewhere} =
+               TurnStorage.takeover(actor, turn.id, %{
+                 grant: :stored,
+                 verify: &Arca.Test.Actor.admits/1,
+                 fence: started.fence
+               })
 
       after_count = Arca.Repo.get!(Arca.Schemas.Turn, turn.id).recovery_attempts
       assert after_count == before_count
@@ -452,7 +502,14 @@ defmodule Arca.TurnTapeStorageTest do
         )
 
       assert {:ok, %{live_peer?: false}} = Threads.claim_holder(actor, thread.id)
-      assert {:ok, taken} = TurnStorage.recover(actor, turn.id, %{fence: started.fence})
+
+      assert {:ok, taken} =
+               TurnStorage.recover(actor, turn.id, %{
+                 grant: :stored,
+                 verify: &Arca.Test.Actor.admits/1,
+                 fence: started.fence
+               })
+
       assert taken.recovery_attempts == before_count + 1
     end
 
@@ -471,7 +528,12 @@ defmodule Arca.TurnTapeStorageTest do
       assert %{active_turn_id: held} = reread(actor, thread)
       assert held == turn.id
 
-      assert {:error, :clone} = TurnStorage.recover(actor, clone.id, %{fence: clone.fence})
+      assert {:error, :clone} =
+               TurnStorage.recover(actor, clone.id, %{
+                 grant: :stored,
+                 verify: &Arca.Test.Actor.admits/1,
+                 fence: clone.fence
+               })
     end
   end
 
@@ -744,7 +806,12 @@ defmodule Arca.TurnTapeStorageTest do
 
       assert {:error, :not_running} = TurnStorage.pause(actor, turn.id, %{fence: turn.fence})
 
-      assert {:ok, resumed} = TurnStorage.resume(actor, turn.id, %{fence: turn.fence})
+      assert {:ok, resumed} =
+               TurnStorage.resume(actor, turn.id, %{
+                 grant: :stored,
+                 verify: &Arca.Test.Actor.admits/1,
+                 fence: turn.fence
+               })
 
       assert resumed.status == "running" and is_nil(resumed.paused_reason)
 
@@ -761,6 +828,8 @@ defmodule Arca.TurnTapeStorageTest do
 
       assert {:ok, done} =
                TurnStorage.finish(actor, turn.id, "completed", %{
+                 grant: :stored,
+                 verify: &Arca.Test.Actor.admits/1,
                  fence: turn.fence
                })
 
@@ -776,6 +845,8 @@ defmodule Arca.TurnTapeStorageTest do
 
       assert {:error, :already_finished} =
                TurnStorage.finish(actor, turn.id, "failed", %{
+                 grant: :stored,
+                 verify: &Arca.Test.Actor.admits/1,
                  fence: turn.fence
                })
 
@@ -784,6 +855,8 @@ defmodule Arca.TurnTapeStorageTest do
 
       assert {:ok, %{status: "cancelled"}} =
                TurnStorage.finish(actor, queued.id, "cancelled", %{
+                 grant: :stored,
+                 verify: &Arca.Test.Actor.admits/1,
                  fence: queued.fence
                })
 
@@ -793,6 +866,8 @@ defmodule Arca.TurnTapeStorageTest do
 
       assert {:ok, %{status: "uncertain"}} =
                TurnStorage.finish(actor, t3.id, "uncertain", %{
+                 grant: :stored,
+                 verify: &Arca.Test.Actor.admits/1,
                  error: "restart",
                  fence: t3.fence
                })
@@ -818,9 +893,14 @@ defmodule Arca.TurnTapeStorageTest do
           set: [lease_until: lapsed]
         )
 
-      {:ok, _} = ExecutionAttempts.lapse(root.attempt.attempt, lapsed)
+      {:ok, _} = ExecutionAttempts.lapse(root.attempt.attempt, lapsed, Arca.Test.Actor.stored())
 
-      assert {:ok, taken} = TurnStorage.takeover(actor, turn.id, %{fence: turn.fence})
+      assert {:ok, taken} =
+               TurnStorage.takeover(actor, turn.id, %{
+                 grant: :stored,
+                 verify: &Arca.Test.Actor.admits/1,
+                 fence: turn.fence
+               })
 
       assert taken.fence != turn.fence
       assert taken.recovery_attempts == 1
@@ -833,16 +913,35 @@ defmodule Arca.TurnTapeStorageTest do
       assert {:error, :superseded} = TurnStorage.pause(actor, turn.id, %{fence: turn.fence})
 
       # A takeover from a fence that already moved takes nothing.
-      assert {:error, :superseded} = TurnStorage.takeover(actor, turn.id, %{fence: turn.fence})
+      assert {:error, :superseded} =
+               TurnStorage.takeover(actor, turn.id, %{
+                 grant: :stored,
+                 verify: &Arca.Test.Actor.admits/1,
+                 fence: turn.fence
+               })
 
-      {:ok, second} = TurnStorage.takeover(actor, turn.id, %{fence: taken.fence})
+      {:ok, second} =
+        TurnStorage.takeover(actor, turn.id, %{
+          grant: :stored,
+          verify: &Arca.Test.Actor.admits/1,
+          fence: taken.fence
+        })
 
-      {:ok, third} = TurnStorage.takeover(actor, turn.id, %{fence: second.fence})
+      {:ok, third} =
+        TurnStorage.takeover(actor, turn.id, %{
+          grant: :stored,
+          verify: &Arca.Test.Actor.admits/1,
+          fence: second.fence
+        })
 
       assert third.recovery_attempts == 3
 
       assert {:error, :recovery_exhausted} =
-               TurnStorage.takeover(actor, turn.id, %{fence: third.fence})
+               TurnStorage.takeover(actor, turn.id, %{
+                 grant: :stored,
+                 verify: &Arca.Test.Actor.admits/1,
+                 fence: third.fence
+               })
     end
 
     test "superseding renews the fence and cancel-marks every dispatched step", %{
@@ -953,7 +1052,12 @@ defmodule Arca.TurnTapeStorageTest do
           fence: a.fence
         })
 
-      {:ok, _} = TurnStorage.finish(actor, a.id, "completed", %{fence: a.fence})
+      {:ok, _} =
+        TurnStorage.finish(actor, a.id, "completed", %{
+          grant: :stored,
+          verify: &Arca.Test.Actor.admits/1,
+          fence: a.fence
+        })
 
       {b, _} = start!(actor, b)
       assert b.window_upto_seq == max(b_message.seq, a_result.seq)
@@ -1165,12 +1269,14 @@ defmodule Arca.TurnTapeStorageTest do
 
       {1, _} =
         Arca.Repo.update_all(
-          from(e in Arca.Execution, where: e.id == ^root.execution.id),
+          from(e in Arca.Schemas.Execution, where: e.id == ^root.execution.id),
           set: [status: "failed"]
         )
 
       assert {:ok, paused} =
                TurnStorage.pause_recovered(actor, turn.id, %{
+                 grant: :stored,
+                 verify: &Arca.Test.Actor.admits/1,
                  content: "restarted",
                  fence: turn.fence
                })
@@ -1202,7 +1308,11 @@ defmodule Arca.TurnTapeStorageTest do
 
       # Resumable: the successor attempt is the paused owner.
       assert {:ok, %{status: "running"}} =
-               TurnStorage.resume(actor, turn.id, %{fence: paused.fence})
+               TurnStorage.resume(actor, turn.id, %{
+                 grant: :stored,
+                 verify: &Arca.Test.Actor.admits/1,
+                 fence: paused.fence
+               })
     end
   end
 end

@@ -15,9 +15,13 @@ defmodule Arca.UnscopedQuerySeamTest do
   simply out of scope rather than exceptions to be listed. The roster is
   derived, not written down.
 
-  A query counts as scoped if it mentions `where_tenant`, `where_athanor`,
-  or `athanor_id` — the last covers the bare-athanor storage APIs, which
-  filter on the column directly. Anything else carries
+  A query counts as scoped if it filters or stamps the athanor column
+  itself: `where_tenant`, `where_athanor`, `stamp_tenant!`, or `athanor_id`
+  compared or bound outside a join condition and a select — the last
+  covers the bare-athanor storage APIs, which filter on the column
+  directly. A join on the athanor column relates two rows of whatever
+  athanors they are in, and a select key reads the column back; neither
+  narrows the query to one athanor. Anything else carries
   `# arca:unscoped-ok <why>` on or above the function head.
   """
   use ExUnit.Case, async: true
@@ -29,8 +33,10 @@ defmodule Arca.UnscopedQuerySeamTest do
   # between their punctuation and the opening parenthesis.
   @repo_verbs ~r/\bRepo\.(?:(?:all|one|update_all|delete_all|aggregate|get|get_by|insert|insert_all|update|delete|transaction)\b|exists\?|query!?)/
   # Scoped means the athanor column is USED — compared, bound or set —
-  # not merely mentioned (a `select:` naming athanor_id once counted).
-  # `stamp_tenant!` is the write-side spelling (Arca.QueryHelpers).
+  # not merely mentioned. `stamp_tenant!` is the write-side spelling
+  # (Arca.QueryHelpers). It is read with every join condition and select
+  # blanked out first (`own_clauses/1`), so `on: c.athanor_id ==
+  # p.athanor_id` and `select: %{athanor_id: p.athanor_id}` scope nothing.
   @scoped ~r/where_tenant|where_athanor|stamp_tenant!|athanor_id ==|athanor_id:/
   @tag_marker ~r/#\s*arca:unscoped-ok\s+\S/
 
@@ -38,7 +44,7 @@ defmodule Arca.UnscopedQuerySeamTest do
   # wider glob costs nothing — and the first engine-side query would
   # otherwise escape the roster by construction.
   defp sources do
-    [@root, "apps/*/lib", "**/*.ex"] |> Path.join() |> Cyfr.Test.SourceTree.files!()
+    [@root, "apps/*/lib", "**/*.ex"] |> Path.join() |> Prima.Test.SourceTree.files!()
   end
 
   # Modules whose schema declares an athanor column — the tables a query can
@@ -49,7 +55,7 @@ defmodule Arca.UnscopedQuerySeamTest do
   # roster.
   defp tenant_schemas do
     for path <- sources(),
-        source = Cyfr.Test.SourceTree.read(path),
+        source = Prima.Test.SourceTree.read(path),
         source =~ ~r/^\s*(field :athanor_id|belongs_to :athanor)\b/m,
         [_, module] = Regex.run(~r/^defmodule ([\w.]+) do/m, source),
         into: MapSet.new(),
@@ -88,6 +94,47 @@ defmodule Arca.UnscopedQuerySeamTest do
     |> Enum.reverse()
   end
 
+  # The body with each join condition (`on:`) and each select (`select:`,
+  # `select_merge:`, `select(…)`, `select_merge(…)`) blanked out to the end
+  # of its expression: a keyword clause ends at a comma at its own depth or
+  # at the bracket closing the list it sits in, and a call at its closing
+  # parenthesis.
+  @own_clause_starts [~r/\Aon:\s/, ~r/\Aselect(?:_merge)?:\s/, ~r/\Aselect(?:_merge)?\(/]
+
+  defp own_clauses(body), do: own_clauses(body, [])
+
+  defp own_clauses("", acc), do: acc |> Enum.reverse() |> IO.iodata_to_binary()
+
+  defp own_clauses(<<c::utf8, rest::binary>> = text, acc) do
+    starts? = acc == [] or not (hd(acc) =~ ~r/[\w.:]/)
+    start = starts? && Enum.find(@own_clause_starts, &Regex.match?(&1, text))
+
+    if start do
+      [keyword] = Regex.run(start, text)
+      call? = String.ends_with?(keyword, "(")
+      rest = binary_part(text, byte_size(keyword), byte_size(text) - byte_size(keyword))
+      own_clauses(skip_clause(rest, if(call?, do: 1, else: 0), call?), [" " | acc])
+    else
+      own_clauses(rest, [<<c::utf8>> | acc])
+    end
+  end
+
+  defp skip_clause("", _depth, _call?), do: ""
+
+  defp skip_clause(<<c, rest::binary>>, depth, call?) when c in [?(, ?[, ?{],
+    do: skip_clause(rest, depth + 1, call?)
+
+  defp skip_clause(<<c, rest::binary>> = text, depth, call?) when c in [?), ?], ?}] do
+    cond do
+      call? and depth == 1 -> rest
+      not call? and depth == 0 -> text
+      true -> skip_clause(rest, depth - 1, call?)
+    end
+  end
+
+  defp skip_clause(<<?,, _::binary>> = text, 0, false), do: text
+  defp skip_clause(<<_, rest::binary>>, depth, call?), do: skip_clause(rest, depth, call?)
+
   defp queried_schemas(body, enclosing, tenant_schemas, by_short) do
     named = Regex.scan(~r/\b([A-Z][\w.]*)\b/, body) |> Enum.map(&Enum.at(&1, 1))
 
@@ -117,11 +164,11 @@ defmodule Arca.UnscopedQuerySeamTest do
 
     offenders =
       for path <- sources(),
-          source = Cyfr.Test.SourceTree.read(path),
+          source = Prima.Test.SourceTree.read(path),
           [_, enclosing] = Regex.run(~r/^defmodule ([\w.]+) do/m, source) || [nil, nil],
           {line, body} <- functions(String.split(source, "\n")),
           body =~ @repo_verbs,
-          not (body =~ @scoped),
+          not (own_clauses(body) =~ @scoped),
           not (body =~ @tag_marker),
           tables = queried_schemas(body, enclosing, schemas, by_short),
           tables != [] do
@@ -144,10 +191,46 @@ defmodule Arca.UnscopedQuerySeamTest do
            """
   end
 
+  test "a join condition or a select key scopes nothing; the query's own where does" do
+    joined = """
+      def heads(after_id) do
+        from(p in Profile,
+          join: c in Consent,
+          on: c.id == p.head_consent_id and c.athanor_id == p.athanor_id,
+          where: p.id > ^after_id,
+          select: %{athanor_id: p.athanor_id, id: p.id}
+        )
+        |> Repo.all()
+      end
+    """
+
+    # The loose reading counted both; the query's own clauses hold neither.
+    assert joined =~ @scoped
+    refute own_clauses(joined) =~ @scoped
+    assert own_clauses(joined) =~ "where: p.id > ^after_id"
+
+    scoped = String.replace(joined, "where: p.id", "where: p.athanor_id == ^athanor_id and p.id")
+    assert own_clauses(scoped) =~ @scoped
+
+    piped = """
+        Profile
+        |> join(:inner, [p], c in Consent, on: c.athanor_id == p.athanor_id)
+        |> select([p], %{athanor_id: p.athanor_id})
+        |> select_merge([p], %{other: p.athanor_id})
+        |> Repo.all()
+    """
+
+    refute own_clauses(piped) =~ @scoped
+    assert own_clauses(piped) =~ "|> Repo.all()"
+
+    keyword = "Repo.get_by(Profile, id: id, athanor_id: athanor_id)"
+    assert own_clauses(keyword) =~ @scoped
+  end
+
   test "the tag is only on functions that actually query" do
     stale =
       for path <- sources(),
-          source = Cyfr.Test.SourceTree.read(path),
+          source = Prima.Test.SourceTree.read(path),
           {line, body} <- functions(String.split(source, "\n")),
           body =~ @tag_marker,
           not (body =~ @repo_verbs) do
@@ -178,22 +261,51 @@ defmodule Arca.UnscopedQuerySeamTest do
     "Arca.Schemas.ServerAllowlistEntry" => "the door: who may sign in at all, before any tenant",
     "Arca.Schemas.CellLease" =>
       "a member slot of the cell, keyed by the node holding it — the deployment's shape, " <>
-        "and a cell has no estate",
+        "and a cell has no athanor",
     "Arca.Schemas.JobClaim" =>
       "a mutual-exclusion token for one of the cell's singleton jobs, keyed by (kind, key); " <>
         "several kinds have no athanor at all, and a key naming one grants no reach into it",
     "Arca.Schemas.ServerMeta" =>
       "the server's own facts (the schema and keyring fingerprints) — one row per key, no tenant",
+    "Arca.PlatformSettings" =>
+      "the cell's platform settings and each member's pins of them, keyed by setting and " <>
+        "member — node facts every member reads alike, no tenant",
     "Arca.Schemas.WebhookDelivery" =>
       "an idempotency claim keyed by a webhooks FK (on_delete: :delete_all), so it is " <>
         "reachable only through its tenant-owned parent and cascade-deleted with it; the " <>
-        "unique index is (webhook_id, idempotency_key), so keys cannot collide across athanors"
+        "unique index is (webhook_id, idempotency_key), so keys cannot collide across athanors",
+    "Arca.Schemas.PersonIdentity" =>
+      "a person's identity and keys, keyed by their user_id and identifier; a person's " <>
+        "identity is not an athanor's to delete",
+    "Arca.Schemas.IdentityAttempt" =>
+      "a person's enrollment, restore or rotation attempt, keyed by its request id; a " <>
+        "restore runs before any person or athanor exists",
+    "Arca.Schemas.IdentityLogEntry" =>
+      "the directory's log, keyed by the person identifier it orders; a directory holds " <>
+        "no athanor",
+    "Arca.Schemas.DirectoryHead" =>
+      "this home's cache of another person's head, keyed by their identifier",
+    "Arca.Schemas.CarryAction" =>
+      "a person's sign-in carry and a relying home's login receipt, keyed by the person " <>
+        "and the action; a carry moves a person between homes, never inside an athanor",
+    "Arca.Schemas.Passkey" =>
+      "a person's credential at this home, keyed by the person and its RP ID; revoked " <>
+        "with the person, never with an athanor",
+    "Arca.Schemas.DeviceCertification" =>
+      "a person's certification of a device at another home, keyed by the person, that " <>
+        "home and its client; the athanor it names is the other home's, not one of this " <>
+        "home's",
+    "Arca.Schemas.InstallationClaim" =>
+      "the node's one claim by a restore, before any person or athanor exists",
+    "Arca.Schemas.RequestRateWindow" =>
+      "a pre-authentication limit, keyed by bucket and hashed key; no session, and so no " <>
+        "athanor, stands behind the requests it bounds"
   }
 
   test "every schema without an athanor column is classified" do
     schemas =
       for path <- sources(),
-          source = Cyfr.Test.SourceTree.read(path),
+          source = Prima.Test.SourceTree.read(path),
           source =~ ~r/^\s*schema "/m,
           not (source =~ ~r/^\s*(field :athanor_id|belongs_to :athanor)\b/m),
           [_, module] = Regex.run(~r/^defmodule ([\w.]+) do/m, source),

@@ -31,8 +31,8 @@ defmodule Opus.VaultDenialTest do
       preloaded_fields: %{"PROBE_KEY" => @value},
       component_ref: "catalyst:local.vault-probe:0.1.0",
       host: host,
-      authority: Cyfr.Authority.zero(),
-      limits: Cyfr.Authority.limits(Cyfr.Authority.zero())
+      authority: Prima.Authority.zero(),
+      limits: Prima.Authority.limits(Prima.Authority.zero())
     )
   end
 
