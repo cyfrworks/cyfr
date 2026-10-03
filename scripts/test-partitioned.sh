@@ -307,6 +307,12 @@ for ((i=1; i<=PARTITIONS; i++)); do
     # they fell in the log.
     grep -nE 'OwnershipError line\(s\) were logged|^-- NEW' "$out_dir/p$i.log" | sed 's/^/    | /' || :
     grep -nE -A3 '^-- NEW' "$out_dir/p$i.log" | grep -vE '^--$' | sed 's/^/    | /' || :
+    # Each failure's own block: the test, its file and line, the assertion
+    # and its stack, which the tail below may not reach when logged lines
+    # follow it. Without this a failure on a runner whose log is gone can
+    # be named but not read.
+    grep -nE -A30 '^[[:space:]]+[0-9]+\) test' "$out_dir/p$i.log" \
+      | grep -vE '^--$|^[0-9]+-[[:space:]]*$' | head -n 240 | sed 's/^/    | /' || :
     tail -n 100 "$out_dir/p$i.log" \
       | grep -vE '^[[:space:]]*$|^\.+$|^Result:|^Finished in|\[(info|debug)\]' \
       | tail -n 40 | sed 's/^/    | /' || :
