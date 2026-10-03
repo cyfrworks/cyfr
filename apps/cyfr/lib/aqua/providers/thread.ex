@@ -24,8 +24,8 @@ defmodule Aqua.Providers.Thread do
 
   It lives beside the runner because the assistant owns its providers,
   as every domain does. `Aqua.ToolSeamTest` keeps the other arrow
-  pointing one way — the assistant reaches the transport only through
-  `Aqua.Ops`, never by naming `Emissary.MCP`.
+  pointing one way — the assistant dispatches through the gate only at
+  `Aqua.Ops` — and the Boundary compiler keeps it from naming `Emissary`.
 
   ## Starting turns
 

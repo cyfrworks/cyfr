@@ -38,7 +38,7 @@ defmodule Aqua do
   - `Aqua.RoomExcerpt` — what the person has open beside the thread, read
     for the turn as quoted material.
   - `Aqua.Attachments` — chat attachment refs and blobs.
-  - `Aqua.Ops` — the single seam to `Emissary.MCP.*`
+  - `Aqua.Ops` — the single seam onto the gate's dispatch
     (`Aqua.ToolSeamTest` keeps it the only one).
 
   This is domain, not console: it drives `PrismWeb`'s chat through PubSub
